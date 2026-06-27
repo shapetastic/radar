@@ -4,6 +4,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
+using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -45,6 +46,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ISignalExtractor, KeywordSignalExtractor>();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ISignalReviewer, DeterministicSignalReviewer>();
+        services.TryAddSingleton<IScoreFormula, PlaceholderScoreFormula>();
+        services.TryAddSingleton(new ScoringOptions());
+        services.AddSingleton<IScoringEngine, ScoringEngine>();
         return services;
     }
 
