@@ -38,6 +38,7 @@ public class InfrastructureServiceCollectionExtensionsTests
     public void Resolver_ResolvesFromRootProvider_AndIsSameInstance()
     {
         var provider = new ServiceCollection()
+            .AddLogging()
             .AddInMemoryRadarPersistence()
             .AddRadarApplicationServices()
             .BuildServiceProvider();

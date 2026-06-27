@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
@@ -56,6 +57,14 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("awarded contract", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
     ];
 
+    private readonly ILogger<KeywordSignalExtractor> _logger;
+
+    public KeywordSignalExtractor(ILogger<KeywordSignalExtractor> logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        _logger = logger;
+    }
+
     public Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -102,6 +111,12 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
                 SupportingExcerpt: BuildExcerpt(body, index, rule.Phrase.Length),
                 Reason: $"Matched phrase '{rule.Phrase}'"));
         }
+
+        _logger.LogDebug(
+            "Extracted {SignalCount} signal(s) from evidence {EvidenceId} ({EvidenceTitle}).",
+            signals.Count,
+            evidence.Id,
+            evidence.Title);
 
         var summary = $"{signals.Count} signal(s) extracted by keyword rules.";
         return Task.FromResult(new ExtractSignalsOutput(signals, summary));

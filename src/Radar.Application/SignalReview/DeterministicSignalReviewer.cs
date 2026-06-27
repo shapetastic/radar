@@ -2,6 +2,8 @@ namespace Radar.Application.SignalReview;
 
 using System.Text.Json;
 
+using Microsoft.Extensions.Logging;
+
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
@@ -31,11 +33,14 @@ public sealed class DeterministicSignalReviewer : ISignalReviewer
     private const decimal ConfidenceReductionFactor = 0.5m;
 
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<DeterministicSignalReviewer> _logger;
 
-    public DeterministicSignalReviewer(TimeProvider timeProvider)
+    public DeterministicSignalReviewer(TimeProvider timeProvider, ILogger<DeterministicSignalReviewer> logger)
     {
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(logger);
         _timeProvider = timeProvider;
+        _logger = logger;
     }
 
     public Task<SignalReviewOutcome> ReviewAsync(Signal signal, EvidenceItem evidence, CancellationToken ct)
@@ -121,6 +126,12 @@ public sealed class DeterministicSignalReviewer : ISignalReviewer
                 (SignalReviewStatus.NeedsHumanReview, signal.Confidence),
             _ => (SignalReviewStatus.NeedsHumanReview, signal.Confidence),
         };
+
+        _logger.LogDebug(
+            "Reviewed signal {SignalId}: decision {Decision}, confidence reduced {ConfidenceReduced}.",
+            signal.Id,
+            decision,
+            adjustedConfidence < signal.Confidence);
 
         var reviewedSignal = signal with
         {

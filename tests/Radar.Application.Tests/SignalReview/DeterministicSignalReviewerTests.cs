@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+using Microsoft.Extensions.Logging.Abstractions;
+
 using Radar.Application.SignalReview;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
@@ -29,7 +31,7 @@ public class DeterministicSignalReviewerTests
     }
 
     private static DeterministicSignalReviewer CreateSut() =>
-        new(new FixedTimeProvider(FixedNow));
+        new(new FixedTimeProvider(FixedNow), NullLogger<DeterministicSignalReviewer>.Instance);
 
     private static EvidenceItem MakeEvidence(
         EvidenceQuality quality = EvidenceQuality.High,

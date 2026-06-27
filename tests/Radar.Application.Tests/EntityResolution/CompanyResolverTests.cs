@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.EntityResolution;
 using Radar.Domain.Companies;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -46,7 +47,7 @@ public class CompanyResolverTests
             await repository.AddAliasAsync(alias, CancellationToken.None);
         }
 
-        return new CompanyResolver(repository);
+        return new CompanyResolver(repository, NullLogger<CompanyResolver>.Instance);
     }
 
     [Fact]
