@@ -49,6 +49,10 @@ Once you have the latest code, produce a written plan covering:
 Present the plan clearly and **wait for explicit approval** before proceeding.
 Do not create a branch or make any changes until the plan is approved.
 
+**Unattended exception:** if your task states you are running unattended/headless (e.g.
+dispatched by `scripts/run-next.ps1` via `claude -p`), do **not** wait for approval — record the
+plan in your output and proceed automatically through Steps 2–4.
+
 ---
 
 ## Step 2 — Create a branch
