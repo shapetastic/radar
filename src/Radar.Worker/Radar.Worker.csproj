@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <UserSecretsId>dotnet-Radar.Worker-ad1ec77f-d1d9-46c2-903e-6a6eb092d20b</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Radar.Application\Radar.Application.csproj" />
+    <ProjectReference Include="..\Radar.Infrastructure\Radar.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

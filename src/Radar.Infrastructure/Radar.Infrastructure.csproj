@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Radar.Application\Radar.Application.csproj" />
+    <ProjectReference Include="..\Radar.Domain\Radar.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
