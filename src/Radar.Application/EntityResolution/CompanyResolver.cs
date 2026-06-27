@@ -43,8 +43,12 @@ public sealed class CompanyResolver : ICompanyResolver
             return new CompanyResolutionResult(null, 0m, "Empty mention", null);
         }
 
-        var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
-        var aliases = await _companyRepository.GetAliasesAsync(ct).ConfigureAwait(false);
+        // GetAllAsync and GetAliasesAsync are independent; start both before awaiting so
+        // they run concurrently (matters more once the repository is not in-memory).
+        var companiesTask = _companyRepository.GetAllAsync(ct);
+        var aliasesTask = _companyRepository.GetAliasesAsync(ct);
+        var companies = await companiesTask.ConfigureAwait(false);
+        var aliases = await aliasesTask.ConfigureAwait(false);
 
         var normalizedMention = Normalize(mentionText);
 

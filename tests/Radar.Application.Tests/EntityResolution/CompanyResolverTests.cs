@@ -149,7 +149,7 @@ public class CompanyResolverTests
     }
 
     [Fact]
-    public async Task EmptyOrWhitespaceMention_IsUnresolvedWithEmptyReason()
+    public async Task EmptyOrWhitespaceMention_IsUnresolvedWithEmptyMentionReason()
     {
         var resolver = await BuildResolverAsync(
             new[] { NewCompany(AcmeId, "Acme Corporation", "ACME") },
