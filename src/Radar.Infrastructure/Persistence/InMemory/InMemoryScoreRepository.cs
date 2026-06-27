@@ -26,6 +26,8 @@ public sealed class InMemoryScoreRepository : IScoreRepository
     {
         IReadOnlyList<CompanyScoreSnapshot> result = _snapshots.Values
             .Where(s => s.CompanyId == companyId)
+            .OrderBy(s => s.CreatedAtUtc)
+            .ThenBy(s => s.Id)
             .ToList();
         return Task.FromResult(result);
     }
@@ -35,6 +37,7 @@ public sealed class InMemoryScoreRepository : IScoreRepository
     {
         IReadOnlyList<ScoreEvidenceLink> result = _links.Values
             .Where(l => l.ScoreSnapshotId == snapshotId)
+            .OrderBy(l => l.Id)
             .ToList();
         return Task.FromResult(result);
     }

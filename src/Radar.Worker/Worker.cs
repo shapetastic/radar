@@ -1,6 +1,6 @@
 namespace Radar.Worker;
 
-public class Worker(ILogger<Worker> logger) : BackgroundService
+public sealed class Worker(ILogger<Worker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -8,7 +8,7 @@ public class Worker(ILogger<Worker> logger) : BackgroundService
         {
             if (logger.IsEnabled(LogLevel.Information))
             {
-                logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                logger.LogInformation("Worker running at: {time}", DateTimeOffset.UtcNow);
             }
             await Task.Delay(1000, stoppingToken);
         }

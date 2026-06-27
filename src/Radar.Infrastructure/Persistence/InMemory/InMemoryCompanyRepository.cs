@@ -23,7 +23,10 @@ public sealed class InMemoryCompanyRepository : ICompanyRepository
 
     public Task<IReadOnlyList<Company>> GetAllAsync(CancellationToken ct)
     {
-        IReadOnlyList<Company> result = _companies.Values.ToList();
+        IReadOnlyList<Company> result = _companies.Values
+            .OrderBy(c => c.CreatedAtUtc)
+            .ThenBy(c => c.Id)
+            .ToList();
         return Task.FromResult(result);
     }
 
@@ -35,7 +38,10 @@ public sealed class InMemoryCompanyRepository : ICompanyRepository
 
     public Task<IReadOnlyList<CompanyAlias>> GetAliasesAsync(CancellationToken ct)
     {
-        IReadOnlyList<CompanyAlias> result = _aliases.Values.ToList();
+        IReadOnlyList<CompanyAlias> result = _aliases.Values
+            .OrderBy(a => a.CreatedAtUtc)
+            .ThenBy(a => a.Id)
+            .ToList();
         return Task.FromResult(result);
     }
 }
