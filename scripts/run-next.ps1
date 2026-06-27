@@ -20,7 +20,10 @@ param(
     [string]$DefaultBranch = "main",
     [int]   $WorktreeIndex = 1,        # which <project>-claude-N worktree to drive
     [switch]$Plan,                     # force work-planner mode even if specs exist
-    [string]$PermissionFlag = "--dangerously-skip-permissions"  # set "" to be prompted
+    [string]$PermissionFlag = "--dangerously-skip-permissions", # set "" to be prompted
+    [switch]$CopilotReview,            # after the PR opens, wait for Copilot's FIRST review and fix its comments
+    [int]   $CopilotPollSeconds = 180, # poll interval while waiting for the review (default 3 min)
+    [int]   $CopilotTimeoutSeconds = 1200 # give up waiting after this long (default 20 min)
 )
 
 # Native tools (git, claude) write progress to stderr. Under 'Stop' that stderr gets turned into
@@ -117,6 +120,76 @@ try {
     $code = $LASTEXITCODE
 } finally {
     Pop-Location
+}
+
+# --- optional: wait for Copilot's FIRST review and fix its inline comments (one cycle, then exit) ---
+if ($CopilotReview) {
+    if ($code -ne 0) {
+        Write-Section "Copilot stage skipped (implementation run exited $code)"
+    } else {
+        Write-Section "Copilot review stage"
+        Push-Location $worktreePath
+        try {
+            $branch = (& git rev-parse --abbrev-ref HEAD).Trim()
+            $nwo    = (& gh repo view --json nameWithOwner -q .nameWithOwner 2>$null | Out-String).Trim()
+            $pr     = (& gh pr view --json number -q .number 2>$null | Out-String).Trim()
+
+            if ([string]::IsNullOrWhiteSpace($pr)) {
+                Write-Host "No open PR found for branch '$branch'; skipping Copilot stage." -ForegroundColor Yellow
+            } else {
+                Write-Host "Waiting for Copilot's first review on PR #$pr (poll ${CopilotPollSeconds}s, timeout ${CopilotTimeoutSeconds}s)..." -ForegroundColor Yellow
+                $found = $false; $elapsed = 0
+                while ($elapsed -lt $CopilotTimeoutSeconds) {
+                    $reviewsRaw = (& gh api "repos/$nwo/pulls/$pr/reviews" 2>$null | Out-String)
+                    if ($reviewsRaw.Trim()) {
+                        $reviews = $reviewsRaw | ConvertFrom-Json
+                        if ($reviews | Where-Object { $_.user.login -like '*opilot*' }) { $found = $true; break }
+                    }
+                    Write-Host "  ...no Copilot review yet (${elapsed}s elapsed); checking again in ${CopilotPollSeconds}s"
+                    Start-Sleep -Seconds $CopilotPollSeconds
+                    $elapsed += $CopilotPollSeconds
+                }
+
+                if (-not $found) {
+                    Write-Host "Timed out after ${CopilotTimeoutSeconds}s waiting for Copilot; leaving PR #$pr as-is." -ForegroundColor Yellow
+                } else {
+                    $commentsRaw = (& gh api "repos/$nwo/pulls/$pr/comments" 2>$null | Out-String)
+                    $copComments = @()
+                    if ($commentsRaw.Trim()) {
+                        $copComments = @(($commentsRaw | ConvertFrom-Json) | Where-Object { $_.user.login -like '*opilot*' })
+                    }
+                    Write-Host "Copilot review landed with $($copComments.Count) inline comment(s)." -ForegroundColor Green
+
+                    if ($copComments.Count -eq 0) {
+                        Write-Host "No actionable inline comments; nothing to fix." -ForegroundColor Green
+                    } else {
+                        Write-Section "Dispatching claude to address Copilot comments"
+                        $fixPrompt = @"
+You are running UNATTENDED in a git worktree on branch '$branch', which already has open PR #$pr.
+GitHub Copilot has left review comments on that PR. This is a FIX pass, not a new task:
+- IGNORE CLAUDE.md Steps 0-2: do NOT pick a new spec and do NOT create a new branch - you are
+  already on the correct branch for the existing PR.
+- Fetch Copilot's inline review comments and address each actionable one with the smallest correct
+  change:
+    gh api repos/$nwo/pulls/$pr/comments --jq '.[] | "[\(.path):\(.line)] \(.body)"'
+  If a comment is wrong or not actionable, do not change code - explain why in your final summary.
+- Keep the solution green: dotnet build Radar.sln -c Release  and  dotnet test Radar.sln -c Release.
+- Commit ("fix: address Copilot review comments") and push to origin/$branch.
+- Do NOT open a new PR, do NOT request another review, and do NOT loop.
+"@
+                        if ([string]::IsNullOrWhiteSpace($PermissionFlag)) {
+                            $null | & claude -p $fixPrompt
+                        } else {
+                            $null | & claude -p $fixPrompt $PermissionFlag
+                        }
+                        Write-Host "Copilot fix pass exit: $LASTEXITCODE" -ForegroundColor Green
+                    }
+                }
+            }
+        } finally {
+            Pop-Location
+        }
+    }
 }
 
 Write-Section "Done (exit $code)"
