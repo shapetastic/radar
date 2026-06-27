@@ -97,3 +97,33 @@ layer, not in Application.
 
 **Status.** Accepted · 2026-06-27 (decision by maintainer). Existing merged slices are not retrofitted;
 new work may add these packages to Application as needed.
+
+---
+
+## AD-6 — Scoring formula v1 (`radar-formula-v1`): shape, constants, and the previous-window input
+
+**Decision.** The first real `IScoreFormula`, `RadarScoreFormulaV1` (`Version = "radar-formula-v1"`),
+was **co-designed with and approved by the maintainer**. Its five components are:
+
+- **TrajectoryScore** — confidence-and-recency-weighted mean of directional strength, mapped `50 + 5·T_raw`
+  (50 = neutral). Direction signs: `Positive +1`, `Negative −1`, **`Neutral` and `Mixed` = 0**.
+- **AttentionScore** — saturating breadth `100·reach/(reach+5)`, `reach = distinctSourceNames + 0.5·mediaSignals`.
+- **EvidenceConfidenceScore** — `100·avgConf·(0.6+0.4·qualFactor)·(0.7+0.3·divFactor)`; quality weights
+  Primary 1.0 / High .85 / Med .6 / Low .35 / Unknown .4; diversity saturates at 3 distinct source types.
+- **SignalVelocityScore** — `50·(actNow+10)/(actPrev+10)` over `Strength` sums (50 = steady).
+- **OpportunityScore** — **multiplicative** `Trajectory·(EC/100)·(1 − Attention/200)` (under-the-radar:
+  high attention halves, never zeroes).
+
+To feed velocity, **`ScoringInput` carries `PreviousSignals`** — the immediately-preceding equal-length
+window `(start−W, start]`, **signals only, no evidence loaded** (velocity needs `Strength` magnitude, not
+provenance). **Only current-window signals build `ScoreContribution`s / `ScoreEvidenceLink`s**;
+`PreviousSignals` never carries provenance. A signal observed exactly at `windowStart` belongs to the
+**previous** window (shared inclusive-end boundary, no double-count).
+
+**Why.** These are deliberate, visible, versioned product choices (full-pipeline spec §Stage 6). They
+are settled — the reviewer/planner must **not** re-flag as drift: Neutral/Mixed contributing 0 to
+trajectory, the multiplicative Opportunity, the no-evidence-for-previous-window rule, or the
+`windowStart`→previous boundary. To change the formula, bump `Version` and update this entry; existing
+snapshots remain reproducible under their recorded `ScoringVersion`.
+
+**Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer).
