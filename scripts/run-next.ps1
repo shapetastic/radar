@@ -23,9 +23,17 @@ param(
     [string]$PermissionFlag = "--dangerously-skip-permissions"  # set "" to be prompted
 )
 
-$ErrorActionPreference = 'Stop'
+# Native tools (git, claude) write progress to stderr. Under 'Stop' that stderr gets turned into
+# a terminating error, so we use 'Continue' and gate on exit codes via Invoke-Git instead.
+$ErrorActionPreference = 'Continue'
 
 function Write-Section($t) { Write-Host ""; Write-Host "==== $t ====" -ForegroundColor Cyan }
+
+# Run git and fail only on a non-zero exit code (not on stderr/progress output).
+function Invoke-Git {
+    & git @args
+    if ($LASTEXITCODE) { throw "git $($args -join ' ') failed (exit $LASTEXITCODE)" }
+}
 
 # --- sanity checks ---
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
@@ -68,20 +76,19 @@ $worktreePath = Join-Path $WorktreeBase "$ProjectName-claude-$WorktreeIndex"
 $baseBranch   = "$ProjectName-claude-$WorktreeIndex-$DefaultBranch"
 if (-not (Test-Path $worktreePath)) {
     Write-Host "Worktree not found; creating $worktreePath" -ForegroundColor Yellow
-    & git worktree add $worktreePath -b $baseBranch $DefaultBranch
-    if ($LASTEXITCODE) { throw "Failed to create worktree $worktreePath" }
+    Invoke-Git worktree add $worktreePath -b $baseBranch $DefaultBranch
 }
 
 # --- always start the worktree clean from origin/<default branch> ---
 Write-Section "Resetting worktree to origin/$DefaultBranch"
-& git fetch origin $DefaultBranch
+Invoke-Git fetch origin $DefaultBranch
 Push-Location $worktreePath
 try {
     # Get onto the per-worktree base branch (create it from origin if missing), discarding any state.
-    & git checkout -f $baseBranch 2>$null
-    if ($LASTEXITCODE) { & git checkout -f -b $baseBranch "origin/$DefaultBranch" }
-    & git reset --hard "origin/$DefaultBranch"
-    & git clean -fd            # remove untracked cruft, but NOT gitignored local settings
+    & git checkout -f $baseBranch *> $null
+    if ($LASTEXITCODE) { Invoke-Git checkout -f -b $baseBranch "origin/$DefaultBranch" }
+    Invoke-Git reset --hard "origin/$DefaultBranch"
+    Invoke-Git clean -fd       # remove untracked cruft, but NOT gitignored local settings
     Write-Host "Worktree at: $(git rev-parse --short HEAD)" -ForegroundColor Green
 } finally {
     Pop-Location
@@ -100,10 +107,12 @@ report instead of committing.
 
 Push-Location $worktreePath
 try {
+    # Pipe $null to give claude an immediate stdin EOF (PowerShell 5.1 has no `< /dev/null`),
+    # otherwise headless `claude -p` waits ~3s for piped stdin before proceeding.
     if ([string]::IsNullOrWhiteSpace($PermissionFlag)) {
-        & claude -p $prompt
+        $null | & claude -p $prompt
     } else {
-        & claude -p $prompt $PermissionFlag
+        $null | & claude -p $prompt $PermissionFlag
     }
     $code = $LASTEXITCODE
 } finally {

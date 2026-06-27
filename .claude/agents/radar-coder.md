@@ -1,3 +1,9 @@
+---
+name: radar-coder
+description: Implements a single Project Radar task from an implementation spec. Makes the minimum change to satisfy the spec, keeps the solution buildable (dotnet build/test), preserves evidence-to-signal-to-score provenance, and never calls AI provider SDKs outside Infrastructure. Invoked by the orchestrator in Step 3 of CLAUDE.md.
+tools: Read, Write, Edit, Bash, Glob, Grep
+---
+
 # Radar Coder Sub-agent
 
 You implement Project Radar tasks from implementation specs.
