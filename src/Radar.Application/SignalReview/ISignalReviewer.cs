@@ -1,7 +1,7 @@
-namespace Radar.Application.SignalReview;
-
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
+
+namespace Radar.Application.SignalReview;
 
 /// <summary>
 /// Stage 5 reviewer: inspects a <see cref="Signal"/> together with its source

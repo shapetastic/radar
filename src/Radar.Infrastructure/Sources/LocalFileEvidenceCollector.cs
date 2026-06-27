@@ -30,6 +30,10 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         ILogger<LocalFileEvidenceCollector> logger,
         TimeProvider timeProvider)
     {
+        ArgumentNullException.ThrowIfNull(normalizer);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         _normalizer = normalizer;
         _options = options;
         _logger = logger;

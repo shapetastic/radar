@@ -1,11 +1,11 @@
-namespace Radar.Application.SignalReview;
-
 using Radar.Domain.Signals;
+
+namespace Radar.Application.SignalReview;
 
 /// <summary>
 /// Result of reviewing a single <see cref="Signal"/>: the (possibly adjusted) reviewed signal
-/// produced via a <c>with</c> expression, plus the immutable <see cref="SignalReview"/> audit record.
+/// produced via a <c>with</c> expression, plus the immutable <see cref="Radar.Domain.Signals.SignalReview"/> audit record.
 /// </summary>
 public sealed record SignalReviewOutcome(
     Signal ReviewedSignal,
-    SignalReview Review);
+    Radar.Domain.Signals.SignalReview Review);

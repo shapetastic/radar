@@ -1,5 +1,6 @@
 using Radar.Domain.Evidence;
 using Radar.Infrastructure.Persistence.InMemory;
+using Radar.TestSupport;
 
 namespace Radar.Infrastructure.Tests.Persistence;
 
@@ -10,19 +11,19 @@ public class InMemoryEvidenceRepositoryTests
         string contentHash,
         string title,
         string rawText)
-        => new(
-            Id: id,
-            SourceType: EvidenceSourceType.NewsArticle,
-            SourceName: "Example Wire",
-            SourceUrl: "https://example.com/article",
-            Title: title,
-            Summary: null,
-            RawText: rawText,
-            ContentHash: contentHash,
-            PublishedAtUtc: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
-            CollectedAtUtc: new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero),
-            Quality: EvidenceQuality.Medium,
-            MetadataJson: null);
+        => new EvidenceBuilder()
+            .WithId(id)
+            .WithSourceType(EvidenceSourceType.NewsArticle)
+            .WithSourceName("Example Wire")
+            .WithSourceUrl("https://example.com/article")
+            .WithTitle(title)
+            .WithSummary(null)
+            .WithRawText(rawText)
+            .WithContentHash(contentHash)
+            .WithPublishedAtUtc(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
+            .WithCollectedAtUtc(new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero))
+            .WithQuality(EvidenceQuality.Medium)
+            .Build();
 
     [Fact]
     public async Task AddIfNewAsync_NewItem_ReturnsTrueAndIsRetrievable()
@@ -105,19 +106,19 @@ public class InMemoryEvidenceRepositoryTests
     }
 
     private static EvidenceItem MakeItemAt(Guid id, string contentHash, DateTimeOffset collectedAtUtc)
-        => new(
-            Id: id,
-            SourceType: EvidenceSourceType.NewsArticle,
-            SourceName: "Example Wire",
-            SourceUrl: "https://example.com/article",
-            Title: "Title",
-            Summary: null,
-            RawText: "raw text",
-            ContentHash: contentHash,
-            PublishedAtUtc: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
-            CollectedAtUtc: collectedAtUtc,
-            Quality: EvidenceQuality.Medium,
-            MetadataJson: null);
+        => new EvidenceBuilder()
+            .WithId(id)
+            .WithSourceType(EvidenceSourceType.NewsArticle)
+            .WithSourceName("Example Wire")
+            .WithSourceUrl("https://example.com/article")
+            .WithTitle("Title")
+            .WithSummary(null)
+            .WithRawText("raw text")
+            .WithContentHash(contentHash)
+            .WithPublishedAtUtc(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
+            .WithCollectedAtUtc(collectedAtUtc)
+            .WithQuality(EvidenceQuality.Medium)
+            .Build();
 
     [Fact]
     public async Task GetAllAsync_ReturnsItemsOrderedByCollectedAtThenId()
