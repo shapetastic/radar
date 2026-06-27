@@ -8,8 +8,11 @@ namespace Radar.Application.Scoring;
 /// touching any other Stage 6 infrastructure.
 ///
 /// Contract for any implementation:
-///  - Pure and deterministic: the same <see cref="ScoringInput"/> MUST yield an equal
-///    <see cref="ScoreComputation"/>. No I/O, no clock, no randomness.
+///  - Pure and deterministic: the same <see cref="ScoringInput"/> MUST yield an equivalent
+///    <see cref="ScoreComputation"/> — the same component scores, <c>ComponentJson</c>, explanation,
+///    and the same contributions in the same order. (This is value/content equivalence, not record
+///    <c>Equals</c>: <see cref="ScoreComputation"/> carries a contributions list, so reference-based
+///    record equality is not implied.) No I/O, no clock, no randomness.
 ///  - Every component score MUST be within the inclusive range 0..100.
 ///  - <see cref="Version"/> is a stable, explicit formula identity (e.g. "mvp-v1"); change it
 ///    whenever the computation changes, so snapshots remain reproducible and auditable.

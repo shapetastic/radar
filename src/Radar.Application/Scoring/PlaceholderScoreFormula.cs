@@ -12,6 +12,7 @@
 // ============================================================================================
 
 using System.Text.Json;
+using Radar.Domain.Signals;
 
 namespace Radar.Application.Scoring;
 
@@ -44,7 +45,7 @@ public sealed class PlaceholderScoreFormula : IScoreFormula
             // PROVISIONAL placeholder — maintainer to replace with the real formula
             totalStrength += signal.Strength;
             // PROVISIONAL placeholder — maintainer to replace with the real formula
-            if (signal.Direction == Domain.Signals.SignalDirection.Positive)
+            if (signal.Direction == SignalDirection.Positive)
             {
                 positiveCount++;
             }
