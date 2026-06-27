@@ -19,6 +19,10 @@ public class InfrastructureServiceCollectionExtensionsTests
         Assert.Contains(services, d => d.ServiceType == typeof(IReportRepository));
 
         Assert.DoesNotContain(services, d => d.ServiceType == typeof(ICompanyResolver));
+
+        // "Repositories only" is the contract: exactly the five repository registrations and
+        // nothing else, so an accidental extra registration is caught here.
+        Assert.Equal(5, services.Count);
     }
 
     [Fact]
