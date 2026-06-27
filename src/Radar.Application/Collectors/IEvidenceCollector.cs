@@ -1,6 +1,6 @@
-namespace Radar.Application.Collectors;
-
 using Radar.Domain.Evidence;
+
+namespace Radar.Application.Collectors;
 
 public interface IEvidenceCollector
 {
