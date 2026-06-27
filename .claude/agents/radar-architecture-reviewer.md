@@ -53,8 +53,11 @@ tests), then dig into each axis:
 - Project references: Domain → nothing; Application → Domain; Infrastructure → Application +
   Domain; Worker → Application + Infrastructure; nothing references Worker. Verify from the
   `.csproj` files / `dotnet list <proj> reference`.
-- `Radar.Domain` and `Radar.Application` carry no third-party/provider packages.
-- No AI provider SDK referenced or called outside `Radar.Infrastructure`.
+- `Radar.Domain` carries no package references (pure). `Radar.Application` MAY reference
+  `Microsoft.Extensions.*` abstractions (Logging/DI/Options/Configuration/AI) per **AD-5**; flag only
+  concrete provider/infra SDKs (DB drivers, concrete LLM clients) appearing in Domain or Application.
+- No concrete AI provider SDK referenced or called outside `Radar.Infrastructure` (the
+  `Microsoft.Extensions.AI` abstraction is allowed in Application).
 - Domain types stay pure (no I/O, persistence, or framework types leaking in).
 
 ### 2. Provenance invariants (hard rules)

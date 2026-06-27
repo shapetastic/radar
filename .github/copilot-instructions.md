@@ -20,9 +20,14 @@ When reviewing changes, prioritise the rules below. The reference specs are
 ## Architecture & layering
 - Project references: `Radar.Domain` → nothing; `Radar.Application` → Domain; `Radar.Infrastructure`
   → Application + Domain; `Radar.Worker` → Application + Infrastructure. **Nothing references Worker.**
-  `Radar.Domain` and `Radar.Application` must stay free of third-party/provider packages.
+- **Package boundary (AD-5):** `Radar.Domain` stays pure (no package references). `Radar.Application`
+  MAY reference `Microsoft.Extensions.*` abstractions (`Logging.Abstractions`,
+  `DependencyInjection.Abstractions`, `Options`, `Configuration.Abstractions`, `Microsoft.Extensions.AI`).
+  Concrete provider/infrastructure SDKs (DB drivers like Npgsql/Dapper, concrete LLM client SDKs) stay
+  in `Radar.Infrastructure`.
 - **No AI provider SDK may be called outside `Radar.Infrastructure`.** Use provider-independent
-  application interfaces (e.g. `IAiStructuredOutputService`).
+  application interfaces (e.g. `IAiStructuredOutputService`); `Microsoft.Extensions.AI` abstractions in
+  Application are fine.
 - Prefer deterministic code before AI. AI outputs must be typed records and **validated before
   persistence**; on low confidence, keep the evidence but do not create high-confidence signals.
 

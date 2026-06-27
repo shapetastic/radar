@@ -69,3 +69,31 @@ the real persistence behaviour. Accepted for now. If the team later prefers to k
 `ICompanyRepository`; until then this is not drift.
 
 **Status.** Accepted · 2026-06-27 (spec 06).
+
+---
+
+## AD-5 — Application may use Microsoft.Extensions.* abstractions (supersedes "package-free Application")
+
+**Decision.** `Radar.Domain` stays pure — **no package references** (records/enums only).
+`Radar.Application` **MAY reference the `Microsoft.Extensions.*` abstraction packages**:
+`Microsoft.Extensions.Logging.Abstractions` (`ILogger<T>`), `…DependencyInjection.Abstractions`,
+`…Options`, `…Configuration.Abstractions`, and `Microsoft.Extensions.AI`. **Concrete provider /
+infrastructure SDKs** — database drivers (Npgsql, Dapper), and concrete LLM client SDKs — remain in
+`Radar.Infrastructure` only.
+
+This **reverses** the earlier implicit "`Radar.Application` keeps zero package references" rule that
+the planner had baked into specs 04/09/10/11 (it forced spec 11 to drop a requested `ILogger`). That
+rule was an over-strict extrapolation, not a master-spec requirement.
+
+**Why.** Depending on framework *abstractions* (logging, DI, options, config, `Microsoft.Extensions.AI`)
+from the Application layer is standard Clean Architecture and keeps the app testable while still
+keeping concrete providers behind interfaces in Infrastructure. The real hard rule is unchanged: **no
+concrete AI/data provider SDK outside `Radar.Infrastructure`** — Application gets the abstractions, not
+the implementations.
+
+**Scope note.** This is about the `Microsoft.Extensions.*` *abstraction* family, not full ASP.NET Core
+hosting/web packages (`Microsoft.AspNetCore.*`), which belong in the `Radar.Api`/`Radar.Worker` host
+layer, not in Application.
+
+**Status.** Accepted · 2026-06-27 (decision by maintainer). Existing merged slices are not retrofitted;
+new work may add these packages to Application as needed.
