@@ -73,18 +73,42 @@ if (Test-Path $nextDir) {
     $specs = Get-ChildItem -Path $nextDir -Filter *.md -File | Sort-Object Name
 }
 
-# --- planner mode: no specs (or forced) ---
+# --- planner mode: no specs (or forced) — architecture-gated ---
 if ($Plan -or $specs.Count -eq 0) {
     if ($Plan) {
-        Write-Section "Work-planner mode (forced)"
+        Write-Section "Planner mode (forced, architecture-gated)"
     } else {
-        Write-Section "No pending specs in docs/next - launching work-planner"
+        Write-Section "No pending specs in docs/next - launching architecture-gated planner"
     }
-    $plannerPrompt = "Act as the Radar work planner defined in .claude/agents/radar-work-planner.md. " +
-        "Inspect docs/ and docs/next/, do a gap analysis against the master specs, and generate the " +
-        "next 1-3 small implementation specs into docs/next/. Do not write production code. " +
-        "When done, commit the new specs and push to origin/$DefaultBranch so the next run can pick them up."
-    # Interactive and in the main repo so a human can review the generated specs.
+    # Interactive (no -p) and in the main repo so a human reviews the verdict and generated specs,
+    # and so the session can spawn the radar-architecture-reviewer / radar-work-planner sub-agents.
+    $plannerPrompt = @"
+You are the Radar planner running interactively. Follow this architecture-GATED procedure exactly —
+converge the trunk before expanding it:
+
+1. Read docs/architecture-decisions.md (the decisions ledger). Treat every decision recorded there
+   as SETTLED: do not propose work to undo or re-litigate it, and do not let the reviewer's findings
+   re-flag it.
+
+2. Run the radar-architecture-reviewer sub-agent to audit the whole codebase for cross-slice drift.
+   It returns severity-ranked findings (HIGH/MEDIUM/LOW).
+
+3. Choose direction:
+   - If there are any HIGH or MEDIUM findings NOT already covered by the decisions ledger, the next
+     work is CLEANUP. Use the radar-work-planner sub-agent to convert those HIGH/MEDIUM findings into
+     ONE small numbered cleanup spec in docs/next/ (continue the existing number sequence). Do NOT
+     plan new feature slices this round. LOW findings are informational — list them, do not gate on
+     them.
+   - Otherwise (only LOW or no findings), use the radar-work-planner sub-agent to generate the next
+     1-3 small feature implementation specs in docs/next/ per its definition and the master specs.
+
+4. Summarize: the architecture verdict (CLEAN vs CLEANUP), the spec(s) created with a one-line each,
+   and the suggested next command. Then commit the new spec(s) and push to origin/$DefaultBranch so
+   the next run can pick them up.
+
+Do not write production code. Reference: .claude/agents/radar-architecture-reviewer.md,
+.claude/agents/radar-work-planner.md, docs/architecture-decisions.md.
+"@
     & claude $plannerPrompt
     exit $LASTEXITCODE
 }

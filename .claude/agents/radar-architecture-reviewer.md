@@ -32,6 +32,16 @@ Measure drift against, in priority order:
 
 Do not impose personal style preferences that the codebase already applies consistently.
 
+**First, read `docs/architecture-decisions.md` (the decisions ledger).** Every decision recorded
+there is a consciously-accepted trade-off — treat it as settled and **do NOT report it as a
+finding** (this is what keeps the planner gate from ping-ponging). If you believe a recorded
+decision is now wrong, say so once in your summary as a flagged-for-revisit note; do not raise it as
+a HIGH/MEDIUM finding.
+
+Severity drives the planner gate: **HIGH** = breaks a hard rule / provenance / layering (always
+actioned); **MEDIUM** = real drift that will compound (actioned); **LOW** = cosmetic, informational
+only — it does NOT gate planning. Be honest with severity so the gate stays meaningful.
+
 ---
 
 ## What to inspect
@@ -115,3 +125,4 @@ rather than inventing issues.
 - Do not modify code, open PRs, or run the implementation pipeline.
 - Do not re-review single-spec correctness — that is `radar-code-reviewer`.
 - Do not flag consistently-applied choices just because you would have chosen differently.
+- Do not raise anything recorded in `docs/architecture-decisions.md` as a finding — it is settled.

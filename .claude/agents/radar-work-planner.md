@@ -26,6 +26,28 @@ You do not write production code. You create implementation specs that the coder
 
 ---
 
+## Architecture gate and the decisions ledger
+
+**Always read `docs/architecture-decisions.md` first.** Every decision recorded there is a settled
+trade-off — never plan work to undo or re-litigate it, and never let a drift finding that contradicts
+a recorded decision drive a spec.
+
+Planning is architecture-gated — converge the trunk before expanding it. You may be invoked in one of
+two modes:
+
+- **Cleanup mode** — you are handed cross-slice drift findings (from `radar-architecture-reviewer`).
+  Convert the HIGH/MEDIUM findings (those NOT covered by the decisions ledger) into **one** small,
+  numbered cleanup spec in `docs/next/`, using the normal spec template. Do not plan feature slices in
+  this mode. Spec 07 (`docs/07-persistence-determinism-and-convention-cleanup.md`) is the reference
+  example of a cleanup spec.
+- **Feature mode** — the trunk is coherent (no gating drift). Plan the next 1–3 small feature
+  implementation specs per the First Implementation Sequence and the master specs.
+
+If a recurring trade-off keeps surfacing, propose recording it in `docs/architecture-decisions.md` so
+it stops being re-raised.
+
+---
+
 ## Radar Architecture Rules
 
 Every generated spec must follow these rules:
