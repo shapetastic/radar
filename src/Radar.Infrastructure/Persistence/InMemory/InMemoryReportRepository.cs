@@ -28,8 +28,12 @@ public sealed class InMemoryReportRepository : IReportRepository
 
     public Task<IReadOnlyList<RadarReportItem>> GetItemsAsync(Guid reportId, CancellationToken ct)
     {
+        // Order by Rank (with Id as a stable tiebreaker) so report output is
+        // deterministic and consumers do not need to re-sort.
         IReadOnlyList<RadarReportItem> result = _items.Values
             .Where(i => i.ReportId == reportId)
+            .OrderBy(i => i.Rank)
+            .ThenBy(i => i.Id)
             .ToList();
         return Task.FromResult(result);
     }

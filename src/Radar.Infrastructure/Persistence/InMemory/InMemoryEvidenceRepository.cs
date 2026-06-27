@@ -11,6 +11,8 @@ public sealed class InMemoryEvidenceRepository : IEvidenceRepository
 
     public Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+
         // Atomic check-and-add on the content-hash index enforces the unique-hash
         // dedupe rule. If the hash already exists we reject without mutating the
         // existing (immutable) evidence.
@@ -19,7 +21,15 @@ public sealed class InMemoryEvidenceRepository : IEvidenceRepository
             return Task.FromResult(false);
         }
 
-        _byId[item.Id] = item;
+        // Preserve immutability: never overwrite an existing record under the same
+        // Id. If the Id is somehow already present, roll back the hash index entry
+        // we just added so the two indexes stay consistent.
+        if (!_byId.TryAdd(item.Id, item))
+        {
+            _byContentHash.TryRemove(item.ContentHash, out _);
+            return Task.FromResult(false);
+        }
+
         return Task.FromResult(true);
     }
 

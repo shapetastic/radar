@@ -75,6 +75,36 @@ public class InMemoryEvidenceRepositoryTests
     }
 
     [Fact]
+    public async Task AddIfNewAsync_DuplicateId_ReturnsFalseAndRollsBackHashIndex()
+    {
+        var repo = new InMemoryEvidenceRepository();
+        var id = Guid.NewGuid();
+
+        var first = MakeItem(id, "hash-a", "Original Title", "original raw text");
+        // Same Id, different content hash — the Id collision must reject the add and
+        // must not leave the new content hash pointing at a non-existent record.
+        var second = MakeItem(id, "hash-b", "Replacement Title", "replacement raw text");
+
+        var firstAdded = await repo.AddIfNewAsync(first, CancellationToken.None);
+        var secondAdded = await repo.AddIfNewAsync(second, CancellationToken.None);
+
+        Assert.True(firstAdded);
+        Assert.False(secondAdded);
+
+        // The original record is untouched.
+        var stored = await repo.GetByIdAsync(id, CancellationToken.None);
+        Assert.NotNull(stored);
+        Assert.Equal("Original Title", stored!.Title);
+
+        // The rolled-back hash index has no dangling entry.
+        var byNewHash = await repo.GetByContentHashAsync("hash-b", CancellationToken.None);
+        Assert.Null(byNewHash);
+
+        var all = await repo.GetAllAsync(CancellationToken.None);
+        Assert.Single(all);
+    }
+
+    [Fact]
     public async Task GetByIdAsync_Absent_ReturnsNull()
     {
         var repo = new InMemoryEvidenceRepository();
