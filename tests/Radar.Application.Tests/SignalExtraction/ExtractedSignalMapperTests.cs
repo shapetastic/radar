@@ -1,6 +1,7 @@
 using Radar.Application.SignalExtraction;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
+using Radar.TestSupport;
 
 namespace Radar.Application.Tests.SignalExtraction;
 
@@ -20,19 +21,13 @@ public class ExtractedSignalMapperTests
         "expanding its enterprise footprint significantly.";
 
     private static EvidenceItem MakeEvidence(DateTimeOffset? publishedAtUtc = null) =>
-        new(
-            Id: Guid.NewGuid(),
-            SourceType: EvidenceSourceType.PressRelease,
-            SourceName: "Acme Newsroom",
-            SourceUrl: "https://example.com/acme",
-            Title: "Acme signs new customer",
-            Summary: "A new enterprise customer win.",
-            RawText: RawText,
-            ContentHash: "hash-1",
-            PublishedAtUtc: publishedAtUtc,
-            CollectedAtUtc: CollectedAt,
-            Quality: EvidenceQuality.High,
-            MetadataJson: null);
+        new EvidenceBuilder()
+            .WithTitle("Acme signs new customer")
+            .WithSummary("A new enterprise customer win.")
+            .WithRawText(RawText)
+            .WithPublishedAtUtc(publishedAtUtc)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
 
     private static ExtractedSignal MakeExtracted(
         string companyMention = "Acme Corp",

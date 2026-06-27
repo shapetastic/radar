@@ -1,6 +1,7 @@
 using System.Globalization;
 using Radar.Domain.Signals;
 using Radar.Domain.Validation;
+using Radar.TestSupport;
 
 namespace Radar.Domain.Tests;
 
@@ -11,24 +12,14 @@ public class SignalValidationTests
         int novelty = 5,
         decimal confidence = 0.5m,
         string supportingExcerpt = "An excerpt from the source evidence.",
-        Guid? evidenceId = null)
-    {
-        return new Signal(
-            Id: Guid.NewGuid(),
-            EvidenceId: evidenceId ?? Guid.NewGuid(),
-            CompanyId: Guid.NewGuid(),
-            CompanyMention: "Acme Corp",
-            Type: SignalType.CustomerWin,
-            Direction: SignalDirection.Positive,
-            Strength: strength,
-            Novelty: novelty,
-            Confidence: confidence,
-            SupportingExcerpt: supportingExcerpt,
-            Reason: "Reason text.",
-            ReviewStatus: SignalReviewStatus.Pending,
-            ObservedAtUtc: DateTimeOffset.UtcNow,
-            CreatedAtUtc: DateTimeOffset.UtcNow);
-    }
+        Guid? evidenceId = null) =>
+        new SignalBuilder()
+            .WithStrength(strength)
+            .WithNovelty(novelty)
+            .WithConfidence(confidence)
+            .WithSupportingExcerpt(supportingExcerpt)
+            .WithEvidenceId(evidenceId ?? Guid.NewGuid())
+            .Build();
 
     [Fact]
     public void ValidSignal_HasNoErrors_AndIsValid()

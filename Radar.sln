@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Radar.Application.Tests", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Radar.Infrastructure.Tests", "tests\Radar.Infrastructure.Tests\Radar.Infrastructure.Tests.csproj", "{1E405177-18E6-411B-BC11-F4F034B40E1A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Radar.TestSupport", "tests\Radar.TestSupport\Radar.TestSupport.csproj", "{5EE27BC9-1E68-4CFA-8261-0E55620A816C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -115,6 +117,18 @@ Global
 		{1E405177-18E6-411B-BC11-F4F034B40E1A}.Release|x64.Build.0 = Release|Any CPU
 		{1E405177-18E6-411B-BC11-F4F034B40E1A}.Release|x86.ActiveCfg = Release|Any CPU
 		{1E405177-18E6-411B-BC11-F4F034B40E1A}.Release|x86.Build.0 = Release|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Debug|x64.Build.0 = Debug|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Debug|x86.Build.0 = Debug|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Release|x64.ActiveCfg = Release|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Release|x64.Build.0 = Release|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Release|x86.ActiveCfg = Release|Any CPU
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -127,5 +141,6 @@ Global
 		{F98D5873-583D-40BB-856F-8FEFD250CBDC} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{9D603AB2-9A1D-4672-A3A8-73C75DC5FB67} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{1E405177-18E6-411B-BC11-F4F034B40E1A} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{5EE27BC9-1E68-4CFA-8261-0E55620A816C} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

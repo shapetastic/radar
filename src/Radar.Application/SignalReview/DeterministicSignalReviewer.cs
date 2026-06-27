@@ -1,5 +1,3 @@
-namespace Radar.Application.SignalReview;
-
 using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
@@ -7,17 +5,19 @@ using Microsoft.Extensions.Logging;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
+namespace Radar.Application.SignalReview;
+
 /// <summary>
 /// Deterministic, rules-based Stage 5 signal reviewer. Applies a small set of conservative
 /// guardrail checks to a <see cref="Signal"/> and its source <see cref="EvidenceItem"/>, then
-/// produces a versioned <see cref="SignalReview"/> audit record and a reviewed signal with an
+/// produces a versioned <see cref="Radar.Domain.Signals.SignalReview"/> audit record and a reviewed signal with an
 /// updated <see cref="SignalReviewStatus"/> (and, where appropriate, a reduced confidence — never an
 /// increased one). Pure and offline: no AI, no I/O. The AI-assisted reviewer described in the schema
 /// is deliberately deferred to a later, human-owned slice.
 /// </summary>
 public sealed class DeterministicSignalReviewer : ISignalReviewer
 {
-    /// <summary>Versioned reviewer identity recorded on every <see cref="SignalReview"/>.</summary>
+    /// <summary>Versioned reviewer identity recorded on every <see cref="Radar.Domain.Signals.SignalReview"/>.</summary>
     private const string ReviewerName = "deterministic-rules-v1";
 
     /// <summary>Strength below this threshold is treated as immaterial.</summary>
@@ -139,7 +139,7 @@ public sealed class DeterministicSignalReviewer : ISignalReviewer
             Confidence = adjustedConfidence,
         };
 
-        var review = new SignalReview(
+        var review = new Radar.Domain.Signals.SignalReview(
             Id: Guid.NewGuid(),
             SignalId: signal.Id,
             ReviewerName: ReviewerName,

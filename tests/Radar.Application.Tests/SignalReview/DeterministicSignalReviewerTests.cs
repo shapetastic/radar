@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.SignalReview;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
+using Radar.TestSupport;
 
 namespace Radar.Application.Tests.SignalReview;
 
@@ -36,19 +37,13 @@ public class DeterministicSignalReviewerTests
     private static EvidenceItem MakeEvidence(
         EvidenceQuality quality = EvidenceQuality.High,
         Guid? id = null) =>
-        new(
-            Id: id ?? EvidenceId,
-            SourceType: EvidenceSourceType.PressRelease,
-            SourceName: "Acme Newsroom",
-            SourceUrl: "https://example.com/acme",
-            Title: "Untitled",
-            Summary: "A summary.",
-            RawText: "Acme signed a multi-year deal with a major customer.",
-            ContentHash: "hash-1",
-            PublishedAtUtc: ObservedAt,
-            CollectedAtUtc: CreatedAt,
-            Quality: quality,
-            MetadataJson: null);
+        new EvidenceBuilder()
+            .WithId(id ?? EvidenceId)
+            .WithRawText("Acme signed a multi-year deal with a major customer.")
+            .WithPublishedAtUtc(ObservedAt)
+            .WithCollectedAtUtc(CreatedAt)
+            .WithQuality(quality)
+            .Build();
 
     private static Signal MakeSignal(
         Guid? companyId = null,
@@ -56,21 +51,15 @@ public class DeterministicSignalReviewerTests
         int novelty = 6,
         decimal confidence = 0.8m,
         Guid? evidenceId = null) =>
-        new(
-            Id: Guid.NewGuid(),
-            EvidenceId: evidenceId ?? EvidenceId,
-            CompanyId: companyId,
-            CompanyMention: "Acme Corp",
-            Type: SignalType.CustomerWin,
-            Direction: SignalDirection.Positive,
-            Strength: strength,
-            Novelty: novelty,
-            Confidence: confidence,
-            SupportingExcerpt: "signed a multi-year deal",
-            Reason: "Customer win phrase detected.",
-            ReviewStatus: SignalReviewStatus.Pending,
-            ObservedAtUtc: ObservedAt,
-            CreatedAtUtc: CreatedAt);
+        new SignalBuilder()
+            .WithEvidenceId(evidenceId ?? EvidenceId)
+            .WithCompanyId(companyId)
+            .WithStrength(strength)
+            .WithNovelty(novelty)
+            .WithConfidence(confidence)
+            .WithObservedAtUtc(ObservedAt)
+            .WithCreatedAtUtc(CreatedAt)
+            .Build();
 
     [Fact]
     public async Task CleanSignal_Approves_LeavesConfidence_AndEmptyIssues()

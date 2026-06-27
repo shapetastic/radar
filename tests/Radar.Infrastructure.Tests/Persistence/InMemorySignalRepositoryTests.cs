@@ -1,5 +1,6 @@
 using Radar.Domain.Signals;
 using Radar.Infrastructure.Persistence.InMemory;
+using Radar.TestSupport;
 
 namespace Radar.Infrastructure.Tests.Persistence;
 
@@ -9,21 +10,21 @@ public class InMemorySignalRepositoryTests
         Guid id,
         Guid? companyId,
         DateTimeOffset observedAtUtc)
-        => new(
-            Id: id,
-            EvidenceId: Guid.NewGuid(),
-            CompanyId: companyId,
-            CompanyMention: "Example Corp",
-            Type: SignalType.CustomerWin,
-            Direction: SignalDirection.Positive,
-            Strength: 3,
-            Novelty: 2,
-            Confidence: 0.8m,
-            SupportingExcerpt: "won a major customer",
-            Reason: "named customer in press release",
-            ReviewStatus: SignalReviewStatus.Approved,
-            ObservedAtUtc: observedAtUtc,
-            CreatedAtUtc: new DateTimeOffset(2026, 1, 10, 0, 0, 0, TimeSpan.Zero));
+        => new SignalBuilder()
+            .WithId(id)
+            .WithCompanyId(companyId)
+            .WithCompanyMention("Example Corp")
+            .WithType(SignalType.CustomerWin)
+            .WithDirection(SignalDirection.Positive)
+            .WithStrength(3)
+            .WithNovelty(2)
+            .WithConfidence(0.8m)
+            .WithSupportingExcerpt("won a major customer")
+            .WithReason("named customer in press release")
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(observedAtUtc)
+            .WithCreatedAtUtc(new DateTimeOffset(2026, 1, 10, 0, 0, 0, TimeSpan.Zero))
+            .Build();
 
     [Fact]
     public async Task GetByCompanyAsync_ReturnsOnlySignalsForRequestedCompany()

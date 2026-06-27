@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.SignalExtraction;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
+using Radar.TestSupport;
 
 namespace Radar.Application.Tests.SignalExtraction;
 
@@ -21,19 +22,13 @@ public class KeywordSignalExtractorTests
         string title = "Untitled",
         string sourceName = "Acme Newsroom",
         DateTimeOffset? publishedAtUtc = null) =>
-        new(
-            Id: Guid.NewGuid(),
-            SourceType: EvidenceSourceType.PressRelease,
-            SourceName: sourceName,
-            SourceUrl: "https://example.com/acme",
-            Title: title,
-            Summary: "A summary.",
-            RawText: rawText,
-            ContentHash: "hash-1",
-            PublishedAtUtc: publishedAtUtc,
-            CollectedAtUtc: CollectedAt,
-            Quality: EvidenceQuality.High,
-            MetadataJson: null);
+        new EvidenceBuilder()
+            .WithTitle(title)
+            .WithSourceName(sourceName)
+            .WithRawText(rawText)
+            .WithPublishedAtUtc(publishedAtUtc)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
 
     private static async Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence) =>
         await new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance).ExtractAsync(evidence, CancellationToken.None);
