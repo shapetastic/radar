@@ -28,12 +28,10 @@ public static partial class ExtractedSignalMapper
         if (companyMention.Length == 0)
             errors.Add("Company mention must not be empty.");
 
+        // Emptiness is validated by SignalValidation below; the mapper only owns the
+        // provenance check (excerpt must be traceable to the evidence body).
         var supportingExcerpt = (extracted.SupportingExcerpt ?? string.Empty).Trim();
-        if (supportingExcerpt.Length == 0)
-        {
-            errors.Add("Supporting excerpt must not be empty.");
-        }
-        else if (!ExcerptIsInEvidence(supportingExcerpt, evidence.RawText))
+        if (supportingExcerpt.Length > 0 && !ExcerptIsInEvidence(supportingExcerpt, evidence.RawText))
         {
             errors.Add("Supporting excerpt not found in evidence.");
         }
