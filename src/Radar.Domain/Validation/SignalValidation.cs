@@ -6,6 +6,8 @@ public static class SignalValidation
 {
     public static IReadOnlyList<string> Validate(Signal signal)
     {
+        ArgumentNullException.ThrowIfNull(signal);
+
         var errors = new List<string>();
         if (signal.Strength is < 1 or > 10)
             errors.Add("Strength must be between 1 and 10.");

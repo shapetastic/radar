@@ -1,3 +1,4 @@
+using System.Globalization;
 using Radar.Domain.Signals;
 using Radar.Domain.Validation;
 
@@ -61,11 +62,12 @@ public class SignalValidationTests
     }
 
     [Theory]
-    [InlineData(-0.1)]
-    [InlineData(1.1)]
-    public void Confidence_OutOfRange_ProducesError(double confidence)
+    [InlineData("-0.1")]
+    [InlineData("1.1")]
+    public void Confidence_OutOfRange_ProducesError(string confidence)
     {
-        var signal = CreateValidSignal(confidence: (decimal)confidence);
+        var signal = CreateValidSignal(
+            confidence: decimal.Parse(confidence, CultureInfo.InvariantCulture));
 
         Assert.Contains("Confidence must be between 0 and 1.", SignalValidation.Validate(signal));
         Assert.False(SignalValidation.IsValid(signal));
