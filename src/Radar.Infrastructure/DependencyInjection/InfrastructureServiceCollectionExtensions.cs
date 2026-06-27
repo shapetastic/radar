@@ -4,6 +4,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
+using Radar.Application.SignalExtraction;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Sources;
 
@@ -28,16 +29,19 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the stateless application services (currently the deterministic
-    /// <see cref="Radar.Application.EntityResolution.ICompanyResolver"/>) as singletons. The
-    /// resolver only depends on the singleton repositories, so a singleton lifetime is correct
-    /// and lets singleton consumers (e.g. a hosted service) resolve it from the root provider.
+    /// Registers the stateless application services as singletons: the deterministic
+    /// <see cref="Radar.Application.EntityResolution.ICompanyResolver"/> and the deterministic
+    /// keyword-based <see cref="Radar.Application.SignalExtraction.ISignalExtractor"/>
+    /// (<see cref="KeywordSignalExtractor"/>). The resolver only depends on the singleton
+    /// repositories and the extractor is dependency-free, so a singleton lifetime is correct and
+    /// lets singleton consumers (e.g. a hosted service) resolve them from the root provider.
     /// Requires <see cref="AddInMemoryRadarPersistence"/> (or another registration of the
     /// repositories) to have been called for the resolver's dependencies.
     /// </summary>
     public static IServiceCollection AddRadarApplicationServices(this IServiceCollection services)
     {
         services.AddSingleton<ICompanyResolver, CompanyResolver>();
+        services.AddSingleton<ISignalExtractor, KeywordSignalExtractor>();
         return services;
     }
 
