@@ -22,8 +22,8 @@ If you are given a spec file from `docs/next/`, or if you are started without a 
 
 If no specs are assigned to your worktree, or `docs/next/` is empty, wait for a task from the user.
 
-> Note: `docs/next/` is gitignored. Pending specs live there locally and are promoted into
-> `docs/` (which IS tracked) once the work is complete — see Step 4.
+> Note: `docs/next/` is tracked and committed, so specs are visible in every worktree after
+> the Step 1/2 reset to `origin/main`. Completed specs are promoted into `docs/` — see Step 4.
 
 ---
 
@@ -128,11 +128,9 @@ When the reviewer approves:
    ```
 
 4. If working from a spec in `docs/next/`:
-   - `docs/next/` is gitignored, so the spec file is untracked — `git mv` will not work.
-     Move it on disk, then stage the destination (which is tracked):
+   - Move the spec file from `docs/next/` to `docs/`:
      ```
-     mv docs/next/<spec-file>.md docs/<spec-file>.md
-     git add docs/<spec-file>.md
+     git mv docs/next/<spec-file>.md docs/<spec-file>.md
      git commit -m "docs: promote completed spec to docs/"
      git push origin <branch-name>
      ```

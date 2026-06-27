@@ -165,6 +165,3 @@ docs/next/.claude/settings.local.json
 .tmp/
 /extraction-output
 /docs/screens
-
-# Pending implementation specs (work planner output; moved to /docs when complete)
-/docs/next/
