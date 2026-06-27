@@ -47,6 +47,25 @@ if (-not (Test-Path (Join-Path $RepoPath ".git"))) {
 }
 Set-Location $RepoPath
 
+# --- sync the main repo to origin/<default branch> so the spec/planner decision uses latest ---
+# (the spec-implementation path resets the WORKTREE; this keeps the main repo's docs/next current)
+Write-Section "Syncing main repo to origin/$DefaultBranch"
+& git fetch origin $DefaultBranch *> $null
+$curBranch = (& git rev-parse --abbrev-ref HEAD).Trim()
+$dirty = @(& git status --porcelain)
+if ($curBranch -ne $DefaultBranch) {
+    Write-Host "On '$curBranch' (not $DefaultBranch); skipping sync, using current state." -ForegroundColor Yellow
+} elseif ($dirty.Count -gt 0) {
+    Write-Host "Local changes present; skipping sync, using current state." -ForegroundColor Yellow
+} else {
+    & git merge --ff-only "origin/$DefaultBranch" *> $null
+    if ($LASTEXITCODE) {
+        Write-Host "Could not fast-forward to origin/$DefaultBranch (diverged?); using current state." -ForegroundColor Yellow
+    } else {
+        Write-Host "Synced to origin/$DefaultBranch ($((& git rev-parse --short HEAD).Trim()))" -ForegroundColor Green
+    }
+}
+
 # --- find the next pending spec ---
 $nextDir = Join-Path $RepoPath "docs/next"
 $specs = @()
