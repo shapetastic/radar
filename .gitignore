@@ -1,0 +1,170 @@
+# .NET / Visual Studio gitignore
+# Based on github.com/github/gitignore VisualStudio.gitignore
+
+## Tactical Problem-Solver diagnostic eval harness output (the inputs are committed; runs are not)
+dev_handoff/eval/out/
+
+## Build output
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## Visual Studio files
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+## NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## MSBuild
+*.pidb
+*.svclog
+*.scc
+
+## Rider / JetBrains
+.idea/
+*.sln.iml
+
+## ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+## Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+TestResult.xml
+*.trx
+*.coverage
+*.coveragexml
+_NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+*.ncrunchproject
+
+## Benchmark results
+BenchmarkDotNet.Artifacts/
+
+## dotCover
+*.dotCover
+
+## NCrunch
+*.ncrunchsolution
+*.ncrunchsolution.user
+
+## Publish profiles
+**/Properties/PublishProfiles/
+PublishScripts/
+
+## Azure
+csx/
+*.build.csdef
+ecf/
+rcf/
+
+## ASP.NET / Web
+AppPackages/
+BundleArtifacts/
+Package.StoreAssociation.xml
+_pkginfo.txt
+*.appx
+*.appxbundle
+*.appxupload
+ServiceFabricBackup/
+*.pfx
+*.publishsettings
+orleans.codegen.cs
+
+## Entity Framework
+migrations/*.sql
+
+## Node (if any frontend tooling)
+node_modules/
+npm-debug.log
+yarn-error.log
+.yarn-integrity
+
+## Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+## Linux
+*~
+
+## VS Code (keep settings, ignore local)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+## Secrets & environment
+*.env
+*.env.local
+appsettings.Local.json
+appsettings.local.json
+secrets.json
+
+## Crash dumps
+*.dmp
+
+.claude/settings.local.json
+docs/next/.claude/settings.local.json
+/CoachingPipeline/CoachingPipeline.Api/Properties/launchSettings.json
+/CoachingPipeline/CoachingPipeline.Watcher/Properties/launchSettings.json
+
+# Local data directories (runtime data lives in /home/pi/coaching-data/ outside the repo).
+# Ignore the directory's contents but NOT the directory entry itself, so the negated paths below
+# can re-include specific source-controlled assets (git won't descend into a fully-ignored dir).
+/data/*
+# ...the seeded base diagnostic framework artifact is a static, versioned source-controlled asset
+# (the diagnostic spine) that ships with the app and is asserted by tests — keep it tracked.
+!/data/frameworks/
+/data/frameworks/*
+!/data/frameworks/default.json
+/review-queue/
+/intake/
+/CoachingPipeline/CoachingPipeline.Api/data/
+/coaching-review-ui/playwright-report
+/coaching-review-ui/test-results
+
+# Ignore runtime temp run snapshots
+.tmp/
+/extraction-output
+/docs/screens
+
+# Pending implementation specs (work planner output; moved to /docs when complete)
+/docs/next/
