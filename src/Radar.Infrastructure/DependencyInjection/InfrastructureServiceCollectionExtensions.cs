@@ -5,6 +5,7 @@ using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.SignalExtraction;
+using Radar.Application.SignalReview;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Sources;
 
@@ -42,6 +43,8 @@ public static class InfrastructureServiceCollectionExtensions
     {
         services.AddSingleton<ICompanyResolver, CompanyResolver>();
         services.AddSingleton<ISignalExtractor, KeywordSignalExtractor>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<ISignalReviewer, DeterministicSignalReviewer>();
         return services;
     }
 
