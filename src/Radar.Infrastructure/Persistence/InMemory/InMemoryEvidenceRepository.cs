@@ -4,8 +4,6 @@ using Radar.Domain.Evidence;
 
 namespace Radar.Infrastructure.Persistence.InMemory;
 
-// In-memory implementations complete synchronously and do not observe the
-// CancellationToken; the real (Dapper) implementations honor it.
 public sealed class InMemoryEvidenceRepository : IEvidenceRepository
 {
     private readonly ConcurrentDictionary<Guid, EvidenceItem> _byId = new();

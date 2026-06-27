@@ -24,7 +24,20 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ISignalRepository, InMemorySignalRepository>();
         services.AddSingleton<IScoreRepository, InMemoryScoreRepository>();
         services.AddSingleton<IReportRepository, InMemoryReportRepository>();
-        services.AddScoped<ICompanyResolver, CompanyResolver>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the stateless application services (currently the deterministic
+    /// <see cref="Radar.Application.EntityResolution.ICompanyResolver"/>) as singletons. The
+    /// resolver only depends on the singleton repositories, so a singleton lifetime is correct
+    /// and lets singleton consumers (e.g. a hosted service) resolve it from the root provider.
+    /// Requires <see cref="AddInMemoryRadarPersistence"/> (or another registration of the
+    /// repositories) to have been called for the resolver's dependencies.
+    /// </summary>
+    public static IServiceCollection AddRadarApplicationServices(this IServiceCollection services)
+    {
+        services.AddSingleton<ICompanyResolver, CompanyResolver>();
         return services;
     }
 
