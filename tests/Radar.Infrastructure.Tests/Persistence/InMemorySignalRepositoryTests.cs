@@ -81,4 +81,98 @@ public class InMemorySignalRepositoryTests
         Assert.DoesNotContain(result, s => s.Id == before.Id);
         Assert.DoesNotContain(result, s => s.Id == after.Id);
     }
+
+    [Fact]
+    public async Task GetByCompanyAsync_ReturnsOrderedByObservedAtThenId()
+    {
+        var repo = new InMemorySignalRepository();
+        var company = Guid.NewGuid();
+
+        var t1 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var t2 = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+        var t3 = new DateTimeOffset(2026, 1, 3, 0, 0, 0, TimeSpan.Zero);
+
+        var first = MakeSignal(Guid.NewGuid(), company, t1);
+        var second = MakeSignal(Guid.NewGuid(), company, t2);
+        var third = MakeSignal(Guid.NewGuid(), company, t3);
+
+        await repo.AddAsync(third, CancellationToken.None);
+        await repo.AddAsync(first, CancellationToken.None);
+        await repo.AddAsync(second, CancellationToken.None);
+
+        var result = await repo.GetByCompanyAsync(company, CancellationToken.None);
+
+        Assert.Equal(
+            new[] { first.Id, second.Id, third.Id },
+            result.Select(s => s.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task GetByCompanyAsync_EqualObservedAt_BreaksTieById()
+    {
+        var repo = new InMemorySignalRepository();
+        var company = Guid.NewGuid();
+        var ts = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var idA = Guid.NewGuid();
+        var idB = Guid.NewGuid();
+        var expected = new[] { idA, idB }.OrderBy(x => x).ToArray();
+
+        await repo.AddAsync(MakeSignal(idB, company, ts), CancellationToken.None);
+        await repo.AddAsync(MakeSignal(idA, company, ts), CancellationToken.None);
+
+        var result = await repo.GetByCompanyAsync(company, CancellationToken.None);
+
+        Assert.Equal(expected, result.Select(s => s.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task GetObservedBetweenAsync_ReturnsOrderedByObservedAtThenId()
+    {
+        var repo = new InMemorySignalRepository();
+        var company = Guid.NewGuid();
+
+        var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
+
+        var t1 = new DateTimeOffset(2026, 1, 5, 0, 0, 0, TimeSpan.Zero);
+        var t2 = new DateTimeOffset(2026, 1, 10, 0, 0, 0, TimeSpan.Zero);
+        var t3 = new DateTimeOffset(2026, 1, 15, 0, 0, 0, TimeSpan.Zero);
+
+        var first = MakeSignal(Guid.NewGuid(), company, t1);
+        var second = MakeSignal(Guid.NewGuid(), company, t2);
+        var third = MakeSignal(Guid.NewGuid(), company, t3);
+
+        await repo.AddAsync(third, CancellationToken.None);
+        await repo.AddAsync(first, CancellationToken.None);
+        await repo.AddAsync(second, CancellationToken.None);
+
+        var result = await repo.GetObservedBetweenAsync(start, end, CancellationToken.None);
+
+        Assert.Equal(
+            new[] { first.Id, second.Id, third.Id },
+            result.Select(s => s.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task GetObservedBetweenAsync_EqualObservedAt_BreaksTieById()
+    {
+        var repo = new InMemorySignalRepository();
+        var company = Guid.NewGuid();
+
+        var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
+        var ts = new DateTimeOffset(2026, 1, 10, 0, 0, 0, TimeSpan.Zero);
+
+        var idA = Guid.NewGuid();
+        var idB = Guid.NewGuid();
+        var expected = new[] { idA, idB }.OrderBy(x => x).ToArray();
+
+        await repo.AddAsync(MakeSignal(idB, company, ts), CancellationToken.None);
+        await repo.AddAsync(MakeSignal(idA, company, ts), CancellationToken.None);
+
+        var result = await repo.GetObservedBetweenAsync(start, end, CancellationToken.None);
+
+        Assert.Equal(expected, result.Select(s => s.Id).ToArray());
+    }
 }

@@ -4,8 +4,10 @@ namespace Radar.Application.Abstractions.Persistence;
 
 public interface IEvidenceRepository
 {
-    // Returns false if an item with the same ContentHash already exists (dedupe),
-    // true if newly added. Preserves immutability: never overwrites existing evidence.
+    /// <remarks>
+    /// Insert-only: existing evidence is never overwritten (immutable); a duplicate
+    /// ContentHash is rejected and returns false.
+    /// </remarks>
     Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct);
     Task<EvidenceItem?> GetByIdAsync(Guid id, CancellationToken ct);
     Task<EvidenceItem?> GetByContentHashAsync(string contentHash, CancellationToken ct);

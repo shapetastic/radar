@@ -104,6 +104,63 @@ public class InMemoryEvidenceRepositoryTests
         Assert.Single(all);
     }
 
+    private static EvidenceItem MakeItemAt(Guid id, string contentHash, DateTimeOffset collectedAtUtc)
+        => new(
+            Id: id,
+            SourceType: EvidenceSourceType.NewsArticle,
+            SourceName: "Example Wire",
+            SourceUrl: "https://example.com/article",
+            Title: "Title",
+            Summary: null,
+            RawText: "raw text",
+            ContentHash: contentHash,
+            PublishedAtUtc: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            CollectedAtUtc: collectedAtUtc,
+            Quality: EvidenceQuality.Medium,
+            MetadataJson: null);
+
+    [Fact]
+    public async Task GetAllAsync_ReturnsItemsOrderedByCollectedAtThenId()
+    {
+        var repo = new InMemoryEvidenceRepository();
+
+        var t1 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var t2 = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+        var t3 = new DateTimeOffset(2026, 1, 3, 0, 0, 0, TimeSpan.Zero);
+
+        var first = MakeItemAt(Guid.NewGuid(), "hash-1", t1);
+        var second = MakeItemAt(Guid.NewGuid(), "hash-2", t2);
+        var third = MakeItemAt(Guid.NewGuid(), "hash-3", t3);
+
+        await repo.AddIfNewAsync(third, CancellationToken.None);
+        await repo.AddIfNewAsync(first, CancellationToken.None);
+        await repo.AddIfNewAsync(second, CancellationToken.None);
+
+        var result = await repo.GetAllAsync(CancellationToken.None);
+
+        Assert.Equal(
+            new[] { first.Id, second.Id, third.Id },
+            result.Select(e => e.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task GetAllAsync_EqualCollectedAt_BreaksTieById()
+    {
+        var repo = new InMemoryEvidenceRepository();
+        var ts = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var idA = Guid.NewGuid();
+        var idB = Guid.NewGuid();
+        var expected = new[] { idA, idB }.OrderBy(x => x).ToArray();
+
+        await repo.AddIfNewAsync(MakeItemAt(idB, "hash-b", ts), CancellationToken.None);
+        await repo.AddIfNewAsync(MakeItemAt(idA, "hash-a", ts), CancellationToken.None);
+
+        var result = await repo.GetAllAsync(CancellationToken.None);
+
+        Assert.Equal(expected, result.Select(e => e.Id).ToArray());
+    }
+
     [Fact]
     public async Task GetByIdAsync_Absent_ReturnsNull()
     {

@@ -4,6 +4,8 @@ using Radar.Domain.Evidence;
 
 namespace Radar.Infrastructure.Persistence.InMemory;
 
+// In-memory implementations complete synchronously and do not observe the
+// CancellationToken; the real (Dapper) implementations honor it.
 public sealed class InMemoryEvidenceRepository : IEvidenceRepository
 {
     private readonly ConcurrentDictionary<Guid, EvidenceItem> _byId = new();
@@ -11,8 +13,6 @@ public sealed class InMemoryEvidenceRepository : IEvidenceRepository
 
     public Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-
         // Atomic check-and-add on the content-hash index enforces the unique-hash
         // dedupe rule. If the hash already exists we reject without mutating the
         // existing (immutable) evidence.
@@ -51,7 +51,10 @@ public sealed class InMemoryEvidenceRepository : IEvidenceRepository
 
     public Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct)
     {
-        IReadOnlyList<EvidenceItem> result = _byId.Values.ToList();
+        IReadOnlyList<EvidenceItem> result = _byId.Values
+            .OrderBy(e => e.CollectedAtUtc)
+            .ThenBy(e => e.Id)
+            .ToList();
         return Task.FromResult(result);
     }
 }

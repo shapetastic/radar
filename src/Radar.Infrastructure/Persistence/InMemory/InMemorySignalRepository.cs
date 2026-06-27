@@ -24,6 +24,8 @@ public sealed class InMemorySignalRepository : ISignalRepository
     {
         IReadOnlyList<Signal> result = _byId.Values
             .Where(s => s.CompanyId == companyId)
+            .OrderBy(s => s.ObservedAtUtc)
+            .ThenBy(s => s.Id)
             .ToList();
         return Task.FromResult(result);
     }
@@ -34,6 +36,8 @@ public sealed class InMemorySignalRepository : ISignalRepository
         // Window bounds are inclusive on ObservedAtUtc.
         IReadOnlyList<Signal> result = _byId.Values
             .Where(s => s.ObservedAtUtc >= startUtc && s.ObservedAtUtc <= endUtc)
+            .OrderBy(s => s.ObservedAtUtc)
+            .ThenBy(s => s.Id)
             .ToList();
         return Task.FromResult(result);
     }
