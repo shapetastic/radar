@@ -48,10 +48,22 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
             return [];
         }
 
-        var files = Directory
-            .EnumerateFiles(directory, "*.json")
-            .OrderBy(Path.GetFileName, StringComparer.Ordinal)
-            .ToList();
+        List<string> files;
+        try
+        {
+            files = Directory
+                .EnumerateFiles(directory, "*.json")
+                .OrderBy(Path.GetFileName, StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to enumerate evidence files in '{SourceDirectory}'; returning no evidence.",
+                directory);
+            return [];
+        }
 
         var items = new List<EvidenceItem>(files.Count);
 
@@ -78,7 +90,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         {
             text = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogWarning(ex, "Failed to read evidence file '{File}'; skipping.", fileName);
             return null;

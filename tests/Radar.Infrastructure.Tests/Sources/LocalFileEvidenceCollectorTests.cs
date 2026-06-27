@@ -28,9 +28,9 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
                 Directory.Delete(_tempDir, recursive: true);
             }
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Best-effort cleanup; ignore transient filesystem locks.
+            // Best-effort cleanup; ignore transient filesystem locks and permission errors.
         }
     }
 

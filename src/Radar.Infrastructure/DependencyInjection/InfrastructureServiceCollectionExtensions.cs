@@ -29,7 +29,7 @@ public static class InfrastructureServiceCollectionExtensions
     /// <summary>
     /// Registers the deterministic local-file evidence collector along with the evidence
     /// normalizer it depends on. The collector reads <c>*.json</c> evidence documents from
-    /// <paramref name="sourceDirectory"/> and produces immutable <see cref="Domain.Evidence.EvidenceItem"/>
+    /// <paramref name="sourceDirectory"/> and produces immutable <see cref="Radar.Domain.Evidence.EvidenceItem"/>
     /// records; it does not persist them. Intended for offline/test pipeline runs.
     /// </summary>
     public static IServiceCollection AddLocalFileCollector(
