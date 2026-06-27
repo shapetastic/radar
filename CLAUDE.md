@@ -206,6 +206,9 @@ or "safe bet". Allowed labels only: `Investigate`, `Watch`, `Needs more evidence
   (the reviewer in the Step 3 loop).
 - **`radar-work-planner`** — splits master specs into small implementation specs in
   `docs/next/` (planning, not part of the per-task loop).
+- **`radar-architecture-reviewer`** — read-only, ad-hoc audit of the *whole* codebase for
+  cross-slice drift (layering, DI/naming/error-handling consistency, duplication, provenance
+  erosion). Run every few merged slices to checkpoint the trunk; not part of the per-task loop.
 - **`radar-signal-reviewer`** / **`radar-skeptic-reviewer`** — *runtime pipeline* reviewers
   that judge extracted signals and emerging theses for evidence quality and hype. These are
   domain reviewers invoked inside the Radar pipeline, **not** the Step 3 code-review loop.
