@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 
 namespace Radar.Application.EntityResolution;
@@ -27,11 +28,14 @@ public sealed class CompanyResolver : ICompanyResolver
     };
 
     private readonly ICompanyRepository _companyRepository;
+    private readonly ILogger<CompanyResolver> _logger;
 
-    public CompanyResolver(ICompanyRepository companyRepository)
+    public CompanyResolver(ICompanyRepository companyRepository, ILogger<CompanyResolver> logger)
     {
         ArgumentNullException.ThrowIfNull(companyRepository);
+        ArgumentNullException.ThrowIfNull(logger);
         _companyRepository = companyRepository;
+        _logger = logger;
     }
 
     public async Task<CompanyResolutionResult> ResolveAsync(string mentionText, CancellationToken ct)
@@ -40,15 +44,20 @@ public sealed class CompanyResolver : ICompanyResolver
 
         if (string.IsNullOrWhiteSpace(mentionText))
         {
-            return new CompanyResolutionResult(null, 0m, "Empty mention", null);
+            return LogAndReturn(mentionText, new CompanyResolutionResult(null, 0m, "Empty mention", null));
         }
 
         // GetAllAsync and GetAliasesAsync are independent; start both before awaiting so
         // they run concurrently (matters more once the repository is not in-memory).
         var companiesTask = _companyRepository.GetAllAsync(ct);
         var aliasesTask = _companyRepository.GetAliasesAsync(ct);
-        var companies = await companiesTask.ConfigureAwait(false);
+        var companies = (await companiesTask.ConfigureAwait(false)).ToList();
         var aliases = await aliasesTask.ConfigureAwait(false);
+
+        if (companies.Count == 0)
+        {
+            _logger.LogDebug("Company seed universe is empty while resolving mention {Mention}.", mentionText);
+        }
 
         var normalizedMention = Normalize(mentionText);
 
@@ -77,7 +86,7 @@ public sealed class CompanyResolver : ICompanyResolver
 
         if (matchedCompanyIds.Count > 1)
         {
-            return new CompanyResolutionResult(null, 0m, "Ambiguous mention", null);
+            return LogAndReturn(mentionText, new CompanyResolutionResult(null, 0m, "Ambiguous mention", null));
         }
 
         if (matchedCompanyIds.Count == 1)
@@ -90,7 +99,7 @@ public sealed class CompanyResolver : ICompanyResolver
                 c.Id == companyId && Normalize(c.Name) == normalizedMention);
 
             var reason = matchedByName ? "Exact name match" : "Exact alias match";
-            return new CompanyResolutionResult(companyId, 1.0m, reason, matchedKey);
+            return LogAndReturn(mentionText, new CompanyResolutionResult(companyId, 1.0m, reason, matchedKey));
         }
 
         // Ticker is matched only as an exact, case-insensitive whole-string match of the
@@ -110,15 +119,40 @@ public sealed class CompanyResolver : ICompanyResolver
 
         if (tickerCompanyIds.Count > 1)
         {
-            return new CompanyResolutionResult(null, 0m, "Ambiguous mention", null);
+            return LogAndReturn(mentionText, new CompanyResolutionResult(null, 0m, "Ambiguous mention", null));
         }
 
         if (tickerCompanyIds.Count == 1)
         {
-            return new CompanyResolutionResult(tickerCompanyIds.Single(), 0.9m, "Exact ticker match", null);
+            return LogAndReturn(mentionText, new CompanyResolutionResult(tickerCompanyIds.Single(), 0.9m, "Exact ticker match", null));
         }
 
-        return new CompanyResolutionResult(null, 0m, "No match", null);
+        return LogAndReturn(mentionText, new CompanyResolutionResult(null, 0m, "No match", null));
+    }
+
+    /// <summary>
+    /// Emits a structured <c>Debug</c> log describing the resolution outcome and returns the result
+    /// unchanged. Logging is side-effect only and never alters the returned value.
+    /// </summary>
+    private CompanyResolutionResult LogAndReturn(string mentionText, CompanyResolutionResult result)
+    {
+        if (result.CompanyId is { } companyId)
+        {
+            _logger.LogDebug(
+                "Resolved mention {Mention} to company {CompanyId} at confidence {Confidence}.",
+                mentionText,
+                companyId,
+                result.Confidence);
+        }
+        else
+        {
+            _logger.LogDebug(
+                "Unresolved mention {Mention}: {Reason}.",
+                mentionText,
+                result.Reason);
+        }
+
+        return result;
     }
 
     /// <summary>

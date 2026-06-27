@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.SignalExtraction;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
@@ -35,7 +36,7 @@ public class KeywordSignalExtractorTests
             MetadataJson: null);
 
     private static async Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence) =>
-        await new KeywordSignalExtractor().ExtractAsync(evidence, CancellationToken.None);
+        await new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance).ExtractAsync(evidence, CancellationToken.None);
 
     [Fact]
     public async Task BodyWithCustomerWinPhrase_YieldsSinglePositiveSignal_WithVerbatimExcerpt()
@@ -145,7 +146,7 @@ public class KeywordSignalExtractorTests
     public async Task NullEvidence_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(
-            () => new KeywordSignalExtractor().ExtractAsync(null!, CancellationToken.None));
+            () => new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance).ExtractAsync(null!, CancellationToken.None));
     }
 
     [Fact]
@@ -156,6 +157,6 @@ public class KeywordSignalExtractorTests
         cts.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => new KeywordSignalExtractor().ExtractAsync(evidence, cts.Token));
+            () => new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance).ExtractAsync(evidence, cts.Token));
     }
 }
