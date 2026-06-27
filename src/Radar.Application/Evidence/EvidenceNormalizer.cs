@@ -10,7 +10,7 @@ namespace Radar.Application.Evidence;
 /// </summary>
 public sealed class EvidenceNormalizer : IEvidenceNormalizer
 {
-    public NormalizedEvidence Normalize(string title, string rawText)
+    public NormalizedEvidence Normalize(string? title, string rawText)
     {
         ArgumentNullException.ThrowIfNull(rawText);
 

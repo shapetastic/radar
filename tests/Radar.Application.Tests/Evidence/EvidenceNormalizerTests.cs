@@ -92,8 +92,8 @@ public class EvidenceNormalizerTests
     [Fact]
     public void Normalize_NullTitle_DoesNotThrowAndHashesDeterministically()
     {
-        var a = _normalizer.Normalize(null!, "body");
-        var b = _normalizer.Normalize(null!, "body");
+        var a = _normalizer.Normalize(null, "body");
+        var b = _normalizer.Normalize(null, "body");
 
         Assert.Equal(a.ContentHash, b.ContentHash);
         Assert.Matches(LowerHex64, a.ContentHash);
@@ -102,7 +102,7 @@ public class EvidenceNormalizerTests
     [Fact]
     public void Normalize_NullAndEmptyTitle_HashEqual()
     {
-        var nullTitle = _normalizer.Normalize(null!, "body");
+        var nullTitle = _normalizer.Normalize(null, "body");
         var emptyTitle = _normalizer.Normalize(string.Empty, "body");
 
         Assert.Equal(nullTitle.ContentHash, emptyTitle.ContentHash);
