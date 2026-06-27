@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
+using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Sources;
@@ -23,6 +24,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ISignalRepository, InMemorySignalRepository>();
         services.AddSingleton<IScoreRepository, InMemoryScoreRepository>();
         services.AddSingleton<IReportRepository, InMemoryReportRepository>();
+        services.AddScoped<ICompanyResolver, CompanyResolver>();
         return services;
     }
 
