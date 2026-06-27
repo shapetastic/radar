@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Radar.Application\Radar.Application.csproj" />
     <ProjectReference Include="..\..\src\Radar.Domain\Radar.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Radar.Infrastructure\Radar.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
