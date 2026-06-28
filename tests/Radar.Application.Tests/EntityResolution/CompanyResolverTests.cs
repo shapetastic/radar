@@ -23,7 +23,8 @@ public class CompanyResolverTests
         Industry: null,
         Status: CompanyStatus.Active,
         CreatedAtUtc: Now,
-        UpdatedAtUtc: Now);
+        UpdatedAtUtc: Now,
+        Themes: []);
 
     private static CompanyAlias NewAlias(Guid companyId, string alias) => new(
         Guid.NewGuid(),

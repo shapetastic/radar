@@ -8,6 +8,7 @@ public sealed class InMemoryCompanyRepository : ICompanyRepository
 {
     private readonly ConcurrentDictionary<Guid, Company> _companies = new();
     private readonly ConcurrentDictionary<Guid, CompanyAlias> _aliases = new();
+    private readonly ConcurrentDictionary<Guid, CompanySourceFeed> _sourceFeeds = new();
 
     public Task AddAsync(Company company, CancellationToken ct)
     {
@@ -41,6 +42,21 @@ public sealed class InMemoryCompanyRepository : ICompanyRepository
         IReadOnlyList<CompanyAlias> result = _aliases.Values
             .OrderBy(a => a.CreatedAtUtc)
             .ThenBy(a => a.Id)
+            .ToList();
+        return Task.FromResult(result);
+    }
+
+    public Task AddSourceFeedAsync(CompanySourceFeed feed, CancellationToken ct)
+    {
+        _sourceFeeds[feed.Id] = feed;
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<CompanySourceFeed>> GetSourceFeedsAsync(CancellationToken ct)
+    {
+        IReadOnlyList<CompanySourceFeed> result = _sourceFeeds.Values
+            .OrderBy(f => f.CreatedAtUtc)
+            .ThenBy(f => f.Id)
             .ToList();
         return Task.FromResult(result);
     }

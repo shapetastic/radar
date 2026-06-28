@@ -32,5 +32,6 @@ public sealed class CompanyBuilder
         Industry: _industry,
         Status: _status,
         CreatedAtUtc: _createdAtUtc,
-        UpdatedAtUtc: _updatedAtUtc);
+        UpdatedAtUtc: _updatedAtUtc,
+        Themes: []);
 }
