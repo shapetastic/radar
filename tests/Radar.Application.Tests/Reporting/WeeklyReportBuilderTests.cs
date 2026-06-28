@@ -332,6 +332,64 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
+    public async Task RejectsNonUtcPeriodEnd()
+    {
+        var h = new Harness();
+        var nonUtc = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.FromHours(2));
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => h.Builder.GenerateAsync(nonUtc, default));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void RejectsNonPositivePeriod(int days)
+    {
+        Assert.Throws<ArgumentException>(
+            () => new Harness(new WeeklyReportOptions { Period = TimeSpan.FromDays(days) }));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void RejectsNonPositiveMaxItems(int maxItems)
+    {
+        Assert.Throws<ArgumentException>(
+            () => new Harness(new WeeklyReportOptions { MaxItems = maxItems }));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void RejectsEmptyReportType(string reportType)
+    {
+        Assert.Throws<ArgumentException>(
+            () => new Harness(new WeeklyReportOptions { ReportType = reportType }));
+    }
+
+    [Fact]
+    public async Task ExcludesSignalObservedExactlyAtPeriodStart()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        // Window is exclusive on its start bound: periodStart = PeriodEnd - 7d.
+        var periodStart = PeriodEnd - new WeeklyReportOptions().Period;
+        var onStart = new SignalBuilder()
+            .WithReviewStatus(SignalReviewStatus.NeedsHumanReview)
+            .WithReason("Observed exactly at the exclusive start bound.")
+            .WithObservedAtUtc(periodStart)
+            .Build();
+        await h.Signals.AddAsync(onStart, default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.DoesNotContain(onStart.Id.ToString(), markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DiWiringResolvesBuilderAndGeneratesReport()
     {
         var services = new ServiceCollection();

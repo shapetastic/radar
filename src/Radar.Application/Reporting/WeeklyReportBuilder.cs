@@ -54,6 +54,24 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
+        if (options.Period <= TimeSpan.Zero)
+        {
+            throw new ArgumentException(
+                "WeeklyReportOptions.Period must be a positive duration.", nameof(options));
+        }
+
+        if (options.MaxItems <= 0)
+        {
+            throw new ArgumentException(
+                "WeeklyReportOptions.MaxItems must be greater than zero.", nameof(options));
+        }
+
+        if (string.IsNullOrWhiteSpace(options.ReportType))
+        {
+            throw new ArgumentException(
+                "WeeklyReportOptions.ReportType must be a non-empty label.", nameof(options));
+        }
+
         _companyRepository = companyRepository;
         _scoreRepository = scoreRepository;
         _evidenceRepository = evidenceRepository;
@@ -69,6 +87,14 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     public async Task<WeeklyReportResult> GenerateAsync(DateTimeOffset periodEndUtc, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+
+        // Enforce the pipeline's UTC-only convention: a non-zero offset would make the persisted
+        // window metadata and all "Utc" timestamps inconsistent with the actual instant.
+        if (periodEndUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException(
+                "periodEndUtc must be UTC (zero offset).", nameof(periodEndUtc));
+        }
 
         // Reporting window: (periodStartUtc, periodEndUtc] — exclusive start, inclusive end,
         // matching the scoring-window convention.
@@ -116,9 +142,10 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             }
 
             var action = _policy.Decide(new ReportActionContext(current, previous));
-            var evidence = await BuildEvidenceRefsAsync(current, ct).ConfigureAwait(false);
 
-            interim.Add(new InterimEntry(company, current, action, evidence));
+            // Evidence is resolved later, only for entries that survive ranking/capping, so we
+            // avoid per-company score-link and evidence lookups that would be discarded by Take().
+            interim.Add(new InterimEntry(company, current, action));
         }
 
         // Rank by OpportunityScore descending, then CompanyId ascending (deterministic, AD-3 spirit).
@@ -132,6 +159,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         for (var i = 0; i < ranked.Count; i++)
         {
             var e = ranked[i];
+            var evidence = await BuildEvidenceRefsAsync(e.Current, ct).ConfigureAwait(false);
             entries.Add(new WeeklyReportEntry(
                 CompanyId: e.Current.CompanyId,
                 CompanyName: e.Company.Name,
@@ -141,7 +169,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 Action: e.Action.Action,
                 Rationale: e.Action.Rationale,
                 Rank: i + 1,
-                Evidence: e.Evidence));
+                Evidence: evidence));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.
@@ -149,7 +177,11 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             .GetObservedBetweenAsync(periodStartUtc, periodEndUtc, ct)
             .ConfigureAwait(false);
 
+        // GetObservedBetweenAsync is inclusive on its start bound, but the report window is
+        // exclusive-start (periodStartUtc, periodEndUtc]; drop signals exactly at periodStartUtc
+        // so this section matches the scoring-window convention used above.
         var needsReview = observed
+            .Where(s => s.ObservedAtUtc > periodStartUtc)
             .Where(s => s.ReviewStatus is SignalReviewStatus.Pending or SignalReviewStatus.NeedsHumanReview)
             .OrderBy(s => s.Id)
             .Take(_options.MaxItems)
@@ -263,6 +295,5 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private sealed record InterimEntry(
         Company Company,
         CompanyScoreSnapshot Current,
-        ReportActionResult Action,
-        IReadOnlyList<ReportEvidenceRef> Evidence);
+        ReportActionResult Action);
 }
