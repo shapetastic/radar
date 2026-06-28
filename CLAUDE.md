@@ -196,8 +196,9 @@ Do not hand back broken code.
 ### Output language (hard rule)
 
 Radar must never produce financial advice. Do not emit "buy", "sell", "guaranteed upside",
-or "safe bet". Allowed labels only: `Investigate`, `Watch`, `Needs more evidence`,
-`Thesis improving`, `Thesis deteriorating`.
+or "safe bet". Allowed labels only: `Investigate`, `Watch`, `Ignore`, `Needs more evidence`,
+`Thesis improving`, `Thesis deteriorating`. (`Ignore` was re-added per the collector-driven
+master spec — see AD-9. The five non-`Ignore` labels remain valid.)
 
 ### Sub-agents
 

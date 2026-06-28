@@ -154,3 +154,44 @@ clock at method entry". The run-instant remains a single value used identically 
 capture *timing* moved.
 
 **Status.** Accepted · 2026-06-28 (spec 25).
+
+---
+
+## AD-8 — MVP direction is collector-driven; persistence is files-first (no PostgreSQL for MVP)
+
+**Decision.** `docs/radar-full-pipeline-spec.md` was replaced by the **collector-driven** master spec
+(the prior content is superseded). The MVP is **collector-driven**: Radar automatically *fetches*
+public evidence (first real collector = **RSS press-release collector** reading per-company
+`sourceFeeds` from the watch universe), rather than depending on manually-dropped inbox files — the
+local-file collector is retained for tests/debug only. Persistence stays **files-first** for the MVP:
+file-based JSON/Markdown under `data/`, with the current in-memory repositories acceptable until a
+spec explicitly needs more. **PostgreSQL/Dapper is deferred** and must not be introduced unless a spec
+explicitly requires it; the six queued Postgres specs (26–31) were **dropped** in favour of this
+direction. `docs/radar-schema-spec.md` remains the domain-record reference (its Postgres orientation
+is roadmap, not MVP).
+
+**Why.** Maintainer redirection: prove the collect → evidence → signal → score → weekly-report loop on
+real fetched evidence before investing in a database. The reviewer/planner must **not** re-propose
+Postgres for the MVP, and must treat the collector-driven spec as the authoritative pipeline master.
+
+**Status.** Accepted · 2026-06-28 (maintainer; supersedes the queued persistence specs 26–31).
+
+---
+
+## AD-9 — Allowed report labels: union of six (incl. `Ignore`)
+
+**Decision.** The allowed human-action labels are the **union** of the prior set and the collector-driven
+spec's set: `Investigate`, `Watch`, `Ignore`, `Needs more evidence`, `Thesis improving`,
+`Thesis deteriorating`. This **re-admits `Ignore`** (previously deliberately excluded in spec 18) while
+keeping `Thesis improving`/`Thesis deteriorating`. The advice-language ban is unchanged: never emit
+"buy", "sell", "guaranteed upside", "safe bet" (or `Buy`/`Sell`/`Strong Buy`/`Price Target`). CLAUDE.md
+and `.claude/agents/radar-philosophy.md` are updated to match.
+
+**Why.** The collector-driven master spec lists `Ignore` as an allowed action (it has an "Ignore / Low
+Signal" report section); the maintainer chose the permissive union so low-signal companies can be
+labelled `Ignore` without losing the thesis-trajectory labels. A follow-up code slice updates
+`MarkdownWeeklyReportRenderer` (allowed-label set) and `WeeklyReportActionPolicyV1` (may now emit
+`Ignore`, e.g. for low-signal companies) with tests. Until that slice lands, the renderer still rejects
+`Ignore`; the policy does not yet emit it.
+
+**Status.** Accepted · 2026-06-28 (maintainer; supersedes the spec-18 exclusion of `Ignore`).

@@ -62,6 +62,7 @@ Radar may say:
 
 - Investigate
 - Watch
+- Ignore
 - Needs more evidence
 - Thesis improving
 - Thesis deteriorating

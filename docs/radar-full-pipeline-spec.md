@@ -2,9 +2,22 @@
 
 ## Purpose
 
-Project Radar detects public companies whose business trajectory appears to be improving before that improvement becomes obvious to mainstream retail investors.
+Project Radar is a local-first investment discovery assistant for finding public companies that may be becoming more interesting before they become obvious to mainstream retail investors.
 
-Radar is not a stock-picking oracle and must never present outputs as financial advice. Its role is to surface evidence-backed candidates for human investigation.
+Radar is built for one first user: **Dean**.
+
+The first goal is not to build a production SaaS platform, a trading bot, or a full institutional research terminal. The first goal is to prove this loop works:
+
+```text
+Automated collectors
+  -> raw evidence
+  -> interpreted signals
+  -> company scoring
+  -> weekly research report
+  -> human investigation
+```
+
+Radar must never present outputs as financial advice. It should surface evidence-backed candidates for human review.
 
 Core principle:
 
@@ -12,37 +25,72 @@ Core principle:
 
 ---
 
+## MVP Direction
+
+The MVP is **collector-driven**.
+
+Radar should not depend on manually copying files into an inbox. Manual files are useful only for tests and debugging. The real MVP should automatically collect public evidence from a small set of trusted sources, normalize it, extract signals, and generate a local markdown report.
+
+The first useful question is:
+
+> Which companies became more interesting this week, and why?
+
+A good Radar v1 result is not:
+
+> Buy this stock.
+
+A good Radar v1 result is:
+
+> Investigate this company because Radar found three new pieces of evidence: a named customer win, a strategic partnership, and increasing commercial activity.
+
+---
+
 ## MVP Scope
 
-The first version must be small and working. Do not build the full future platform yet.
+The first version must be small, working, and locally runnable.
 
-MVP question:
+MVP must support:
 
-> Which public companies show meaningful positive signal activity from press releases, company news, and simple market-attention data?
+1. A local watch universe of companies to monitor.
+2. Automated collection from at least one real-world source type.
+3. Local raw evidence storage as files.
+4. Evidence normalization and deduplication.
+5. Conservative company/entity resolution using aliases.
+6. Deterministic signal extraction for first proof-of-concept.
+7. Explainable scoring from extracted signals.
+8. Weekly markdown report output.
+9. Evidence links/references behind every company surfaced.
 
-The MVP should support:
+MVP should deliberately **not** require:
 
-1. Ingest raw evidence from a small number of source types.
-2. Store raw evidence with provenance.
-3. Extract structured signals from the evidence.
-4. Resolve signals to public companies where possible.
-5. Score companies using explainable rules.
-6. Produce a weekly Radar report.
-7. Allow a human to review the evidence behind every score.
-
-Out of scope for MVP:
-
-- Automated trading.
-- Portfolio allocation advice.
-- Full SEC/RNS ingestion.
+- PostgreSQL.
+- A web UI.
+- Live social media scraping.
 - LinkedIn scraping.
-- Patent ingestion.
-- Social media scraping.
 - Complex vector search.
-- Backtesting engine.
-- Real-time alerts.
+- Automated trading.
+- Portfolio advice.
+- Backtesting.
+- Full SEC/RNS ingestion.
+- Production-grade resilience.
 
-These can be added later.
+These can be added later once the evidence -> signal -> report loop proves useful.
+
+---
+
+## MVP Success Criteria
+
+Radar v1 is successful if it can run locally and produce a weekly report containing:
+
+- 5-10 companies worth looking at.
+- A clear explanation for why each company surfaced.
+- Evidence references for each signal.
+- A suggested human action: `Investigate`, `Watch`, `Ignore`, or `Needs More Evidence`.
+- No unsupported recommendations.
+
+The test is practical:
+
+> Did Radar show Dean at least one company or development he would not otherwise have noticed?
 
 ---
 
@@ -50,15 +98,16 @@ These can be added later.
 
 - Target framework: `.NET 10`
 - Language: C# 14
-- Backend: ASP.NET Core / Worker Service
-- Database: PostgreSQL
-- Data access: Dapper
-- Background jobs: Hosted services first; Hangfire or Quartz later
-- AI abstraction: `Microsoft.Extensions.AI`
-- Structured outputs: JSON schema / typed records
-- Logging: Microsoft.Extensions.Logging
-- Observability: OpenTelemetry later
-- UI: Blazor or React later; console/markdown reports acceptable for MVP
+- Runtime model: local-first console/worker application
+- Backend style: .NET Worker Service / console runner first
+- Storage for MVP: file-based JSON/Markdown under `data/`
+- Database: optional later; do not require it for MVP
+- Data access: file repositories first; Dapper/PostgreSQL later
+- Background jobs: manual local run first; hosted services later
+- AI abstraction: `Microsoft.Extensions.AI` when AI is introduced
+- Structured outputs: typed records / JSON schema
+- Logging: `Microsoft.Extensions.Logging`
+- UI: markdown report first; web UI later
 
 All projects should target `net10.0`.
 
@@ -66,11 +115,14 @@ All projects should target `net10.0`.
 
 ## Architecture
 
+### High-Level Flow
+
 ```text
-Sources
+Watch Universe
   -> Collectors
-  -> Raw Evidence Store
-  -> Entity Resolver
+  -> Raw Evidence Files
+  -> Evidence Normalizer
+  -> Company Resolver
   -> Signal Extractor
   -> Signal Reviewer
   -> Scoring Engine
@@ -78,7 +130,13 @@ Sources
   -> Human Review
 ```
 
-The system must preserve provenance at every stage. A score without evidence is invalid.
+### Important Separation
+
+Collectors are responsible for **finding and capturing evidence**.
+
+Radar is responsible for **interpreting evidence**.
+
+Do not make the signal extraction pipeline responsible for finding content on the internet. That belongs to collectors.
 
 ---
 
@@ -101,150 +159,323 @@ src/
     Collectors/
     EntityResolution/
     SignalExtraction/
+    SignalReview/
     Scoring/
     Reporting/
     Ai/
 
   Radar.Infrastructure/
-    Database/
-    Repositories/
-    Ai/
+    FileSystem/
     Sources/
+    Rss/
+    Ai/
 
   Radar.Worker/
     Program.cs
     Jobs/
 
-  Radar.Api/                 # optional after MVP foundation
-
-  Radar.Web/                 # optional after API exists
-
 tests/
   Radar.Domain.Tests/
   Radar.Application.Tests/
   Radar.Infrastructure.Tests/
+  Radar.Worker.Tests/
+
+data/
+  watch-universe/
+    companies.json
+
+  evidence/
+    raw/
+      press-releases/
+      news/
+      test/
+    normalized/
+
+  signals/
+
+  scores/
+
+  reports/
+    weekly/
 ```
 
-Start with Domain, Application, Infrastructure, Worker, and tests. API/UI can wait.
+API/UI projects can wait.
 
 ---
 
-## Core Concepts
+## Core Philosophy for Implementation
 
-### Evidence
+Radar should be useful before it is beautiful.
 
-Evidence is a raw piece of source material.
+For the MVP:
 
-Examples:
+- Prefer files over databases.
+- Prefer deterministic rules over premature LLM calls.
+- Prefer a working weekly report over a dashboard.
+- Prefer one reliable collector over many weak collectors.
+- Prefer explainable simple scoring over clever scoring.
+- Prefer small specs that leave the app runnable.
 
-- Press release
-- Company blog post
-- News article
-- Earnings transcript excerpt
-- Government contract notice
-- Job advert
+---
 
-Evidence must store:
+## Watch Universe
 
-- source type
-- source name
-- URL or identifier
-- publication date
-- collected date
-- raw text or normalized text
-- content hash
-- collection metadata
+The watch universe tells Radar which companies to monitor first.
 
-Evidence is immutable once stored. If re-collected, create a new evidence record only if content changed.
+This is intentionally narrow for the MVP. Radar is not yet scanning every listed company in the world. It is monitoring a curated set of companies and learning how to collect and interpret evidence.
 
-### Signal
+Example:
 
-A signal is a structured interpretation of evidence.
+```json
+[
+  {
+    "ticker": "RKLB",
+    "name": "Rocket Lab USA",
+    "exchange": "NASDAQ",
+    "country": "US",
+    "aliases": ["Rocket Lab", "Rocket Lab USA", "Rocket Lab USA Inc"],
+    "sourceFeeds": [
+      {
+        "type": "rss",
+        "name": "Rocket Lab Investor News",
+        "url": "https://example.com/rss"
+      }
+    ],
+    "themes": ["space", "defence", "launch infrastructure"]
+  }
+]
+```
 
-Examples:
+The watch universe should be easy to edit by hand.
 
-- customer win
-- strategic partnership
-- executive hire
-- hiring expansion
-- guidance raise
-- government contract
-- patent activity
-- insider buying
-- product launch
+MVP does not need a UI for managing this.
 
-Signals must link to evidence.
+---
 
-A signal has:
+## Collectors
 
-- type
-- direction: positive / negative / neutral
-- strength: 1-10
-- novelty: 1-10
-- confidence: 0-1
-- company reference
-- reason
-- evidence reference
+### Purpose
 
-### Company
+Collectors gather raw public evidence and write it to local storage.
 
-A company is a public entity that may be investable.
+They do not score companies.
+They do not decide whether a company is investable.
+They do not create final recommendations.
 
-Company records include:
+They simply answer:
 
-- legal/common name
-- ticker
-- exchange
-- country
-- sector
-- industry
-- market cap when available
+> What new public information did we find?
+
+### Collector Interface
+
+Recommended application interface:
+
+```csharp
+public interface IEvidenceCollector
+{
+    string CollectorName { get; }
+    string SourceType { get; }
+
+    Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+        CollectionContext context,
+        CancellationToken cancellationToken);
+}
+```
+
+### Collected Evidence
+
+Collectors return normalized collection results before persistence:
+
+```csharp
+public sealed record CollectedEvidence(
+    string SourceType,
+    string SourceName,
+    string? SourceUrl,
+    string Title,
+    string RawText,
+    DateTimeOffset? PublishedAt,
+    DateTimeOffset CollectedAt,
+    IReadOnlyDictionary<string, string> Metadata);
+```
+
+### MVP Collector
+
+The first real collector should be:
+
+## RSS Press Release Collector
+
+Responsibilities:
+
+1. Read RSS source definitions from the watch universe.
+2. Fetch RSS feeds.
+3. Convert each new feed item into raw evidence.
+4. Preserve title, URL, publication date, summary/body, source feed name, and company hint.
+5. Write evidence into `data/evidence/raw/press-releases/`.
+6. Avoid duplicates using URL and content hash.
+7. Log what it collected.
+
+This is the first real-world test of Radar.
+
+### Local Test Collector
+
+Keep or add a local deterministic collector for tests.
+
+This can read from:
+
+```text
+data/evidence/raw/test/
+```
+
+or embedded test fixtures.
+
+It exists so integration tests do not require the internet.
+
+---
+
+## Evidence Storage
+
+MVP storage is file-based.
+
+A raw evidence file should be written as JSON:
+
+```text
+data/evidence/raw/{sourceType}/{yyyy}/{MM}/{contentHash}.json
+```
+
+Example:
+
+```text
+data/evidence/raw/press-releases/2026/01/6AF3E9.json
+```
+
+### Raw Evidence Schema
+
+```json
+{
+  "evidenceId": "ev_20260110_6af3e9",
+  "sourceType": "press_release",
+  "sourceName": "Rocket Lab Investor News",
+  "sourceUrl": "https://...",
+  "title": "Rocket Lab Announces New Multi-Launch Agreement",
+  "rawText": "...",
+  "normalizedText": null,
+  "publishedAt": "2026-01-10T08:00:00Z",
+  "collectedAt": "2026-01-10T10:15:00Z",
+  "contentHash": "6AF3E9...",
+  "companyHints": ["RKLB"],
+  "metadata": {
+    "rssFeedUrl": "https://...",
+    "rssItemId": "..."
+  }
+}
+```
+
+### Storage Rules
+
+- Do not overwrite raw evidence.
+- If the same URL/content appears again, skip it.
+- If same URL but changed content appears, write a new version with a new hash.
+- Every downstream object must reference the evidence ID.
+
+---
+
+## Evidence Normalization
+
+Normalization prepares evidence for signal extraction.
+
+Responsibilities:
+
+- Trim obvious RSS boilerplate.
+- Preserve title.
+- Preserve source URL.
+- Preserve published date.
+- Remove duplicate whitespace.
+- Keep enough surrounding text for excerpts.
+
+MVP normalization should be simple.
+
+Do not overfit boilerplate removal early.
+
+---
+
+## Company Resolution
+
+MVP company resolution should be conservative and alias-driven.
+
+Inputs:
+
+- watch universe company name
 - aliases
+- ticker
+- company hints from collector
+- evidence title/text
 
-Entity resolution must be conservative. If uncertain, create an unresolved company mention rather than guessing.
+Rules:
 
-### Score
+1. If a collector collected evidence from a company-specific feed, use that company as a high-confidence hint.
+2. If an alias appears in title or body, resolve to that company.
+3. If multiple companies match, mark as ambiguous.
+4. If no company matches, store unresolved mention.
+5. Never hallucinate tickers.
 
-A company score is a snapshot derived from recent signals.
-
-Initial MVP scores:
-
-- `TrajectoryScore`: how much the company appears to be improving
-- `AttentionScore`: how widely noticed the company appears to be
-- `OpportunityScore`: trajectory adjusted by attention and evidence confidence
-- `EvidenceConfidence`: how strong and diverse the supporting evidence is
-- `SignalVelocity`: recent acceleration in signals
-
-Scores must be explainable and reproducible from stored signals.
+MVP can avoid global company databases.
 
 ---
 
-## MVP Signal Types
+## Signal Extraction
 
-Start with these only:
+Signal extraction turns evidence into structured business signals.
+
+For MVP, start deterministic.
+
+Do not wait for LLM integration before proving the pipeline.
+
+### MVP Signal Types
+
+Start with:
 
 1. `CustomerWin`
-   - Named customer, contract, deployment, expansion.
+   - Named customer, contract, deployment, expansion, renewal.
 2. `StrategicPartnership`
-   - Named partnership with credible partner.
-3. `ExecutiveHire`
-   - Senior hire from notable organisation.
+   - Named partnership, collaboration, integration, ecosystem relationship.
+3. `GovernmentContract`
+   - Government, defence, NASA, MOD, DoD, public procurement, grant.
 4. `ProductLaunch`
-   - New commercially relevant product/platform.
+   - Commercially relevant new product, platform, capability, service.
 5. `CapitalRaise`
-   - Funding or debt raise, positive or negative depending context.
+   - Equity raise, debt facility, convertible note, refinancing. Can be positive or negative depending context.
 6. `GuidanceChange`
-   - Raised or reduced guidance.
+   - Raised/reduced outlook, backlog increase, major revenue expectation change.
 
-Avoid social signals in the first implementation. Add later once evidence quality is strong.
+Later signal types:
 
----
+- ExecutiveHire
+- HiringMomentum
+- InsiderBuying
+- InstitutionalOwnership
+- PatentActivity
+- DeveloperAdoption
+- ConferenceMentions
+- SocialAttention
 
-## AI Usage
+### Deterministic Extractor
 
-Use AI only behind provider-independent application interfaces.
+First extractor can be keyword/rule based.
 
-No class outside the AI infrastructure should call a specific provider SDK directly.
+Examples:
+
+- Words like `contract`, `selected by`, `awarded`, `multi-year agreement` -> possible `CustomerWin` or `GovernmentContract`.
+- Words like `partnership`, `collaboration`, `integrates with` -> possible `StrategicPartnership`.
+- Words like `launches`, `introduces`, `new platform` -> possible `ProductLaunch`.
+- Words like `raises`, `offering`, `credit facility`, `debt financing` -> possible `CapitalRaise`.
+
+The deterministic extractor should produce low/medium confidence signals and supporting excerpts.
+
+### Future AI Extractor
+
+When introduced, AI extraction must sit behind an application abstraction and use typed outputs.
+
+No provider SDK should leak into application code.
 
 Recommended interface:
 
@@ -260,171 +491,295 @@ public interface IAiStructuredOutputService
 
 Implementation can use `Microsoft.Extensions.AI`.
 
-AI outputs must be typed records and validated before persistence.
-
-If AI confidence is low, persist the evidence but do not create high-confidence signals.
-
 ---
 
-## Pipeline Stages
+## Signal Model
 
-### Stage 1 - Source Collection
+A signal is a structured interpretation of evidence.
 
-Input: configured source definitions.
+A signal must include:
 
-Output: raw evidence records.
-
-MVP source options:
-
-- manual URL input
-- RSS feed collector
-- local test file collector
-
-The MVP should include at least one deterministic local/test collector so the pipeline can run in tests without the internet.
-
-### Stage 2 - Evidence Normalization
-
-Normalize raw material into text suitable for extraction.
-
-Responsibilities:
-
-- remove obvious boilerplate
-- preserve title and date
-- preserve source URL
-- compute content hash
-- reject duplicates
-
-### Stage 3 - Entity Resolution
-
-Detect company mentions and resolve to known company records.
-
-MVP approach:
-
-- start with a seed company table/watch universe
-- alias matching
-- conservative matching only
-- unresolved mentions stored separately
-
-Do not hallucinate tickers.
-
-### Stage 4 - Signal Extraction
-
-Use AI structured output to extract candidate signals from evidence.
-
-The extractor must produce:
-
+- signal ID
+- evidence ID
+- company ID/ticker if resolved
 - signal type
-- company mention
-- direction
-- strength
-- novelty estimate
-- confidence
+- direction: positive / negative / neutral
+- strength: 1-10
+- confidence: 0-1
+- novelty: 1-10 where possible
 - supporting excerpt
-- reasoning
+- reason
+- extractor name/version
+- created timestamp
 
-### Stage 5 - Signal Review
+Example:
 
-Apply deterministic and AI-assisted checks:
-
-- Is this repeated PR?
-- Is the source primary or secondary?
-- Is the signal material?
-- Is the company match reliable?
-- Is the signal hype rather than evidence?
-
-For MVP, implement deterministic checks first and leave AI reviewer as interface/stub if necessary.
-
-### Stage 6 - Scoring
-
-Calculate company scores from recent signals.
-
-MVP scoring can be simple and explainable:
-
-```text
-TrajectoryScore = weighted average of recent positive/negative signal strength
-SignalVelocity = count and strength acceleration over 30 days vs previous 30 days
-EvidenceConfidence = confidence adjusted by source diversity and primary-source weight
-AttentionScore = article/source count or explicit attention signals
-OpportunityScore = TrajectoryScore + EvidenceConfidence - AttentionPenalty
+```json
+{
+  "signalId": "sig_20260110_001",
+  "evidenceId": "ev_20260110_6af3e9",
+  "companyTicker": "RKLB",
+  "signalType": "CustomerWin",
+  "direction": "Positive",
+  "strength": 7,
+  "confidence": 0.74,
+  "novelty": 5,
+  "supportingExcerpt": "Rocket Lab announced a new multi-launch agreement with...",
+  "reason": "Named commercial agreement suggests additional customer traction.",
+  "extractor": "DeterministicKeywordSignalExtractorV1",
+  "createdAt": "2026-01-10T10:20:00Z"
+}
 ```
 
-The exact formula should be simple, visible, and versioned.
+---
 
-### Stage 7 - Weekly Report
+## Signal Review
 
-Generate a markdown report:
+MVP signal review should be simple and deterministic.
 
-- Top improving companies
-- New signals
-- Highest opportunity score
-- Signals needing review
-- Companies with deteriorating signals
-- Evidence links for each recommendation to investigate
+Checks:
 
-The report must include disclaimers:
+- Does the signal have evidence?
+- Does the signal have a resolved company or explicit unresolved status?
+- Is the supporting excerpt present?
+- Is the strength within range?
+- Is the confidence within range?
+- Is this clearly promotional boilerplate with no specific event?
 
-- Not financial advice.
-- For research only.
-- Human review required.
+Allowed statuses:
+
+- `Accepted`
+- `NeedsReview`
+- `Rejected`
+
+For MVP, do not block the whole report because some signals need review. Include them separately.
 
 ---
 
-## Data Persistence Rules
+## Scoring
 
-- Never overwrite raw evidence.
-- Signals must reference evidence IDs.
-- Scores must reference scoring version.
-- Reports must reference score snapshot IDs.
-- Store timestamps in UTC.
-- Use database migrations if available; otherwise clearly version schema SQL.
+Scoring should be explainable and deliberately simple.
 
----
+Initial scores:
 
-## Backtesting and Time Travel
+- `TrajectoryScore`: positive/negative signal strength over the current window.
+- `SignalVelocity`: number and strength of recent signals compared with a prior window.
+- `EvidenceConfidence`: source quality and signal confidence.
+- `AttentionScore`: simple count of evidence items for now.
+- `OpportunityScore`: trajectory adjusted by attention and confidence.
 
-Not required in MVP, but design for it.
+### MVP Formula Guidance
 
-Do not mutate historical signals or scores in a way that prevents replay.
+Keep formula visible and versioned.
 
-Later goal:
+Example:
 
-> Show what Radar knew on a given date without hindsight contamination.
+```text
+TrajectoryScore = weighted average of accepted signal strength
+SignalVelocity = current 30-day signal score - previous 30-day signal score
+EvidenceConfidence = average confidence adjusted by source count
+OpportunityScore = TrajectoryScore + EvidenceConfidence + SignalVelocity - AttentionPenalty
+```
 
----
-
-## Human Review Workflow
-
-Radar should not say “buy”.
-
-Allowed labels:
-
-- Investigate
-- Watch
-- Ignore
-- Needs more evidence
-- Thesis improving
-- Thesis deteriorating
-
-Human review should be recorded separately from system scores.
+The exact formula can evolve, but every score must explain which signals contributed.
 
 ---
 
-## Implementation Approach
+## Weekly Report
 
-The work planner must split this master spec into small implementation specs of roughly 1-2 hours.
+The weekly report is the MVP user interface.
 
-Suggested first chunks:
+Output path:
 
-1. Solution skeleton targeting .NET 10.
-2. Domain model records for Company, Evidence, Signal, Score, Report.
-3. PostgreSQL schema and repositories for evidence/signals.
-4. Local file collector for deterministic test evidence.
-5. Signal extraction interface and fake extractor.
-6. Simple scoring engine.
-7. Markdown weekly report generator.
-8. Replace fake extractor with Microsoft.Extensions.AI implementation.
+```text
+data/reports/weekly/radar-weekly-{yyyy-MM-dd}.md
+```
 
-Every task must leave the solution buildable and testable.
+The report should include:
+
+```markdown
+# Radar Weekly Report
+
+Generated: 2026-01-10
+
+> Research assistant output only. Not financial advice. Human review required.
+
+## Top Companies To Investigate
+
+### 1. Rocket Lab USA (RKLB)
+
+Action: Investigate
+Opportunity Score: 78
+Trajectory Score: 72
+Evidence Confidence: 81
+
+Why Radar noticed:
+- CustomerWin: Multi-launch agreement announced.
+- GovernmentContract: NASA-related contract evidence found.
+
+Evidence:
+- [Rocket Lab Announces ...](source-url-or-local-evidence-id)
+
+Notes:
+- Needs human review for contract size and financial materiality.
+
+## Watch
+
+## Ignore / Low Signal
+
+## Signals Needing Review
+```
+
+Allowed action labels:
+
+- `Investigate`
+- `Watch`
+- `Ignore`
+- `Needs More Evidence`
+
+Forbidden labels:
+
+- `Buy`
+- `Sell`
+- `Strong Buy`
+- `Price Target`
+
+---
+
+## Human Review
+
+Human review can be lightweight for MVP.
+
+A simple markdown or JSON note is enough.
+
+Example:
+
+```json
+{
+  "ticker": "RKLB",
+  "reviewedAt": "2026-01-10T18:00:00Z",
+  "decision": "Investigate",
+  "notes": "Worth reviewing latest investor presentation and balance sheet."
+}
+```
+
+Do not build a full review UI yet.
+
+---
+
+## Data Persistence Roadmap
+
+MVP uses files.
+
+PostgreSQL comes later when:
+
+- evidence volume becomes annoying in files;
+- query/report performance suffers;
+- the data model stabilizes;
+- UI/API work begins.
+
+When database persistence is introduced, preserve the same conceptual model:
+
+- Evidence
+- Signals
+- Scores
+- Reports
+- Reviews
+
+Do not let database design drive the MVP.
+
+---
+
+## AI Usage Roadmap
+
+AI is not required for the first proof.
+
+Recommended progression:
+
+### Level 1 - Deterministic
+
+- keyword extraction
+- simple rules
+- file-based evidence
+- explainable scoring
+
+### Level 2 - AI-Assisted Extraction
+
+- LLM reads evidence and proposes signals
+- typed structured output
+- deterministic validation
+- confidence thresholds
+
+### Level 3 - Review Agents
+
+- signal reviewer
+- skeptic reviewer
+- thesis builder
+- thesis challenger
+
+### Level 4 - Discovery Agents
+
+- broader search/discovery
+- related company discovery
+- cross-source relationship building
+
+Do not start at Level 4.
+
+---
+
+## Collector Roadmap
+
+Build collectors incrementally.
+
+### First Collector
+
+1. RSS Press Release Collector
+
+### Next Candidates
+
+2. SEC company filings collector.
+3. UK RNS collector.
+4. Insider transaction collector.
+5. Government contract collector.
+6. Company careers/hiring collector.
+7. Conference agenda collector.
+8. Article/media collector.
+9. Patent collector.
+10. Social attention collector.
+
+Only add a collector when the current pipeline can turn its evidence into useful report output.
+
+---
+
+## Work Planner Guidance
+
+The work planner must treat this document as a reference/master spec.
+
+It must not generate one giant implementation task.
+
+It should create small implementation specs, each approximately 1-2 hours.
+
+### Preferred Next Specs From Current Direction
+
+The planner should prioritize collector-driven proof of concept work:
+
+1. Collector abstraction and collection context.
+2. Watch universe source feed configuration.
+3. RSS press release collector.
+4. Raw evidence file writer and deduplication.
+5. Pipeline command to run collection -> extraction -> scoring -> report.
+6. Report improvements to show collector evidence clearly.
+
+### Planner Rules
+
+- Keep Radar locally runnable after every task.
+- Prefer file-based storage until the concept proves useful.
+- Do not introduce PostgreSQL unless a spec explicitly requires it.
+- Do not introduce a web UI yet.
+- Do not introduce AI extraction until deterministic end-to-end collection works.
+- Every generated spec must preserve evidence provenance.
+- Every generated spec must include tests.
+- Every generated spec must avoid trading advice wording.
 
 ---
 
@@ -439,18 +794,40 @@ Radar must not:
 - Use black-box scoring with no explanation.
 - Scrape sites in violation of terms.
 - Store API keys or secrets in source control.
+- Become a productized SaaS before it is useful locally.
 
 ---
 
 ## Acceptance Criteria for MVP
 
 - [ ] Solution builds on .NET 10.
-- [ ] Evidence can be ingested from at least one deterministic source.
-- [ ] Evidence is stored with provenance.
-- [ ] Signals can be extracted or simulated with typed outputs.
-- [ ] Signals link back to evidence.
-- [ ] Companies can be scored from signals.
-- [ ] Weekly markdown report is generated.
-- [ ] Every reported company includes evidence references.
-- [ ] Tests cover core scoring and extraction validation.
-- [ ] No provider-specific AI SDK leaks outside infrastructure.
+- [ ] A watch universe file defines companies and RSS feeds.
+- [ ] RSS collector fetches at least one configured feed.
+- [ ] Collector writes raw evidence files locally.
+- [ ] Duplicate evidence is skipped by URL/hash.
+- [ ] Evidence is normalized.
+- [ ] Company resolver links evidence to watch universe companies conservatively.
+- [ ] Deterministic extractor creates typed signals from evidence.
+- [ ] Signals reference evidence IDs.
+- [ ] Scores are produced from signals.
+- [ ] Weekly markdown report is generated locally.
+- [ ] Report includes evidence references for every surfaced company.
+- [ ] Report uses only research labels: Investigate, Watch, Ignore, Needs More Evidence.
+- [ ] Tests cover collector, evidence writing, duplicate handling, signal extraction, scoring, and report generation.
+- [ ] The whole pipeline can run locally without a database.
+
+---
+
+## Final MVP Definition
+
+Radar v1 is complete when Dean can:
+
+1. Add companies and RSS feeds to a local watch universe file.
+2. Run one local command.
+3. Have Radar automatically collect new evidence.
+4. See which watched companies produced meaningful signals.
+5. Read the evidence behind each surfaced company.
+6. Decide what to investigate next.
+
+That is the product for now.
+
