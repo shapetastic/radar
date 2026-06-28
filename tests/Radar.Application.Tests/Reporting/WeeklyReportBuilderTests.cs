@@ -214,12 +214,12 @@ public sealed class WeeklyReportBuilderTests
         {
             RadarReportAction.Investigate,
             RadarReportAction.Watch,
+            RadarReportAction.Ignore,
             RadarReportAction.NeedsMoreEvidence,
             RadarReportAction.ThesisImproving,
             RadarReportAction.ThesisDeteriorating,
         };
         Assert.All(result.Items, i => Assert.Contains(i.SuggestedAction, allowed));
-        Assert.DoesNotContain(result.Items, i => i.SuggestedAction == RadarReportAction.Ignore);
 
         var markdown = result.Report.MarkdownContent;
         Assert.Contains("> Not financial advice.", markdown, StringComparison.Ordinal);

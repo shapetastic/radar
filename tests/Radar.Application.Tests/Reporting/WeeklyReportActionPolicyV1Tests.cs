@@ -10,6 +10,7 @@ public sealed class WeeklyReportActionPolicyV1Tests
     [
         RadarReportAction.Investigate,
         RadarReportAction.Watch,
+        RadarReportAction.Ignore,
         RadarReportAction.NeedsMoreEvidence,
         RadarReportAction.ThesisImproving,
         RadarReportAction.ThesisDeteriorating
@@ -65,7 +66,6 @@ public sealed class WeeklyReportActionPolicyV1Tests
         var result = CreatePolicy().Decide(new ReportActionContext(current, previous));
 
         Assert.Contains(result.Action, AllowedActions);
-        Assert.NotEqual(RadarReportAction.Ignore, result.Action);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class WeeklyReportActionPolicyV1Tests
     }
 
     [Fact]
-    public void Opportunity_Below_Watch_Threshold_Yields_NeedsMoreEvidence()
+    public void Adequate_Evidence_Below_Watch_Threshold_Yields_Ignore()
     {
         var current = new ScoreSnapshotBuilder()
             .WithOpportunityScore(39)
@@ -121,8 +121,25 @@ public sealed class WeeklyReportActionPolicyV1Tests
 
         var result = CreatePolicy().Decide(new ReportActionContext(current, null));
 
-        Assert.Equal(RadarReportAction.NeedsMoreEvidence, result.Action);
+        Assert.Equal(RadarReportAction.Ignore, result.Action);
         Assert.Contains("39", result.Rationale);
+        Assert.Contains("40", result.Rationale);
+    }
+
+    [Fact]
+    public void Thin_Evidence_Below_Watch_Threshold_Still_Yields_NeedsMoreEvidence()
+    {
+        // Thin evidence (below the floor) must win over the low-opportunity Ignore rule:
+        // an insufficiently-evidenced company is "needs more evidence", not silently ignored.
+        var current = new ScoreSnapshotBuilder()
+            .WithOpportunityScore(20)
+            .WithEvidenceConfidenceScore(34)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(current, null));
+
+        Assert.Equal(RadarReportAction.NeedsMoreEvidence, result.Action);
+        Assert.NotEqual(RadarReportAction.Ignore, result.Action);
     }
 
     [Fact]

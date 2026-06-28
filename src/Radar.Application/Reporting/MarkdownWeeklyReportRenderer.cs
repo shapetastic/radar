@@ -8,7 +8,8 @@ using Radar.Domain.Reports;
 /// Pure, deterministic renderer that turns a fully-assembled <see cref="WeeklyReportModel"/> into
 /// markdown. No clock, no I/O, no repositories: the same model always renders byte-identical output
 /// (invariant culture, <c>\n</c> line endings, model-supplied ordering). This is where Radar's
-/// output-language hard rule is enforced — only the five ALLOWED labels render, the required
+/// output-language hard rule is enforced — only the six AD-9 ALLOWED labels render (Investigate,
+/// Watch, Ignore, Needs more evidence, Thesis improving, Thesis deteriorating), the required
 /// disclaimers are always present, and every entry carries its score-snapshot id plus attributed
 /// evidence links so a reported company is reproducible from stored data.
 /// </summary>
@@ -20,6 +21,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     {
         RadarReportAction.Investigate,
         RadarReportAction.Watch,
+        RadarReportAction.Ignore,
         RadarReportAction.NeedsMoreEvidence,
         RadarReportAction.ThesisImproving,
         RadarReportAction.ThesisDeteriorating,
@@ -30,6 +32,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         {
             [RadarReportAction.Investigate] = "Investigate",
             [RadarReportAction.Watch] = "Watch",
+            [RadarReportAction.Ignore] = "Ignore",
             [RadarReportAction.NeedsMoreEvidence] = "Needs more evidence",
             [RadarReportAction.ThesisImproving] = "Thesis improving",
             [RadarReportAction.ThesisDeteriorating] = "Thesis deteriorating",
@@ -40,7 +43,8 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         ArgumentNullException.ThrowIfNull(model);
 
         // Enforce the output-language hard rule and provenance invariants before emitting
-        // anything: a disallowed label (e.g. Ignore) must never reach the report, and the
+        // anything: a disallowed label (anything outside the six AD-9 labels) must never reach
+        // the report, and the
         // cited score-snapshot id / company id must match the attached snapshot the scores are
         // read from — otherwise the markdown would cite one snapshot while showing another's
         // scores, breaking reproducibility.
@@ -74,6 +78,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         AppendHighestOpportunity(sb, model);
         AppendThesisSection(sb, model, RadarReportAction.ThesisImproving, "Thesis improving");
         AppendThesisSection(sb, model, RadarReportAction.ThesisDeteriorating, "Thesis deteriorating");
+        AppendNamedActionSection(sb, model, RadarReportAction.Ignore, "Ignore / Low signal");
         AppendSignalsNeedingReview(sb, model);
 
         return sb.ToString();
@@ -177,6 +182,13 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     }
 
     private static void AppendThesisSection(
+        StringBuilder sb, WeeklyReportModel model, RadarReportAction action, string header) =>
+        AppendNamedActionSection(sb, model, action, header);
+
+    // Named roll-up of every entry whose action matches: company (ticker) (#rank), in model order.
+    // Shared by the thesis sections and the "Ignore / Low signal" section so all three stay
+    // byte-identical in shape. Omitted entirely when no entry matches.
+    private static void AppendNamedActionSection(
         StringBuilder sb, WeeklyReportModel model, RadarReportAction action, string header)
     {
         var matches = new List<WeeklyReportEntry>();
