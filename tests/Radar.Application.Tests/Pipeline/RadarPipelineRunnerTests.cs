@@ -42,6 +42,36 @@ public sealed class RadarPipelineRunnerTests
             Task.FromResult(items);
     }
 
+    /// <summary>
+    /// A deterministic clock whose <see cref="GetUtcNow"/> advances by a fixed step on every call, so
+    /// instants captured later in the run are strictly greater than instants captured earlier. Returns
+    /// zero-offset values (the report builder requires zero offset).
+    /// </summary>
+    private sealed class AdvancingTimeProvider(DateTimeOffset start, TimeSpan step) : TimeProvider
+    {
+        private long _ticks;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var n = Interlocked.Increment(ref _ticks) - 1;
+            return start + TimeSpan.FromTicks(step.Ticks * n);
+        }
+    }
+
+    /// <summary>
+    /// A collector that stamps each returned evidence item's <see cref="EvidenceItem.CollectedAtUtc"/>
+    /// from the injected clock at collection time, mirroring the production collector. With the
+    /// advancing clock this makes collection time strictly precede the post-collection asOfUtc.
+    /// </summary>
+    private sealed class ClockStampingCollector(TimeProvider clock, EvidenceItem template) : IEvidenceCollector
+    {
+        public Task<IReadOnlyList<EvidenceItem>> CollectAsync(CancellationToken ct)
+        {
+            var stamped = template with { CollectedAtUtc = clock.GetUtcNow() };
+            return Task.FromResult<IReadOnlyList<EvidenceItem>>([stamped]);
+        }
+    }
+
     /// <summary>A deterministic, in-test extractor returning a fixed output keyed by evidence id.</summary>
     private sealed class FakeSignalExtractor(
         IReadOnlyDictionary<Guid, ExtractSignalsOutput> outputsByEvidenceId) : ISignalExtractor
@@ -65,9 +95,10 @@ public sealed class RadarPipelineRunnerTests
         public Harness(
             IEvidenceCollector collector,
             ISignalExtractor extractor,
-            PipelineOptions options)
+            PipelineOptions options,
+            TimeProvider? timeProvider = null)
         {
-            var time = new FixedTimeProvider(FixedNow);
+            var time = timeProvider ?? new FixedTimeProvider(FixedNow);
 
             var resolver = new CompanyResolver(Companies, NullLogger<CompanyResolver>.Instance);
             var reviewer = new DeterministicSignalReviewer(
@@ -386,6 +417,56 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(first.SignalsApproved, second.SignalsApproved);
         Assert.Equal(first.SignalsNeedingReview, second.SignalsNeedingReview);
         Assert.Equal(first.CompaniesScored, second.CompaniesScored);
+    }
+
+    [Fact]
+    public async Task FreshlyCollectedEvidence_WithNoPublishedAt_IsScoredInSameRun()
+    {
+        // Part B regression: the runner must capture asOfUtc AFTER collection. The advancing clock
+        // makes the post-collection asOfUtc strictly greater than the evidence's CollectedAtUtc. With
+        // no PublishedAtUtc, ObservedAtUtc falls back to CollectedAtUtc, which is at the (start, end]
+        // window's inclusive end — so the signal scores. If asOfUtc were captured BEFORE collection
+        // (the pre-fix bug), ObservedAtUtc would sort just AFTER the window end and the signal would be
+        // dropped from scoring (CompaniesScored snapshot would have no contributing signals).
+        var evidenceId = Guid.NewGuid();
+        var companyId = Guid.NewGuid();
+
+        // Position the advancing clock's base so the freshly-stamped ObservedAtUtc sits inside both the
+        // 30-day scoring window and the 7-day report period (both end at the post-collection asOfUtc).
+        var clock = new AdvancingTimeProvider(FixedNow, TimeSpan.FromSeconds(1));
+
+        // Build evidence with NO PublishedAtUtc so ObservedAtUtc falls back to CollectedAtUtc.
+        var template = new EvidenceBuilder()
+            .WithId(evidenceId)
+            .WithSourceName("Northwind Newsroom")
+            .WithTitle("Northwind Robotics customer win")
+            .WithRawText(RawText)
+            .WithContentHash("hash-nopub")
+            .WithQuality(EvidenceQuality.High)
+            .Build();
+
+        var collector = new ClockStampingCollector(clock, template);
+        var extractor = new FakeSignalExtractor(
+            new Dictionary<Guid, ExtractSignalsOutput>
+            {
+                [evidenceId] = new([MaterialSignal()], "summary"),
+            });
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = true }, clock);
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.True(result.CompaniesScored >= 1);
+
+        // The snapshot must reflect the freshly collected signal: at least one contributing
+        // evidence link (provenance) ties the snapshot to the in-window signal.
+        var snapshots = await h.Scores.GetSnapshotsForCompanyAsync(companyId, default);
+        var snapshot = Assert.Single(snapshots);
+        var links = await h.Scores.GetLinksForSnapshotAsync(snapshot.Id, default);
+        var link = Assert.Single(links);
+        Assert.Equal(evidenceId, link.EvidenceId);
     }
 
     [Fact]

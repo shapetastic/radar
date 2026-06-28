@@ -140,7 +140,31 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
             ContentHash: normalized.ContentHash,
             PublishedAtUtc: doc.PublishedAtUtc?.ToUniversalTime(),
             CollectedAtUtc: _timeProvider.GetUtcNow(),
-            Quality: EvidenceQuality.Unknown,
+            Quality: ParseQuality(doc.Quality),
             MetadataJson: metadataJson);
+    }
+
+    /// <summary>
+    /// Maps a declared evidence quality string to <see cref="EvidenceQuality"/>. Accepts only a
+    /// defined enum name (case-insensitive); rejects digit-only input (which
+    /// <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/> would otherwise accept). Missing,
+    /// blank, or unparseable values default to <see cref="EvidenceQuality.Unknown"/> (skip-don't-throw).
+    /// </summary>
+    private EvidenceQuality ParseQuality(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Trim().All(char.IsDigit))
+        {
+            return EvidenceQuality.Unknown;
+        }
+
+        if (Enum.TryParse<EvidenceQuality>(value, ignoreCase: true, out var q) && Enum.IsDefined(q))
+        {
+            return q;
+        }
+
+        _logger.LogDebug(
+            "Evidence declared quality '{Quality}' is not a recognized EvidenceQuality; defaulting to Unknown.",
+            value);
+        return EvidenceQuality.Unknown;
     }
 }
