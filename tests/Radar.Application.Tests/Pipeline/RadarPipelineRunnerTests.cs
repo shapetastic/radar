@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
+using Radar.Application.Evidence;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
@@ -36,9 +37,14 @@ public sealed class RadarPipelineRunnerTests
     }
 
     /// <summary>A deterministic, in-test evidence collector returning a fixed list.</summary>
-    private sealed class FakeEvidenceCollector(IReadOnlyList<EvidenceItem> items) : IEvidenceCollector
+    private sealed class FakeEvidenceCollector(IReadOnlyCollection<CollectedEvidence> items) : IEvidenceCollector
     {
-        public Task<IReadOnlyList<EvidenceItem>> CollectAsync(CancellationToken ct) =>
+        public string CollectorName => "FakeEvidenceCollector";
+
+        public string SourceType => "local_file";
+
+        public Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+            CollectionContext context, CancellationToken ct) =>
             Task.FromResult(items);
     }
 
@@ -59,28 +65,33 @@ public sealed class RadarPipelineRunnerTests
     }
 
     /// <summary>
-    /// A collector that stamps each returned evidence item's <see cref="EvidenceItem.CollectedAtUtc"/>
+    /// A collector that stamps each returned collected-evidence's <see cref="CollectedEvidence.CollectedAt"/>
     /// from the injected clock at collection time, mirroring the production collector. With the
     /// advancing clock this makes collection time strictly precede the post-collection asOfUtc.
     /// </summary>
-    private sealed class ClockStampingCollector(TimeProvider clock, EvidenceItem template) : IEvidenceCollector
+    private sealed class ClockStampingCollector(TimeProvider clock, CollectedEvidence template) : IEvidenceCollector
     {
-        public Task<IReadOnlyList<EvidenceItem>> CollectAsync(CancellationToken ct)
+        public string CollectorName => "ClockStampingCollector";
+
+        public string SourceType => "local_file";
+
+        public Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+            CollectionContext context, CancellationToken ct)
         {
-            var stamped = template with { CollectedAtUtc = clock.GetUtcNow() };
-            return Task.FromResult<IReadOnlyList<EvidenceItem>>([stamped]);
+            var stamped = template with { CollectedAt = clock.GetUtcNow() };
+            return Task.FromResult<IReadOnlyCollection<CollectedEvidence>>([stamped]);
         }
     }
 
-    /// <summary>A deterministic, in-test extractor returning a fixed output keyed by evidence id.</summary>
-    private sealed class FakeSignalExtractor(
-        IReadOnlyDictionary<Guid, ExtractSignalsOutput> outputsByEvidenceId) : ISignalExtractor
+    /// <summary>
+    /// A deterministic, in-test extractor returning a fixed output for ANY evidence id. The runner now
+    /// maps <see cref="CollectedEvidence"/> to evidence via the real mapper (which assigns a fresh id),
+    /// so the extractor cannot key off a pre-chosen id — it returns the same output regardless.
+    /// </summary>
+    private sealed class AnyEvidenceSignalExtractor(ExtractSignalsOutput output) : ISignalExtractor
     {
         public Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence, CancellationToken ct) =>
-            Task.FromResult(
-                outputsByEvidenceId.TryGetValue(evidence.Id, out var output)
-                    ? output
-                    : new ExtractSignalsOutput([], string.Empty));
+            Task.FromResult(output);
     }
 
     private sealed class Harness
@@ -123,8 +134,12 @@ public sealed class RadarPipelineRunnerTests
                 time,
                 NullLogger<WeeklyReportBuilder>.Instance);
 
+            var mapper = new CollectedEvidenceMapper(
+                new EvidenceNormalizer(), NullLogger<CollectedEvidenceMapper>.Instance);
+
             Runner = new RadarPipelineRunner(
                 collector,
+                mapper,
                 Evidence,
                 extractor,
                 resolver,
@@ -139,16 +154,21 @@ public sealed class RadarPipelineRunnerTests
         }
     }
 
-    private static EvidenceItem BuildEvidence(Guid id, string rawText = RawText, string hash = "hash-nw") =>
-        new EvidenceBuilder()
-            .WithId(id)
-            .WithSourceName("Northwind Newsroom")
-            .WithTitle("Northwind Robotics customer win")
-            .WithRawText(rawText)
-            .WithContentHash(hash)
-            .WithPublishedAtUtc(Observed)
-            .WithQuality(EvidenceQuality.High)
-            .Build();
+    /// <summary>
+    /// Builds a raw <see cref="CollectedEvidence"/> for the collector. The runner maps it to an
+    /// <see cref="EvidenceItem"/> via the real mapper (which normalizes title+rawText into the content
+    /// hash and assigns a fresh id). Dedup is therefore by normalized content, not by a pre-chosen id.
+    /// </summary>
+    private static CollectedEvidence BuildCollected(string rawText = RawText) =>
+        new(
+            SourceType: "local_file",
+            SourceName: "Northwind Newsroom",
+            SourceUrl: "https://example.com/nw",
+            Title: "Northwind Robotics customer win",
+            RawText: rawText,
+            PublishedAt: Observed,
+            CollectedAt: FixedNow,
+            Metadata: new Dictionary<string, string> { ["quality"] = "High" });
 
     private static ExtractedSignal MaterialSignal(
         string mention = CompanyName,
@@ -177,15 +197,9 @@ public sealed class RadarPipelineRunnerTests
     [Fact]
     public async Task HappyPath_FullChain_PersistsAndKeepsProvenance()
     {
-        var evidenceId = Guid.NewGuid();
         var companyId = Guid.NewGuid();
-        var evidence = BuildEvidence(evidenceId);
-        var collector = new FakeEvidenceCollector([evidence]);
-        var extractor = new FakeSignalExtractor(
-            new Dictionary<Guid, ExtractSignalsOutput>
-            {
-                [evidenceId] = new([MaterialSignal()], "summary"),
-            });
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
 
         var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
         await SeedCompanyAsync(h, companyId);
@@ -202,15 +216,14 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(1, result.CompaniesScored);
         Assert.NotNull(result.ReportId);
 
-        // Evidence persisted.
-        Assert.NotNull(await h.Evidence.GetByIdAsync(evidenceId, default));
-
-        // Exactly one signal persisted, resolved + approved, keeping its evidence id.
+        // Exactly one signal persisted, resolved + approved. The mapper assigned the evidence id, so
+        // discover it from the persisted signal and verify the evidence was persisted under it.
         var signals = await h.Signals.GetByCompanyAsync(companyId, default);
         var signal = Assert.Single(signals);
         Assert.Equal(companyId, signal.CompanyId);
         Assert.Equal(SignalReviewStatus.Approved, signal.ReviewStatus);
-        Assert.Equal(evidenceId, signal.EvidenceId);
+        var evidenceId = signal.EvidenceId;
+        Assert.NotNull(await h.Evidence.GetByIdAsync(evidenceId, default));
 
         // A snapshot exists for the company.
         var snapshots = await h.Scores.GetSnapshotsForCompanyAsync(companyId, default);
@@ -234,14 +247,8 @@ public sealed class RadarPipelineRunnerTests
     [Fact]
     public async Task UnresolvedMention_StaysConservative()
     {
-        var evidenceId = Guid.NewGuid();
-        var evidence = BuildEvidence(evidenceId);
-        var collector = new FakeEvidenceCollector([evidence]);
-        var extractor = new FakeSignalExtractor(
-            new Dictionary<Guid, ExtractSignalsOutput>
-            {
-                [evidenceId] = new([MaterialSignal()], "summary"),
-            });
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
 
         // Empty company universe → mention cannot resolve.
         var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
@@ -264,15 +271,13 @@ public sealed class RadarPipelineRunnerTests
     [Fact]
     public async Task RunningTwice_DoesNotDoubleStoreOrDoubleExtract()
     {
-        var evidenceId = Guid.NewGuid();
         var companyId = Guid.NewGuid();
-        var evidence = BuildEvidence(evidenceId);
-        var collector = new FakeEvidenceCollector([evidence]);
-        var extractor = new FakeSignalExtractor(
-            new Dictionary<Guid, ExtractSignalsOutput>
-            {
-                [evidenceId] = new([MaterialSignal()], "summary"),
-            });
+
+        // The same CollectedEvidence maps to the same content hash each run (the mapper's normalizer is
+        // deterministic over title+rawText), even though it assigns a fresh id every map. AddIfNewAsync
+        // dedups by content hash, so the second run stores nothing new.
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
 
         var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
         await SeedCompanyAsync(h, companyId);
@@ -303,18 +308,12 @@ public sealed class RadarPipelineRunnerTests
     [Fact]
     public async Task InvalidExtractedSignal_IsDroppedNotPersisted()
     {
-        var evidenceId = Guid.NewGuid();
         var companyId = Guid.NewGuid();
-        var evidence = BuildEvidence(evidenceId);
-        var collector = new FakeEvidenceCollector([evidence]);
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
 
         // Unknown type AND an excerpt not present in the evidence — both make the mapper reject it.
         var invalid = MaterialSignal(type: "NotARealType", excerpt: "this text is absent from evidence");
-        var extractor = new FakeSignalExtractor(
-            new Dictionary<Guid, ExtractSignalsOutput>
-            {
-                [evidenceId] = new([invalid], "summary"),
-            });
+        var extractor = new AnyEvidenceSignalExtractor(new([invalid], "summary"));
 
         var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
         await SeedCompanyAsync(h, companyId);
@@ -335,15 +334,9 @@ public sealed class RadarPipelineRunnerTests
     [Fact]
     public async Task GenerateReportFalse_ProducesNoReport()
     {
-        var evidenceId = Guid.NewGuid();
         var companyId = Guid.NewGuid();
-        var evidence = BuildEvidence(evidenceId);
-        var collector = new FakeEvidenceCollector([evidence]);
-        var extractor = new FakeSignalExtractor(
-            new Dictionary<Guid, ExtractSignalsOutput>
-            {
-                [evidenceId] = new([MaterialSignal()], "summary"),
-            });
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
 
         var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
         await SeedCompanyAsync(h, companyId);
@@ -361,15 +354,9 @@ public sealed class RadarPipelineRunnerTests
     [Fact]
     public async Task InjectedClock_IsHonoured_NoUtcNowLeak()
     {
-        var evidenceId = Guid.NewGuid();
         var companyId = Guid.NewGuid();
-        var evidence = BuildEvidence(evidenceId);
-        var collector = new FakeEvidenceCollector([evidence]);
-        var extractor = new FakeSignalExtractor(
-            new Dictionary<Guid, ExtractSignalsOutput>
-            {
-                [evidenceId] = new([MaterialSignal()], "summary"),
-            });
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
 
         var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
         await SeedCompanyAsync(h, companyId);
@@ -392,15 +379,10 @@ public sealed class RadarPipelineRunnerTests
 
         async Task<RadarPipelineResult> RunOnceAsync()
         {
-            // Fresh evidence id + content hash per fresh state so each run sees brand-new evidence.
-            var evidenceId = Guid.NewGuid();
-            var evidence = BuildEvidence(evidenceId, hash: evidenceId.ToString());
-            var collector = new FakeEvidenceCollector([evidence]);
-            var extractor = new FakeSignalExtractor(
-                new Dictionary<Guid, ExtractSignalsOutput>
-                {
-                    [evidenceId] = new([MaterialSignal()], "summary"),
-                });
+            // Each run uses a fresh harness (fresh in-memory state), so the same collected evidence is
+            // brand-new to it. The excerpt stays present in the raw text so the signal validates.
+            var collector = new FakeEvidenceCollector([BuildCollected()]);
+            var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
 
             var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
             await SeedCompanyAsync(h, companyId);
@@ -428,29 +410,26 @@ public sealed class RadarPipelineRunnerTests
         // window's inclusive end — so the signal scores. If asOfUtc were captured BEFORE collection
         // (the pre-fix bug), ObservedAtUtc would sort just AFTER the window end and the signal would be
         // dropped from scoring (CompaniesScored snapshot would have no contributing signals).
-        var evidenceId = Guid.NewGuid();
         var companyId = Guid.NewGuid();
 
         // Position the advancing clock's base so the freshly-stamped ObservedAtUtc sits inside both the
         // 30-day scoring window and the 7-day report period (both end at the post-collection asOfUtc).
         var clock = new AdvancingTimeProvider(FixedNow, TimeSpan.FromSeconds(1));
 
-        // Build evidence with NO PublishedAtUtc so ObservedAtUtc falls back to CollectedAtUtc.
-        var template = new EvidenceBuilder()
-            .WithId(evidenceId)
-            .WithSourceName("Northwind Newsroom")
-            .WithTitle("Northwind Robotics customer win")
-            .WithRawText(RawText)
-            .WithContentHash("hash-nopub")
-            .WithQuality(EvidenceQuality.High)
-            .Build();
+        // Build collected evidence with NO PublishedAt so the mapped ObservedAtUtc falls back to the
+        // clock-stamped CollectedAt. The collector stamps CollectedAt from the advancing clock.
+        var template = new CollectedEvidence(
+            SourceType: "local_file",
+            SourceName: "Northwind Newsroom",
+            SourceUrl: "https://example.com/nw",
+            Title: "Northwind Robotics customer win",
+            RawText: RawText,
+            PublishedAt: null,
+            CollectedAt: FixedNow,
+            Metadata: new Dictionary<string, string> { ["quality"] = "High" });
 
         var collector = new ClockStampingCollector(clock, template);
-        var extractor = new FakeSignalExtractor(
-            new Dictionary<Guid, ExtractSignalsOutput>
-            {
-                [evidenceId] = new([MaterialSignal()], "summary"),
-            });
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
 
         var h = new Harness(
             collector, extractor, new PipelineOptions { GenerateReport = true }, clock);
@@ -461,12 +440,15 @@ public sealed class RadarPipelineRunnerTests
         Assert.True(result.CompaniesScored >= 1);
 
         // The snapshot must reflect the freshly collected signal: at least one contributing
-        // evidence link (provenance) ties the snapshot to the in-window signal.
+        // evidence link (provenance) ties the snapshot to the in-window signal. The mapper assigned the
+        // evidence id, so discover it from the persisted signal.
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
         var snapshots = await h.Scores.GetSnapshotsForCompanyAsync(companyId, default);
         var snapshot = Assert.Single(snapshots);
         var links = await h.Scores.GetLinksForSnapshotAsync(snapshot.Id, default);
         var link = Assert.Single(links);
-        Assert.Equal(evidenceId, link.EvidenceId);
+        Assert.Equal(signal.EvidenceId, link.EvidenceId);
     }
 
     [Fact]
