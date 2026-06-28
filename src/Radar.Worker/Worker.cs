@@ -63,9 +63,10 @@ public class Worker : BackgroundService
                 await RunPipelineAsync(stoppingToken).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            // Graceful shutdown — stoppingToken was cancelled.
+            // Graceful shutdown — only swallow cancellations triggered by the host stopping token.
+            // Cancellations from any other source are unexpected and propagate.
         }
     }
 

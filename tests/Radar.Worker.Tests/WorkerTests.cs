@@ -63,11 +63,10 @@ public sealed class WorkerTests
         var executeTask = worker.RunExecuteAsync(cts.Token);
 
         // Wait until the first run has happened and the worker is awaiting the next tick.
-        var spin = new SpinWait();
-        while (pipeline.RunCount < 1)
-        {
-            spin.SpinOnce();
-        }
+        // Bounded so a startup regression fails fast instead of hanging the test in CI.
+        Assert.True(
+            SpinWait.SpinUntil(() => pipeline.RunCount >= 1, TimeSpan.FromSeconds(5)),
+            "worker did not reach the first pipeline run within the timeout");
 
         // Cancelling the stoppingToken must unwind cleanly — the OperationCanceledException is swallowed
         // inside ExecuteAsync and the task completes successfully (does not throw out).
@@ -105,11 +104,10 @@ public sealed class WorkerTests
         await worker.StartAsync(CancellationToken.None);
 
         // Wait until the first (immediate) run has occurred and the worker is awaiting the next tick.
-        var spin = new SpinWait();
-        while (pipeline.RunCount < 1)
-        {
-            spin.SpinOnce();
-        }
+        // Bounded so a startup regression fails fast instead of hanging the test in CI.
+        Assert.True(
+            SpinWait.SpinUntil(() => pipeline.RunCount >= 1, TimeSpan.FromSeconds(5)),
+            "worker did not reach the first pipeline run within the timeout");
 
         // Advance past one interval to trigger the second run.
         timeProvider.Advance(interval);

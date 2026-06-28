@@ -17,6 +17,14 @@ internal static class RadarWorkerServices
     {
         var options = configuration.GetSection("Radar").Get<RadarWorkerOptions>() ?? new RadarWorkerOptions();
 
+        // Fail fast with a clear message: a non-positive interval would otherwise throw an opaque
+        // ArgumentOutOfRangeException from PeriodicTimer when the worker starts looping.
+        if (!options.RunOnce && options.IntervalMinutes <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:IntervalMinutes must be greater than zero when Radar:RunOnce is false (was {options.IntervalMinutes}).");
+        }
+
         // Register the configured option instances FIRST so the libraries' TryAddSingleton defaults
         // (ScoringOptions / WeeklyReportOptions / PipelineOptions) do not override them. Do NOT reorder
         // these below the AddRadar* helpers — that would let configuration lose to the library defaults.
