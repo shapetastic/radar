@@ -258,6 +258,103 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
+    public async Task NeedsReviewKeepsMostRecentSignalsUnderCapInDescendingObservedOrder()
+    {
+        var h = new Harness(new WeeklyReportOptions { MaxItems = 2 });
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        // ObservedAtUtc recency order is deliberately the OPPOSITE of Id order: the LARGEST Id is
+        // the most recent and the SMALLEST Id is the oldest. Under the old OrderBy(Id).Take(2) the
+        // surfaced set would be {oldest, middle} — dropping the newest — so this test goes red under
+        // the old ordering and green only with the recency-first key.
+        var idNewest = new Guid("00000000-0000-0000-0000-000000000003");
+        var idMiddle = new Guid("00000000-0000-0000-0000-000000000002");
+        var idOldest = new Guid("00000000-0000-0000-0000-000000000001");
+
+        var observedNewest = new DateTimeOffset(2026, 2, 6, 0, 0, 0, TimeSpan.Zero);
+        var observedMiddle = new DateTimeOffset(2026, 2, 5, 0, 0, 0, TimeSpan.Zero);
+        var observedOldest = new DateTimeOffset(2026, 2, 4, 0, 0, 0, TimeSpan.Zero);
+
+        await h.Signals.AddAsync(new SignalBuilder()
+            .WithId(idNewest)
+            .WithReviewStatus(SignalReviewStatus.NeedsHumanReview)
+            .WithReason("Newest needs review.")
+            .WithObservedAtUtc(observedNewest)
+            .Build(), default);
+        await h.Signals.AddAsync(new SignalBuilder()
+            .WithId(idMiddle)
+            .WithReviewStatus(SignalReviewStatus.Pending)
+            .WithReason("Middle needs review.")
+            .WithObservedAtUtc(observedMiddle)
+            .Build(), default);
+        await h.Signals.AddAsync(new SignalBuilder()
+            .WithId(idOldest)
+            .WithReviewStatus(SignalReviewStatus.NeedsHumanReview)
+            .WithReason("Oldest needs review.")
+            .WithObservedAtUtc(observedOldest)
+            .Build(), default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var markdown = result.Report.MarkdownContent;
+
+        // The two most-recent signals are surfaced; the oldest is dropped by the cap.
+        var newestIndex = markdown.IndexOf($"signal {idNewest}", StringComparison.Ordinal);
+        var middleIndex = markdown.IndexOf($"signal {idMiddle}", StringComparison.Ordinal);
+        Assert.True(newestIndex >= 0, "Newest needs-review signal should be present.");
+        Assert.True(middleIndex >= 0, "Middle needs-review signal should be present.");
+        Assert.DoesNotContain($"signal {idOldest}", markdown, StringComparison.Ordinal);
+
+        // Descending ObservedAtUtc order: newest appears before middle.
+        Assert.True(newestIndex < middleIndex, "Needs-review signals should be most-recent-first.");
+    }
+
+    [Fact]
+    public async Task NeedsReviewTiebreaksBySignalIdAscendingDeterministically()
+    {
+        var sharedObserved = new DateTimeOffset(2026, 2, 5, 0, 0, 0, TimeSpan.Zero);
+        var smallerId = new Guid("00000000-0000-0000-0000-000000000001");
+        var largerId = new Guid("00000000-0000-0000-0000-000000000002");
+        // Fixed company/snapshot ids so the whole markdown (not just the needs-review section)
+        // is reproducible across the two independent builds.
+        var companyId = new Guid("00000000-0000-0000-0000-0000000000a1");
+        var snapshotId = new Guid("00000000-0000-0000-0000-0000000000b1");
+
+        async Task<string> RunAsync()
+        {
+            var h = new Harness();
+            await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
+
+            await h.Signals.AddAsync(new SignalBuilder()
+                .WithId(largerId)
+                .WithReviewStatus(SignalReviewStatus.NeedsHumanReview)
+                .WithReason("Larger-id signal at shared instant.")
+                .WithObservedAtUtc(sharedObserved)
+                .Build(), default);
+            await h.Signals.AddAsync(new SignalBuilder()
+                .WithId(smallerId)
+                .WithReviewStatus(SignalReviewStatus.Pending)
+                .WithReason("Smaller-id signal at shared instant.")
+                .WithObservedAtUtc(sharedObserved)
+                .Build(), default);
+
+            var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+            return result.Report.MarkdownContent;
+        }
+
+        var first = await RunAsync();
+        var second = await RunAsync();
+
+        // Deterministic across independent builds.
+        Assert.Equal(first, second);
+
+        // Same instant → smaller Id ordered first.
+        var smallerIndex = first.IndexOf($"signal {smallerId}", StringComparison.Ordinal);
+        var largerIndex = first.IndexOf($"signal {largerId}", StringComparison.Ordinal);
+        Assert.True(smallerIndex >= 0 && largerIndex >= 0, "Both signals should be present.");
+        Assert.True(smallerIndex < largerIndex, "Same-instant signals tiebreak by Id ascending.");
+    }
+
+    [Fact]
     public async Task PersistsReportAndItemsRetrievableOrderedByRank()
     {
         var h = new Harness();
