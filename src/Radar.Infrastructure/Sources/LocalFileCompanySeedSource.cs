@@ -1,0 +1,148 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Radar.Application.EntityResolution;
+using Radar.Domain.Companies;
+
+namespace Radar.Infrastructure.Sources;
+
+/// <summary>
+/// Deterministic <see cref="ICompanySeedSource"/> that reads the seed watch-universe from a local
+/// JSON file. Mirrors the local-file evidence collector: it never throws when the file is missing or
+/// unreadable, skips entries lacking a stable <c>id</c> or a <c>name</c> (never hallucinating data),
+/// and preserves file order. Company Ids come from the file and alias Ids are derived deterministically
+/// so re-seeding upserts the same rows. The injected <see cref="TimeProvider"/> only stamps
+/// timestamps; it never affects identity.
+/// </summary>
+public sealed class LocalFileCompanySeedSource : ICompanySeedSource
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
+    private readonly LocalFileCompanySeedOptions _options;
+    private readonly ILogger<LocalFileCompanySeedSource> _logger;
+    private readonly TimeProvider _timeProvider;
+
+    public LocalFileCompanySeedSource(
+        LocalFileCompanySeedOptions options,
+        ILogger<LocalFileCompanySeedSource> logger,
+        TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        _options = options;
+        _logger = logger;
+        _timeProvider = timeProvider;
+    }
+
+    public async Task<CompanySeedData> GetSeedAsync(CancellationToken ct)
+    {
+        var filePath = _options.FilePath;
+
+        if (!File.Exists(filePath))
+        {
+            _logger.LogWarning(
+                "Company seed file '{FilePath}' does not exist; returning an empty seed.",
+                filePath);
+            return new CompanySeedData([], []);
+        }
+
+        LocalFileCompanySeedDocument? doc;
+        try
+        {
+            var text = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
+            doc = JsonSerializer.Deserialize<LocalFileCompanySeedDocument>(text, JsonOptions);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to read or parse company seed file '{FilePath}'; returning an empty seed.",
+                filePath);
+            return new CompanySeedData([], []);
+        }
+
+        if (doc?.Companies is null)
+        {
+            _logger.LogWarning(
+                "Company seed file '{FilePath}' contained no companies; returning an empty seed.",
+                filePath);
+            return new CompanySeedData([], []);
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        var companies = new List<Company>(doc.Companies.Count);
+        var aliases = new List<CompanyAlias>();
+
+        foreach (var entry in doc.Companies)
+        {
+            if (entry is null)
+            {
+                continue;
+            }
+
+            if (!Guid.TryParse(entry.Id, out var companyId) || string.IsNullOrWhiteSpace(entry.Name))
+            {
+                _logger.LogWarning(
+                    "Company seed entry with id '{Id}' and name '{Name}' is missing a parseable id or a name; skipping.",
+                    entry.Id,
+                    entry.Name);
+                continue;
+            }
+
+            companies.Add(new Company(
+                Id: companyId,
+                Name: entry.Name,
+                LegalName: entry.LegalName,
+                Ticker: entry.Ticker,
+                Exchange: entry.Exchange,
+                CountryCode: entry.CountryCode,
+                Sector: entry.Sector,
+                Industry: entry.Industry,
+                Status: CompanyStatus.Active,
+                CreatedAtUtc: now,
+                UpdatedAtUtc: now));
+
+            if (entry.Aliases is null)
+            {
+                continue;
+            }
+
+            foreach (var aliasText in entry.Aliases)
+            {
+                if (string.IsNullOrWhiteSpace(aliasText))
+                {
+                    continue;
+                }
+
+                aliases.Add(new CompanyAlias(
+                    Id: DeterministicGuid(companyId, "seed", aliasText),
+                    CompanyId: companyId,
+                    Alias: aliasText,
+                    AliasType: "seed",
+                    CreatedAtUtc: now));
+            }
+        }
+
+        return new CompanySeedData(companies, aliases);
+    }
+
+    /// <summary>
+    /// Derives a stable <see cref="Guid"/> for a seed alias from its identifying tuple so that
+    /// re-seeding upserts the same alias row rather than creating a new one. The Id is the MD5 hash
+    /// of the canonical string <c>$"{companyId}|{aliasType}|{normalizedAliasText}"</c> (the alias text
+    /// normalized by trim + lower-invariant) reinterpreted as a 16-byte Guid. MD5 is used purely as a
+    /// fast non-cryptographic hash to obtain a deterministic 128-bit value, not for security.
+    /// </summary>
+    private static Guid DeterministicGuid(Guid companyId, string aliasType, string aliasText)
+    {
+        var normalized = aliasText.Trim().ToLowerInvariant();
+        var canonical = $"{companyId}|{aliasType}|{normalized}";
+        var bytes = MD5.HashData(Encoding.UTF8.GetBytes(canonical));
+        return new Guid(bytes);
+    }
+}
