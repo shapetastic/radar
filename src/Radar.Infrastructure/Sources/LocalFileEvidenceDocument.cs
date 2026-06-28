@@ -10,4 +10,5 @@ internal sealed record LocalFileEvidenceDocument(
     string? Title,
     string? Summary,
     DateTimeOffset? PublishedAtUtc,
-    string? RawText);
+    string? RawText,
+    string? Quality);

@@ -44,7 +44,11 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
     private void WriteFile(string fileName, string content) =>
         File.WriteAllText(Path.Combine(_tempDir, fileName), content);
 
-    private static string ValidDocJson(string title, string rawText, string? sourceName = null) =>
+    private static string ValidDocJson(
+        string title,
+        string rawText,
+        string? sourceName = null,
+        string? quality = null) =>
         $$"""
         {
           "sourceName": {{(sourceName is null ? "null" : $"\"{sourceName}\"")}},
@@ -52,7 +56,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
           "title": "{{title}}",
           "summary": "A summary",
           "publishedAtUtc": "2026-06-01T13:00:00Z",
-          "rawText": "{{rawText}}"
+          "rawText": "{{rawText}}"{{(quality is null ? string.Empty : $",\n          \"quality\": \"{quality}\"")}}
         }
         """;
 
@@ -141,6 +145,46 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         var repository = new InMemoryEvidenceRepository();
         Assert.True(await repository.AddIfNewAsync(item, CancellationToken.None));
         Assert.False(await repository.AddIfNewAsync(item, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("PrimarySource", EvidenceQuality.PrimarySource)]
+    [InlineData("High", EvidenceQuality.High)]
+    [InlineData("medium", EvidenceQuality.Medium)]
+    [InlineData("LOW", EvidenceQuality.Low)]
+    public async Task CollectAsync_DeclaredQuality_MapsCaseInsensitively(
+        string declared, EvidenceQuality expected)
+    {
+        WriteFile("q.json", ValidDocJson("Title", "Body", quality: declared));
+
+        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+
+        var item = Assert.Single(items);
+        Assert.Equal(expected, item.Quality);
+    }
+
+    [Fact]
+    public async Task CollectAsync_OmittedQuality_DefaultsToUnknown()
+    {
+        WriteFile("q.json", ValidDocJson("Title", "Body"));
+
+        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+
+        var item = Assert.Single(items);
+        Assert.Equal(EvidenceQuality.Unknown, item.Quality);
+    }
+
+    [Theory]
+    [InlineData("bogus")]
+    [InlineData("4")]
+    public async Task CollectAsync_UnparseableQuality_DefaultsToUnknown(string declared)
+    {
+        WriteFile("q.json", ValidDocJson("Title", "Body", quality: declared));
+
+        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+
+        var item = Assert.Single(items);
+        Assert.Equal(EvidenceQuality.Unknown, item.Quality);
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

@@ -79,11 +79,6 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     {
         ct.ThrowIfCancellationRequested();
 
-        // A single run instant feeds the mapper's createdAtUtc, the scoring windowEndUtc, and the
-        // report periodEndUtc so the whole run is internally consistent. TimeProvider.GetUtcNow()
-        // already returns a zero-offset DateTimeOffset (the report builder requires zero offset).
-        var asOfUtc = _timeProvider.GetUtcNow();
-
         var evidenceCollected = 0;
         var evidenceNew = 0;
         var signalsExtracted = 0;
@@ -108,6 +103,18 @@ public sealed class RadarPipelineRunner : IRadarPipeline
                 newEvidence.Add(item);
             }
         }
+
+        // A single run instant feeds the mapper's createdAtUtc, the scoring windowEndUtc, and the
+        // report periodEndUtc so the whole run is internally consistent. TimeProvider.GetUtcNow()
+        // already returns a zero-offset DateTimeOffset (the report builder requires zero offset).
+        //
+        // Captured AFTER collection on purpose: the run instant must not precede the collection that
+        // produced this run's evidence. The collector stamps each item's CollectedAtUtc as it reads,
+        // so just-collected evidence with no PublishedAtUtc (whose ObservedAtUtc falls back to
+        // CollectedAtUtc) would sort just AFTER an earlier asOfUtc and fall outside the (start, end]
+        // scoring window — scoring from zero signals in the same run. Capturing here keeps asOfUtc at
+        // or after every CollectedAtUtc so freshly collected evidence is in-window.
+        var asOfUtc = _timeProvider.GetUtcNow();
 
         // Stage 4 + 3 + 5: extract → resolve → review → store, per new evidence, in order.
         foreach (var evidence in newEvidence)
