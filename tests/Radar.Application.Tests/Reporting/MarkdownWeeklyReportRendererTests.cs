@@ -76,6 +76,7 @@ public sealed class MarkdownWeeklyReportRendererTests
     [Theory]
     [InlineData(RadarReportAction.Investigate, "Investigate")]
     [InlineData(RadarReportAction.Watch, "Watch")]
+    [InlineData(RadarReportAction.Ignore, "Ignore")]
     [InlineData(RadarReportAction.NeedsMoreEvidence, "Needs more evidence")]
     [InlineData(RadarReportAction.ThesisImproving, "Thesis improving")]
     [InlineData(RadarReportAction.ThesisDeteriorating, "Thesis deteriorating")]
@@ -89,9 +90,32 @@ public sealed class MarkdownWeeklyReportRendererTests
     }
 
     [Fact]
+    public void Render_Ignore_Label_Renders_Under_Low_Signal_Section()
+    {
+        var model = CreateModel([CreateEntry(RadarReportAction.Ignore, companyName: "Low Co", ticker: "LOW")]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("- Label: Ignore", output);
+        Assert.Contains("## Ignore / Low signal", output);
+        Assert.Contains("- Low Co (LOW) (#1)", output);
+    }
+
+    [Fact]
+    public void Render_Ignore_Section_Omitted_When_No_Ignore_Entries()
+    {
+        var model = CreateModel([CreateEntry(RadarReportAction.Investigate)]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.DoesNotContain("## Ignore / Low signal", output);
+    }
+
+    [Fact]
     public void Render_Disallowed_Label_Throws()
     {
-        var model = CreateModel([CreateEntry(RadarReportAction.Ignore)]);
+        // An enum value outside the six AD-9 labels must still be rejected.
+        var model = CreateModel([CreateEntry((RadarReportAction)999)]);
 
         Assert.Throws<InvalidOperationException>(() => CreateRenderer().Render(model));
     }

@@ -37,10 +37,10 @@ public sealed class PipelineEndToEndTests
     private const string Acme = "Acme Dynamics";
     private const string Borealis = "Borealis Systems";
 
-    // The five allowed display labels the markdown may render.
+    // The six allowed display labels the markdown may render.
     private static readonly string[] AllowedDisplayLabels =
     [
-        "Investigate", "Watch", "Needs more evidence", "Thesis improving", "Thesis deteriorating",
+        "Investigate", "Watch", "Ignore", "Needs more evidence", "Thesis improving", "Thesis deteriorating",
     ];
 
     private static ServiceProvider BuildProvider(TempPipelineFixtures fixtures)
@@ -71,6 +71,7 @@ public sealed class PipelineEndToEndTests
     {
         RadarReportAction.Investigate => "Investigate",
         RadarReportAction.Watch => "Watch",
+        RadarReportAction.Ignore => "Ignore",
         RadarReportAction.NeedsMoreEvidence => "Needs more evidence",
         RadarReportAction.ThesisImproving => "Thesis improving",
         RadarReportAction.ThesisDeteriorating => "Thesis deteriorating",
