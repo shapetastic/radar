@@ -98,7 +98,8 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
             IReadOnlyList<string> themes = entry.Themes?
                 .Where(t => !string.IsNullOrWhiteSpace(t))
                 .Select(t => t!.Trim())
-                .ToList() ?? [];
+                .ToList()
+                .AsReadOnly() ?? [];
 
             companies.Add(new Company(
                 Id: companyId,
@@ -147,7 +148,9 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                 if (string.IsNullOrWhiteSpace(feed.Url))
                 {
                     _logger.LogWarning(
-                        "Source feed for company {CompanyId} is missing a url; skipping.",
+                        "Source feed (name '{FeedName}', type '{FeedType}') for company {CompanyId} is missing a url; skipping.",
+                        feed.Name,
+                        feed.Type,
                         companyId);
                     continue;
                 }
