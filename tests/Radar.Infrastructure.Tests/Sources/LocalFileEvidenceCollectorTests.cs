@@ -1,7 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using Radar.Application.Evidence;
-using Radar.Domain.Evidence;
-using Radar.Infrastructure.Persistence.InMemory;
+using Radar.Application.Collectors;
 using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Tests.Sources;
@@ -36,10 +34,13 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
 
     private LocalFileEvidenceCollector CreateCollector(string? directory = null) =>
         new(
-            new EvidenceNormalizer(),
             new LocalFileEvidenceCollectorOptions { SourceDirectory = directory ?? _tempDir },
             NullLogger<LocalFileEvidenceCollector>.Instance,
             new FixedTimeProvider(FixedNow));
+
+    private static Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+        LocalFileEvidenceCollector collector) =>
+        collector.CollectAsync(new CollectionContext([]), CancellationToken.None);
 
     private void WriteFile(string fileName, string content) =>
         File.WriteAllText(Path.Combine(_tempDir, fileName), content);
@@ -61,23 +62,21 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         """;
 
     [Fact]
-    public async Task CollectAsync_TwoValidFiles_ProducesTwoEvidenceItems()
+    public async Task CollectAsync_TwoValidFiles_ProducesTwoCollectedEvidence()
     {
         WriteFile("a.json", ValidDocJson("Title A", "Body A"));
         WriteFile("b.json", ValidDocJson("Title B", "Body B"));
 
-        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+        var items = await CollectAsync(CreateCollector());
 
         Assert.Equal(2, items.Count);
         Assert.All(items, item =>
         {
-            Assert.Equal(EvidenceSourceType.LocalFile, item.SourceType);
+            Assert.Equal("local_file", item.SourceType);
             Assert.False(string.IsNullOrWhiteSpace(item.Title));
             Assert.False(string.IsNullOrWhiteSpace(item.RawText));
-            Assert.False(string.IsNullOrWhiteSpace(item.ContentHash));
-            Assert.Equal(EvidenceQuality.Unknown, item.Quality);
-            Assert.Equal(FixedNow, item.CollectedAtUtc);
-            Assert.NotNull(item.MetadataJson);
+            Assert.Equal(FixedNow, item.CollectedAt);
+            Assert.True(item.Metadata.ContainsKey("sourceFile"));
         });
     }
 
@@ -87,7 +86,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         WriteFile("b.json", ValidDocJson("Title B", "Body B"));
         WriteFile("a.json", ValidDocJson("Title A", "Body A"));
 
-        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+        var items = (await CollectAsync(CreateCollector())).ToList();
 
         Assert.Equal(2, items.Count);
         Assert.Equal("Title A", items[0].Title);
@@ -102,7 +101,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         WriteFile("no-title.json", """{ "rawText": "has body but no title" }""");
         WriteFile("no-rawtext.json", """{ "title": "has title but no body" }""");
 
-        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+        var items = await CollectAsync(CreateCollector());
 
         var item = Assert.Single(items);
         Assert.Equal("Good", item.Title);
@@ -113,7 +112,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
     {
         var missing = Path.Combine(_tempDir, "does-not-exist");
 
-        var items = await CreateCollector(missing).CollectAsync(CancellationToken.None);
+        var items = await CollectAsync(CreateCollector(missing));
 
         Assert.Empty(items);
     }
@@ -123,68 +122,51 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
     {
         WriteFile("acme-q3.json", ValidDocJson("Title", "Body", sourceName: null));
 
-        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+        var items = await CollectAsync(CreateCollector());
 
         var item = Assert.Single(items);
         Assert.Equal("acme-q3", item.SourceName);
     }
 
     [Fact]
-    public async Task CollectAsync_ContentHash_MatchesNormalizerAndDedupesInRepository()
+    public async Task CollectAsync_CarriesRawTextAndSourceFileMetadata()
     {
         const string title = "Roundtrip Title";
         const string rawText = "Roundtrip body text";
         WriteFile("rt.json", ValidDocJson(title, rawText));
 
-        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+        var items = await CollectAsync(CreateCollector());
         var item = Assert.Single(items);
 
-        var expectedHash = new EvidenceNormalizer().Normalize(title, rawText).ContentHash;
-        Assert.Equal(expectedHash, item.ContentHash);
-
-        var repository = new InMemoryEvidenceRepository();
-        Assert.True(await repository.AddIfNewAsync(item, CancellationToken.None));
-        Assert.False(await repository.AddIfNewAsync(item, CancellationToken.None));
+        // Raw text is carried through unchanged — normalization/hashing now live in the mapper.
+        Assert.Equal(rawText, item.RawText);
+        Assert.Equal("rt.json", item.Metadata["sourceFile"]);
     }
 
     [Theory]
-    [InlineData("PrimarySource", EvidenceQuality.PrimarySource)]
-    [InlineData("High", EvidenceQuality.High)]
-    [InlineData("medium", EvidenceQuality.Medium)]
-    [InlineData("LOW", EvidenceQuality.Low)]
-    public async Task CollectAsync_DeclaredQuality_MapsCaseInsensitively(
-        string declared, EvidenceQuality expected)
+    [InlineData("PrimarySource")]
+    [InlineData("High")]
+    [InlineData("medium")]
+    [InlineData("LOW")]
+    public async Task CollectAsync_DeclaredQuality_CarriedRawInMetadata(string declared)
     {
         WriteFile("q.json", ValidDocJson("Title", "Body", quality: declared));
 
-        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+        var items = await CollectAsync(CreateCollector());
 
         var item = Assert.Single(items);
-        Assert.Equal(expected, item.Quality);
+        Assert.Equal(declared, item.Metadata["quality"]);
     }
 
     [Fact]
-    public async Task CollectAsync_OmittedQuality_DefaultsToUnknown()
+    public async Task CollectAsync_OmittedQuality_OmitsMetadataKey()
     {
         WriteFile("q.json", ValidDocJson("Title", "Body"));
 
-        var items = await CreateCollector().CollectAsync(CancellationToken.None);
+        var items = await CollectAsync(CreateCollector());
 
         var item = Assert.Single(items);
-        Assert.Equal(EvidenceQuality.Unknown, item.Quality);
-    }
-
-    [Theory]
-    [InlineData("bogus")]
-    [InlineData("4")]
-    public async Task CollectAsync_UnparseableQuality_DefaultsToUnknown(string declared)
-    {
-        WriteFile("q.json", ValidDocJson("Title", "Body", quality: declared));
-
-        var items = await CreateCollector().CollectAsync(CancellationToken.None);
-
-        var item = Assert.Single(items);
-        Assert.Equal(EvidenceQuality.Unknown, item.Quality);
+        Assert.False(item.Metadata.ContainsKey("quality"));
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

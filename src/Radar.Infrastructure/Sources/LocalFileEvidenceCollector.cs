@@ -1,16 +1,15 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Radar.Application.Collectors;
-using Radar.Application.Evidence;
-using Radar.Domain.Evidence;
 
 namespace Radar.Infrastructure.Sources;
 
 /// <summary>
-/// Deterministic Stage 1 collector. Reads evidence definitions from a local directory of JSON
-/// files and produces immutable <see cref="EvidenceItem"/> records, computing normalized text and
-/// content hash via <see cref="IEvidenceNormalizer"/>. The collector never persists or mutates
-/// evidence; a later worker job hands each item to the repository for deduped storage.
+/// Deterministic test/debug Stage 1 collector. Reads evidence definitions from a local directory of
+/// JSON files and produces raw <see cref="CollectedEvidence"/> records. It does NOT normalize, hash,
+/// or parse quality — that is the <see cref="CollectedEvidenceMapper"/>'s job; the collector only
+/// finds evidence and stamps the collection instant. The collector never persists or mutates
+/// evidence; the pipeline runner maps and hands each item to the repository for deduped storage.
 /// </summary>
 public sealed class LocalFileEvidenceCollector : IEvidenceCollector
 {
@@ -19,29 +18,35 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         PropertyNameCaseInsensitive = true,
     };
 
-    private readonly IEvidenceNormalizer _normalizer;
     private readonly LocalFileEvidenceCollectorOptions _options;
     private readonly ILogger<LocalFileEvidenceCollector> _logger;
     private readonly TimeProvider _timeProvider;
 
     public LocalFileEvidenceCollector(
-        IEvidenceNormalizer normalizer,
         LocalFileEvidenceCollectorOptions options,
         ILogger<LocalFileEvidenceCollector> logger,
         TimeProvider timeProvider)
     {
-        ArgumentNullException.ThrowIfNull(normalizer);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(timeProvider);
-        _normalizer = normalizer;
         _options = options;
         _logger = logger;
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<EvidenceItem>> CollectAsync(CancellationToken ct)
+    public string CollectorName => "LocalFileEvidenceCollector";
+
+    public string SourceType => "local_file";
+
+    public async Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+        CollectionContext context, CancellationToken cancellationToken)
     {
+        // The local-file collector is universe-agnostic: it is the deterministic test/debug source
+        // and simply emits whatever JSON documents are on disk, so it ignores the watch universe
+        // (context). Company-specific collectors (e.g. RSS) consume context for hint resolution.
+        _ = context;
+
         var directory = _options.SourceDirectory;
 
         if (!Directory.Exists(directory))
@@ -69,13 +74,13 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
             return [];
         }
 
-        var items = new List<EvidenceItem>(files.Count);
+        var items = new List<CollectedEvidence>(files.Count);
 
         foreach (var path in files)
         {
-            ct.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
 
-            var item = await ReadDocumentAsync(path, ct).ConfigureAwait(false);
+            var item = await ReadDocumentAsync(path, cancellationToken).ConfigureAwait(false);
             if (item is not null)
             {
                 items.Add(item);
@@ -85,7 +90,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         return items;
     }
 
-    private async Task<EvidenceItem?> ReadDocumentAsync(string path, CancellationToken ct)
+    private async Task<CollectedEvidence?> ReadDocumentAsync(string path, CancellationToken ct)
     {
         var fileName = Path.GetFileName(path);
 
@@ -121,53 +126,30 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
             return null;
         }
 
-        var normalized = _normalizer.Normalize(doc.Title, doc.RawText);
-
         var sourceName = string.IsNullOrWhiteSpace(doc.SourceName)
             ? Path.GetFileNameWithoutExtension(path)
             : doc.SourceName;
 
-        var metadataJson = JsonSerializer.Serialize(new { sourceFile = fileName });
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["sourceFile"] = fileName,
+        };
+        if (!string.IsNullOrWhiteSpace(doc.Quality))
+        {
+            metadata["quality"] = doc.Quality;
+        }
 
-        return new EvidenceItem(
-            Id: Guid.NewGuid(),
-            SourceType: EvidenceSourceType.LocalFile,
+        return new CollectedEvidence(
+            SourceType: SourceType,
             SourceName: sourceName,
             SourceUrl: doc.SourceUrl,
             Title: doc.Title,
-            Summary: doc.Summary,
-            RawText: normalized.NormalizedText,
-            ContentHash: normalized.ContentHash,
-            PublishedAtUtc: doc.PublishedAtUtc?.ToUniversalTime(),
-            CollectedAtUtc: _timeProvider.GetUtcNow(),
-            Quality: ParseQuality(doc.Quality),
-            MetadataJson: metadataJson);
-    }
-
-    /// <summary>
-    /// Maps a declared evidence quality string to <see cref="EvidenceQuality"/>. Accepts only a
-    /// defined enum name (case-insensitive); rejects digit-only input (which
-    /// <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/> would otherwise accept). Missing,
-    /// blank, or unparseable values default to <see cref="EvidenceQuality.Unknown"/> (skip-don't-throw).
-    /// </summary>
-    private EvidenceQuality ParseQuality(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Trim().All(char.IsDigit))
+            RawText: doc.RawText,
+            PublishedAt: doc.PublishedAtUtc,
+            CollectedAt: _timeProvider.GetUtcNow(),
+            Metadata: metadata)
         {
-            _logger.LogDebug(
-                "Evidence declared quality '{Quality}' is missing, blank, or digit-only; defaulting to Unknown.",
-                value);
-            return EvidenceQuality.Unknown;
-        }
-
-        if (Enum.TryParse<EvidenceQuality>(value, ignoreCase: true, out var q) && Enum.IsDefined(q))
-        {
-            return q;
-        }
-
-        _logger.LogDebug(
-            "Evidence declared quality '{Quality}' is not a recognized EvidenceQuality; defaulting to Unknown.",
-            value);
-        return EvidenceQuality.Unknown;
+            CompanyHints = [],
+        };
     }
 }

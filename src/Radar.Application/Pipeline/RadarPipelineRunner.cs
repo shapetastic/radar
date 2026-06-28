@@ -22,6 +22,7 @@ namespace Radar.Application.Pipeline;
 public sealed class RadarPipelineRunner : IRadarPipeline
 {
     private readonly IEvidenceCollector _collector;
+    private readonly CollectedEvidenceMapper _mapper;
     private readonly IEvidenceRepository _evidenceRepository;
     private readonly ISignalExtractor _extractor;
     private readonly ICompanyResolver _resolver;
@@ -36,6 +37,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
 
     public RadarPipelineRunner(
         IEvidenceCollector collector,
+        CollectedEvidenceMapper mapper,
         IEvidenceRepository evidenceRepository,
         ISignalExtractor extractor,
         ICompanyResolver resolver,
@@ -49,6 +51,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ILogger<RadarPipelineRunner> logger)
     {
         ArgumentNullException.ThrowIfNull(collector);
+        ArgumentNullException.ThrowIfNull(mapper);
         ArgumentNullException.ThrowIfNull(evidenceRepository);
         ArgumentNullException.ThrowIfNull(extractor);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -62,6 +65,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(logger);
 
         _collector = collector;
+        _mapper = mapper;
         _evidenceRepository = evidenceRepository;
         _extractor = extractor;
         _resolver = resolver;
@@ -87,20 +91,26 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         var signalsNeedingReview = 0;
         var companiesScored = 0;
 
-        // Stage 1 + 2: collect (text already normalized + content-hashed by the collector), then
+        // Stage 1 + 2: collect raw evidence over the watch universe, map each result to an immutable
+        // domain EvidenceItem (normalization, hashing, quality parsing live in the mapper), then
         // dedupe-store. Only newly-stored evidence is extracted so re-collected duplicates never
-        // produce duplicate signals. Iterate in the collector's returned (deterministic) order.
-        var collected = await _collector.CollectAsync(ct).ConfigureAwait(false);
-        var newEvidence = new List<EvidenceItem>();
+        // produce duplicate signals. Iterate in the collector's returned (deterministic) order. The
+        // companies are loaded once up front: the collection context needs them and Stage 6 reuses
+        // the same list for scoring.
+        var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
+        var context = new CollectionContext(companies);
+        var collected = await _collector.CollectAsync(context, ct).ConfigureAwait(false);
+        var newEvidence = new List<CollectedEvidenceEntry>();
         foreach (var item in collected)
         {
             ct.ThrowIfCancellationRequested();
 
             evidenceCollected++;
-            if (await _evidenceRepository.AddIfNewAsync(item, ct).ConfigureAwait(false))
+            var evidence = _mapper.ToEvidenceItem(item);
+            if (await _evidenceRepository.AddIfNewAsync(evidence, ct).ConfigureAwait(false))
             {
                 evidenceNew++;
-                newEvidence.Add(item);
+                newEvidence.Add(new CollectedEvidenceEntry(evidence, item.CompanyHints));
             }
         }
 
@@ -116,11 +126,13 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // or after every CollectedAtUtc so freshly collected evidence is in-window.
         var asOfUtc = _timeProvider.GetUtcNow();
 
-        // Stage 4 + 3 + 5: extract → resolve → review → store, per new evidence, in order.
-        foreach (var evidence in newEvidence)
+        // Stage 4 + 3 + 5: extract → resolve → review → store, per new evidence, in order. Company
+        // hints (entry.CompanyHints) are carried for a later slice; only entry.Evidence is used here.
+        foreach (var entry in newEvidence)
         {
             ct.ThrowIfCancellationRequested();
 
+            var evidence = entry.Evidence;
             var output = await _extractor.ExtractAsync(evidence, ct).ConfigureAwait(false);
             foreach (var extracted in output.Signals)
             {
@@ -176,8 +188,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
 
         // Stage 6: score every company at asOfUtc. The engine applies the window/Approved-only
         // filter and writes the snapshot + links; the runner does not pre-filter which companies
-        // have signals (a company with no in-window signals yields a valid neutral snapshot).
-        var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
+        // have signals (a company with no in-window signals yields a valid neutral snapshot). Reuses
+        // the company list loaded up front for the collection context (single repository read).
         foreach (var company in companies)
         {
             ct.ThrowIfCancellationRequested();
@@ -215,4 +227,12 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             CompaniesScored: companiesScored,
             ReportId: reportId);
     }
+
+    /// <summary>
+    /// Pairs a newly-stored <see cref="EvidenceItem"/> with the collector-supplied company hints so a
+    /// later slice can resolve hints without re-parsing the evidence's MetadataJson. Hints are unused
+    /// in this slice.
+    /// </summary>
+    private readonly record struct CollectedEvidenceEntry(
+        EvidenceItem Evidence, IReadOnlyList<string> CompanyHints);
 }
