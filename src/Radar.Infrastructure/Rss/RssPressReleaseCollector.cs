@@ -82,7 +82,7 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
                 };
 
                 results.Add(new CollectedEvidence(
-                    SourceType: "press_release",
+                    SourceType: SourceType,
                     SourceName: feed.Name,
                     SourceUrl: item.Link,
                     Title: item.Title,

@@ -52,9 +52,15 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
             _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch failed; skipping.", feedUrl);
             return [];
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller-requested cancellation must propagate so the run stops; do not hide it as an empty result.
+            throw;
+        }
         catch (TaskCanceledException ex)
         {
-            _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch timed out or was cancelled; skipping.", feedUrl);
+            // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+            _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch timed out; skipping.", feedUrl);
             return [];
         }
 
@@ -62,7 +68,14 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
         {
             try
             {
-                using var xmlReader = XmlReader.Create(stream);
+                // Feeds are untrusted external XML: disable DTD processing and external resolvers to
+                // avoid XXE and entity-expansion attacks rather than relying on framework defaults.
+                var xmlSettings = new XmlReaderSettings
+                {
+                    DtdProcessing = DtdProcessing.Prohibit,
+                    XmlResolver = null,
+                };
+                using var xmlReader = XmlReader.Create(stream, xmlSettings);
                 var feed = SyndicationFeed.Load(xmlReader);
                 if (feed is null)
                 {

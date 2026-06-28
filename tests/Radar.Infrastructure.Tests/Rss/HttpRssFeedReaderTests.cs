@@ -82,6 +82,17 @@ public sealed class HttpRssFeedReaderTests
         Assert.Empty(items);
     }
 
+    [Fact]
+    public async Task ReadAsync_CallerCancellation_Propagates()
+    {
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, ValidRss));
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => reader.ReadAsync("https://acme.test/rss", cts.Token));
+    }
+
     private sealed class StubHandler(HttpStatusCode status, string body) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
