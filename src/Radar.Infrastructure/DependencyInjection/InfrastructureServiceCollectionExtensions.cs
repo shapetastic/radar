@@ -4,6 +4,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
+using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
@@ -49,6 +50,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV1>();
         services.TryAddSingleton(new ScoringOptions());
         services.AddSingleton<IScoringEngine, ScoringEngine>();
+        services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();
         return services;
     }
 
