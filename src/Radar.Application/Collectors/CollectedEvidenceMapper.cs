@@ -59,7 +59,7 @@ public sealed class CollectedEvidenceMapper
             RawText: normalized.NormalizedText,
             ContentHash: normalized.ContentHash,
             PublishedAtUtc: collected.PublishedAt?.ToUniversalTime(),
-            CollectedAtUtc: collected.CollectedAt,
+            CollectedAtUtc: collected.CollectedAt.ToUniversalTime(),
             Quality: quality,
             MetadataJson: metadataJson);
     }

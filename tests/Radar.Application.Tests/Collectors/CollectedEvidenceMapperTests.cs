@@ -88,7 +88,8 @@ public sealed class CollectedEvidenceMapperTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("4")]
-    public void ToEvidenceItem_BlankOrDigitOnlyQuality_DefaultsToUnknown(string quality)
+    [InlineData("bogus")]
+    public void ToEvidenceItem_BlankDigitOnlyOrUnparseableQuality_DefaultsToUnknown(string quality)
     {
         var mapper = CreateMapper();
 
@@ -129,12 +130,13 @@ public sealed class CollectedEvidenceMapperTests
     public void ToEvidenceItem_CarriesTimestamps_ConvertingPublishedToUtc()
     {
         var mapper = CreateMapper();
-        var collectedAt = new DateTimeOffset(2026, 2, 8, 12, 0, 0, TimeSpan.Zero);
+        var collectedAt = new DateTimeOffset(2026, 2, 8, 12, 0, 0, TimeSpan.FromHours(2));
         var publishedAt = new DateTimeOffset(2026, 2, 6, 9, 0, 0, TimeSpan.FromHours(5));
 
         var item = mapper.ToEvidenceItem(Build(publishedAt: publishedAt, collectedAt: collectedAt));
 
-        Assert.Equal(collectedAt, item.CollectedAtUtc);
+        Assert.Equal(collectedAt.ToUniversalTime(), item.CollectedAtUtc);
+        Assert.Equal(TimeSpan.Zero, item.CollectedAtUtc.Offset);
         Assert.Equal(publishedAt.ToUniversalTime(), item.PublishedAtUtc);
     }
 }
