@@ -75,6 +75,21 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the local-file company watch-universe seed source and the idempotent seeder. The seed file
+    /// at <paramref name="filePath"/> defines the companies/aliases that entity resolution can match
+    /// against. Safe to invoke the seeder on every startup (upsert-by-Id, AD-1).
+    /// </summary>
+    public static IServiceCollection AddLocalFileCompanySeed(
+        this IServiceCollection services, string filePath)
+    {
+        services.AddSingleton(new LocalFileCompanySeedOptions { FilePath = filePath });
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<ICompanySeedSource, LocalFileCompanySeedSource>();
+        services.AddSingleton<ICompanyUniverseSeeder, CompanyUniverseSeeder>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the end-to-end pipeline runner. Requires the persistence registration
     /// (<see cref="AddInMemoryRadarPersistence"/>), the application services
     /// (<see cref="AddRadarApplicationServices"/>), and an evidence collector
