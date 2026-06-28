@@ -51,6 +51,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton(new ScoringOptions());
         services.AddSingleton<IScoringEngine, ScoringEngine>();
         services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();
+        services.TryAddSingleton<IWeeklyReportRenderer, MarkdownWeeklyReportRenderer>();
         return services;
     }
 
