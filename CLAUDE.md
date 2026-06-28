@@ -160,6 +160,22 @@ Reference specs (master/reference — do not implement directly, plan from them)
 - `docs/radar-schema-spec.md` — domain records and persistence schema
 - `.claude/agents/radar-philosophy.md` — principles and allowed output language
 
+### Running "run next"
+
+`scripts/run-next.ps1` is the canonical entry point for picking up the next pending spec.
+When the user says **"run next"** / **"run next now"** in an interactive session, do NOT run
+the Step 0–4 loop in this session — invoke the script, which resets a clean worktree and
+dispatches a headless, unattended claude to implement the next spec:
+
+```
+powershell -File scripts/run-next.ps1 -CopilotReview
+```
+
+`-CopilotReview` makes the script wait for Copilot's first PR review and dispatch a follow-up
+fix pass for its inline comments. The headless session the script launches is the one that
+follows Steps 0–4 above; this interactive session only launches, monitors, and reports its
+outcome.
+
 ### Tech stack
 
 - Target framework `.NET 10` / `net10.0`, C# 14.
