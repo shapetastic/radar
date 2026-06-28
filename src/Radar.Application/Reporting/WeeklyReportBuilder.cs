@@ -183,7 +183,10 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         var needsReview = observed
             .Where(s => s.ObservedAtUtc > periodStartUtc)
             .Where(s => s.ReviewStatus is SignalReviewStatus.Pending or SignalReviewStatus.NeedsHumanReview)
-            .OrderBy(s => s.Id)
+            // Most-recent-first so the cap never silently hides the newest needs-review signals;
+            // Id is the deterministic tiebreaker (AD-3). Order before Take.
+            .OrderByDescending(s => s.ObservedAtUtc)
+            .ThenBy(s => s.Id)
             .Take(_options.MaxItems)
             .Select(s => new NeedsReviewSignalRef(
                 SignalId: s.Id,
