@@ -333,7 +333,7 @@ public sealed class ScoringEngineTests
     }
 
     [Fact]
-    public async Task DiWiring_ResolvesEngine_AndScoresWithRealPlaceholderFormula()
+    public async Task DiWiring_ResolvesEngine_AndScoresWithRealFormula()
     {
         var services = new ServiceCollection();
         services.AddLogging();
