@@ -97,6 +97,44 @@ public sealed class MarkdownWeeklyReportRendererTests
     }
 
     [Fact]
+    public void Render_SnapshotId_Mismatch_Throws()
+    {
+        var snap = new ScoreSnapshotBuilder().Build();
+        var entry = new WeeklyReportEntry(
+            CompanyId: snap.CompanyId,
+            CompanyName: "Acme Corp",
+            Ticker: "ACME",
+            ScoreSnapshotId: Guid.NewGuid(), // does not match snap.Id
+            Snapshot: snap,
+            Action: RadarReportAction.Investigate,
+            Rationale: "Deterministic rationale.",
+            Rank: 1,
+            Evidence: []);
+        var model = CreateModel([entry]);
+
+        Assert.Throws<InvalidOperationException>(() => CreateRenderer().Render(model));
+    }
+
+    [Fact]
+    public void Render_CompanyId_Mismatch_Throws()
+    {
+        var snap = new ScoreSnapshotBuilder().Build();
+        var entry = new WeeklyReportEntry(
+            CompanyId: Guid.NewGuid(), // does not match snap.CompanyId
+            CompanyName: "Acme Corp",
+            Ticker: "ACME",
+            ScoreSnapshotId: snap.Id,
+            Snapshot: snap,
+            Action: RadarReportAction.Investigate,
+            Rationale: "Deterministic rationale.",
+            Rank: 1,
+            Evidence: []);
+        var model = CreateModel([entry]);
+
+        Assert.Throws<InvalidOperationException>(() => CreateRenderer().Render(model));
+    }
+
+    [Fact]
     public void Render_Entry_Shows_Score_Components_And_Snapshot_Id()
     {
         var snap = new ScoreSnapshotBuilder()

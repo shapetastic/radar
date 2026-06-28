@@ -39,14 +39,31 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     {
         ArgumentNullException.ThrowIfNull(model);
 
-        // Enforce the output-language hard rule before emitting anything: a disallowed label
-        // (e.g. Ignore) must never reach the report.
+        // Enforce the output-language hard rule and provenance invariants before emitting
+        // anything: a disallowed label (e.g. Ignore) must never reach the report, and the
+        // cited score-snapshot id / company id must match the attached snapshot the scores are
+        // read from — otherwise the markdown would cite one snapshot while showing another's
+        // scores, breaking reproducibility.
         foreach (var entry in model.Entries)
         {
             if (!Allowed.Contains(entry.Action))
             {
                 throw new InvalidOperationException(
                     $"Entry for '{entry.CompanyName}' has disallowed report action '{entry.Action}'.");
+            }
+
+            if (entry.ScoreSnapshotId != entry.Snapshot.Id)
+            {
+                throw new InvalidOperationException(
+                    $"Entry for '{entry.CompanyName}' cites score snapshot '{entry.ScoreSnapshotId}' "
+                    + $"but the attached snapshot is '{entry.Snapshot.Id}'.");
+            }
+
+            if (entry.CompanyId != entry.Snapshot.CompanyId)
+            {
+                throw new InvalidOperationException(
+                    $"Entry for '{entry.CompanyName}' has company id '{entry.CompanyId}' "
+                    + $"but the attached snapshot belongs to company '{entry.Snapshot.CompanyId}'.");
             }
         }
 
