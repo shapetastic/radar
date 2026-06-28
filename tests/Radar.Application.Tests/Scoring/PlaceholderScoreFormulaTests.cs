@@ -22,7 +22,8 @@ public sealed class PlaceholderScoreFormulaTests
         CompanyId: Guid.NewGuid(),
         WindowStartUtc: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
         WindowEndUtc: new DateTimeOffset(2026, 1, 31, 0, 0, 0, TimeSpan.Zero),
-        Signals: signals);
+        Signals: signals,
+        PreviousSignals: Array.Empty<Signal>());
 
     private static void AssertComponentsInRange(ScoreComponents c)
     {

@@ -51,6 +51,36 @@ public sealed class ScoringEngineTests
         }
     }
 
+    /// <summary>
+    /// In-test formula that records the last <see cref="ScoringInput"/> it received so windowing-input
+    /// tests can assert exactly what the engine handed the formula. Returns a valid all-zero
+    /// computation with no contributions (provenance is asserted elsewhere).
+    /// </summary>
+    private sealed class CapturingScoreFormula : IScoreFormula
+    {
+        public ScoringInput? LastInput { get; private set; }
+
+        public string Version => "capturing-formula-vX";
+
+        public ScoreComputation Compute(ScoringInput input)
+        {
+            LastInput = input;
+
+            var components = new ScoreComponents(
+                TrajectoryScore: 0,
+                OpportunityScore: 0,
+                AttentionScore: 0,
+                EvidenceConfidenceScore: 0,
+                SignalVelocityScore: 0);
+
+            return new ScoreComputation(
+                components,
+                Explanation: "capturing formula: zero.",
+                ComponentJson: "{}",
+                Contributions: new List<ScoreContribution>());
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
@@ -333,5 +363,108 @@ public sealed class ScoringEngineTests
 
         Assert.InRange(result.Snapshot.TrajectoryScore, 0, 100);
         Assert.Contains("mvp-engine-v1", result.Snapshot.ScoringVersion);
+    }
+
+    [Fact]
+    public async Task PreviousWindow_IsSlicedAndPassed_SeparateFromCurrentAndOlder()
+    {
+        var formula = new CapturingScoreFormula();
+        var harness = new Harness(formula);
+        var companyId = Guid.NewGuid();
+
+        // Current window (WindowStart, WindowEnd].
+        var windowStart = WindowEnd - Window;
+        var current = await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-3));
+        // Previous window (WindowStart - Window, WindowStart].
+        var previous = await harness.SeedPairAsync(companyId, windowStart.AddDays(-3));
+        // Older than the previous window -> excluded from both.
+        await harness.SeedPairAsync(companyId, windowStart - Window - TimeSpan.FromDays(1));
+
+        await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var input = Assert.IsType<ScoringInput>(formula.LastInput);
+
+        Assert.Equal(new[] { current.signal.Id }, input.Signals.Select(s => s.Signal.Id).ToArray());
+        Assert.Equal(new[] { previous.signal.Id }, input.PreviousSignals.Select(s => s.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task PreviousWindow_BoundaryAtWindowStart_BelongsToPrevious()
+    {
+        var formula = new CapturingScoreFormula();
+        var harness = new Harness(formula);
+        var companyId = Guid.NewGuid();
+
+        var windowStart = WindowEnd - Window;
+        var atStart = await harness.SeedPairAsync(companyId, windowStart);
+
+        await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var input = Assert.IsType<ScoringInput>(formula.LastInput);
+
+        Assert.DoesNotContain(input.Signals, s => s.Signal.Id == atStart.signal.Id);
+        Assert.Contains(input.PreviousSignals, s => s.Id == atStart.signal.Id);
+    }
+
+    [Fact]
+    public async Task PreviousWindow_ReviewFilter_ExcludesNonApproved()
+    {
+        var formula = new CapturingScoreFormula();
+        var harness = new Harness(formula);
+        var companyId = Guid.NewGuid();
+
+        var windowStart = WindowEnd - Window;
+        var approved = await harness.SeedPairAsync(companyId, windowStart.AddDays(-5));
+        var pending = await harness.SeedPairAsync(
+            companyId, windowStart.AddDays(-5), SignalReviewStatus.Pending);
+
+        await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var input = Assert.IsType<ScoringInput>(formula.LastInput);
+
+        Assert.Contains(input.PreviousSignals, s => s.Id == approved.signal.Id);
+        Assert.DoesNotContain(input.PreviousSignals, s => s.Id == pending.signal.Id);
+    }
+
+    [Fact]
+    public async Task PreviousWindow_DoesNotRequireEvidence_ButCurrentStillDoes()
+    {
+        var formula = new CapturingScoreFormula();
+        var harness = new Harness(formula);
+        var companyId = Guid.NewGuid();
+
+        var windowStart = WindowEnd - Window;
+        // Previous-window signal with missing evidence -> still carried.
+        var previousNoEvidence = await harness.SeedPairAsync(
+            companyId, windowStart.AddDays(-2), storeEvidence: false);
+        // Current-window signal with missing evidence -> still dropped.
+        var currentNoEvidence = await harness.SeedPairAsync(
+            companyId, WindowEnd.AddDays(-2), storeEvidence: false);
+
+        await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var input = Assert.IsType<ScoringInput>(formula.LastInput);
+
+        Assert.Contains(input.PreviousSignals, s => s.Id == previousNoEvidence.signal.Id);
+        Assert.DoesNotContain(input.Signals, s => s.Signal.Id == currentNoEvidence.signal.Id);
+    }
+
+    [Fact]
+    public async Task PreviousWindow_Empty_WhenNoSignalsBeforeWindowStart()
+    {
+        var formula = new CapturingScoreFormula();
+        var harness = new Harness(formula);
+        var companyId = Guid.NewGuid();
+
+        // Only a current-window signal; nothing at or before windowStart.
+        await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-1));
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var input = Assert.IsType<ScoringInput>(formula.LastInput);
+
+        Assert.NotNull(input.PreviousSignals);
+        Assert.Empty(input.PreviousSignals);
+        Assert.InRange(result.Snapshot.TrajectoryScore, 0, 100);
     }
 }
