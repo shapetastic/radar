@@ -18,4 +18,8 @@ public interface ICompanyRepository
     /// </remarks>
     Task AddAliasAsync(CompanyAlias alias, CancellationToken ct);
     Task<IReadOnlyList<CompanyAlias>> GetAliasesAsync(CancellationToken ct);
+
+    /// <remarks>Upsert by Id (last-write-wins), same semantics as companies/aliases.</remarks>
+    Task AddSourceFeedAsync(CompanySourceFeed feed, CancellationToken ct);
+    Task<IReadOnlyList<CompanySourceFeed>> GetSourceFeedsAsync(CancellationToken ct);
 }

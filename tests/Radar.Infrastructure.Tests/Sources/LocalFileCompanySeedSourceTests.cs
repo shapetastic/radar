@@ -103,6 +103,74 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
         Assert.Contains(seed.Aliases, a => a.CompanyId == AcmeId && a.Alias == "Acme");
         Assert.Contains(seed.Aliases, a => a.CompanyId == AcmeId && a.Alias == "Acme Inc");
         Assert.Contains(seed.Aliases, a => a.CompanyId == GlobexId && a.Alias == "Globex Industries");
+
+        // No sourceFeeds/themes in this file: feeds empty, themes empty per company.
+        Assert.Empty(seed.SourceFeeds);
+        Assert.All(seed.Companies, c => Assert.Empty(c.Themes));
+    }
+
+    private const string FeedsAndThemesJson = """
+        {
+          "companies": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Acme Corp",
+              "ticker": "ACME",
+              "themes": [ "space", "  defence  ", "", "   " ],
+              "sourceFeeds": [
+                { "type": "rss", "name": "Acme Investor News", "url": "https://example.com/acme.rss" },
+                { "type": "rss", "name": "No Url Feed" }
+              ]
+            },
+            {
+              "id": "22222222-2222-2222-2222-222222222222",
+              "name": "Globex",
+              "ticker": "GLBX"
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_ParsesSourceFeedsAndThemes_SkippingUrllessFeeds()
+    {
+        var path = WriteSeedFile(FeedsAndThemesJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        // Only the one valid feed is yielded; the url-less feed is skipped (never fabricated).
+        var feed = Assert.Single(seed.SourceFeeds);
+        Assert.Equal(AcmeId, feed.CompanyId);
+        Assert.Equal("https://example.com/acme.rss", feed.Url);
+        Assert.Equal("Acme Investor News", feed.Name);
+        Assert.Equal("rss", feed.FeedType);
+        Assert.Equal(FixedNow, feed.CreatedAtUtc);
+
+        var acme = seed.Companies.Single(c => c.Id == AcmeId);
+        Assert.Equal(new[] { "space", "defence" }, acme.Themes.ToArray());
+
+        // Company with no sourceFeeds/themes yields no feeds and empty themes.
+        var globex = seed.Companies.Single(c => c.Id == GlobexId);
+        Assert.Empty(globex.Themes);
+        Assert.DoesNotContain(seed.SourceFeeds, f => f.CompanyId == GlobexId);
+    }
+
+    [Fact]
+    public async Task GetSeedAsync_DerivesDeterministicFeedIds()
+    {
+        var path = WriteSeedFile(FeedsAndThemesJson);
+
+        var first = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+        var second = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        Assert.Equal(first.SourceFeeds.Count, second.SourceFeeds.Count);
+
+        foreach (var feed in first.SourceFeeds)
+        {
+            var match = second.SourceFeeds.Single(
+                f => f.CompanyId == feed.CompanyId && f.Url == feed.Url);
+            Assert.Equal(feed.Id, match.Id);
+        }
     }
 
     [Fact]
@@ -137,6 +205,7 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
 
         Assert.Empty(seed.Companies);
         Assert.Empty(seed.Aliases);
+        Assert.Empty(seed.SourceFeeds);
     }
 
     [Fact]
@@ -148,6 +217,7 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
 
         Assert.Empty(seed.Companies);
         Assert.Empty(seed.Aliases);
+        Assert.Empty(seed.SourceFeeds);
     }
 
     [Fact]

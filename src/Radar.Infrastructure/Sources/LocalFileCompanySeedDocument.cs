@@ -21,4 +21,15 @@ internal sealed record LocalFileCompanySeedEntry(
     string? CountryCode,
     string? Sector,
     string? Industry,
-    IReadOnlyList<string?>? Aliases);
+    IReadOnlyList<string?>? Aliases,
+    IReadOnlyList<LocalFileSourceFeed?>? SourceFeeds,
+    IReadOnlyList<string?>? Themes);
+
+/// <summary>
+/// Internal JSON DTO for a single configured source feed on a seed company. All members are nullable
+/// so that a feed missing its required <c>url</c> can be skipped (never fabricated).
+/// </summary>
+internal sealed record LocalFileSourceFeed(
+    string? Type,
+    string? Name,
+    string? Url);

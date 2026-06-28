@@ -16,6 +16,8 @@ public class CompanyUniverseSeederTests
     private static readonly Guid GlobexId = Guid.Parse("22222222-2222-2222-2222-222222222222");
     private static readonly Guid AcmeAliasId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     private static readonly Guid GlobexAliasId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    private static readonly Guid AcmeFeedId = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
+    private static readonly Guid GlobexFeedId = Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd");
 
     private static readonly DateTimeOffset Now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
@@ -38,7 +40,13 @@ public class CompanyUniverseSeederTests
             new CompanyAlias(GlobexAliasId, GlobexId, "Globex Industries", "seed", Now),
         };
 
-        return new CompanySeedData(new[] { acme, globex }, aliases);
+        var feeds = new[]
+        {
+            new CompanySourceFeed(AcmeFeedId, AcmeId, "rss", "Acme Investor News", "https://example.com/acme.rss", Now),
+            new CompanySourceFeed(GlobexFeedId, GlobexId, "rss", "Globex Investor News", "https://example.com/globex.rss", Now),
+        };
+
+        return new CompanySeedData(new[] { acme, globex }, aliases, feeds);
     }
 
     private static CompanyUniverseSeeder CreateSeeder(
@@ -67,6 +75,11 @@ public class CompanyUniverseSeederTests
         Assert.Equal(2, aliases.Count);
         Assert.Contains(aliases, a => a.Id == AcmeAliasId && a.CompanyId == AcmeId);
         Assert.Contains(aliases, a => a.Id == GlobexAliasId && a.CompanyId == GlobexId);
+
+        var feeds = await repository.GetSourceFeedsAsync(CancellationToken.None);
+        Assert.Equal(2, feeds.Count);
+        Assert.Contains(feeds, f => f.Id == AcmeFeedId && f.CompanyId == AcmeId);
+        Assert.Contains(feeds, f => f.Id == GlobexFeedId && f.CompanyId == GlobexId);
     }
 
     [Fact]
@@ -81,9 +94,11 @@ public class CompanyUniverseSeederTests
 
         var companies = await repository.GetAllAsync(CancellationToken.None);
         var aliases = await repository.GetAliasesAsync(CancellationToken.None);
+        var feeds = await repository.GetSourceFeedsAsync(CancellationToken.None);
 
         Assert.Equal(2, companies.Count);
         Assert.Equal(2, aliases.Count);
+        Assert.Equal(2, feeds.Count);
     }
 
     [Fact]

@@ -48,7 +48,7 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
             _logger.LogWarning(
                 "Company seed file '{FilePath}' does not exist; returning an empty seed.",
                 filePath);
-            return new CompanySeedData([], []);
+            return new CompanySeedData([], [], []);
         }
 
         LocalFileCompanySeedDocument? doc;
@@ -63,7 +63,7 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                 ex,
                 "Failed to read or parse company seed file '{FilePath}'; returning an empty seed.",
                 filePath);
-            return new CompanySeedData([], []);
+            return new CompanySeedData([], [], []);
         }
 
         if (doc?.Companies is null)
@@ -71,12 +71,13 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
             _logger.LogWarning(
                 "Company seed file '{FilePath}' contained no companies; returning an empty seed.",
                 filePath);
-            return new CompanySeedData([], []);
+            return new CompanySeedData([], [], []);
         }
 
         var now = _timeProvider.GetUtcNow();
         var companies = new List<Company>(doc.Companies.Count);
         var aliases = new List<CompanyAlias>();
+        var feeds = new List<CompanySourceFeed>();
 
         foreach (var entry in doc.Companies)
         {
@@ -94,6 +95,12 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                 continue;
             }
 
+            IReadOnlyList<string> themes = entry.Themes?
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Select(t => t!.Trim())
+                .ToList()
+                .AsReadOnly() ?? [];
+
             companies.Add(new Company(
                 Id: companyId,
                 Name: entry.Name,
@@ -105,43 +112,74 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                 Industry: entry.Industry,
                 Status: CompanyStatus.Active,
                 CreatedAtUtc: now,
-                UpdatedAtUtc: now));
+                UpdatedAtUtc: now,
+                Themes: themes));
 
-            if (entry.Aliases is null)
+            if (entry.Aliases is not null)
+            {
+                foreach (var aliasText in entry.Aliases)
+                {
+                    if (string.IsNullOrWhiteSpace(aliasText))
+                    {
+                        continue;
+                    }
+
+                    aliases.Add(new CompanyAlias(
+                        Id: DeterministicGuid(companyId, "seed", aliasText),
+                        CompanyId: companyId,
+                        Alias: aliasText,
+                        AliasType: "seed",
+                        CreatedAtUtc: now));
+                }
+            }
+
+            if (entry.SourceFeeds is null)
             {
                 continue;
             }
 
-            foreach (var aliasText in entry.Aliases)
+            foreach (var feed in entry.SourceFeeds)
             {
-                if (string.IsNullOrWhiteSpace(aliasText))
+                if (feed is null)
                 {
                     continue;
                 }
 
-                aliases.Add(new CompanyAlias(
-                    Id: DeterministicGuid(companyId, "seed", aliasText),
+                if (string.IsNullOrWhiteSpace(feed.Url))
+                {
+                    _logger.LogWarning(
+                        "Source feed (name '{FeedName}', type '{FeedType}') for company {CompanyId} is missing a url; skipping.",
+                        feed.Name,
+                        feed.Type,
+                        companyId);
+                    continue;
+                }
+
+                feeds.Add(new CompanySourceFeed(
+                    Id: DeterministicGuid(companyId, "feed", feed.Url),
                     CompanyId: companyId,
-                    Alias: aliasText,
-                    AliasType: "seed",
+                    FeedType: string.IsNullOrWhiteSpace(feed.Type) ? "rss" : feed.Type.Trim(),
+                    Name: feed.Name?.Trim() ?? string.Empty,
+                    Url: feed.Url.Trim(),
                     CreatedAtUtc: now));
             }
         }
 
-        return new CompanySeedData(companies, aliases);
+        return new CompanySeedData(companies, aliases, feeds);
     }
 
     /// <summary>
-    /// Derives a stable <see cref="Guid"/> for a seed alias from its identifying tuple so that
-    /// re-seeding upserts the same alias row rather than creating a new one. The Id is the MD5 hash
-    /// of the canonical string <c>$"{companyId}|{aliasType}|{normalizedAliasText}"</c> (the alias text
-    /// normalized by trim + lower-invariant) reinterpreted as a 16-byte Guid. MD5 is used purely as a
-    /// fast non-cryptographic hash to obtain a deterministic 128-bit value, not for security.
+    /// Derives a stable <see cref="Guid"/> for a seed child row (an alias keyed on its text, or a
+    /// source feed keyed on its url) from its identifying tuple so that re-seeding upserts the same
+    /// row rather than creating a new one. The Id is the MD5 hash of the canonical string
+    /// <c>$"{companyId}|{kind}|{normalizedValue}"</c> (the value normalized by trim + lower-invariant)
+    /// reinterpreted as a 16-byte Guid. MD5 is used purely as a fast non-cryptographic hash to obtain
+    /// a deterministic 128-bit value, not for security.
     /// </summary>
-    private static Guid DeterministicGuid(Guid companyId, string aliasType, string aliasText)
+    private static Guid DeterministicGuid(Guid companyId, string kind, string value)
     {
-        var normalized = aliasText.Trim().ToLowerInvariant();
-        var canonical = $"{companyId}|{aliasType}|{normalized}";
+        var normalized = value.Trim().ToLowerInvariant();
+        var canonical = $"{companyId}|{kind}|{normalized}";
         var bytes = MD5.HashData(Encoding.UTF8.GetBytes(canonical));
         return new Guid(bytes);
     }

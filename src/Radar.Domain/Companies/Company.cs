@@ -11,4 +11,5 @@ public sealed record Company(
     string? Industry,
     CompanyStatus Status,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    IReadOnlyList<string> Themes);

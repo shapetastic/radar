@@ -43,10 +43,16 @@ public sealed class CompanyUniverseSeeder : ICompanyUniverseSeeder
             await _companyRepository.AddAliasAsync(alias, ct).ConfigureAwait(false);
         }
 
+        foreach (var feed in seed.SourceFeeds)
+        {
+            await _companyRepository.AddSourceFeedAsync(feed, ct).ConfigureAwait(false);
+        }
+
         _logger.LogInformation(
-            "Seeded company watch-universe: {CompanyCount} companies, {AliasCount} aliases.",
+            "Seeded company watch-universe: {CompanyCount} companies, {AliasCount} aliases, {FeedCount} source feeds.",
             seed.Companies.Count,
-            seed.Aliases.Count);
+            seed.Aliases.Count,
+            seed.SourceFeeds.Count);
 
         return seed.Companies.Count;
     }
