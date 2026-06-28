@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 
 namespace Radar.IntegrationTests;
 
@@ -92,8 +93,14 @@ internal sealed class TempPipelineFixtures : IDisposable
         File.WriteAllText(Path.Combine(EvidenceDir, fileName), sb.ToString());
     }
 
-    private static string Escape(string value) =>
-        value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    // Defer to the JSON serializer for escaping so control characters (newlines, tabs, etc.) in
+    // inputs like rawText produce valid JSON. JsonSerializer.Serialize returns a quoted string;
+    // strip the surrounding quotes since call sites add their own.
+    private static string Escape(string value)
+    {
+        var json = JsonSerializer.Serialize(value);
+        return json[1..^1];
+    }
 
     public void Dispose()
     {

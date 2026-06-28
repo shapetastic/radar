@@ -154,6 +154,9 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
     {
         if (string.IsNullOrWhiteSpace(value) || value.Trim().All(char.IsDigit))
         {
+            _logger.LogDebug(
+                "Evidence declared quality '{Quality}' is missing, blank, or digit-only; defaulting to Unknown.",
+                value);
             return EvidenceQuality.Unknown;
         }
 

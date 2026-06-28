@@ -178,7 +178,7 @@ public sealed class PipelineEndToEndTests
     // 2. Quality flows through (Part A end-to-end).
     // ---------------------------------------------------------------------------------------------
     [Fact]
-    public async Task QualityFlowsThrough_PrimarySourceBeatsUnknown_AndLiftsALabel()
+    public async Task QualityFlowsThrough_PrimarySourceBeatsUnknown_AndClearsConfidenceFloor()
     {
         using var fx = new TempPipelineFixtures();
         fx.WriteCompanies(
