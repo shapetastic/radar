@@ -319,12 +319,12 @@ public sealed class RadarPipelineRunnerTests
 
         var result = await h.Runner.RunAsync(default);
 
+        // No report id is returned when GenerateReport is false: Stage 7 was skipped.
         Assert.Null(result.ReportId);
 
-        // The company was still scored, but no report exists.
+        // Scoring (Stage 6) still ran: the company has exactly one snapshot.
         var snapshots = await h.Scores.GetSnapshotsForCompanyAsync(companyId, default);
-        var snapshot = Assert.Single(snapshots);
-        Assert.Null(await h.Reports.GetByIdAsync(snapshot.Id, default)); // snapshot id is not a report id
+        Assert.Single(snapshots);
     }
 
     [Fact]

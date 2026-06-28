@@ -99,6 +99,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         var newEvidence = new List<EvidenceItem>();
         foreach (var item in collected)
         {
+            ct.ThrowIfCancellationRequested();
+
             evidenceCollected++;
             if (await _evidenceRepository.AddIfNewAsync(item, ct).ConfigureAwait(false))
             {
@@ -110,9 +112,13 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // Stage 4 + 3 + 5: extract → resolve → review → store, per new evidence, in order.
         foreach (var evidence in newEvidence)
         {
+            ct.ThrowIfCancellationRequested();
+
             var output = await _extractor.ExtractAsync(evidence, ct).ConfigureAwait(false);
             foreach (var extracted in output.Signals)
             {
+                ct.ThrowIfCancellationRequested();
+
                 signalsExtracted++;
 
                 // The mapper owns the provenance check (excerpt must be found in the evidence) and
@@ -167,6 +173,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
         foreach (var company in companies)
         {
+            ct.ThrowIfCancellationRequested();
+
             await _scoringEngine.ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
             companiesScored++;
         }
