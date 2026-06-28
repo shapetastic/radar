@@ -25,7 +25,7 @@ public sealed class WeeklyReportActionPolicyV1Tests
         Assert.Equal("weekly-report-action-v1", CreatePolicy().Version);
     }
 
-    public static IEnumerable<object[]> RepresentativeMatrix()
+    public static IEnumerable<object?[]> RepresentativeMatrix()
     {
         // current trajectory, current opportunity, current evidence, previous trajectory (nullable)
         var trajectories = new[] { 10, 45, 50, 60, 90 };
@@ -41,7 +41,7 @@ public sealed class WeeklyReportActionPolicyV1Tests
                 {
                     foreach (var p in previousTrajectories)
                     {
-                        yield return [t, o, e, p!];
+                        yield return [t, o, e, p];
                     }
                 }
             }
