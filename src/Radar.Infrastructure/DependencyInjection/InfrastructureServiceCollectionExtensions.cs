@@ -4,6 +4,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
+using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
@@ -70,6 +71,19 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton(new LocalFileEvidenceCollectorOptions { SourceDirectory = sourceDirectory });
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, LocalFileEvidenceCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the end-to-end pipeline runner. Requires the persistence registration
+    /// (<see cref="AddInMemoryRadarPersistence"/>), the application services
+    /// (<see cref="AddRadarApplicationServices"/>), and an evidence collector
+    /// (e.g. <see cref="AddLocalFileCollector"/>) to also be registered.
+    /// </summary>
+    public static IServiceCollection AddRadarPipeline(this IServiceCollection services)
+    {
+        services.TryAddSingleton(new PipelineOptions());
+        services.AddSingleton<IRadarPipeline, RadarPipelineRunner>();
         return services;
     }
 }
