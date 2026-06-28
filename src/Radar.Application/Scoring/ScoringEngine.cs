@@ -96,7 +96,22 @@ public sealed class ScoringEngine : IScoringEngine
             return byObserved != 0 ? byObserved : a.Signal.Id.CompareTo(b.Signal.Id);
         });
 
-        var input = new ScoringInput(companyId, windowStartUtc, windowEndUtc, pairs);
+        // The immediately-preceding window of the same length, sliced from the already-fetched signals
+        // (no extra repository call). It is carried as activity-only input for velocity measurement:
+        //   * window rule: ObservedAtUtc in (previousWindowStartUtc, windowStartUtc] — note the shared
+        //     boundary with the current window means a signal exactly at windowStartUtc belongs here;
+        //   * review rule: same Approved-only filter as the current window.
+        // No evidence is loaded for it and it is NOT dropped for missing evidence — it never builds
+        // contributions / ScoreEvidenceLinks (provenance is only the current-window signals).
+        var previousWindowStartUtc = windowStartUtc - _options.Window;
+
+        var previousSignals = allSignals
+            .Where(s => s.ObservedAtUtc > previousWindowStartUtc && s.ObservedAtUtc <= windowStartUtc)
+            .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)
+            .OrderBy(s => s.ObservedAtUtc).ThenBy(s => s.Id) // deterministic (AD-3)
+            .ToList();
+
+        var input = new ScoringInput(companyId, windowStartUtc, windowEndUtc, pairs, previousSignals);
         var computation = _formula.Compute(input);
 
         // Record both identities so snapshots remain reproducible and auditable.
