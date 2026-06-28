@@ -127,3 +127,30 @@ trajectory, the multiplicative Opportunity, the no-evidence-for-previous-window 
 snapshots remain reproducible under their recorded `ScoringVersion`.
 
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer).
+
+---
+
+## AD-7 — Evidence quality is a declared input; the pipeline run-instant is captured after collection
+
+**Decision (two related conventions, spec 25).**
+
+1. **Evidence quality is an input, not hard-coded.** `LocalFileEvidenceCollector` reads an optional
+   `quality` from each evidence document and maps it to `EvidenceQuality` (case-insensitive,
+   defined-enum-only, digit-only rejected), defaulting to `Unknown` when absent/unparseable. It no
+   longer hard-codes `Unknown`. Quality legitimately drives downstream behaviour — the reviewer's
+   weak-source rule and `EvidenceConfidenceScore` — so `Unknown`-quality evidence stays conservative
+   ("Needs more evidence") while higher-quality evidence can reach stronger labels. `SourceType` for
+   this collector stays `LocalFile`.
+
+2. **`RadarPipelineRunner` captures `asOfUtc` *after* collection.** The single run-instant (which feeds
+   the mapper `createdAtUtc`, the scoring `windowEndUtc`, and the report `periodEndUtc`) is taken once,
+   immediately after `CollectAsync` returns — never at method entry. Otherwise freshly collected
+   evidence (whose `ObservedAtUtc` falls back to `CollectedAtUtc`) sorts just *after* `asOfUtc` and
+   drops out of the `(start, end]` window, scoring from zero signals in the same run.
+
+**Why.** Both came out of an end-to-end smoke run. They are intentional and settled — the
+reviewer/planner must **not** re-flag "the collector should set a fixed quality" or "capture the
+clock at method entry". The run-instant remains a single value used identically everywhere; only its
+capture *timing* moved.
+
+**Status.** Accepted · 2026-06-28 (spec 25).
