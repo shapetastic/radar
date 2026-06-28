@@ -10,6 +10,7 @@ using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Infrastructure.Persistence.InMemory;
+using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.DependencyInjection;
@@ -74,6 +75,22 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton(new LocalFileEvidenceCollectorOptions { SourceDirectory = sourceDirectory });
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, LocalFileEvidenceCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the RSS press-release collector and the typed <c>HttpClient</c> its
+    /// <see cref="IRssFeedReader"/> uses. The collector reads the per-company RSS feeds supplied on the
+    /// <see cref="Radar.Application.Collectors.CollectionContext"/> (populated by the runner from
+    /// <see cref="ICompanyRepository.GetSourceFeedsAsync"/>) and produces raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> press releases; it does not persist
+    /// them. All HTTP/XML/Syndication code stays in Infrastructure (AD-5).
+    /// </summary>
+    public static IServiceCollection AddRssPressReleaseCollector(this IServiceCollection services)
+    {
+        services.AddHttpClient<IRssFeedReader, HttpRssFeedReader>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, RssPressReleaseCollector>();
         return services;
     }
 

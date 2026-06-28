@@ -98,7 +98,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // companies are loaded once up front: the collection context needs them and Stage 6 reuses
         // the same list for scoring.
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
-        var context = new CollectionContext(companies);
+        var sourceFeeds = await _companyRepository.GetSourceFeedsAsync(ct).ConfigureAwait(false);
+        var context = new CollectionContext(companies, sourceFeeds);
         var collected = await _collector.CollectAsync(context, ct).ConfigureAwait(false);
         var newEvidence = new List<CollectedEvidenceEntry>();
         foreach (var item in collected)
