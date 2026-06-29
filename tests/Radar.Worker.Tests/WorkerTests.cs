@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Radar.Application.EntityResolution;
@@ -51,7 +50,7 @@ public sealed class WorkerTests
         using var lifetime = new RecordingLifetime();
         var timeProvider = new FakeTimeProvider();
 
-        var worker = new TestableWorker(
+        var worker = new Worker(
             seeder,
             pipeline,
             lifetime,
@@ -59,8 +58,7 @@ public sealed class WorkerTests
             timeProvider,
             NullLogger<Worker>.Instance);
 
-        using var cts = new CancellationTokenSource();
-        var executeTask = worker.RunExecuteAsync(cts.Token);
+        await worker.StartAsync(CancellationToken.None);
 
         // Wait until the first run has happened and the worker is awaiting the next tick.
         // Bounded so a startup regression fails fast instead of hanging the test in CI.
@@ -68,12 +66,11 @@ public sealed class WorkerTests
             SpinWait.SpinUntil(() => pipeline.RunCount >= 1, TimeSpan.FromSeconds(5)),
             "worker did not reach the first pipeline run within the timeout");
 
-        // Cancelling the stoppingToken must unwind cleanly — the OperationCanceledException is swallowed
-        // inside ExecuteAsync and the task completes successfully (does not throw out).
-        cts.Cancel();
-        await executeTask;
+        // Stopping the host cancels the stoppingToken; the OperationCanceledException is swallowed
+        // inside ExecuteAsync and the background task completes successfully (does not throw out).
+        await worker.StopAsync(CancellationToken.None);
 
-        Assert.True(executeTask.IsCompletedSuccessfully);
+        Assert.True(worker.ExecuteTask!.IsCompletedSuccessfully);
     }
 
     [Fact]
@@ -117,18 +114,6 @@ public sealed class WorkerTests
         await worker.StopAsync(CancellationToken.None);
 
         Assert.True(pipeline.RunCount >= 2, $"expected >= 2 runs, got {pipeline.RunCount}");
-    }
-
-    private sealed class TestableWorker(
-        ICompanyUniverseSeeder seeder,
-        IRadarPipeline pipeline,
-        IHostApplicationLifetime lifetime,
-        WorkerRunOptions options,
-        TimeProvider timeProvider,
-        ILogger<Worker> logger)
-        : Worker(seeder, pipeline, lifetime, options, timeProvider, logger)
-    {
-        public Task RunExecuteAsync(CancellationToken stoppingToken) => ExecuteAsync(stoppingToken);
     }
 
     private sealed class RecordingSeeder(List<string> callLog) : ICompanyUniverseSeeder

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
 using Radar.Domain.Companies;
+using Radar.Domain.Evidence;
 using Radar.Infrastructure.Rss;
 
 namespace Radar.Infrastructure.Tests.Rss;
@@ -57,7 +58,7 @@ public sealed class RssPressReleaseCollectorTests
         var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
 
         Assert.Equal(2, items.Count);
-        Assert.All(items, i => Assert.Equal("press_release", i.SourceType));
+        Assert.All(items, i => Assert.Equal(EvidenceSourceType.PressRelease, i.SourceType));
 
         var acme = items.Single(i => i.SourceName == "Acme IR");
         Assert.Equal("https://acme.test/n1", acme.SourceUrl);

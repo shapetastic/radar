@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Collectors;
+using Radar.Domain.Evidence;
 using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Tests.Sources;
@@ -72,7 +73,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         Assert.Equal(2, items.Count);
         Assert.All(items, item =>
         {
-            Assert.Equal("local_file", item.SourceType);
+            Assert.Equal(EvidenceSourceType.LocalFile, item.SourceType);
             Assert.False(string.IsNullOrWhiteSpace(item.Title));
             Assert.False(string.IsNullOrWhiteSpace(item.RawText));
             Assert.Equal(FixedNow, item.CollectedAt);

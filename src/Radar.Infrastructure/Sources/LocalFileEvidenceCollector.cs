@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Radar.Application.Collectors;
+using Radar.Domain.Evidence;
 
 namespace Radar.Infrastructure.Sources;
 
@@ -37,10 +38,10 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
 
     public string CollectorName => "LocalFileEvidenceCollector";
 
-    public string SourceType => "local_file";
+    public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
 
     public async Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
-        CollectionContext context, CancellationToken cancellationToken)
+        CollectionContext context, CancellationToken ct)
     {
         // The local-file collector is universe-agnostic: it is the deterministic test/debug source
         // and simply emits whatever JSON documents are on disk, so it ignores the watch universe
@@ -78,9 +79,9 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
 
         foreach (var path in files)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            ct.ThrowIfCancellationRequested();
 
-            var item = await ReadDocumentAsync(path, cancellationToken).ConfigureAwait(false);
+            var item = await ReadDocumentAsync(path, ct).ConfigureAwait(false);
             if (item is not null)
             {
                 items.Add(item);
