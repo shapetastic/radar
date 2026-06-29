@@ -47,6 +47,15 @@ public sealed class CompanyResolver : ICompanyResolver
         ArgumentNullException.ThrowIfNull(mentionText);
         ArgumentNullException.ThrowIfNull(companyHints);
 
+        // Fast-path the common invalid-input case: a blank mention with no usable hints can
+        // never resolve, so return before touching the repository to avoid a needless read
+        // (and potential DB roundtrip). A blank mention WITH a usable hint must still fall
+        // through, since the hint path below can resolve it.
+        if (string.IsNullOrWhiteSpace(mentionText) && !companyHints.Any(h => !string.IsNullOrWhiteSpace(h)))
+        {
+            return LogAndReturn(mentionText, new CompanyResolutionResult(null, 0m, "Empty mention", null));
+        }
+
         // GetAllAsync and GetAliasesAsync are independent; start both before awaiting so
         // they run concurrently (matters more once the repository is not in-memory). Loaded once
         // here and shared by both the hint path and the mention-based logic below.

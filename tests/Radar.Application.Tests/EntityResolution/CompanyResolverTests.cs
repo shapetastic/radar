@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Radar.Application.Abstractions.Persistence;
 using Radar.Application.EntityResolution;
 using Radar.Domain.Companies;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -331,5 +332,37 @@ public class CompanyResolverTests
         Assert.Equal(AcmeId, result.CompanyId);
         Assert.Equal(1.0m, result.Confidence);
         Assert.Equal("Exact name match", result.Reason);
+    }
+
+    [Fact]
+    public async Task BlankMentionAndBlankHints_DoesNotTouchRepository()
+    {
+        // The fast-path must short-circuit before any repository read when there is
+        // nothing to resolve. The throwing repository fails the test if it is queried.
+        var resolver = new CompanyResolver(new ThrowingCompanyRepository(), NullLogger<CompanyResolver>.Instance);
+
+        var result = await resolver.ResolveAsync("   ", new[] { "", "  " }, CancellationToken.None);
+
+        Assert.Null(result.CompanyId);
+        Assert.Equal(0m, result.Confidence);
+        Assert.Equal("Empty mention", result.Reason);
+    }
+
+    // Repository whose read methods throw, so any access by the resolver fails the test.
+    private sealed class ThrowingCompanyRepository : ICompanyRepository
+    {
+        public Task AddAsync(Company company, CancellationToken ct) => throw new InvalidOperationException();
+
+        public Task<Company?> GetByIdAsync(Guid id, CancellationToken ct) => throw new InvalidOperationException();
+
+        public Task<IReadOnlyList<Company>> GetAllAsync(CancellationToken ct) => throw new InvalidOperationException();
+
+        public Task AddAliasAsync(CompanyAlias alias, CancellationToken ct) => throw new InvalidOperationException();
+
+        public Task<IReadOnlyList<CompanyAlias>> GetAliasesAsync(CancellationToken ct) => throw new InvalidOperationException();
+
+        public Task AddSourceFeedAsync(CompanySourceFeed feed, CancellationToken ct) => throw new InvalidOperationException();
+
+        public Task<IReadOnlyList<CompanySourceFeed>> GetSourceFeedsAsync(CancellationToken ct) => throw new InvalidOperationException();
     }
 }
