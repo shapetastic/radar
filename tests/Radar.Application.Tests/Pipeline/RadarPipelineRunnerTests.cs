@@ -94,9 +94,26 @@ public sealed class RadarPipelineRunnerTests
             Task.FromResult(output);
     }
 
+    /// <summary>
+    /// A fake <see cref="IRawEvidenceStore"/> that records every <see cref="EvidenceItem"/> it is asked
+    /// to write and always reports a new write. Lets tests assert exactly which newly-stored evidence
+    /// the runner mirrors to disk.
+    /// </summary>
+    private sealed class RecordingRawEvidenceStore : IRawEvidenceStore
+    {
+        public List<EvidenceItem> Written { get; } = new();
+
+        public Task<bool> WriteIfNewAsync(EvidenceItem evidence, CancellationToken ct)
+        {
+            Written.Add(evidence);
+            return Task.FromResult(true);
+        }
+    }
+
     private sealed class Harness
     {
         public InMemoryEvidenceRepository Evidence { get; } = new();
+        public RecordingRawEvidenceStore RawStore { get; } = new();
         public InMemoryCompanyRepository Companies { get; } = new();
         public InMemorySignalRepository Signals { get; } = new();
         public InMemoryScoreRepository Scores { get; } = new();
@@ -141,6 +158,7 @@ public sealed class RadarPipelineRunnerTests
                 collector,
                 mapper,
                 Evidence,
+                RawStore,
                 extractor,
                 resolver,
                 reviewer,
@@ -303,6 +321,34 @@ public sealed class RadarPipelineRunnerTests
         // A second scoring snapshot per company is expected and fine.
         var snapshots = await h.Scores.GetSnapshotsForCompanyAsync(companyId, default);
         Assert.Equal(2, snapshots.Count);
+    }
+
+    [Fact]
+    public async Task RunningTwice_MirrorsOnlyNewlyStoredEvidenceToRawStore()
+    {
+        var companyId = Guid.NewGuid();
+
+        // Same deterministic collected evidence both runs: the second run dedupes by content hash so
+        // only the first run's newly-stored evidence is mirrored to the raw store.
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+        await h.Runner.RunAsync(default);
+
+        // Exactly one write: the re-collected duplicate on the second run is not re-written.
+        var written = Assert.Single(h.RawStore.Written);
+
+        // It matches the persisted evidence (same content hash and id discovered via the signal).
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        var persisted = await h.Evidence.GetByIdAsync(signal.EvidenceId, default);
+        Assert.NotNull(persisted);
+        Assert.Equal(persisted!.Id, written.Id);
+        Assert.Equal(persisted.ContentHash, written.ContentHash);
     }
 
     [Fact]
@@ -478,6 +524,7 @@ public sealed class RadarPipelineRunnerTests
             services.AddInMemoryRadarPersistence();
             services.AddRadarApplicationServices();
             services.AddLocalFileCollector(tempDir);
+            services.AddFileRawEvidenceStore(Path.Combine(tempDir, "raw"));
             services.AddRadarPipeline();
 
             using var provider = services.BuildServiceProvider();

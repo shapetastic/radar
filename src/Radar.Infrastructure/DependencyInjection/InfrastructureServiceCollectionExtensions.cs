@@ -9,6 +9,7 @@ using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
+using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sources;
@@ -106,6 +107,21 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ICompanySeedSource, LocalFileCompanySeedSource>();
         services.AddSingleton<ICompanyUniverseSeeder, CompanyUniverseSeeder>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the insert-only file raw-evidence store that mirrors each newly-stored
+    /// <see cref="Radar.Domain.Evidence.EvidenceItem"/> to
+    /// <c>{rootDirectory}/{sourceType}/{yyyy}/{MM}/{contentHash}.json</c> (AD-8). The pipeline runner
+    /// requires <see cref="Radar.Application.Evidence.IRawEvidenceStore"/>; all file I/O stays in
+    /// Infrastructure. Existing raw files are never overwritten (provenance, AD-1).
+    /// </summary>
+    public static IServiceCollection AddFileRawEvidenceStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FileRawEvidenceStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IRawEvidenceStore, FileRawEvidenceStore>();
         return services;
     }
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
+using Radar.Application.Evidence;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
@@ -24,6 +25,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly IEvidenceCollector _collector;
     private readonly CollectedEvidenceMapper _mapper;
     private readonly IEvidenceRepository _evidenceRepository;
+    private readonly IRawEvidenceStore _rawEvidenceStore;
     private readonly ISignalExtractor _extractor;
     private readonly ICompanyResolver _resolver;
     private readonly ISignalReviewer _reviewer;
@@ -39,6 +41,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         IEvidenceCollector collector,
         CollectedEvidenceMapper mapper,
         IEvidenceRepository evidenceRepository,
+        IRawEvidenceStore rawEvidenceStore,
         ISignalExtractor extractor,
         ICompanyResolver resolver,
         ISignalReviewer reviewer,
@@ -53,6 +56,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(collector);
         ArgumentNullException.ThrowIfNull(mapper);
         ArgumentNullException.ThrowIfNull(evidenceRepository);
+        ArgumentNullException.ThrowIfNull(rawEvidenceStore);
         ArgumentNullException.ThrowIfNull(extractor);
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(reviewer);
@@ -67,6 +71,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _collector = collector;
         _mapper = mapper;
         _evidenceRepository = evidenceRepository;
+        _rawEvidenceStore = rawEvidenceStore;
         _extractor = extractor;
         _resolver = resolver;
         _reviewer = reviewer;
@@ -112,6 +117,11 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             {
                 evidenceNew++;
                 newEvidence.Add(new CollectedEvidenceEntry(evidence, item.CompanyHints));
+
+                // Mirror each newly-stored item to the insert-only on-disk raw store (AD-8). The file
+                // store is the on-disk twin of the immutable repository; a false return is just a
+                // dedupe/disk skip and must not abort the run or change any counters.
+                await _rawEvidenceStore.WriteIfNewAsync(evidence, ct).ConfigureAwait(false);
             }
         }
 

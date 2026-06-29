@@ -45,6 +45,7 @@ internal static class RadarWorkerServices
         services.AddRadarApplicationServices();
         services.AddLocalFileCollector(options.EvidenceSourceDirectory);
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
+        services.AddFileRawEvidenceStore("data/evidence/raw");
         services.AddRadarPipeline();
 
         services.AddHostedService<Worker>();
