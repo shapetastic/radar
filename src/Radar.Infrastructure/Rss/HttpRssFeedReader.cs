@@ -7,9 +7,10 @@ namespace Radar.Infrastructure.Rss;
 
 /// <summary>
 /// Fetches and parses an RSS/Atom feed over HTTP using <c>SyndicationFeed</c>. A flaky or malformed
-/// feed never crashes the run: non-success status, transport errors, cancellation of the request, and
-/// malformed XML all degrade to an empty list with a warning. All HTTP/XML/Syndication code stays in
-/// Infrastructure (AD-5).
+/// feed never crashes the run: non-success status, transport errors, the request's own timeout, and
+/// malformed XML are each reported as a typed failure on the returned <see cref="RssFeedReadResult"/>
+/// (with a warning) rather than swallowed; caller-requested cancellation still throws. All
+/// HTTP/XML/Syndication code stays in Infrastructure (AD-5).
 /// </summary>
 internal sealed class HttpRssFeedReader : IRssFeedReader
 {
@@ -25,7 +26,7 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<RssFeedItem>> ReadAsync(string feedUrl, CancellationToken ct)
+    public async Task<RssFeedReadResult> ReadAsync(string feedUrl, CancellationToken ct)
     {
         Stream stream;
         try
@@ -40,7 +41,8 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
                     "RSS feed {FeedUrl} returned non-success status {StatusCode}; skipping.",
                     feedUrl,
                     (int)response.StatusCode);
-                return [];
+                return RssFeedReadResult.Failure(
+                    RssFeedReadOutcome.HttpError, $"HTTP {(int)response.StatusCode}");
             }
 
             // Materialize the body before disposing the response so parsing can happen synchronously.
@@ -50,18 +52,18 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
         catch (HttpRequestException ex)
         {
             _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch failed; skipping.", feedUrl);
-            return [];
+            return RssFeedReadResult.Failure(RssFeedReadOutcome.Unreachable, "transport error");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Caller-requested cancellation must propagate so the run stops; do not hide it as an empty result.
+            // Caller-requested cancellation must propagate so the run stops; do not hide it as a failure result.
             throw;
         }
         catch (TaskCanceledException ex)
         {
             // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
             _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch timed out; skipping.", feedUrl);
-            return [];
+            return RssFeedReadResult.Failure(RssFeedReadOutcome.Timeout, "request timed out");
         }
 
         using (stream)
@@ -80,7 +82,7 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
                 if (feed is null)
                 {
                     _logger.LogWarning("RSS feed {FeedUrl} parsed to no feed; skipping.", feedUrl);
-                    return [];
+                    return RssFeedReadResult.Failure(RssFeedReadOutcome.Malformed, "malformed XML");
                 }
 
                 var items = new List<RssFeedItem>();
@@ -98,12 +100,12 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
                         Content: ExtractContent(item)));
                 }
 
-                return items;
+                return RssFeedReadResult.Success(items);
             }
             catch (XmlException ex)
             {
                 _logger.LogWarning(ex, "RSS feed {FeedUrl} returned malformed XML; skipping.", feedUrl);
-                return [];
+                return RssFeedReadResult.Failure(RssFeedReadOutcome.Malformed, "malformed XML");
             }
         }
     }

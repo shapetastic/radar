@@ -105,13 +105,27 @@ public sealed class HttpRssFeedReaderTests
     private static HttpRssFeedReader CreateReader(HttpMessageHandler handler) =>
         new(new HttpClient(handler), NullLogger<HttpRssFeedReader>.Instance);
 
+    private const string EmptyRss = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Acme IR</title>
+            <link>https://acme.test</link>
+            <description>Acme investor news</description>
+          </channel>
+        </rss>
+        """;
+
     [Fact]
     public async Task ReadAsync_ValidRss_ParsesItems()
     {
         var reader = CreateReader(new StubHandler(HttpStatusCode.OK, ValidRss));
 
-        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
+        Assert.Equal(RssFeedReadOutcome.Success, result.Outcome);
+        Assert.True(result.IsSuccess);
+        var items = result.Items;
         Assert.Equal(2, items.Count);
 
         var first = items[0];
@@ -127,9 +141,9 @@ public sealed class HttpRssFeedReaderTests
     {
         var reader = CreateReader(new StubHandler(HttpStatusCode.OK, RssWithContentEncoded));
 
-        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
-        var item = Assert.Single(items);
+        var item = Assert.Single(result.Items);
         Assert.Equal(
             "Full body: Acme signed a multi-year contract with a major customer.",
             item.Content);
@@ -141,9 +155,9 @@ public sealed class HttpRssFeedReaderTests
     {
         var reader = CreateReader(new StubHandler(HttpStatusCode.OK, AtomWithContent));
 
-        var items = await reader.ReadAsync("https://acme.test/atom", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/atom", CancellationToken.None);
 
-        var item = Assert.Single(items);
+        var item = Assert.Single(result.Items);
         Assert.Equal(
             "Full body: Acme signed a multi-year contract with a major customer.",
             item.Content);
@@ -155,9 +169,9 @@ public sealed class HttpRssFeedReaderTests
     {
         var reader = CreateReader(new StubHandler(HttpStatusCode.OK, RssWithWhitespaceContentEncoded));
 
-        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
-        var item = Assert.Single(items);
+        var item = Assert.Single(result.Items);
         Assert.Null(item.Content);
         Assert.Equal("Short teaser.", item.Summary);
     }
@@ -167,9 +181,9 @@ public sealed class HttpRssFeedReaderTests
     {
         var reader = CreateReader(new StubHandler(HttpStatusCode.OK, AtomWithWhitespaceContent));
 
-        var items = await reader.ReadAsync("https://acme.test/atom", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/atom", CancellationToken.None);
 
-        var item = Assert.Single(items);
+        var item = Assert.Single(result.Items);
         Assert.Null(item.Content);
         Assert.Equal("Short teaser.", item.Summary);
     }
@@ -179,41 +193,70 @@ public sealed class HttpRssFeedReaderTests
     {
         var reader = CreateReader(new StubHandler(HttpStatusCode.OK, ValidRss));
 
-        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
-        var first = items[0];
+        var first = result.Items[0];
         Assert.Null(first.Content);
         Assert.Equal("The widget is now available.", first.Summary);
     }
 
     [Fact]
-    public async Task ReadAsync_NonSuccessStatus_ReturnsEmptyWithoutThrowing()
+    public async Task ReadAsync_QuietButValidFeed_ReturnsSuccessWithNoItems()
     {
-        var reader = CreateReader(new StubHandler(HttpStatusCode.InternalServerError, "boom"));
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, EmptyRss));
 
-        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
-        Assert.Empty(items);
+        Assert.Equal(RssFeedReadOutcome.Success, result.Outcome);
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.Items);
     }
 
     [Fact]
-    public async Task ReadAsync_MalformedXml_ReturnsEmptyWithoutThrowing()
+    public async Task ReadAsync_NonSuccessStatus_ReturnsHttpErrorWithoutThrowing()
+    {
+        var reader = CreateReader(new StubHandler(HttpStatusCode.NotFound, "missing"));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.HttpError, result.Outcome);
+        Assert.False(result.IsSuccess);
+        Assert.Contains("404", result.Detail);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public async Task ReadAsync_MalformedXml_ReturnsMalformedWithoutThrowing()
     {
         var reader = CreateReader(new StubHandler(HttpStatusCode.OK, "this is not <xml"));
 
-        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
-        Assert.Empty(items);
+        Assert.Equal(RssFeedReadOutcome.Malformed, result.Outcome);
+        Assert.Empty(result.Items);
     }
 
     [Fact]
-    public async Task ReadAsync_HttpRequestException_ReturnsEmptyWithoutThrowing()
+    public async Task ReadAsync_HttpRequestException_ReturnsUnreachableWithoutThrowing()
     {
         var reader = CreateReader(new ThrowingHandler(new HttpRequestException("network down")));
 
-        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
-        Assert.Empty(items);
+        Assert.Equal(RssFeedReadOutcome.Unreachable, result.Outcome);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public async Task ReadAsync_RequestTimeout_ReturnsTimeoutWithoutThrowing()
+    {
+        // A TaskCanceledException with the caller's token NOT cancelled is the request's own deadline.
+        var reader = CreateReader(new ThrowingHandler(new TaskCanceledException("timed out")));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.Timeout, result.Outcome);
+        Assert.Empty(result.Items);
     }
 
     [Fact]
