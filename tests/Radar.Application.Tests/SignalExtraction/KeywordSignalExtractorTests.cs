@@ -216,6 +216,20 @@ public class KeywordSignalExtractorTests
         Assert.Equal("Positive", signal.Direction);
     }
 
+    [Theory]
+    [InlineData("Acme wins a DoD contract for radar systems.")]
+    [InlineData("Acme signs a five-year deal with the Department of Defense.")]
+    public async Task DefenseDepartmentCues_YieldGovernmentContractSignal(string rawText)
+    {
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
     [Fact]
     public async Task SelectedByNasa_YieldsBothCustomerWinAndGovernmentContract_InEnumOrder()
     {
@@ -233,6 +247,7 @@ public class KeywordSignalExtractorTests
 
     [Theory]
     [InlineData("Acme wins contract with a major retailer.")]
+    [InlineData("Acme lands a major contract win with a global retailer.")]
     [InlineData("Acme renews its agreement with a major retailer.")]
     [InlineData("Acme expands agreement with a major retailer.")]
     public async Task NewCustomerWinPhrases_YieldSingleCustomerWinSignal(string rawText)
@@ -248,6 +263,7 @@ public class KeywordSignalExtractorTests
 
     [Theory]
     [InlineData("Acme rolls out a refreshed analytics suite for customers.")]
+    [InlineData("Acme debuts a new platform for enterprise customers.")]
     [InlineData("Acme announces general availability of its analytics suite.")]
     public async Task NewProductLaunchPhrases_YieldSingleProductLaunchSignal(string rawText)
     {
