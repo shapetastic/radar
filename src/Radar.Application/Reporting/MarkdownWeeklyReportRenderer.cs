@@ -296,12 +296,12 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             .Append(" could not be read.")
             .Append(Lf);
 
-        if (collection.SourcesFailed > 0)
+        if (collection.Failures.Count > 0)
         {
             foreach (var failure in collection.Failures)
             {
                 sb.Append("- ").Append(failure.SourceName);
-                if (!string.IsNullOrEmpty(failure.SourceUrl))
+                if (!string.IsNullOrWhiteSpace(failure.SourceUrl))
                 {
                     sb.Append(" (").Append(failure.SourceUrl).Append(')');
                 }
