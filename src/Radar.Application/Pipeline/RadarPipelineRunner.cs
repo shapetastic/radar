@@ -137,8 +137,9 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // or after every CollectedAtUtc so freshly collected evidence is in-window.
         var asOfUtc = _timeProvider.GetUtcNow();
 
-        // Stage 4 + 3 + 5: extract → resolve → review → store, per new evidence, in order. Company
-        // hints (entry.CompanyHints) are carried for a later slice; only entry.Evidence is used here.
+        // Stage 4 + 3 + 5: extract → resolve → review → store, per new evidence, in order. Each
+        // evidence's collector hints (entry.CompanyHints) are passed to the resolver so a
+        // company-specific feed's binding can drive a high-confidence resolution.
         foreach (var entry in newEvidence)
         {
             ct.ThrowIfCancellationRequested();
@@ -168,7 +169,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
 
                 // Resolve: only ADD a CompanyId when matched; never guess. An unresolved mention
                 // stays CompanyId == null and the reviewer routes it to human review.
-                var resolution = await _resolver.ResolveAsync(signal.CompanyMention, ct).ConfigureAwait(false);
+                var resolution = await _resolver
+                    .ResolveAsync(signal.CompanyMention, entry.CompanyHints, ct).ConfigureAwait(false);
                 if (resolution.CompanyId is { } companyId)
                 {
                     signal = signal with { CompanyId = companyId };
@@ -240,9 +242,9 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     }
 
     /// <summary>
-    /// Pairs a newly-stored <see cref="EvidenceItem"/> with the collector-supplied company hints so a
-    /// later slice can resolve hints without re-parsing the evidence's MetadataJson. Hints are unused
-    /// in this slice.
+    /// Pairs a newly-stored <see cref="EvidenceItem"/> with the collector-supplied company hints so the
+    /// runner can pass them to the resolver without re-parsing the evidence's MetadataJson. The hints
+    /// drive the resolver's high-confidence hint path.
     /// </summary>
     private readonly record struct CollectedEvidenceEntry(
         EvidenceItem Evidence, IReadOnlyList<string> CompanyHints);

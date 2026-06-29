@@ -263,6 +263,34 @@ public sealed class RadarPipelineRunnerTests
     }
 
     [Fact]
+    public async Task EvidenceCompanyHint_ResolvesSignalToHintedCompany()
+    {
+        var companyId = Guid.NewGuid();
+
+        // Evidence carries the seeded company's ticker as a collector hint. The extracted signal's
+        // mention is generic and would NOT resolve on its own — only the hint can resolve it.
+        var collector = new FakeEvidenceCollector(
+            [BuildCollected() with { CompanyHints = ["NWR"] }]);
+        var extractor = new AnyEvidenceSignalExtractor(
+            new([MaterialSignal(mention: "Some Generic Vendor Name")], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, result.SignalsValid);
+        Assert.Equal(1, result.SignalsApproved);
+
+        // The runner threaded the hint to the resolver, so the signal resolved to the hinted company
+        // and was approved.
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(companyId, signal.CompanyId);
+        Assert.Equal(SignalReviewStatus.Approved, signal.ReviewStatus);
+    }
+
+    [Fact]
     public async Task UnresolvedMention_StaysConservative()
     {
         var collector = new FakeEvidenceCollector([BuildCollected()]);

@@ -38,21 +38,93 @@ public sealed class CompanyResolver : ICompanyResolver
         _logger = logger;
     }
 
-    public async Task<CompanyResolutionResult> ResolveAsync(string mentionText, CancellationToken ct)
+    public Task<CompanyResolutionResult> ResolveAsync(string mentionText, CancellationToken ct) =>
+        ResolveAsync(mentionText, Array.Empty<string>(), ct);
+
+    public async Task<CompanyResolutionResult> ResolveAsync(
+        string mentionText, IReadOnlyList<string> companyHints, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(mentionText);
+        ArgumentNullException.ThrowIfNull(companyHints);
 
-        if (string.IsNullOrWhiteSpace(mentionText))
+        // Fast-path the common invalid-input case: a blank mention with no usable hints can
+        // never resolve, so return before touching the repository to avoid a needless read
+        // (and potential DB roundtrip). A blank mention WITH a usable hint must still fall
+        // through, since the hint path below can resolve it.
+        if (string.IsNullOrWhiteSpace(mentionText) && !companyHints.Any(h => !string.IsNullOrWhiteSpace(h)))
         {
             return LogAndReturn(mentionText, new CompanyResolutionResult(null, 0m, "Empty mention", null));
         }
 
         // GetAllAsync and GetAliasesAsync are independent; start both before awaiting so
-        // they run concurrently (matters more once the repository is not in-memory).
+        // they run concurrently (matters more once the repository is not in-memory). Loaded once
+        // here and shared by both the hint path and the mention-based logic below.
         var companiesTask = _companyRepository.GetAllAsync(ct);
         var aliasesTask = _companyRepository.GetAliasesAsync(ct);
         var companies = (await companiesTask.ConfigureAwait(false)).ToList();
         var aliases = await aliasesTask.ConfigureAwait(false);
+
+        // Highest-precedence path: a collector hint (e.g. the ticker of a company-specific feed).
+        // Evaluated BEFORE the empty-mention early return so a hint can resolve even when the
+        // mention text is blank. Conservative: exact ticker / normalized name+alias only, and a
+        // hint naming an unknown company is ignored — never fabricated into a company.
+        var hintMatchedCompanyIds = new HashSet<Guid>();
+        string? matchedHint = null;
+        foreach (var hint in companyHints)
+        {
+            if (string.IsNullOrWhiteSpace(hint))
+            {
+                continue;
+            }
+
+            var trimmedHint = hint.Trim();
+            var normalizedHint = Normalize(hint);
+
+            foreach (var company in companies)
+            {
+                var tickerMatch = !string.IsNullOrWhiteSpace(company.Ticker) &&
+                    string.Equals(company.Ticker.Trim(), trimmedHint, StringComparison.OrdinalIgnoreCase);
+                var nameMatch = Normalize(company.Name) == normalizedHint;
+                if (tickerMatch || nameMatch)
+                {
+                    if (hintMatchedCompanyIds.Add(company.Id))
+                    {
+                        matchedHint ??= hint;
+                    }
+                }
+            }
+
+            foreach (var alias in aliases)
+            {
+                if (Normalize(alias.Alias) == normalizedHint)
+                {
+                    if (hintMatchedCompanyIds.Add(alias.CompanyId))
+                    {
+                        matchedHint ??= hint;
+                    }
+                }
+            }
+        }
+
+        if (hintMatchedCompanyIds.Count == 1)
+        {
+            return LogAndReturn(
+                mentionText,
+                new CompanyResolutionResult(hintMatchedCompanyIds.Single(), 0.95m, "Company hint match", matchedHint));
+        }
+
+        if (hintMatchedCompanyIds.Count > 1)
+        {
+            _logger.LogDebug(
+                "Ignoring ambiguous company hints for mention {Mention}: matched {Count} companies.",
+                mentionText,
+                hintMatchedCompanyIds.Count);
+        }
+
+        if (string.IsNullOrWhiteSpace(mentionText))
+        {
+            return LogAndReturn(mentionText, new CompanyResolutionResult(null, 0m, "Empty mention", null));
+        }
 
         if (companies.Count == 0)
         {
