@@ -105,6 +105,64 @@ public sealed class MarkdownWeeklyReportRendererTests
     }
 
     [Fact]
+    public void Render_Watch_Label_Renders_Under_Watch_Section()
+    {
+        var model = CreateModel([CreateEntry(RadarReportAction.Watch, companyName: "Watch Co", ticker: "WCH")]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("## Watch", output);
+        Assert.Contains("- Watch Co (WCH) (#1)", output);
+    }
+
+    [Fact]
+    public void Render_Watch_Section_Omitted_When_No_Watch_Entries()
+    {
+        var model = CreateModel([CreateEntry(RadarReportAction.Investigate)]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.DoesNotContain("## Watch", output);
+    }
+
+    [Fact]
+    public void Render_Watch_Section_Ordered_After_Thesis_And_Before_Ignore()
+    {
+        var improving = CreateEntry(RadarReportAction.ThesisImproving, rank: 1, companyName: "Up Co", ticker: "UP");
+        var watch = CreateEntry(RadarReportAction.Watch, rank: 2, companyName: "Watch Co", ticker: "WCH");
+        var ignore = CreateEntry(RadarReportAction.Ignore, rank: 3, companyName: "Low Co", ticker: "LOW");
+        var model = CreateModel([improving, watch, ignore]);
+
+        var output = CreateRenderer().Render(model);
+
+        var thesisIndex = output.IndexOf("## Thesis improving", StringComparison.Ordinal);
+        var watchIndex = output.IndexOf("## Watch", StringComparison.Ordinal);
+        var ignoreIndex = output.IndexOf("## Ignore / Low signal", StringComparison.Ordinal);
+
+        Assert.True(thesisIndex >= 0 && watchIndex >= 0 && ignoreIndex >= 0);
+        Assert.True(thesisIndex < watchIndex, "Watch section should appear after the thesis sections.");
+        Assert.True(watchIndex < ignoreIndex, "Watch section should appear before the Ignore section.");
+    }
+
+    [Fact]
+    public void Render_Watch_Entry_Appears_In_Both_Detail_And_RollUp()
+    {
+        var model = CreateModel([CreateEntry(RadarReportAction.Watch, companyName: "Watch Co", ticker: "WCH")]);
+
+        var output = CreateRenderer().Render(model);
+
+        // Detailed lead block (every entry) shows the entry with its label.
+        var detailIndex = output.IndexOf("### 1. Watch Co (WCH)", StringComparison.Ordinal);
+        Assert.True(detailIndex >= 0, "Watch entry should appear in the detailed Highest opportunity block.");
+        Assert.Contains("- Label: Watch", output);
+
+        // Roll-up section also lists the entry, after the detailed block.
+        var rollUpIndex = output.IndexOf("## Watch", StringComparison.Ordinal);
+        Assert.True(rollUpIndex > detailIndex, "Watch roll-up should appear after the detailed block.");
+        Assert.Contains("- Watch Co (WCH) (#1)", output);
+    }
+
+    [Fact]
     public void Render_Ignore_Section_Omitted_When_No_Ignore_Entries()
     {
         var model = CreateModel([CreateEntry(RadarReportAction.Investigate)]);

@@ -78,6 +78,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         AppendHighestOpportunity(sb, model);
         AppendThesisSection(sb, model, RadarReportAction.ThesisImproving, "Thesis improving");
         AppendThesisSection(sb, model, RadarReportAction.ThesisDeteriorating, "Thesis deteriorating");
+        AppendNamedActionSection(sb, model, RadarReportAction.Watch, "Watch");
         AppendNamedActionSection(sb, model, RadarReportAction.Ignore, "Ignore / Low signal");
         AppendSignalsNeedingReview(sb, model);
 
