@@ -93,9 +93,9 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         ArgumentNullException.ThrowIfNull(evidence);
 
         // Provenance: search and excerpt from the composed searchable text (Title + "\n" + RawText).
-        // The mapper's excerpt-in-evidence check validates against the same composition, so a
-        // title-drawn excerpt survives the round-trip.
-        var searchableText = ComposeSearchableText(evidence.Title, evidence.RawText);
+        // The composition lives in the shared EvidenceSearchableText helper that the mapper also
+        // uses, so a title-drawn excerpt survives the mapper's excerpt-in-evidence round-trip.
+        var searchableText = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);
 
         var emittedTypes = new HashSet<SignalType>();
         var matches = new List<(KeywordSignalRule Rule, int Index)>();
@@ -155,10 +155,4 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         var end = Math.Min(searchableText.Length, matchIndex + phraseLength + ExcerptWindow);
         return searchableText[start..end];
     }
-
-    // Composed searchable text for an evidence item: Title first (events lead the headline), then a
-    // single newline, then the body. Null/empty fields are treated as the empty string. This must
-    // agree byte-for-byte with the identical helper in ExtractedSignalMapper.
-    private static string ComposeSearchableText(string? title, string? rawText) =>
-        (title ?? string.Empty) + "\n" + (rawText ?? string.Empty);
 }

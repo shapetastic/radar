@@ -31,7 +31,7 @@ public static partial class ExtractedSignalMapper
         // Emptiness is validated by SignalValidation below; the mapper only owns the
         // provenance check (excerpt must be traceable to the evidence title or body).
         var supportingExcerpt = (extracted.SupportingExcerpt ?? string.Empty).Trim();
-        var searchableText = ComposeSearchableText(evidence.Title, evidence.RawText);
+        var searchableText = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);
         if (supportingExcerpt.Length > 0 && !ExcerptIsInEvidence(supportingExcerpt, searchableText))
         {
             errors.Add("Supporting excerpt not found in evidence.");
@@ -98,12 +98,6 @@ public static partial class ExtractedSignalMapper
 
     private static bool ExcerptIsInEvidence(string excerpt, string? searchableText) =>
         Normalize(searchableText).Contains(Normalize(excerpt), StringComparison.Ordinal);
-
-    // Composed searchable text for an evidence item: Title first (events lead the headline), then a
-    // single newline, then the body. Null/empty fields are treated as the empty string. This must
-    // agree byte-for-byte with the identical helper in KeywordSignalExtractor.
-    private static string ComposeSearchableText(string? title, string? rawText) =>
-        (title ?? string.Empty) + "\n" + (rawText ?? string.Empty);
 
     private static string Normalize(string? text)
     {
