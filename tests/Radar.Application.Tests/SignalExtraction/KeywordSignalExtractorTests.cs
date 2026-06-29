@@ -203,6 +203,127 @@ public class KeywordSignalExtractorTests
     }
 
     [Fact]
+    public async Task GovernmentContractCues_YieldGovernmentContractSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Acme awarded a defence contract by NASA");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Theory]
+    [InlineData("Acme wins a DoD contract for radar systems.")]
+    [InlineData("Acme signs a five-year deal with the Department of Defense.")]
+    public async Task DefenseDepartmentCues_YieldGovernmentContractSignal(string rawText)
+    {
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
+    public async Task SelectedByNasa_YieldsBothCustomerWinAndGovernmentContract_InEnumOrder()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Acme selected by NASA for a new mission");
+
+        var output = await ExtractAsync(evidence);
+
+        Assert.Equal(2, output.Signals.Count);
+        // CustomerWin (enum 0) before GovernmentContract (enum 6).
+        Assert.Equal(SignalType.CustomerWin.ToString(), output.Signals[0].SignalType);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), output.Signals[1].SignalType);
+    }
+
+    [Theory]
+    [InlineData("Acme wins contract with a major retailer.")]
+    [InlineData("Acme lands a major contract win with a global retailer.")]
+    [InlineData("Acme renews its agreement with a major retailer.")]
+    [InlineData("Acme expands agreement with a major retailer.")]
+    public async Task NewCustomerWinPhrases_YieldSingleCustomerWinSignal(string rawText)
+    {
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CustomerWin.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Theory]
+    [InlineData("Acme rolls out a refreshed analytics suite for customers.")]
+    [InlineData("Acme debuts a new platform for enterprise customers.")]
+    [InlineData("Acme announces general availability of its analytics suite.")]
+    public async Task NewProductLaunchPhrases_YieldSingleProductLaunchSignal(string rawText)
+    {
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.ProductLaunch.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Theory]
+    [InlineData("Acme secures a new credit facility from its lenders.")]
+    [InlineData("Acme completes a debt financing round.")]
+    [InlineData("Acme issues a convertible note to investors.")]
+    public async Task NewCapitalRaisePhrases_YieldSingleCapitalRaiseSignal(string rawText)
+    {
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CapitalRaise.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Theory]
+    [InlineData("Acme cuts outlook for the full year amid weak demand.")]
+    [InlineData("Acme lowers outlook for the next quarter.")]
+    public async Task NewNegativeGuidancePhrases_YieldNegativeGuidanceChange(string rawText)
+    {
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GuidanceChange.ToString(), signal.SignalType);
+        Assert.Equal("Negative", signal.Direction);
+    }
+
+    [Fact]
+    public async Task MultiplePhrasesSameType_YieldSingleDedupedSignal_AndRoundTripValid()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Acme awarded a defence contract; the public procurement was a government grant.",
+            title: "Acme wins NASA work",
+            publishedAtUtc: PublishedAt);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
     public async Task NullEvidence_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(
