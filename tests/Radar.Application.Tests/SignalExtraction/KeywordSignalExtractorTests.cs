@@ -44,8 +44,73 @@ public class KeywordSignalExtractorTests
         var signal = Assert.Single(output.Signals);
         Assert.Equal(SignalType.CustomerWin.ToString(), signal.SignalType);
         Assert.Equal("Positive", signal.Direction);
-        Assert.True(evidence.RawText.Contains(signal.SupportingExcerpt, StringComparison.Ordinal));
+        var composed = (evidence.Title ?? string.Empty) + "\n" + (evidence.RawText ?? string.Empty);
+        Assert.Contains(signal.SupportingExcerpt, composed, StringComparison.Ordinal);
         Assert.Equal(evidence.SourceName, signal.CompanyMention);
+    }
+
+    [Fact]
+    public async Task EventOnlyInTitle_YieldsExpectedSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Acme awarded contract by NASA");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+        Assert.Contains("awarded contract", signal.SupportingExcerpt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task EventOnlyInBody_StillYieldsSignal_Regression()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Today Acme was awarded contract worth millions by a federal agency.",
+            title: "Quarterly newsroom update");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        var composed = (evidence.Title ?? string.Empty) + "\n" + (evidence.RawText ?? string.Empty);
+        Assert.Contains(signal.SupportingExcerpt, composed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SamePhraseInTitleAndBody_YieldsSingleSignal_WithExcerptFromComposedText()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Acme launches a new analytics platform for customers.",
+            title: "Acme launches new platform");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.ProductLaunch.ToString(), signal.SignalType);
+
+        var composed = (evidence.Title ?? string.Empty) + "\n" + (evidence.RawText ?? string.Empty);
+        Assert.Contains(signal.SupportingExcerpt, composed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TitleSourcedExcerpts_RoundTripToValidSignals()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Acme awarded contract and launches new platform",
+            publishedAtUtc: PublishedAt);
+
+        var output = await ExtractAsync(evidence);
+
+        Assert.NotEmpty(output.Signals);
+        foreach (var extracted in output.Signals)
+        {
+            var result = ExtractedSignalMapper.ToSignal(extracted, evidence, CreatedAt);
+            Assert.True(result.IsValid, string.Join("; ", result.Errors));
+        }
     }
 
     [Fact]

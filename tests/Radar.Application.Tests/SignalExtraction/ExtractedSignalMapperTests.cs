@@ -148,6 +148,33 @@ public class ExtractedSignalMapperTests
     }
 
     [Fact]
+    public void ExcerptFoundOnlyInTitle_IsValid_AndMaps()
+    {
+        var evidence = MakeEvidence(PublishedAt);
+        var extracted = MakeExtracted(
+            supportingExcerpt: "Acme signs new customer");
+
+        var result = ExtractedSignalMapper.ToSignal(extracted, evidence, CreatedAt);
+
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+        Assert.NotNull(result.Signal);
+        Assert.Equal("Acme signs new customer", result.Signal!.SupportingExcerpt);
+    }
+
+    [Fact]
+    public void ExcerptFoundOnlyInBody_StillValid_Regression()
+    {
+        var evidence = MakeEvidence(PublishedAt);
+        var extracted = MakeExtracted(
+            supportingExcerpt: "expanding its enterprise footprint significantly");
+
+        var result = ExtractedSignalMapper.ToSignal(extracted, evidence, CreatedAt);
+
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+        Assert.NotNull(result.Signal);
+    }
+
+    [Fact]
     public void ExcerptDifferingOnlyInWhitespaceAndCasing_IsValid()
     {
         var evidence = MakeEvidence(PublishedAt);
