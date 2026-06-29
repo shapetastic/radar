@@ -120,8 +120,8 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
             results.Count);
 
         var summary = new CollectionSummary(
-            feedsChecked, feedsChecked - feedsFailed, feedsFailed, results.Count, failures);
-        return new CollectionResult(results, summary);
+            feedsChecked, feedsChecked - feedsFailed, feedsFailed, results.Count, failures.ToArray());
+        return new CollectionResult(results.ToArray(), summary);
     }
 
     private static IReadOnlyList<string> BuildCompanyHints(

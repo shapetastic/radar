@@ -43,10 +43,11 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
     public async Task<CollectionResult> CollectAsync(
         CollectionContext context, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(context);
+
         // The local-file collector is universe-agnostic: it is the deterministic test/debug source
         // and simply emits whatever JSON documents are on disk, so it ignores the watch universe
         // (context). Company-specific collectors (e.g. RSS) consume context for hint resolution.
-        _ = context;
 
         var directory = _options.SourceDirectory;
 
@@ -99,8 +100,8 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         }
 
         var summary = new CollectionSummary(
-            sourcesChecked, sourcesChecked - sourcesFailed, sourcesFailed, items.Count, failures);
-        return new CollectionResult(items, summary);
+            sourcesChecked, sourcesChecked - sourcesFailed, sourcesFailed, items.Count, failures.ToArray());
+        return new CollectionResult(items.ToArray(), summary);
     }
 
     private async Task<(CollectedEvidence? Item, string? FailureReason)> ReadDocumentAsync(
