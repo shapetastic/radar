@@ -74,11 +74,13 @@ public sealed class Worker : BackgroundService
     {
         var result = await _pipeline.RunAsync(ct).ConfigureAwait(false);
         _logger.LogInformation(
-            "Radar pipeline run completed at {RunAt:o}: {EvidenceNew} new evidence, {SignalsApproved} signals approved, {CompaniesScored} companies scored, report {ReportId}.",
+            "Radar pipeline run completed at {RunAt:o}: {EvidenceNew} new evidence, {SignalsApproved} signals approved, {CompaniesScored} companies scored, {SourcesFailed}/{SourcesChecked} sources unreadable, report {ReportId}.",
             _timeProvider.GetUtcNow(),
             result.EvidenceNew,
             result.SignalsApproved,
             result.CompaniesScored,
+            result.SourcesFailed,
+            result.SourcesChecked,
             result.ReportId);
     }
 }

@@ -40,13 +40,14 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
 
     public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
 
-    public async Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+    public async Task<CollectionResult> CollectAsync(
         CollectionContext context, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(context);
+
         // The local-file collector is universe-agnostic: it is the deterministic test/debug source
         // and simply emits whatever JSON documents are on disk, so it ignores the watch universe
         // (context). Company-specific collectors (e.g. RSS) consume context for hint resolution.
-        _ = context;
 
         var directory = _options.SourceDirectory;
 
@@ -55,7 +56,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
             _logger.LogWarning(
                 "Local file evidence source directory '{SourceDirectory}' does not exist; returning no evidence.",
                 directory);
-            return [];
+            return new CollectionResult([], CollectionSummary.Empty);
         }
 
         List<string> files;
@@ -72,26 +73,39 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
                 ex,
                 "Failed to enumerate evidence files in '{SourceDirectory}'; returning no evidence.",
                 directory);
-            return [];
+            return new CollectionResult([], CollectionSummary.Empty);
         }
 
         var items = new List<CollectedEvidence>(files.Count);
+        var failures = new List<SourceFailure>();
+        var sourcesChecked = 0;
+        var sourcesFailed = 0;
 
         foreach (var path in files)
         {
             ct.ThrowIfCancellationRequested();
 
-            var item = await ReadDocumentAsync(path, ct).ConfigureAwait(false);
+            sourcesChecked++;
+            var (item, failureReason) = await ReadDocumentAsync(path, ct).ConfigureAwait(false);
             if (item is not null)
             {
                 items.Add(item);
             }
+            else
+            {
+                sourcesFailed++;
+                failures.Add(new SourceFailure(
+                    Path.GetFileName(path), null, failureReason ?? "Unknown failure"));
+            }
         }
 
-        return items;
+        var summary = new CollectionSummary(
+            sourcesChecked, sourcesChecked - sourcesFailed, sourcesFailed, items.Count, failures.ToArray());
+        return new CollectionResult(items.ToArray(), summary);
     }
 
-    private async Task<CollectedEvidence?> ReadDocumentAsync(string path, CancellationToken ct)
+    private async Task<(CollectedEvidence? Item, string? FailureReason)> ReadDocumentAsync(
+        string path, CancellationToken ct)
     {
         var fileName = Path.GetFileName(path);
 
@@ -103,7 +117,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogWarning(ex, "Failed to read evidence file '{File}'; skipping.", fileName);
-            return null;
+            return (null, "Failed to read file");
         }
 
         LocalFileEvidenceDocument? doc;
@@ -114,7 +128,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         catch (JsonException ex)
         {
             _logger.LogWarning(ex, "Failed to parse evidence file '{File}' as JSON; skipping.", fileName);
-            return null;
+            return (null, "Invalid JSON");
         }
 
         if (doc is null
@@ -124,7 +138,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
             _logger.LogWarning(
                 "Evidence file '{File}' is missing a title or rawText; skipping.",
                 fileName);
-            return null;
+            return (null, "Missing title or rawText");
         }
 
         var sourceName = string.IsNullOrWhiteSpace(doc.SourceName)
@@ -140,7 +154,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
             metadata["quality"] = doc.Quality;
         }
 
-        return new CollectedEvidence(
+        var evidence = new CollectedEvidence(
             SourceType: SourceType,
             SourceName: sourceName,
             SourceUrl: doc.SourceUrl,
@@ -152,5 +166,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         {
             CompanyHints = [],
         };
+
+        return (evidence, null);
     }
 }

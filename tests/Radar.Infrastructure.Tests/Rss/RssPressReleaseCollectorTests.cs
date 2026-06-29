@@ -57,7 +57,7 @@ public sealed class RssPressReleaseCollectorTests
             [Company(AcmeId, "Acme Corp", "ACME"), Company(GlobexId, "Globex Inc", "GLBX")],
             [feedA, feedB]);
 
-        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).Evidence.ToList();
 
         Assert.Equal(2, items.Count);
         Assert.All(items, i => Assert.Equal(EvidenceSourceType.PressRelease, i.SourceType));
@@ -81,7 +81,7 @@ public sealed class RssPressReleaseCollectorTests
         var reader = new FakeRssFeedReader { ["https://acme.test/rss"] = [Item("News", "https://acme.test/n1")] };
         var context = new CollectionContext([Company(AcmeId, "Acme Corp", ticker: null)], [feed]);
 
-        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).Evidence.ToList();
 
         var item = Assert.Single(items);
         Assert.Equal(["Acme Corp"], item.CompanyHints);
@@ -98,7 +98,7 @@ public sealed class RssPressReleaseCollectorTests
         };
         var context = new CollectionContext([Company(AcmeId, "Acme Corp", "ACME")], [feed]);
 
-        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).Evidence.ToList();
 
         var item = Assert.Single(items);
         Assert.Equal("full body text", item.RawText);
@@ -118,7 +118,7 @@ public sealed class RssPressReleaseCollectorTests
         };
         var context = new CollectionContext([Company(AcmeId, "Acme Corp", "ACME")], [feed]);
 
-        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).Evidence.ToList();
 
         var withSummary = items.Single(i => i.Title == "Has summary");
         Assert.Equal("teaser", withSummary.RawText);
@@ -141,7 +141,7 @@ public sealed class RssPressReleaseCollectorTests
         };
         var context = new CollectionContext([Company(AcmeId, "Acme Corp", "ACME")], [feed]);
 
-        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).Evidence.ToList();
 
         var item = Assert.Single(items);
         Assert.Equal("First", item.Title);
@@ -161,7 +161,7 @@ public sealed class RssPressReleaseCollectorTests
         };
         var context = new CollectionContext([Company(AcmeId, "Acme Corp", "ACME")], [feed]);
 
-        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).Evidence.ToList();
 
         var item = Assert.Single(items);
         Assert.Equal("Real", item.Title);
@@ -176,7 +176,7 @@ public sealed class RssPressReleaseCollectorTests
         var reader = new FakeRssFeedReader();
         var context = new CollectionContext([Company(AcmeId, "Acme Corp", "ACME")], [nonRss]);
 
-        var items = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).Evidence;
 
         Assert.Empty(items);
         Assert.Equal(0, reader.ReadCount);
@@ -191,7 +191,7 @@ public sealed class RssPressReleaseCollectorTests
         var reader = new FakeRssFeedReader { ["https://acme.test/rss"] = [Item("News", "https://acme.test/n1")] };
         var context = new CollectionContext([Company(AcmeId, "Acme Corp", "ACME")], [feed]);
 
-        var items = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).Evidence;
 
         Assert.Single(items);
         Assert.Equal(1, reader.ReadCount);
@@ -216,7 +216,8 @@ public sealed class RssPressReleaseCollectorTests
             [Company(AcmeId, "Acme Corp", "ACME"), Company(GlobexId, "Globex Inc", "GLBX")],
             [feedA, feedB]);
 
-        var items = (await collector.CollectAsync(context, CancellationToken.None)).ToList();
+        var result = await collector.CollectAsync(context, CancellationToken.None);
+        var items = result.Evidence.ToList();
 
         // Only the successful feed contributes evidence; the failed feed produces none and does not throw.
         var item = Assert.Single(items);
@@ -227,6 +228,16 @@ public sealed class RssPressReleaseCollectorTests
         Assert.Contains("Acme IR", warning.Message);
         Assert.Contains("https://acme.test/rss", warning.Message);
         Assert.Contains("HTTP 404", warning.Message);
+
+        // The summary reports one checked-and-failed feed and one succeeded feed.
+        Assert.Equal(2, result.Summary.SourcesChecked);
+        Assert.Equal(1, result.Summary.SourcesSucceeded);
+        Assert.Equal(1, result.Summary.SourcesFailed);
+        Assert.Equal(1, result.Summary.ItemsCollected);
+        var failure = Assert.Single(result.Summary.Failures);
+        Assert.Equal("Acme IR", failure.SourceName);
+        Assert.Equal("https://acme.test/rss", failure.SourceUrl);
+        Assert.Equal("HTTP 404", failure.Reason);
     }
 
     private sealed class FakeRssFeedReader : IRssFeedReader

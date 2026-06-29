@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 
@@ -8,7 +10,8 @@ namespace Radar.Worker.Tests;
 
 public sealed class WorkerTests
 {
-    private static readonly RadarPipelineResult EmptyResult = new(0, 0, 0, 0, 0, 0, 0, null);
+    private static readonly RadarPipelineResult EmptyResult =
+        new(0, 0, 0, 0, 0, 0, 0, null, 0, 0, CollectionSummary.Empty);
 
     [Fact]
     public async Task RunOnce_SeedsBeforePipeline_RunsOnce_AndStopsApplication()
@@ -38,6 +41,44 @@ public sealed class WorkerTests
         Assert.Equal(["seed", "run"], callLog);
         Assert.True(stoppingTriggered);
         Assert.True(lifetime.ApplicationStopping.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task RunCompleted_LogIncludesSourcesCheckedAndFailed()
+    {
+        var callLog = new List<string>();
+        var seeder = new RecordingSeeder(callLog);
+        var result = new RadarPipelineResult(
+            EvidenceCollected: 3,
+            EvidenceNew: 2,
+            SignalsExtracted: 1,
+            SignalsValid: 1,
+            SignalsApproved: 1,
+            SignalsNeedingReview: 0,
+            CompaniesScored: 1,
+            ReportId: null,
+            SourcesChecked: 5,
+            SourcesFailed: 2,
+            Collection: CollectionSummary.Empty);
+        var pipeline = new RecordingPipeline(callLog, result);
+        using var lifetime = new RecordingLifetime();
+        var timeProvider = new FakeTimeProvider();
+        var logger = new CapturingLogger<Worker>();
+
+        var worker = new Worker(
+            seeder,
+            pipeline,
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            timeProvider,
+            logger);
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        var completed = Assert.Single(
+            logger.Entries, e => e.Message.Contains("pipeline run completed"));
+        Assert.Contains("2/5 sources unreadable", completed.Message);
     }
 
     [Fact]
@@ -151,6 +192,23 @@ public sealed class WorkerTests
             onRun?.Invoke(count);
             return Task.FromResult(result);
         }
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     private sealed class RecordingLifetime : IHostApplicationLifetime, IDisposable

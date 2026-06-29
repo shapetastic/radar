@@ -13,6 +13,10 @@ public interface IEvidenceCollector
     /// </summary>
     EvidenceSourceType SourceType { get; }
 
-    Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+    /// <summary>
+    /// Collects raw evidence over the watch universe and returns it alongside an observational
+    /// <see cref="CollectionSummary"/> describing this run's collection health.
+    /// </summary>
+    Task<CollectionResult> CollectAsync(
         CollectionContext context, CancellationToken ct);
 }
