@@ -67,17 +67,36 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
             // FileMode.CreateNew throws if the file already exists, so even under a race two writers
-            // can never overwrite the same immutable final path.
-            await using var stream = new FileStream(
-                path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            // can never overwrite the same immutable final path. FileOptions.Asynchronous enables
+            // true async I/O so WriteAsync doesn't block a thread-pool thread under load.
+            var streamOptions = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous,
+            };
+            await using var stream = new FileStream(path, streamOptions);
             var bytes = Encoding.UTF8.GetBytes(json);
             await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
             return true;
         }
+        catch (IOException ex) when (File.Exists(path))
+        {
+            // Expected dedupe race: a concurrent writer won the CreateNew and created the immutable
+            // final path first. That is a normal skip, not an I/O failure — log at Debug to avoid
+            // noisy warnings during parallel runs.
+            _logger.LogDebug(
+                ex,
+                "Raw evidence file already exists for evidence {EvidenceId} at {Path} (concurrent writer won); skipping write.",
+                evidence.Id,
+                path);
+            return false;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // A disk hiccup (including a CreateNew race losing to a concurrent writer) must never
-            // crash the run; the in-memory repository copy still works.
+            // A genuine disk hiccup (the final path still doesn't exist) must never crash the run;
+            // the in-memory repository copy still works.
             _logger.LogWarning(
                 ex,
                 "Failed to write raw evidence file for evidence {EvidenceId} at {Path}; skipping.",
