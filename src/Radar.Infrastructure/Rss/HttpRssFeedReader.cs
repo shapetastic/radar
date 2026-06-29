@@ -121,7 +121,7 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
                 .ReadElementExtensions<string>("encoded", "http://purl.org/rss/1.0/modules/content/");
             foreach (var value in encoded)
             {
-                if (!string.IsNullOrEmpty(value))
+                if (!string.IsNullOrWhiteSpace(value))
                 {
                     return value;
                 }
@@ -132,6 +132,8 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
             // A missing or unreadable content:encoded extension just yields null; never throw.
         }
 
-        return item.Content is TextSyndicationContent text ? text.Text : null;
+        return item.Content is TextSyndicationContent text && !string.IsNullOrWhiteSpace(text.Text)
+            ? text.Text
+            : null;
     }
 }
