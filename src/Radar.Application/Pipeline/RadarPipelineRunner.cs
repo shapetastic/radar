@@ -33,6 +33,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly ICompanyRepository _companyRepository;
     private readonly IScoringEngine _scoringEngine;
     private readonly IWeeklyReportBuilder _reportBuilder;
+    private readonly IReportFileWriter _reportFileWriter;
     private readonly PipelineOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<RadarPipelineRunner> _logger;
@@ -49,6 +50,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ICompanyRepository companyRepository,
         IScoringEngine scoringEngine,
         IWeeklyReportBuilder reportBuilder,
+        IReportFileWriter reportFileWriter,
         PipelineOptions options,
         TimeProvider timeProvider,
         ILogger<RadarPipelineRunner> logger)
@@ -64,6 +66,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(scoringEngine);
         ArgumentNullException.ThrowIfNull(reportBuilder);
+        ArgumentNullException.ThrowIfNull(reportFileWriter);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -79,6 +82,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _companyRepository = companyRepository;
         _scoringEngine = scoringEngine;
         _reportBuilder = reportBuilder;
+        _reportFileWriter = reportFileWriter;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -216,6 +220,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         if (_options.GenerateReport)
         {
             var report = await _reportBuilder.GenerateAsync(asOfUtc, ct).ConfigureAwait(false);
+            await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
             reportId = report.Report.Id;
         }
 

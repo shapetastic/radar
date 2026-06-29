@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
@@ -47,6 +48,30 @@ public sealed class RadarWorkerServicesTests
 
         Assert.Equal(TimeSpan.FromDays(14), scoring.Window);
         Assert.Equal(5, report.MaxItems);
+    }
+
+    [Fact]
+    public void Graph_Resolves_WithRssCollector()
+    {
+        using var provider = BuildProvider(("Radar:CollectorKind", "rss"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+        Assert.NotNull(provider.GetService<IEvidenceCollector>());
+    }
+
+    [Fact]
+    public void Graph_Resolves_WithLocalFileCollector()
+    {
+        using var provider = BuildProvider(("Radar:CollectorKind", "localfile"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+        Assert.NotNull(provider.GetService<IEvidenceCollector>());
+    }
+
+    [Fact]
+    public void UnknownCollectorKind_Throws()
+    {
+        Assert.Throws<InvalidOperationException>(() => BuildProvider(("Radar:CollectorKind", "bogus")));
     }
 
     [Fact]

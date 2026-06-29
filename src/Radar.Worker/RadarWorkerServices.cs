@@ -43,9 +43,26 @@ internal static class RadarWorkerServices
 
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
-        services.AddLocalFileCollector(options.EvidenceSourceDirectory);
+
+        // Select the evidence collector by configuration (case-insensitive). Fail fast with a clear
+        // message on an unknown kind, mirroring the interval check above.
+        if (string.Equals(options.CollectorKind, "rss", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddRssPressReleaseCollector();
+        }
+        else if (string.Equals(options.CollectorKind, "localfile", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddLocalFileCollector(options.EvidenceSourceDirectory);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Radar:CollectorKind '{options.CollectorKind}' is not supported; valid kinds are \"rss\" and \"localfile\".");
+        }
+
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
-        services.AddFileRawEvidenceStore("data/evidence/raw");
+        services.AddFileRawEvidenceStore(options.EvidenceRawDirectory);
+        services.AddFileReportWriter(options.ReportDirectory);
         services.AddRadarPipeline();
 
         services.AddHostedService<Worker>();
