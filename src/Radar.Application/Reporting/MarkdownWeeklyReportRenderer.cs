@@ -81,6 +81,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         AppendNamedActionSection(sb, model, RadarReportAction.Watch, "Watch");
         AppendNamedActionSection(sb, model, RadarReportAction.Ignore, "Ignore / Low signal");
         AppendSignalsNeedingReview(sb, model);
+        AppendCollectionSummary(sb, model);
 
         return sb.ToString();
     }
@@ -271,6 +272,43 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                 .Append(')')
                 .Append(Lf);
         }
+        sb.Append(Lf);
+    }
+
+    // Transparency footer: how many sources Radar checked this run and how many were unreadable,
+    // plus one bullet per failed source (in the summary's deterministic order). Observational
+    // metadata only — no labels, no scoring, no advice language. Omitted entirely when the model
+    // carries no collection summary, preserving back-compat for direct-model callers.
+    private static void AppendCollectionSummary(StringBuilder sb, WeeklyReportModel model)
+    {
+        var collection = model.Collection;
+        if (collection is null)
+        {
+            return;
+        }
+
+        sb.Append("## Collection summary").Append(Lf);
+        sb.Append(Lf);
+        sb.Append("Radar checked ")
+            .Append(collection.SourcesChecked.ToString(CultureInfo.InvariantCulture))
+            .Append(" source(s) this run; ")
+            .Append(collection.SourcesFailed.ToString(CultureInfo.InvariantCulture))
+            .Append(" could not be read.")
+            .Append(Lf);
+
+        if (collection.Failures.Count > 0)
+        {
+            foreach (var failure in collection.Failures)
+            {
+                sb.Append("- ").Append(failure.SourceName);
+                if (!string.IsNullOrWhiteSpace(failure.SourceUrl))
+                {
+                    sb.Append(" (").Append(failure.SourceUrl).Append(')');
+                }
+                sb.Append(": ").Append(failure.Reason).Append(Lf);
+            }
+        }
+
         sb.Append(Lf);
     }
 }

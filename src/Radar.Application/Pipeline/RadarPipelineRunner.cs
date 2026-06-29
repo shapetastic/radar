@@ -219,7 +219,9 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         Guid? reportId = null;
         if (_options.GenerateReport)
         {
-            var report = await _reportBuilder.GenerateAsync(asOfUtc, ct).ConfigureAwait(false);
+            var report = await _reportBuilder
+                .GenerateAsync(asOfUtc, collected.Summary, ct)
+                .ConfigureAwait(false);
             await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
             reportId = report.Report.Id;
         }

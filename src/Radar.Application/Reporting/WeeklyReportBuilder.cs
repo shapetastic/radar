@@ -3,6 +3,7 @@ namespace Radar.Application.Reporting;
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
+using Radar.Application.Collectors;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -84,8 +85,10 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _logger = logger;
     }
 
-    public async Task<WeeklyReportResult> GenerateAsync(DateTimeOffset periodEndUtc, CancellationToken ct)
+    public async Task<WeeklyReportResult> GenerateAsync(
+        DateTimeOffset periodEndUtc, CollectionSummary collection, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(collection);
         ct.ThrowIfCancellationRequested();
 
         // Enforce the pipeline's UTC-only convention: a non-zero offset would make the persisted
@@ -217,7 +220,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             PeriodEndUtc: periodEndUtc,
             GeneratedAtUtc: generatedAt,
             Entries: entries,
-            SignalsNeedingReview: needsReview);
+            SignalsNeedingReview: needsReview,
+            Collection: collection);
 
         var markdown = _renderer.Render(model);
 
