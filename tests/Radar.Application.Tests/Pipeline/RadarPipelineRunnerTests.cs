@@ -11,6 +11,7 @@ using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Domain.Evidence;
+using Radar.Domain.Reports;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -110,10 +111,27 @@ public sealed class RadarPipelineRunnerTests
         }
     }
 
+    /// <summary>
+    /// A fake <see cref="IReportFileWriter"/> that records every <see cref="RadarReport"/> it is asked
+    /// to write and returns a fixed path. Lets tests assert whether (and which) report the runner
+    /// wrote to disk.
+    /// </summary>
+    private sealed class RecordingReportFileWriter : IReportFileWriter
+    {
+        public List<RadarReport> Written { get; } = new();
+
+        public Task<string> WriteAsync(RadarReport report, CancellationToken ct)
+        {
+            Written.Add(report);
+            return Task.FromResult("written/path.md");
+        }
+    }
+
     private sealed class Harness
     {
         public InMemoryEvidenceRepository Evidence { get; } = new();
         public RecordingRawEvidenceStore RawStore { get; } = new();
+        public RecordingReportFileWriter ReportWriter { get; } = new();
         public InMemoryCompanyRepository Companies { get; } = new();
         public InMemorySignalRepository Signals { get; } = new();
         public InMemoryScoreRepository Scores { get; } = new();
@@ -166,6 +184,7 @@ public sealed class RadarPipelineRunnerTests
                 Companies,
                 scoringEngine,
                 reportBuilder,
+                ReportWriter,
                 options,
                 time,
                 NullLogger<RadarPipelineRunner>.Instance);
@@ -426,6 +445,39 @@ public sealed class RadarPipelineRunnerTests
     }
 
     [Fact]
+    public async Task GenerateReportTrue_WritesBuiltReportToDiskOnce()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // The built report was written to disk exactly once, and it is the same report whose id the
+        // runner returns.
+        var written = Assert.Single(h.ReportWriter.Written);
+        Assert.Equal(result.ReportId, written.Id);
+    }
+
+    [Fact]
+    public async Task GenerateReportFalse_DoesNotWriteReportToDisk()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        Assert.Empty(h.ReportWriter.Written);
+    }
+
+    [Fact]
     public async Task InjectedClock_IsHonoured_NoUtcNowLeak()
     {
         var companyId = Guid.NewGuid();
@@ -553,6 +605,7 @@ public sealed class RadarPipelineRunnerTests
             services.AddRadarApplicationServices();
             services.AddLocalFileCollector(tempDir);
             services.AddFileRawEvidenceStore(Path.Combine(tempDir, "raw"));
+            services.AddFileReportWriter(Path.Combine(tempDir, "reports"));
             services.AddRadarPipeline();
 
             using var provider = services.BuildServiceProvider();

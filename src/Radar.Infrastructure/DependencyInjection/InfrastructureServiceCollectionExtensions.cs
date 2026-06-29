@@ -57,6 +57,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton<IWeeklyReportRenderer, MarkdownWeeklyReportRenderer>();
         services.TryAddSingleton(new WeeklyReportOptions());
         services.AddSingleton<IWeeklyReportBuilder, WeeklyReportBuilder>();
+        // The mapper is a core pipeline service used regardless of which collector is wired, so its
+        // IEvidenceNormalizer dependency is registered here. TryAdd keeps a collector-specific
+        // registration (e.g. AddLocalFileCollector) from conflicting.
+        services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
         services.AddSingleton<CollectedEvidenceMapper>();
         return services;
     }
@@ -72,7 +76,7 @@ public static class InfrastructureServiceCollectionExtensions
     public static IServiceCollection AddLocalFileCollector(
         this IServiceCollection services, string sourceDirectory)
     {
-        services.AddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
+        services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
         services.AddSingleton(new LocalFileEvidenceCollectorOptions { SourceDirectory = sourceDirectory });
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, LocalFileEvidenceCollector>();
@@ -122,6 +126,21 @@ public static class InfrastructureServiceCollectionExtensions
     {
         services.AddSingleton(new FileRawEvidenceStoreOptions { RootDirectory = rootDirectory });
         services.AddSingleton<IRawEvidenceStore, FileRawEvidenceStore>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the file report writer that writes each built weekly report's markdown to
+    /// <c>{rootDirectory}/weekly/radar-weekly-{yyyy-MM-dd}.md</c>. The pipeline runner requires
+    /// <see cref="Radar.Application.Reporting.IReportFileWriter"/>; all file I/O stays in
+    /// Infrastructure. Reports are derived views, so an existing file may be overwritten (AD-1 governs
+    /// evidence immutability only).
+    /// </summary>
+    public static IServiceCollection AddFileReportWriter(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FileReportWriterOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IReportFileWriter, FileReportWriter>();
         return services;
     }
 

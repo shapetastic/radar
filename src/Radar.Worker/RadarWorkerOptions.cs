@@ -3,8 +3,17 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
+    /// <summary>Which evidence collector to run ("rss" | "localfile").</summary>
+    public string CollectorKind { get; init; } = "rss";
+
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
+
+    /// <summary>Root directory for the insert-only raw-evidence file store.</summary>
+    public string EvidenceRawDirectory { get; init; } = "data/evidence/raw";
+
+    /// <summary>Root directory for the weekly markdown report writer.</summary>
+    public string ReportDirectory { get; init; } = "data/reports";
 
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
