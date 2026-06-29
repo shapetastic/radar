@@ -28,6 +28,11 @@ internal sealed record RssFeedReadResult(
     public static RssFeedReadResult Success(IReadOnlyList<RssFeedItem> items) =>
         new(RssFeedReadOutcome.Success, items, Detail: null);
 
-    public static RssFeedReadResult Failure(RssFeedReadOutcome outcome, string detail) =>
-        new(outcome, [], detail);
+    public static RssFeedReadResult Failure(RssFeedReadOutcome outcome, string detail)
+    {
+        if (outcome == RssFeedReadOutcome.Success)
+            throw new ArgumentException("A failure result cannot carry the Success outcome.", nameof(outcome));
+
+        return new(outcome, [], detail);
+    }
 }
