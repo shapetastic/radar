@@ -1,5 +1,7 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Radar.Application.Evidence;
 
@@ -8,14 +10,14 @@ namespace Radar.Application.Evidence;
 /// computes a stable SHA-256 content hash over the canonical title+body string.
 /// Pure function: no I/O, no clock, no randomness.
 /// </summary>
-public sealed class EvidenceNormalizer : IEvidenceNormalizer
+public sealed partial class EvidenceNormalizer : IEvidenceNormalizer
 {
     public NormalizedEvidence Normalize(string? title, string rawText)
     {
         ArgumentNullException.ThrowIfNull(rawText);
 
         var normalizedText = NormalizeBody(rawText);
-        var normalizedTitle = CollapseInlineWhitespace((title ?? string.Empty).Trim());
+        var normalizedTitle = CollapseInlineWhitespace(CleanHtml(title ?? string.Empty).Trim());
 
         var canonical = normalizedTitle + "\n" + normalizedText;
         var contentHash = ComputeHash(canonical);
@@ -23,10 +25,41 @@ public sealed class EvidenceNormalizer : IEvidenceNormalizer
         return new NormalizedEvidence(normalizedText, contentHash);
     }
 
+    /// <summary>
+    /// Strips HTML/XML markup and decodes HTML entities, producing plain text.
+    /// </summary>
+    /// <remarks>
+    /// Ordering is intentional: tags are stripped <b>before</b> entities are decoded.
+    /// Decoding first would turn source-escaped literal text such as <c>&amp;lt;script&amp;gt;</c>
+    /// into <c>&lt;script&gt;</c>, which the tag strip would then wrongly delete. Stripping first
+    /// leaves escaped angle brackets to be decoded into literal <c>&lt;</c>/<c>&gt;</c> text,
+    /// preserving them as content and keeping the transform faithful to the source's intent.
+    /// </remarks>
+    private static string CleanHtml(string raw)
+    {
+        // Drop <script>/<style> blocks entirely (tag + inner text); their bodies are never
+        // human-readable evidence.
+        var stripped = ScriptStyleBlockRegex().Replace(raw, " ");
+
+        // Replace any remaining tag with a single space so block boundaries
+        // (e.g. "...sentence.</p><p>Next...") do not word-join.
+        stripped = TagRegex().Replace(stripped, " ");
+
+        // Decode entities only after tags are gone (see remarks above).
+        var decoded = WebUtility.HtmlDecode(stripped);
+
+        // &nbsp; decodes to a non-breaking space (U+00A0); fold it to a regular space so the
+        // existing inline-whitespace collapse can absorb it like any other run of spaces.
+        return decoded.Replace(' ', ' ');
+    }
+
     private static string NormalizeBody(string rawText)
     {
+        // 0. Strip HTML markup and decode entities before any whitespace work.
+        var cleaned = CleanHtml(rawText);
+
         // 1. Normalize line endings (\r\n and \r -> \n).
-        var text = rawText.Replace("\r\n", "\n").Replace('\r', '\n');
+        var text = cleaned.Replace("\r\n", "\n").Replace('\r', '\n');
 
         var rawLines = text.Split('\n');
 
@@ -111,4 +144,10 @@ public sealed class EvidenceNormalizer : IEvidenceNormalizer
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexStringLower(hash);
     }
+
+    [GeneratedRegex(@"<(script|style)\b[^>]*>.*?</\1>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex ScriptStyleBlockRegex();
+
+    [GeneratedRegex(@"<[^>]*>", RegexOptions.IgnoreCase)]
+    private static partial Regex TagRegex();
 }
