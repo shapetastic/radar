@@ -12,6 +12,16 @@ namespace Radar.Application.Evidence;
 /// </summary>
 public sealed partial class EvidenceNormalizer : IEvidenceNormalizer
 {
+    /// <summary>
+    /// Cleans and normalizes the body text and computes the canonical content hash.
+    /// </summary>
+    /// <remarks>
+    /// The <paramref name="title"/> is cleaned (HTML-stripped, entity-decoded, whitespace-collapsed)
+    /// only to fold it into the <see cref="NormalizedEvidence.ContentHash"/>, which keys deduplication.
+    /// The cleaned title is intentionally <b>not</b> returned: callers keep the title they collected
+    /// (see <c>CollectedEvidenceMapper</c>, which sets <c>EvidenceItem.Title</c> from the raw source
+    /// title). Only the normalized body is propagated to downstream consumers.
+    /// </remarks>
     public NormalizedEvidence Normalize(string? title, string rawText)
     {
         ArgumentNullException.ThrowIfNull(rawText);
@@ -50,7 +60,7 @@ public sealed partial class EvidenceNormalizer : IEvidenceNormalizer
 
         // &nbsp; decodes to a non-breaking space (U+00A0); fold it to a regular space so the
         // existing inline-whitespace collapse can absorb it like any other run of spaces.
-        return decoded.Replace(' ', ' ');
+        return decoded.Replace('\u00A0', ' ');
     }
 
     private static string NormalizeBody(string rawText)
@@ -145,7 +155,7 @@ public sealed partial class EvidenceNormalizer : IEvidenceNormalizer
         return Convert.ToHexStringLower(hash);
     }
 
-    [GeneratedRegex(@"<(script|style)\b[^>]*>.*?</\1>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    [GeneratedRegex(@"<(script|style)\b[^>]*>.*?</\1\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex ScriptStyleBlockRegex();
 
     [GeneratedRegex(@"<[^>]*>", RegexOptions.IgnoreCase)]

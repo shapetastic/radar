@@ -166,6 +166,18 @@ public class EvidenceNormalizerTests
     }
 
     [Fact]
+    public void Normalize_DropsScriptBlock_WithWhitespaceBeforeClosingBracket()
+    {
+        // Closing tags may carry whitespace before '>' (e.g. "</script >"); the block
+        // (tag + body) must still be stripped, not leak its contents into the output.
+        var result = _normalizer.Normalize(
+            "Title",
+            "<style >.a{color:red}</style >Hello<script >x()</script >");
+
+        Assert.Equal("Hello", result.NormalizedText);
+    }
+
+    [Fact]
     public void Normalize_TitleMarkup_CleanedAndReflectedInHash()
     {
         // Two titles differing only by markup that cleans to identical text -> same hash.
