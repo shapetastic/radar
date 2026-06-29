@@ -31,6 +31,12 @@ internal sealed class TempPipelineFixtures : IDisposable
     public string SeedFilePath { get; }
 
     /// <summary>
+    /// The raw-evidence root passed to <c>AddFileRawEvidenceStore</c>. Not pre-created — the store
+    /// creates directories on demand; <see cref="RootDir"/>'s recursive delete on dispose cleans it up.
+    /// </summary>
+    public string RawEvidenceDir => Path.Combine(RootDir, "evidence-raw");
+
+    /// <summary>
     /// A single seed company definition. <see cref="Name"/> is matched against evidence
     /// <c>sourceName</c> during resolution, so it must be a plain multi-word name with no trailing
     /// company-suffix token (inc/corp/ltd/...) that the resolver would strip.
