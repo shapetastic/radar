@@ -8,4 +8,8 @@
     <ProjectReference Include="..\Radar.Domain\Radar.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Radar.Application.Tests" />
+  </ItemGroup>
+
 </Project>
