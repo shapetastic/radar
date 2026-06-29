@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
@@ -196,22 +197,76 @@ public sealed class RssPressReleaseCollectorTests
         Assert.Equal(1, reader.ReadCount);
     }
 
+    [Fact]
+    public async Task CollectAsync_FailedFeed_IsLoggedAndSkippedWhileOtherFeedSucceeds()
+    {
+        var feedA = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-000000000009"), AcmeId, "Acme IR", "https://acme.test/rss");
+        var feedB = Feed(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000009"), GlobexId, "Globex IR", "https://globex.test/rss");
+
+        var reader = new FakeRssFeedReader
+        {
+            ["https://globex.test/rss"] = [Item("Globex opens plant", "https://globex.test/n1")],
+        };
+        reader.SetFailure("https://acme.test/rss", RssFeedReadOutcome.HttpError, "HTTP 404");
+
+        var logger = new CapturingLogger<RssPressReleaseCollector>();
+        var collector = new RssPressReleaseCollector(reader, logger, new FixedTimeProvider(FixedNow));
+
+        var context = new CollectionContext(
+            [Company(AcmeId, "Acme Corp", "ACME"), Company(GlobexId, "Globex Inc", "GLBX")],
+            [feedA, feedB]);
+
+        var items = (await collector.CollectAsync(context, CancellationToken.None)).ToList();
+
+        // Only the successful feed contributes evidence; the failed feed produces none and does not throw.
+        var item = Assert.Single(items);
+        Assert.Equal("Globex IR", item.SourceName);
+        Assert.DoesNotContain(items, i => i.SourceName == "Acme IR");
+
+        var warning = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("Acme IR", warning.Message);
+        Assert.Contains("https://acme.test/rss", warning.Message);
+        Assert.Contains("HTTP 404", warning.Message);
+    }
+
     private sealed class FakeRssFeedReader : IRssFeedReader
     {
-        private readonly Dictionary<string, IReadOnlyList<RssFeedItem>> _byUrl = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, RssFeedReadResult> _byUrl = new(StringComparer.Ordinal);
 
         public int ReadCount { get; private set; }
 
+        // Convenience setter: assigning items registers a successful read for that URL.
         public IReadOnlyList<RssFeedItem> this[string url]
         {
-            set => _byUrl[url] = value;
+            set => _byUrl[url] = RssFeedReadResult.Success(value);
         }
 
-        public Task<IReadOnlyList<RssFeedItem>> ReadAsync(string feedUrl, CancellationToken ct)
+        public void SetFailure(string url, RssFeedReadOutcome outcome, string detail) =>
+            _byUrl[url] = RssFeedReadResult.Failure(outcome, detail);
+
+        public Task<RssFeedReadResult> ReadAsync(string feedUrl, CancellationToken ct)
         {
             ReadCount++;
-            return Task.FromResult(_byUrl.TryGetValue(feedUrl, out var items) ? items : []);
+            return Task.FromResult(
+                _byUrl.TryGetValue(feedUrl, out var result) ? result : RssFeedReadResult.Success([]));
         }
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

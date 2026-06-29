@@ -9,8 +9,9 @@ namespace Radar.Infrastructure.Rss;
 /// <summary>
 /// Reads the per-company RSS source feeds configured on the <see cref="CollectionContext"/> and turns
 /// each new feed item into a raw <see cref="CollectedEvidence"/> press release. Does not score,
-/// resolve, or persist — it only answers "what new public information did we find?" A flaky feed
-/// degrades to no evidence (the reader returns empty); a bad item is skipped. Company hints come only
+/// resolve, or persist — it only answers "what new public information did we find?" A feed that fails
+/// to read contributes no evidence and is logged as a Warning (the reader reports the failure mode); a
+/// bad item is skipped. Company hints come only
 /// from the configured feed→company binding — tickers are never invented (provenance is sacred).
 /// </summary>
 internal sealed class RssPressReleaseCollector : IEvidenceCollector
@@ -53,16 +54,28 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
 
         var results = new List<CollectedEvidence>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var feedsRead = 0;
+        var feedsChecked = 0;
+        var feedsFailed = 0;
 
         foreach (var feed in feeds)
         {
             ct.ThrowIfCancellationRequested();
 
-            var items = await _reader.ReadAsync(feed.Url, ct).ConfigureAwait(false);
-            feedsRead++;
+            var result = await _reader.ReadAsync(feed.Url, ct).ConfigureAwait(false);
+            feedsChecked++;
 
-            foreach (var item in items)
+            if (!result.IsSuccess)
+            {
+                feedsFailed++;
+                _logger.LogWarning(
+                    "RSS feed '{FeedName}' ({FeedUrl}) could not be read: {Detail}; skipping.",
+                    feed.Name,
+                    feed.Url,
+                    result.Detail);
+                continue;
+            }
+
+            foreach (var item in result.Items)
             {
                 if (string.IsNullOrWhiteSpace(item.Title))
                 {
@@ -98,8 +111,9 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
         }
 
         _logger.LogInformation(
-            "RSS press-release collection complete: {FeedsRead} feed(s) read, {ItemsCollected} item(s) collected.",
-            feedsRead,
+            "RSS press-release collection complete: {FeedsChecked} feed(s) checked, {FeedsFailed} failed, {ItemsCollected} item(s) collected.",
+            feedsChecked,
+            feedsFailed,
             results.Count);
 
         return results;
