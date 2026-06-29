@@ -42,7 +42,7 @@ public sealed class RadarPipelineRunnerTests
     {
         public string CollectorName => "FakeEvidenceCollector";
 
-        public string SourceType => "local_file";
+        public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
 
         public Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
             CollectionContext context, CancellationToken ct) =>
@@ -74,7 +74,7 @@ public sealed class RadarPipelineRunnerTests
     {
         public string CollectorName => "ClockStampingCollector";
 
-        public string SourceType => "local_file";
+        public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
 
         public Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
             CollectionContext context, CancellationToken ct)
@@ -198,7 +198,7 @@ public sealed class RadarPipelineRunnerTests
     /// </summary>
     private static CollectedEvidence BuildCollected(string rawText = RawText) =>
         new(
-            SourceType: "local_file",
+            SourceType: EvidenceSourceType.LocalFile,
             SourceName: "Northwind Newsroom",
             SourceUrl: "https://example.com/nw",
             Title: "Northwind Robotics customer win",
@@ -545,7 +545,7 @@ public sealed class RadarPipelineRunnerTests
         // Build collected evidence with NO PublishedAt so the mapped ObservedAtUtc falls back to the
         // clock-stamped CollectedAt. The collector stamps CollectedAt from the advancing clock.
         var template = new CollectedEvidence(
-            SourceType: "local_file",
+            SourceType: EvidenceSourceType.LocalFile,
             SourceName: "Northwind Newsroom",
             SourceUrl: "https://example.com/nw",
             Title: "Northwind Robotics customer win",

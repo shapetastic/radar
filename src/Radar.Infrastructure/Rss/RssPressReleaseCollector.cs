@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 
 using Radar.Application.Collectors;
 using Radar.Domain.Companies;
+using Radar.Domain.Evidence;
 
 namespace Radar.Infrastructure.Rss;
 
@@ -34,10 +35,10 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
 
     public string CollectorName => "RssPressReleaseCollector";
 
-    public string SourceType => "press_release";
+    public EvidenceSourceType SourceType => EvidenceSourceType.PressRelease;
 
     public async Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
-        CollectionContext context, CancellationToken cancellationToken)
+        CollectionContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);
 
@@ -56,9 +57,9 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
 
         foreach (var feed in feeds)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            ct.ThrowIfCancellationRequested();
 
-            var items = await _reader.ReadAsync(feed.Url, cancellationToken).ConfigureAwait(false);
+            var items = await _reader.ReadAsync(feed.Url, ct).ConfigureAwait(false);
             feedsRead++;
 
             foreach (var item in items)

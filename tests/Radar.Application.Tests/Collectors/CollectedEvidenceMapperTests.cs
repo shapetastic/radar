@@ -14,7 +14,7 @@ public sealed class CollectedEvidenceMapperTests
         new(new EvidenceNormalizer(), NullLogger<CollectedEvidenceMapper>.Instance);
 
     private static CollectedEvidence Build(
-        string sourceType = "local_file",
+        EvidenceSourceType sourceType = EvidenceSourceType.LocalFile,
         string sourceName = "Northwind Newsroom",
         string? sourceUrl = "https://example.com/nw",
         string title = "Northwind Robotics customer win",
@@ -51,16 +51,17 @@ public sealed class CollectedEvidenceMapperTests
     }
 
     [Theory]
-    [InlineData("local_file", EvidenceSourceType.LocalFile)]
-    [InlineData("press_release", EvidenceSourceType.PressRelease)]
-    [InlineData("wat", EvidenceSourceType.Manual)]
-    public void ToEvidenceItem_ResolvesSourceType(string sourceType, EvidenceSourceType expected)
+    [InlineData(EvidenceSourceType.LocalFile)]
+    [InlineData(EvidenceSourceType.PressRelease)]
+    [InlineData(EvidenceSourceType.RssFeed)]
+    [InlineData(EvidenceSourceType.NewsArticle)]
+    public void ToEvidenceItem_CarriesDeclaredSourceTypeThroughUnchanged(EvidenceSourceType declared)
     {
         var mapper = CreateMapper();
 
-        var item = mapper.ToEvidenceItem(Build(sourceType: sourceType));
+        var item = mapper.ToEvidenceItem(Build(sourceType: declared));
 
-        Assert.Equal(expected, item.SourceType);
+        Assert.Equal(declared, item.SourceType);
     }
 
     [Fact]

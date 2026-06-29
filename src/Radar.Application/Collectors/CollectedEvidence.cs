@@ -1,14 +1,17 @@
+using Radar.Domain.Evidence;
+
 namespace Radar.Application.Collectors;
 
 /// <summary>
 /// Pre-persistence collection result. A collector produces these raw, un-normalized records; the
 /// <see cref="CollectedEvidenceMapper"/> turns each into an immutable domain
-/// <see cref="Radar.Domain.Evidence.EvidenceItem"/> (normalization, content hashing, quality parsing,
-/// <c>SourceType</c> resolution). <c>Metadata</c> is a free-form provenance bag (e.g. the local
-/// collector puts its <c>sourceFile</c> and declared <c>quality</c> here).
+/// <see cref="EvidenceItem"/> (normalization, content hashing, quality parsing). The
+/// <c>SourceType</c> is collector-declared and carried straight through (no resolution step).
+/// <c>Metadata</c> is a free-form provenance bag (e.g. the local collector puts its
+/// <c>sourceFile</c> and declared <c>quality</c> here).
 /// </summary>
 public sealed record CollectedEvidence(
-    string SourceType,
+    EvidenceSourceType SourceType,
     string SourceName,
     string? SourceUrl,
     string Title,

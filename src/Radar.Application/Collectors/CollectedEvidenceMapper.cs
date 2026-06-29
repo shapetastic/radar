@@ -10,10 +10,11 @@ namespace Radar.Application.Collectors;
 /// <summary>
 /// Pure, deterministic Application service — the single place a raw <see cref="CollectedEvidence"/>
 /// becomes an immutable domain <see cref="EvidenceItem"/>. Centralises normalization
-/// (<see cref="IEvidenceNormalizer"/>), content hashing, quality parsing (AD-7),
-/// <see cref="EvidenceSourceType"/> resolution, and hint/metadata serialization. <c>Id</c> uses
-/// <see cref="Guid.NewGuid"/>; <c>CollectedAt</c> comes from the <see cref="CollectedEvidence"/>
-/// (the collector already stamped the run instant), so no <see cref="TimeProvider"/> is needed.
+/// (<see cref="IEvidenceNormalizer"/>), content hashing, quality parsing (AD-7), and hint/metadata
+/// serialization. The collector-declared <see cref="EvidenceSourceType"/> is carried straight
+/// through. <c>Id</c> uses <see cref="Guid.NewGuid"/>; <c>CollectedAt</c> comes from the
+/// <see cref="CollectedEvidence"/> (the collector already stamped the run instant), so no
+/// <see cref="TimeProvider"/> is needed.
 /// </summary>
 public sealed class CollectedEvidenceMapper
 {
@@ -38,7 +39,7 @@ public sealed class CollectedEvidenceMapper
 
         var normalized = _normalizer.Normalize(collected.Title, collected.RawText);
 
-        var sourceType = ResolveSourceType(collected.SourceType);
+        var sourceType = collected.SourceType;
 
         var quality = ParseQuality(
             collected.Metadata.TryGetValue("quality", out var declaredQuality)
@@ -62,35 +63,6 @@ public sealed class CollectedEvidenceMapper
             CollectedAtUtc: collected.CollectedAt.ToUniversalTime(),
             Quality: quality,
             MetadataJson: metadataJson);
-    }
-
-    /// <summary>
-    /// Resolves a collector's canonical source-type token to an <see cref="EvidenceSourceType"/>
-    /// via a documented, case-insensitive table. Unknown tokens default to
-    /// <see cref="EvidenceSourceType.Manual"/> (skip-don't-throw, logged at Debug).
-    /// </summary>
-    private EvidenceSourceType ResolveSourceType(string? sourceType)
-    {
-        switch (sourceType?.Trim().ToLowerInvariant())
-        {
-            case "local_file":
-            case "localfile":
-                return EvidenceSourceType.LocalFile;
-            case "press_release":
-            case "pressrelease":
-                return EvidenceSourceType.PressRelease;
-            case "rss":
-            case "rss_feed":
-                return EvidenceSourceType.RssFeed;
-            case "news":
-            case "news_article":
-                return EvidenceSourceType.NewsArticle;
-            default:
-                _logger.LogDebug(
-                    "Collected evidence source-type '{SourceType}' is not recognized; defaulting to Manual.",
-                    sourceType);
-                return EvidenceSourceType.Manual;
-        }
     }
 
     /// <summary>

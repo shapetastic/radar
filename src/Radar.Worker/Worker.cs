@@ -9,7 +9,7 @@ namespace Radar.Worker;
 /// logic; all stage behaviour lives behind the injected interfaces. Takes time only from the injected
 /// <see cref="TimeProvider"/> (no inline clock).
 /// </summary>
-public class Worker : BackgroundService
+public sealed class Worker : BackgroundService
 {
     private readonly ICompanyUniverseSeeder _seeder;
     private readonly IRadarPipeline _pipeline;
