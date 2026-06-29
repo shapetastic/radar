@@ -6,22 +6,23 @@ namespace Radar.Application.SignalExtraction;
 
 /// <summary>
 /// Deterministic, keyword-based <see cref="ISignalExtractor"/> for offline pipeline runs and
-/// reproducible tests. It scans the evidence body (<see cref="EvidenceItem.RawText"/>) for a fixed,
-/// small table of phrases mapped to MVP <see cref="SignalType"/>s and emits typed
-/// <see cref="ExtractedSignal"/>s with a verbatim excerpt taken from the matched body text
-/// (provenance). It performs <b>no</b> entity resolution: <see cref="ExtractedSignal.CompanyMention"/>
-/// is the evidence <see cref="EvidenceItem.SourceName"/> placeholder and a company/ticker is never
-/// guessed. The placeholder heuristics here are not a tuned scoring model; the real AI extractor is a
-/// later, human-owned slice.
+/// reproducible tests. It scans the evidence searchable text (<see cref="EvidenceItem.Title"/> joined
+/// to <see cref="EvidenceItem.RawText"/>) for a fixed, small table of phrases mapped to MVP
+/// <see cref="SignalType"/>s and emits typed <see cref="ExtractedSignal"/>s with a verbatim excerpt
+/// taken from the matched title-or-body text (provenance). It performs <b>no</b> entity resolution:
+/// <see cref="ExtractedSignal.CompanyMention"/> is the evidence <see cref="EvidenceItem.SourceName"/>
+/// placeholder and a company/ticker is never guessed. The placeholder heuristics here are not a tuned
+/// scoring model; the real AI extractor is a later, human-owned slice.
 /// </summary>
 public sealed class KeywordSignalExtractor : ISignalExtractor
 {
-    // Window of original-cased body characters captured on either side of a phrase match so the
-    // excerpt carries surrounding context while remaining a verbatim slice of RawText.
+    // Window of original-cased searchable-text characters captured on either side of a phrase match
+    // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
+    // searchable text (Title + "\n" + RawText).
     private const int ExcerptWindow = 80;
 
     // Fixed, ordered, visibly-constant rule table. Phrases are matched case-insensitively as
-    // substrings of the evidence body. The first matching rule for a given SignalType wins
+    // substrings of the evidence searchable text. The first matching rule for a given SignalType wins
     // (deterministic dedupe). All numbers are within domain ranges (Strength/Novelty 1-10,
     // Confidence 0-1) so mapped signals pass SignalValidation. These are placeholder heuristics,
     // not a tuned model.
@@ -70,10 +71,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         ct.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(evidence);
 
-        // Provenance: search and excerpt from the body ONLY. The mapper's excerpt-in-evidence check
-        // validates against RawText only, so a title-drawn excerpt would fail the round-trip.
-        var body = evidence.RawText ?? string.Empty;
-        var lowered = body.ToLowerInvariant();
+        // Provenance: search and excerpt from the composed searchable text (Title + "\n" + RawText).
+        // The mapper's excerpt-in-evidence check validates against the same composition, so a
+        // title-drawn excerpt survives the round-trip.
+        var searchableText = ComposeSearchableText(evidence.Title, evidence.RawText);
 
         var emittedTypes = new HashSet<SignalType>();
         var matches = new List<(KeywordSignalRule Rule, int Index)>();
@@ -83,7 +84,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
             if (emittedTypes.Contains(rule.Type))
                 continue;
 
-            var index = lowered.IndexOf(rule.Phrase.ToLowerInvariant(), StringComparison.Ordinal);
+            // Match case-insensitively directly on the original-cased searchable text so the index
+            // stays aligned with it (a lowercased copy can shift indices for Unicode chars whose
+            // lowercasing changes length, e.g. dotted I) and to avoid extra allocations.
+            var index = searchableText.IndexOf(rule.Phrase, StringComparison.OrdinalIgnoreCase);
             if (index < 0)
                 continue;
 
@@ -108,7 +112,7 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
                 Strength: rule.Strength,
                 Novelty: rule.Novelty,
                 Confidence: rule.Confidence,
-                SupportingExcerpt: BuildExcerpt(body, index, rule.Phrase.Length),
+                SupportingExcerpt: BuildExcerpt(searchableText, index, rule.Phrase.Length),
                 Reason: $"Matched phrase '{rule.Phrase}'"));
         }
 
@@ -122,12 +126,18 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         return Task.FromResult(new ExtractSignalsOutput(signals, summary));
     }
 
-    // Returns a deterministic, verbatim slice of the original-cased body around the match so the
-    // excerpt survives the mapper's provenance check.
-    private static string BuildExcerpt(string body, int matchIndex, int phraseLength)
+    // Returns a deterministic, verbatim slice of the original-cased searchable text around the match
+    // so the excerpt survives the mapper's provenance check.
+    private static string BuildExcerpt(string searchableText, int matchIndex, int phraseLength)
     {
         var start = Math.Max(0, matchIndex - ExcerptWindow);
-        var end = Math.Min(body.Length, matchIndex + phraseLength + ExcerptWindow);
-        return body[start..end];
+        var end = Math.Min(searchableText.Length, matchIndex + phraseLength + ExcerptWindow);
+        return searchableText[start..end];
     }
+
+    // Composed searchable text for an evidence item: Title first (events lead the headline), then a
+    // single newline, then the body. Null/empty fields are treated as the empty string. This must
+    // agree byte-for-byte with the identical helper in ExtractedSignalMapper.
+    private static string ComposeSearchableText(string? title, string? rawText) =>
+        (title ?? string.Empty) + "\n" + (rawText ?? string.Empty);
 }
