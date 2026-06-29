@@ -33,8 +33,9 @@ public sealed class RssPressReleaseCollectorTests
     private static CompanySourceFeed Feed(Guid id, Guid companyId, string name, string url, string feedType = "rss") =>
         new(id, companyId, feedType, name, url, FixedNow);
 
-    private static RssFeedItem Item(string title, string? link, string? summary = "summary", string? id = "id") =>
-        new(id, title, summary, link, FixedNow);
+    private static RssFeedItem Item(
+        string title, string? link, string? summary = "summary", string? id = "id", string? content = null) =>
+        new(id, title, summary, link, FixedNow, content);
 
     private static RssPressReleaseCollector CreateCollector(FakeRssFeedReader reader) =>
         new(reader, NullLogger<RssPressReleaseCollector>.Instance, new FixedTimeProvider(FixedNow));
@@ -83,6 +84,46 @@ public sealed class RssPressReleaseCollectorTests
 
         var item = Assert.Single(items);
         Assert.Equal(["Acme Corp"], item.CompanyHints);
+    }
+
+    [Fact]
+    public async Task CollectAsync_ItemWithContent_PrefersContentForRawText()
+    {
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-000000000007"), AcmeId, "Acme IR", "https://acme.test/rss");
+        var reader = new FakeRssFeedReader
+        {
+            ["https://acme.test/rss"] =
+                [Item("News", "https://acme.test/n1", summary: "teaser", content: "full body text")],
+        };
+        var context = new CollectionContext([Company(AcmeId, "Acme Corp", "ACME")], [feed]);
+
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
+
+        var item = Assert.Single(items);
+        Assert.Equal("full body text", item.RawText);
+    }
+
+    [Fact]
+    public async Task CollectAsync_ContentNull_FallsBackToSummaryThenTitle()
+    {
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-000000000008"), AcmeId, "Acme IR", "https://acme.test/rss");
+        var reader = new FakeRssFeedReader
+        {
+            ["https://acme.test/rss"] =
+            [
+                Item("Has summary", "https://acme.test/n1", summary: "teaser", content: null),
+                Item("Has only title", "https://acme.test/n2", summary: null, content: null),
+            ],
+        };
+        var context = new CollectionContext([Company(AcmeId, "Acme Corp", "ACME")], [feed]);
+
+        var items = (await CreateCollector(reader).CollectAsync(context, CancellationToken.None)).ToList();
+
+        var withSummary = items.Single(i => i.Title == "Has summary");
+        Assert.Equal("teaser", withSummary.RawText);
+
+        var titleOnly = items.Single(i => i.Title == "Has only title");
+        Assert.Equal("Has only title", titleOnly.RawText);
     }
 
     [Fact]

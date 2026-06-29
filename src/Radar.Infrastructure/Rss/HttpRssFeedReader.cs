@@ -94,7 +94,8 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
                         Title: item.Title?.Text ?? string.Empty,
                         Summary: item.Summary?.Text,
                         Link: link,
-                        PublishedAt: item.PublishDate == default ? null : item.PublishDate));
+                        PublishedAt: item.PublishDate == default ? null : item.PublishDate,
+                        Content: ExtractContent(item)));
                 }
 
                 return items;
@@ -105,5 +106,32 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
                 return [];
             }
         }
+    }
+
+    /// <summary>
+    /// Returns the full item body when the feed supplies it: the RSS <c>content:encoded</c> element
+    /// first, then the Atom/syndication <c>content</c> when it is plain text, else <c>null</c>. Raw and
+    /// un-normalized — an unreadable extension never throws.
+    /// </summary>
+    private static string? ExtractContent(SyndicationItem item)
+    {
+        try
+        {
+            var encoded = item.ElementExtensions
+                .ReadElementExtensions<string>("encoded", "http://purl.org/rss/1.0/modules/content/");
+            foreach (var value in encoded)
+            {
+                if (!string.IsNullOrEmpty(value))
+                {
+                    return value;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is XmlException or InvalidOperationException or FormatException)
+        {
+            // A missing or unreadable content:encoded extension just yields null; never throw.
+        }
+
+        return item.Content is TextSyndicationContent text ? text.Text : null;
     }
 }
