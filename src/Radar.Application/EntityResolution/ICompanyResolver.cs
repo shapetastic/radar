@@ -10,4 +10,12 @@ namespace Radar.Application.EntityResolution;
 public interface ICompanyResolver
 {
     Task<CompanyResolutionResult> ResolveAsync(string mentionText, CancellationToken ct);
+
+    /// <summary>
+    /// Resolves a mention, preferring high-confidence collector hints (e.g. the ticker of a
+    /// company-specific feed). Hints are matched against known companies only — an unknown hint is
+    /// ignored, never fabricated into a company.
+    /// </summary>
+    Task<CompanyResolutionResult> ResolveAsync(
+        string mentionText, IReadOnlyList<string> companyHints, CancellationToken ct);
 }

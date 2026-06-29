@@ -192,6 +192,132 @@ public class CompanyResolverTests
     }
 
     [Fact]
+    public async Task Hint_MatchingTicker_ResolvesAtHintConfidence()
+    {
+        var resolver = await BuildResolverAsync(
+            new[] { NewCompany(AcmeId, "Acme Corporation", "ACME") },
+            Array.Empty<CompanyAlias>());
+
+        // The mention alone would not match; the hint (ticker) drives resolution.
+        var result = await resolver.ResolveAsync(
+            "Some Vendor", new[] { "ACME" }, CancellationToken.None);
+
+        Assert.Equal(AcmeId, result.CompanyId);
+        Assert.Equal(0.95m, result.Confidence);
+        Assert.Equal("Company hint match", result.Reason);
+        Assert.Equal("ACME", result.MatchedAlias);
+    }
+
+    [Fact]
+    public async Task Hint_TakesPrecedenceOverMentionMatch()
+    {
+        var resolver = await BuildResolverAsync(
+            new[]
+            {
+                NewCompany(AcmeId, "Acme Corporation", "ACME"),
+                NewCompany(GlobexId, "Globex Corporation", "GLBX"),
+            },
+            Array.Empty<CompanyAlias>());
+
+        // Mention matches Globex by name, but a single unambiguous hint points to Acme: the hint wins.
+        var result = await resolver.ResolveAsync(
+            "Globex Corporation", new[] { "ACME" }, CancellationToken.None);
+
+        Assert.Equal(AcmeId, result.CompanyId);
+        Assert.Equal(0.95m, result.Confidence);
+        Assert.Equal("Company hint match", result.Reason);
+    }
+
+    [Fact]
+    public async Task AmbiguousHints_FallThroughToMentionLogic()
+    {
+        var resolver = await BuildResolverAsync(
+            new[]
+            {
+                NewCompany(AcmeId, "Acme Corporation", "ACME"),
+                NewCompany(GlobexId, "Globex Corporation", "GLBX"),
+            },
+            Array.Empty<CompanyAlias>());
+
+        // Two hints matching two distinct companies are ambiguous: fall through to the mention,
+        // which matches Globex by name.
+        var result = await resolver.ResolveAsync(
+            "Globex Corporation", new[] { "ACME", "GLBX" }, CancellationToken.None);
+
+        Assert.Equal(GlobexId, result.CompanyId);
+        Assert.Equal(1.0m, result.Confidence);
+        Assert.Equal("Exact name match", result.Reason);
+    }
+
+    [Fact]
+    public async Task UnknownHint_FallsThrough_MentionStillResolves()
+    {
+        var resolver = await BuildResolverAsync(
+            new[] { NewCompany(AcmeId, "Acme Corporation", "ACME") },
+            Array.Empty<CompanyAlias>());
+
+        var result = await resolver.ResolveAsync(
+            "Acme Corporation", new[] { "ZZZZ" }, CancellationToken.None);
+
+        Assert.Equal(AcmeId, result.CompanyId);
+        Assert.Equal(1.0m, result.Confidence);
+        Assert.Equal("Exact name match", result.Reason);
+    }
+
+    [Fact]
+    public async Task UnknownHint_AndUnmatchableMention_IsUnresolved()
+    {
+        var resolver = await BuildResolverAsync(
+            new[] { NewCompany(AcmeId, "Acme Corporation", "ACME") },
+            Array.Empty<CompanyAlias>());
+
+        var result = await resolver.ResolveAsync(
+            "Nonexistent Holdings", new[] { "ZZZZ" }, CancellationToken.None);
+
+        Assert.Null(result.CompanyId);
+        Assert.Equal(0m, result.Confidence);
+        Assert.Equal("No match", result.Reason);
+    }
+
+    [Fact]
+    public async Task EmptyHints_MatchSingleArgBehaviour()
+    {
+        var resolver = await BuildResolverAsync(
+            new[] { NewCompany(AcmeId, "Acme Corporation", "ACME") },
+            Array.Empty<CompanyAlias>());
+
+        var singleArg = await resolver.ResolveAsync("Acme Corporation", CancellationToken.None);
+        var emptyHints = await resolver.ResolveAsync(
+            "Acme Corporation", Array.Empty<string>(), CancellationToken.None);
+
+        Assert.Equal(singleArg.CompanyId, emptyHints.CompanyId);
+        Assert.Equal(singleArg.Confidence, emptyHints.Confidence);
+        Assert.Equal(singleArg.Reason, emptyHints.Reason);
+
+        // Empty mention + empty hints still reports "Empty mention".
+        var empty = await resolver.ResolveAsync(
+            "   ", Array.Empty<string>(), CancellationToken.None);
+        Assert.Null(empty.CompanyId);
+        Assert.Equal("Empty mention", empty.Reason);
+    }
+
+    [Fact]
+    public async Task Hint_MatchingNormalizedName_Resolves()
+    {
+        var resolver = await BuildResolverAsync(
+            new[] { NewCompany(AcmeId, "Acme Corporation", "ACME") },
+            Array.Empty<CompanyAlias>());
+
+        // The hint matches by normalized name (not ticker); mention alone would not match.
+        var result = await resolver.ResolveAsync(
+            "Some Vendor", new[] { "Acme Corporation" }, CancellationToken.None);
+
+        Assert.Equal(AcmeId, result.CompanyId);
+        Assert.Equal(0.95m, result.Confidence);
+        Assert.Equal("Company hint match", result.Reason);
+    }
+
+    [Fact]
     public async Task SuffixInsideWord_IsNotStripped()
     {
         // "Incoco" ends with the letters of "inc"/"co" but is a single whole token,
