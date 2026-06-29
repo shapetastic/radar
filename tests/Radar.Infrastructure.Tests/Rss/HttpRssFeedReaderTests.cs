@@ -32,6 +32,76 @@ public sealed class HttpRssFeedReaderTests
         </rss>
         """;
 
+    private const string RssWithContentEncoded = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+          <channel>
+            <title>Acme IR</title>
+            <link>https://acme.test</link>
+            <description>Acme investor news</description>
+            <item>
+              <title>Acme signs contract</title>
+              <link>https://acme.test/news/1</link>
+              <description>Short teaser.</description>
+              <content:encoded>Full body: Acme signed a multi-year contract with a major customer.</content:encoded>
+              <pubDate>Mon, 01 Jun 2026 13:00:00 GMT</pubDate>
+            </item>
+          </channel>
+        </rss>
+        """;
+
+    private const string AtomWithContent = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Acme IR</title>
+          <id>https://acme.test/atom</id>
+          <updated>2026-06-01T13:00:00Z</updated>
+          <entry>
+            <title>Acme signs contract</title>
+            <id>https://acme.test/news/1</id>
+            <link href="https://acme.test/news/1"/>
+            <updated>2026-06-01T13:00:00Z</updated>
+            <summary>Short teaser.</summary>
+            <content type="text">Full body: Acme signed a multi-year contract with a major customer.</content>
+          </entry>
+        </feed>
+        """;
+
+    private const string RssWithWhitespaceContentEncoded = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+          <channel>
+            <title>Acme IR</title>
+            <link>https://acme.test</link>
+            <description>Acme investor news</description>
+            <item>
+              <title>Acme signs contract</title>
+              <link>https://acme.test/news/1</link>
+              <description>Short teaser.</description>
+              <content:encoded>   </content:encoded>
+              <pubDate>Mon, 01 Jun 2026 13:00:00 GMT</pubDate>
+            </item>
+          </channel>
+        </rss>
+        """;
+
+    private const string AtomWithWhitespaceContent = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Acme IR</title>
+          <id>https://acme.test/atom</id>
+          <updated>2026-06-01T13:00:00Z</updated>
+          <entry>
+            <title>Acme signs contract</title>
+            <id>https://acme.test/news/1</id>
+            <link href="https://acme.test/news/1"/>
+            <updated>2026-06-01T13:00:00Z</updated>
+            <summary>Short teaser.</summary>
+            <content type="text">   </content>
+          </entry>
+        </feed>
+        """;
+
     private static HttpRssFeedReader CreateReader(HttpMessageHandler handler) =>
         new(new HttpClient(handler), NullLogger<HttpRssFeedReader>.Instance);
 
@@ -50,6 +120,70 @@ public sealed class HttpRssFeedReaderTests
         Assert.Equal("The widget is now available.", first.Summary);
         Assert.NotNull(first.PublishedAt);
         Assert.Equal(new DateTimeOffset(2026, 6, 1, 13, 0, 0, TimeSpan.Zero), first.PublishedAt!.Value.ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task ReadAsync_RssContentEncoded_CapturedAsContent()
+    {
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, RssWithContentEncoded));
+
+        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        var item = Assert.Single(items);
+        Assert.Equal(
+            "Full body: Acme signed a multi-year contract with a major customer.",
+            item.Content);
+        Assert.Equal("Short teaser.", item.Summary);
+    }
+
+    [Fact]
+    public async Task ReadAsync_AtomContent_CapturedAsContent()
+    {
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, AtomWithContent));
+
+        var items = await reader.ReadAsync("https://acme.test/atom", CancellationToken.None);
+
+        var item = Assert.Single(items);
+        Assert.Equal(
+            "Full body: Acme signed a multi-year contract with a major customer.",
+            item.Content);
+        Assert.Equal("Short teaser.", item.Summary);
+    }
+
+    [Fact]
+    public async Task ReadAsync_WhitespaceContentEncoded_ContentIsNull()
+    {
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, RssWithWhitespaceContentEncoded));
+
+        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        var item = Assert.Single(items);
+        Assert.Null(item.Content);
+        Assert.Equal("Short teaser.", item.Summary);
+    }
+
+    [Fact]
+    public async Task ReadAsync_WhitespaceAtomContent_ContentIsNull()
+    {
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, AtomWithWhitespaceContent));
+
+        var items = await reader.ReadAsync("https://acme.test/atom", CancellationToken.None);
+
+        var item = Assert.Single(items);
+        Assert.Null(item.Content);
+        Assert.Equal("Short teaser.", item.Summary);
+    }
+
+    [Fact]
+    public async Task ReadAsync_NoContentElement_ContentIsNullSummaryPreserved()
+    {
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, ValidRss));
+
+        var items = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        var first = items[0];
+        Assert.Null(first.Content);
+        Assert.Equal("The widget is now available.", first.Summary);
     }
 
     [Fact]

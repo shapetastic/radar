@@ -87,7 +87,7 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
                     SourceName: feed.Name,
                     SourceUrl: item.Link,
                     Title: item.Title,
-                    RawText: item.Summary ?? item.Title,
+                    RawText: item.Content ?? item.Summary ?? item.Title,
                     PublishedAt: item.PublishedAt,
                     CollectedAt: _timeProvider.GetUtcNow(),
                     Metadata: metadata)
