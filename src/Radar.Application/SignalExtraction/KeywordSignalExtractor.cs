@@ -75,7 +75,6 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // The mapper's excerpt-in-evidence check validates against the same composition, so a
         // title-drawn excerpt survives the round-trip.
         var searchableText = ComposeSearchableText(evidence.Title, evidence.RawText);
-        var lowered = searchableText.ToLowerInvariant();
 
         var emittedTypes = new HashSet<SignalType>();
         var matches = new List<(KeywordSignalRule Rule, int Index)>();
@@ -85,7 +84,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
             if (emittedTypes.Contains(rule.Type))
                 continue;
 
-            var index = lowered.IndexOf(rule.Phrase.ToLowerInvariant(), StringComparison.Ordinal);
+            // Match case-insensitively directly on the original-cased searchable text so the index
+            // stays aligned with it (a lowercased copy can shift indices for Unicode chars whose
+            // lowercasing changes length, e.g. dotted I) and to avoid extra allocations.
+            var index = searchableText.IndexOf(rule.Phrase, StringComparison.OrdinalIgnoreCase);
             if (index < 0)
                 continue;
 
