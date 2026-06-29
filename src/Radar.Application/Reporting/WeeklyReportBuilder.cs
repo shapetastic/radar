@@ -159,7 +159,15 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         for (var i = 0; i < ranked.Count; i++)
         {
             var e = ranked[i];
-            var evidence = await BuildEvidenceRefsAsync(e.Current, ct).ConfigureAwait(false);
+
+            // Fetch the snapshot's score-evidence links once and share them across both ref
+            // builders; otherwise each builder hits the score repository for the same links.
+            var links = await _scoreRepository
+                .GetLinksForSnapshotAsync(e.Current.Id, ct)
+                .ConfigureAwait(false);
+
+            var evidence = await BuildEvidenceRefsAsync(e.Current, links, ct).ConfigureAwait(false);
+            var signals = await BuildSignalRefsAsync(e.Current, links, ct).ConfigureAwait(false);
             entries.Add(new WeeklyReportEntry(
                 CompanyId: e.Current.CompanyId,
                 CompanyName: e.Company.Name,
@@ -169,7 +177,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 Action: e.Action.Action,
                 Rationale: e.Action.Rationale,
                 Rank: i + 1,
-                Evidence: evidence));
+                Evidence: evidence,
+                Signals: signals));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.
@@ -245,12 +254,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     }
 
     private async Task<IReadOnlyList<ReportEvidenceRef>> BuildEvidenceRefsAsync(
-        CompanyScoreSnapshot current, CancellationToken ct)
+        CompanyScoreSnapshot current, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct)
     {
-        var links = await _scoreRepository
-            .GetLinksForSnapshotAsync(current.Id, ct)
-            .ConfigureAwait(false);
-
         // Order by ContributionWeight descending, then SignalId (deterministic).
         var ordered = links
             .OrderByDescending(l => l.ContributionWeight)
@@ -293,6 +298,45 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         }
 
         return refs;
+    }
+
+    private async Task<IReadOnlyList<ReportSignalRef>> BuildSignalRefsAsync(
+        CompanyScoreSnapshot current, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct)
+    {
+        // The same signal can back multiple evidence links; collapse to distinct contributing
+        // signals so the "why noticed" block lists each signal once.
+        var distinctSignalIds = links
+            .Select(l => l.SignalId)
+            .Distinct()
+            .ToList();
+
+        var refs = new List<ReportSignalRef>(distinctSignalIds.Count);
+        foreach (var signalId in distinctSignalIds)
+        {
+            var signal = await _signalRepository
+                .GetByIdAsync(signalId, ct)
+                .ConfigureAwait(false);
+
+            if (signal is null)
+            {
+                // Never drop provenance silently: the signal id is cited by the score snapshot but
+                // could not be loaded; warn and skip (the evidence-link block still carries the id).
+                _logger.LogWarning(
+                    "Signal {SignalId} referenced by score snapshot {SnapshotId} was not found; skipping its 'why noticed' line.",
+                    signalId,
+                    current.Id);
+                continue;
+            }
+
+            refs.Add(new ReportSignalRef(signal.Id, signal.Type, signal.Direction, signal.Reason));
+        }
+
+        // Deterministic order: by Type (enum order), then Direction, then SignalId (AD-3 spirit).
+        return refs
+            .OrderBy(r => r.Type)
+            .ThenBy(r => r.Direction)
+            .ThenBy(r => r.SignalId)
+            .ToList();
     }
 
     private sealed record InterimEntry(

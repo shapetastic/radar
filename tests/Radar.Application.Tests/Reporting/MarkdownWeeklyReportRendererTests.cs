@@ -1,6 +1,7 @@
 using Radar.Application.Reporting;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
+using Radar.Domain.Signals;
 using Radar.TestSupport;
 
 namespace Radar.Application.Tests.Reporting;
@@ -21,7 +22,8 @@ public sealed class MarkdownWeeklyReportRendererTests
         string companyName = "Acme Corp",
         string? ticker = "ACME",
         CompanyScoreSnapshot? snapshot = null,
-        IReadOnlyList<ReportEvidenceRef>? evidence = null)
+        IReadOnlyList<ReportEvidenceRef>? evidence = null,
+        IReadOnlyList<ReportSignalRef>? signals = null)
     {
         var snap = snapshot ?? new ScoreSnapshotBuilder().Build();
         return new WeeklyReportEntry(
@@ -33,7 +35,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             Action: action,
             Rationale: "Deterministic rationale.",
             Rank: rank,
-            Evidence: evidence ?? []);
+            Evidence: evidence ?? [],
+            Signals: signals ?? []);
     }
 
     private static WeeklyReportModel CreateModel(
@@ -133,7 +136,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             Action: RadarReportAction.Investigate,
             Rationale: "Deterministic rationale.",
             Rank: 1,
-            Evidence: []);
+            Evidence: [],
+            Signals: []);
         var model = CreateModel([entry]);
 
         Assert.Throws<InvalidOperationException>(() => CreateRenderer().Render(model));
@@ -152,7 +156,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             Action: RadarReportAction.Investigate,
             Rationale: "Deterministic rationale.",
             Rank: 1,
-            Evidence: []);
+            Evidence: [],
+            Signals: []);
         var model = CreateModel([entry]);
 
         Assert.Throws<InvalidOperationException>(() => CreateRenderer().Render(model));
@@ -316,6 +321,11 @@ public sealed class MarkdownWeeklyReportRendererTests
             [
                 new ReportEvidenceRef(
                     Guid.NewGuid(), Guid.NewGuid(), "Source", "https://example.com", "Title", "reason"),
+            ],
+            signals:
+            [
+                new ReportSignalRef(
+                    Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive, "customer win detected"),
             ]);
         var review = new NeedsReviewSignalRef(Guid.NewGuid(), Guid.NewGuid(), "Mention", "summary");
         var model = CreateModel([entry], [review]);
@@ -326,6 +336,53 @@ public sealed class MarkdownWeeklyReportRendererTests
         {
             Assert.DoesNotContain(forbidden, output, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void Render_Signals_Renders_WhyNoticed_Block_In_Model_Order()
+    {
+        var first = new ReportSignalRef(
+            Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive, "Matched phrase 'multi-year deal'.");
+        var second = new ReportSignalRef(
+            Guid.NewGuid(), SignalType.GovernmentContract, SignalDirection.Positive, "Matched phrase 'nasa'.");
+        var model = CreateModel([CreateEntry(RadarReportAction.Investigate, signals: [first, second])]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("- Why noticed:", output);
+        Assert.Contains("  - CustomerWin (Positive): Matched phrase 'multi-year deal'.", output);
+        Assert.Contains("  - GovernmentContract (Positive): Matched phrase 'nasa'.", output);
+
+        // Renderer is a pure formatter: bullets appear in model-supplied order, no re-sorting.
+        var firstIndex = output.IndexOf("CustomerWin (Positive)", StringComparison.Ordinal);
+        var secondIndex = output.IndexOf("GovernmentContract (Positive)", StringComparison.Ordinal);
+        Assert.True(firstIndex >= 0 && secondIndex >= 0);
+        Assert.True(firstIndex < secondIndex, "Signals should render in model-supplied order.");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Render_Signal_With_Empty_Reason_Omits_Trailing_Colon(string reason)
+    {
+        var signal = new ReportSignalRef(
+            Guid.NewGuid(), SignalType.ExecutiveHire, SignalDirection.Neutral, reason);
+        var model = CreateModel([CreateEntry(RadarReportAction.Investigate, signals: [signal])]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("  - ExecutiveHire (Neutral)\n", output);
+        Assert.DoesNotContain("ExecutiveHire (Neutral):", output);
+    }
+
+    [Fact]
+    public void Render_No_Signals_Renders_No_WhyNoticed_Block()
+    {
+        var model = CreateModel([CreateEntry(RadarReportAction.Investigate, signals: [])]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.DoesNotContain("- Why noticed:", output);
     }
 
     [Fact]
@@ -344,6 +401,14 @@ public sealed class MarkdownWeeklyReportRendererTests
                     "https://example.com/a",
                     "Title A",
                     "reason A"),
+            ],
+            signals:
+            [
+                new ReportSignalRef(
+                    Guid.Parse("55555555-5555-5555-5555-555555555555"),
+                    SignalType.CustomerWin,
+                    SignalDirection.Positive,
+                    "reason for signal"),
             ]);
         var review = new NeedsReviewSignalRef(
             Guid.Parse("33333333-3333-3333-3333-333333333333"),

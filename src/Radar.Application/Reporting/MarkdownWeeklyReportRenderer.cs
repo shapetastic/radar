@@ -164,7 +164,35 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             }
         }
 
+        AppendSignals(sb, entry);
+
         sb.Append(Lf);
+    }
+
+    private static void AppendSignals(StringBuilder sb, WeeklyReportEntry entry)
+    {
+        if (entry.Signals.Count == 0)
+        {
+            return;
+        }
+
+        sb.Append("- Why noticed:").Append(Lf);
+        foreach (var signal in entry.Signals)
+        {
+            sb.Append("  - ")
+                .Append(signal.Type.ToString())
+                .Append(" (")
+                .Append(signal.Direction.ToString())
+                .Append(')');
+
+            var reason = signal.Reason.Trim();
+            if (reason.Length > 0)
+            {
+                sb.Append(": ").Append(reason);
+            }
+
+            sb.Append(Lf);
+        }
     }
 
     private static void AppendEvidence(StringBuilder sb, ReportEvidenceRef ev)
