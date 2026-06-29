@@ -39,9 +39,13 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
             NullLogger<LocalFileEvidenceCollector>.Instance,
             new FixedTimeProvider(FixedNow));
 
-    private static Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+    private static Task<CollectionResult> CollectAsync(
         LocalFileEvidenceCollector collector) =>
         collector.CollectAsync(new CollectionContext([]), CancellationToken.None);
+
+    private static async Task<IReadOnlyCollection<CollectedEvidence>> CollectEvidenceAsync(
+        LocalFileEvidenceCollector collector) =>
+        (await CollectAsync(collector)).Evidence;
 
     private void WriteFile(string fileName, string content) =>
         File.WriteAllText(Path.Combine(_tempDir, fileName), content);
@@ -68,7 +72,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         WriteFile("a.json", ValidDocJson("Title A", "Body A"));
         WriteFile("b.json", ValidDocJson("Title B", "Body B"));
 
-        var items = await CollectAsync(CreateCollector());
+        var items = await CollectEvidenceAsync(CreateCollector());
 
         Assert.Equal(2, items.Count);
         Assert.All(items, item =>
@@ -87,7 +91,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         WriteFile("b.json", ValidDocJson("Title B", "Body B"));
         WriteFile("a.json", ValidDocJson("Title A", "Body A"));
 
-        var items = (await CollectAsync(CreateCollector())).ToList();
+        var items = (await CollectAsync(CreateCollector())).Evidence.ToList();
 
         Assert.Equal(2, items.Count);
         Assert.Equal("Title A", items[0].Title);
@@ -102,7 +106,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         WriteFile("no-title.json", """{ "rawText": "has body but no title" }""");
         WriteFile("no-rawtext.json", """{ "title": "has title but no body" }""");
 
-        var items = await CollectAsync(CreateCollector());
+        var items = await CollectEvidenceAsync(CreateCollector());
 
         var item = Assert.Single(items);
         Assert.Equal("Good", item.Title);
@@ -113,9 +117,43 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
     {
         var missing = Path.Combine(_tempDir, "does-not-exist");
 
-        var items = await CollectAsync(CreateCollector(missing));
+        var items = await CollectEvidenceAsync(CreateCollector(missing));
 
         Assert.Empty(items);
+    }
+
+    [Fact]
+    public async Task CollectAsync_OneGoodOneMalformed_SummaryCountsAndNamesFailure()
+    {
+        WriteFile("good.json", ValidDocJson("Good", "Good body"));
+        WriteFile("bad.json", "{ this is not valid json ");
+
+        var result = await CollectAsync(CreateCollector());
+
+        // The good file's evidence is still returned.
+        var item = Assert.Single(result.Evidence);
+        Assert.Equal("Good", item.Title);
+
+        Assert.Equal(2, result.Summary.SourcesChecked);
+        Assert.Equal(1, result.Summary.SourcesSucceeded);
+        Assert.Equal(1, result.Summary.SourcesFailed);
+        Assert.Equal(1, result.Summary.ItemsCollected);
+
+        var failure = Assert.Single(result.Summary.Failures);
+        Assert.Equal("bad.json", failure.SourceName);
+        Assert.Null(failure.SourceUrl);
+        Assert.False(string.IsNullOrWhiteSpace(failure.Reason));
+    }
+
+    [Fact]
+    public async Task CollectAsync_MissingDirectory_SummaryIsEmpty()
+    {
+        var missing = Path.Combine(_tempDir, "does-not-exist");
+
+        var result = await CollectAsync(CreateCollector(missing));
+
+        Assert.Empty(result.Evidence);
+        Assert.Equal(CollectionSummary.Empty, result.Summary);
     }
 
     [Fact]
@@ -123,7 +161,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
     {
         WriteFile("acme-q3.json", ValidDocJson("Title", "Body", sourceName: null));
 
-        var items = await CollectAsync(CreateCollector());
+        var items = await CollectEvidenceAsync(CreateCollector());
 
         var item = Assert.Single(items);
         Assert.Equal("acme-q3", item.SourceName);
@@ -136,7 +174,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
         const string rawText = "Roundtrip body text";
         WriteFile("rt.json", ValidDocJson(title, rawText));
 
-        var items = await CollectAsync(CreateCollector());
+        var items = await CollectEvidenceAsync(CreateCollector());
         var item = Assert.Single(items);
 
         // Raw text is carried through unchanged — normalization/hashing now live in the mapper.
@@ -153,7 +191,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
     {
         WriteFile("q.json", ValidDocJson("Title", "Body", quality: declared));
 
-        var items = await CollectAsync(CreateCollector());
+        var items = await CollectEvidenceAsync(CreateCollector());
 
         var item = Assert.Single(items);
         Assert.Equal(declared, item.Metadata["quality"]);
@@ -164,7 +202,7 @@ public sealed class LocalFileEvidenceCollectorTests : IDisposable
     {
         WriteFile("q.json", ValidDocJson("Title", "Body"));
 
-        var items = await CollectAsync(CreateCollector());
+        var items = await CollectEvidenceAsync(CreateCollector());
 
         var item = Assert.Single(items);
         Assert.False(item.Metadata.ContainsKey("quality"));

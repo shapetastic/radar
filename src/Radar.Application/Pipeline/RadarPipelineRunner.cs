@@ -111,7 +111,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         var context = new CollectionContext(companies, sourceFeeds);
         var collected = await _collector.CollectAsync(context, ct).ConfigureAwait(false);
         var newEvidence = new List<CollectedEvidenceEntry>();
-        foreach (var item in collected)
+        foreach (var item in collected.Evidence)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -227,12 +227,15 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _logger.LogInformation(
             "Pipeline run complete: {EvidenceNew}/{EvidenceCollected} new evidence, " +
             "{SignalsApproved} approved / {SignalsNeedingReview} needs-review signals, " +
-            "{CompaniesScored} companies scored, report {ReportId}.",
+            "{CompaniesScored} companies scored, {SourcesFailed}/{SourcesChecked} sources unreadable, " +
+            "report {ReportId}.",
             evidenceNew,
             evidenceCollected,
             signalsApproved,
             signalsNeedingReview,
             companiesScored,
+            collected.Summary.SourcesFailed,
+            collected.Summary.SourcesChecked,
             reportId?.ToString() ?? "none");
 
         return new RadarPipelineResult(
@@ -243,7 +246,10 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             SignalsApproved: signalsApproved,
             SignalsNeedingReview: signalsNeedingReview,
             CompaniesScored: companiesScored,
-            ReportId: reportId);
+            ReportId: reportId,
+            SourcesChecked: collected.Summary.SourcesChecked,
+            SourcesFailed: collected.Summary.SourcesFailed,
+            Collection: collected.Summary);
     }
 
     /// <summary>

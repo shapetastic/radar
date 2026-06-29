@@ -37,16 +37,28 @@ public sealed class RadarPipelineRunnerTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    /// <summary>A deterministic, in-test evidence collector returning a fixed list.</summary>
-    private sealed class FakeEvidenceCollector(IReadOnlyCollection<CollectedEvidence> items) : IEvidenceCollector
+    /// <summary>
+    /// Wraps an evidence list as a <see cref="CollectionResult"/> with an empty summary, for tests
+    /// that do not care about collection health.
+    /// </summary>
+    private static CollectionResult AsResult(IReadOnlyCollection<CollectedEvidence> items) =>
+        new(items, CollectionSummary.Empty);
+
+    /// <summary>A deterministic, in-test evidence collector returning a fixed result.</summary>
+    private sealed class FakeEvidenceCollector(CollectionResult result) : IEvidenceCollector
     {
+        public FakeEvidenceCollector(IReadOnlyCollection<CollectedEvidence> items)
+            : this(AsResult(items))
+        {
+        }
+
         public string CollectorName => "FakeEvidenceCollector";
 
         public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
 
-        public Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+        public Task<CollectionResult> CollectAsync(
             CollectionContext context, CancellationToken ct) =>
-            Task.FromResult(items);
+            Task.FromResult(result);
     }
 
     /// <summary>
@@ -76,11 +88,11 @@ public sealed class RadarPipelineRunnerTests
 
         public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
 
-        public Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+        public Task<CollectionResult> CollectAsync(
             CollectionContext context, CancellationToken ct)
         {
             var stamped = template with { CollectedAt = clock.GetUtcNow() };
-            return Task.FromResult<IReadOnlyCollection<CollectedEvidence>>([stamped]);
+            return Task.FromResult(AsResult([stamped]));
         }
     }
 
@@ -279,6 +291,34 @@ public sealed class RadarPipelineRunnerTests
         var link = Assert.Single(links);
         Assert.Equal(evidenceId, link.EvidenceId);
         Assert.Equal(signal.Id, link.SignalId);
+    }
+
+    [Fact]
+    public async Task CollectionSummary_IsSurfacedIntoResult()
+    {
+        var companyId = Guid.NewGuid();
+
+        // A collector whose run summary reports two checked sources, one of which failed.
+        var summary = new CollectionSummary(
+            SourcesChecked: 2,
+            SourcesSucceeded: 1,
+            SourcesFailed: 1,
+            ItemsCollected: 1,
+            Failures: [new SourceFailure("Broken Feed", "https://broken.test/rss", "HTTP 500")]);
+        var collector = new FakeEvidenceCollector(new CollectionResult([BuildCollected()], summary));
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // The runner threads the collector's summary into the result unchanged.
+        Assert.Equal(2, result.SourcesChecked);
+        Assert.Equal(1, result.SourcesFailed);
+        Assert.Same(summary, result.Collection);
+        var failure = Assert.Single(result.Collection.Failures);
+        Assert.Equal("Broken Feed", failure.SourceName);
     }
 
     [Fact]

@@ -38,7 +38,7 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
 
     public EvidenceSourceType SourceType => EvidenceSourceType.PressRelease;
 
-    public async Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+    public async Task<CollectionResult> CollectAsync(
         CollectionContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -56,6 +56,7 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var feedsChecked = 0;
         var feedsFailed = 0;
+        var failures = new List<SourceFailure>();
 
         foreach (var feed in feeds)
         {
@@ -67,6 +68,8 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
             if (!result.IsSuccess)
             {
                 feedsFailed++;
+                failures.Add(new SourceFailure(
+                    feed.Name, feed.Url, result.Detail ?? result.Outcome.ToString()));
                 _logger.LogWarning(
                     "RSS feed '{FeedName}' ({FeedUrl}) could not be read: {Detail}; skipping.",
                     feed.Name,
@@ -116,7 +119,9 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
             feedsFailed,
             results.Count);
 
-        return results;
+        var summary = new CollectionSummary(
+            feedsChecked, feedsChecked - feedsFailed, feedsFailed, results.Count, failures);
+        return new CollectionResult(results, summary);
     }
 
     private static IReadOnlyList<string> BuildCompanyHints(
