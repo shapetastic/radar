@@ -93,6 +93,10 @@ public sealed class FileReportWriterTests : IDisposable
         var writer = CreateWriter(rootAsFile);
 
         var path = await writer.WriteAsync(report, CancellationToken.None);
-        Assert.False(string.IsNullOrEmpty(path));
+
+        // Contract: on failure the writer returns the path it *attempted* to write.
+        var expectedPath = Path.Combine(rootAsFile, "weekly", "radar-weekly-2026-02-08.md");
+        Assert.Equal(expectedPath, path);
+        Assert.False(File.Exists(expectedPath), "No file should be created when the write fails.");
     }
 }

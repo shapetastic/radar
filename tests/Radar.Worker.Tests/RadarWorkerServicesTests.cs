@@ -64,6 +64,7 @@ public sealed class RadarWorkerServicesTests
     {
         using var provider = BuildProvider(("Radar:CollectorKind", "localfile"));
 
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
         Assert.NotNull(provider.GetService<IEvidenceCollector>());
     }
 
