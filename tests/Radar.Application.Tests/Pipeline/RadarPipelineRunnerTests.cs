@@ -503,6 +503,39 @@ public sealed class RadarPipelineRunnerTests
     }
 
     [Fact]
+    public async Task GenerateReportTrue_ThreadsCollectionSummaryIntoReportFooter()
+    {
+        var companyId = Guid.NewGuid();
+
+        // A collector whose run summary reports a failed source; the runner must thread it into the
+        // report so the renderer emits the Collection summary footer with that failure.
+        var summary = new CollectionSummary(
+            SourcesChecked: 2,
+            SourcesSucceeded: 1,
+            SourcesFailed: 1,
+            ItemsCollected: 1,
+            Failures: [new SourceFailure("Broken Feed", "https://broken.test/rss", "HTTP 500")]);
+        var collector = new FakeEvidenceCollector(new CollectionResult([BuildCollected()], summary));
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var written = Assert.Single(h.ReportWriter.Written);
+        Assert.Contains("## Collection summary", written.MarkdownContent, StringComparison.Ordinal);
+        Assert.Contains(
+            "Radar checked 2 source(s) this run; 1 could not be read.",
+            written.MarkdownContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "- Broken Feed (https://broken.test/rss): HTTP 500",
+            written.MarkdownContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GenerateReportFalse_DoesNotWriteReportToDisk()
     {
         var companyId = Guid.NewGuid();

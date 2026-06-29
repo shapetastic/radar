@@ -1,3 +1,4 @@
+using Radar.Application.Collectors;
 using Radar.Application.Reporting;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -41,14 +42,16 @@ public sealed class MarkdownWeeklyReportRendererTests
 
     private static WeeklyReportModel CreateModel(
         IReadOnlyList<WeeklyReportEntry>? entries = null,
-        IReadOnlyList<NeedsReviewSignalRef>? signalsNeedingReview = null) =>
+        IReadOnlyList<NeedsReviewSignalRef>? signalsNeedingReview = null,
+        CollectionSummary? collection = null) =>
         new(
             Title: "Radar Weekly",
             PeriodStartUtc: PeriodStart,
             PeriodEndUtc: PeriodEnd,
             GeneratedAtUtc: GeneratedAt,
             Entries: entries ?? [],
-            SignalsNeedingReview: signalsNeedingReview ?? []);
+            SignalsNeedingReview: signalsNeedingReview ?? [],
+            Collection: collection);
 
     [Fact]
     public void Render_Null_Model_Throws()
@@ -474,6 +477,106 @@ public sealed class MarkdownWeeklyReportRendererTests
             "Mention",
             "summary");
         var model = CreateModel([entry], [review]);
+
+        var renderer = CreateRenderer();
+        var first = renderer.Render(model);
+        var second = renderer.Render(model);
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void Render_CollectionSummary_All_Read_Renders_Count_Line_No_Bullets()
+    {
+        var summary = new CollectionSummary(
+            SourcesChecked: 5,
+            SourcesSucceeded: 5,
+            SourcesFailed: 0,
+            ItemsCollected: 12,
+            Failures: []);
+        var model = CreateModel(collection: summary);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("## Collection summary", output);
+        Assert.Contains("Radar checked 5 source(s) this run; 0 could not be read.", output);
+        Assert.DoesNotContain("\n- ", output[output.IndexOf("## Collection summary", StringComparison.Ordinal)..]);
+    }
+
+    [Fact]
+    public void Render_CollectionSummary_Some_Failed_Renders_One_Bullet_Per_Failure_In_Order()
+    {
+        var summary = new CollectionSummary(
+            SourcesChecked: 3,
+            SourcesSucceeded: 1,
+            SourcesFailed: 2,
+            ItemsCollected: 4,
+            Failures:
+            [
+                new SourceFailure("Acme Feed", "https://acme.example/rss", "HTTP 503"),
+                new SourceFailure("Local File", null, "File not found"),
+            ]);
+        var model = CreateModel(collection: summary);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("## Collection summary", output);
+        Assert.Contains("Radar checked 3 source(s) this run; 2 could not be read.", output);
+        Assert.Contains("- Acme Feed (https://acme.example/rss): HTTP 503", output);
+        Assert.Contains("- Local File: File not found", output);
+
+        // URL is omitted when absent.
+        Assert.DoesNotContain("- Local File (", output);
+
+        // Failures render in summary order.
+        var firstIndex = output.IndexOf("- Acme Feed", StringComparison.Ordinal);
+        var secondIndex = output.IndexOf("- Local File", StringComparison.Ordinal);
+        Assert.True(firstIndex >= 0 && secondIndex >= 0);
+        Assert.True(firstIndex < secondIndex, "Failures should render in summary order.");
+    }
+
+    [Fact]
+    public void Render_CollectionSummary_Omitted_When_Null()
+    {
+        var output = CreateRenderer().Render(CreateModel(collection: null));
+
+        Assert.DoesNotContain("## Collection summary", output);
+    }
+
+    [Fact]
+    public void Render_CollectionSummary_Appears_After_Signals_Needing_Review()
+    {
+        var review = new NeedsReviewSignalRef(
+            SignalId: Guid.NewGuid(),
+            EvidenceId: Guid.NewGuid(),
+            CompanyMention: "Beta Inc",
+            Summary: "ambiguous mention");
+        var summary = new CollectionSummary(2, 2, 0, 3, []);
+        var model = CreateModel(signalsNeedingReview: [review], collection: summary);
+
+        var output = CreateRenderer().Render(model);
+
+        var reviewIndex = output.IndexOf("## Signals needing review", StringComparison.Ordinal);
+        var summaryIndex = output.IndexOf("## Collection summary", StringComparison.Ordinal);
+
+        Assert.True(reviewIndex >= 0 && summaryIndex >= 0);
+        Assert.True(reviewIndex < summaryIndex, "Collection summary should appear after Signals needing review.");
+    }
+
+    [Fact]
+    public void Render_CollectionSummary_Is_Deterministic_ByteIdentical()
+    {
+        var summary = new CollectionSummary(
+            SourcesChecked: 3,
+            SourcesSucceeded: 1,
+            SourcesFailed: 2,
+            ItemsCollected: 4,
+            Failures:
+            [
+                new SourceFailure("Acme Feed", "https://acme.example/rss", "HTTP 503"),
+                new SourceFailure("Local File", null, "File not found"),
+            ]);
+        var model = CreateModel(collection: summary);
 
         var renderer = CreateRenderer();
         var first = renderer.Render(model);

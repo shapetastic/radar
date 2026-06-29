@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Radar.Application.Collectors;
 using Radar.Application.Reporting;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -156,7 +157,7 @@ public sealed class WeeklyReportBuilderTests
             h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
             "Multi-launch agreement announced.");
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var markdown = result.Report.MarkdownContent;
         Assert.Contains("- Why noticed:", markdown, StringComparison.Ordinal);
@@ -200,7 +201,7 @@ public sealed class WeeklyReportBuilderTests
                 ContributionWeight: 3),
             default);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var markdown = result.Report.MarkdownContent;
         var whyNoticedIndex = markdown.IndexOf("- Why noticed:", StringComparison.Ordinal);
@@ -243,7 +244,7 @@ public sealed class WeeklyReportBuilderTests
                 ContributionWeight: 4),
             default);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var markdown = result.Report.MarkdownContent;
         Assert.Contains(
@@ -263,7 +264,7 @@ public sealed class WeeklyReportBuilderTests
         // No score-evidence links seeded for this snapshot.
         await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var markdown = result.Report.MarkdownContent;
         Assert.DoesNotContain("- Why noticed:", markdown, StringComparison.Ordinal);
@@ -284,7 +285,7 @@ public sealed class WeeklyReportBuilderTests
             h, excludedCompany, excludedSnapshot, opportunity: 90, name: "Excluded", ticker: "EXC",
             createdAt: BeforePeriod);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         Assert.Single(result.Items);
         Assert.Equal(included, result.Items[0].CompanyId);
@@ -319,7 +320,7 @@ public sealed class WeeklyReportBuilderTests
         await h.Scores.AddSnapshotAsync(prevSnapshot, default);
         await h.Scores.AddSnapshotAsync(currentSnapshot, default);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var item = Assert.Single(result.Items);
         Assert.Equal(currentSnapshotId, item.ScoreSnapshotId);
@@ -339,7 +340,7 @@ public sealed class WeeklyReportBuilderTests
         await SeedCompanyAsync(h, mid, Guid.NewGuid(), opportunity: 55, name: "Mid", ticker: "MID");
         await SeedCompanyAsync(h, high, Guid.NewGuid(), opportunity: 80, name: "High", ticker: "HIGH");
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         Assert.Equal(2, result.Items.Count);
         Assert.Equal(high, result.Items[0].CompanyId);
@@ -357,7 +358,7 @@ public sealed class WeeklyReportBuilderTests
         await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
         var (_, sourceUrl) = await SeedEvidenceLinkAsync(h, snapshotId);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var item = Assert.Single(result.Items);
         Assert.Equal(snapshotId, item.ScoreSnapshotId);
@@ -375,7 +376,7 @@ public sealed class WeeklyReportBuilderTests
         await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 45, name: "B", ticker: "B");
         await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 10, name: "C", ticker: "C");
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var allowed = new[]
         {
@@ -415,7 +416,7 @@ public sealed class WeeklyReportBuilderTests
             .Build();
         await h.Signals.AddAsync(approved, default);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var markdown = result.Report.MarkdownContent;
         Assert.Contains("## Signals needing review", markdown, StringComparison.Ordinal);
@@ -461,7 +462,7 @@ public sealed class WeeklyReportBuilderTests
             .WithObservedAtUtc(observedOldest)
             .Build(), default);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
         var markdown = result.Report.MarkdownContent;
 
         // The two most-recent signals are surfaced; the oldest is dropped by the cap.
@@ -504,7 +505,7 @@ public sealed class WeeklyReportBuilderTests
                 .WithObservedAtUtc(sharedObserved)
                 .Build(), default);
 
-            var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+            var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
             return result.Report.MarkdownContent;
         }
 
@@ -530,7 +531,7 @@ public sealed class WeeklyReportBuilderTests
         await SeedCompanyAsync(h, a, Guid.NewGuid(), opportunity: 80, name: "A", ticker: "A");
         await SeedCompanyAsync(h, b, Guid.NewGuid(), opportunity: 40, name: "B", ticker: "B");
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var stored = await h.Reports.GetByIdAsync(result.Report.Id, default);
         Assert.NotNull(stored);
@@ -550,7 +551,7 @@ public sealed class WeeklyReportBuilderTests
         var h = new Harness();
         // No companies / no in-period snapshots.
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         Assert.Empty(result.Items);
         var markdown = result.Report.MarkdownContent;
@@ -577,7 +578,7 @@ public sealed class WeeklyReportBuilderTests
             var h = new Harness();
             await SeedCompanyAsync(h, companyA, snapshotA, opportunity: 80, name: "A", ticker: "A");
             await SeedCompanyAsync(h, companyB, snapshotB, opportunity: 40, name: "B", ticker: "B");
-            return await h.Builder.GenerateAsync(PeriodEnd, default);
+            return await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
         }
 
         var first = await RunAsync();
@@ -602,7 +603,7 @@ public sealed class WeeklyReportBuilderTests
         var nonUtc = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.FromHours(2));
 
         await Assert.ThrowsAsync<ArgumentException>(
-            () => h.Builder.GenerateAsync(nonUtc, default));
+            () => h.Builder.GenerateAsync(nonUtc, CollectionSummary.Empty, default));
     }
 
     [Theory]
@@ -647,7 +648,7 @@ public sealed class WeeklyReportBuilderTests
             .Build();
         await h.Signals.AddAsync(onStart, default);
 
-        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         var markdown = result.Report.MarkdownContent;
         Assert.DoesNotContain(onStart.Id.ToString(), markdown, StringComparison.Ordinal);
@@ -676,8 +677,40 @@ public sealed class WeeklyReportBuilderTests
             default);
 
         var builder = provider.GetRequiredService<IWeeklyReportBuilder>();
-        var result = await builder.GenerateAsync(PeriodEnd, default);
+        var result = await builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
         Assert.Single(result.Items);
+    }
+
+    [Fact]
+    public async Task AttachesPassedCollectionSummaryToReportFooter()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var summary = new CollectionSummary(
+            SourcesChecked: 4,
+            SourcesSucceeded: 3,
+            SourcesFailed: 1,
+            ItemsCollected: 9,
+            Failures: [new SourceFailure("Acme Feed", "https://acme.example/rss", "HTTP 503")]);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, summary, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("## Collection summary", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "Radar checked 4 source(s) this run; 1 could not be read.", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "- Acme Feed (https://acme.example/rss): HTTP 503", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RejectsNullCollectionSummary()
+    {
+        var h = new Harness();
+
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => h.Builder.GenerateAsync(PeriodEnd, null!, default));
     }
 }
