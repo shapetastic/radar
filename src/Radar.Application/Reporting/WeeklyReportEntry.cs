@@ -13,4 +13,5 @@ public sealed record WeeklyReportEntry(
     RadarReportAction Action,
     string Rationale,
     int Rank,
-    IReadOnlyList<ReportEvidenceRef> Evidence);
+    IReadOnlyList<ReportEvidenceRef> Evidence,
+    IReadOnlyList<ReportSignalRef> Signals);

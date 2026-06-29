@@ -102,6 +102,173 @@ public sealed class WeeklyReportBuilderTests
         return (evidenceId, sourceUrl);
     }
 
+    // Seeds a stored signal plus a score-evidence link (with stored evidence) referencing it, so the
+    // builder's "why noticed" assembly resolves the signal. Returns the signal id.
+    private static async Task<Guid> SeedSignalLinkAsync(
+        Harness h,
+        Guid snapshotId,
+        Guid signalId,
+        SignalType type,
+        SignalDirection direction,
+        string reason)
+    {
+        var signal = new SignalBuilder()
+            .WithId(signalId)
+            .WithType(type)
+            .WithDirection(direction)
+            .WithReason(reason)
+            .Build();
+        await h.Signals.AddAsync(signal, default);
+
+        var evidenceId = Guid.NewGuid();
+        var evidence = new EvidenceBuilder()
+            .WithId(evidenceId)
+            .WithContentHash($"hash-{evidenceId}")
+            .Build();
+        await h.Evidence.AddIfNewAsync(evidence, default);
+
+        var link = new ScoreEvidenceLink(
+            Id: Guid.NewGuid(),
+            ScoreSnapshotId: snapshotId,
+            SignalId: signalId,
+            EvidenceId: evidenceId,
+            ContributionReason: "Contributed to the score.",
+            ContributionWeight: 5);
+        await h.Scores.AddEvidenceLinkAsync(link, default);
+
+        return signalId;
+    }
+
+    [Fact]
+    public async Task WhyNoticedListsDistinctSignalsOrderedByTypeThenDirectionThenId()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
+
+        // GovernmentContract sorts after CustomerWin in enum order, so seeding it first proves the
+        // builder reorders by type.
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.GovernmentContract, SignalDirection.Positive,
+            "NASA-related contract evidence found.");
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Multi-launch agreement announced.");
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("- Why noticed:", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "  - CustomerWin (Positive): Multi-launch agreement announced.",
+            markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "  - GovernmentContract (Positive): NASA-related contract evidence found.",
+            markdown, StringComparison.Ordinal);
+
+        // Ordered by Type (enum): CustomerWin before GovernmentContract.
+        var customerIndex = markdown.IndexOf("CustomerWin (Positive)", StringComparison.Ordinal);
+        var govIndex = markdown.IndexOf("GovernmentContract (Positive)", StringComparison.Ordinal);
+        Assert.True(customerIndex < govIndex, "Signals should be ordered by type.");
+    }
+
+    [Fact]
+    public async Task WhyNoticedCollapsesDuplicateSignalIdsToOneBullet()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
+
+        var signalId = Guid.NewGuid();
+        // First link seeds the signal; the second link references the same signal id.
+        await SeedSignalLinkAsync(
+            h, snapshotId, signalId, SignalType.CustomerWin, SignalDirection.Positive,
+            "Unique customer-win reason.");
+        var dupEvidenceId = Guid.NewGuid();
+        await h.Evidence.AddIfNewAsync(
+            new EvidenceBuilder().WithId(dupEvidenceId).WithContentHash($"hash-{dupEvidenceId}").Build(),
+            default);
+        await h.Scores.AddEvidenceLinkAsync(
+            new ScoreEvidenceLink(
+                Id: Guid.NewGuid(),
+                ScoreSnapshotId: snapshotId,
+                SignalId: signalId,
+                EvidenceId: dupEvidenceId,
+                ContributionReason: "Second link, same signal.",
+                ContributionWeight: 3),
+            default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+
+        var markdown = result.Report.MarkdownContent;
+        var whyNoticedIndex = markdown.IndexOf("- Why noticed:", StringComparison.Ordinal);
+        Assert.True(whyNoticedIndex >= 0);
+
+        // The reason text appears exactly once in the "why noticed" area.
+        var first = markdown.IndexOf("Unique customer-win reason.", StringComparison.Ordinal);
+        var next = markdown.IndexOf(
+            "Unique customer-win reason.", first + 1, StringComparison.Ordinal);
+        Assert.True(first >= 0, "Reason should appear once.");
+        Assert.Equal(-1, next);
+    }
+
+    [Fact]
+    public async Task WhyNoticedSkipsMissingSignalWithoutThrowingAndSurfacesPresentOnes()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
+
+        // A present signal that should render.
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Present signal reason.");
+
+        // A link whose signal is NOT stored (no SeedSignalLinkAsync) — must be skipped, not thrown.
+        var missingSignalId = Guid.NewGuid();
+        var missingEvidenceId = Guid.NewGuid();
+        await h.Evidence.AddIfNewAsync(
+            new EvidenceBuilder().WithId(missingEvidenceId).WithContentHash($"hash-{missingEvidenceId}").Build(),
+            default);
+        await h.Scores.AddEvidenceLinkAsync(
+            new ScoreEvidenceLink(
+                Id: Guid.NewGuid(),
+                ScoreSnapshotId: snapshotId,
+                SignalId: missingSignalId,
+                EvidenceId: missingEvidenceId,
+                ContributionReason: "Link to a missing signal.",
+                ContributionWeight: 4),
+            default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains(
+            "  - CustomerWin (Positive): Present signal reason.", markdown, StringComparison.Ordinal);
+        // The missing signal's id should not appear in the "why noticed" block (it has no bullet).
+        var whyNoticedIndex = markdown.IndexOf("- Why noticed:", StringComparison.Ordinal);
+        var whyNoticedTail = markdown[whyNoticedIndex..];
+        Assert.DoesNotContain(missingSignalId.ToString(), whyNoticedTail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NoContributingSignalsYieldsNoWhyNoticedBlock()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        // No score-evidence links seeded for this snapshot.
+        await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.DoesNotContain("- Why noticed:", markdown, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task IncludesCompanyWithInPeriodSnapshotAndExcludesPriorOnly()
     {
