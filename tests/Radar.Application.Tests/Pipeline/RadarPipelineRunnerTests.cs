@@ -318,6 +318,18 @@ public sealed class RadarPipelineRunnerTests
     }
 
     [Fact]
+    public void Constructor_WithNoCollectors_FailsFast()
+    {
+        // DI supplies an empty enumerable when no collector is registered; the runner must reject it
+        // rather than "succeed" while silently collecting zero evidence.
+        var extractor = new AnyEvidenceSignalExtractor(new([], "summary"));
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => new Harness(Array.Empty<IEvidenceCollector>(), extractor, new PipelineOptions()));
+        Assert.Equal("collectors", ex.ParamName);
+    }
+
+    [Fact]
     public async Task HappyPath_FullChain_PersistsAndKeepsProvenance()
     {
         var companyId = Guid.NewGuid();

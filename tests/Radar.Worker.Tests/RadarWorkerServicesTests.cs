@@ -111,6 +111,26 @@ public sealed class RadarWorkerServicesTests
         Assert.Contains("bogus", ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void WhitespaceCollectorEntry_FailsFast_WithClearMessage()
+    {
+        // A blank entry must fail fast with a dedicated message rather than falling through to the
+        // unknown-kind branch as the unhelpful "kind ' ' is not supported".
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => BuildProvider(("Radar:Collectors:0", "   ")));
+        Assert.Contains("must not be null, empty, or whitespace", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CollectorKind_IsTrimmed_BeforeMatching()
+    {
+        // Surrounding whitespace is normalized away so a padded but otherwise valid kind still
+        // registers its collector rather than tripping the unknown-kind branch.
+        using var provider = BuildProvider(("Radar:Collectors:0", "  rss  "));
+
+        Assert.Single(provider.GetServices<IEvidenceCollector>());
+    }
+
     // NOTE: the empty-list fail-fast in AddRadarWorker (Collectors null/empty ->
     // InvalidOperationException) is intentionally not covered by a config-driven test here: the
     // Microsoft.Extensions.Configuration binder only replaces the RadarWorkerOptions.Collectors default

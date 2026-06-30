@@ -89,6 +89,18 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _collectors = collectors
             .OrderBy(c => c.CollectorName, StringComparer.Ordinal)
             .ToList();
+
+        // Fail fast on an empty enumerable: DI happily supplies zero collectors when none are
+        // registered, which would otherwise let the pipeline "succeed" while silently collecting no
+        // evidence. This restores the fail-fast guarantee the previous single-collector constructor
+        // gave for free.
+        if (_collectors.Count == 0)
+        {
+            throw new ArgumentException(
+                "At least one IEvidenceCollector must be registered; the pipeline cannot run with no collectors.",
+                nameof(collectors));
+        }
+
         _mapper = mapper;
         _evidenceRepository = evidenceRepository;
         _rawEvidenceStore = rawEvidenceStore;

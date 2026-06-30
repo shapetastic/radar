@@ -55,8 +55,17 @@ internal static class RadarWorkerServices
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var kind in options.Collectors)
+        foreach (var rawKind in options.Collectors)
         {
+            // Validate/normalize first so a null/empty/whitespace entry fails fast with a clear
+            // message instead of falling through to the "unknown kind" branch as "kind '' ...".
+            if (string.IsNullOrWhiteSpace(rawKind))
+            {
+                throw new InvalidOperationException(
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\" and \"localfile\".");
+            }
+
+            var kind = rawKind.Trim();
             if (!seenKinds.Add(kind))
             {
                 continue;
