@@ -148,11 +148,24 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 }
             }
 
+            // A company scored from zero in-window signals has no score-evidence links behind its
+            // snapshot. That is an absence of data, not an opportunity, so it must not surface as an
+            // all-zero "Highest opportunity" row (spec 53). Fetch the links here (rather than only
+            // for survivors) so we can test the actual provenance signal — zero links — and reuse
+            // the same links when building the entry, avoiding a second repository round-trip per
+            // surviving company.
+            var links = await _scoreRepository
+                .GetLinksForSnapshotAsync(current.Id, ct)
+                .ConfigureAwait(false);
+
+            if (links.Count == 0)
+            {
+                continue; // no evidence behind the score → not surfaced
+            }
+
             var action = _policy.Decide(new ReportActionContext(current, previous));
 
-            // Evidence is resolved later, only for entries that survive ranking/capping, so we
-            // avoid per-company score-link and evidence lookups that would be discarded by Take().
-            interim.Add(new InterimEntry(company, current, action));
+            interim.Add(new InterimEntry(company, current, action, links));
         }
 
         // Rank by OpportunityScore descending, then CompanyId ascending (deterministic, AD-3 spirit).
@@ -167,11 +180,9 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         {
             var e = ranked[i];
 
-            // Fetch the snapshot's score-evidence links once and share them across both ref
-            // builders; otherwise each builder hits the score repository for the same links.
-            var links = await _scoreRepository
-                .GetLinksForSnapshotAsync(e.Current.Id, ct)
-                .ConfigureAwait(false);
+            // Reuse the score-evidence links already fetched (and proven non-empty) during the
+            // candidate loop; both ref builders share them, so survivors are never double-fetched.
+            var links = e.Links;
 
             var evidence = await BuildEvidenceRefsAsync(e.Current, links, ct).ConfigureAwait(false);
             var signals = await BuildSignalRefsAsync(e.Current, links, ct).ConfigureAwait(false);
@@ -384,5 +395,6 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private sealed record InterimEntry(
         Company Company,
         CompanyScoreSnapshot Current,
-        ReportActionResult Action);
+        ReportActionResult Action,
+        IReadOnlyList<ScoreEvidenceLink> Links);
 }

@@ -61,7 +61,8 @@ public sealed class WeeklyReportBuilderTests
         string ticker = "ACME",
         DateTimeOffset? createdAt = null,
         int trajectory = 50,
-        int evidenceConfidence = 50)
+        int evidenceConfidence = 50,
+        bool withLink = true)
     {
         var company = new CompanyBuilder()
             .WithId(companyId)
@@ -79,6 +80,39 @@ public sealed class WeeklyReportBuilderTests
             .WithCreatedAtUtc(createdAt ?? InPeriod)
             .Build();
         await h.Scores.AddSnapshotAsync(snapshot, default);
+
+        // A company surfaces in the report only when its snapshot has at least one score-evidence
+        // link (spec 53: zero-signal snapshots are an absence of data, not an opportunity). Seed a
+        // default link so the company surfaces, unless the caller explicitly wants a zero-signal
+        // snapshot (withLink: false). Ids are derived deterministically from the snapshot id so two
+        // independent harnesses seeded with identical ids produce identical reports (AD-3).
+        if (withLink)
+        {
+            var evidenceId = DeriveGuid(snapshotId, 0xE0);
+            var evidence = new EvidenceBuilder()
+                .WithId(evidenceId)
+                .WithContentHash($"hash-{evidenceId}")
+                .Build();
+            await h.Evidence.AddIfNewAsync(evidence, default);
+
+            var link = new ScoreEvidenceLink(
+                Id: DeriveGuid(snapshotId, 0x11),
+                ScoreSnapshotId: snapshotId,
+                SignalId: DeriveGuid(snapshotId, 0x51),
+                EvidenceId: evidenceId,
+                ContributionReason: "Contributed to the score.",
+                ContributionWeight: 5);
+            await h.Scores.AddEvidenceLinkAsync(link, default);
+        }
+    }
+
+    // Derives a deterministic Guid from a base Guid by XORing its last byte with a tag, so seeded
+    // link/evidence/signal ids are stable across independent harness runs (determinism tests).
+    private static Guid DeriveGuid(Guid baseId, byte tag)
+    {
+        var bytes = baseId.ToByteArray();
+        bytes[^1] ^= tag;
+        return new Guid(bytes);
     }
 
     private static async Task<(Guid evidenceId, string sourceUrl)> SeedEvidenceLinkAsync(
@@ -258,16 +292,18 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
-    public async Task NoContributingSignalsYieldsNoWhyNoticedBlock()
+    public async Task NoResolvableSignalsYieldsNoWhyNoticedBlock()
     {
         var h = new Harness();
         var companyId = Guid.NewGuid();
         var snapshotId = Guid.NewGuid();
-        // No score-evidence links seeded for this snapshot.
+        // The default link surfaces the company (spec 53) but references an unresolved signal id, so
+        // there is no "why noticed" bullet to render.
         await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
 
         var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
+        Assert.Single(result.Items);
         var markdown = result.Report.MarkdownContent;
         Assert.DoesNotContain("- Why noticed:", markdown, StringComparison.Ordinal);
     }
@@ -321,6 +357,8 @@ public sealed class WeeklyReportBuilderTests
         await h.Companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
         await h.Scores.AddSnapshotAsync(prevSnapshot, default);
         await h.Scores.AddSnapshotAsync(currentSnapshot, default);
+        // The current snapshot needs ≥1 score-evidence link to surface (spec 53).
+        await SeedEvidenceLinkAsync(h, currentSnapshotId);
 
         var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
 
@@ -349,6 +387,56 @@ public sealed class WeeklyReportBuilderTests
         Assert.Equal(1, result.Items[0].Rank);
         Assert.Equal(mid, result.Items[1].CompanyId);
         Assert.Equal(2, result.Items[1].Rank);
+    }
+
+    [Fact]
+    public async Task ExcludesZeroSignalCompanyAndSurfacesSignalBearingOnesRanked()
+    {
+        var h = new Harness();
+
+        // Two signal-bearing companies (default link) and one zero-signal company. The zero-signal
+        // company has the HIGHEST opportunity to prove inclusion is decided by provenance (links),
+        // not by the opportunity score (spec 53).
+        var high = Guid.NewGuid();
+        var low = Guid.NewGuid();
+        var zeroSignal = Guid.NewGuid();
+        await SeedCompanyAsync(h, high, Guid.NewGuid(), opportunity: 70, name: "High", ticker: "HIGH");
+        await SeedCompanyAsync(h, low, Guid.NewGuid(), opportunity: 40, name: "Low", ticker: "LOW");
+        await SeedCompanyAsync(
+            h, zeroSignal, Guid.NewGuid(), opportunity: 99, name: "ZeroSignal", ticker: "ZERO",
+            withLink: false);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        // Only the two signal-bearing companies surface, ranked by opportunity descending.
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal(high, result.Items[0].CompanyId);
+        Assert.Equal(1, result.Items[0].Rank);
+        Assert.Equal(low, result.Items[1].CompanyId);
+        Assert.Equal(2, result.Items[1].Rank);
+        Assert.DoesNotContain(result.Items, i => i.CompanyId == zeroSignal);
+
+        // The zero-signal company never appears in the rendered "Highest opportunity" list.
+        Assert.DoesNotContain("ZeroSignal", result.Report.MarkdownContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AllZeroSignalRunYieldsEmptyHighestOpportunityWithoutError()
+    {
+        var h = new Harness();
+
+        // Every in-period company has zero score-evidence links.
+        await SeedCompanyAsync(
+            h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 80, name: "A", ticker: "A", withLink: false);
+        await SeedCompanyAsync(
+            h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 40, name: "B", ticker: "B", withLink: false);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        Assert.Empty(result.Items);
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("# Radar Weekly", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("(no linked evidence)", markdown, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -814,13 +902,25 @@ public sealed class WeeklyReportBuilderTests
         var companies = provider.GetRequiredService<Radar.Application.Abstractions.Persistence.ICompanyRepository>();
         var scores = provider.GetRequiredService<Radar.Application.Abstractions.Persistence.IScoreRepository>();
         var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
         await companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
         await scores.AddSnapshotAsync(
             new ScoreSnapshotBuilder()
+                .WithId(snapshotId)
                 .WithCompanyId(companyId)
                 .WithOpportunityScore(70)
                 .WithCreatedAtUtc(InPeriod)
                 .Build(),
+            default);
+        // The snapshot needs ≥1 score-evidence link to surface (spec 53).
+        await scores.AddEvidenceLinkAsync(
+            new ScoreEvidenceLink(
+                Id: Guid.NewGuid(),
+                ScoreSnapshotId: snapshotId,
+                SignalId: Guid.NewGuid(),
+                EvidenceId: Guid.NewGuid(),
+                ContributionReason: "Contributed to the score.",
+                ContributionWeight: 5),
             default);
 
         var builder = provider.GetRequiredService<IWeeklyReportBuilder>();
