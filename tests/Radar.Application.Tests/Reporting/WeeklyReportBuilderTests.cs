@@ -464,6 +464,44 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
+    public async Task NeedsReviewDoesNotDoublePrefixWhenSummaryAlreadyStartsWithDecision()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var signalId = Guid.NewGuid();
+        var signal = new SignalBuilder()
+            .WithId(signalId)
+            .WithReviewStatus(SignalReviewStatus.NeedsHumanReview)
+            .WithCompanyMention("Beta Inc")
+            .WithReason("Matched phrase 'partnership'.")
+            .WithObservedAtUtc(InPeriod)
+            .Build();
+        await h.Signals.AddAsync(signal, default);
+
+        // DeterministicSignalReviewer writes summaries already prefixed with the decision; the
+        // builder must not render "EscalateToHuman: EscalateToHuman: 2 issue(s).".
+        await h.SignalReviews.AddAsync(
+            new Radar.Domain.Signals.SignalReview(
+                Id: Guid.NewGuid(),
+                SignalId: signalId,
+                ReviewerName: "radar-signal-reviewer",
+                Decision: SignalReviewDecision.EscalateToHuman,
+                Summary: "EscalateToHuman: 2 issue(s).",
+                IssuesJson: null,
+                ReviewedAtUtc: InPeriod),
+            default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains(
+            $"- Beta Inc: Matched phrase 'partnership'. — EscalateToHuman: 2 issue(s). (signal {signalId})",
+            markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("EscalateToHuman: EscalateToHuman:", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task NeedsReviewSurfacesLatestStoredReviewWhenMultipleExist()
     {
         var h = new Harness();

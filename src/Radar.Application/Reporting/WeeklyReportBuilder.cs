@@ -221,9 +221,21 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 .GetBySignalAsync(s.Id, ct)
                 .ConfigureAwait(false);
 
-            var reviewReason = reviews.Count > 0
-                ? $"{reviews[^1].Decision}: {reviews[^1].Summary}"
-                : "Pending review";
+            string reviewReason;
+            if (reviews.Count > 0)
+            {
+                var latest = reviews[^1];
+                // Some reviewers (e.g. DeterministicSignalReviewer) already prefix the Summary with
+                // the decision; don't double it up (e.g. "EscalateToHuman: EscalateToHuman: ...").
+                var decisionPrefix = $"{latest.Decision}: ";
+                reviewReason = latest.Summary.StartsWith(decisionPrefix, StringComparison.Ordinal)
+                    ? latest.Summary
+                    : decisionPrefix + latest.Summary;
+            }
+            else
+            {
+                reviewReason = "Pending review";
+            }
 
             needsReview.Add(new NeedsReviewSignalRef(
                 SignalId: s.Id,
