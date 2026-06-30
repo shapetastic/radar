@@ -37,6 +37,12 @@ internal sealed class TempPipelineFixtures : IDisposable
     public string RawEvidenceDir => Path.Combine(RootDir, "evidence-raw");
 
     /// <summary>
+    /// The signals root passed to <c>AddFileSignalStore</c>. Not pre-created — the store creates
+    /// directories on demand; <see cref="RootDir"/>'s recursive delete on dispose cleans it up.
+    /// </summary>
+    public string SignalsDir => Path.Combine(RootDir, "signals");
+
+    /// <summary>
     /// A single seed company definition. <see cref="Name"/> is matched against evidence
     /// <c>sourceName</c> during resolution, so it must be a plain multi-word name with no trailing
     /// company-suffix token (inc/corp/ltd/...) that the resolver would strip.

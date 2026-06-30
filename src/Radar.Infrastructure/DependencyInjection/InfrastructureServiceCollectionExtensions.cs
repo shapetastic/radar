@@ -9,6 +9,7 @@ using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
+using Radar.Application.Signals;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Rss;
@@ -127,6 +128,22 @@ public static class InfrastructureServiceCollectionExtensions
     {
         services.AddSingleton(new FileRawEvidenceStoreOptions { RootDirectory = rootDirectory });
         services.AddSingleton<IRawEvidenceStore, FileRawEvidenceStore>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the file signal store that mirrors each reviewed
+    /// <see cref="Radar.Domain.Signals.Signal"/> (with its embedded review) to
+    /// <c>{rootDirectory}/{yyyy}/{MM}/{signalId}.json</c> (AD-8). The pipeline runner requires
+    /// <see cref="Radar.Application.Signals.ISignalFileStore"/>; all file I/O stays in Infrastructure.
+    /// Signals are upsert-by-Id, so an existing file is overwritten last-write-wins (AD-1 governs
+    /// evidence immutability only).
+    /// </summary>
+    public static IServiceCollection AddFileSignalStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FileSignalStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<ISignalFileStore, FileSignalStore>();
         return services;
     }
 

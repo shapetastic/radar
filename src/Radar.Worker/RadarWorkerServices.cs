@@ -62,6 +62,7 @@ internal static class RadarWorkerServices
 
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
         services.AddFileRawEvidenceStore(options.EvidenceRawDirectory);
+        services.AddFileSignalStore(options.SignalsDirectory);
         services.AddFileReportWriter(options.ReportDirectory);
         services.AddRadarPipeline();
 

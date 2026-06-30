@@ -8,6 +8,7 @@ using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
+using Radar.Application.Signals;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
@@ -31,6 +32,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly ISignalReviewer _reviewer;
     private readonly ISignalRepository _signalRepository;
     private readonly ISignalReviewRepository _signalReviewRepository;
+    private readonly ISignalFileStore _signalFileStore;
     private readonly ICompanyRepository _companyRepository;
     private readonly IScoringEngine _scoringEngine;
     private readonly IWeeklyReportBuilder _reportBuilder;
@@ -49,6 +51,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ISignalReviewer reviewer,
         ISignalRepository signalRepository,
         ISignalReviewRepository signalReviewRepository,
+        ISignalFileStore signalFileStore,
         ICompanyRepository companyRepository,
         IScoringEngine scoringEngine,
         IWeeklyReportBuilder reportBuilder,
@@ -66,6 +69,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(reviewer);
         ArgumentNullException.ThrowIfNull(signalRepository);
         ArgumentNullException.ThrowIfNull(signalReviewRepository);
+        ArgumentNullException.ThrowIfNull(signalFileStore);
         ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(scoringEngine);
         ArgumentNullException.ThrowIfNull(reportBuilder);
@@ -83,6 +87,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _reviewer = reviewer;
         _signalRepository = signalRepository;
         _signalReviewRepository = signalReviewRepository;
+        _signalFileStore = signalFileStore;
         _companyRepository = companyRepository;
         _scoringEngine = scoringEngine;
         _reportBuilder = reportBuilder;
@@ -192,6 +197,13 @@ public sealed class RadarPipelineRunner : IRadarPipeline
                 // builds the review from signal.Id), so the persisted review traces to the stored signal.
                 await _signalRepository.AddAsync(outcome.ReviewedSignal, ct).ConfigureAwait(false);
                 await _signalReviewRepository.AddAsync(outcome.Review, ct).ConfigureAwait(false);
+
+                // Mirror the stored signal + its review to the on-disk signal store (AD-8), the
+                // durable twin of the in-memory repositories. Signals are upsert-by-Id (the store
+                // overwrites last-write-wins), and the store swallows disk errors, so this must not
+                // change any counter or abort the run.
+                await _signalFileStore
+                    .WriteAsync(outcome.ReviewedSignal, outcome.Review, ct).ConfigureAwait(false);
 
                 switch (outcome.ReviewedSignal.ReviewStatus)
                 {

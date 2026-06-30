@@ -12,6 +12,9 @@ public sealed class RadarWorkerOptions
     /// <summary>Root directory for the insert-only raw-evidence file store.</summary>
     public string EvidenceRawDirectory { get; init; } = "data/evidence/raw";
 
+    /// <summary>Root directory for the signal file store.</summary>
+    public string SignalsDirectory { get; init; } = "data/signals";
+
     /// <summary>Root directory for the weekly markdown report writer.</summary>
     public string ReportDirectory { get; init; } = "data/reports";
 
