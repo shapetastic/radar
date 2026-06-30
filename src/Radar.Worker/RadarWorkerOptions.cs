@@ -15,6 +15,9 @@ public sealed class RadarWorkerOptions
     /// <summary>Root directory for the signal file store.</summary>
     public string SignalsDirectory { get; init; } = "data/signals";
 
+    /// <summary>Root directory for the score snapshot file store.</summary>
+    public string ScoresDirectory { get; init; } = "data/scores";
+
     /// <summary>Root directory for the weekly markdown report writer.</summary>
     public string ReportDirectory { get; init; } = "data/reports";
 

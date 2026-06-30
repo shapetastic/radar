@@ -142,6 +142,26 @@ public sealed class RadarPipelineRunnerTests
     }
 
     /// <summary>
+    /// A fake <see cref="IScoreSnapshotFileStore"/> that records every <c>(snapshot, links)</c> it is
+    /// asked to write and returns a fixed path. Lets tests assert exactly which scored companies the
+    /// runner mirrors to disk and that each recorded link traces back to its snapshot.
+    /// </summary>
+    private sealed class RecordingScoreSnapshotFileStore : IScoreSnapshotFileStore
+    {
+        public List<(Radar.Domain.Scoring.CompanyScoreSnapshot Snapshot,
+            IReadOnlyList<Radar.Domain.Scoring.ScoreEvidenceLink> Links)> Written { get; } = new();
+
+        public Task<string> WriteAsync(
+            Radar.Domain.Scoring.CompanyScoreSnapshot snapshot,
+            IReadOnlyList<Radar.Domain.Scoring.ScoreEvidenceLink> links,
+            CancellationToken ct)
+        {
+            Written.Add((snapshot, links));
+            return Task.FromResult("written/score.json");
+        }
+    }
+
+    /// <summary>
     /// A fake <see cref="IReportFileWriter"/> that records every <see cref="RadarReport"/> it is asked
     /// to write and returns a fixed path. Lets tests assert whether (and which) report the runner
     /// wrote to disk.
@@ -166,6 +186,7 @@ public sealed class RadarPipelineRunnerTests
         public InMemorySignalRepository Signals { get; } = new();
         public InMemorySignalReviewRepository Reviews { get; } = new();
         public RecordingSignalFileStore SignalStore { get; } = new();
+        public RecordingScoreSnapshotFileStore ScoreStore { get; } = new();
         public InMemoryScoreRepository Scores { get; } = new();
         public InMemoryReportRepository Reports { get; } = new();
         public RadarPipelineRunner Runner { get; }
@@ -218,6 +239,7 @@ public sealed class RadarPipelineRunnerTests
                 SignalStore,
                 Companies,
                 scoringEngine,
+                ScoreStore,
                 reportBuilder,
                 ReportWriter,
                 options,
@@ -556,6 +578,31 @@ public sealed class RadarPipelineRunnerTests
     }
 
     [Fact]
+    public async Task Run_MirrorsEachScoredCompanyToScoreFileStore_PreservingProvenance()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // Exactly one score-file write per scored company.
+        Assert.Equal(result.CompaniesScored, h.ScoreStore.Written.Count);
+
+        // Provenance preserved through the runner: every recorded link traces back to its snapshot.
+        foreach (var write in h.ScoreStore.Written)
+        {
+            foreach (var link in write.Links)
+            {
+                Assert.Equal(write.Snapshot.Id, link.ScoreSnapshotId);
+            }
+        }
+    }
+
+    [Fact]
     public async Task InvalidExtractedSignal_IsDroppedNotPersisted()
     {
         var companyId = Guid.NewGuid();
@@ -796,6 +843,7 @@ public sealed class RadarPipelineRunnerTests
             services.AddLocalFileCollector(tempDir);
             services.AddFileRawEvidenceStore(Path.Combine(tempDir, "raw"));
             services.AddFileSignalStore(Path.Combine(tempDir, "signals"));
+            services.AddFileScoreStore(Path.Combine(tempDir, "scores"));
             services.AddFileReportWriter(Path.Combine(tempDir, "reports"));
             services.AddRadarPipeline();
 
