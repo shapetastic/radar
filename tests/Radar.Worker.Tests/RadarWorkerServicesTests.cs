@@ -37,6 +37,16 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Default_ScoringWindow_Is60Days()
+    {
+        using var provider = BuildProvider();
+
+        var scoring = provider.GetRequiredService<ScoringOptions>();
+
+        Assert.Equal(TimeSpan.FromDays(60), scoring.Window);
+    }
+
+    [Fact]
     public void Configuration_OverridesLibraryDefaults_ForScoringAndReportOptions()
     {
         using var provider = BuildProvider(

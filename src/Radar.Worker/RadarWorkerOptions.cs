@@ -24,8 +24,14 @@ public sealed class RadarWorkerOptions
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
 
-    /// <summary>Recent-signal scoring window length, in days (maps to ScoringOptions.Window).</summary>
-    public int ScoringWindowDays { get; init; } = 30;
+    /// <summary>
+    /// Recent-signal scoring window length, in days (maps to ScoringOptions.Window).
+    /// Defaults to 60: small-cap issuers publish material news roughly monthly, so a 30-day
+    /// window systematically misses real recent fundamentals. The scoring formula
+    /// (radar-formula-v1) already recency-weights signals within the window (older signals
+    /// contribute less), so a wider window adds recall without over-weighting stale news.
+    /// </summary>
+    public int ScoringWindowDays { get; init; } = 60;
 
     /// <summary>Report period length, in days (maps to WeeklyReportOptions.Period).</summary>
     public int ReportPeriodDays { get; init; } = 7;
