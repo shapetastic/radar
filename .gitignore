@@ -140,3 +140,10 @@ secrets.json
 
 # Runtime temp run snapshots
 .tmp/
+
+# Radar runtime output produced by a Worker run (the watch-universe seed
+# data/companies.json is tracked; everything else under data/ is generated).
+/data/evidence/
+/data/signals/
+/data/scores/
+/data/reports/
