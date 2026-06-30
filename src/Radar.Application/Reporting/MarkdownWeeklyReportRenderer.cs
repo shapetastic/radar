@@ -267,6 +267,8 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                 .Append(signal.CompanyMention)
                 .Append(": ")
                 .Append(signal.Summary)
+                .Append(" — ")
+                .Append(signal.ReviewReason)
                 .Append(" (signal ")
                 .Append(signal.SignalId.ToString())
                 .Append(')')

@@ -318,13 +318,35 @@ public sealed class MarkdownWeeklyReportRendererTests
             SignalId: signalId,
             EvidenceId: Guid.NewGuid(),
             CompanyMention: "Beta Inc",
-            Summary: "ambiguous mention");
+            Summary: "ambiguous mention",
+            ReviewReason: "EscalateToHuman: Unresolved company mention");
         var model = CreateModel(signalsNeedingReview: [review]);
 
         var output = CreateRenderer().Render(model);
 
         Assert.Contains("## Signals needing review", output);
-        Assert.Contains($"- Beta Inc: ambiguous mention (signal {signalId})", output);
+        Assert.Contains(
+            $"- Beta Inc: ambiguous mention — EscalateToHuman: Unresolved company mention (signal {signalId})",
+            output);
+    }
+
+    [Fact]
+    public void Render_NeedsReview_Bullet_Places_ReviewReason_Between_Summary_And_SignalId()
+    {
+        var signalId = Guid.Parse("66666666-6666-6666-6666-666666666666");
+        var review = new NeedsReviewSignalRef(
+            SignalId: signalId,
+            EvidenceId: Guid.NewGuid(),
+            CompanyMention: "Acme",
+            Summary: "Matched phrase 'x'",
+            ReviewReason: "EscalateToHuman: Unresolved company mention");
+        var model = CreateModel(signalsNeedingReview: [review]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains(
+            $"- Acme: Matched phrase 'x' — EscalateToHuman: Unresolved company mention (signal {signalId})",
+            output);
     }
 
     [Fact]
@@ -388,7 +410,8 @@ public sealed class MarkdownWeeklyReportRendererTests
                 new ReportSignalRef(
                     Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive, "customer win detected"),
             ]);
-        var review = new NeedsReviewSignalRef(Guid.NewGuid(), Guid.NewGuid(), "Mention", "summary");
+        var review = new NeedsReviewSignalRef(
+            Guid.NewGuid(), Guid.NewGuid(), "Mention", "summary", "EscalateToHuman: review reason");
         var model = CreateModel([entry], [review]);
 
         var output = CreateRenderer().Render(model);
@@ -475,7 +498,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             Guid.Parse("33333333-3333-3333-3333-333333333333"),
             Guid.Parse("44444444-4444-4444-4444-444444444444"),
             "Mention",
-            "summary");
+            "summary",
+            "EscalateToHuman: review reason");
         var model = CreateModel([entry], [review]);
 
         var renderer = CreateRenderer();
@@ -550,7 +574,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             SignalId: Guid.NewGuid(),
             EvidenceId: Guid.NewGuid(),
             CompanyMention: "Beta Inc",
-            Summary: "ambiguous mention");
+            Summary: "ambiguous mention",
+            ReviewReason: "EscalateToHuman: Unresolved company mention");
         var summary = new CollectionSummary(2, 2, 0, 3, []);
         var model = CreateModel(signalsNeedingReview: [review], collection: summary);
 

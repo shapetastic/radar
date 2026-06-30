@@ -25,6 +25,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private readonly IScoreRepository _scoreRepository;
     private readonly IEvidenceRepository _evidenceRepository;
     private readonly ISignalRepository _signalRepository;
+    private readonly ISignalReviewRepository _signalReviewRepository;
     private readonly IReportActionPolicy _policy;
     private readonly IWeeklyReportRenderer _renderer;
     private readonly IReportRepository _reportRepository;
@@ -37,6 +38,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         IScoreRepository scoreRepository,
         IEvidenceRepository evidenceRepository,
         ISignalRepository signalRepository,
+        ISignalReviewRepository signalReviewRepository,
         IReportActionPolicy policy,
         IWeeklyReportRenderer renderer,
         IReportRepository reportRepository,
@@ -48,6 +50,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         ArgumentNullException.ThrowIfNull(scoreRepository);
         ArgumentNullException.ThrowIfNull(evidenceRepository);
         ArgumentNullException.ThrowIfNull(signalRepository);
+        ArgumentNullException.ThrowIfNull(signalReviewRepository);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(reportRepository);
@@ -77,6 +80,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _scoreRepository = scoreRepository;
         _evidenceRepository = evidenceRepository;
         _signalRepository = signalRepository;
+        _signalReviewRepository = signalReviewRepository;
         _policy = policy;
         _renderer = renderer;
         _reportRepository = reportRepository;
@@ -192,7 +196,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         // GetObservedBetweenAsync is inclusive on its start bound, but the report window is
         // exclusive-start (periodStartUtc, periodEndUtc]; drop signals exactly at periodStartUtc
         // so this section matches the scoring-window convention used above.
-        var needsReview = observed
+        var surfaced = observed
             .Where(s => s.ObservedAtUtc > periodStartUtc)
             .Where(s => s.ReviewStatus is SignalReviewStatus.Pending or SignalReviewStatus.NeedsHumanReview)
             // Most-recent-first so the cap never silently hides the newest needs-review signals;
@@ -200,12 +204,34 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             .OrderByDescending(s => s.ObservedAtUtc)
             .ThenBy(s => s.Id)
             .Take(_options.MaxItems)
-            .Select(s => new NeedsReviewSignalRef(
+            .ToList();
+
+        // Surface the latest persisted review reason per signal (provenance: report → review →
+        // signal → evidence). The lookup is async, so iterate the already ordered+capped set
+        // rather than projecting in LINQ — ordering, cap, and the surfaced set are unchanged.
+        var needsReview = new List<NeedsReviewSignalRef>(surfaced.Count);
+        foreach (var s in surfaced)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // GetBySignalAsync is AD-3-ordered by ReviewedAtUtc then Id, so the last element is
+            // the most recent review. No stored review → honest fallback rather than an invented
+            // reason.
+            var reviews = await _signalReviewRepository
+                .GetBySignalAsync(s.Id, ct)
+                .ConfigureAwait(false);
+
+            var reviewReason = reviews.Count > 0
+                ? $"{reviews[^1].Decision}: {reviews[^1].Summary}"
+                : "Pending review";
+
+            needsReview.Add(new NeedsReviewSignalRef(
                 SignalId: s.Id,
                 EvidenceId: s.EvidenceId,
                 CompanyMention: s.CompanyMention,
-                Summary: s.Reason))
-            .ToList();
+                Summary: s.Reason,
+                ReviewReason: reviewReason));
+        }
 
         var generatedAt = _timeProvider.GetUtcNow();
         var title = string.Format(
