@@ -96,6 +96,14 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
                 {
                     ["rssFeedUrl"] = feed.Url,
                     ["rssItemId"] = item.Id ?? item.Link ?? string.Empty,
+                    // Declared baseline evidence quality (AD-7), read by CollectedEvidenceMapper.ParseQuality.
+                    // An official IR-newsroom press release is a first-party source, so Unknown is the wrong
+                    // default: Unknown is double-penalised (reviewer weak-source haircut + low scoring quality
+                    // factor) and collapses EvidenceConfidenceScore below the 35 floor. Medium is the
+                    // least-aggressive level that clears that floor and is NOT a weak source, so it also avoids
+                    // the reviewer's Low/Unknown confidence haircut. Feeds that mix thought-leadership/blog
+                    // posts inherit this same single baseline; per-feed quality config is out of scope here.
+                    ["quality"] = "Medium",
                 };
 
                 results.Add(new CollectedEvidence(

@@ -76,6 +76,22 @@ public sealed class CollectedEvidenceMapperTests
     }
 
     [Fact]
+    public void ToEvidenceItem_RssPressReleaseBaselineQuality_MapsToMediumNotUnknown()
+    {
+        var mapper = CreateMapper();
+
+        // Mirrors the metadata the RSS press-release collector emits: a declared "Medium" baseline.
+        // Proves a first-party press release maps to EvidenceQuality.Medium, not Unknown.
+        var item = mapper.ToEvidenceItem(
+            Build(
+                sourceType: EvidenceSourceType.PressRelease,
+                metadata: new Dictionary<string, string> { ["quality"] = "Medium" }));
+
+        Assert.Equal(EvidenceQuality.Medium, item.Quality);
+        Assert.NotEqual(EvidenceQuality.Unknown, item.Quality);
+    }
+
+    [Fact]
     public void ToEvidenceItem_MissingQualityKey_DefaultsToUnknown()
     {
         var mapper = CreateMapper();

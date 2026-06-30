@@ -62,6 +62,10 @@ public sealed class RssPressReleaseCollectorTests
         Assert.Equal(2, items.Count);
         Assert.All(items, i => Assert.Equal(EvidenceSourceType.PressRelease, i.SourceType));
 
+        // First-party IR press releases declare a Medium baseline quality (the mapper reads "quality"),
+        // so they are not double-penalised down to Unknown. See RssPressReleaseCollector for the rationale.
+        Assert.All(items, i => Assert.Equal("Medium", i.Metadata["quality"]));
+
         var acme = items.Single(i => i.SourceName == "Acme IR");
         Assert.Equal("https://acme.test/n1", acme.SourceUrl);
         Assert.Equal("Acme launches widget", acme.Title);
