@@ -55,6 +55,18 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(links);
 
+        // Provenance guard: every link must belong to this snapshot. Persisting a mismatched link would
+        // write an internally inconsistent file and silently break the score→signal/evidence trace.
+        foreach (var link in links)
+        {
+            if (link.ScoreSnapshotId != snapshot.Id)
+            {
+                throw new ArgumentException(
+                    $"Link {link.Id} targets snapshot {link.ScoreSnapshotId}, not snapshot {snapshot.Id}; refusing to persist a mismatched pair.",
+                    nameof(links));
+            }
+        }
+
         var path = Path.Combine(
             _options.RootDirectory,
             snapshot.CompanyId.ToString(),

@@ -8,6 +8,12 @@ using Radar.Domain.Scoring;
 /// upsert-by-Id (AD-1): an existing file for the same snapshot id is overwritten (last-write-wins).
 /// Returns the written path.
 /// </summary>
+/// <remarks>
+/// Provenance invariant: every provided link must belong to the provided snapshot
+/// (<c>link.ScoreSnapshotId == snapshot.Id</c>). Implementations throw <see cref="ArgumentException"/>
+/// on a mismatch rather than persist an internally inconsistent file that would break the
+/// score→signal/evidence trace.
+/// </remarks>
 public interface IScoreSnapshotFileStore
 {
     Task<string> WriteAsync(

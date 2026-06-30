@@ -153,6 +153,28 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_LinkBelongsToDifferentSnapshot_ThrowsAndWritesNothing()
+    {
+        var snapshot = new ScoreSnapshotBuilder().WithWindow(WindowStart, WindowEnd).Build();
+        var otherSnapshot = new ScoreSnapshotBuilder().WithWindow(WindowStart, WindowEnd).Build();
+        // Link targets a different snapshot id — persisting it would break the score→signal/evidence trace.
+        var mismatchedLink = LinkFor(otherSnapshot, Guid.NewGuid(), Guid.NewGuid());
+        var links = new List<ScoreEvidenceLink> { mismatchedLink };
+
+        var store = CreateStore();
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => store.WriteAsync(snapshot, links, CancellationToken.None));
+        Assert.Equal("links", ex.ParamName);
+
+        // Nothing was written for either snapshot.
+        Assert.False(File.Exists(
+            Path.Combine(_tempDir, snapshot.CompanyId.ToString(), snapshot.Id + ".json")));
+        Assert.False(File.Exists(
+            Path.Combine(_tempDir, otherSnapshot.CompanyId.ToString(), otherSnapshot.Id + ".json")));
+    }
+
+    [Fact]
     public async Task WriteAsync_IoFailure_ReturnsAttemptedPathWithoutThrowing()
     {
         // Point the root at an existing FILE so Directory.CreateDirectory throws IOException.
