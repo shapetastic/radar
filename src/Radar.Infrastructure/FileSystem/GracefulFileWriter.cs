@@ -22,7 +22,11 @@ internal static class GracefulFileWriter
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
 
             if (encoding is null)
             {

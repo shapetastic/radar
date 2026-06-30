@@ -11,10 +11,20 @@ namespace Radar.Infrastructure.FileSystem;
 /// </summary>
 internal static class RadarFileStoreJson
 {
-    public static JsonSerializerOptions Options { get; } = new()
+    public static JsonSerializerOptions Options { get; } = CreateOptions();
+
+    private static JsonSerializerOptions CreateOptions()
     {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new JsonStringEnumConverter() },
-    };
+        var options = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: false) },
+        };
+
+        // Freeze so callers cannot add converters or change policies at runtime; this stays the single
+        // source of truth for the on-disk shape.
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    }
 }
