@@ -3,8 +3,8 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collector to run ("rss" | "localfile").</summary>
-    public string CollectorKind { get; init; } = "rss";
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile".</summary>
+    public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";

@@ -98,6 +98,27 @@ public sealed class RadarPipelineRunnerTests
     }
 
     /// <summary>
+    /// A configurable in-test collector with a caller-supplied <see cref="CollectorName"/>,
+    /// <see cref="SourceType"/>, and fixed result. Records whether it was invoked so the multi-collector
+    /// test can assert every registered collector ran.
+    /// </summary>
+    private sealed class ConfigurableCollector(
+        string name, EvidenceSourceType type, CollectionResult result) : IEvidenceCollector
+    {
+        public bool WasCalled { get; private set; }
+
+        public string CollectorName => name;
+
+        public EvidenceSourceType SourceType => type;
+
+        public Task<CollectionResult> CollectAsync(CollectionContext context, CancellationToken ct)
+        {
+            WasCalled = true;
+            return Task.FromResult(result);
+        }
+    }
+
+    /// <summary>
     /// A deterministic, in-test extractor returning a fixed output for ANY evidence id. The runner now
     /// maps <see cref="CollectedEvidence"/> to evidence via the real mapper (which assigns a fresh id),
     /// so the extractor cannot key off a pre-chosen id — it returns the same output regardless.
@@ -196,6 +217,15 @@ public sealed class RadarPipelineRunnerTests
             ISignalExtractor extractor,
             PipelineOptions options,
             TimeProvider? timeProvider = null)
+            : this([collector], extractor, options, timeProvider)
+        {
+        }
+
+        public Harness(
+            IReadOnlyList<IEvidenceCollector> collectors,
+            ISignalExtractor extractor,
+            PipelineOptions options,
+            TimeProvider? timeProvider = null)
         {
             var time = timeProvider ?? new FixedTimeProvider(FixedNow);
 
@@ -226,7 +256,7 @@ public sealed class RadarPipelineRunnerTests
                 new EvidenceNormalizer(), NullLogger<CollectedEvidenceMapper>.Instance);
 
             Runner = new RadarPipelineRunner(
-                collector,
+                collectors,
                 mapper,
                 Evidence,
                 RawStore,
@@ -404,10 +434,15 @@ public sealed class RadarPipelineRunnerTests
 
         var result = await h.Runner.RunAsync(default);
 
-        // The runner threads the collector's summary into the result unchanged.
+        // The runner threads the collector's summary into the result. With a single collector the merge
+        // rebuilds an equivalent CollectionSummary (concatenating the one result's evidence and
+        // failures), so assert by value field-by-field rather than by reference.
         Assert.Equal(2, result.SourcesChecked);
         Assert.Equal(1, result.SourcesFailed);
-        Assert.Same(summary, result.Collection);
+        Assert.Equal(summary.SourcesChecked, result.Collection.SourcesChecked);
+        Assert.Equal(summary.SourcesSucceeded, result.Collection.SourcesSucceeded);
+        Assert.Equal(summary.SourcesFailed, result.Collection.SourcesFailed);
+        Assert.Equal(summary.ItemsCollected, result.Collection.ItemsCollected);
         var failure = Assert.Single(result.Collection.Failures);
         Assert.Equal("Broken Feed", failure.SourceName);
     }
@@ -865,5 +900,88 @@ public sealed class RadarPipelineRunnerTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task MultiCollector_RunsAllAndMergesEvidence_OrderedByCollectorName()
+    {
+        var companyId = Guid.NewGuid();
+
+        // Distinct evidence items so they map to distinct content hashes and both survive dedupe.
+        var aEvidence = new CollectedEvidence(
+            SourceType: EvidenceSourceType.Filing,
+            SourceName: "SEC EDGAR",
+            SourceUrl: "https://sec.example/a",
+            Title: "Northwind Robotics customer win (filing)",
+            RawText: RawText,
+            PublishedAt: Observed,
+            CollectedAt: FixedNow,
+            Metadata: new Dictionary<string, string> { ["quality"] = "High" });
+
+        // The lexically-later collector ("ZZZ") emits a duplicate that COLLIDES with AAA's canonical
+        // item (identical title+rawText → identical content hash) PLUS one distinct item. Because the
+        // runner orders collectors by CollectorName ordinal, AAA is processed first and wins the
+        // insert-only ContentHash dedupe; ZZZ's colliding duplicate is dropped, its distinct item kept.
+        var zCollide = aEvidence with { SourceName = "Gov Contracts", SourceUrl = "https://gov.example/dup" };
+        var zDistinct = new CollectedEvidence(
+            SourceType: EvidenceSourceType.GovernmentContract,
+            SourceName: "Gov Contracts",
+            SourceUrl: "https://gov.example/b",
+            Title: "Northwind Robotics federal award",
+            RawText: "Northwind Robotics won a multi-year federal contract award this quarter.",
+            PublishedAt: Observed,
+            CollectedAt: FixedNow,
+            Metadata: new Dictionary<string, string> { ["quality"] = "High" });
+
+        var aCollector = new ConfigurableCollector(
+            "AAA",
+            EvidenceSourceType.Filing,
+            new CollectionResult(
+                [aEvidence],
+                new CollectionSummary(1, 1, 0, 1, [])));
+        var zCollector = new ConfigurableCollector(
+            "ZZZ",
+            EvidenceSourceType.GovernmentContract,
+            new CollectionResult(
+                [zCollide, zDistinct],
+                new CollectionSummary(
+                    SourcesChecked: 1,
+                    SourcesSucceeded: 0,
+                    SourcesFailed: 1,
+                    ItemsCollected: 2,
+                    Failures: [new SourceFailure("Gov Contracts", "https://gov.example", "HTTP 503")])));
+
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        // Pass collectors DI-registration-shuffled (Z before A) to prove the runner sorts by name.
+        var h = new Harness(
+            [zCollector, aCollector], extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // Both collectors ran.
+        Assert.True(aCollector.WasCalled);
+        Assert.True(zCollector.WasCalled);
+
+        // Three items were collected (AAA: 1, ZZZ: 2); the colliding duplicate dedupes away, so two
+        // distinct evidence items are stored.
+        Assert.Equal(3, result.EvidenceCollected);
+        Assert.Equal(2, result.EvidenceNew);
+
+        // The aggregated summary sums the per-collector counts.
+        Assert.Equal(2, result.Collection.SourcesChecked);
+        Assert.Equal(1, result.Collection.SourcesFailed);
+        Assert.Equal(3, result.Collection.ItemsCollected);
+
+        // The canonical (colliding) hash is stored exactly once, traced to AAA's SourceType (Filing)
+        // because AAA is processed first under the CollectorName-ordinal order. The mapper assigns a
+        // fresh id each map, so the stored item is located by content hash (computed from title+rawText).
+        var canonical = new CollectedEvidenceMapper(
+            new EvidenceNormalizer(), NullLogger<CollectedEvidenceMapper>.Instance)
+            .ToEvidenceItem(aEvidence);
+        var stored = await h.Evidence.GetByContentHashAsync(canonical.ContentHash, default);
+        Assert.NotNull(stored);
+        Assert.Equal(EvidenceSourceType.Filing, stored!.SourceType);
     }
 }
