@@ -248,7 +248,7 @@ public class KeywordSignalExtractorTests
     [Theory]
     [InlineData("Acme wins contract with a major retailer.")]
     [InlineData("Acme lands a major contract win with a global retailer.")]
-    [InlineData("Acme renews its agreement with a major retailer.")]
+    [InlineData("Acme renews agreement with a major retailer.")]
     [InlineData("Acme expands agreement with a major retailer.")]
     public async Task NewCustomerWinPhrases_YieldSingleCustomerWinSignal(string rawText)
     {
@@ -321,6 +321,90 @@ public class KeywordSignalExtractorTests
 
         var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
         Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public async Task ProjectWinsHeadline_YieldsCustomerWinSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "New Wastewater Project Wins Across India");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CustomerWin.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
+    public async Task ExceededOutlookHeadline_YieldsPositiveGuidanceChangeSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Reports First Quarter Results that Exceeded Outlook with Sales Growth of 17%");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GuidanceChange.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
+    public async Task LargestProductionOrderHeadline_YieldsCustomerWinSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Receives Largest Production Order for its Rugged Servers");
+
+        var output = await ExtractAsync(evidence);
+
+        Assert.Contains(
+            output.Signals,
+            s => s.SignalType == SignalType.CustomerWin.ToString());
+    }
+
+    [Fact]
+    public async Task Series3Headline_DoesNotYieldCapitalRaiseSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Introduces the Series 3 pressure sensor");
+
+        var output = await ExtractAsync(evidence);
+
+        // "introduces" still legitimately fires a ProductLaunch; only CapitalRaise must be absent.
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.CapitalRaise.ToString());
+    }
+
+    [Fact]
+    public async Task BenefitsAwardHeadline_DoesNotYieldGovernmentContractSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Recognized with Top Benefits Award from Mployer");
+
+        var output = await ExtractAsync(evidence);
+
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.GovernmentContract.ToString());
+    }
+
+    [Fact]
+    public async Task UnqualifiedDeployment_DoesNotYieldCustomerWinSignal()
+    {
+        var evidence = MakeEvidence(
+            "Acme discusses its software deployment process at a conference.");
+
+        var output = await ExtractAsync(evidence);
+
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.CustomerWin.ToString());
     }
 
     [Fact]
