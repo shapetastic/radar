@@ -19,12 +19,6 @@ namespace Radar.Infrastructure.FileSystem;
 /// </summary>
 public sealed class FileRawEvidenceStore : IRawEvidenceStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     private readonly FileRawEvidenceStoreOptions _options;
     private readonly ILogger<FileRawEvidenceStore> _logger;
 
@@ -130,7 +124,7 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore
             CompanyHints: companyHints,
             Metadata: metadata);
 
-        return JsonSerializer.Serialize(raw, SerializerOptions);
+        return JsonSerializer.Serialize(raw, RadarFileStoreJson.Options);
     }
 
     private static (string[] CompanyHints, JsonElement Metadata) ParseMetadataJson(string? metadataJson)

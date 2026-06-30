@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 using Microsoft.Extensions.Logging;
 
@@ -25,15 +24,6 @@ namespace Radar.Infrastructure.FileSystem;
 /// </remarks>
 public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        // No enums on the score records today, but keep the converter for consistency with the other
-        // file stores so any future enum fields render as readable string names, never integer ordinals.
-        Converters = { new JsonStringEnumConverter() },
-    };
-
     private readonly FileScoreSnapshotStoreOptions _options;
     private readonly ILogger<FileScoreSnapshotStore> _logger;
 
@@ -74,32 +64,16 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
 
         var json = Serialize(snapshot, links);
 
-        try
+        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-
-            // Overwrite-allowed (upsert-by-Id, last-write-wins): unlike the insert-only evidence store,
-            // score snapshots are NOT immutable (AD-1 covers evidence only), so we do not guard on
-            // File.Exists.
-            await File.WriteAllTextAsync(path, json, ct).ConfigureAwait(false);
-
             _logger.LogInformation(
                 "Wrote score snapshot {SnapshotId} for company {CompanyId} to {Path}.",
                 snapshot.Id,
                 snapshot.CompanyId,
                 path);
-            return path;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // A disk hiccup must not crash the run; the in-memory score repository copy still exists.
-            _logger.LogWarning(
-                ex,
-                "Failed to write score snapshot {SnapshotId} to {Path}; skipping.",
-                snapshot.Id,
-                path);
-            return path;
-        }
+
+        return path;
     }
 
     private static string Serialize(CompanyScoreSnapshot snapshot, IReadOnlyList<ScoreEvidenceLink> links)
@@ -126,7 +100,7 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
                 ContributionReason: l.ContributionReason,
                 ContributionWeight: l.ContributionWeight))]);
 
-        return JsonSerializer.Serialize(file, SerializerOptions);
+        return JsonSerializer.Serialize(file, RadarFileStoreJson.Options);
     }
 
     /// <summary>

@@ -42,26 +42,12 @@ public sealed class FileReportWriter : IReportFileWriter
             "weekly",
             $"radar-weekly-{report.PeriodEndUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.md");
 
-        try
+        if (await GracefulFileWriter.TryWriteAllTextAsync(path, report.MarkdownContent, _logger, ct, Utf8NoBom)
+                .ConfigureAwait(false))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-
-            // Overwrite-allowed: reports are derived views, not immutable evidence (AD-1). UTF-8 with
-            // no BOM preserves the renderer's '\n' line endings byte-for-byte.
-            await File.WriteAllTextAsync(path, report.MarkdownContent, Utf8NoBom, ct).ConfigureAwait(false);
-
             _logger.LogInformation("Wrote weekly report {ReportId} to {Path}.", report.Id, path);
-            return path;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // A disk hiccup must not crash the run; the in-memory report still exists.
-            _logger.LogWarning(
-                ex,
-                "Failed to write weekly report {ReportId} to {Path}; skipping.",
-                report.Id,
-                path);
-            return path;
-        }
+
+        return path;
     }
 }
