@@ -175,6 +175,7 @@ public sealed class RadarPipelineRunnerTests
                 Scores,
                 Evidence,
                 Signals,
+                Reviews,
                 new WeeklyReportActionPolicyV1(),
                 new MarkdownWeeklyReportRenderer(),
                 Reports,

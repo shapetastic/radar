@@ -31,6 +31,7 @@ public sealed class WeeklyReportBuilderTests
         public InMemoryScoreRepository Scores { get; } = new();
         public InMemoryEvidenceRepository Evidence { get; } = new();
         public InMemorySignalRepository Signals { get; } = new();
+        public InMemorySignalReviewRepository SignalReviews { get; } = new();
         public InMemoryReportRepository Reports { get; } = new();
         public WeeklyReportBuilder Builder { get; }
 
@@ -41,6 +42,7 @@ public sealed class WeeklyReportBuilderTests
                 Scores,
                 Evidence,
                 Signals,
+                SignalReviews,
                 new WeeklyReportActionPolicyV1(),
                 new MarkdownWeeklyReportRenderer(),
                 Reports,
@@ -423,6 +425,151 @@ public sealed class WeeklyReportBuilderTests
         Assert.Contains("Ambiguous customer-win phrasing needs a human.", markdown, StringComparison.Ordinal);
         Assert.Contains($"signal {signal.Id}", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain(approved.Id.ToString(), markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NeedsReviewSurfacesStoredReviewDecisionAndSummaryAsReviewReason()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var signalId = Guid.NewGuid();
+        var signal = new SignalBuilder()
+            .WithId(signalId)
+            .WithReviewStatus(SignalReviewStatus.NeedsHumanReview)
+            .WithCompanyMention("Beta Inc")
+            .WithReason("Matched phrase 'partnership'.")
+            .WithObservedAtUtc(InPeriod)
+            .Build();
+        await h.Signals.AddAsync(signal, default);
+
+        await h.SignalReviews.AddAsync(
+            new Radar.Domain.Signals.SignalReview(
+                Id: Guid.NewGuid(),
+                SignalId: signalId,
+                ReviewerName: "radar-signal-reviewer",
+                Decision: SignalReviewDecision.EscalateToHuman,
+                Summary: "Unresolved company mention",
+                IssuesJson: null,
+                ReviewedAtUtc: InPeriod),
+            default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        // Extractor reason stays the Summary; the review decision + summary is the ReviewReason.
+        Assert.Contains(
+            $"- Beta Inc: Matched phrase 'partnership'. — EscalateToHuman: Unresolved company mention (signal {signalId})",
+            markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NeedsReviewDoesNotDoublePrefixWhenSummaryAlreadyStartsWithDecision()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var signalId = Guid.NewGuid();
+        var signal = new SignalBuilder()
+            .WithId(signalId)
+            .WithReviewStatus(SignalReviewStatus.NeedsHumanReview)
+            .WithCompanyMention("Beta Inc")
+            .WithReason("Matched phrase 'partnership'.")
+            .WithObservedAtUtc(InPeriod)
+            .Build();
+        await h.Signals.AddAsync(signal, default);
+
+        // DeterministicSignalReviewer writes summaries already prefixed with the decision; the
+        // builder must not render "EscalateToHuman: EscalateToHuman: 2 issue(s).".
+        await h.SignalReviews.AddAsync(
+            new Radar.Domain.Signals.SignalReview(
+                Id: Guid.NewGuid(),
+                SignalId: signalId,
+                ReviewerName: "radar-signal-reviewer",
+                Decision: SignalReviewDecision.EscalateToHuman,
+                Summary: "EscalateToHuman: 2 issue(s).",
+                IssuesJson: null,
+                ReviewedAtUtc: InPeriod),
+            default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains(
+            $"- Beta Inc: Matched phrase 'partnership'. — EscalateToHuman: 2 issue(s). (signal {signalId})",
+            markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("EscalateToHuman: EscalateToHuman:", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NeedsReviewSurfacesLatestStoredReviewWhenMultipleExist()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var signalId = Guid.NewGuid();
+        await h.Signals.AddAsync(new SignalBuilder()
+            .WithId(signalId)
+            .WithReviewStatus(SignalReviewStatus.NeedsHumanReview)
+            .WithCompanyMention("Beta Inc")
+            .WithReason("Matched phrase 'partnership'.")
+            .WithObservedAtUtc(InPeriod)
+            .Build(), default);
+
+        var earlier = new DateTimeOffset(2026, 2, 4, 0, 0, 0, TimeSpan.Zero);
+        var later = new DateTimeOffset(2026, 2, 6, 0, 0, 0, TimeSpan.Zero);
+
+        await h.SignalReviews.AddAsync(
+            new Radar.Domain.Signals.SignalReview(
+                Id: Guid.NewGuid(),
+                SignalId: signalId,
+                ReviewerName: "reviewer-a",
+                Decision: SignalReviewDecision.ReduceConfidence,
+                Summary: "Weak or unknown source quality",
+                IssuesJson: null,
+                ReviewedAtUtc: earlier),
+            default);
+        await h.SignalReviews.AddAsync(
+            new Radar.Domain.Signals.SignalReview(
+                Id: Guid.NewGuid(),
+                SignalId: signalId,
+                ReviewerName: "reviewer-b",
+                Decision: SignalReviewDecision.EscalateToHuman,
+                Summary: "Unresolved company mention",
+                IssuesJson: null,
+                ReviewedAtUtc: later),
+            default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        // The latest review (by ReviewedAtUtc) wins.
+        Assert.Contains(
+            "— EscalateToHuman: Unresolved company mention (signal", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReduceConfidence", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NeedsReviewFallsBackToPendingReviewWhenNoStoredReview()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var signalId = Guid.NewGuid();
+        await h.Signals.AddAsync(new SignalBuilder()
+            .WithId(signalId)
+            .WithReviewStatus(SignalReviewStatus.Pending)
+            .WithCompanyMention("Beta Inc")
+            .WithReason("Matched phrase 'partnership'.")
+            .WithObservedAtUtc(InPeriod)
+            .Build(), default);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains(
+            $"- Beta Inc: Matched phrase 'partnership'. — Pending review (signal {signalId})",
+            markdown, StringComparison.Ordinal);
     }
 
     [Fact]
