@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 using Microsoft.Extensions.Logging;
 
@@ -26,15 +25,6 @@ namespace Radar.Infrastructure.FileSystem;
 /// </remarks>
 public sealed class FileSignalStore : ISignalFileStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        // Persist enums as their plain string names (e.g. "CustomerWin", "Approved", "Positive")
-        // so the on-disk shape is human-readable and lossless, never integer ordinals.
-        Converters = { new JsonStringEnumConverter() },
-    };
-
     private readonly FileSignalStoreOptions _options;
     private readonly ILogger<FileSignalStore> _logger;
 
@@ -71,27 +61,12 @@ public sealed class FileSignalStore : ISignalFileStore
 
         var json = Serialize(signal, review);
 
-        try
+        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-
-            // Overwrite-allowed (upsert-by-Id, last-write-wins): unlike the insert-only evidence store,
-            // signals are NOT immutable (AD-1 covers evidence only), so we do not guard on File.Exists.
-            await File.WriteAllTextAsync(path, json, ct).ConfigureAwait(false);
-
             _logger.LogInformation("Wrote signal {SignalId} to {Path}.", signal.Id, path);
-            return path;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // A disk hiccup must not crash the run; the in-memory repository copy still exists.
-            _logger.LogWarning(
-                ex,
-                "Failed to write signal {SignalId} to {Path}; skipping.",
-                signal.Id,
-                path);
-            return path;
-        }
+
+        return path;
     }
 
     private static string Serialize(Signal signal, SignalReview review)
@@ -120,7 +95,7 @@ public sealed class FileSignalStore : ISignalFileStore
                 IssuesJson: review.IssuesJson,
                 ReviewedAt: review.ReviewedAtUtc));
 
-        return JsonSerializer.Serialize(file, SerializerOptions);
+        return JsonSerializer.Serialize(file, RadarFileStoreJson.Options);
     }
 
     /// <summary>
