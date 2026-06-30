@@ -10,6 +10,7 @@ using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
+using Radar.Application.Signals;
 using Radar.Domain.Evidence;
 using Radar.Domain.Reports;
 using Radar.Domain.Signals;
@@ -124,6 +125,23 @@ public sealed class RadarPipelineRunnerTests
     }
 
     /// <summary>
+    /// A fake <see cref="ISignalFileStore"/> that records every <c>(signal, review)</c> it is asked to
+    /// write and returns a fixed path. Lets tests assert exactly which stored signals the runner
+    /// mirrors to disk and that each recorded review traces back to its signal.
+    /// </summary>
+    private sealed class RecordingSignalFileStore : ISignalFileStore
+    {
+        public List<(Signal Signal, Radar.Domain.Signals.SignalReview Review)> Written { get; } = new();
+
+        public Task<string> WriteAsync(
+            Signal signal, Radar.Domain.Signals.SignalReview review, CancellationToken ct)
+        {
+            Written.Add((signal, review));
+            return Task.FromResult("written/signal.json");
+        }
+    }
+
+    /// <summary>
     /// A fake <see cref="IReportFileWriter"/> that records every <see cref="RadarReport"/> it is asked
     /// to write and returns a fixed path. Lets tests assert whether (and which) report the runner
     /// wrote to disk.
@@ -147,6 +165,7 @@ public sealed class RadarPipelineRunnerTests
         public InMemoryCompanyRepository Companies { get; } = new();
         public InMemorySignalRepository Signals { get; } = new();
         public InMemorySignalReviewRepository Reviews { get; } = new();
+        public RecordingSignalFileStore SignalStore { get; } = new();
         public InMemoryScoreRepository Scores { get; } = new();
         public InMemoryReportRepository Reports { get; } = new();
         public RadarPipelineRunner Runner { get; }
@@ -196,6 +215,7 @@ public sealed class RadarPipelineRunnerTests
                 reviewer,
                 Signals,
                 Reviews,
+                SignalStore,
                 Companies,
                 scoringEngine,
                 reportBuilder,
@@ -489,6 +509,53 @@ public sealed class RadarPipelineRunnerTests
     }
 
     [Fact]
+    public async Task Run_MirrorsEachStoredSignalToFileStore_TracingReviewToSignal()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        // Exactly one signal stored, so exactly one signal-file write; the recorded review's
+        // SignalId traces back to the stored signal (provenance holds on the on-disk mirror).
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+
+        var write = Assert.Single(h.SignalStore.Written);
+        Assert.Equal(signal.Id, write.Signal.Id);
+        Assert.Equal(signal.Id, write.Review.SignalId);
+    }
+
+    [Fact]
+    public async Task RunningTwice_MirrorsOnlyNewlyStoredSignalsToFileStore()
+    {
+        var companyId = Guid.NewGuid();
+
+        // Same deterministic collected evidence both runs: the second run dedupes by content hash so
+        // it produces no new signals, hence no extra signal-file writes.
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+        await h.Runner.RunAsync(default);
+
+        // Exactly one write: the re-collected duplicate on the second run yields no new signal.
+        var write = Assert.Single(h.SignalStore.Written);
+
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(signal.Id, write.Signal.Id);
+        Assert.Equal(signal.Id, write.Review.SignalId);
+    }
+
+    [Fact]
     public async Task InvalidExtractedSignal_IsDroppedNotPersisted()
     {
         var companyId = Guid.NewGuid();
@@ -728,6 +795,7 @@ public sealed class RadarPipelineRunnerTests
             services.AddRadarApplicationServices();
             services.AddLocalFileCollector(tempDir);
             services.AddFileRawEvidenceStore(Path.Combine(tempDir, "raw"));
+            services.AddFileSignalStore(Path.Combine(tempDir, "signals"));
             services.AddFileReportWriter(Path.Combine(tempDir, "reports"));
             services.AddRadarPipeline();
 
