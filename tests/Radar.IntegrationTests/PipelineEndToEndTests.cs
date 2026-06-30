@@ -43,10 +43,13 @@ public sealed class PipelineEndToEndTests
         "Investigate", "Watch", "Ignore", "Needs more evidence", "Thesis improving", "Thesis deteriorating",
     ];
 
-    private static ServiceProvider BuildProvider(TempPipelineFixtures fixtures)
+    private static ServiceProvider BuildProvider(
+        TempPipelineFixtures fixtures, TimeProvider? timeProvider = null)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<TimeProvider>(new FakeTimeProvider(FixedNow)); // FIRST: wins over System
+        // FIRST: wins over System. Defaults to a constant clock; tests may inject an auto-advancing
+        // FakeTimeProvider to reproduce production wall-clock skew (spec 49 regression guard).
+        services.AddSingleton<TimeProvider>(timeProvider ?? new FakeTimeProvider(FixedNow));
         services.AddLogging();
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
@@ -388,5 +391,41 @@ public sealed class PipelineEndToEndTests
         {
             Assert.Contains(DisplayLabel(item.SuggestedAction), AllowedDisplayLabels);
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 8. Regression guard for spec 49 — snapshot CreatedAtUtc must equal the run instant.
+    // ---------------------------------------------------------------------------------------------
+    [Fact]
+    public async Task ClockSkew_SnapshotCreatedThisRun_StillAppearsInReport()
+    {
+        using var fx = new TempPipelineFixtures();
+        fx.WriteCompanies([new(NorthwindId, Northwind, "NWR", [])]);
+        fx.WriteEvidence(
+            "northwind.json", Northwind, "Northwind update",
+            "Northwind Robotics signs a multi-year deal with a partner.",
+            InPeriodPublished, quality: "High");
+
+        // An auto-advancing clock: every GetUtcNow() returns an instant 200ms later than the last,
+        // mirroring the observed live wall-clock skew. This makes the pipeline's asOfUtc capture
+        // (the scoring windowEndUtc / report periodEndUtc) and any LATER clock read return DIFFERENT
+        // instants. Before the spec-49 fix the snapshot stamped CreatedAtUtc from a fresh GetUtcNow()
+        // read AFTER asOfUtc, so CreatedAtUtc > periodEndUtc and the report's inclusive (start, end]
+        // window EXCLUDED the just-created snapshot → empty report. With the fix CreatedAtUtc ==
+        // windowEndUtc == periodEndUtc, so the company surfaces. The 200ms advance is irrelevant to
+        // the 30-day scoring window (InPeriodPublished 2026-06-24 vs FixedNow 2026-06-28), so the
+        // in-period evidence still scores. THIS TEST FAILS without the
+        // `ScoringEngine.CreatedAtUtc = windowEndUtc` fix.
+        var skewingClock = new FakeTimeProvider(FixedNow)
+        {
+            AutoAdvanceAmount = TimeSpan.FromMilliseconds(200),
+        };
+
+        await using var sp = BuildProvider(fx, skewingClock);
+        var (_, report, items) = await SeedAndRunAsync(sp);
+
+        Assert.NotEmpty(items);
+        Assert.Contains(items, i => i.CompanyId == NorthwindId);
+        Assert.Contains(Northwind, report.MarkdownContent);
     }
 }
