@@ -30,11 +30,18 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     [
         new("multi-year deal", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
         new("selected by", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
-        new("deployment", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("selected to", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("customer deployment", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("production deployment", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
         new("contract win", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
         new("wins contract", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("project win", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("production order", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("largest order", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("receives order", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
         new("expands agreement", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
-        new("renews", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("renews contract", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
+        new("renews agreement", SignalType.CustomerWin, SignalDirection.Positive, 6, 5, 0.6m),
 
         new("partnership", SignalType.StrategicPartnership, SignalDirection.Positive, 5, 5, 0.6m),
         new("partners with", SignalType.StrategicPartnership, SignalDirection.Positive, 5, 5, 0.6m),
@@ -56,10 +63,18 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("debt financing", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("raises $", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("funding round", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
-        new("series ", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
+        new("series a", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
+        new("series b", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
+        new("series c", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
+        new("series seed", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
 
         new("raises guidance", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
         new("raises outlook", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
+        new("raises full-year", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
+        new("exceeded outlook", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
+        new("above the high end", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
+        new("record revenue", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
+        new("beats expectations", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
 
         new("cuts guidance", SignalType.GuidanceChange, SignalDirection.Negative, 6, 6, 0.65m),
         new("lowers guidance", SignalType.GuidanceChange, SignalDirection.Negative, 6, 6, 0.65m),
@@ -76,7 +91,6 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("government grant", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("dod ", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("nasa", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
-        new("awarded", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
     ];
 
     private readonly ILogger<KeywordSignalExtractor> _logger;
