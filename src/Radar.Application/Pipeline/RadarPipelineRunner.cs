@@ -35,6 +35,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly ISignalFileStore _signalFileStore;
     private readonly ICompanyRepository _companyRepository;
     private readonly IScoringEngine _scoringEngine;
+    private readonly IScoreSnapshotFileStore _scoreFileStore;
     private readonly IWeeklyReportBuilder _reportBuilder;
     private readonly IReportFileWriter _reportFileWriter;
     private readonly PipelineOptions _options;
@@ -54,6 +55,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ISignalFileStore signalFileStore,
         ICompanyRepository companyRepository,
         IScoringEngine scoringEngine,
+        IScoreSnapshotFileStore scoreFileStore,
         IWeeklyReportBuilder reportBuilder,
         IReportFileWriter reportFileWriter,
         PipelineOptions options,
@@ -72,6 +74,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(signalFileStore);
         ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(scoringEngine);
+        ArgumentNullException.ThrowIfNull(scoreFileStore);
         ArgumentNullException.ThrowIfNull(reportBuilder);
         ArgumentNullException.ThrowIfNull(reportFileWriter);
         ArgumentNullException.ThrowIfNull(options);
@@ -90,6 +93,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _signalFileStore = signalFileStore;
         _companyRepository = companyRepository;
         _scoringEngine = scoringEngine;
+        _scoreFileStore = scoreFileStore;
         _reportBuilder = reportBuilder;
         _reportFileWriter = reportFileWriter;
         _options = options;
@@ -222,11 +226,17 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // filter and writes the snapshot + links; the runner does not pre-filter which companies
         // have signals (a company with no in-window signals yields a valid neutral snapshot). Reuses
         // the company list loaded up front for the collection context (single repository read).
+        // The score file store mirrors each snapshot + its links to disk (AD-8), the durable twin of
+        // the in-memory score repository. Snapshots are upsert-by-Id (the store overwrites
+        // last-write-wins), and the store swallows disk errors, so this must not change any counter or
+        // abort the run. Every scored company still increments companiesScored, including neutral
+        // zero-signal snapshots.
         foreach (var company in companies)
         {
             ct.ThrowIfCancellationRequested();
 
-            await _scoringEngine.ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
+            var result = await _scoringEngine.ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
+            await _scoreFileStore.WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
             companiesScored++;
         }
 

@@ -54,6 +54,7 @@ public sealed class PipelineEndToEndTests
         services.AddLocalFileCompanySeed(fixtures.SeedFilePath);
         services.AddFileRawEvidenceStore(fixtures.RawEvidenceDir);
         services.AddFileSignalStore(fixtures.SignalsDir);
+        services.AddFileScoreStore(Path.Combine(fixtures.RootDir, "scores"));
         services.AddFileReportWriter(Path.Combine(fixtures.RootDir, "reports"));
         services.AddRadarPipeline();
         return services.BuildServiceProvider();

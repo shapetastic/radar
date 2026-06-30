@@ -148,6 +148,23 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the file score-snapshot store that mirrors each
+    /// <see cref="Radar.Domain.Scoring.CompanyScoreSnapshot"/> together with its
+    /// <see cref="Radar.Domain.Scoring.ScoreEvidenceLink"/>s to
+    /// <c>{rootDirectory}/{companyId}/{snapshotId}.json</c> (AD-8). The pipeline runner requires
+    /// <see cref="Radar.Application.Scoring.IScoreSnapshotFileStore"/>; all file I/O stays in
+    /// Infrastructure. Snapshots are upsert-by-Id, so an existing file is overwritten last-write-wins
+    /// (AD-1 governs evidence immutability only).
+    /// </summary>
+    public static IServiceCollection AddFileScoreStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FileScoreSnapshotStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IScoreSnapshotFileStore, FileScoreSnapshotStore>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the file report writer that writes each built weekly report's markdown to
     /// <c>{rootDirectory}/weekly/radar-weekly-{yyyy-MM-dd}.md</c>. The pipeline runner requires
     /// <see cref="Radar.Application.Reporting.IReportFileWriter"/>; all file I/O stays in
