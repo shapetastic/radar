@@ -113,7 +113,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         // keep the repository surface untouched in this slice.
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
 
-        var interim = new List<InterimEntry>();
+        var candidates = new List<CandidateEntry>();
         foreach (var company in companies)
         {
             ct.ThrowIfCancellationRequested();
@@ -148,14 +148,36 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 }
             }
 
+            candidates.Add(new CandidateEntry(company, current, previous));
+        }
+
+        // Rank by OpportunityScore descending, then CompanyId ascending (deterministic, AD-3 spirit).
+        // Link fetching is deferred to the rank-ordered walk below so we only touch the repository for
+        // companies that can actually surface, keeping link lookups close to MaxItems in the common
+        // case instead of O(companyCount) per run.
+        var ranked = candidates
+            .OrderByDescending(c => c.Current.OpportunityScore)
+            .ThenBy(c => c.Company.Id)
+            .ToList();
+
+        var entries = new List<WeeklyReportEntry>(Math.Min(ranked.Count, _options.MaxItems));
+        foreach (var c in ranked)
+        {
+            if (entries.Count >= _options.MaxItems)
+            {
+                break; // cap reached → no need to fetch links for lower-ranked candidates
+            }
+
+            ct.ThrowIfCancellationRequested();
+
             // A company scored from zero in-window signals has no score-evidence links behind its
             // snapshot. That is an absence of data, not an opportunity, so it must not surface as an
-            // all-zero "Highest opportunity" row (spec 53). Fetch the links here (rather than only
-            // for survivors) so we can test the actual provenance signal — zero links — and reuse
-            // the same links when building the entry, avoiding a second repository round-trip per
-            // surviving company.
+            // all-zero "Highest opportunity" row (spec 53). Walking in rank order and skipping
+            // zero-link snapshots yields the same surfaced set as filtering before the cap, while
+            // bounding link fetches by the number of rendered rows in the common case. The fetched
+            // links are reused by both ref builders, so survivors are never double-fetched.
             var links = await _scoreRepository
-                .GetLinksForSnapshotAsync(current.Id, ct)
+                .GetLinksForSnapshotAsync(c.Current.Id, ct)
                 .ConfigureAwait(false);
 
             if (links.Count == 0)
@@ -163,38 +185,18 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 continue; // no evidence behind the score → not surfaced
             }
 
-            var action = _policy.Decide(new ReportActionContext(current, previous));
-
-            interim.Add(new InterimEntry(company, current, action, links));
-        }
-
-        // Rank by OpportunityScore descending, then CompanyId ascending (deterministic, AD-3 spirit).
-        var ranked = interim
-            .OrderByDescending(e => e.Current.OpportunityScore)
-            .ThenBy(e => e.Company.Id)
-            .Take(_options.MaxItems)
-            .ToList();
-
-        var entries = new List<WeeklyReportEntry>(ranked.Count);
-        for (var i = 0; i < ranked.Count; i++)
-        {
-            var e = ranked[i];
-
-            // Reuse the score-evidence links already fetched (and proven non-empty) during the
-            // candidate loop; both ref builders share them, so survivors are never double-fetched.
-            var links = e.Links;
-
-            var evidence = await BuildEvidenceRefsAsync(e.Current, links, ct).ConfigureAwait(false);
-            var signals = await BuildSignalRefsAsync(e.Current, links, ct).ConfigureAwait(false);
+            var action = _policy.Decide(new ReportActionContext(c.Current, c.Previous));
+            var evidence = await BuildEvidenceRefsAsync(c.Current, links, ct).ConfigureAwait(false);
+            var signals = await BuildSignalRefsAsync(c.Current, links, ct).ConfigureAwait(false);
             entries.Add(new WeeklyReportEntry(
-                CompanyId: e.Current.CompanyId,
-                CompanyName: e.Company.Name,
-                Ticker: e.Company.Ticker,
-                ScoreSnapshotId: e.Current.Id,
-                Snapshot: e.Current,
-                Action: e.Action.Action,
-                Rationale: e.Action.Rationale,
-                Rank: i + 1,
+                CompanyId: c.Current.CompanyId,
+                CompanyName: c.Company.Name,
+                Ticker: c.Company.Ticker,
+                ScoreSnapshotId: c.Current.Id,
+                Snapshot: c.Current,
+                Action: action.Action,
+                Rationale: action.Rationale,
+                Rank: entries.Count + 1,
                 Evidence: evidence,
                 Signals: signals));
         }
@@ -392,9 +394,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             .ToList();
     }
 
-    private sealed record InterimEntry(
+    private sealed record CandidateEntry(
         Company Company,
         CompanyScoreSnapshot Current,
-        ReportActionResult Action,
-        IReadOnlyList<ScoreEvidenceLink> Links);
+        CompanyScoreSnapshot? Previous);
 }
