@@ -150,6 +150,25 @@ public sealed class FileSignalStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_ReviewBelongsToDifferentSignal_ThrowsAndWritesNothing()
+    {
+        var signal = new SignalBuilder().WithObservedAtUtc(Observed).Build();
+        var otherSignal = new SignalBuilder().WithObservedAtUtc(Observed).Build();
+        // Review targets a different signal id — persisting it would break the review→signal trace.
+        var mismatchedReview = ReviewFor(otherSignal);
+
+        var store = CreateStore();
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => store.WriteAsync(signal, mismatchedReview, CancellationToken.None));
+        Assert.Equal("review", ex.ParamName);
+
+        // Nothing was written for either signal.
+        Assert.False(File.Exists(Path.Combine(_tempDir, "2026", "02", signal.Id + ".json")));
+        Assert.False(File.Exists(Path.Combine(_tempDir, "2026", "02", otherSignal.Id + ".json")));
+    }
+
+    [Fact]
     public async Task WriteAsync_IoFailure_ReturnsAttemptedPathWithoutThrowing()
     {
         // Point the root at an existing FILE so Directory.CreateDirectory throws IOException.

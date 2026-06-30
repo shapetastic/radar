@@ -10,5 +10,10 @@ using Radar.Domain.Signals;
 /// </summary>
 public interface ISignalFileStore
 {
+    /// <summary>
+    /// Mirrors the reviewed <paramref name="signal"/> and its <paramref name="review"/> to disk.
+    /// The review must belong to the signal (<c>review.SignalId == signal.Id</c>), otherwise an
+    /// <see cref="ArgumentException"/> is thrown to protect the review→signal provenance trace.
+    /// </summary>
     Task<string> WriteAsync(Signal signal, SignalReview review, CancellationToken ct);
 }

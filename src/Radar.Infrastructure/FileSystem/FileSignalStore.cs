@@ -53,6 +53,15 @@ public sealed class FileSignalStore : ISignalFileStore
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(review);
 
+        // Provenance guard: the embedded review must belong to this signal. Persisting a mismatched
+        // pair would write an internally inconsistent file and silently break the review→signal trace.
+        if (review.SignalId != signal.Id)
+        {
+            throw new ArgumentException(
+                $"Review {review.Id} targets signal {review.SignalId}, not signal {signal.Id}; refusing to persist a mismatched pair.",
+                nameof(review));
+        }
+
         var observedUtc = signal.ObservedAtUtc.ToUniversalTime();
         var path = Path.Combine(
             _options.RootDirectory,
