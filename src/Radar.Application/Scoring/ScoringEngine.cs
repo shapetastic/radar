@@ -27,7 +27,6 @@ public sealed class ScoringEngine : IScoringEngine
     private readonly IScoreRepository _scoreRepository;
     private readonly IScoreFormula _formula;
     private readonly ScoringOptions _options;
-    private readonly TimeProvider _timeProvider;
     private readonly ILogger<ScoringEngine> _logger;
 
     public ScoringEngine(
@@ -36,7 +35,6 @@ public sealed class ScoringEngine : IScoringEngine
         IScoreRepository scoreRepository,
         IScoreFormula formula,
         ScoringOptions options,
-        TimeProvider timeProvider,
         ILogger<ScoringEngine> logger)
     {
         ArgumentNullException.ThrowIfNull(signalRepository);
@@ -44,7 +42,6 @@ public sealed class ScoringEngine : IScoringEngine
         ArgumentNullException.ThrowIfNull(scoreRepository);
         ArgumentNullException.ThrowIfNull(formula);
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _signalRepository = signalRepository;
@@ -52,7 +49,6 @@ public sealed class ScoringEngine : IScoringEngine
         _scoreRepository = scoreRepository;
         _formula = formula;
         _options = options;
-        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -130,7 +126,12 @@ public sealed class ScoringEngine : IScoringEngine
             ComponentJson: computation.ComponentJson,
             WindowStartUtc: windowStartUtc,
             WindowEndUtc: windowEndUtc,
-            CreatedAtUtc: _timeProvider.GetUtcNow());
+            // CreatedAtUtc IS the single run instant (windowEndUtc / asOfUtc), NOT a separate
+            // wall-clock read. Using the run instant keeps the snapshot deterministic/reproducible
+            // and AD-7-consistent: a fresh GetUtcNow() lands a few ms after asOfUtc, so the snapshot
+            // would have CreatedAtUtc > periodEndUtc and be excluded by the report's inclusive
+            // upper-bound window — the run could never report the snapshots it just created.
+            CreatedAtUtc: windowEndUtc);
 
         var links = new List<ScoreEvidenceLink>(computation.Contributions.Count);
         foreach (var contribution in computation.Contributions)

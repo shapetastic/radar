@@ -14,7 +14,6 @@ namespace Radar.Application.Tests.Scoring;
 public sealed class ScoringEngineTests
 {
     private static readonly DateTimeOffset WindowEnd = new(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
-    private static readonly DateTimeOffset FixedNow = new(2026, 2, 1, 12, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan Window = TimeSpan.FromDays(30);
 
     /// <summary>
@@ -81,11 +80,6 @@ public sealed class ScoringEngineTests
         }
     }
 
-    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => now;
-    }
-
     private sealed class Harness
     {
         public InMemorySignalRepository Signals { get; } = new();
@@ -101,7 +95,6 @@ public sealed class ScoringEngineTests
                 Scores,
                 formula ?? new StubScoreFormula(),
                 new ScoringOptions { Window = Window },
-                new FixedTimeProvider(FixedNow),
                 NullLogger<ScoringEngine>.Instance);
         }
 
@@ -259,7 +252,7 @@ public sealed class ScoringEngineTests
     }
 
     [Fact]
-    public async Task WindowAndTimestamps_AreSetFromOptionsAndClock()
+    public async Task WindowAndTimestamps_CreatedAtEqualsWindowEnd()
     {
         var harness = new Harness();
         var companyId = Guid.NewGuid();
@@ -269,7 +262,9 @@ public sealed class ScoringEngineTests
 
         Assert.Equal(WindowEnd - Window, result.Snapshot.WindowStartUtc);
         Assert.Equal(WindowEnd, result.Snapshot.WindowEndUtc);
-        Assert.Equal(FixedNow, result.Snapshot.CreatedAtUtc);
+        // CreatedAtUtc must track the run instant (windowEndUtc), NOT a separate clock read — so a
+        // freshly-created snapshot is included by the report's inclusive (start, end] window (spec 49).
+        Assert.Equal(WindowEnd, result.Snapshot.CreatedAtUtc);
     }
 
     [Fact]

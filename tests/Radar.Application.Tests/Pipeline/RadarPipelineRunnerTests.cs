@@ -208,7 +208,6 @@ public sealed class RadarPipelineRunnerTests
                 Scores,
                 new RadarScoreFormulaV1(),
                 new ScoringOptions(),
-                time,
                 NullLogger<ScoringEngine>.Instance);
             var reportBuilder = new WeeklyReportBuilder(
                 Companies,
