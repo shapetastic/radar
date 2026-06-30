@@ -1,0 +1,137 @@
+{
+  "companies": [
+    {
+      "id": "885ea986-041f-4fc2-8163-b815ae930a78",
+      "name": "Mercury Systems, Inc.",
+      "legalName": "Mercury Systems, Inc.",
+      "ticker": "MRCY",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense",
+      "aliases": ["Mercury Systems", "Mercury"],
+      "themes": ["defense electronics", "aerospace and defense", "secure processing"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Mercury Systems — News Releases (IR)",
+          "url": "https://ir.mrcy.com/rss/news-releases.xml"
+        }
+      ]
+    },
+    {
+      "id": "043f8524-d5c6-41e6-a848-ef14f2dbc49e",
+      "name": "Aehr Test Systems",
+      "legalName": "Aehr Test Systems",
+      "ticker": "AEHR",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Semiconductor Equipment & Materials",
+      "aliases": ["Aehr", "Aehr Test"],
+      "themes": ["semiconductor test", "silicon carbide", "wafer-level burn-in"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Aehr Test Systems — Press Releases",
+          "url": "https://www.aehr.com/category/news/press-releases/feed/"
+        }
+      ]
+    },
+    {
+      "id": "f0d50897-7161-40e6-a367-4ce63fc5aa8c",
+      "name": "Agilysys, Inc.",
+      "legalName": "Agilysys, Inc.",
+      "ticker": "AGYS",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Software—Application",
+      "aliases": ["Agilysys"],
+      "themes": ["hospitality software", "SaaS", "point of sale"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Agilysys — News & Events",
+          "url": "https://www.agilysys.com/en/category/news-events/feed/"
+        }
+      ]
+    },
+    {
+      "id": "d4def651-0d9e-4198-9dcf-b0dd2ed918d3",
+      "name": "Cryoport, Inc.",
+      "legalName": "Cryoport, Inc.",
+      "ticker": "CYRX",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Distribution / Cold Chain Logistics",
+      "aliases": ["Cryoport", "CryoPort"],
+      "themes": ["cold chain logistics", "cell and gene therapy", "life sciences"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Cryoport — Press Releases (IR)",
+          "url": "https://ir.cryoportinc.com/news-events/press-releases/rss"
+        }
+      ]
+    },
+    {
+      "id": "a825bf45-a23f-431c-b392-a04a029f2400",
+      "name": "Energy Recovery, Inc.",
+      "legalName": "Energy Recovery, Inc.",
+      "ticker": "ERII",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Specialty Industrial Machinery",
+      "aliases": ["Energy Recovery"],
+      "themes": ["energy recovery devices", "desalination", "CO2 refrigeration"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Energy Recovery — Press Releases (IR)",
+          "url": "https://ir.energyrecovery.com/news-events/press-releases/rss"
+        }
+      ]
+    },
+    {
+      "id": "4cab0e8e-0e72-4f69-a7da-978f04470110",
+      "name": "Sapiens International Corporation",
+      "legalName": "Sapiens International Corporation N.V.",
+      "ticker": "SPNS",
+      "exchange": "NASDAQ",
+      "countryCode": "IL",
+      "sector": "Technology",
+      "industry": "Software—Application",
+      "aliases": ["Sapiens", "Sapiens International"],
+      "themes": ["insurance software", "SaaS"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Sapiens — Newsroom",
+          "url": "https://sapiens.com/newsroom/feed/"
+        }
+      ]
+    },
+    {
+      "id": "8a6f696d-130c-4e2d-9b04-ea57b60a0858",
+      "name": "Helios Technologies, Inc.",
+      "legalName": "Helios Technologies, Inc.",
+      "ticker": "HLIO",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Specialty Industrial Machinery",
+      "aliases": ["Helios", "Helios Technologies"],
+      "themes": ["motion control", "hydraulics", "industrial technology"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Helios Technologies — Press Releases (IR)",
+          "url": "https://www.heliostechnologies.com/investors/news-events/press-releases/rss"
+        }
+      ]
+    }
+  ]
+}
