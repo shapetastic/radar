@@ -15,14 +15,15 @@ public class InfrastructureServiceCollectionExtensionsTests
         Assert.Contains(services, d => d.ServiceType == typeof(IEvidenceRepository));
         Assert.Contains(services, d => d.ServiceType == typeof(ICompanyRepository));
         Assert.Contains(services, d => d.ServiceType == typeof(ISignalRepository));
+        Assert.Contains(services, d => d.ServiceType == typeof(ISignalReviewRepository));
         Assert.Contains(services, d => d.ServiceType == typeof(IScoreRepository));
         Assert.Contains(services, d => d.ServiceType == typeof(IReportRepository));
 
         Assert.DoesNotContain(services, d => d.ServiceType == typeof(ICompanyResolver));
 
-        // "Repositories only" is the contract: exactly the five repository registrations and
+        // "Repositories only" is the contract: exactly the six repository registrations and
         // nothing else, so an accidental extra registration is caught here.
-        Assert.Equal(5, services.Count);
+        Assert.Equal(6, services.Count);
     }
 
     [Fact]

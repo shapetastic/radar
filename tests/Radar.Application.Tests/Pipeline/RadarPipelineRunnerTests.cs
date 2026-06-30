@@ -146,6 +146,7 @@ public sealed class RadarPipelineRunnerTests
         public RecordingReportFileWriter ReportWriter { get; } = new();
         public InMemoryCompanyRepository Companies { get; } = new();
         public InMemorySignalRepository Signals { get; } = new();
+        public InMemorySignalReviewRepository Reviews { get; } = new();
         public InMemoryScoreRepository Scores { get; } = new();
         public InMemoryReportRepository Reports { get; } = new();
         public RadarPipelineRunner Runner { get; }
@@ -193,6 +194,7 @@ public sealed class RadarPipelineRunnerTests
                 resolver,
                 reviewer,
                 Signals,
+                Reviews,
                 Companies,
                 scoringEngine,
                 reportBuilder,
@@ -291,6 +293,53 @@ public sealed class RadarPipelineRunnerTests
         var link = Assert.Single(links);
         Assert.Equal(evidenceId, link.EvidenceId);
         Assert.Equal(signal.Id, link.SignalId);
+    }
+
+    [Fact]
+    public async Task Run_PersistsOneSignalReviewPerStoredSignal_TracingToSignal()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        // One reviewed signal persisted; the audit trail carries exactly one review for it, and the
+        // review's SignalId traces back to the stored signal (provenance).
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+
+        var reviews = await h.Reviews.GetBySignalAsync(signal.Id, default);
+        var review = Assert.Single(reviews);
+        Assert.Equal(signal.Id, review.SignalId);
+    }
+
+    [Fact]
+    public async Task Run_WithNoExtractedSignals_PersistsNoReviews()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+
+        // Unknown type AND an excerpt absent from the evidence — the mapper drops the signal before
+        // it is ever reviewed, so no SignalReview is produced or persisted.
+        var invalid = MaterialSignal(type: "NotARealType", excerpt: "this text is absent from evidence");
+        var extractor = new AnyEvidenceSignalExtractor(new([invalid], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(0, result.SignalsValid);
+
+        // No signals were stored, so no reviews exist for any persisted signal.
+        var signals = await h.Signals.GetObservedBetweenAsync(
+            DateTimeOffset.MinValue, DateTimeOffset.MaxValue, default);
+        Assert.Empty(signals);
+        Assert.Empty(await h.Reviews.GetBySignalAsync(Guid.NewGuid(), default));
     }
 
     [Fact]
