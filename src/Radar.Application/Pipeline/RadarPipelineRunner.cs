@@ -30,6 +30,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly ICompanyResolver _resolver;
     private readonly ISignalReviewer _reviewer;
     private readonly ISignalRepository _signalRepository;
+    private readonly ISignalReviewRepository _signalReviewRepository;
     private readonly ICompanyRepository _companyRepository;
     private readonly IScoringEngine _scoringEngine;
     private readonly IWeeklyReportBuilder _reportBuilder;
@@ -47,6 +48,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ICompanyResolver resolver,
         ISignalReviewer reviewer,
         ISignalRepository signalRepository,
+        ISignalReviewRepository signalReviewRepository,
         ICompanyRepository companyRepository,
         IScoringEngine scoringEngine,
         IWeeklyReportBuilder reportBuilder,
@@ -63,6 +65,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(reviewer);
         ArgumentNullException.ThrowIfNull(signalRepository);
+        ArgumentNullException.ThrowIfNull(signalReviewRepository);
         ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(scoringEngine);
         ArgumentNullException.ThrowIfNull(reportBuilder);
@@ -79,6 +82,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _resolver = resolver;
         _reviewer = reviewer;
         _signalRepository = signalRepository;
+        _signalReviewRepository = signalReviewRepository;
         _companyRepository = companyRepository;
         _scoringEngine = scoringEngine;
         _reportBuilder = reportBuilder;
@@ -183,12 +187,11 @@ public sealed class RadarPipelineRunner : IRadarPipeline
                 // Review may only lower confidence and set the review status.
                 var outcome = await _reviewer.ReviewAsync(signal, evidence, ct).ConfigureAwait(false);
 
-                // Store the reviewed signal. Known MVP gap: the reviewer also returns an audit
-                // SignalReview record (outcome.Review), but there is currently no
-                // ISignalReviewRepository, so that audit record is NOT persisted in this slice —
-                // only the reviewed signal's ReviewStatus/Confidence are. Persisting the audit
-                // trail is a future slice, not this one.
+                // Store the reviewed signal, then its immutable audit record alongside it. Provenance
+                // holds because outcome.Review.SignalId == outcome.ReviewedSignal.Id (the reviewer
+                // builds the review from signal.Id), so the persisted review traces to the stored signal.
                 await _signalRepository.AddAsync(outcome.ReviewedSignal, ct).ConfigureAwait(false);
+                await _signalReviewRepository.AddAsync(outcome.Review, ct).ConfigureAwait(false);
 
                 switch (outcome.ReviewedSignal.ReviewStatus)
                 {

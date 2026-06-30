@@ -29,6 +29,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IEvidenceRepository, InMemoryEvidenceRepository>();
         services.AddSingleton<ICompanyRepository, InMemoryCompanyRepository>();
         services.AddSingleton<ISignalRepository, InMemorySignalRepository>();
+        services.AddSingleton<ISignalReviewRepository, InMemorySignalReviewRepository>();
         services.AddSingleton<IScoreRepository, InMemoryScoreRepository>();
         services.AddSingleton<IReportRepository, InMemoryReportRepository>();
         return services;
