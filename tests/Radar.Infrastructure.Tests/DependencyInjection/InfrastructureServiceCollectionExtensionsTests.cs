@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Radar.Application.Abstractions.Persistence;
+using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.Sec;
 
 namespace Radar.Infrastructure.Tests.DependencyInjection;
 
@@ -50,5 +52,53 @@ public class InfrastructureServiceCollectionExtensionsTests
         var second = provider.GetRequiredService<ICompanyResolver>();
 
         Assert.Same(first, second);
+    }
+
+    [Fact]
+    public void AddSecEdgarCollector_ValidOptions_RegistersCollector()
+    {
+        var services = new ServiceCollection().AddSecEdgarCollector(
+            new SecCollectorOptions { UserAgent = "Radar Research test@example.com" });
+
+        Assert.Contains(services, d => d.ServiceType == typeof(IEvidenceCollector));
+    }
+
+    [Fact]
+    public void AddSecEdgarCollector_BlankUserAgent_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddSecEdgarCollector(new SecCollectorOptions { UserAgent = "  " }));
+
+        Assert.Contains("User-Agent", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void AddSecEdgarCollector_NonPositiveMaxFilings_FailsFast(int maxFilings)
+    {
+        // A zero/negative cap would let the collector run yet collect nothing — treat it as a config error.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddSecEdgarCollector(new SecCollectorOptions
+            {
+                UserAgent = "Radar Research test@example.com",
+                MaxFilingsPerCompany = maxFilings,
+            }));
+
+        Assert.Contains("MaxFilingsPerCompany", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddSecEdgarCollector_EmptyForms_FailsFast()
+    {
+        // An empty form filter matches nothing, so the collector would run yet collect nothing.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddSecEdgarCollector(new SecCollectorOptions
+            {
+                UserAgent = "Radar Research test@example.com",
+                Forms = [],
+            }));
+
+        Assert.Contains("filing form", ex.Message, StringComparison.Ordinal);
     }
 }

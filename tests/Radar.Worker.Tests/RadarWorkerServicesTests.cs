@@ -93,6 +93,27 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_WithSecCollector_WhenUserAgentConfigured()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "sec"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+        Assert.Equal(2, provider.GetServices<IEvidenceCollector>().Count());
+    }
+
+    [Fact]
+    public void SecCollector_WithoutUserAgent_FailsFast()
+    {
+        // A blank Radar:Sec:UserAgent must fail fast: every SEC request 403s without a compliant UA.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => BuildProvider(("Radar:Collectors:0", "sec")));
+        Assert.Contains("User-Agent", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DuplicateCollectorKind_RegistersOnce()
     {
         using var provider = BuildProvider(
