@@ -1,5 +1,11 @@
 namespace Radar.Domain.Evidence;
 
+/// <summary>
+/// The canonical provenance source-type for a piece of evidence: which kind of public source it came
+/// from. Persisted by name. Treat this enum as <b>append-only</b> — add new members at the end and never
+/// reorder or remove existing ones, so persisted values stay stable as collectors fan out. Each collector
+/// declares exactly one <see cref="EvidenceSourceType"/> for the evidence it produces.
+/// </summary>
 public enum EvidenceSourceType
 {
     Manual,
@@ -13,5 +19,8 @@ public enum EvidenceSourceType
     GovernmentContract,
     JobPosting,
     Patent,
-    SocialMedia
+    SocialMedia,
+    RegulatoryAnnouncement,   // UK RNS / regulatory news service announcements
+    InsiderTransaction,       // director / insider buy-sell filings
+    ConferenceMention         // conference / event agenda appearances
 }

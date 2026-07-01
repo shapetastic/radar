@@ -43,12 +43,7 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        // Deterministic order: by CompanyId then feed Id, RSS feeds only.
-        var feeds = context.SourceFeeds
-            .Where(f => string.Equals(f.FeedType, "rss", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(f => f.CompanyId)
-            .ThenBy(f => f.Id)
-            .ToList();
+        var feeds = context.FeedsOfType("rss");
 
         var companiesById = context.Companies.ToDictionary(c => c.Id);
 
