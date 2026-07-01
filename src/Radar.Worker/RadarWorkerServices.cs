@@ -34,6 +34,7 @@ internal static class RadarWorkerServices
         {
             Period = TimeSpan.FromDays(options.ReportPeriodDays),
             MaxItems = options.ReportMaxItems,
+            RecentRunsInReport = options.RecentRunsInReport,
         });
         services.AddSingleton(new PipelineOptions { GenerateReport = options.GenerateReport });
         services.AddSingleton(new WorkerRunOptions

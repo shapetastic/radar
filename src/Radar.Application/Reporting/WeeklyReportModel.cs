@@ -10,4 +10,5 @@ public sealed record WeeklyReportModel(
     DateTimeOffset GeneratedAtUtc,
     IReadOnlyList<WeeklyReportEntry> Entries,
     IReadOnlyList<NeedsReviewSignalRef> SignalsNeedingReview,
-    CollectionSummary? Collection = null);
+    CollectionSummary? Collection = null,
+    IReadOnlyList<RecentRunSummary>? RecentRuns = null);

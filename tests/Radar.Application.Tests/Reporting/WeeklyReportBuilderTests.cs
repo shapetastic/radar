@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Collectors;
+using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -25,6 +26,17 @@ public sealed class WeeklyReportBuilderTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
+    // A minimal in-test IPipelineRunStore that returns pre-seeded records newest-first and honours the
+    // requested count via Take (mirroring the real store's cap and AD-3 ordering).
+    private sealed class FakeRunStore(IReadOnlyList<PipelineRunRecord> records) : IPipelineRunStore
+    {
+        public Task<string> WriteAsync(PipelineRunRecord record, CancellationToken ct) =>
+            Task.FromResult("unused");
+
+        public Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<PipelineRunRecord>>(records.Take(Math.Max(0, count)).ToList());
+    }
+
     private sealed class Harness
     {
         public InMemoryCompanyRepository Companies { get; } = new();
@@ -35,7 +47,7 @@ public sealed class WeeklyReportBuilderTests
         public InMemoryReportRepository Reports { get; } = new();
         public WeeklyReportBuilder Builder { get; }
 
-        public Harness(WeeklyReportOptions? options = null)
+        public Harness(WeeklyReportOptions? options = null, IReadOnlyList<PipelineRunRecord>? runs = null)
         {
             Builder = new WeeklyReportBuilder(
                 Companies,
@@ -46,11 +58,31 @@ public sealed class WeeklyReportBuilderTests
                 new WeeklyReportActionPolicyV1(),
                 new MarkdownWeeklyReportRenderer(),
                 Reports,
+                new FakeRunStore(runs ?? []),
                 options ?? new WeeklyReportOptions(),
                 new FixedTimeProvider(FixedNow),
                 NullLogger<WeeklyReportBuilder>.Instance);
         }
     }
+
+    // Builds a PipelineRunRecord with a distinctive collector + counts so ordering/cap assertions are
+    // unambiguous. Only the fields the footer projects are meaningful here.
+    private static PipelineRunRecord RunRecord(
+        DateTimeOffset createdAt, string collector, int evidenceNew) =>
+        new(
+            Id: Guid.NewGuid(),
+            CreatedAtUtc: createdAt,
+            Collectors: [collector],
+            EvidenceCollected: evidenceNew,
+            EvidenceNew: evidenceNew,
+            SignalsExtracted: 0,
+            SignalsValid: 0,
+            SignalsApproved: 0,
+            SignalsNeedingReview: 0,
+            CompaniesScored: 0,
+            SourcesChecked: 0,
+            SourcesFailed: 0,
+            ReportId: null);
 
     private static async Task SeedCompanyAsync(
         Harness h,
@@ -945,6 +977,9 @@ public sealed class WeeklyReportBuilderTests
         services.AddLogging();
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
+        // WeeklyReportBuilder now depends on IPipelineRunStore; register the file store (Infrastructure)
+        // so the builder resolves from the container.
+        services.AddFilePipelineRunStore(Path.Combine(Path.GetTempPath(), $"radar-runs-{Guid.NewGuid():N}"));
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedNow));
         var provider = services.BuildServiceProvider();
 
@@ -1008,5 +1043,63 @@ public sealed class WeeklyReportBuilderTests
 
         await Assert.ThrowsAsync<ArgumentNullException>(
             () => h.Builder.GenerateAsync(PeriodEnd, null!, default));
+    }
+
+    [Fact]
+    public async Task RecentRunsFooterRendersPriorRunsNewestFirstFromStore()
+    {
+        var runs = new[]
+        {
+            RunRecord(new DateTimeOffset(2026, 2, 7, 14, 0, 0, TimeSpan.Zero), "alpha", 12),
+            RunRecord(new DateTimeOffset(2026, 2, 6, 9, 0, 0, TimeSpan.Zero), "bravo", 7),
+            RunRecord(new DateTimeOffset(2026, 2, 5, 8, 0, 0, TimeSpan.Zero), "charlie", 3),
+        };
+        var h = new Harness(runs: runs);
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("## Recent runs", markdown, StringComparison.Ordinal);
+
+        // Store order (newest-first) is preserved: alpha, then bravo, then charlie.
+        var alphaIndex = markdown.IndexOf("collectors: alpha", StringComparison.Ordinal);
+        var bravoIndex = markdown.IndexOf("collectors: bravo", StringComparison.Ordinal);
+        var charlieIndex = markdown.IndexOf("collectors: charlie", StringComparison.Ordinal);
+        Assert.True(alphaIndex >= 0 && bravoIndex >= 0 && charlieIndex >= 0);
+        Assert.True(alphaIndex < bravoIndex, "Recent runs should render in store (newest-first) order.");
+        Assert.True(bravoIndex < charlieIndex, "Recent runs should render in store (newest-first) order.");
+    }
+
+    [Fact]
+    public async Task RecentRunsFooterCappedByRecentRunsInReport()
+    {
+        var runs = new[]
+        {
+            RunRecord(new DateTimeOffset(2026, 2, 7, 14, 0, 0, TimeSpan.Zero), "alpha", 12),
+            RunRecord(new DateTimeOffset(2026, 2, 6, 9, 0, 0, TimeSpan.Zero), "bravo", 7),
+            RunRecord(new DateTimeOffset(2026, 2, 5, 8, 0, 0, TimeSpan.Zero), "charlie", 3),
+        };
+        var h = new Harness(new WeeklyReportOptions { RecentRunsInReport = 2 }, runs);
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("collectors: alpha", markdown, StringComparison.Ordinal);
+        Assert.Contains("collectors: bravo", markdown, StringComparison.Ordinal);
+        // The third (oldest) run is dropped by the cap.
+        Assert.DoesNotContain("collectors: charlie", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RecentRunsFooterOmittedWhenStoreEmpty()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        Assert.DoesNotContain("## Recent runs", result.Report.MarkdownContent, StringComparison.Ordinal);
     }
 }

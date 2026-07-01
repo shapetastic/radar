@@ -49,6 +49,9 @@ public sealed class RadarWorkerOptions
     /// <summary>Max companies in the report (maps to WeeklyReportOptions.MaxItems).</summary>
     public int ReportMaxItems { get; init; } = 25;
 
+    /// <summary>Recent runs shown in the report footer (maps to WeeklyReportOptions.RecentRunsInReport).</summary>
+    public int RecentRunsInReport { get; init; } = 5;
+
     /// <summary>Whether the run ends by building the weekly report (maps to PipelineOptions.GenerateReport).</summary>
     public bool GenerateReport { get; init; } = true;
 
