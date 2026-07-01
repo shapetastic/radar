@@ -107,6 +107,104 @@ public sealed class SecEdgarFilingCollectorTests
     }
 
     [Fact]
+    public async Task CollectAsync_KnownItemCodes_ExpandToOfficialTitlesWhileKeepingRawCodes()
+    {
+        const string url = "https://data.sec.gov/submissions/CIK0001049521.json";
+        var feed = Feed(Guid.Parse("cccccccc-0000-0000-0000-000000000001"), MrcyId, "Mercury — SEC", url);
+
+        var reader = new FakeSecFilingReader
+        {
+            [url] =
+            [
+                // 2.02 resolves to a title; 9.01 (exhibits) is intentionally unmapped and must stay bare.
+                Filing("8-K", "2026-06-02", "acc-1", new DateTimeOffset(2026, 6, 2, 0, 0, 0, TimeSpan.Zero), items: "2.02,9.01"),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        // Raw codes preserved (provenance) AND the official item title appended (matchable text).
+        Assert.Contains("2.02,9.01", item.RawText);
+        Assert.Contains("Results of Operations and Financial Condition", item.RawText);
+        // Unmapped 9.01 fabricates no title.
+        Assert.DoesNotContain("9.01:", item.RawText);
+    }
+
+    [Fact]
+    public async Task CollectAsync_MaterialDefinitiveAgreement_ExpandsToOfficialTitle()
+    {
+        const string url = "https://data.sec.gov/submissions/CIK0001049521.json";
+        var feed = Feed(Guid.Parse("cccccccc-0000-0000-0000-000000000002"), MrcyId, "Mercury — SEC", url);
+
+        var reader = new FakeSecFilingReader
+        {
+            [url] =
+            [
+                Filing("8-K", "2026-06-02", "acc-1", new DateTimeOffset(2026, 6, 2, 0, 0, 0, TimeSpan.Zero), items: "1.01"),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        Assert.Contains("1.01", item.RawText);
+        Assert.Contains("Entry into a Material Definitive Agreement", item.RawText);
+    }
+
+    [Fact]
+    public async Task CollectAsync_UnmappedItemCodeAlone_LeavesBareCodeAndFabricatesNoTitle()
+    {
+        const string url = "https://data.sec.gov/submissions/CIK0001049521.json";
+        var feed = Feed(Guid.Parse("cccccccc-0000-0000-0000-000000000003"), MrcyId, "Mercury — SEC", url);
+
+        var reader = new FakeSecFilingReader
+        {
+            [url] =
+            [
+                Filing("8-K", "2026-06-02", "acc-1", new DateTimeOffset(2026, 6, 2, 0, 0, 0, TimeSpan.Zero), items: "9.01"),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        // Bare code retained, no "Items:" clause synthesised (no fabricated title).
+        Assert.Contains("9.01", item.RawText);
+        Assert.DoesNotContain("Items:", item.RawText);
+        Assert.DoesNotContain("Items:", item.Title);
+    }
+
+    [Fact]
+    public async Task CollectAsync_NonEightKForm_HasNoItemsAndNoSynthesizedTitles()
+    {
+        const string url = "https://data.sec.gov/submissions/CIK0001049521.json";
+        var feed = Feed(Guid.Parse("cccccccc-0000-0000-0000-000000000004"), MrcyId, "Mercury — SEC", url);
+
+        var reader = new FakeSecFilingReader
+        {
+            [url] =
+            [
+                Filing("10-Q", "2026-06-02", "acc-1", new DateTimeOffset(2026, 6, 2, 0, 0, 0, TimeSpan.Zero), items: null),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        Assert.DoesNotContain("Items:", item.RawText);
+        Assert.DoesNotContain("8-K item codes", item.RawText);
+    }
+
+    [Fact]
     public async Task CollectAsync_FiltersToConfiguredForms()
     {
         const string url = "https://data.sec.gov/submissions/CIK.json";
