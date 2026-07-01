@@ -82,7 +82,16 @@ public sealed class FilePipelineRunStore : IPipelineRunStore
             return Array.Empty<PipelineRunRecord>();
         }
 
-        var records = new List<PipelineRunRecord>(files.Count);
+        // Run files are named run-{yyyyMMddTHHmmssfffZ}-{id}.json (WriteAsync), so the fixed-width,
+        // zero-padded UTC timestamp makes ordinal filename order equal chronological order. Sorting the
+        // file names descending lets us deserialize only the newest candidates instead of the whole
+        // history — as run history grows this keeps report generation from getting progressively slower.
+        // We keep reading until we have `count` valid records so malformed/unreadable files (which we
+        // skip, as before) don't cause us to under-return newer valid runs.
+        files.Sort(static (a, b) =>
+            string.CompareOrdinal(Path.GetFileName(b), Path.GetFileName(a)));
+
+        var records = new List<PipelineRunRecord>(Math.Min(count, files.Count));
         foreach (var file in files)
         {
             ct.ThrowIfCancellationRequested();
@@ -107,8 +116,15 @@ public sealed class FilePipelineRunStore : IPipelineRunStore
                 // One unreadable/malformed run file must not break the whole history read.
                 _logger.LogWarning(ex, "Failed to read run-log file '{File}'; skipping.", file);
             }
+
+            if (records.Count >= count)
+            {
+                break;
+            }
         }
 
+        // Re-sort on the deserialized fields to honour the exact ordering contract (CreatedAtUtc then Id,
+        // both descending) for the returned subset, independent of how file names happened to sort.
         return records
             .OrderByDescending(r => r.CreatedAtUtc)
             .ThenByDescending(r => r.Id)

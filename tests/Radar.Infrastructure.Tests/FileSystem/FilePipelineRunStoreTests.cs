@@ -108,6 +108,31 @@ public sealed class FilePipelineRunStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadRecentAsync_MalformedNewestFile_StillReturnsCountValidRecords()
+    {
+        // The read walks newest-first and stops once it has `count` valid records. A malformed file in
+        // the newest position must be skipped without causing the read to under-return older valid runs.
+        var oldest = RecordAt(BaseInstant);
+        var middle = RecordAt(BaseInstant.AddMinutes(1));
+        var newest = RecordAt(BaseInstant.AddMinutes(2));
+
+        var store = CreateStore();
+        await store.WriteAsync(oldest, CancellationToken.None);
+        await store.WriteAsync(middle, CancellationToken.None);
+        var newestPath = await store.WriteAsync(newest, CancellationToken.None);
+
+        // Corrupt the newest run file in place; it must be skipped, and the read must fall through to the
+        // next-newest valid records rather than returning fewer than `count`.
+        await File.WriteAllTextAsync(newestPath, "{ not valid");
+
+        var read = await store.ReadRecentAsync(2, CancellationToken.None);
+
+        Assert.Equal(2, read.Count);
+        Assert.Equal(middle.Id, read[0].Id);
+        Assert.Equal(oldest.Id, read[1].Id);
+    }
+
+    [Fact]
     public async Task ReadRecentAsync_WithZeroOrNegativeCount_ReturnsEmpty()
     {
         var store = CreateStore();
