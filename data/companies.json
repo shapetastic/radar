@@ -16,6 +16,11 @@
           "type": "rss",
           "name": "Mercury Systems — News Releases (IR)",
           "url": "https://ir.mrcy.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Mercury Systems — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001049521.json"
         }
       ]
     },
@@ -35,6 +40,11 @@
           "type": "rss",
           "name": "Aehr Test Systems — Press Releases",
           "url": "https://www.aehr.com/category/news/press-releases/feed/"
+        },
+        {
+          "type": "sec",
+          "name": "Aehr Test Systems — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001040470.json"
         }
       ]
     },
@@ -54,6 +64,11 @@
           "type": "rss",
           "name": "Agilysys — News & Events",
           "url": "https://www.agilysys.com/en/category/news-events/feed/"
+        },
+        {
+          "type": "sec",
+          "name": "Agilysys — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000078749.json"
         }
       ]
     },
@@ -73,6 +88,11 @@
           "type": "rss",
           "name": "Cryoport — Press Releases (IR)",
           "url": "https://ir.cryoportinc.com/news-events/press-releases/rss"
+        },
+        {
+          "type": "sec",
+          "name": "Cryoport — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001124524.json"
         }
       ]
     },
@@ -92,6 +112,11 @@
           "type": "rss",
           "name": "Energy Recovery — Press Releases (IR)",
           "url": "https://ir.energyrecovery.com/news-events/press-releases/rss"
+        },
+        {
+          "type": "sec",
+          "name": "Energy Recovery — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001421517.json"
         }
       ]
     },
@@ -130,6 +155,11 @@
           "type": "rss",
           "name": "Helios Technologies — Press Releases (IR)",
           "url": "https://www.heliostechnologies.com/investors/news-events/press-releases/rss"
+        },
+        {
+          "type": "sec",
+          "name": "Helios Technologies — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001024795.json"
         }
       ]
     }

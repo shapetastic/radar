@@ -2,6 +2,7 @@ using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.Sec;
 
 namespace Radar.Worker;
 
@@ -51,7 +52,7 @@ internal static class RadarWorkerServices
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
-                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\" and \"localfile\".");
+                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", and \"sec\".");
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -62,7 +63,7 @@ internal static class RadarWorkerServices
             if (string.IsNullOrWhiteSpace(rawKind))
             {
                 throw new InvalidOperationException(
-                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\" and \"localfile\".");
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", and \"sec\".");
             }
 
             var kind = rawKind.Trim();
@@ -79,10 +80,19 @@ internal static class RadarWorkerServices
             {
                 services.AddLocalFileCollector(options.EvidenceSourceDirectory);
             }
+            else if (string.Equals(kind, "sec", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddSecEdgarCollector(new SecCollectorOptions
+                {
+                    UserAgent = options.Sec.UserAgent,
+                    Forms = options.Sec.Forms,
+                    MaxFilingsPerCompany = options.Sec.MaxFilingsPerCompany,
+                });
+            }
             else
             {
                 throw new InvalidOperationException(
-                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\" and \"localfile\".");
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", and \"sec\".");
             }
         }
 

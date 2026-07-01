@@ -13,7 +13,10 @@ using Radar.Application.Signals;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Rss;
+using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.Sources;
+
+using System.Net;
 
 namespace Radar.Infrastructure.DependencyInjection;
 
@@ -98,6 +101,51 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHttpClient<IRssFeedReader, HttpRssFeedReader>();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, RssPressReleaseCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the SEC EDGAR filing collector and the typed <c>HttpClient</c> its
+    /// <see cref="ISecFilingReader"/> uses. The collector reads the per-company <c>sec</c> feeds supplied on
+    /// the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's <c>Url</c> is that
+    /// company's EDGAR submissions JSON endpoint) and produces raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> filings; it does not persist them. All
+    /// HTTP/JSON/SEC code stays in Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="SecCollectorOptions.UserAgent"/> is null/blank: SEC returns HTTP 403 for
+    /// every request without a compliant declared User-Agent, so an unconfigured UA is a configuration error.
+    /// The named client sends the configured UA plus <c>Accept-Encoding: gzip, deflate</c> and enables
+    /// automatic decompression (SEC recommends gzip).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddSecEdgarCollector(
+        this IServiceCollection services, SecCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.IsNullOrWhiteSpace(options.UserAgent))
+        {
+            throw new InvalidOperationException(
+                "SEC EDGAR requires a compliant User-Agent (e.g. \"Radar Research <email>\"); configure "
+                    + "Radar:Sec:UserAgent before enabling the \"sec\" collector — every request 403s without it.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<ISecFilingReader, HttpSecFilingReader>(client =>
+            {
+                // Use TryAddWithoutValidation: the SEC-recommended UA form ("Radar Research <email>") is not a
+                // strict RFC product/comment token, so the strongly-typed UserAgent collection rejects it.
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, SecEdgarFilingCollector>();
         return services;
     }
 
