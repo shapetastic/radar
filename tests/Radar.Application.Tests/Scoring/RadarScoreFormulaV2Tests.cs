@@ -6,7 +6,7 @@ using Radar.TestSupport;
 
 namespace Radar.Application.Tests.Scoring;
 
-public sealed class RadarScoreFormulaV1Tests
+public sealed class RadarScoreFormulaV2Tests
 {
     private static readonly DateTimeOffset WindowStart = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset WindowEnd = new(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
@@ -47,20 +47,20 @@ public sealed class RadarScoreFormulaV1Tests
         PreviousSignals: previous ?? Array.Empty<Signal>());
 
     [Fact]
-    public void Version_IsRadarFormulaV1_AndAppearsInExplanation()
+    public void Version_IsRadarFormulaV2_AndAppearsInExplanation()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
 
-        Assert.Equal("radar-formula-v1", formula.Version);
+        Assert.Equal("radar-formula-v2", formula.Version);
 
         var result = formula.Compute(InputFrom(new[] { BuildSignal() }));
-        Assert.Contains("radar-formula-v1", result.Explanation);
+        Assert.Contains("radar-formula-v2", result.Explanation);
     }
 
     [Fact]
     public void NeutralBaseline_SingleNeutralSignal_TrajectoryIs50()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var input = InputFrom(new[] { BuildSignal(direction: SignalDirection.Neutral) });
 
         var result = formula.Compute(input);
@@ -71,7 +71,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void AllPositive_Improves_AllNegative_Declines()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
 
         var positive = formula.Compute(InputFrom(new[]
         {
@@ -91,7 +91,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void MixedInput_AllComponentsInRange()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var input = InputFrom(
             new[]
             {
@@ -114,7 +114,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void ClampHoldsAtExtremes()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
 
         var maxPositive = new List<ScoringSignal>();
         var maxNegative = new List<ScoringSignal>();
@@ -136,22 +136,85 @@ public sealed class RadarScoreFormulaV1Tests
     }
 
     [Fact]
+    public void Trajectory_NeutralSignals_DoNotDilute_DirectionalRead()
+    {
+        var formula = new RadarScoreFormulaV2();
+
+        var positiveOnly = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(strength: 6, direction: SignalDirection.Positive, sourceName: "src-a"),
+        }));
+
+        var positiveWithNeutrals = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(strength: 6, direction: SignalDirection.Positive, sourceName: "src-a"),
+            BuildSignal(strength: 9, direction: SignalDirection.Neutral, sourceName: "src-b"),
+            BuildSignal(strength: 9, direction: SignalDirection.Neutral, sourceName: "src-c"),
+        }));
+
+        // Neutral signals are excluded from trajectory entirely, so the score is unchanged.
+        Assert.Equal(
+            positiveOnly.Components.TrajectoryScore,
+            positiveWithNeutrals.Components.TrajectoryScore);
+    }
+
+    [Fact]
+    public void Trajectory_OnlyNeutralSignals_Is50()
+    {
+        var formula = new RadarScoreFormulaV2();
+
+        var result = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(strength: 8, direction: SignalDirection.Neutral, sourceName: "src-a"),
+            BuildSignal(strength: 4, direction: SignalDirection.Mixed, sourceName: "src-b"),
+        }));
+
+        Assert.Equal(50, result.Components.TrajectoryScore);
+    }
+
+    [Fact]
+    public void Attention_FirstPartyOnly_IsZero_ThirdPartyRaisesIt()
+    {
+        var formula = new RadarScoreFormulaV2();
+
+        // A company's own press release + filing: both first-party → no market attention.
+        var firstParty = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(sourceType: EvidenceSourceType.PressRelease, sourceName: "Acme Newsroom"),
+            BuildSignal(sourceType: EvidenceSourceType.Filing, sourceName: "SEC EDGAR"),
+        }));
+
+        Assert.Equal(0, firstParty.Components.AttentionScore);
+
+        // Adding a third-party news source raises attention above zero.
+        var withThirdParty = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(sourceType: EvidenceSourceType.PressRelease, sourceName: "Acme Newsroom"),
+            BuildSignal(sourceType: EvidenceSourceType.Filing, sourceName: "SEC EDGAR"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "The Ledger"),
+        }));
+
+        Assert.True(withThirdParty.Components.AttentionScore > 0);
+    }
+
+    [Fact]
     public void Attention_Saturates_AndIsMonotonic()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
 
+        // Third-party source types so attention is measurable.
         var one = formula.Compute(InputFrom(new[]
         {
-            BuildSignal(sourceName: "only-source"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "only-source"),
         }));
 
         var five = formula.Compute(InputFrom(new[]
         {
-            BuildSignal(sourceName: "src-a"),
-            BuildSignal(sourceName: "src-b"),
-            BuildSignal(sourceName: "src-c"),
-            BuildSignal(sourceName: "src-d"),
-            BuildSignal(sourceName: "src-e"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "src-a"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "src-b"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "src-c"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "src-d"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "src-e"),
         }));
 
         Assert.True(five.Components.AttentionScore > one.Components.AttentionScore);
@@ -161,7 +224,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void EvidenceConfidence_RewardsQualityAndDiversity()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
 
         // High quality + diverse source types.
         var rich = formula.Compute(InputFrom(new[]
@@ -189,9 +252,101 @@ public sealed class RadarScoreFormulaV1Tests
     }
 
     [Fact]
+    public void EvidenceConfidence_IsMonotonic_UnderCorroboration()
+    {
+        var formula = new RadarScoreFormulaV2();
+
+        var baseSignal = new[]
+        {
+            BuildSignal(confidence: 0.8m, quality: EvidenceQuality.Medium,
+                sourceType: EvidenceSourceType.PressRelease, sourceName: "src-a"),
+        };
+        var baseline = formula.Compute(InputFrom(baseSignal)).Components.EvidenceConfidenceScore;
+
+        // Adding a weaker (lower-confidence) signal of the same source type must not lower the score.
+        var withWeaker = formula.Compute(InputFrom(new[]
+        {
+            baseSignal[0],
+            BuildSignal(confidence: 0.3m, quality: EvidenceQuality.Low,
+                sourceType: EvidenceSourceType.PressRelease, sourceName: "src-b"),
+        })).Components.EvidenceConfidenceScore;
+
+        Assert.True(withWeaker >= baseline);
+
+        // Adding evidence of a NEW source type raises it (diversity bonus).
+        var withNewType = formula.Compute(InputFrom(new[]
+        {
+            baseSignal[0],
+            BuildSignal(confidence: 0.3m, quality: EvidenceQuality.Low,
+                sourceType: EvidenceSourceType.Filing, sourceName: "src-b"),
+        })).Components.EvidenceConfidenceScore;
+
+        Assert.True(withNewType > baseline);
+    }
+
+    [Fact]
+    public void EvidenceConfidence_HighQualityItem_RaisesBestQualWeight()
+    {
+        var formula = new RadarScoreFormulaV2();
+
+        var allLow = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(confidence: 0.8m, quality: EvidenceQuality.Low,
+                sourceType: EvidenceSourceType.PressRelease, sourceName: "src-a"),
+            BuildSignal(confidence: 0.8m, quality: EvidenceQuality.Low,
+                sourceType: EvidenceSourceType.PressRelease, sourceName: "src-b"),
+        })).Components.EvidenceConfidenceScore;
+
+        var withHigh = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(confidence: 0.8m, quality: EvidenceQuality.Low,
+                sourceType: EvidenceSourceType.PressRelease, sourceName: "src-a"),
+            BuildSignal(confidence: 0.8m, quality: EvidenceQuality.High,
+                sourceType: EvidenceSourceType.PressRelease, sourceName: "src-b"),
+        })).Components.EvidenceConfidenceScore;
+
+        Assert.True(withHigh > allLow);
+    }
+
+    [Fact]
+    public void HeliosScenario_Corroboration_ReachesWatchTerritory()
+    {
+        var formula = new RadarScoreFormulaV2();
+
+        // A strong Positive press-release guidance change plus two Neutral High-quality 8-K filings.
+        var input = InputFrom(new[]
+        {
+            BuildSignal(strength: 6, direction: SignalDirection.Positive, confidence: 0.65m,
+                type: SignalType.GuidanceChange, quality: EvidenceQuality.Medium,
+                sourceType: EvidenceSourceType.PressRelease, sourceName: "Helios Newsroom"),
+            BuildSignal(strength: 4, direction: SignalDirection.Neutral, confidence: 0.40m,
+                type: SignalType.Other, quality: EvidenceQuality.High,
+                sourceType: EvidenceSourceType.Filing, sourceName: "SEC EDGAR"),
+            BuildSignal(strength: 4, direction: SignalDirection.Neutral, confidence: 0.40m,
+                type: SignalType.Other, quality: EvidenceQuality.High,
+                sourceType: EvidenceSourceType.Filing, sourceName: "SEC EDGAR"),
+        });
+
+        var c = formula.Compute(input).Components;
+
+        // Trajectory: single directional signal (Positive strength 6) → 50 + 5·6 = 80.
+        Assert.Equal(80, c.TrajectoryScore);
+
+        // Attention: all first-party (press release + filings) → 0.
+        Assert.Equal(0, c.AttentionScore);
+
+        // EvidenceConfidence: bestConf 0.65, bestQual High (.85), 2 distinct source types →
+        // 100·0.65·(0.6+0.4·0.85)·(0.7+0.3·(2/3)) ≈ 55.
+        Assert.InRange(c.EvidenceConfidenceScore, 53, 57);
+
+        // Opportunity: Trajectory 80 · (EC/100) · (1 − 0/200) ≈ 44 — comfortably in Watch territory.
+        Assert.True(c.OpportunityScore >= 40);
+    }
+
+    [Fact]
     public void Velocity_Acceleration_AbovePrevious_IsAbove50()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var input = InputFrom(
             new[] { BuildSignal(strength: 10), BuildSignal(strength: 10) },
             new[] { BuildSignal(strength: 1).Signal });
@@ -202,7 +357,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void Velocity_Deceleration_BelowPrevious_IsBelow50()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var input = InputFrom(
             new[] { BuildSignal(strength: 1) },
             new[] { BuildSignal(strength: 10).Signal, BuildSignal(strength: 10).Signal });
@@ -213,7 +368,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void Velocity_EqualActivity_Is50()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var input = InputFrom(
             new[] { BuildSignal(strength: 6) },
             new[] { BuildSignal(strength: 6).Signal });
@@ -224,7 +379,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void Velocity_EmptyPreviousWithCurrent_IsAbove50()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var input = InputFrom(
             new[] { BuildSignal(strength: 8) },
             Array.Empty<Signal>());
@@ -235,22 +390,23 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void Opportunity_FallsAsAttentionRises_NeverZeroes()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
 
-        // Low attention: single source.
+        // Low attention: single third-party source.
         var lowAttention = formula.Compute(InputFrom(new[]
         {
             BuildSignal(strength: 10, confidence: 1.0m, direction: SignalDirection.Positive,
-                quality: EvidenceQuality.PrimarySource, sourceName: "only"),
+                quality: EvidenceQuality.PrimarySource,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "only"),
         }));
 
-        // High attention: many distinct sources + media attention, same trajectory/confidence drivers.
+        // High attention: many distinct third-party sources + media attention, same trajectory drivers.
         var highSignals = new List<ScoringSignal>();
         for (var i = 0; i < 8; i++)
         {
             highSignals.Add(BuildSignal(strength: 10, confidence: 1.0m, direction: SignalDirection.Positive,
                 quality: EvidenceQuality.PrimarySource, type: SignalType.MediaAttention,
-                sourceName: $"src-{i}"));
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: $"src-{i}"));
         }
         var highAttention = formula.Compute(InputFrom(highSignals));
 
@@ -262,7 +418,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void Contributions_OnePerCurrentSignal_InOrder_WithProvenance_AndSignedWeight()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var current = new[]
         {
             BuildSignal(strength: 8, direction: SignalDirection.Positive, sourceName: "src-a"),
@@ -290,9 +446,27 @@ public sealed class RadarScoreFormulaV1Tests
     }
 
     [Fact]
+    public void Contributions_IncludeNeutralSignals_WithZeroWeight()
+    {
+        var formula = new RadarScoreFormulaV2();
+        var current = new[]
+        {
+            BuildSignal(strength: 6, direction: SignalDirection.Positive, sourceName: "src-a"),
+            BuildSignal(strength: 9, direction: SignalDirection.Neutral, sourceName: "src-b"),
+        };
+
+        var result = formula.Compute(InputFrom(current));
+
+        // Neutral signal still emits a contribution (provenance unchanged), with weight 0.
+        Assert.Equal(current.Length, result.Contributions.Count);
+        Assert.Equal(current[1].Signal.Id, result.Contributions[1].SignalId);
+        Assert.Equal(0, result.Contributions[1].ContributionWeight);
+    }
+
+    [Fact]
     public void EmptyCurrentWindow_EvenWithPrevious_AllZero_EmptyContributions_ValidJson()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var input = InputFrom(
             Array.Empty<ScoringSignal>(),
             new[] { BuildSignal(strength: 9).Signal });
@@ -310,7 +484,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void Determinism_SameInput_ProducesEqualOutputs()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
         var input = InputFrom(
             new[]
             {
@@ -332,7 +506,7 @@ public sealed class RadarScoreFormulaV1Tests
     [Fact]
     public void Recency_NewerPositiveSignal_WeighsAtLeastAsMuch()
     {
-        var formula = new RadarScoreFormulaV1();
+        var formula = new RadarScoreFormulaV2();
 
         var older = formula.Compute(InputFrom(new[]
         {

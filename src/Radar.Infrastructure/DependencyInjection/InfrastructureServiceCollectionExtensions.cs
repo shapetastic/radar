@@ -55,7 +55,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ISignalExtractor, KeywordSignalExtractor>();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ISignalReviewer, DeterministicSignalReviewer>();
-        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV1>();
+        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV2>();
         services.TryAddSingleton(new ScoringOptions());
         services.AddSingleton<IScoringEngine, ScoringEngine>();
         services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();
