@@ -114,6 +114,19 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_WithUsaSpendingCollector()
+    {
+        // The USASpending API needs no key/User-Agent, so the collector enables with just the kind and the
+        // RadarWorkerOptions defaults (contracts group A/B/C/D, 365-day lookback, cap 25).
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "usaspending"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+        Assert.Equal(2, provider.GetServices<IEvidenceCollector>().Count());
+    }
+
+    [Fact]
     public void DuplicateCollectorKind_RegistersOnce()
     {
         using var provider = BuildProvider(

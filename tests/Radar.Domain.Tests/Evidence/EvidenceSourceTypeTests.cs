@@ -15,4 +15,13 @@ public sealed class EvidenceSourceTypeTests
         Assert.True(Enum.IsDefined(parsed));
         Assert.Equal(name, parsed.ToString());
     }
+
+    [Fact]
+    public void GovernmentContract_IsNotThirdPartyAttentionSource()
+    {
+        // A federal contract award is an official primary record (like a Filing), not third-party market
+        // attention — it must contribute nothing to measured attention.
+        Assert.False(
+            EvidenceSourceTypes.IsThirdPartyAttentionSource(EvidenceSourceType.GovernmentContract));
+    }
 }

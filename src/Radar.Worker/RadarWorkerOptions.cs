@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "usaspending".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -12,6 +12,13 @@ public sealed class RadarWorkerOptions
     /// compliant User-Agent).
     /// </summary>
     public SecWorkerOptions Sec { get; init; } = new();
+
+    /// <summary>
+    /// USASpending.gov government-contract collector configuration (bound from "Radar:UsaSpending"). Only read
+    /// when the "usaspending" collector is enabled; the defaults let the rss-only configuration keep working
+    /// with no USASpending config.
+    /// </summary>
+    public UsaSpendingWorkerOptions UsaSpending { get; init; } = new();
 
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
@@ -80,4 +87,21 @@ public sealed class SecWorkerOptions
 
     /// <summary>Maximum most-recent matching filings to collect per company per run.</summary>
     public int MaxFilingsPerCompany { get; init; } = 25;
+}
+
+/// <summary>
+/// USASpending.gov government-contract collector configuration (bound from "Radar:UsaSpending"). Surfaces the
+/// mutually-exclusive award-type group, the recent-activity window, and the per-company cap through to
+/// <c>UsaSpendingCollectorOptions</c>. Defaults so the rss-only configuration works without any USASpending config.
+/// </summary>
+public sealed class UsaSpendingWorkerOptions
+{
+    /// <summary>Mutually-exclusive award-type group to query. Defaults to the contracts group A/B/C/D (mixing groups is an API 400).</summary>
+    public IReadOnlyList<string> AwardTypeCodes { get; init; } = ["A", "B", "C", "D"];
+
+    /// <summary>Recent-activity window length, in days. Defaults to 365.</summary>
+    public int LookbackDays { get; init; } = 365;
+
+    /// <summary>Maximum highest-value matching awards to collect per company per run. Defaults to 25.</summary>
+    public int MaxAwardsPerCompany { get; init; } = 25;
 }

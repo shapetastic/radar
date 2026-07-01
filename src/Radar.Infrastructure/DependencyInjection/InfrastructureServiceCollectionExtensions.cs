@@ -15,6 +15,7 @@ using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.Sources;
+using Radar.Infrastructure.UsaSpending;
 
 using System.Net;
 
@@ -163,6 +164,62 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, SecEdgarFilingCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the USASpending.gov government-contract collector and the typed <c>HttpClient</c> its
+    /// <see cref="IUsaSpendingAwardReader"/> uses. The collector reads the per-company <c>usaspending</c>
+    /// feeds supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's
+    /// <c>Url</c> is a <c>recipientId=...&amp;recipientSearchText=...</c> token) and produces raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> contract awards; it does not persist
+    /// them. All HTTP/JSON/USASpending code stays in Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="UsaSpendingCollectorOptions.AwardTypeCodes"/> is null/empty, when
+    /// <see cref="UsaSpendingCollectorOptions.MaxAwardsPerCompany"/> is zero/negative, or when
+    /// <see cref="UsaSpendingCollectorOptions.LookbackDays"/> is zero/negative: each of those would let the
+    /// collector run yet silently collect nothing, so they are treated as configuration errors. The API needs
+    /// no User-Agent or key; the named client only enables automatic gzip/deflate decompression (polite).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddUsaSpendingContractCollector(
+        this IServiceCollection services, UsaSpendingCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.AwardTypeCodes is null || options.AwardTypeCodes.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "USASpending requires at least one award_type_code to query; configure "
+                    + "Radar:UsaSpending:AwardTypeCodes (default A, B, C, D — the contracts group) — an empty "
+                    + "list collects nothing while still running.");
+        }
+
+        if (options.MaxAwardsPerCompany <= 0)
+        {
+            throw new InvalidOperationException(
+                "USASpending MaxAwardsPerCompany must be greater than zero; configure "
+                    + "Radar:UsaSpending:MaxAwardsPerCompany to a positive cap (default 25) — a zero/negative "
+                    + "value collects nothing while still running.");
+        }
+
+        if (options.LookbackDays <= 0)
+        {
+            throw new InvalidOperationException(
+                "USASpending LookbackDays must be greater than zero; configure Radar:UsaSpending:LookbackDays "
+                    + "to a positive window (default 365) — a zero/negative value collects nothing while still running.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<IUsaSpendingAwardReader, HttpUsaSpendingAwardReader>()
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, UsaSpendingContractCollector>();
         return services;
     }
 
