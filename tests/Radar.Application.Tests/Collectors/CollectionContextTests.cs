@@ -66,7 +66,9 @@ public sealed class CollectionContextTests
     [Fact]
     public void FeedsOfType_NullArgument_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => Context().FeedsOfType(null!));
+        // Contract is "throws on null/whitespace"; assert any ArgumentException (the guard throws the
+        // ArgumentNullException subtype for null) so the test isn't coupled to the exact subtype.
+        Assert.ThrowsAny<ArgumentException>(() => Context().FeedsOfType(null!));
     }
 
     [Theory]
