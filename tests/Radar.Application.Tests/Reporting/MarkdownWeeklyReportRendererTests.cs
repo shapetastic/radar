@@ -47,7 +47,8 @@ public sealed class MarkdownWeeklyReportRendererTests
     private static WeeklyReportModel CreateModel(
         IReadOnlyList<WeeklyReportEntry>? entries = null,
         IReadOnlyList<NeedsReviewSignalRef>? signalsNeedingReview = null,
-        CollectionSummary? collection = null) =>
+        CollectionSummary? collection = null,
+        IReadOnlyList<RecentRunSummary>? recentRuns = null) =>
         new(
             Title: "Radar Weekly",
             PeriodStartUtc: PeriodStart,
@@ -55,7 +56,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             GeneratedAtUtc: GeneratedAt,
             Entries: entries ?? [],
             SignalsNeedingReview: signalsNeedingReview ?? [],
-            Collection: collection);
+            Collection: collection,
+            RecentRuns: recentRuns);
 
     [Fact]
     public void Render_Null_Model_Throws()
@@ -733,5 +735,110 @@ public sealed class MarkdownWeeklyReportRendererTests
         var second = renderer.Render(model);
 
         Assert.Equal(first, second);
+    }
+
+    private static readonly DateTimeOffset RunNewer = new(2026, 6, 28, 14, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset RunOlder = new(2026, 6, 27, 9, 5, 0, TimeSpan.Zero);
+
+    [Fact]
+    public void Render_RecentRuns_Renders_Section_With_Bullets_Newest_First()
+    {
+        var newer = new RecentRunSummary(
+            CreatedAtUtc: RunNewer,
+            Collectors: ["rss", "sec"],
+            EvidenceNew: 12,
+            SignalsApproved: 7,
+            CompaniesScored: 6,
+            SourcesChecked: 14,
+            SourcesFailed: 1);
+        var older = new RecentRunSummary(
+            CreatedAtUtc: RunOlder,
+            Collectors: ["rss"],
+            EvidenceNew: 3,
+            SignalsApproved: 2,
+            CompaniesScored: 4,
+            SourcesChecked: 5,
+            SourcesFailed: 0);
+        var model = CreateModel(recentRuns: [newer, older]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("## Recent runs", output);
+        Assert.Contains(
+            "- 2026-06-28 14:00Z — collectors: rss, sec — new evidence 12 · approved 7 · companies 6 · sources 14/1 failed",
+            output);
+        Assert.Contains(
+            "- 2026-06-27 09:05Z — collectors: rss — new evidence 3 · approved 2 · companies 4 · sources 5/0 failed",
+            output);
+
+        // Model order preserved (newest-first as supplied).
+        var newerIndex = output.IndexOf("2026-06-28 14:00Z", StringComparison.Ordinal);
+        var olderIndex = output.IndexOf("2026-06-27 09:05Z", StringComparison.Ordinal);
+        Assert.True(newerIndex >= 0 && olderIndex >= 0);
+        Assert.True(newerIndex < olderIndex, "Recent runs should render in model-supplied (newest-first) order.");
+    }
+
+    [Fact]
+    public void Render_RecentRuns_Section_Omitted_When_Null()
+    {
+        var output = CreateRenderer().Render(CreateModel(recentRuns: null));
+
+        Assert.DoesNotContain("## Recent runs", output);
+    }
+
+    [Fact]
+    public void Render_RecentRuns_Section_Omitted_When_Empty()
+    {
+        var output = CreateRenderer().Render(CreateModel(recentRuns: []));
+
+        Assert.DoesNotContain("## Recent runs", output);
+    }
+
+    [Fact]
+    public void Render_RecentRuns_Empty_Collectors_Renders_None()
+    {
+        var run = new RecentRunSummary(
+            CreatedAtUtc: RunNewer,
+            Collectors: [],
+            EvidenceNew: 0,
+            SignalsApproved: 0,
+            CompaniesScored: 0,
+            SourcesChecked: 0,
+            SourcesFailed: 0);
+        var model = CreateModel(recentRuns: [run]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("collectors: (none)", output);
+    }
+
+    [Fact]
+    public void Render_RecentRuns_Appears_After_Collection_Summary()
+    {
+        var summary = new CollectionSummary(2, 2, 0, 3, []);
+        var run = new RecentRunSummary(RunNewer, ["rss"], 1, 1, 1, 1, 0);
+        var model = CreateModel(collection: summary, recentRuns: [run]);
+
+        var output = CreateRenderer().Render(model);
+
+        var summaryIndex = output.IndexOf("## Collection summary", StringComparison.Ordinal);
+        var runsIndex = output.IndexOf("## Recent runs", StringComparison.Ordinal);
+
+        Assert.True(summaryIndex >= 0 && runsIndex >= 0);
+        Assert.True(summaryIndex < runsIndex, "Recent runs should appear after the Collection summary.");
+    }
+
+    [Fact]
+    public void Render_RecentRuns_Contains_No_Advice_Language()
+    {
+        var run = new RecentRunSummary(RunNewer, ["rss", "sec"], 12, 7, 6, 14, 1);
+        var model = CreateModel(recentRuns: [run]);
+
+        var output = CreateRenderer().Render(model);
+
+        foreach (var forbidden in ForbiddenWords)
+        {
+            Assert.DoesNotContain(forbidden, output, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

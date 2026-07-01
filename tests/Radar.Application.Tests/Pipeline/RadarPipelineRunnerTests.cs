@@ -275,6 +275,7 @@ public sealed class RadarPipelineRunnerTests
                 new WeeklyReportActionPolicyV1(),
                 new MarkdownWeeklyReportRenderer(),
                 Reports,
+                RunStore,
                 new WeeklyReportOptions(),
                 time,
                 NullLogger<WeeklyReportBuilder>.Instance);

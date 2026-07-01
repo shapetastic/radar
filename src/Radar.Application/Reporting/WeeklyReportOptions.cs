@@ -13,4 +13,10 @@ public sealed class WeeklyReportOptions
 
     /// <summary>Maximum number of company entries to include (highest opportunity first). Default 25.</summary>
     public int MaxItems { get; init; } = 25;
+
+    /// <summary>
+    /// How many recent runs to show in the report's "Recent runs" footer. Default 5. A non-positive
+    /// value yields no footer (the run store returns an empty list for a non-positive count).
+    /// </summary>
+    public int RecentRunsInReport { get; init; } = 5;
 }

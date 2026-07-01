@@ -82,6 +82,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         AppendNamedActionSection(sb, model, RadarReportAction.Ignore, "Ignore / Low signal");
         AppendSignalsNeedingReview(sb, model);
         AppendCollectionSummary(sb, model);
+        AppendRecentRuns(sb, model);
 
         return sb.ToString();
     }
@@ -349,6 +350,42 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             }
         }
 
+        sb.Append(Lf);
+    }
+
+    // Run-history footer: one bullet per recent run (newest-first, model order) with the run instant,
+    // which collectors ran, and a glance at the run's counts. Observational metadata only — no labels,
+    // no scoring, no advice language. Omitted entirely when the model carries no recent runs (null or
+    // empty), preserving back-compat for direct-model callers.
+    private static void AppendRecentRuns(StringBuilder sb, WeeklyReportModel model)
+    {
+        var recentRuns = model.RecentRuns;
+        if (recentRuns is null || recentRuns.Count == 0)
+        {
+            return;
+        }
+
+        sb.Append("## Recent runs").Append(Lf);
+        sb.Append(Lf);
+        foreach (var run in recentRuns)
+        {
+            sb.Append("- ")
+                .Append(run.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))
+                .Append("Z — collectors: ")
+                .Append(run.Collectors.Count > 0 ? string.Join(", ", run.Collectors) : "(none)")
+                .Append(" — new evidence ")
+                .Append(run.EvidenceNew.ToString(CultureInfo.InvariantCulture))
+                .Append(" · approved ")
+                .Append(run.SignalsApproved.ToString(CultureInfo.InvariantCulture))
+                .Append(" · companies ")
+                .Append(run.CompaniesScored.ToString(CultureInfo.InvariantCulture))
+                .Append(" · sources ")
+                .Append(run.SourcesChecked.ToString(CultureInfo.InvariantCulture))
+                .Append('/')
+                .Append(run.SourcesFailed.ToString(CultureInfo.InvariantCulture))
+                .Append(" failed")
+                .Append(Lf);
+        }
         sb.Append(Lf);
     }
 }

@@ -4,6 +4,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
+using Radar.Application.Pipeline;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -29,6 +30,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private readonly IReportActionPolicy _policy;
     private readonly IWeeklyReportRenderer _renderer;
     private readonly IReportRepository _reportRepository;
+    private readonly IPipelineRunStore _runStore;
     private readonly WeeklyReportOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WeeklyReportBuilder> _logger;
@@ -42,6 +44,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         IReportActionPolicy policy,
         IWeeklyReportRenderer renderer,
         IReportRepository reportRepository,
+        IPipelineRunStore runStore,
         WeeklyReportOptions options,
         TimeProvider timeProvider,
         ILogger<WeeklyReportBuilder> logger)
@@ -54,6 +57,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(reportRepository);
+        ArgumentNullException.ThrowIfNull(runStore);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -84,6 +88,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _policy = policy;
         _renderer = renderer;
         _reportRepository = reportRepository;
+        _runStore = runStore;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -260,6 +265,37 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 ReviewReason: reviewReason));
         }
 
+        // Read the recent run history for the observational footer. This degrades to null (section
+        // omitted) on any read failure — the report must never abort because the run log is
+        // unreadable. Cancellation still propagates (the catch filter excludes it).
+        IReadOnlyList<RecentRunSummary>? recentRuns = null;
+        try
+        {
+            var runs = await _runStore
+                .ReadRecentAsync(_options.RecentRunsInReport, ct)
+                .ConfigureAwait(false);
+
+            // The store returns records newest-first (AD-3). Note: the run currently being generated
+            // is persisted by the runner AFTER this report is built (spec 59 writes at the end of
+            // RunAsync), so this footer intentionally shows the PRIOR runs only.
+            recentRuns = runs
+                .Select(r => new RecentRunSummary(
+                    r.CreatedAtUtc,
+                    r.Collectors,
+                    r.EvidenceNew,
+                    r.SignalsApproved,
+                    r.CompaniesScored,
+                    r.SourcesChecked,
+                    r.SourcesFailed))
+                .ToList();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to read recent run history for the weekly report footer; omitting the section.");
+        }
+
         var generatedAt = _timeProvider.GetUtcNow();
         var title = string.Format(
             CultureInfo.InvariantCulture,
@@ -274,7 +310,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             GeneratedAtUtc: generatedAt,
             Entries: entries,
             SignalsNeedingReview: needsReview,
-            Collection: collection);
+            Collection: collection,
+            RecentRuns: recentRuns);
 
         var markdown = _renderer.Render(model);
 
