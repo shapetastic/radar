@@ -369,6 +369,55 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
+    public async Task RendersScoreDeltaClauseFromPreviousSnapshot()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+
+        // Previous (before period): lower opportunity/trajectory.
+        var prevSnapshot = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithOpportunityScore(61)
+            .WithTrajectoryScore(56)
+            .WithCreatedAtUtc(BeforePeriod)
+            .Build();
+
+        // Current (in period): clearly higher, so deltas are +19/+19.
+        var currentSnapshotId = Guid.NewGuid();
+        var currentSnapshot = new ScoreSnapshotBuilder()
+            .WithId(currentSnapshotId)
+            .WithCompanyId(companyId)
+            .WithOpportunityScore(80)
+            .WithTrajectoryScore(75)
+            .WithCreatedAtUtc(InPeriod)
+            .Build();
+
+        await h.Companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
+        await h.Scores.AddSnapshotAsync(prevSnapshot, default);
+        await h.Scores.AddSnapshotAsync(currentSnapshot, default);
+        await SeedEvidenceLinkAsync(h, currentSnapshotId);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains(
+            "(Opportunity +19, Trajectory +19 vs last run)", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RendersFirstSnapshotClauseWhenNoPreviousSnapshot()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("(first snapshot)", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RanksByOpportunityDescendingAndAppliesMaxItemsCap()
     {
         var h = new Harness(new WeeklyReportOptions { MaxItems = 2 });

@@ -14,4 +14,6 @@ public sealed record WeeklyReportEntry(
     string Rationale,
     int Rank,
     IReadOnlyList<ReportEvidenceRef> Evidence,
-    IReadOnlyList<ReportSignalRef> Signals);
+    IReadOnlyList<ReportSignalRef> Signals,
+    int? PreviousOpportunityScore = null,
+    int? PreviousTrajectoryScore = null);

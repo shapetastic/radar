@@ -146,6 +146,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             .Append(snap.EvidenceConfidenceScore.ToString(CultureInfo.InvariantCulture))
             .Append(" · Velocity ")
             .Append(snap.SignalVelocityScore.ToString(CultureInfo.InvariantCulture))
+            .Append(FormatMovement(entry, snap))
             .Append(Lf);
 
         sb.Append("- Why: ").Append(entry.Rationale).Append(Lf);
@@ -169,6 +170,40 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         AppendSignals(sb, entry);
 
         sb.Append(Lf);
+    }
+
+    // Deterministic week-over-week movement clause appended to the score line. Descriptive metadata
+    // only (never a label or advice): signed deltas of Opportunity/Trajectory against the entry's
+    // previous snapshot, "no change" when both are flat, or "first snapshot" when there is no prior.
+    private static string FormatMovement(WeeklyReportEntry entry, Domain.Scoring.CompanyScoreSnapshot snap)
+    {
+        if (entry.PreviousOpportunityScore is not int previousOpportunity)
+        {
+            return " (first snapshot)";
+        }
+
+        var previousTrajectory = entry.PreviousTrajectoryScore ?? snap.TrajectoryScore;
+        var opportunityDelta = snap.OpportunityScore - previousOpportunity;
+        var trajectoryDelta = snap.TrajectoryScore - previousTrajectory;
+
+        if (opportunityDelta == 0 && trajectoryDelta == 0)
+        {
+            return " (no change vs last run)";
+        }
+
+        return " (Opportunity "
+            + FormatSignedDelta(snap.OpportunityScore, previousOpportunity)
+            + ", Trajectory "
+            + FormatSignedDelta(snap.TrajectoryScore, previousTrajectory)
+            + " vs last run)";
+    }
+
+    private static string FormatSignedDelta(int current, int previous)
+    {
+        var delta = current - previous;
+        return delta >= 0
+            ? "+" + delta.ToString(CultureInfo.InvariantCulture)
+            : delta.ToString(CultureInfo.InvariantCulture);
     }
 
     private static void AppendSignals(StringBuilder sb, WeeklyReportEntry entry)

@@ -24,7 +24,9 @@ public sealed class MarkdownWeeklyReportRendererTests
         string? ticker = "ACME",
         CompanyScoreSnapshot? snapshot = null,
         IReadOnlyList<ReportEvidenceRef>? evidence = null,
-        IReadOnlyList<ReportSignalRef>? signals = null)
+        IReadOnlyList<ReportSignalRef>? signals = null,
+        int? previousOpportunity = null,
+        int? previousTrajectory = null)
     {
         var snap = snapshot ?? new ScoreSnapshotBuilder().Build();
         return new WeeklyReportEntry(
@@ -37,7 +39,9 @@ public sealed class MarkdownWeeklyReportRendererTests
             Rationale: "Deterministic rationale.",
             Rank: rank,
             Evidence: evidence ?? [],
-            Signals: signals ?? []);
+            Signals: signals ?? [],
+            PreviousOpportunityScore: previousOpportunity,
+            PreviousTrajectoryScore: previousTrajectory);
     }
 
     private static WeeklyReportModel CreateModel(
@@ -242,6 +246,105 @@ public sealed class MarkdownWeeklyReportRendererTests
             "- Opportunity 61 · Trajectory 62 · Attention 63 · Evidence 64 · Velocity 65",
             output);
         Assert.Contains($"- Score snapshot: {snap.Id}", output);
+    }
+
+    [Fact]
+    public void Render_Score_Line_Shows_Positive_Deltas_When_Scores_Rose()
+    {
+        var snap = new ScoreSnapshotBuilder()
+            .WithOpportunityScore(80)
+            .WithTrajectoryScore(75)
+            .Build();
+        var model = CreateModel(
+        [
+            CreateEntry(
+                RadarReportAction.Investigate,
+                snapshot: snap,
+                previousOpportunity: 61,
+                previousTrajectory: 56),
+        ]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("(Opportunity +19, Trajectory +19 vs last run)\n", output);
+    }
+
+    [Fact]
+    public void Render_Score_Line_Shows_Negative_Deltas_When_Scores_Fell()
+    {
+        var snap = new ScoreSnapshotBuilder()
+            .WithOpportunityScore(61)
+            .WithTrajectoryScore(56)
+            .Build();
+        var model = CreateModel(
+        [
+            CreateEntry(
+                RadarReportAction.ThesisDeteriorating,
+                snapshot: snap,
+                previousOpportunity: 80,
+                previousTrajectory: 75),
+        ]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("(Opportunity -19, Trajectory -19 vs last run)\n", output);
+    }
+
+    [Fact]
+    public void Render_Score_Line_Shows_No_Change_When_Deltas_Zero()
+    {
+        var snap = new ScoreSnapshotBuilder()
+            .WithOpportunityScore(70)
+            .WithTrajectoryScore(65)
+            .Build();
+        var model = CreateModel(
+        [
+            CreateEntry(
+                RadarReportAction.Watch,
+                snapshot: snap,
+                previousOpportunity: 70,
+                previousTrajectory: 65),
+        ]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("(no change vs last run)\n", output);
+        Assert.DoesNotContain("vs last run)", output[..output.IndexOf("(no change", StringComparison.Ordinal)]);
+    }
+
+    [Fact]
+    public void Render_Score_Line_Shows_First_Snapshot_When_No_Previous()
+    {
+        var model = CreateModel([CreateEntry(RadarReportAction.Investigate)]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("(first snapshot)\n", output);
+    }
+
+    [Fact]
+    public void Render_Delta_Clause_Contains_No_Advice_Language()
+    {
+        var snap = new ScoreSnapshotBuilder()
+            .WithOpportunityScore(80)
+            .WithTrajectoryScore(50)
+            .Build();
+        var model = CreateModel(
+        [
+            CreateEntry(
+                RadarReportAction.Investigate,
+                snapshot: snap,
+                previousOpportunity: 61,
+                previousTrajectory: 75),
+        ]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("(Opportunity +19, Trajectory -25 vs last run)\n", output);
+        foreach (var forbidden in ForbiddenWords)
+        {
+            Assert.DoesNotContain(forbidden, output, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
