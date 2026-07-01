@@ -126,7 +126,40 @@ trajectory, the multiplicative Opportunity, the no-evidence-for-previous-window 
 `windowStart`→previous boundary. To change the formula, bump `Version` and update this entry; existing
 snapshots remain reproducible under their recorded `ScoringVersion`.
 
-**Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer).
+### Refinement — `radar-formula-v2` (spec 58): corroboration and diversity must *raise* scores
+
+The first two-collector live run (`["rss","sec"]`, RSS press releases + SEC 8-K filings) exposed a
+structural flaw in v1: **adding corroborating evidence *lowered* every company it touched** (Helios fell
+Opportunity 32→22 despite gaining two real 8-K signals). Three v1 component formulas moved the wrong way:
+Neutral filings dragged the trajectory *mean* toward 50; a company's own SEC feed inflated Attention (which
+the Opportunity `(1 − Attention/200)` term penalises); and *mean* confidence averaged the 0.40 filing down
+against the 0.60 press release. `RadarScoreFormulaV2` (`Version = "radar-formula-v2"`, **maintainer-approved**)
+fixes exactly three components; **Opportunity, Velocity, the window, and the provenance/contribution rules are
+unchanged**. The v1 component formulas above are therefore *superseded by radar-formula-v2*:
+
+- **TrajectoryScore** — now the confidence/recency-weighted mean of directional strength over **only
+  `Positive`/`Negative` signals**; `Neutral`/`Mixed` are excluded from **both** numerator and denominator (no
+  directional signals → `T_raw = 0` → 50). Neutrals no longer dilute the directional read. (Contributions still
+  emit one row per current-window signal in input order — Neutral/Mixed simply carry weight 0.)
+- **AttentionScore** — `reach = distinctThirdPartySourceNames + 0.5·mediaSignals`, counting distinct source
+  names **only among third-party (market-attention) evidence source types** (`NewsArticle`, `SocialMedia`,
+  `ConferenceMention` — see `EvidenceSourceTypes.IsThirdPartyAttentionSource`). A company's own disclosures
+  (press releases, filings, RSS, …) are first-party and add nothing. With only first-party collectors today
+  `reach → 0` and Attention → 0 (correct: market attention is unmeasurable from own disclosures); a
+  news/media collector makes it meaningful automatically.
+- **EvidenceConfidenceScore** — *best-anchored + diversity bonus*:
+  `100·bestConf·(0.6+0.4·bestQualWeight)·(0.7+0.3·divFactor)`, where `bestConf` is the **max** signal
+  confidence and `bestQualWeight` the **max** quality weight among contributing evidence (was avg for both).
+  Because the diversity factor now multiplies a max-anchored base, adding a signal/evidence item is
+  **monotonic non-decreasing** — corroboration can never lower confidence.
+
+Rationale: for a research tool whose whole premise is corroboration, more (and more diverse) evidence must
+*earn* a stronger label, not a weaker one. Existing on-disk snapshots keep their recorded `ScoringVersion`
+(`radar-formula-v1`) and remain reproducible under it; only the live formula moved to v2. Per the
+spec-implementation checklist, `RadarScoreFormulaV1` was **deleted** (not left dormant) and its tests ported.
+
+**Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
+2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved).
 
 ---
 

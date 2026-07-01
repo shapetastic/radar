@@ -5,14 +5,17 @@ using Radar.Domain.Signals;
 namespace Radar.Application.Scoring;
 
 /// <summary>
-/// The first real, maintainer-owned <see cref="IScoreFormula"/>: <c>radar-formula-v1</c>. Pure and
-/// deterministic (no clock, no randomness, no I/O); every component clamps to [0,100]. All tunable
-/// numbers are named <c>private const</c> fields below — simple, visible, versioned. The five
-/// component computations were designed and approved by the maintainer; this class transcribes them
-/// exactly. Emits exactly one provenance-carrying contribution per current-window signal, in input
-/// order, and never from <see cref="ScoringInput.PreviousSignals"/>.
+/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v2</c>: an AD-6 refinement of
+/// <c>radar-formula-v1</c> so that corroboration and source diversity <b>raise</b> scores rather than
+/// lower them. Pure and deterministic (no clock, no randomness, no I/O); every component clamps to
+/// [0,100]. Only three components change from v1 — Trajectory excludes zero-direction signals,
+/// Attention counts only third-party (market) sources, and EvidenceConfidence anchors on the strongest
+/// signal/quality with a saturating diversity bonus. SignalVelocity and Opportunity are byte-for-byte
+/// identical to v1. Emits exactly one provenance-carrying contribution per current-window signal, in
+/// input order (including Neutral/Mixed, which naturally weigh 0), and never from
+/// <see cref="ScoringInput.PreviousSignals"/>.
 /// </summary>
-public sealed class RadarScoreFormulaV1 : IScoreFormula
+public sealed class RadarScoreFormulaV2 : IScoreFormula
 {
     // Direction → sign used in trajectory.
     private const int DirPositive = +1;
@@ -52,7 +55,7 @@ public sealed class RadarScoreFormulaV1 : IScoreFormula
     private const double OpportunityAttentionDivisor = 200.0;
 
     /// <inheritdoc />
-    public string Version => "radar-formula-v1";
+    public string Version => "radar-formula-v2";
 
     private static int DirectionSign(SignalDirection d) => d switch
     {
@@ -84,7 +87,7 @@ public sealed class RadarScoreFormulaV1 : IScoreFormula
             var emptyComponents = new ScoreComponents(0, 0, 0, 0, 0);
             return new ScoreComputation(
                 emptyComponents,
-                "radar-formula-v1: no signals in window.",
+                "radar-formula-v2: no signals in window.",
                 JsonSerializer.Serialize(emptyComponents),
                 new List<ScoreContribution>());
         }
@@ -112,47 +115,60 @@ public sealed class RadarScoreFormulaV1 : IScoreFormula
         }
 
         // ---- 1. TrajectoryScore (50 = neutral, >50 improving) ----
+        // v2: only Positive/Negative signals contribute to numerator AND denominator. Neutral/Mixed are
+        // excluded entirely so they no longer dilute the directional read toward 50.
         var sumW = 0.0;
         var sumTerm = 0.0;
         for (var i = 0; i < signals.Count; i++)
         {
             var signal = signals[i].Signal;
+            var sign = DirectionSign(signal.Direction);
+            if (sign == 0)
+            {
+                continue; // Neutral/Mixed excluded from both numerator and denominator.
+            }
+
             var w = (double)signal.Confidence * recency[i];
-            var term = DirectionSign(signal.Direction) * signal.Strength * w;
             sumW += w;
-            sumTerm += term;
+            sumTerm += sign * signal.Strength * w;
         }
 
-        var tRaw = sumW <= 0 ? 0 : sumTerm / sumW; // ∈ [-10, 10]
+        var tRaw = sumW <= 0 ? 0 : sumTerm / sumW; // ∈ [-10, 10]; no directional signals → 0 → 50
         var trajectoryScore = Score(TrajectoryNeutral + TrajectoryScale * tRaw);
 
         // ---- 2. AttentionScore (saturating on breadth) ----
-        var distinctSources = signals
+        // v2: only third-party (market attention) evidence source names count toward reach; a company's
+        // own disclosures (press releases, filings, ...) are not market attention.
+        var distinctThirdPartySources = signals
+            .Where(s => EvidenceSourceTypes.IsThirdPartyAttentionSource(s.Evidence.SourceType))
             .Select(s => s.Evidence.SourceName)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count();
         var mediaCount = signals.Count(s => s.Signal.Type == SignalType.MediaAttention);
-        var reach = distinctSources + MediaReachWeight * mediaCount;
+        var reach = distinctThirdPartySources + MediaReachWeight * mediaCount;
         var attentionScore = Score(100 * reach / (reach + AttentionHalfSaturation));
 
         // ---- 3. EvidenceConfidenceScore ----
-        var avgConf = signals.Average(s => (double)s.Signal.Confidence); // 0..1
-        var qualFactor = signals.Average(s => QualityWeight(s.Evidence.Quality));
+        // v2: best-anchored + diversity bonus. Anchor on the strongest signal confidence and the highest
+        // evidence-quality weight, then apply a saturating diversity multiplier. Adding a weaker
+        // signal/lower-quality source can never lower the base, so corroboration is monotonic.
+        var bestConf = signals.Max(s => (double)s.Signal.Confidence); // 0..1
+        var bestQualWeight = signals.Max(s => QualityWeight(s.Evidence.Quality));
         var distinctTypes = signals.Select(s => s.Evidence.SourceType).Distinct().Count();
         var divFactor = Math.Min(1, distinctTypes / DiversityTarget);
         var evidenceConfidenceScore = Score(
-            100 * avgConf
-                * (EcQualityBase + EcQualitySpan * qualFactor)
+            100 * bestConf
+                * (EcQualityBase + EcQualitySpan * bestQualWeight)
                 * (EcDiversityBase + EcDiversitySpan * divFactor));
 
-        // ---- 4. SignalVelocityScore (50 = steady activity) ----
+        // ---- 4. SignalVelocityScore (50 = steady activity) ---- (unchanged from v1)
         var actNow = signals.Sum(s => s.Signal.Strength);
         var actPrev = input.PreviousSignals.Sum(s => s.Strength);
         var ratio = (actNow + VelocitySmoothing) / (actPrev + VelocitySmoothing);
         var signalVelocityScore = Score(VelocitySteady * ratio);
 
-        // ---- 5. OpportunityScore (multiplicative; uses clamped int components above) ----
+        // ---- 5. OpportunityScore (multiplicative; uses clamped int components above) ---- (unchanged)
         var opportunityScore = Score(
             trajectoryScore
             * (evidenceConfidenceScore / 100.0)
@@ -166,6 +182,8 @@ public sealed class RadarScoreFormulaV1 : IScoreFormula
             SignalVelocityScore: signalVelocityScore);
 
         // ---- Contributions (provenance — current window only) ----
+        // Still one contribution per current-window signal in input order, including Neutral/Mixed
+        // (which naturally get weight 0 from DirectionSign). Provenance is unchanged from v1.
         var contributions = new List<ScoreContribution>(signals.Count);
         for (var i = 0; i < signals.Count; i++)
         {
@@ -185,7 +203,7 @@ public sealed class RadarScoreFormulaV1 : IScoreFormula
 
         var windowDays = (int)Math.Round(windowLength.TotalDays, MidpointRounding.AwayFromZero);
         var explanation =
-            $"radar-formula-v1: {input.Signals.Count} signal(s) over {windowDays}d → " +
+            $"radar-formula-v2: {input.Signals.Count} signal(s) over {windowDays}d → " +
             $"Trajectory {trajectoryScore}, Opportunity {opportunityScore} (Attention {attentionScore}, " +
             $"Confidence {evidenceConfidenceScore}, Velocity {signalVelocityScore}).";
 
