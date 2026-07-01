@@ -112,10 +112,13 @@ public static class InfrastructureServiceCollectionExtensions
     /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> filings; it does not persist them. All
     /// HTTP/JSON/SEC code stays in Infrastructure (AD-5).
     /// <para>
-    /// Fails fast when <see cref="SecCollectorOptions.UserAgent"/> is null/blank: SEC returns HTTP 403 for
-    /// every request without a compliant declared User-Agent, so an unconfigured UA is a configuration error.
-    /// The named client sends the configured UA plus <c>Accept-Encoding: gzip, deflate</c> and enables
-    /// automatic decompression (SEC recommends gzip).
+    /// Fails fast when <see cref="SecCollectorOptions.UserAgent"/> is null/blank (SEC returns HTTP 403 for
+    /// every request without a compliant declared User-Agent), when
+    /// <see cref="SecCollectorOptions.MaxFilingsPerCompany"/> is zero/negative, or when
+    /// <see cref="SecCollectorOptions.Forms"/> is null/empty: each of those would let the collector run yet
+    /// silently collect nothing, so they are treated as configuration errors. The named client sends the
+    /// configured UA plus <c>Accept-Encoding: gzip, deflate</c> and enables automatic decompression (SEC
+    /// recommends gzip).
     /// </para>
     /// </summary>
     public static IServiceCollection AddSecEdgarCollector(
@@ -128,6 +131,20 @@ public static class InfrastructureServiceCollectionExtensions
             throw new InvalidOperationException(
                 "SEC EDGAR requires a compliant User-Agent (e.g. \"Radar Research <email>\"); configure "
                     + "Radar:Sec:UserAgent before enabling the \"sec\" collector — every request 403s without it.");
+        }
+
+        if (options.MaxFilingsPerCompany <= 0)
+        {
+            throw new InvalidOperationException(
+                "SEC EDGAR MaxFilingsPerCompany must be greater than zero; configure Radar:Sec:MaxFilingsPerCompany "
+                    + "to a positive cap (default 25) — a zero/negative value collects nothing while still running.");
+        }
+
+        if (options.Forms is null || options.Forms.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "SEC EDGAR requires at least one filing form to collect; configure Radar:Sec:Forms "
+                    + "(default 8-K, 10-Q, 10-K) — an empty list collects nothing while still running.");
         }
 
         services.AddSingleton(options);

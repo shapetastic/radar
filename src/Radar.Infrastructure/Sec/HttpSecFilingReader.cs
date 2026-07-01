@@ -79,6 +79,21 @@ internal sealed class HttpSecFilingReader : ISecFilingReader
         try
         {
             using var document = JsonDocument.Parse(bytes);
+
+            // The submissions endpoint always returns a JSON object. Valid JSON with any other root shape
+            // (array, string, number, …) is a bad/changed response, not a quiet issuer: report it as
+            // Malformed so the collector does not treat the source as silently "succeeded".
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                _logger.LogWarning(
+                    "SEC submissions {SubmissionsUrl} returned JSON with an unexpected root kind {RootKind} "
+                        + "(expected an object); skipping.",
+                    submissionsUrl,
+                    document.RootElement.ValueKind);
+                return SecFilingReadResult.Failure(
+                    SecFilingReadOutcome.Malformed, "unexpected root JSON shape");
+            }
+
             var items = ParseFilings(document.RootElement, ct);
             return SecFilingReadResult.Success(items);
         }

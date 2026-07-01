@@ -142,6 +142,23 @@ public sealed class HttpSecFilingReaderTests
         Assert.Empty(result.Items);
     }
 
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"a string\"")]
+    [InlineData("42")]
+    public async Task ReadAsync_UnexpectedRootShape_ReturnsMalformedWithoutThrowing(string body)
+    {
+        // Valid JSON whose root is not the expected object (array/string/number) is a bad/changed response
+        // shape, not a quiet issuer: it must surface as Malformed rather than a silent empty Success.
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, body));
+
+        var result = await reader.ReadAsync(SubmissionsUrl, CancellationToken.None);
+
+        Assert.Equal(SecFilingReadOutcome.Malformed, result.Outcome);
+        Assert.False(result.IsSuccess);
+        Assert.Empty(result.Items);
+    }
+
     [Fact]
     public async Task ReadAsync_QuietButValidIssuer_ReturnsSuccessWithNoItems()
     {
