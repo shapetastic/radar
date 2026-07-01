@@ -198,11 +198,38 @@ public sealed class RadarPipelineRunnerTests
         }
     }
 
+    /// <summary>
+    /// A fake <see cref="IPipelineRunStore"/> that records every <see cref="PipelineRunRecord"/> it is
+    /// asked to write and returns a fixed path. Lets tests assert the runner writes exactly one run
+    /// record per run with the run's counts and ordered collector names.
+    /// </summary>
+    private sealed class RecordingPipelineRunStore : IPipelineRunStore
+    {
+        public List<PipelineRunRecord> Written { get; } = new();
+
+        public Task<string> WriteAsync(PipelineRunRecord record, CancellationToken ct)
+        {
+            Written.Add(record);
+            return Task.FromResult("written/run.json");
+        }
+
+        public Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct)
+        {
+            IReadOnlyList<PipelineRunRecord> recent = Written
+                .OrderByDescending(r => r.CreatedAtUtc)
+                .ThenByDescending(r => r.Id)
+                .Take(Math.Max(count, 0))
+                .ToList();
+            return Task.FromResult(recent);
+        }
+    }
+
     private sealed class Harness
     {
         public InMemoryEvidenceRepository Evidence { get; } = new();
         public RecordingRawEvidenceStore RawStore { get; } = new();
         public RecordingReportFileWriter ReportWriter { get; } = new();
+        public RecordingPipelineRunStore RunStore { get; } = new();
         public InMemoryCompanyRepository Companies { get; } = new();
         public InMemorySignalRepository Signals { get; } = new();
         public InMemorySignalReviewRepository Reviews { get; } = new();
@@ -271,6 +298,7 @@ public sealed class RadarPipelineRunnerTests
                 ScoreStore,
                 reportBuilder,
                 ReportWriter,
+                RunStore,
                 options,
                 time,
                 NullLogger<RadarPipelineRunner>.Instance);
@@ -891,6 +919,7 @@ public sealed class RadarPipelineRunnerTests
             services.AddFileSignalStore(Path.Combine(tempDir, "signals"));
             services.AddFileScoreStore(Path.Combine(tempDir, "scores"));
             services.AddFileReportWriter(Path.Combine(tempDir, "reports"));
+            services.AddFilePipelineRunStore(Path.Combine(tempDir, "runs"));
             services.AddRadarPipeline();
 
             using var provider = services.BuildServiceProvider();
@@ -995,5 +1024,82 @@ public sealed class RadarPipelineRunnerTests
         var stored = await h.Evidence.GetByContentHashAsync(canonical.ContentHash, default);
         Assert.NotNull(stored);
         Assert.Equal(EvidenceSourceType.Filing, stored!.SourceType);
+    }
+
+    [Fact]
+    public async Task Run_WritesExactlyOneRunRecord_MatchingResultCounts()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // Exactly one run record is written per run, and every count on it equals the returned result.
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(result.EvidenceCollected, record.EvidenceCollected);
+        Assert.Equal(result.EvidenceNew, record.EvidenceNew);
+        Assert.Equal(result.SignalsExtracted, record.SignalsExtracted);
+        Assert.Equal(result.SignalsValid, record.SignalsValid);
+        Assert.Equal(result.SignalsApproved, record.SignalsApproved);
+        Assert.Equal(result.SignalsNeedingReview, record.SignalsNeedingReview);
+        Assert.Equal(result.CompaniesScored, record.CompaniesScored);
+        Assert.Equal(result.SourcesChecked, record.SourcesChecked);
+        Assert.Equal(result.SourcesFailed, record.SourcesFailed);
+
+        // The record's ReportId matches the result and is non-null when a report was generated.
+        Assert.Equal(result.ReportId, record.ReportId);
+        Assert.NotNull(record.ReportId);
+
+        // The record is stamped with the run's single instant (AD-7).
+        Assert.Equal(FixedNow, record.CreatedAtUtc);
+    }
+
+    [Fact]
+    public async Task Run_RunRecord_HasOrderedCollectorNames()
+    {
+        var companyId = Guid.NewGuid();
+
+        var aCollector = new ConfigurableCollector(
+            "AAA",
+            EvidenceSourceType.Filing,
+            new CollectionResult([BuildCollected()], CollectionSummary.Empty));
+        var zCollector = new ConfigurableCollector(
+            "ZZZ",
+            EvidenceSourceType.GovernmentContract,
+            new CollectionResult([], CollectionSummary.Empty));
+
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        // Pass collectors DI-registration-shuffled (Z before A) to prove the record carries the
+        // runner's stable CollectorName-ordinal order, not the registration order.
+        var h = new Harness(
+            [zCollector, aCollector], extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(new[] { "AAA", "ZZZ" }, record.Collectors);
+    }
+
+    [Fact]
+    public async Task Run_WithGenerateReportFalse_RunRecordReportIdIsNull()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Null(record.ReportId);
+        Assert.Equal(result.ReportId, record.ReportId);
     }
 }

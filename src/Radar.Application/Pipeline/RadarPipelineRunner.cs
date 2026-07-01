@@ -40,6 +40,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly IScoreSnapshotFileStore _scoreFileStore;
     private readonly IWeeklyReportBuilder _reportBuilder;
     private readonly IReportFileWriter _reportFileWriter;
+    private readonly IPipelineRunStore _runStore;
     private readonly PipelineOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<RadarPipelineRunner> _logger;
@@ -60,6 +61,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         IScoreSnapshotFileStore scoreFileStore,
         IWeeklyReportBuilder reportBuilder,
         IReportFileWriter reportFileWriter,
+        IPipelineRunStore runStore,
         PipelineOptions options,
         TimeProvider timeProvider,
         ILogger<RadarPipelineRunner> logger)
@@ -79,6 +81,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(scoreFileStore);
         ArgumentNullException.ThrowIfNull(reportBuilder);
         ArgumentNullException.ThrowIfNull(reportFileWriter);
+        ArgumentNullException.ThrowIfNull(runStore);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -115,6 +118,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _scoreFileStore = scoreFileStore;
         _reportBuilder = reportBuilder;
         _reportFileWriter = reportFileWriter;
+        _runStore = runStore;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -296,7 +300,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             collected.Summary.SourcesChecked,
             reportId?.ToString() ?? "none");
 
-        return new RadarPipelineResult(
+        var pipelineResult = new RadarPipelineResult(
             EvidenceCollected: evidenceCollected,
             EvidenceNew: evidenceNew,
             SignalsExtracted: signalsExtracted,
@@ -308,6 +312,28 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             SourcesChecked: collected.Summary.SourcesChecked,
             SourcesFailed: collected.Summary.SourcesFailed,
             Collection: collected.Summary);
+
+        // Persist a durable run record (append-only run log, AD-8). Best-effort like the other file
+        // stores: the store swallows disk errors, so a failure here never changes a counter or aborts
+        // the run. Reuse asOfUtc (AD-7: one run, one instant) and the runner's already-ordered
+        // collector names so the record reflects what actually ran.
+        var runRecord = new PipelineRunRecord(
+            Id: Guid.NewGuid(),
+            CreatedAtUtc: asOfUtc,
+            Collectors: _collectors.Select(c => c.CollectorName).ToList(),
+            EvidenceCollected: pipelineResult.EvidenceCollected,
+            EvidenceNew: pipelineResult.EvidenceNew,
+            SignalsExtracted: pipelineResult.SignalsExtracted,
+            SignalsValid: pipelineResult.SignalsValid,
+            SignalsApproved: pipelineResult.SignalsApproved,
+            SignalsNeedingReview: pipelineResult.SignalsNeedingReview,
+            CompaniesScored: pipelineResult.CompaniesScored,
+            SourcesChecked: pipelineResult.SourcesChecked,
+            SourcesFailed: pipelineResult.SourcesFailed,
+            ReportId: pipelineResult.ReportId);
+        await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
+
+        return pipelineResult;
     }
 
     /// <summary>
