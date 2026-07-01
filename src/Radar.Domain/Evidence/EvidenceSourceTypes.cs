@@ -15,8 +15,9 @@ public static class EvidenceSourceTypes
     /// postings, patents, regulatory/insider disclosures, local files, manual entries) is first-party
     /// and contributes nothing to measured attention.
     /// <para>
-    /// The <c>radar-formula</c> spec also lists <c>MediaAttention</c> as third-party, but that is a
-    /// <see cref="Signals.SignalType"/>, <b>not</b> an <see cref="EvidenceSourceType"/> — its
+    /// The <c>radar-formula</c> spec also lists <see cref="Radar.Domain.Signals.SignalType.MediaAttention"/>
+    /// as third-party, but that is a <see cref="Radar.Domain.Signals.SignalType"/>, <b>not</b> an
+    /// <see cref="EvidenceSourceType"/> — its
     /// contribution to attention reach is captured separately by the media-signal term in the formula.
     /// </para>
     /// Written as an explicit whitelist so first-party stays the safe default as the append-only
