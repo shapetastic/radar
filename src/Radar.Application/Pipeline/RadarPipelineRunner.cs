@@ -17,13 +17,15 @@ namespace Radar.Application.Pipeline;
 /// <summary>
 /// Provider-independent deterministic orchestration of the seven pipeline stages. Sequences the
 /// existing Application interfaces (collect → store evidence → extract → resolve → review → store
-/// signals → score → report) and threads provenance through them. Contains <b>no</b> scoring math,
-/// <b>no</b> label thresholds, and <b>no</b> resolution/extraction logic — each stage's behaviour
-/// stays behind its own interface; the runner only sequences them.
+/// signals → score → report) and threads provenance through them. The collect stage runs <b>all</b>
+/// registered collectors in a stable <see cref="IEvidenceCollector.CollectorName"/> order and merges
+/// their results (via <see cref="CollectionResultMerger"/>) before storing evidence. Contains
+/// <b>no</b> scoring math, <b>no</b> label thresholds, and <b>no</b> resolution/extraction logic —
+/// each stage's behaviour stays behind its own interface; the runner only sequences them.
 /// </summary>
 public sealed class RadarPipelineRunner : IRadarPipeline
 {
-    private readonly IEvidenceCollector _collector;
+    private readonly IReadOnlyList<IEvidenceCollector> _collectors;
     private readonly CollectedEvidenceMapper _mapper;
     private readonly IEvidenceRepository _evidenceRepository;
     private readonly IRawEvidenceStore _rawEvidenceStore;
@@ -43,7 +45,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly ILogger<RadarPipelineRunner> _logger;
 
     public RadarPipelineRunner(
-        IEvidenceCollector collector,
+        IEnumerable<IEvidenceCollector> collectors,
         CollectedEvidenceMapper mapper,
         IEvidenceRepository evidenceRepository,
         IRawEvidenceStore rawEvidenceStore,
@@ -62,7 +64,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         TimeProvider timeProvider,
         ILogger<RadarPipelineRunner> logger)
     {
-        ArgumentNullException.ThrowIfNull(collector);
+        ArgumentNullException.ThrowIfNull(collectors);
         ArgumentNullException.ThrowIfNull(mapper);
         ArgumentNullException.ThrowIfNull(evidenceRepository);
         ArgumentNullException.ThrowIfNull(rawEvidenceStore);
@@ -81,7 +83,24 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _collector = collector;
+        // Materialize once in a stable CollectorName-ordinal order so the merge order — and therefore
+        // which collector "wins" a ContentHash tie in AddIfNewAsync — is deterministic across runs and
+        // independent of DI registration order.
+        _collectors = collectors
+            .OrderBy(c => c.CollectorName, StringComparer.Ordinal)
+            .ToList();
+
+        // Fail fast on an empty enumerable: DI happily supplies zero collectors when none are
+        // registered, which would otherwise let the pipeline "succeed" while silently collecting no
+        // evidence. This restores the fail-fast guarantee the previous single-collector constructor
+        // gave for free.
+        if (_collectors.Count == 0)
+        {
+            throw new ArgumentException(
+                "At least one IEvidenceCollector must be registered; the pipeline cannot run with no collectors.",
+                nameof(collectors));
+        }
+
         _mapper = mapper;
         _evidenceRepository = evidenceRepository;
         _rawEvidenceStore = rawEvidenceStore;
@@ -122,7 +141,19 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
         var sourceFeeds = await _companyRepository.GetSourceFeedsAsync(ct).ConfigureAwait(false);
         var context = new CollectionContext(companies, sourceFeeds);
-        var collected = await _collector.CollectAsync(context, ct).ConfigureAwait(false);
+
+        // Run every registered collector sequentially in the stable order fixed in the constructor
+        // (keeps determinism and avoids hammering the network), then merge their results into one. The
+        // merge concatenates evidence in collector order without re-sorting/de-duping; cross-collector
+        // duplicates resolve downstream via the insert-only ContentHash dedupe (AD-1).
+        var results = new List<CollectionResult>(_collectors.Count);
+        foreach (var collector in _collectors)
+        {
+            ct.ThrowIfCancellationRequested();
+            results.Add(await collector.CollectAsync(context, ct).ConfigureAwait(false));
+        }
+
+        var collected = CollectionResultMerger.Merge(results);
         var newEvidence = new List<CollectedEvidenceEntry>();
         foreach (var item in collected.Evidence)
         {

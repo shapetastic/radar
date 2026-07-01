@@ -44,20 +44,46 @@ internal static class RadarWorkerServices
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
 
-        // Select the evidence collector by configuration (case-insensitive). Fail fast with a clear
-        // message on an unknown kind, mirroring the interval check above.
-        if (string.Equals(options.CollectorKind, "rss", StringComparison.OrdinalIgnoreCase))
-        {
-            services.AddRssPressReleaseCollector();
-        }
-        else if (string.Equals(options.CollectorKind, "localfile", StringComparison.OrdinalIgnoreCase))
-        {
-            services.AddLocalFileCollector(options.EvidenceSourceDirectory);
-        }
-        else
+        // Enable the configured evidence collectors additively (case-insensitive). Each kind registers
+        // its collector as IEvidenceCollector, composing into the IEnumerable the runner now consumes.
+        // Fail fast with a clear message on an empty list or an unknown kind, mirroring the interval
+        // check above. De-dupe defensively so a config typo listing the same kind twice registers once.
+        if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
-                $"Radar:CollectorKind '{options.CollectorKind}' is not supported; valid kinds are \"rss\" and \"localfile\".");
+                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\" and \"localfile\".");
+        }
+
+        var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawKind in options.Collectors)
+        {
+            // Validate/normalize first so a null/empty/whitespace entry fails fast with a clear
+            // message instead of falling through to the "unknown kind" branch as "kind '' ...".
+            if (string.IsNullOrWhiteSpace(rawKind))
+            {
+                throw new InvalidOperationException(
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\" and \"localfile\".");
+            }
+
+            var kind = rawKind.Trim();
+            if (!seenKinds.Add(kind))
+            {
+                continue;
+            }
+
+            if (string.Equals(kind, "rss", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddRssPressReleaseCollector();
+            }
+            else if (string.Equals(kind, "localfile", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddLocalFileCollector(options.EvidenceSourceDirectory);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\" and \"localfile\".");
+            }
         }
 
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
