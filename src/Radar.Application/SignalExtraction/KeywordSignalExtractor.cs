@@ -46,10 +46,18 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("partnership", SignalType.StrategicPartnership, SignalDirection.Positive, 5, 5, 0.6m),
         new("partners with", SignalType.StrategicPartnership, SignalDirection.Positive, 5, 5, 0.6m),
         new("teams up", SignalType.StrategicPartnership, SignalDirection.Positive, 5, 5, 0.6m),
+        // SEC 8-K item titles (1.01 / 2.01): inherently growth-leaning corporate events. Also legitimate
+        // press-release phrases, so no source-coupling is introduced.
+        new("material definitive agreement", SignalType.StrategicPartnership, SignalDirection.Positive, 4, 5, 0.5m),
+        new("completion of acquisition", SignalType.StrategicPartnership, SignalDirection.Positive, 4, 5, 0.5m),
 
         new("appoints", SignalType.ExecutiveHire, SignalDirection.Positive, 4, 5, 0.5m),
         new("names new", SignalType.ExecutiveHire, SignalDirection.Positive, 4, 5, 0.5m),
         new("hires", SignalType.ExecutiveHire, SignalDirection.Positive, 4, 5, 0.5m),
+        // SEC 8-K item 5.02 covers both departures and appointments; the code alone cannot tell which, so
+        // these officer/director-change phrases are Neutral (event type without valence).
+        new("appointment of certain officers", SignalType.ExecutiveHire, SignalDirection.Neutral, 4, 5, 0.5m),
+        new("election of directors", SignalType.ExecutiveHire, SignalDirection.Neutral, 4, 5, 0.5m),
 
         new("general availability", SignalType.ProductLaunch, SignalDirection.Positive, 5, 6, 0.6m),
         new("new platform", SignalType.ProductLaunch, SignalDirection.Positive, 5, 6, 0.6m),
@@ -67,6 +75,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("series b", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("series c", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("series seed", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
+        // SEC 8-K item titles (2.03 / 3.02): a debt facility or an equity issuance. Both are capital
+        // events but the code reveals no directional read, so Neutral.
+        new("direct financial obligation", SignalType.CapitalRaise, SignalDirection.Neutral, 4, 5, 0.5m),
+        new("unregistered sales of equity", SignalType.CapitalRaise, SignalDirection.Neutral, 4, 5, 0.5m),
 
         new("raises guidance", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
         new("raises outlook", SignalType.GuidanceChange, SignalDirection.Positive, 6, 6, 0.65m),
@@ -80,6 +92,11 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("lowers guidance", SignalType.GuidanceChange, SignalDirection.Negative, 6, 6, 0.65m),
         new("cuts outlook", SignalType.GuidanceChange, SignalDirection.Negative, 6, 6, 0.65m),
         new("lowers outlook", SignalType.GuidanceChange, SignalDirection.Negative, 6, 6, 0.65m),
+        // SEC 8-K item 2.02 title. The item code encodes "earnings released" but not beat/miss, so this is
+        // Neutral — a filing whose text carries only this phrase must NOT surface a Positive trajectory
+        // signal. Placed last in the GuidanceChange group so directional press-release phrases (raises /
+        // cuts guidance) still win first-match-per-type when they co-occur.
+        new("results of operations", SignalType.GuidanceChange, SignalDirection.Neutral, 3, 4, 0.4m),
 
         new("government contract", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("awarded contract", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),

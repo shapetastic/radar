@@ -129,17 +129,29 @@ internal sealed class SecEdgarFilingCollector : IEvidenceCollector
 
         var hasItems = !string.IsNullOrWhiteSpace(filing.Items);
 
-        // Title: "{form} — {description} ({filingDate})", with 8-K item codes appended when present.
+        // Resolve recognised 8-K item codes to their official SEC item titles (real semantics, not
+        // fabricated). Only mapped codes contribute a title; unmapped codes (e.g. 9.01) stay bare so no
+        // title is ever invented. The titles are legitimate business phrases the shared keyword extractor
+        // can match, which is how a Filing produces a signal (and thus a source-diversity lift).
+        var itemTitles = hasItems ? SecFormItemTitles.ResolveTitles(filing.Items) : [];
+        var itemsClause = itemTitles.Count > 0
+            ? $" Items: {string.Join("; ", itemTitles)}."
+            : string.Empty;
+
+        // Title: "{form} — {description} ({filingDate})", with 8-K item codes appended when present, plus
+        // the resolved official item titles alongside the raw codes (both retained).
         var title = hasItems
-            ? $"{filing.Form} — {description} ({filing.FilingDate}) [items: {filing.Items}]"
+            ? $"{filing.Form} — {description} ({filing.FilingDate}) [items: {filing.Items}]{itemsClause}"
             : $"{filing.Form} — {description} ({filing.FilingDate})";
 
-        // RawText: synthesized from REAL metadata only (form + human description + item codes). The
-        // accession number and filing date are included so two same-form filings on different dates hash
-        // differently under the mapper's Title+RawText ContentHash dedupe. No filing body text is fabricated.
+        // RawText: synthesized from REAL metadata only (form + human description + item codes + official
+        // item titles). The accession number and filing date are included so two same-form filings on
+        // different dates hash differently under the mapper's Title+RawText ContentHash dedupe. Raw codes
+        // are kept for provenance and the official titles are appended for matchable text; no filing body
+        // text is fabricated.
         var rawText = hasItems
             ? $"{filing.Form} filing accession {filing.Accession} filed {filing.FilingDate}: {description}. "
-                + $"8-K item codes: {filing.Items}."
+                + $"8-K item codes: {filing.Items}.{itemsClause}"
             : $"{filing.Form} filing accession {filing.Accession} filed {filing.FilingDate}: {description}.";
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)

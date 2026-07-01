@@ -408,6 +408,93 @@ public class KeywordSignalExtractorTests
     }
 
     [Fact]
+    public async Task ResultsOfOperationsTitle_YieldsNeutralGuidanceChange_NoSpuriousPositiveTrajectory()
+    {
+        // Mirrors the SEC 8-K item 2.02 evidence text: raw code plus its official item title.
+        var evidence = MakeEvidence(
+            rawText: "8-K filing accession acc-1 filed 2026-06-02: Report. 8-K item codes: 2.02,9.01. "
+                + "Items: Results of Operations and Financial Condition.",
+            title: "8-K — Report (2026-06-02)");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GuidanceChange.ToString(), signal.SignalType);
+        // Item code encodes the event type but not beat/miss: must be Neutral, never a Positive read.
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.DoesNotContain(output.Signals, s => s.Direction == "Positive");
+    }
+
+    [Fact]
+    public async Task MaterialDefinitiveAgreementTitle_YieldsPositiveStrategicPartnership()
+    {
+        var evidence = MakeEvidence(
+            "Items: Entry into a Material Definitive Agreement.");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.StrategicPartnership.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
+    public async Task CompletionOfAcquisitionTitle_YieldsPositiveStrategicPartnership()
+    {
+        var evidence = MakeEvidence(
+            "Items: Completion of Acquisition or Disposition of Assets.");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.StrategicPartnership.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
+    public async Task OfficerChangeTitle_YieldsNeutralExecutiveHire()
+    {
+        var evidence = MakeEvidence(
+            "Items: Departure of Directors or Certain Officers; Election of Directors; Appointment of Certain Officers.");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.ExecutiveHire.ToString(), signal.SignalType);
+        // Item 5.02 covers departures and appointments alike; the code cannot tell which.
+        Assert.Equal("Neutral", signal.Direction);
+    }
+
+    [Theory]
+    [InlineData("Items: Creation of a Direct Financial Obligation.")]
+    [InlineData("Items: Unregistered Sales of Equity Securities.")]
+    public async Task CapitalItemTitles_YieldNeutralCapitalRaise(string rawText)
+    {
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CapitalRaise.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+    }
+
+    [Fact]
+    public async Task DirectionalGuidancePhrase_WithResultsOfOperations_KeepsDirectionalWinner()
+    {
+        // When a press release contains both a directional cue and the generic "results of operations"
+        // phrase, first-match-per-type ordering must keep the directional (Positive) rule.
+        var evidence = MakeEvidence(
+            "Acme reports results of operations and raises guidance for the full year.");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GuidanceChange.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
     public async Task NullEvidence_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(
