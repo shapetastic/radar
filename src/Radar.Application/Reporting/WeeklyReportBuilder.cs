@@ -198,7 +198,9 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 Rationale: action.Rationale,
                 Rank: entries.Count + 1,
                 Evidence: evidence,
-                Signals: signals));
+                Signals: signals,
+                PreviousOpportunityScore: c.Previous?.OpportunityScore,
+                PreviousTrajectoryScore: c.Previous?.TrajectoryScore));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.
