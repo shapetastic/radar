@@ -186,6 +186,27 @@ public sealed class UsaSpendingContractCollectorTests
     }
 
     [Fact]
+    public async Task CollectAsync_MisconfiguredLookbackDays_ClampsToApiFloorWithoutThrowing()
+    {
+        var feed = Feed(
+            Guid.Parse("aaaaaaaa-0000-0000-0000-000000000009"), MrcyId, "Mercury — USASpending", MrcyToken);
+        var reader = new FakeUsaSpendingAwardReader
+        {
+            [MrcySearchText] = [Award("A-1", "CONT_AWD_1", MrcyRecipientId)],
+        };
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        // A config-driven LookbackDays this large would overflow DateTimeOffset.AddDays if unclamped.
+        var options = new UsaSpendingCollectorOptions { LookbackDays = int.MaxValue };
+
+        var result = await CreateCollector(reader, options).CollectAsync(context, CancellationToken.None);
+
+        Assert.Single(result.Evidence);
+        Assert.NotNull(reader.LastQuery);
+        Assert.Equal("2007-10-01", reader.LastQuery!.StartDate);
+    }
+
+    [Fact]
     public async Task CollectAsync_MalformedFeedToken_DegradesToSourceFailureWithoutThrowing()
     {
         var feed = Feed(
@@ -320,6 +341,8 @@ public sealed class UsaSpendingContractCollectorTests
 
         public int ReadCount { get; private set; }
 
+        public UsaSpendingAwardQuery? LastQuery { get; private set; }
+
         public IReadOnlyList<UsaSpendingAwardItem> this[string searchText]
         {
             set => _bySearchText[searchText] = UsaSpendingReadResult.Success(value);
@@ -331,6 +354,7 @@ public sealed class UsaSpendingContractCollectorTests
         public Task<UsaSpendingReadResult> ReadAsync(UsaSpendingAwardQuery query, CancellationToken ct)
         {
             ReadCount++;
+            LastQuery = query;
             return Task.FromResult(
                 _bySearchText.TryGetValue(query.SearchText, out var result)
                     ? result

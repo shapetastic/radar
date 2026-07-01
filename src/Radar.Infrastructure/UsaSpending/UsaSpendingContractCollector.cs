@@ -155,7 +155,13 @@ internal sealed class UsaSpendingContractCollector : IEvidenceCollector
     {
         var now = _timeProvider.GetUtcNow();
 
-        var start = now.AddDays(-_options.LookbackDays);
+        // Clamp the effective lookback before AddDays: a config-driven LookbackDays that is negative
+        // or absurdly large would otherwise overflow DateTimeOffset.AddDays and crash the collector.
+        // The earliest valid start is the API floor (2007-10-01), so cap the lookback at that distance.
+        var maxLookbackDays = (now - TimePeriodFloor).TotalDays;
+        var effectiveLookbackDays = Math.Clamp((double)_options.LookbackDays, 0d, maxLookbackDays);
+
+        var start = now.AddDays(-effectiveLookbackDays);
         if (start < TimePeriodFloor)
         {
             start = TimePeriodFloor;
