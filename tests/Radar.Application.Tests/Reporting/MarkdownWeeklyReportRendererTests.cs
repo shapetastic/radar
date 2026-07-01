@@ -322,6 +322,28 @@ public sealed class MarkdownWeeklyReportRendererTests
         Assert.Contains("(first snapshot)\n", output);
     }
 
+    [Theory]
+    [InlineData(61, null)]
+    [InlineData(null, 56)]
+    public void Render_Score_Line_Shows_First_Snapshot_When_Previous_Partially_Present(
+        int? previousOpportunity, int? previousTrajectory)
+    {
+        // Previous scores are populated-or-null together; a single-null entry has no prior
+        // snapshot to compare, so the movement clause must not fabricate a "+0" delta.
+        var model = CreateModel(
+        [
+            CreateEntry(
+                RadarReportAction.Investigate,
+                previousOpportunity: previousOpportunity,
+                previousTrajectory: previousTrajectory),
+        ]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("(first snapshot)\n", output);
+        Assert.DoesNotContain("vs last run)", output);
+    }
+
     [Fact]
     public void Render_Delta_Clause_Contains_No_Advice_Language()
     {

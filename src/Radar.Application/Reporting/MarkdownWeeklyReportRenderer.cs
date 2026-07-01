@@ -177,12 +177,15 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     // previous snapshot, "no change" when both are flat, or "first snapshot" when there is no prior.
     private static string FormatMovement(WeeklyReportEntry entry, Domain.Scoring.CompanyScoreSnapshot snap)
     {
-        if (entry.PreviousOpportunityScore is not int previousOpportunity)
+        // Previous scores are populated-or-null together (both come from the prior snapshot, or
+        // neither does). Only render the movement clause when *both* are present; a single null
+        // means there is no prior snapshot to compare against.
+        if (entry.PreviousOpportunityScore is not int previousOpportunity
+            || entry.PreviousTrajectoryScore is not int previousTrajectory)
         {
             return " (first snapshot)";
         }
 
-        var previousTrajectory = entry.PreviousTrajectoryScore ?? snap.TrajectoryScore;
         var opportunityDelta = snap.OpportunityScore - previousOpportunity;
         var trajectoryDelta = snap.TrajectoryScore - previousTrajectory;
 
