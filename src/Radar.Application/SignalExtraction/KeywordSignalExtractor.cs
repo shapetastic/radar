@@ -98,6 +98,13 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // cuts guidance) still win first-match-per-type when they co-occur.
         new("results of operations", SignalType.GuidanceChange, SignalDirection.Neutral, 3, 4, 0.4m),
 
+        // Canonical federal-award cue emitted by the USASpending collector on every GovernmentContract
+        // evidence item ("Federal contract award {AwardId} — {Agency} → {Recipient} …"). Placed first in
+        // the GovernmentContract group so first-match-per-type claims the type uniformly for every award
+        // regardless of awarding agency (DoD, HHS, GSA, VA, DOE, …). Ordinary business phrases, not a
+        // source-type coupling — the extractor still never reads evidence.SourceType or evidence.Metadata.
+        new("federal contract award", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
+        new("contract award", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("government contract", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("awarded contract", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("department of defense", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),

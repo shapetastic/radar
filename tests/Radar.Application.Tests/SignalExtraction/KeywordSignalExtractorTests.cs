@@ -495,6 +495,109 @@ public class KeywordSignalExtractorTests
     }
 
     [Fact]
+    public async Task NonDodUsaSpendingAward_YieldsSingleGovernmentContractPositiveSignal_WithVerbatimExcerpt()
+    {
+        // Mirrors the real USASpending collector output for a non-DoD (HHS) award: previously this text
+        // matched no GovernmentContract rule and produced zero signals. The "federal contract award" cue
+        // now guarantees exactly one GovernmentContract Positive signal, regardless of awarding agency.
+        var evidence = MakeEvidence(
+            rawText: "Federal contract award 75D30122P12345 (generated_internal_id CONT_AWD_1, "
+                + "recipient_id r-1): Department of Health and Human Services awarded AGILYSYS INC "
+                + "$6,775 starting 2026-02-10. Description: software maintenance.",
+            title: "Federal contract award 75D30122P12345 — Department of Health and Human Services "
+                + "→ AGILYSYS INC ($6,775, 2026-02-10)");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+        var composed = (evidence.Title ?? string.Empty) + "\n" + (evidence.RawText ?? string.Empty);
+        Assert.Contains(signal.SupportingExcerpt, composed, StringComparison.Ordinal);
+        Assert.Equal(evidence.SourceName, signal.CompanyMention);
+    }
+
+    [Theory]
+    [InlineData("Federal contract award GS-35F-0119Y — General Services Administration → AGILYSYS INC ($12,340, 2026-03-01)")]
+    [InlineData("Federal contract award 36C10X22P0042 — Department of Veterans Affairs → CRYOPORT INC ($4,809, 2026-01-20)")]
+    [InlineData("Federal contract award DE-AC02-06 — Department of Energy → ACME LABS INC ($88,000, 2026-04-15)")]
+    public async Task UsaSpendingAward_IsAgencyIndependent_YieldsSingleGovernmentContractPositiveSignal(string title)
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: title);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
+    public async Task DodUsaSpendingAward_YieldsExactlyOneGovernmentContractSignal_NotTwo()
+    {
+        // Text contains BOTH "Federal contract award …" and "Department of Defense": first-match-per-type
+        // dedupe must still emit exactly one GovernmentContract signal.
+        var evidence = MakeEvidence(
+            rawText: "Federal contract award W912DY23C0007 (generated_internal_id CONT_AWD_9, "
+                + "recipient_id r-9): Department of Defense awarded ACME DEFENSE INC $52,000,000 "
+                + "starting 2026-05-01. Description: radar systems.",
+            title: "Federal contract award W912DY23C0007 — Department of Defense → ACME DEFENSE INC "
+                + "($52,000,000, 2026-05-01)");
+
+        var output = await ExtractAsync(evidence);
+
+        var governmentContractSignals = output.Signals
+            .Where(s => s.SignalType == SignalType.GovernmentContract.ToString())
+            .ToList();
+
+        var signal = Assert.Single(governmentContractSignals);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
+    public async Task UsaSpendingAwardSignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Federal contract award 75D30122P12345 (generated_internal_id CONT_AWD_1, "
+                + "recipient_id r-1): Department of Health and Human Services awarded AGILYSYS INC "
+                + "$6,775 starting 2026-02-10. Description: software maintenance.",
+            title: "Federal contract award 75D30122P12345 — Department of Health and Human Services "
+                + "→ AGILYSYS INC ($6,775, 2026-02-10)",
+            publishedAtUtc: PublishedAt);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public async Task UsaSpendingAward_Determinism_TwoCalls_YieldEqualSequences()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Federal contract award 75D30122P12345 (generated_internal_id CONT_AWD_1, "
+                + "recipient_id r-1): Department of Health and Human Services awarded AGILYSYS INC "
+                + "$6,775 starting 2026-02-10. Description: software maintenance.",
+            title: "Federal contract award 75D30122P12345 — Department of Health and Human Services "
+                + "→ AGILYSYS INC ($6,775, 2026-02-10)");
+
+        var first = await ExtractAsync(evidence);
+        var second = await ExtractAsync(evidence);
+
+        var firstKeys = first.Signals
+            .Select(s => (s.SignalType, s.Direction, s.SupportingExcerpt))
+            .ToList();
+        var secondKeys = second.Signals
+            .Select(s => (s.SignalType, s.Direction, s.SupportingExcerpt))
+            .ToList();
+
+        Assert.Equal(firstKeys, secondKeys);
+    }
+
+    [Fact]
     public async Task NullEvidence_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(
