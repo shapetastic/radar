@@ -245,6 +245,20 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the file pipeline-run store that writes one <see cref="PipelineRunRecord"/> per
+    /// completed run to <c>{rootDirectory}/{yyyy}/{MM}/run-...json</c> (AD-8), the append-only run log.
+    /// The pipeline runner requires <see cref="IPipelineRunStore"/>; all file I/O stays in Infrastructure.
+    /// Each run carries a fresh id, so files never collide and prior runs are never overwritten.
+    /// </summary>
+    public static IServiceCollection AddFilePipelineRunStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FilePipelineRunStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IPipelineRunStore, FilePipelineRunStore>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the end-to-end pipeline runner. Requires the persistence registration
     /// (<see cref="AddInMemoryRadarPersistence"/>), the application services
     /// (<see cref="AddRadarApplicationServices"/>), and an evidence collector
