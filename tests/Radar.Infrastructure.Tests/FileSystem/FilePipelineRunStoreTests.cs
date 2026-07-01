@@ -146,6 +146,24 @@ public sealed class FilePipelineRunStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadRecentAsync_SkipsNullRecordFile()
+    {
+        var good = RecordAt(BaseInstant);
+
+        var store = CreateStore();
+        await store.WriteAsync(good, CancellationToken.None);
+
+        // A file whose contents deserialize to null (the JSON literal `null`) is a malformed
+        // entry; it must be skipped like other unreadable files, not silently returned as null.
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "null.json"), "null");
+
+        var read = await store.ReadRecentAsync(10, CancellationToken.None);
+
+        var roundTripped = Assert.Single(read);
+        Assert.Equal(good.Id, roundTripped.Id);
+    }
+
+    [Fact]
     public async Task WriteAsync_IoFailure_ReturnsAttemptedPathWithoutThrowing()
     {
         // Point the root at an existing FILE so Directory.CreateDirectory throws IOException.

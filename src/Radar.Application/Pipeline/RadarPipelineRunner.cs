@@ -320,7 +320,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         var runRecord = new PipelineRunRecord(
             Id: Guid.NewGuid(),
             CreatedAtUtc: asOfUtc,
-            Collectors: _collectors.Select(c => c.CollectorName).ToList(),
+            Collectors: _collectors.Select(c => c.CollectorName).ToArray(),
             EvidenceCollected: pipelineResult.EvidenceCollected,
             EvidenceNew: pipelineResult.EvidenceNew,
             SignalsExtracted: pipelineResult.SignalsExtracted,

@@ -95,6 +95,12 @@ public sealed class FilePipelineRunStore : IPipelineRunStore
                 {
                     records.Add(record);
                 }
+                else
+                {
+                    // A JSON literal `null` deserializes to a null record — treat it as a malformed
+                    // entry (same as a JsonException) so operators can spot corrupted run files.
+                    _logger.LogWarning("Run-log file '{File}' contained a null run record; skipping.", file);
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
