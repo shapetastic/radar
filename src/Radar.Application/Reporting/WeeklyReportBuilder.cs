@@ -148,18 +148,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 continue; // nothing scored this period
             }
 
-            // Previous = latest PERSISTED snapshot strictly before the current one. This must come
-            // from the file store, not the in-memory repo: the in-memory repo only holds THIS run's
-            // snapshots, so it can never see a snapshot written by an earlier run — which is exactly
-            // the cross-run "vs last run" comparison the report needs. The store swallows per-file
-            // read failures and returns null, so no builder-level try/catch is required (a null
-            // previous simply renders "(first snapshot)"). A future batched cross-run read could
-            // replace these per-company calls, but that is out of scope here.
-            CompanyScoreSnapshot? previous = await _scoreSnapshotFileStore
-                .ReadLatestBeforeAsync(company.Id, current.CreatedAtUtc, ct)
-                .ConfigureAwait(false);
-
-            candidates.Add(new CandidateEntry(company, current, previous));
+            candidates.Add(new CandidateEntry(company, current));
         }
 
         // Rank by OpportunityScore descending, then CompanyId ascending (deterministic, AD-3 spirit).
@@ -196,7 +185,18 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 continue; // no evidence behind the score → not surfaced
             }
 
-            var action = _policy.Decide(new ReportActionContext(c.Current, c.Previous));
+            // Previous = latest PERSISTED snapshot strictly before current, read from the file store
+            // (the in-memory repo only holds THIS run's snapshots, so it can never see an earlier run's
+            // snapshot — the cross-run "vs last run" comparison the report needs). Deferred to here,
+            // after the MaxItems cap and zero-link check, so only entries that actually surface pay the
+            // disk read (mirroring the link-fetch deferral above) rather than every in-period company.
+            // The store swallows per-file read failures and returns null, so a null previous simply
+            // renders "(first snapshot)"; no builder-level try/catch is required.
+            var previous = await _scoreSnapshotFileStore
+                .ReadLatestBeforeAsync(c.Current.CompanyId, c.Current.CreatedAtUtc, ct)
+                .ConfigureAwait(false);
+
+            var action = _policy.Decide(new ReportActionContext(c.Current, previous));
             var evidence = await BuildEvidenceRefsAsync(c.Current, links, ct).ConfigureAwait(false);
             var signals = await BuildSignalRefsAsync(c.Current, links, ct).ConfigureAwait(false);
             entries.Add(new WeeklyReportEntry(
@@ -210,8 +210,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 Rank: entries.Count + 1,
                 Evidence: evidence,
                 Signals: signals,
-                PreviousOpportunityScore: c.Previous?.OpportunityScore,
-                PreviousTrajectoryScore: c.Previous?.TrajectoryScore));
+                PreviousOpportunityScore: previous?.OpportunityScore,
+                PreviousTrajectoryScore: previous?.TrajectoryScore));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.
@@ -441,6 +441,5 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
 
     private sealed record CandidateEntry(
         Company Company,
-        CompanyScoreSnapshot Current,
-        CompanyScoreSnapshot? Previous);
+        CompanyScoreSnapshot Current);
 }
