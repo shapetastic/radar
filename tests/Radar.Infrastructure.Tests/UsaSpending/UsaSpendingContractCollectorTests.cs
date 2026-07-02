@@ -47,6 +47,7 @@ public sealed class UsaSpendingContractCollectorTests
         string recipientId,
         decimal amount = 100000m,
         string startDate = "2026-03-24",
+        string? lastModifiedDate = "2026-06-03 14:40:04",
         string agency = "Department of Defense",
         string recipientName = "MERCURY SYSTEMS INC",
         string? description = "Processor cards") =>
@@ -57,6 +58,7 @@ public sealed class UsaSpendingContractCollectorTests
             AwardingAgency: agency,
             StartDate: startDate,
             EndDate: null,
+            LastModifiedDate: lastModifiedDate,
             Description: description,
             RecipientId: recipientId,
             GeneratedInternalId: generatedInternalId,
@@ -92,8 +94,9 @@ public sealed class UsaSpendingContractCollectorTests
         Assert.Equal("Mercury — USASpending", item.SourceName);
         Assert.Equal("https://www.usaspending.gov/award/CONT_AWD_5106", item.SourceUrl);
 
-        // PublishedAt is the award Start Date parsed as UTC midnight; CollectedAt is the TimeProvider now.
-        Assert.Equal(new DateTimeOffset(2026, 3, 24, 0, 0, 0, TimeSpan.Zero), item.PublishedAt);
+        // PublishedAt is the award Last Modified Date (most recent activity) parsed as UTC, so recently-active
+        // awards land in the scoring window; CollectedAt is the TimeProvider now.
+        Assert.Equal(new DateTimeOffset(2026, 6, 3, 14, 40, 4, TimeSpan.Zero), item.PublishedAt);
         Assert.Equal(TimeSpan.Zero, item.PublishedAt!.Value.Offset);
         Assert.Equal(FixedNow, item.CollectedAt);
 
@@ -112,6 +115,31 @@ public sealed class UsaSpendingContractCollectorTests
 
         // Company hint comes from the feed binding (ticker preferred), never invented.
         Assert.Equal(["MRCY"], item.CompanyHints);
+
+        // The recent-activity instant is also carried in metadata for traceability.
+        Assert.Equal("2026-06-03 14:40:04", item.Metadata["lastModifiedDate"]);
+    }
+
+    [Fact]
+    public async Task CollectAsync_FallsBackToStartDateWhenLastModifiedDateAbsent()
+    {
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-000000000009"), MrcyId, "Mercury — USASpending", MrcyToken);
+
+        var reader = new FakeUsaSpendingAwardReader
+        {
+            [MrcySearchText] =
+            [
+                Award("N6893626P5106", "CONT_AWD_5106", MrcyRecipientId, startDate: "2026-03-24", lastModifiedDate: null),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        // With no Last Modified Date, PublishedAt falls back to the Start Date (UTC midnight).
+        Assert.Equal(new DateTimeOffset(2026, 3, 24, 0, 0, 0, TimeSpan.Zero), item.PublishedAt);
     }
 
     [Fact]
