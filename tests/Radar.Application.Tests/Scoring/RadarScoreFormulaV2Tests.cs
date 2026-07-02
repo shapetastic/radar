@@ -198,6 +198,26 @@ public sealed class RadarScoreFormulaV2Tests
     }
 
     [Fact]
+    public void MediaAttentionSignals_OverNews_LiftAttention_LeaveTrajectoryAtBaseline()
+    {
+        var formula = new RadarScoreFormulaV2();
+
+        // The downstream payoff of spec 70: each NewsArticle evidence item now carries a Neutral
+        // MediaAttention signal. Two such signals (mediaCount 2 + at least one distinct third-party
+        // source name) push AttentionScore above zero while Neutral keeps Trajectory at the 50 baseline.
+        var result = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(direction: SignalDirection.Neutral, type: SignalType.MediaAttention,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "The Ledger"),
+            BuildSignal(direction: SignalDirection.Neutral, type: SignalType.MediaAttention,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "Yahoo Finance"),
+        }));
+
+        Assert.True(result.Components.AttentionScore > 0);
+        Assert.Equal(50, result.Components.TrajectoryScore);
+    }
+
+    [Fact]
     public void Attention_Saturates_AndIsMonotonic()
     {
         var formula = new RadarScoreFormulaV2();
