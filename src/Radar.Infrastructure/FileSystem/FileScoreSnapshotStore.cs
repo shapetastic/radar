@@ -76,6 +76,87 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
         return path;
     }
 
+    public async Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
+        Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct)
+    {
+        // WriteAsync stores each snapshot flat under {RootDirectory}/{companyId}/{snapshotId}.json,
+        // so all of a company's snapshots live directly in this directory.
+        var companyDir = Path.Combine(_options.RootDirectory, companyId.ToString());
+        if (!Directory.Exists(companyDir))
+        {
+            return null;
+        }
+
+        List<string> files;
+        try
+        {
+            files = Directory
+                .EnumerateFiles(companyDir, "*.json", SearchOption.TopDirectoryOnly)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to enumerate score-snapshot files in '{CompanyDir}'; returning no previous snapshot.",
+                companyDir);
+            return null;
+        }
+
+        var snapshots = new List<CompanyScoreSnapshot>(files.Count);
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+                var parsed = JsonSerializer.Deserialize<ScoreSnapshotFile>(text, RadarFileStoreJson.Options);
+                if (parsed is not null)
+                {
+                    // Reconstruct only the scalar snapshot fields. Callers (the weekly report's
+                    // previous-vs-current comparison) need only the scores, so the Links are
+                    // intentionally left empty here — this is NOT dropped provenance: the current
+                    // report's evidence links still come from the in-memory repo, unchanged.
+                    snapshots.Add(new CompanyScoreSnapshot(
+                        Id: parsed.SnapshotId,
+                        CompanyId: parsed.CompanyId,
+                        ScoringVersion: parsed.ScoringVersion,
+                        TrajectoryScore: parsed.TrajectoryScore,
+                        OpportunityScore: parsed.OpportunityScore,
+                        AttentionScore: parsed.AttentionScore,
+                        EvidenceConfidenceScore: parsed.EvidenceConfidenceScore,
+                        SignalVelocityScore: parsed.SignalVelocityScore,
+                        Explanation: parsed.Explanation,
+                        ComponentJson: parsed.ComponentJson,
+                        WindowStartUtc: parsed.WindowStartUtc,
+                        WindowEndUtc: parsed.WindowEndUtc,
+                        CreatedAtUtc: parsed.CreatedAtUtc));
+                }
+                else
+                {
+                    // A JSON literal `null` deserializes to a null record — treat it as a malformed
+                    // entry so operators can spot corrupted snapshot files.
+                    _logger.LogWarning(
+                        "Score-snapshot file '{File}' contained a null snapshot; skipping.", file);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // One unreadable/malformed snapshot file must not break the whole read.
+                _logger.LogWarning(ex, "Failed to read score-snapshot file '{File}'; skipping.", file);
+            }
+        }
+
+        // Deterministic (AD-3): among snapshots strictly before beforeUtc, return the newest by
+        // CreatedAtUtc, tie-broken by Id (both descending).
+        return snapshots
+            .Where(s => s.CreatedAtUtc < beforeUtc)
+            .OrderByDescending(s => s.CreatedAtUtc)
+            .ThenByDescending(s => s.Id)
+            .FirstOrDefault();
+    }
+
     private static string Serialize(CompanyScoreSnapshot snapshot, IReadOnlyList<ScoreEvidenceLink> links)
     {
         var file = new ScoreSnapshotFile(

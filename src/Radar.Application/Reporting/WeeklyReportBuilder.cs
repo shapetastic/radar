@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.Pipeline;
+using Radar.Application.Scoring;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -31,6 +32,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private readonly IWeeklyReportRenderer _renderer;
     private readonly IReportRepository _reportRepository;
     private readonly IPipelineRunStore _runStore;
+    private readonly IScoreSnapshotFileStore _scoreSnapshotFileStore;
     private readonly WeeklyReportOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WeeklyReportBuilder> _logger;
@@ -45,6 +47,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         IWeeklyReportRenderer renderer,
         IReportRepository reportRepository,
         IPipelineRunStore runStore,
+        IScoreSnapshotFileStore scoreSnapshotFileStore,
         WeeklyReportOptions options,
         TimeProvider timeProvider,
         ILogger<WeeklyReportBuilder> logger)
@@ -58,6 +61,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(reportRepository);
         ArgumentNullException.ThrowIfNull(runStore);
+        ArgumentNullException.ThrowIfNull(scoreSnapshotFileStore);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -89,6 +93,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _renderer = renderer;
         _reportRepository = reportRepository;
         _runStore = runStore;
+        _scoreSnapshotFileStore = scoreSnapshotFileStore;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -143,15 +148,16 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 continue; // nothing scored this period
             }
 
-            // Previous = latest snapshot with CreatedAtUtc < current.CreatedAtUtc (any time), else null.
-            CompanyScoreSnapshot? previous = null;
-            foreach (var snapshot in snapshots)
-            {
-                if (snapshot.CreatedAtUtc < current.CreatedAtUtc)
-                {
-                    previous = snapshot; // ascending → last such is the latest prior snapshot
-                }
-            }
+            // Previous = latest PERSISTED snapshot strictly before the current one. This must come
+            // from the file store, not the in-memory repo: the in-memory repo only holds THIS run's
+            // snapshots, so it can never see a snapshot written by an earlier run — which is exactly
+            // the cross-run "vs last run" comparison the report needs. The store swallows per-file
+            // read failures and returns null, so no builder-level try/catch is required (a null
+            // previous simply renders "(first snapshot)"). A future batched cross-run read could
+            // replace these per-company calls, but that is out of scope here.
+            CompanyScoreSnapshot? previous = await _scoreSnapshotFileStore
+                .ReadLatestBeforeAsync(company.Id, current.CreatedAtUtc, ct)
+                .ConfigureAwait(false);
 
             candidates.Add(new CandidateEntry(company, current, previous));
         }
