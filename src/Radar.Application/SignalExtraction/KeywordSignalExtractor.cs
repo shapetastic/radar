@@ -241,7 +241,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // Reads the invariant-culture decimal award amount from the nested evidence metadata written by the
     // USASpending collector: root -> "metadata" object -> "awardAmount" string. Defensive at every hop;
     // returns false (and amount = 0) for null/blank MetadataJson, malformed JSON, a missing/mistyped
-    // property, or a blank/unparseable value. Never throws.
+    // property, a blank/unparseable value, or a non-positive amount. The USASpending reader normalizes a
+    // missing/non-numeric "Award Amount" to 0m and still serializes it, so a "0" (or negative) is treated
+    // as an absent amount here and falls back to the fixed rule Strength 6 rather than the floor tier.
+    // Never throws.
     private static bool TryGetAwardAmount(EvidenceItem evidence, out decimal amount)
     {
         amount = 0m;
@@ -269,7 +272,17 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
             if (string.IsNullOrWhiteSpace(value))
                 return false;
 
-            return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out amount);
+            // A non-positive amount (the collector's 0m sentinel for a missing/non-numeric "Award Amount",
+            // or any negative) is not a usable award magnitude: treat it as absent so the caller keeps the
+            // fixed rule Strength instead of mapping to the floor tier.
+            if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out amount)
+                || amount <= 0m)
+            {
+                amount = 0m;
+                return false;
+            }
+
+            return true;
         }
         catch (JsonException)
         {

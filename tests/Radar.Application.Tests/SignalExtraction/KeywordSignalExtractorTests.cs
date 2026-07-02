@@ -151,7 +151,10 @@ public class KeywordSignalExtractorTests
     [Theory]
     [InlineData("not-a-number")]
     [InlineData("")]
-    public async Task GovContract_UnparseableOrBlankAwardAmount_FallsBackToFixedStrength(string awardAmount)
+    [InlineData("0")]              // USASpending normalizes a missing/non-numeric "Award Amount" to 0m and
+    [InlineData("0.00")]           // still serializes it — a "0" is a no-amount case, not a floor Strength 2.
+    [InlineData("-508575.00")]     // A negative amount is not a usable award magnitude either.
+    public async Task GovContract_UnusableAwardAmount_FallsBackToFixedStrength(string awardAmount)
     {
         var evidence = MakeGovContractEvidence(GovMetadataJson(awardAmount));
 
