@@ -110,6 +110,7 @@ internal static class RadarWorkerServices
                     EnglishOnly = options.Gdelt.EnglishOnly,
                     InterRequestDelay = TimeSpan.FromSeconds(options.Gdelt.InterRequestDelaySeconds),
                     MaxRetriesOn429 = options.Gdelt.MaxRetriesOn429,
+                    RetryBackoff = TimeSpan.FromSeconds(options.Gdelt.RetryBackoffSeconds),
                 });
             }
             else
