@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text.Json;
+
 using Microsoft.Extensions.Logging;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
@@ -117,6 +120,33 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("nasa", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
     ];
 
+    // First metadata-aware rule (spec 66): scales the Strength of an already-fired GovernmentContract
+    // Positive signal by the award dollar amount (materiality). This is the ONLY signal type whose
+    // magnitude is refined by evidence metadata; every other SignalType stays source/metadata-agnostic
+    // and the extractor still never reads evidence.SourceType (spec 63 invariant preserved). The amount
+    // is read from a generic, provider-neutral metadata key (awardAmount), not from any source type.
+    //
+    // Visibly-constant, ordered tier table sorted DESCENDING by threshold. Boundaries are
+    // inclusive-lower / exclusive-upper: e.g. exactly $1,000,000 maps to Strength 6, and $999,999.99
+    // maps to Strength 4. Monotonic non-decreasing in amount; every Strength is within domain range
+    // (1-10) so mapped signals still pass SignalValidation.
+    //
+    //   >= $100,000,000  -> 9   very large, thesis-moving award
+    //   >= $10,000,000   -> 8   large, clearly material award
+    //   >= $1,000,000    -> 6   baseline material award (equals the old fixed Strength => no regression)
+    //   >= $100,000      -> 4   small but real, modest thesis contribution
+    //   <  $100,000      -> 2   sub-material routine order; deliberately <= 2 so the existing
+    //                           DeterministicSignalReviewer (MinMaterialStrength = 3, strict < 3) flags
+    //                           it NeedsMoreEvidence — reuse that guardrail, do not add a drop path.
+    private static readonly (decimal MinInclusive, int Strength)[] GovernmentContractAmountTiers =
+    [
+        (100_000_000m, 9),
+        (10_000_000m, 8),
+        (1_000_000m, 6),
+        (100_000m, 4),
+        (decimal.MinValue, 2),
+    ];
+
     private readonly ILogger<KeywordSignalExtractor> _logger;
 
     public KeywordSignalExtractor(ILogger<KeywordSignalExtractor> logger)
@@ -134,6 +164,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // The composition lives in the shared EvidenceSearchableText helper that the mapper also
         // uses, so a title-drawn excerpt survives the mapper's excerpt-in-evidence round-trip.
         var searchableText = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);
+
+        // Parse the award amount ONCE per evidence (not per rule) for determinism and efficiency. Any
+        // absent/blank/unparseable/malformed input yields hasAmount == false and never throws.
+        var hasAmount = TryGetAwardAmount(evidence, out var awardAmount);
 
         var emittedTypes = new HashSet<SignalType>();
         var matches = new List<(KeywordSignalRule Rule, int Index)>();
@@ -164,11 +198,21 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         var signals = new List<ExtractedSignal>(matches.Count);
         foreach (var (rule, index) in matches)
         {
+            // Only a GovernmentContract Positive signal with a parseable award amount has its Strength
+            // scaled by materiality; every other signal keeps its fixed rule Strength. Novelty,
+            // Confidence, excerpt, CompanyMention, Reason, ordering and dedupe are unchanged — this
+            // slice calibrates Strength alone.
+            var strength = hasAmount
+                    && rule.Type == SignalType.GovernmentContract
+                    && rule.Direction == SignalDirection.Positive
+                ? StrengthForAmount(awardAmount)
+                : rule.Strength;
+
             signals.Add(new ExtractedSignal(
                 CompanyMention: evidence.SourceName,
                 SignalType: rule.Type.ToString(),
                 Direction: rule.Direction.ToString(),
-                Strength: rule.Strength,
+                Strength: strength,
                 Novelty: rule.Novelty,
                 Confidence: rule.Confidence,
                 SupportingExcerpt: BuildExcerpt(searchableText, index, rule.Phrase.Length),
@@ -192,5 +236,72 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         var start = Math.Max(0, matchIndex - ExcerptWindow);
         var end = Math.Min(searchableText.Length, matchIndex + phraseLength + ExcerptWindow);
         return searchableText[start..end];
+    }
+
+    // Reads the invariant-culture decimal award amount from the nested evidence metadata written by the
+    // USASpending collector: root -> "metadata" object -> "awardAmount" string. Defensive at every hop;
+    // returns false (and amount = 0) for null/blank MetadataJson, malformed JSON, a missing/mistyped
+    // property, a blank/unparseable value, or a non-positive amount. The USASpending reader normalizes a
+    // missing/non-numeric "Award Amount" to 0m and still serializes it, so a "0" (or negative) is treated
+    // as an absent amount here and falls back to the fixed rule Strength 6 rather than the floor tier.
+    // Never throws.
+    private static bool TryGetAwardAmount(EvidenceItem evidence, out decimal amount)
+    {
+        amount = 0m;
+
+        if (string.IsNullOrWhiteSpace(evidence.MetadataJson))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(evidence.MetadataJson);
+
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (!root.TryGetProperty("metadata", out var metadata)
+                || metadata.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (!metadata.TryGetProperty("awardAmount", out var awardAmount)
+                || awardAmount.ValueKind != JsonValueKind.String)
+                return false;
+
+            var value = awardAmount.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            // A non-positive amount (the collector's 0m sentinel for a missing/non-numeric "Award Amount",
+            // or any negative) is not a usable award magnitude: treat it as absent so the caller keeps the
+            // fixed rule Strength instead of mapping to the floor tier.
+            if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out amount)
+                || amount <= 0m)
+            {
+                amount = 0m;
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            amount = 0m;
+            return false;
+        }
+    }
+
+    // Walks the descending tier table and returns the Strength of the first tier whose lower bound is
+    // at or below the amount. The floor tier's bound is decimal.MinValue, so any amount maps.
+    private static int StrengthForAmount(decimal amount)
+    {
+        foreach (var (minInclusive, strength) in GovernmentContractAmountTiers)
+        {
+            if (minInclusive <= amount)
+                return strength;
+        }
+
+        // Unreachable: the floor tier (decimal.MinValue) always matches. Kept as a defensive fallback.
+        return 2;
     }
 }
