@@ -33,6 +33,183 @@ public class KeywordSignalExtractorTests
     private static async Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence) =>
         await new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance).ExtractAsync(evidence, CancellationToken.None);
 
+    // Builds the nested metadata JSON shape written by the USASpending collector:
+    // { "metadata": { … "awardAmount": "<value>" … }, "companyHints": [ … ] }, so the tests exercise
+    // the real production parse path (root.metadata.awardAmount as a string).
+    private static string GovMetadataJson(string awardAmount) =>
+        $$"""
+        { "metadata": { "quality": "High", "awardAmount": "{{awardAmount}}", "awardingAgency": "Department of Defense", "startDate": "2026-05-01" }, "companyHints": [ "ACME DEFENSE INC" ] }
+        """;
+
+    // USASpending-shaped GovernmentContract evidence with an optional MetadataJson carrying awardAmount.
+    private static EvidenceItem MakeGovContractEvidence(
+        string? metadataJson,
+        string title = "Federal contract award W912DY23C0007 — Department of Defense → ACME DEFENSE INC",
+        string rawText = "Federal contract award W912DY23C0007: Department of Defense awarded ACME DEFENSE INC.") =>
+        new EvidenceBuilder()
+            .WithTitle(title)
+            .WithRawText(rawText)
+            .WithCollectedAtUtc(CollectedAt)
+            .WithMetadataJson(metadataJson)
+            .Build();
+
+    private static ExtractedSignal SingleGovContractSignal(ExtractSignalsOutput output)
+    {
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.GovernmentContract.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+        return signal;
+    }
+
+    [Fact]
+    public async Task LargeAward_YieldsHighStrengthGovernmentContractSignal()
+    {
+        // ~$52M award (the large award from the Mercury Systems distortion example) => Strength 8.
+        var evidence = MakeGovContractEvidence(GovMetadataJson("52000000.00"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(8, signal.Strength);
+    }
+
+    [Fact]
+    public async Task VeryLargeAward_YieldsTopTierStrength()
+    {
+        // >= $100M => top tier Strength 9.
+        var evidence = MakeGovContractEvidence(GovMetadataJson("250000000"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(9, signal.Strength);
+    }
+
+    [Fact]
+    public async Task MidAward_YieldsBaselineStrength_NoRegression()
+    {
+        // $3.5M award => baseline Strength 6, equal to the old fixed value (no regression).
+        var evidence = MakeGovContractEvidence(GovMetadataJson("3500000"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(6, signal.Strength);
+    }
+
+    [Fact]
+    public async Task SmallAward_YieldsSubMaterialStrength()
+    {
+        // ~$500k routine DoD order => Strength 4 (above the materiality floor, modest contribution).
+        var evidence = MakeGovContractEvidence(GovMetadataJson("508575.00"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(4, signal.Strength);
+    }
+
+    [Fact]
+    public async Task TinyAward_YieldsFloorStrength_BelowMaterialityThreshold()
+    {
+        // < $100k routine order (the seeded ~$6,775 HHS order) => floor Strength 2, deliberately below
+        // the reviewer's MinMaterialStrength (strict < 3) so the existing guardrail flags it.
+        var evidence = MakeGovContractEvidence(GovMetadataJson("6775"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(2, signal.Strength);
+        Assert.True(signal.Strength < 3);
+    }
+
+    [Fact]
+    public async Task GovContract_NoAwardAmountInMetadata_FallsBackToFixedStrength()
+    {
+        // Gov evidence whose metadata lacks awardAmount => fixed rule Strength 6, no throw.
+        var metadataWithoutAmount =
+            """{ "metadata": { "quality": "High", "awardingAgency": "Department of Defense" }, "companyHints": [ ] }""";
+        var evidence = MakeGovContractEvidence(metadataWithoutAmount);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(6, signal.Strength);
+    }
+
+    [Fact]
+    public async Task GovContract_NullMetadataJson_FallsBackToFixedStrength()
+    {
+        var evidence = MakeGovContractEvidence(metadataJson: null);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(6, signal.Strength);
+    }
+
+    [Theory]
+    [InlineData("not-a-number")]
+    [InlineData("")]
+    public async Task GovContract_UnparseableOrBlankAwardAmount_FallsBackToFixedStrength(string awardAmount)
+    {
+        var evidence = MakeGovContractEvidence(GovMetadataJson(awardAmount));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(6, signal.Strength);
+    }
+
+    [Fact]
+    public async Task GovContract_MalformedMetadataJson_FallsBackToFixedStrength()
+    {
+        var evidence = MakeGovContractEvidence(metadataJson: "{ this is not json");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(6, signal.Strength);
+    }
+
+    [Fact]
+    public async Task NonGovernmentContractSignal_IsUnaffectedByAwardAmountMetadata()
+    {
+        // A CustomerWin firing evidence that ALSO carries a (huge) awardAmount must keep its fixed
+        // Strength 6 — amount metadata never touches a non-GovernmentContract signal.
+        var evidence = new EvidenceBuilder()
+            .WithTitle("Acme signs multi-year deal")
+            .WithRawText("Acme signed a multi-year deal with a major enterprise customer.")
+            .WithCollectedAtUtc(CollectedAt)
+            .WithMetadataJson(GovMetadataJson("250000000"))
+            .Build();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CustomerWin.ToString(), signal.SignalType);
+        Assert.Equal(6, signal.Strength);
+    }
+
+    [Fact]
+    public async Task AmountBearingGovContract_Determinism_TwoCalls_YieldEqualSequences_IncludingStrength()
+    {
+        var evidence = MakeGovContractEvidence(GovMetadataJson("52000000.00"));
+
+        var first = await ExtractAsync(evidence);
+        var second = await ExtractAsync(evidence);
+
+        var firstKeys = first.Signals
+            .Select(s => (s.SignalType, s.Direction, s.Strength, s.SupportingExcerpt))
+            .ToList();
+        var secondKeys = second.Signals
+            .Select(s => (s.SignalType, s.Direction, s.Strength, s.SupportingExcerpt))
+            .ToList();
+
+        Assert.Equal(firstKeys, secondKeys);
+        Assert.All(firstKeys, k => Assert.Equal(8, k.Strength));
+    }
+
     [Fact]
     public async Task BodyWithCustomerWinPhrase_YieldsSinglePositiveSignal_WithVerbatimExcerpt()
     {

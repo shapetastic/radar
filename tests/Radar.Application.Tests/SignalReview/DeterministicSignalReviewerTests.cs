@@ -101,6 +101,22 @@ public class DeterministicSignalReviewerTests
     }
 
     [Fact]
+    public async Task GovContractFloorStrength_IsFlaggedImmaterialByExistingGuardrail()
+    {
+        // Spec 66: a sub-material (< $100k) GovernmentContract award is emitted at floor Strength 2.
+        // With novelty/confidence/source otherwise clean, materiality is the deciding issue: the
+        // EXISTING MinMaterialStrength guardrail (strict < 3) flags it NeedsMoreEvidence — the floor
+        // reuses that guardrail rather than adding a new drop path.
+        var signal = MakeSignal(companyId: CompanyId, strength: 2, novelty: 6, confidence: 0.8m);
+        var evidence = MakeEvidence(EvidenceQuality.High);
+
+        var outcome = await CreateSut().ReviewAsync(signal, evidence, CancellationToken.None);
+
+        Assert.Equal(SignalReviewDecision.NeedsMoreEvidence, outcome.Review.Decision);
+        Assert.Equal(SignalReviewStatus.NeedsHumanReview, outcome.ReviewedSignal.ReviewStatus);
+    }
+
+    [Fact]
     public async Task LowConfidenceOnly_ReducesConfidence_AndApproves()
     {
         var signal = MakeSignal(companyId: CompanyId, confidence: 0.2m);
