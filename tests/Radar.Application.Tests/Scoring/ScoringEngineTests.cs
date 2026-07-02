@@ -274,9 +274,10 @@ public sealed class ScoringEngineTests
 
         var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
 
-        // Guard the stamp itself (not its exact value — that would defeat AD-10's bump convention): a
-        // freshly-produced snapshot must always carry a scoring-generation stamp so it can never silently
-        // regress to null and disable the report's cross-run comparability gate (spec 69).
+        // Guard the presence of the stamp, independent of its exact value: Versioning_StampsScoringConfigVersion
+        // asserts the current version string (and is intentionally updated on each AD-10 bump), while this test
+        // stays decoupled from that value so it survives bumps and only fails if a freshly-produced snapshot ever
+        // silently regresses to null — which would disable the report's cross-run comparability gate (spec 69).
         Assert.False(string.IsNullOrEmpty(result.Snapshot.ScoringConfigVersion));
     }
 
