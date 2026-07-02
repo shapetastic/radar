@@ -196,7 +196,15 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 .ReadLatestBeforeAsync(c.Current.CompanyId, c.Current.CreatedAtUtc, ct)
                 .ConfigureAwait(false);
 
-            var action = _policy.Decide(new ReportActionContext(c.Current, previous));
+            // Two snapshots are comparable only when they were produced by the SAME scoring generation.
+            // A null stamp (old on-disk snapshot, or any pre-stamp snapshot) is never comparable.
+            var comparable =
+                previous is not null
+                && !string.IsNullOrEmpty(c.Current.ScoringConfigVersion)
+                && string.Equals(
+                    c.Current.ScoringConfigVersion, previous.ScoringConfigVersion, StringComparison.Ordinal);
+
+            var action = _policy.Decide(new ReportActionContext(c.Current, previous, PreviousComparable: comparable));
             var evidence = await BuildEvidenceRefsAsync(c.Current, links, ct).ConfigureAwait(false);
             var signals = await BuildSignalRefsAsync(c.Current, links, ct).ConfigureAwait(false);
             entries.Add(new WeeklyReportEntry(
@@ -210,8 +218,9 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 Rank: entries.Count + 1,
                 Evidence: evidence,
                 Signals: signals,
-                PreviousOpportunityScore: previous?.OpportunityScore,
-                PreviousTrajectoryScore: previous?.TrajectoryScore));
+                PreviousOpportunityScore: comparable ? previous!.OpportunityScore : (int?)null,
+                PreviousTrajectoryScore: comparable ? previous!.TrajectoryScore : (int?)null,
+                PreviousScoringChanged: previous is not null && !comparable));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.

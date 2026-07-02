@@ -290,6 +290,80 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_StampedSnapshot_SerializesAndRoundTripsScoringConfigVersion()
+    {
+        var companyId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithScoringConfigVersion("radar-scoring-config-v1")
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        var path = await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        // The serialized JSON carries the camelCase scoringConfigVersion property.
+        await using (var stream = File.OpenRead(path))
+        {
+            using var doc = await JsonDocument.ParseAsync(stream);
+            Assert.Equal(
+                "radar-scoring-config-v1",
+                doc.RootElement.GetProperty("scoringConfigVersion").GetString());
+        }
+
+        // And it round-trips through ReadLatestBeforeAsync.
+        var latest = await store.ReadLatestBeforeAsync(companyId, t1.AddDays(1), CancellationToken.None);
+        Assert.NotNull(latest);
+        Assert.Equal("radar-scoring-config-v1", latest!.ScoringConfigVersion);
+    }
+
+    [Fact]
+    public async Task ReadLatestBeforeAsync_OldFileMissingScoringConfigVersion_ReadsBackAsNull()
+    {
+        // An old on-disk snapshot written before the ScoringConfigVersion field existed lacks the
+        // property entirely. Default System.Text.Json tolerates the missing member, so it reads back as
+        // null (treated as not comparable) with no crash.
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        var createdAt = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var companyDir = Path.Combine(_tempDir, companyId.ToString());
+        Directory.CreateDirectory(companyDir);
+
+        // Hand-written JSON matching the camelCase ScoreSnapshotFile shape but WITHOUT scoringConfigVersion.
+        var json = $$"""
+        {
+          "snapshotId": "{{snapshotId}}",
+          "companyId": "{{companyId}}",
+          "scoringVersion": "mvp-engine-v1+radar-formula-v2",
+          "trajectoryScore": 55,
+          "opportunityScore": 60,
+          "attentionScore": 50,
+          "evidenceConfidenceScore": 70,
+          "signalVelocityScore": 40,
+          "explanation": "legacy snapshot",
+          "componentJson": "{}",
+          "windowStartUtc": "2026-01-08T00:00:00+00:00",
+          "windowEndUtc": "2026-02-07T00:00:00+00:00",
+          "createdAtUtc": "2026-02-01T00:00:00+00:00",
+          "links": []
+        }
+        """;
+        await File.WriteAllTextAsync(Path.Combine(companyDir, snapshotId + ".json"), json);
+
+        var store = CreateStore();
+        var latest = await store.ReadLatestBeforeAsync(
+            companyId, createdAt.AddDays(1), CancellationToken.None);
+
+        Assert.NotNull(latest);
+        Assert.Equal(snapshotId, latest!.Id);
+        Assert.Null(latest.ScoringConfigVersion);
+    }
+
+    [Fact]
     public async Task WriteAsync_IoFailure_ReturnsAttemptedPathWithoutThrowing()
     {
         // Point the root at an existing FILE so Directory.CreateDirectory throws IOException.

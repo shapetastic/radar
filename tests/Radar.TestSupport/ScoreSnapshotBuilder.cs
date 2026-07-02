@@ -17,6 +17,9 @@ public sealed class ScoreSnapshotBuilder
     private DateTimeOffset _windowStartUtc = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private DateTimeOffset _windowEndUtc = new(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
     private DateTimeOffset _createdAtUtc = new(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+    // Default a real stamp so builder/renderer/policy tests asserting real deltas / thesis labels keep
+    // matching stamps on both current and previous snapshots and stay green.
+    private string? _scoringConfigVersion = "radar-scoring-config-v1";
 
     public ScoreSnapshotBuilder WithId(Guid v) { _id = v; return this; }
     public ScoreSnapshotBuilder WithCompanyId(Guid v) { _companyId = v; return this; }
@@ -33,6 +36,7 @@ public sealed class ScoreSnapshotBuilder
         return this;
     }
     public ScoreSnapshotBuilder WithCreatedAtUtc(DateTimeOffset v) { _createdAtUtc = v; return this; }
+    public ScoreSnapshotBuilder WithScoringConfigVersion(string? v) { _scoringConfigVersion = v; return this; }
 
     public CompanyScoreSnapshot Build() => new(
         Id: _id,
@@ -47,5 +51,6 @@ public sealed class ScoreSnapshotBuilder
         ComponentJson: _componentJson,
         WindowStartUtc: _windowStartUtc,
         WindowEndUtc: _windowEndUtc,
-        CreatedAtUtc: _createdAtUtc);
+        CreatedAtUtc: _createdAtUtc,
+        ScoringConfigVersion: _scoringConfigVersion);
 }

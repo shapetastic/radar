@@ -26,7 +26,8 @@ public sealed class MarkdownWeeklyReportRendererTests
         IReadOnlyList<ReportEvidenceRef>? evidence = null,
         IReadOnlyList<ReportSignalRef>? signals = null,
         int? previousOpportunity = null,
-        int? previousTrajectory = null)
+        int? previousTrajectory = null,
+        bool previousScoringChanged = false)
     {
         var snap = snapshot ?? new ScoreSnapshotBuilder().Build();
         return new WeeklyReportEntry(
@@ -41,7 +42,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             Evidence: evidence ?? [],
             Signals: signals ?? [],
             PreviousOpportunityScore: previousOpportunity,
-            PreviousTrajectoryScore: previousTrajectory);
+            PreviousTrajectoryScore: previousTrajectory,
+            PreviousScoringChanged: previousScoringChanged);
     }
 
     private static WeeklyReportModel CreateModel(
@@ -322,6 +324,20 @@ public sealed class MarkdownWeeklyReportRendererTests
         var output = CreateRenderer().Render(model);
 
         Assert.Contains("(first snapshot)\n", output);
+    }
+
+    [Fact]
+    public void Render_Score_Line_Shows_Scoring_Updated_When_Previous_Incomparable()
+    {
+        // A prior snapshot exists but was produced by a different (incomparable) scoring generation.
+        // The renderer must say "(scoring updated)" instead of a numeric delta or "(first snapshot)".
+        var model = CreateModel([CreateEntry(RadarReportAction.Investigate, previousScoringChanged: true)]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains(" (scoring updated)\n", output);
+        Assert.DoesNotContain("vs last run)", output);
+        Assert.DoesNotContain("(first snapshot)", output);
     }
 
     [Theory]

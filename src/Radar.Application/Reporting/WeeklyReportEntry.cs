@@ -16,4 +16,5 @@ public sealed record WeeklyReportEntry(
     IReadOnlyList<ReportEvidenceRef> Evidence,
     IReadOnlyList<ReportSignalRef> Signals,
     int? PreviousOpportunityScore = null,
-    int? PreviousTrajectoryScore = null);
+    int? PreviousTrajectoryScore = null,
+    bool PreviousScoringChanged = false);
