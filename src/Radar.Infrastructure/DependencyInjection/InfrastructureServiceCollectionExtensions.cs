@@ -11,6 +11,7 @@ using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
 using Radar.Infrastructure.FileSystem;
+using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sec;
@@ -220,6 +221,70 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, UsaSpendingContractCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the GDELT DOC 2.0 news collector (Radar's first third-party market-attention source) and the
+    /// typed <c>HttpClient</c> its <see cref="IGdeltNewsReader"/> uses. The collector reads the per-company
+    /// <c>news</c> feeds supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each
+    /// feed's <c>Url</c> is a <c>query=...&amp;ticker=...</c> token) and produces raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> news articles; it does not persist them.
+    /// All HTTP/JSON/GDELT code stays in Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="GdeltCollectorOptions.MaxRecordsPerCompany"/> is zero/negative, when
+    /// <see cref="GdeltCollectorOptions.Timespan"/> is null/blank, when
+    /// <see cref="GdeltCollectorOptions.InterRequestDelay"/> is negative, or when
+    /// <see cref="GdeltCollectorOptions.MaxRetriesOn429"/> is negative: each of those would let the collector
+    /// run yet either collect nothing, hammer GDELT's aggressive rate limit, or carry nonsensical config, so
+    /// they are treated as configuration errors. The API needs no User-Agent or key; the named client only enables automatic
+    /// gzip/deflate decompression (polite).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddGdeltNewsCollector(
+        this IServiceCollection services, GdeltCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.MaxRecordsPerCompany <= 0)
+        {
+            throw new InvalidOperationException(
+                "GDELT MaxRecordsPerCompany must be greater than zero; configure "
+                    + "Radar:Gdelt:MaxRecordsPerCompany to a positive cap (default 25) — a zero/negative value "
+                    + "collects nothing while still running.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.Timespan))
+        {
+            throw new InvalidOperationException(
+                "GDELT requires a non-blank timespan window; configure Radar:Gdelt:Timespan (default 2w) — a "
+                    + "blank value collects nothing while still running.");
+        }
+
+        if (options.InterRequestDelay < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                "GDELT InterRequestDelay must not be negative; configure Radar:Gdelt:InterRequestDelaySeconds "
+                    + "to a non-negative pacing delay (default 3s) — GDELT throttles hard, so pacing is required.");
+        }
+
+        if (options.MaxRetriesOn429 < 0)
+        {
+            throw new InvalidOperationException(
+                "GDELT MaxRetriesOn429 must not be negative; configure Radar:Gdelt:MaxRetriesOn429 to a "
+                    + "non-negative retry count (default 1) — a negative value is nonsensical configuration.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<IGdeltNewsReader, HttpGdeltNewsReader>()
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, GdeltNewsCollector>();
         return services;
     }
 
