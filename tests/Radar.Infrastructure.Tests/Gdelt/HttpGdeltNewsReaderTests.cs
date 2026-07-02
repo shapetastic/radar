@@ -205,6 +205,35 @@ public sealed class HttpGdeltNewsReaderTests
         Assert.Empty(result.Items);
     }
 
+    [Theory]
+    [InlineData("""{ "articles": {} }""")]
+    [InlineData("""{ "articles": "unexpected" }""")]
+    [InlineData("""{ "articles": 42 }""")]
+    public async Task ReadAsync_ArticlesPresentButNotArray_ReturnsMalformed(string body)
+    {
+        // `articles` present with a non-array shape is a bad/changed payload, not a quiet company; it must not
+        // masquerade as a successful zero-coverage read.
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, body));
+
+        var result = await reader.ReadAsync(Query, CancellationToken.None);
+
+        Assert.Equal(GdeltReadOutcome.Malformed, result.Outcome);
+        Assert.False(result.IsSuccess);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public async Task ReadAsync_ArticlesExplicitNull_ReturnsSuccessWithNoItems()
+    {
+        // An explicit null `articles` is treated as no coverage (like an absent key), not a malformed payload.
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, """{ "articles": null }"""));
+
+        var result = await reader.ReadAsync(Query, CancellationToken.None);
+
+        Assert.Equal(GdeltReadOutcome.Success, result.Outcome);
+        Assert.Empty(result.Items);
+    }
+
     [Fact]
     public async Task ReadAsync_HttpRequestException_ReturnsUnreachableWithoutThrowing()
     {

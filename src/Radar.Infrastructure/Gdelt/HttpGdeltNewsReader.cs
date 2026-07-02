@@ -126,6 +126,20 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
                 return GdeltReadResult.Failure(GdeltReadOutcome.Malformed, "unexpected root JSON shape");
             }
 
+            // An absent (or explicitly null) `articles` is a company with no recent coverage — not an error.
+            // But `articles` present with any other non-array shape is a bad/changed payload: report it as
+            // Malformed rather than silently counting the feed as succeeded with zero items.
+            if (document.RootElement.TryGetProperty("articles", out var articles)
+                && articles.ValueKind is not (JsonValueKind.Array or JsonValueKind.Null))
+            {
+                _logger.LogWarning(
+                    "GDELT news search for '{QueryPhrase}' returned an 'articles' property of unexpected kind "
+                        + "{ArticlesKind} (expected an array); skipping.",
+                    query.QueryPhrase,
+                    articles.ValueKind);
+                return GdeltReadResult.Failure(GdeltReadOutcome.Malformed, "unexpected 'articles' JSON shape");
+            }
+
             var items = ParseArticles(document.RootElement, ct);
             return GdeltReadResult.Success(items);
         }
@@ -152,7 +166,7 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
 
         var url =
             $"{Endpoint}?query={Uri.EscapeDataString(fullQuery)}&mode=ArtList&format=json&sort=DateDesc"
-                + $"&timespan={Uri.EscapeDataString(query.Timespan)}&maxrecords={maxRecords}";
+                + $"&timespan={Uri.EscapeDataString(query.Timespan.Trim())}&maxrecords={maxRecords}";
 
         return new Uri(url);
     }

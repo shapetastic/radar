@@ -86,7 +86,7 @@ internal sealed class GdeltNewsCollector : IEvidenceCollector
                 failures.Add(new SourceFailure(feed.Name, feed.Url, "malformed news feed token"));
                 _logger.LogWarning(
                     "News feed '{FeedName}' ({FeedUrl}) has a malformed token "
-                        + "(expected 'query=<phrase>&ticker=<TICKER>'); skipping.",
+                        + "(expected 'query=<phrase>' with an optional '&ticker=<TICKER>'); skipping.",
                     feed.Name,
                     feed.Url);
                 continue;
