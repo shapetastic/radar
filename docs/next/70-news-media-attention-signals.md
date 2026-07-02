@@ -123,7 +123,7 @@ A Neutral coverage signal should be modest — it states "the market is paying s
 |---|---|---|
 | `SignalType` | `MediaAttention` | already in the enum; already counted by the formula |
 | `Direction`  | `Neutral` | coverage is not directional (see Overview) |
-| `Strength`   | `3` | modest; **at** the reviewer's `MinMaterialStrength` (strict `< 3`) so it passes materiality but claims little |
+| `Strength`   | `4` | modest; one clear step **above** the reviewer's `MinMaterialStrength` (strict `< 3`) so it passes materiality with margin but still claims little |
 | `Novelty`    | `4` | above the reviewer's `MinNovelty` (`3`); a fresh article is mildly novel |
 | `Confidence` | `0.5` | reflects news's `Medium` quality — below a first-party press release's `0.6` |
 
@@ -131,13 +131,14 @@ All values are within domain validation ranges (Strength/Novelty 1-10, Confidenc
 signal passes `SignalValidation`. Present these as a **tunable starting point**; a reviewer may adjust.
 
 **Reviewer interaction (state the expected outcome).** Run the proposed signal through
-`DeterministicSignalReviewer` (spec 11): `Strength 3` is NOT `< 3`; `Novelty 4` is NOT `< 3`;
+`DeterministicSignalReviewer` (spec 11): `Strength 4` is NOT `< 3`; `Novelty 4` is NOT `< 3`;
 `Confidence 0.5` is NOT `< 0.40`; and `NewsArticle` evidence is declared `Medium` quality, which is NOT
 `Unknown`/`Low` — so **no materiality/novelty/hype/weak-source issue fires**. Assuming the company
 mention resolves (the same entity-resolution precondition as every other signal), the decision is
-**`Approve`** and the signal enters scoring as `Approved` — which is what lets it lift Attention. (Had
-`Strength` been set below 3 it would be flagged `NeedsMoreEvidence` and never reach scoring; `3` is the
-deliberate floor that passes. Note this when choosing the tunable value.)
+**`Approve`** and the signal enters scoring as `Approved` — which is what lets it lift Attention.
+`Strength 4` is deliberately one step above the `MinMaterialStrength` floor (`3`) so a future tightening
+of that threshold to 3 would not silently drop these coverage signals; anything below 3 would be flagged
+`NeedsMoreEvidence` and never reach scoring.
 
 ---
 
@@ -207,7 +208,7 @@ if (evidence.SourceType == EvidenceSourceType.NewsArticle)
         CompanyMention: evidence.SourceName,
         SignalType: SignalType.MediaAttention.ToString(),
         Direction: SignalDirection.Neutral.ToString(),
-        Strength: 3,
+        Strength: 4,
         Novelty: 4,
         Confidence: 0.5m,
         SupportingExcerpt: excerpt,
@@ -261,7 +262,7 @@ Extend `KeywordSignalExtractorTests` (xUnit; reuse `EvidenceBuilder`/`MakeEviden
 1. **NewsArticle evidence → exactly one Neutral MediaAttention signal (the gap this slice closes).**
    A `NewsArticle` evidence item with a real headline (e.g. Title
    `"Aehr Test Systems , Inc . ( AEHR ): Q3 wafer-level test order momentum"`) yields `Single` signal
-   with `SignalType == MediaAttention`, `Direction == "Neutral"`, `Strength == 3`, `Novelty == 4`,
+   with `SignalType == MediaAttention`, `Direction == "Neutral"`, `Strength == 4`, `Novelty == 4`,
    `Confidence == 0.5m`, and a `SupportingExcerpt` that is a verbatim `Contains` slice of the composed
    searchable text. Assert `CompanyMention == evidence.SourceName`.
 2. **Directional headline on news → ONLY MediaAttention, no directional signal (the suppression rule).**
@@ -338,7 +339,7 @@ No advice language is introduced; all values stay in domain range.
       stays at the neutral baseline and a first-party-only window still scores `Attention == 0`
       (asserted by a scoring test).
 - [ ] The extracted signal round-trips valid via `ExtractedSignalMapper.ToSignal`; the proposed values
-      (Strength 3 / Novelty 4 / Confidence 0.5) pass `DeterministicSignalReviewer` as `Approve` (not
+      (Strength 4 / Novelty 4 / Confidence 0.5) pass `DeterministicSignalReviewer` as `Approve` (not
       flagged `NeedsMoreEvidence`), given a resolved company.
 - [ ] Non-news evidence is completely unaffected: all existing keyword rules, the spec-66
       `GovernmentContract` materiality tiers, and the `"Top Benefits Award"` negative case stay green; a
