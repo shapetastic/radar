@@ -168,7 +168,12 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
                         ComponentJson: parsed.ComponentJson,
                         WindowStartUtc: parsed.WindowStartUtc,
                         WindowEndUtc: parsed.WindowEndUtc,
-                        CreatedAtUtc: parsed.CreatedAtUtc);
+                        CreatedAtUtc: parsed.CreatedAtUtc,
+                        // Old-format files lack this property and deserialize to null (default
+                        // System.Text.Json tolerates missing members). A null stamp is treated by the
+                        // report builder as "not comparable" → "(scoring updated)". This is NOT dropped
+                        // provenance: the current report's evidence links are unchanged.
+                        ScoringConfigVersion: parsed.ScoringConfigVersion);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -197,6 +202,7 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
             WindowStartUtc: snapshot.WindowStartUtc,
             WindowEndUtc: snapshot.WindowEndUtc,
             CreatedAtUtc: snapshot.CreatedAtUtc,
+            ScoringConfigVersion: snapshot.ScoringConfigVersion,
             Links: [.. links.Select(l => new ScoreEvidenceLinkFile(
                 LinkId: l.Id,
                 ScoreSnapshotId: l.ScoreSnapshotId,
@@ -228,6 +234,9 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
         DateTimeOffset WindowStartUtc,
         DateTimeOffset WindowEndUtc,
         DateTimeOffset CreatedAtUtc,
+        // Whole scoring-generation stamp (distinct from ScoringVersion). Trailing + nullable so old-format
+        // files that lack the property deserialize to null → treated as not comparable → "(scoring updated)".
+        string? ScoringConfigVersion,
         IReadOnlyList<ScoreEvidenceLinkFile> Links);
 
     /// <summary>

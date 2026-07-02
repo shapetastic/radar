@@ -227,6 +227,45 @@ public sealed class WeeklyReportActionPolicyV1Tests
         Assert.Equal(RadarReportAction.Watch, result.Action);
     }
 
+    [Fact]
+    public void Incomparable_Previous_Never_Yields_Deteriorating()
+    {
+        // A prior snapshot exists but was produced by a different scoring generation. Even though the
+        // trajectory dropped 60 → 40 (which would normally deteriorate), the incomparable previous must
+        // fall through to the steady-state branch — Investigate on opportunity 90.
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(40)
+            .WithOpportunityScore(90)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+        var previous = new ScoreSnapshotBuilder().WithTrajectoryScore(60).Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(current, previous, PreviousComparable: false));
+
+        Assert.NotEqual(RadarReportAction.ThesisDeteriorating, result.Action);
+        Assert.NotEqual(RadarReportAction.ThesisImproving, result.Action);
+        Assert.Equal(RadarReportAction.Investigate, result.Action);
+    }
+
+    [Fact]
+    public void Incomparable_Previous_Never_Yields_Improving()
+    {
+        // A prior snapshot exists but is incomparable. A rise 50 → 60 must not yield ThesisImproving;
+        // it falls through to the steady-state Watch on opportunity 55.
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(60)
+            .WithOpportunityScore(55)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+        var previous = new ScoreSnapshotBuilder().WithTrajectoryScore(50).Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(current, previous, PreviousComparable: false));
+
+        Assert.NotEqual(RadarReportAction.ThesisImproving, result.Action);
+        Assert.NotEqual(RadarReportAction.ThesisDeteriorating, result.Action);
+        Assert.Equal(RadarReportAction.Watch, result.Action);
+    }
+
     [Theory]
     [MemberData(nameof(RepresentativeMatrix))]
     public void Rationale_Is_NonEmpty_And_Free_Of_Advice_Language(int trajectory, int opportunity, int evidence, int? previousTrajectory)

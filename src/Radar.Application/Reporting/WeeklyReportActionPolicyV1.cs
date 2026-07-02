@@ -50,7 +50,11 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
                 $"Evidence confidence {current.EvidenceConfidenceScore} is below {EvidenceConfidenceFloor}; needs more evidence.");
         }
 
-        if (previous is not null)
+        // Comparability gate: only diff against the prior snapshot when it was produced by the SAME
+        // scoring generation (context.PreviousComparable). An incomparable previous (e.g. scoring logic
+        // changed between runs) falls through to the steady-state branch below and never yields
+        // ThesisImproving/ThesisDeteriorating — a scoring-logic delta must not be told as a company story.
+        if (previous is not null && context.PreviousComparable)
         {
             var delta = current.TrajectoryScore - previous.TrajectoryScore;
 

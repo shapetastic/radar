@@ -252,6 +252,20 @@ public sealed class ScoringEngineTests
     }
 
     [Fact]
+    public async Task Versioning_StampsScoringConfigVersion()
+    {
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+        await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-1));
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // Every new snapshot is stamped with the current scoring-generation constant (non-null), so the
+        // report can gate cross-run comparability on it.
+        Assert.Equal("radar-scoring-config-v1", result.Snapshot.ScoringConfigVersion);
+    }
+
+    [Fact]
     public async Task WindowAndTimestamps_CreatedAtEqualsWindowEnd()
     {
         var harness = new Harness();

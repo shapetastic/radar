@@ -22,6 +22,11 @@ public sealed class ScoringEngine : IScoringEngine
 {
     private const string EngineVersion = "mvp-engine-v1";
 
+    // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
+    // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
+    // ScoringOptions). This deploy ships after spec 66, so v1 is the first stamped generation.
+    private const string ScoringConfigVersion = "radar-scoring-config-v1";
+
     private readonly ISignalRepository _signalRepository;
     private readonly IEvidenceRepository _evidenceRepository;
     private readonly IScoreRepository _scoreRepository;
@@ -131,7 +136,8 @@ public sealed class ScoringEngine : IScoringEngine
             // and AD-7-consistent: a fresh GetUtcNow() lands a few ms after asOfUtc, so the snapshot
             // would have CreatedAtUtc > periodEndUtc and be excluded by the report's inclusive
             // upper-bound window — the run could never report the snapshots it just created.
-            CreatedAtUtc: windowEndUtc);
+            CreatedAtUtc: windowEndUtc,
+            ScoringConfigVersion: ScoringConfigVersion);
 
         var links = new List<ScoreEvidenceLink>(computation.Contributions.Count);
         foreach (var contribution in computation.Contributions)

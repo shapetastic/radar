@@ -542,6 +542,116 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
+    public async Task DifferentScoringGenerationRendersScoringUpdatedAndNoThesisLabel()
+    {
+        // The previous snapshot was produced by a DIFFERENT scoring generation (v0) than the current
+        // run (default v1). Even though the trajectory dropped 80 → 70 (which would normally trip
+        // deterioration), the snapshots are not comparable, so the movement must render
+        // "(scoring updated)" and the policy must NOT emit a thesis label — that drop is a
+        // scoring-logic artifact, not a real-world change (the Mercury defect).
+        var companyId = Guid.NewGuid();
+
+        var prevSnapshot = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithScoringConfigVersion("radar-scoring-config-v0")
+            .WithOpportunityScore(70)
+            .WithTrajectoryScore(80)
+            .WithEvidenceConfidenceScore(70)
+            .WithCreatedAtUtc(BeforePeriod)
+            .Build();
+
+        var h = new Harness(scoreFiles: new FakeScoreSnapshotFileStore([prevSnapshot]));
+
+        var currentSnapshotId = Guid.NewGuid();
+        var currentSnapshot = new ScoreSnapshotBuilder()
+            .WithId(currentSnapshotId)
+            .WithCompanyId(companyId)
+            .WithOpportunityScore(70)
+            .WithTrajectoryScore(70)
+            .WithEvidenceConfidenceScore(70)
+            .WithCreatedAtUtc(InPeriod)
+            .Build();
+
+        await h.Companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
+        await h.Scores.AddSnapshotAsync(currentSnapshot, default);
+        await SeedEvidenceLinkAsync(h, currentSnapshotId);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("(scoring updated)", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("vs last run)", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("(first snapshot)", markdown, StringComparison.Ordinal);
+
+        var item = Assert.Single(result.Items);
+        Assert.NotEqual(RadarReportAction.ThesisDeteriorating, item.SuggestedAction);
+        Assert.NotEqual(RadarReportAction.ThesisImproving, item.SuggestedAction);
+    }
+
+    [Fact]
+    public async Task OldOnDiskSnapshotLackingStampIsNotComparableRendersScoringUpdated()
+    {
+        // An old on-disk snapshot written before the ScoringConfigVersion field existed reads back with
+        // a null stamp. A null stamp is never comparable, so the report renders "(scoring updated)" and
+        // does not crash. Here we simulate that by writing a prior snapshot with a null stamp via the
+        // real file store.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"radar-scores-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var companyId = Guid.NewGuid();
+
+            var fileStore = new FileScoreSnapshotStore(
+                new FileScoreSnapshotStoreOptions { RootDirectory = tempDir },
+                NullLogger<FileScoreSnapshotStore>.Instance);
+
+            var priorSnapshot = new ScoreSnapshotBuilder()
+                .WithId(Guid.NewGuid())
+                .WithCompanyId(companyId)
+                .WithScoringConfigVersion(null)
+                .WithOpportunityScore(60)
+                .WithTrajectoryScore(80)
+                .WithCreatedAtUtc(BeforePeriod)
+                .Build();
+            await fileStore.WriteAsync(priorSnapshot, Array.Empty<ScoreEvidenceLink>(), default);
+
+            var h = new Harness(scoreFiles: fileStore);
+
+            var currentSnapshotId = Guid.NewGuid();
+            var currentSnapshot = new ScoreSnapshotBuilder()
+                .WithId(currentSnapshotId)
+                .WithCompanyId(companyId)
+                .WithOpportunityScore(80)
+                .WithTrajectoryScore(70)
+                .WithCreatedAtUtc(InPeriod)
+                .Build();
+
+            await h.Companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
+            await h.Scores.AddSnapshotAsync(currentSnapshot, default);
+            await SeedEvidenceLinkAsync(h, currentSnapshotId);
+
+            var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+            var markdown = result.Report.MarkdownContent;
+            Assert.Contains("(scoring updated)", markdown, StringComparison.Ordinal);
+            Assert.DoesNotContain("vs last run)", markdown, StringComparison.Ordinal);
+            Assert.DoesNotContain("(first snapshot)", markdown, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Best-effort cleanup.
+            }
+        }
+    }
+
+    [Fact]
     public async Task RanksByOpportunityDescendingAndAppliesMaxItemsCap()
     {
         var h = new Harness(new WeeklyReportOptions { MaxItems = 2 });

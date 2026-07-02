@@ -175,9 +175,19 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
 
     // Deterministic week-over-week movement clause appended to the score line. Descriptive metadata
     // only (never a label or advice): signed deltas of Opportunity/Trajectory against the entry's
-    // previous snapshot, "no change" when both are flat, or "first snapshot" when there is no prior.
+    // previous snapshot, "no change" when both are flat, "first snapshot" when there is no prior, or
+    // "scoring updated" when a prior snapshot exists but was produced by a different (incomparable)
+    // scoring generation — in that case a numeric delta would be a fabricated company story.
     private static string FormatMovement(WeeklyReportEntry entry, Domain.Scoring.CompanyScoreSnapshot snap)
     {
+        // A prior snapshot exists but is incomparable (scoring logic changed between runs). Render an
+        // honest "(scoring updated)" instead of a numeric delta or "(first snapshot)" — a prior snapshot
+        // *does* exist, it is just not comparable.
+        if (entry.PreviousScoringChanged)
+        {
+            return " (scoring updated)";
+        }
+
         // Previous scores are populated-or-null together (both come from the prior snapshot, or
         // neither does). Only render the movement clause when *both* are present; a single null
         // means there is no prior snapshot to compare against.
