@@ -32,6 +32,7 @@ internal sealed class HttpUsaSpendingAwardReader : IUsaSpendingAwardReader
         "Awarding Agency",
         "Start Date",
         "End Date",
+        "Last Modified Date",
         "Description",
         "recipient_id",
         "generated_internal_id",
@@ -148,7 +149,10 @@ internal sealed class HttpUsaSpendingAwardReader : IUsaSpendingAwardReader
             },
         },
         fields = Fields,
-        sort = "Award Amount",
+        // Sort by recency (most-recently-modified first) so the collector's top-N-per-recipient cap keeps
+        // the awards with recent activity — those whose Last Modified Date lands in the scoring window —
+        // rather than the largest-but-stale multi-year vehicles.
+        sort = "Last Modified Date",
         order = "desc",
         limit = query.Limit,
         page = 1,
@@ -217,6 +221,7 @@ internal sealed class HttpUsaSpendingAwardReader : IUsaSpendingAwardReader
                 AwardingAgency: GetString(row, "Awarding Agency"),
                 StartDate: GetString(row, "Start Date"),
                 EndDate: NullIfBlank(GetString(row, "End Date")),
+                LastModifiedDate: NullIfBlank(GetString(row, "Last Modified Date")),
                 Description: NullIfBlank(GetString(row, "Description")),
                 RecipientId: recipientId,
                 GeneratedInternalId: generatedInternalId,

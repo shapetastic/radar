@@ -125,7 +125,8 @@ internal sealed class UsaSpendingContractCollector : IEvidenceCollector
 
                 if (collectedForFeed >= _options.MaxAwardsPerCompany)
                 {
-                    // The API sorts by Award Amount desc, so the first N surviving rows are the largest.
+                    // The API sorts by Last Modified Date desc, so the first N surviving rows are the ones
+                    // with the most recent activity — the awards most likely to fall in the scoring window.
                     break;
                 }
 
@@ -210,6 +211,7 @@ internal sealed class UsaSpendingContractCollector : IEvidenceCollector
             ["awardingAgency"] = award.AwardingAgency,
             ["awardAmount"] = award.AwardAmount.ToString(CultureInfo.InvariantCulture),
             ["startDate"] = award.StartDate,
+            ["lastModifiedDate"] = award.LastModifiedDate ?? string.Empty,
         };
 
         return new CollectedEvidence(
@@ -218,8 +220,11 @@ internal sealed class UsaSpendingContractCollector : IEvidenceCollector
             SourceUrl: award.AwardUrl,
             Title: title,
             RawText: rawText,
-            // The award Start Date (UTC midnight) is the observed/published moment, so windowing/recency work.
-            PublishedAt: ParseStartDate(award.StartDate),
+            // Observed instant = the award's Last Modified Date (most recent activity), falling back to the
+            // period-of-performance Start Date. The PoP start is often years old for multi-year vehicles, so
+            // using it as PublishedAt dropped recently-active awards out of the scoring window; Last Modified
+            // Date reflects recent activity and keeps windowing/recency correct.
+            PublishedAt: ParseObservedInstant(award.LastModifiedDate) ?? ParseObservedInstant(award.StartDate),
             CollectedAt: _timeProvider.GetUtcNow(),
             Metadata: metadata)
         {
@@ -228,14 +233,15 @@ internal sealed class UsaSpendingContractCollector : IEvidenceCollector
     }
 
     /// <summary>
-    /// Parses an award <c>Start Date</c> (<c>YYYY-MM-DD</c>, invariant culture) to UTC midnight. Returns
-    /// <see langword="null"/> for an absent/unparseable date rather than throwing.
+    /// Parses a USASpending date to a UTC instant, accepting both the <c>Last Modified Date</c> form
+    /// (<c>yyyy-MM-dd HH:mm:ss</c>) and the date-only <c>Start Date</c> form (<c>yyyy-MM-dd</c>), invariant
+    /// culture. Returns <see langword="null"/> for an absent/unparseable value rather than throwing.
     /// </summary>
-    private static DateTimeOffset? ParseStartDate(string startDate)
+    private static DateTimeOffset? ParseObservedInstant(string? value)
     {
         if (DateTime.TryParseExact(
-                startDate,
-                "yyyy-MM-dd",
+                value,
+                ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd"],
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                 out var parsed))
