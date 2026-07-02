@@ -160,6 +160,31 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         ct.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(evidence);
 
+        // Third-party news coverage is inherently a source-type signal, not a phrase signal: the EXISTENCE of
+        // NewsArticle evidence is the attention event (spec 70). Emit exactly one Neutral MediaAttention signal
+        // and return, deliberately SUPPRESSING the directional keyword rules for news (news framing != the
+        // company's own disclosure; avoids double-counting a press release + its news echo — see spec 70).
+        // This is the second source-type-aware branch in this deterministic extractor (spec 66 was the first,
+        // metadata-aware for GovernmentContract materiality); all keyword behaviour for other sources is
+        // unchanged below.
+        if (evidence.SourceType == EvidenceSourceType.NewsArticle)
+        {
+            var searchable = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);
+            var excerpt = BuildExcerpt(searchable, matchIndex: 0, phraseLength: 0);   // verbatim provenance slice
+            var signal = new ExtractedSignal(
+                CompanyMention: evidence.SourceName,
+                SignalType: SignalType.MediaAttention.ToString(),
+                Direction: SignalDirection.Neutral.ToString(),
+                Strength: 4,
+                Novelty: 4,
+                Confidence: 0.5m,
+                SupportingExcerpt: excerpt,
+                Reason: "Third-party news coverage (media attention)");
+            return Task.FromResult(new ExtractSignalsOutput(
+                new List<ExtractedSignal> { signal },
+                "1 media-attention signal extracted from news coverage."));
+        }
+
         // Provenance: search and excerpt from the composed searchable text (Title + "\n" + RawText).
         // The composition lives in the shared EvidenceSearchableText helper that the mapper also
         // uses, so a title-drawn excerpt survives the mapper's excerpt-in-evidence round-trip.

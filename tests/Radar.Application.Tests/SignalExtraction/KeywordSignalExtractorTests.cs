@@ -777,6 +777,112 @@ public class KeywordSignalExtractorTests
         Assert.Equal(firstKeys, secondKeys);
     }
 
+    // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
+    // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
+    // publication masthead — and RawText is synthesized from real article metadata
+    // ("<title> — <domain> (<seendate>). Source: <url>"), never a fabricated article body. The defaults
+    // below mirror that shape so readers don't mistake these fields for a news outlet or article body.
+    private static EvidenceItem MakeNewsEvidence(
+        string title,
+        string rawText = "Acme Investor News — finance.example (2026-02-10T00:00:00Z). Source: https://finance.example/acme",
+        string sourceName = "Acme Investor News") =>
+        new EvidenceBuilder()
+            .WithSourceType(EvidenceSourceType.NewsArticle)
+            .WithTitle(title)
+            .WithSourceName(sourceName)
+            .WithRawText(rawText)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+    [Fact]
+    public async Task NewsArticle_YieldsSingleNeutralMediaAttentionSignal_WithVerbatimExcerpt()
+    {
+        var evidence = MakeNewsEvidence(
+            title: "Aehr Test Systems , Inc . ( AEHR ): Q3 wafer-level test order momentum");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.MediaAttention.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(4, signal.Strength);
+        Assert.Equal(4, signal.Novelty);
+        Assert.Equal(0.5m, signal.Confidence);
+        var composed = (evidence.Title ?? string.Empty) + "\n" + (evidence.RawText ?? string.Empty);
+        // An empty excerpt is a substring of anything, so assert it is genuinely non-blank before Contains.
+        Assert.False(string.IsNullOrWhiteSpace(signal.SupportingExcerpt));
+        Assert.Contains(signal.SupportingExcerpt, composed, StringComparison.Ordinal);
+        Assert.Equal(evidence.SourceName, signal.CompanyMention);
+    }
+
+    [Fact]
+    public async Task NewsArticle_WithDirectionalCue_YieldsOnlyMediaAttention_NoDirectionalSignal()
+    {
+        // A headline that on a PressRelease would fire CustomerWin (wins contract) AND GovernmentContract
+        // (US Navy is a defense/government cue). On NewsArticle evidence the keyword loop is suppressed, so
+        // only the Neutral MediaAttention signal is emitted.
+        var evidence = MakeNewsEvidence(title: "Acme wins contract with the US Navy");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.MediaAttention.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.DoesNotContain(output.Signals, s => s.SignalType == SignalType.CustomerWin.ToString());
+        Assert.DoesNotContain(output.Signals, s => s.SignalType == SignalType.GovernmentContract.ToString());
+    }
+
+    [Fact]
+    public async Task NewsArticleMediaAttentionSignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeNewsEvidence(
+            title: "Aehr Test Systems , Inc . ( AEHR ): Q3 wafer-level test order momentum",
+            sourceName: "Yahoo Finance");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public async Task PressRelease_WinsContract_StillYieldsCustomerWin_NeverMediaAttention()
+    {
+        // Regression: the same directional headline on a first-party PressRelease keeps its CustomerWin
+        // signal and never produces a MediaAttention signal (the news branch is source-type gated).
+        var evidence = new EvidenceBuilder()
+            .WithSourceType(EvidenceSourceType.PressRelease)
+            .WithTitle("Acme wins contract with a major retailer")
+            .WithRawText("Acme wins contract with a major retailer this quarter.")
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+        var output = await ExtractAsync(evidence);
+
+        Assert.Contains(output.Signals, s => s.SignalType == SignalType.CustomerWin.ToString());
+        Assert.DoesNotContain(output.Signals, s => s.SignalType == SignalType.MediaAttention.ToString());
+    }
+
+    [Fact]
+    public async Task NewsArticle_Determinism_TwoCalls_YieldEqualSequences()
+    {
+        var evidence = MakeNewsEvidence(
+            title: "Acme secures largest production order to date, analysts say");
+
+        var first = await ExtractAsync(evidence);
+        var second = await ExtractAsync(evidence);
+
+        var firstKeys = first.Signals
+            .Select(s => (s.SignalType, s.Direction, s.Strength, s.Novelty, s.Confidence, s.SupportingExcerpt))
+            .ToList();
+        var secondKeys = second.Signals
+            .Select(s => (s.SignalType, s.Direction, s.Strength, s.Novelty, s.Confidence, s.SupportingExcerpt))
+            .ToList();
+
+        Assert.Equal(firstKeys, secondKeys);
+    }
+
     [Fact]
     public async Task NullEvidence_Throws()
     {

@@ -24,8 +24,12 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This deploy ships after spec 66, so v1 is the first stamped generation.
-    private const string ScoringConfigVersion = "radar-scoring-config-v1";
+    // ScoringOptions). This generation ships spec 70 (news -> MediaAttention signals): the extractor now
+    // emits a MediaAttention signal for each NewsArticle evidence item, so news-covered companies gain
+    // AttentionScore they did not have pre-70. Pre/post-70 snapshots are therefore not comparable, and a
+    // cross-run delta across that boundary correctly renders "(scoring updated)" rather than a fabricated
+    // thesis label.
+    private const string ScoringConfigVersion = "radar-scoring-config-v2";
 
     private readonly ISignalRepository _signalRepository;
     private readonly IEvidenceRepository _evidenceRepository;
