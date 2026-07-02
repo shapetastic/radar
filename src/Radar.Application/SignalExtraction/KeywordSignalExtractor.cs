@@ -16,6 +16,20 @@ namespace Radar.Application.SignalExtraction;
 /// <see cref="ExtractedSignal.CompanyMention"/> is the evidence <see cref="EvidenceItem.SourceName"/>
 /// placeholder and a company/ticker is never guessed. The placeholder heuristics here are not a tuned
 /// scoring model; the real AI extractor is a later, human-owned slice.
+/// <para>
+/// Beyond pure keyword scanning it is <b>source-type-aware in exactly two defined ways</b>:
+/// (1) <see cref="EvidenceSourceType.NewsArticle"/> evidence emits exactly one <b>Neutral
+/// <see cref="SignalType.MediaAttention"/></b> signal — the directional keyword rules are suppressed for
+/// news, since third-party coverage is an attention event, not the company's own disclosure (spec 70);
+/// (2) a <see cref="SignalType.GovernmentContract"/> signal's <b>Strength</b> is scaled by the award
+/// amount read from <c>evidence</c> metadata (the <c>awardAmount</c> key; spec 66). All other signal
+/// types stay purely keyword-driven and read neither <see cref="EvidenceItem.SourceType"/> nor metadata.
+/// </para>
+/// <para>
+/// WATCH-ITEM: these are two justified branches. If a <b>third</b> source-type special-case is ever
+/// needed, refactor to an explicit per-<see cref="EvidenceSourceType"/> dispatch/strategy rather than
+/// adding a third inline branch here — do not keep growing inline special-cases.
+/// </para>
 /// </summary>
 public sealed class KeywordSignalExtractor : ISignalExtractor
 {
@@ -105,7 +119,7 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // evidence item ("Federal contract award {AwardId} — {Agency} → {Recipient} …"). Placed first in
         // the GovernmentContract group so first-match-per-type claims the type uniformly for every award
         // regardless of awarding agency (DoD, HHS, GSA, VA, DOE, …). Ordinary business phrases, not a
-        // source-type coupling — the extractor still never reads evidence.SourceType or evidence.Metadata.
+        // source-type coupling: the phrases are matched on searchable text like every other rule.
         new("federal contract award", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("contract award", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("government contract", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
@@ -122,9 +136,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
 
     // First metadata-aware rule (spec 66): scales the Strength of an already-fired GovernmentContract
     // Positive signal by the award dollar amount (materiality). This is the ONLY signal type whose
-    // magnitude is refined by evidence metadata; every other SignalType stays source/metadata-agnostic
-    // and the extractor still never reads evidence.SourceType (spec 63 invariant preserved). The amount
-    // is read from a generic, provider-neutral metadata key (awardAmount), not from any source type.
+    // magnitude is refined by evidence metadata; every other SignalType stays source/metadata-agnostic.
+    // This metadata read is one of the two defined source/metadata-aware behaviours of the extractor
+    // (the other being the spec 70 NewsArticle -> Neutral MediaAttention branch in ExtractAsync). The
+    // amount is read from a generic, provider-neutral metadata key (awardAmount), not from any source type.
     //
     // Visibly-constant, ordered tier table sorted DESCENDING by threshold. Boundaries are
     // inclusive-lower / exclusive-upper: e.g. exactly $1,000,000 maps to Strength 6, and $999,999.99

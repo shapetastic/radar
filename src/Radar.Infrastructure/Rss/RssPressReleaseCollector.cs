@@ -1,8 +1,8 @@
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Collectors;
-using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
+using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Rss;
 
@@ -111,7 +111,7 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
                     CollectedAt: _timeProvider.GetUtcNow(),
                     Metadata: metadata)
                 {
-                    CompanyHints = BuildCompanyHints(feed.CompanyId, companiesById),
+                    CompanyHints = CollectorCompanyHints.For(feed.CompanyId, companiesById),
                 });
             }
         }
@@ -125,23 +125,5 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
         var summary = new CollectionSummary(
             feedsChecked, feedsChecked - feedsFailed, feedsFailed, results.Count, failures.ToArray());
         return new CollectionResult(results.ToArray(), summary);
-    }
-
-    private static IReadOnlyList<string> BuildCompanyHints(
-        Guid companyId, IReadOnlyDictionary<Guid, Company> companiesById)
-    {
-        if (!companiesById.TryGetValue(companyId, out var company))
-        {
-            return [];
-        }
-
-        // High-confidence hint from the configured binding: prefer the ticker, fall back to the name.
-        // Never invent a ticker.
-        if (!string.IsNullOrWhiteSpace(company.Ticker))
-        {
-            return [company.Ticker];
-        }
-
-        return string.IsNullOrWhiteSpace(company.Name) ? [] : [company.Name];
     }
 }
