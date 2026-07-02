@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Radar.Application.Collectors;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
+using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Sec;
 
@@ -80,7 +81,7 @@ internal sealed class SecEdgarFilingCollector : IEvidenceCollector
                 continue;
             }
 
-            var hints = BuildCompanyHints(feed.CompanyId, companiesById);
+            var hints = CollectorCompanyHints.For(feed.CompanyId, companiesById);
 
             // Dedupe within this feed by accession number so a filing appears at most once.
             var seenAccessions = new HashSet<string>(StringComparer.Ordinal);
@@ -184,23 +185,5 @@ internal sealed class SecEdgarFilingCollector : IEvidenceCollector
         {
             CompanyHints = hints,
         };
-    }
-
-    private static IReadOnlyList<string> BuildCompanyHints(
-        Guid companyId, IReadOnlyDictionary<Guid, Company> companiesById)
-    {
-        if (!companiesById.TryGetValue(companyId, out var company))
-        {
-            return [];
-        }
-
-        // High-confidence hint from the configured binding: prefer the ticker, fall back to the name.
-        // Never invent a ticker.
-        if (!string.IsNullOrWhiteSpace(company.Ticker))
-        {
-            return [company.Ticker];
-        }
-
-        return string.IsNullOrWhiteSpace(company.Name) ? [] : [company.Name];
     }
 }

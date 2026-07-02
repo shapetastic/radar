@@ -266,6 +266,21 @@ public sealed class ScoringEngineTests
     }
 
     [Fact]
+    public async Task Versioning_ScoringConfigVersion_IsNonNullAndNonEmpty()
+    {
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+        await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-1));
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // Guard the stamp itself (not its exact value — that would defeat AD-10's bump convention): a
+        // freshly-produced snapshot must always carry a scoring-generation stamp so it can never silently
+        // regress to null and disable the report's cross-run comparability gate (spec 69).
+        Assert.False(string.IsNullOrEmpty(result.Snapshot.ScoringConfigVersion));
+    }
+
+    [Fact]
     public async Task WindowAndTimestamps_CreatedAtEqualsWindowEnd()
     {
         var harness = new Harness();

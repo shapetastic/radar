@@ -239,3 +239,5 @@ When implementing a spec that replaces existing functionality:
 3. Ensure tests exercise the new production path.
 4. Delete deprecated code rather than leaving it dormant.
 5. Update this CLAUDE.md if the architecture changes.
+6. Bump `ScoringEngine.ScoringConfigVersion` when a change affects scoring output (formula, extractor
+   rules incl. materiality tiers, or `ScoringOptions`) — see AD-10.

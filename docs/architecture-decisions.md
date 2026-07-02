@@ -228,3 +228,30 @@ labelled `Ignore` without losing the thesis-trajectory labels. A follow-up code 
 `Ignore`; the policy does not yet emit it.
 
 **Status.** Accepted · 2026-06-28 (maintainer; supersedes the spec-18 exclusion of `Ignore`).
+
+---
+
+## AD-10 — Any scoring-affecting change MUST bump `ScoringEngine.ScoringConfigVersion`
+
+**Decision.** `ScoringEngine.ScoringConfigVersion` (a code constant, currently
+`"radar-scoring-config-v2"`) stamps every `CompanyScoreSnapshot` and identifies the whole
+scoring-affecting pipeline **generation** — distinct from the formula/engine identity `ScoringVersion`
+(AD-6). Any change that can move scoring output — the scoring formula, the extractor rules (including the
+`GovernmentContract` materiality tiers), or `ScoringOptions` — **MUST bump `ScoringConfigVersion`** in the
+same slice. It is a **code constant**, never an ops-tunable config value: bumping it must require a code
+edit that trips the spec-implementation checklist, and it must move in lockstep with the code.
+
+**Why.** The stamp (spec 69) gates the cross-run delta clause **and** the
+`Thesis improving`/`Thesis deteriorating` action label: two snapshots are compared only when their
+`ScoringConfigVersion` values are non-null and equal. When they differ, the report renders
+`(scoring updated)` instead of a numeric delta and the policy falls back to its no-previous behaviour —
+so a scoring **recalibration** can never fabricate a thesis-trajectory label (the exact defect spec 69
+fixed, where spec 66's materiality change dropped Mercury Systems' Trajectory 80→75 and produced a false
+`Thesis deteriorating`). This correctness property holds **only** if every scoring-affecting change bumps
+the stamp; a forgotten bump silently re-creates that bug. Spec 70 correctly bumped v1→v2 — but only by
+author discipline against a convention that lived nowhere discoverable. Recording it here (and in the
+`CLAUDE.md` checklist) gives the next scoring-affecting change a single documented obligation.
+Cross-reference AD-6 (formula versioning) and spec 69 (the stamp and its comparability gate).
+
+**Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
+by spec 70).
