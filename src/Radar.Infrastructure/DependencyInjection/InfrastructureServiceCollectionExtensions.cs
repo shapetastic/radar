@@ -265,14 +265,21 @@ public static class InfrastructureServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 "GDELT InterRequestDelay must not be negative; configure Radar:Gdelt:InterRequestDelaySeconds "
-                    + "to a non-negative pacing delay (default 3s) — GDELT throttles hard, so pacing is required.");
+                    + "to a non-negative pacing delay (default 6s) — GDELT allows ~1 request/5s per IP, so pacing is required.");
         }
 
         if (options.MaxRetriesOn429 < 0)
         {
             throw new InvalidOperationException(
                 "GDELT MaxRetriesOn429 must not be negative; configure Radar:Gdelt:MaxRetriesOn429 to a "
-                    + "non-negative retry count (default 1) — a negative value is nonsensical configuration.");
+                    + "non-negative retry count (default 2) — a negative value is nonsensical configuration.");
+        }
+
+        if (options.RetryBackoff < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                "GDELT RetryBackoff must not be negative; configure Radar:Gdelt:RetryBackoffSeconds to a "
+                    + "non-negative base cool-down (default 60s) — the reader doubles it per 429 retry.");
         }
 
         services.AddSingleton(options);

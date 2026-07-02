@@ -14,8 +14,8 @@ namespace Radar.Infrastructure.Gdelt;
 /// returned <see cref="GdeltReadResult"/> (with a warning) rather than swallowed; caller-requested
 /// cancellation still throws. <b>Operationally-critical:</b> GDELT throttles hard and returns HTTP 429 on
 /// back-to-back requests — a 429 is the distinct <see cref="GdeltReadOutcome.RateLimited"/> outcome, and the
-/// reader owns a single bounded delayed retry (per <see cref="GdeltNewsQuery.MaxRetriesOn429"/> /
-/// <see cref="GdeltNewsQuery.RetryDelay"/>) so the collector stays simple; after retries are exhausted it
+/// reader owns a bounded EXPONENTIAL delayed retry (per <see cref="GdeltNewsQuery.MaxRetriesOn429"/> /
+/// <see cref="GdeltNewsQuery.RetryDelay"/> as the base, doubling each retry) so the collector stays simple; after retries are exhausted it
 /// still returns <see cref="GdeltReadOutcome.RateLimited"/> and never throws. All HTTP/JSON/GDELT code stays
 /// in Infrastructure (AD-5). No User-Agent or key is required by the API.
 /// </summary>
@@ -24,6 +24,12 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
     private const string Endpoint = "https://api.gdeltproject.org/api/v2/doc/doc";
     private const int ApiMinRecords = 1;
     private const int ApiMaxRecords = 250;
+
+    // Upper bound on a single 429 backoff. The exponential growth (base·2^attempt) would otherwise overflow
+    // TimeSpan / exceed Task.Delay's limit for a large MaxRetriesOn429 and throw — breaking the reader's
+    // never-throw contract. There is also no point waiting longer than this in-run; a still-throttled feed is
+    // better skipped and retried next run.
+    private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(10);
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<HttpGdeltNewsReader> _logger;
@@ -42,7 +48,8 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
         ArgumentNullException.ThrowIfNull(query);
 
         var requestUri = BuildRequestUri(query);
-        var retriesRemaining = Math.Max(0, query.MaxRetriesOn429);
+        var maxRetries = Math.Max(0, query.MaxRetriesOn429);
+        var attempt = 0;
 
         byte[] bytes;
         while (true)
@@ -55,16 +62,22 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
 
                 if ((int)response.StatusCode == 429)
                 {
-                    // GDELT's aggressive throttle. Own a single bounded delayed retry here so the collector
-                    // stays simple; after retries are exhausted still return RateLimited (never throw).
-                    if (retriesRemaining > 0)
+                    // GDELT's aggressive throttle (published limit: 1 request / 5s per IP). Own a bounded,
+                    // EXPONENTIAL delayed retry here (base, 2×base, …) so the collector stays simple; after
+                    // retries are exhausted still return RateLimited (never throw). GDELT recommends a long
+                    // cool-down after a 429 (≈60s then 120s), which a few-second pacing delay cannot satisfy.
+                    if (attempt < maxRetries)
                     {
-                        retriesRemaining--;
+                        var backoff = ComputeBackoff(query.RetryDelay, attempt);
+                        attempt++;
                         _logger.LogWarning(
                             "GDELT news search for '{QueryPhrase}' returned HTTP 429 (rate limited); "
-                                + "retrying after a short delay.",
-                            query.QueryPhrase);
-                        await Task.Delay(query.RetryDelay, ct).ConfigureAwait(false);
+                                + "retry {Attempt}/{MaxRetries} after {BackoffSeconds:0.#}s.",
+                            query.QueryPhrase,
+                            attempt,
+                            maxRetries,
+                            backoff.TotalSeconds);
+                        await Task.Delay(backoff, ct).ConfigureAwait(false);
                         continue;
                     }
 
@@ -149,6 +162,18 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
                 ex, "GDELT news search for '{QueryPhrase}' returned malformed JSON; skipping.", query.QueryPhrase);
             return GdeltReadResult.Failure(GdeltReadOutcome.Malformed, "malformed JSON");
         }
+    }
+
+    /// <summary>
+    /// Exponential backoff for the Nth (zero-based) 429 retry: <c>base·2^attempt</c>, clamped to
+    /// <see cref="MaxBackoff"/>. Computed in <see cref="double"/> ticks so a large attempt count can never
+    /// overflow <see cref="TimeSpan"/> or exceed <see cref="Task.Delay(TimeSpan, CancellationToken)"/>'s limit
+    /// (which would throw and break the never-throw contract). A zero base stays zero (keeps tests instant).
+    /// </summary>
+    internal static TimeSpan ComputeBackoff(TimeSpan baseDelay, int attempt)
+    {
+        var ticks = baseDelay.Ticks * Math.Pow(2, attempt);
+        return ticks >= MaxBackoff.Ticks ? MaxBackoff : TimeSpan.FromTicks((long)ticks);
     }
 
     /// <summary>

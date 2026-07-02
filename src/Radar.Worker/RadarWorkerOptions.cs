@@ -129,9 +129,12 @@ public sealed class GdeltWorkerOptions
     /// <summary>Whether to restrict the query to English-language coverage. Defaults to true.</summary>
     public bool EnglishOnly { get; init; } = true;
 
-    /// <summary>Pause between successive per-company requests, in seconds (GDELT throttles hard). Defaults to 3.</summary>
-    public int InterRequestDelaySeconds { get; init; } = 3;
+    /// <summary>Pause between successive per-company requests, in seconds. Defaults to 6 (GDELT allows 1 request / 5s per IP).</summary>
+    public int InterRequestDelaySeconds { get; init; } = 6;
 
-    /// <summary>How many times the reader re-issues a request after an HTTP 429 before giving up. Defaults to 1.</summary>
-    public int MaxRetriesOn429 { get; init; } = 1;
+    /// <summary>How many times the reader re-issues a request after an HTTP 429 before giving up. Defaults to 2.</summary>
+    public int MaxRetriesOn429 { get; init; } = 2;
+
+    /// <summary>Base cool-down before the first 429 retry, in seconds; the reader doubles it per retry. Defaults to 60 (→ 60s/120s).</summary>
+    public int RetryBackoffSeconds { get; init; } = 60;
 }

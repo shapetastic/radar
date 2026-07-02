@@ -175,8 +175,9 @@ internal sealed class GdeltNewsCollector : IEvidenceCollector
         EnglishOnly: _options.EnglishOnly)
     {
         MaxRetriesOn429 = _options.MaxRetriesOn429,
-        // Reuse the pacing delay as the 429 backoff — same politeness magnitude, no extra option needed.
-        RetryDelay = _options.InterRequestDelay,
+        // A 429 needs a much longer cool-down than ordinary pacing (GDELT recommends ≈60s/120s), so the
+        // backoff base is its own option — the reader grows it exponentially per retry.
+        RetryDelay = _options.RetryBackoff,
     };
 
     /// <summary>

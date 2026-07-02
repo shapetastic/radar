@@ -22,11 +22,20 @@ public sealed class GdeltCollectorOptions
     public bool EnglishOnly { get; init; } = true;
 
     /// <summary>
-    /// The pause between successive per-company requests (default ~3s). The collector is strictly sequential,
-    /// so this pacing keeps it under GDELT's aggressive rate limit. Registration fails fast when negative.
+    /// The pause between successive per-company requests (default 6s). The collector is strictly sequential,
+    /// so this pacing keeps it under GDELT's published limit of 1 request / 5s per IP (6s leaves margin).
+    /// Registration fails fast when negative.
     /// </summary>
-    public TimeSpan InterRequestDelay { get; init; } = TimeSpan.FromSeconds(3);
+    public TimeSpan InterRequestDelay { get; init; } = TimeSpan.FromSeconds(6);
 
-    /// <summary>How many times the reader re-issues a request after an HTTP 429 before giving up (default 1).</summary>
-    public int MaxRetriesOn429 { get; init; } = 1;
+    /// <summary>How many times the reader re-issues a request after an HTTP 429 before giving up (default 2).</summary>
+    public int MaxRetriesOn429 { get; init; } = 2;
+
+    /// <summary>
+    /// Base wait before the FIRST 429 retry; the reader backs off exponentially (base, then 2×base, …), so the
+    /// default 60s yields GDELT's recommended 60s/120s sequence for two retries. Kept separate from
+    /// <see cref="InterRequestDelay"/> because a 429 needs a much longer cool-down than ordinary pacing.
+    /// Registration fails fast when negative.
+    /// </summary>
+    public TimeSpan RetryBackoff { get; init; } = TimeSpan.FromSeconds(60);
 }
