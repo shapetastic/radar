@@ -778,10 +778,14 @@ public class KeywordSignalExtractorTests
     }
 
     // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
+    // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
+    // publication masthead — and RawText is synthesized from real article metadata
+    // ("<title> — <domain> (<seendate>). Source: <url>"), never a fabricated article body. The defaults
+    // below mirror that shape so readers don't mistake these fields for a news outlet or article body.
     private static EvidenceItem MakeNewsEvidence(
         string title,
-        string rawText = "Boilerplate news body about the company.",
-        string sourceName = "The Ledger") =>
+        string rawText = "Acme Investor News — finance.example (2026-02-10T00:00:00Z). Source: https://finance.example/acme",
+        string sourceName = "Acme Investor News") =>
         new EvidenceBuilder()
             .WithSourceType(EvidenceSourceType.NewsArticle)
             .WithTitle(title)
@@ -805,6 +809,8 @@ public class KeywordSignalExtractorTests
         Assert.Equal(4, signal.Novelty);
         Assert.Equal(0.5m, signal.Confidence);
         var composed = (evidence.Title ?? string.Empty) + "\n" + (evidence.RawText ?? string.Empty);
+        // An empty excerpt is a substring of anything, so assert it is genuinely non-blank before Contains.
+        Assert.False(string.IsNullOrWhiteSpace(signal.SupportingExcerpt));
         Assert.Contains(signal.SupportingExcerpt, composed, StringComparison.Ordinal);
         Assert.Equal(evidence.SourceName, signal.CompanyMention);
     }
