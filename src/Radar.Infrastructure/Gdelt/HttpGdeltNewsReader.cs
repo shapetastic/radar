@@ -25,6 +25,12 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
     private const int ApiMinRecords = 1;
     private const int ApiMaxRecords = 250;
 
+    // Upper bound on a single 429 backoff. The exponential growth (base·2^attempt) would otherwise overflow
+    // TimeSpan / exceed Task.Delay's limit for a large MaxRetriesOn429 and throw — breaking the reader's
+    // never-throw contract. There is also no point waiting longer than this in-run; a still-throttled feed is
+    // better skipped and retried next run.
+    private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(10);
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<HttpGdeltNewsReader> _logger;
 
@@ -62,7 +68,7 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
                     // cool-down after a 429 (≈60s then 120s), which a few-second pacing delay cannot satisfy.
                     if (attempt < maxRetries)
                     {
-                        var backoff = query.RetryDelay * Math.Pow(2, attempt);
+                        var backoff = ComputeBackoff(query.RetryDelay, attempt);
                         attempt++;
                         _logger.LogWarning(
                             "GDELT news search for '{QueryPhrase}' returned HTTP 429 (rate limited); "
@@ -156,6 +162,18 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
                 ex, "GDELT news search for '{QueryPhrase}' returned malformed JSON; skipping.", query.QueryPhrase);
             return GdeltReadResult.Failure(GdeltReadOutcome.Malformed, "malformed JSON");
         }
+    }
+
+    /// <summary>
+    /// Exponential backoff for the Nth (zero-based) 429 retry: <c>base·2^attempt</c>, clamped to
+    /// <see cref="MaxBackoff"/>. Computed in <see cref="double"/> ticks so a large attempt count can never
+    /// overflow <see cref="TimeSpan"/> or exceed <see cref="Task.Delay(TimeSpan, CancellationToken)"/>'s limit
+    /// (which would throw and break the never-throw contract). A zero base stays zero (keeps tests instant).
+    /// </summary>
+    internal static TimeSpan ComputeBackoff(TimeSpan baseDelay, int attempt)
+    {
+        var ticks = baseDelay.Ticks * Math.Pow(2, attempt);
+        return ticks >= MaxBackoff.Ticks ? MaxBackoff : TimeSpan.FromTicks((long)ticks);
     }
 
     /// <summary>

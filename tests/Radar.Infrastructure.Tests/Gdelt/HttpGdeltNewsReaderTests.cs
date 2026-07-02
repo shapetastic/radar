@@ -143,6 +143,24 @@ public sealed class HttpGdeltNewsReaderTests
         Assert.Equal(2, handler.CallCount); // initial attempt + 1 retry
     }
 
+    [Theory]
+    [InlineData(0, 60)]      // attempt 0 -> base
+    [InlineData(1, 120)]     // attempt 1 -> 2x base
+    [InlineData(2, 240)]     // attempt 2 -> 4x base
+    [InlineData(40, 600)]    // huge attempt -> clamped to MaxBackoff (10 min), never overflows/throws
+    public void ComputeBackoff_GrowsExponentiallyThenClampsToMax(int attempt, int expectedSeconds)
+    {
+        var backoff = HttpGdeltNewsReader.ComputeBackoff(TimeSpan.FromSeconds(60), attempt);
+
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), backoff);
+    }
+
+    [Fact]
+    public void ComputeBackoff_ZeroBase_StaysZero()
+    {
+        Assert.Equal(TimeSpan.Zero, HttpGdeltNewsReader.ComputeBackoff(TimeSpan.Zero, 5));
+    }
+
     [Fact]
     public async Task ReadAsync_Http429_ExhaustsExponentialRetries_CallsOncePerAttempt()
     {
