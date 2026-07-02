@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.Pipeline;
+using Radar.Application.Scoring;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -31,6 +32,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private readonly IWeeklyReportRenderer _renderer;
     private readonly IReportRepository _reportRepository;
     private readonly IPipelineRunStore _runStore;
+    private readonly IScoreSnapshotFileStore _scoreSnapshotFileStore;
     private readonly WeeklyReportOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WeeklyReportBuilder> _logger;
@@ -45,6 +47,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         IWeeklyReportRenderer renderer,
         IReportRepository reportRepository,
         IPipelineRunStore runStore,
+        IScoreSnapshotFileStore scoreSnapshotFileStore,
         WeeklyReportOptions options,
         TimeProvider timeProvider,
         ILogger<WeeklyReportBuilder> logger)
@@ -58,6 +61,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(reportRepository);
         ArgumentNullException.ThrowIfNull(runStore);
+        ArgumentNullException.ThrowIfNull(scoreSnapshotFileStore);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -89,6 +93,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _renderer = renderer;
         _reportRepository = reportRepository;
         _runStore = runStore;
+        _scoreSnapshotFileStore = scoreSnapshotFileStore;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -143,17 +148,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 continue; // nothing scored this period
             }
 
-            // Previous = latest snapshot with CreatedAtUtc < current.CreatedAtUtc (any time), else null.
-            CompanyScoreSnapshot? previous = null;
-            foreach (var snapshot in snapshots)
-            {
-                if (snapshot.CreatedAtUtc < current.CreatedAtUtc)
-                {
-                    previous = snapshot; // ascending → last such is the latest prior snapshot
-                }
-            }
-
-            candidates.Add(new CandidateEntry(company, current, previous));
+            candidates.Add(new CandidateEntry(company, current));
         }
 
         // Rank by OpportunityScore descending, then CompanyId ascending (deterministic, AD-3 spirit).
@@ -190,7 +185,18 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 continue; // no evidence behind the score → not surfaced
             }
 
-            var action = _policy.Decide(new ReportActionContext(c.Current, c.Previous));
+            // Previous = latest PERSISTED snapshot strictly before current, read from the file store
+            // (the in-memory repo only holds THIS run's snapshots, so it can never see an earlier run's
+            // snapshot — the cross-run "vs last run" comparison the report needs). Deferred to here,
+            // after the MaxItems cap and zero-link check, so only entries that actually surface pay the
+            // disk read (mirroring the link-fetch deferral above) rather than every in-period company.
+            // The store swallows per-file read failures and returns null, so a null previous simply
+            // renders "(first snapshot)"; no builder-level try/catch is required.
+            var previous = await _scoreSnapshotFileStore
+                .ReadLatestBeforeAsync(c.Current.CompanyId, c.Current.CreatedAtUtc, ct)
+                .ConfigureAwait(false);
+
+            var action = _policy.Decide(new ReportActionContext(c.Current, previous));
             var evidence = await BuildEvidenceRefsAsync(c.Current, links, ct).ConfigureAwait(false);
             var signals = await BuildSignalRefsAsync(c.Current, links, ct).ConfigureAwait(false);
             entries.Add(new WeeklyReportEntry(
@@ -204,8 +210,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 Rank: entries.Count + 1,
                 Evidence: evidence,
                 Signals: signals,
-                PreviousOpportunityScore: c.Previous?.OpportunityScore,
-                PreviousTrajectoryScore: c.Previous?.TrajectoryScore));
+                PreviousOpportunityScore: previous?.OpportunityScore,
+                PreviousTrajectoryScore: previous?.TrajectoryScore));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.
@@ -435,6 +441,5 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
 
     private sealed record CandidateEntry(
         Company Company,
-        CompanyScoreSnapshot Current,
-        CompanyScoreSnapshot? Previous);
+        CompanyScoreSnapshot Current);
 }

@@ -76,6 +76,111 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
         return path;
     }
 
+    public async Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
+        Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct)
+    {
+        // WriteAsync stores each snapshot flat under {RootDirectory}/{companyId}/{snapshotId}.json,
+        // so all of a company's snapshots live directly in this directory.
+        var companyDir = Path.Combine(_options.RootDirectory, companyId.ToString());
+        if (!Directory.Exists(companyDir))
+        {
+            return null;
+        }
+
+        List<string> files;
+        try
+        {
+            files = Directory
+                .EnumerateFiles(companyDir, "*.json", SearchOption.TopDirectoryOnly)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to enumerate score-snapshot files in '{CompanyDir}'; returning no previous snapshot.",
+                companyDir);
+            return null;
+        }
+
+        // Deterministic (AD-3): among snapshots strictly before beforeUtc, we want the newest by
+        // CreatedAtUtc, tie-broken by Id (both descending). Track the single best candidate in one
+        // pass rather than materialising and sorting the whole history — same result, no list
+        // allocation, and cost stays linear as a company's snapshot history grows.
+        CompanyScoreSnapshot? best = null;
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+                var parsed = JsonSerializer.Deserialize<ScoreSnapshotFile>(text, RadarFileStoreJson.Options);
+                if (parsed is null)
+                {
+                    // A JSON literal `null` deserializes to a null record — treat it as a malformed
+                    // entry so operators can spot corrupted snapshot files.
+                    _logger.LogWarning(
+                        "Score-snapshot file '{File}' contained a null snapshot; skipping.", file);
+                    continue;
+                }
+
+                // Guard the method contract: this directory is keyed by companyId, but a mis-filed or
+                // hand-copied JSON could carry a different CompanyId. Returning it would attribute
+                // another company's scores to this one and corrupt the week-over-week deltas, so warn
+                // and skip rather than trust the file's location.
+                if (parsed.CompanyId != companyId)
+                {
+                    _logger.LogWarning(
+                        "Score-snapshot file '{File}' has CompanyId {FileCompanyId} but is filed under {CompanyId}; skipping.",
+                        file,
+                        parsed.CompanyId,
+                        companyId);
+                    continue;
+                }
+
+                // Only snapshots strictly before beforeUtc are eligible.
+                if (parsed.CreatedAtUtc >= beforeUtc)
+                {
+                    continue;
+                }
+
+                // Keep this candidate only if it is strictly newer than the current best, tie-broken
+                // by Id descending — mirrors the previous OrderByDescending(CreatedAtUtc).ThenByDescending(Id).
+                if (best is null
+                    || parsed.CreatedAtUtc > best.CreatedAtUtc
+                    || (parsed.CreatedAtUtc == best.CreatedAtUtc && parsed.SnapshotId.CompareTo(best.Id) > 0))
+                {
+                    // Reconstruct only the scalar snapshot fields. Callers (the weekly report's
+                    // previous-vs-current comparison) need only the scores, so the Links are
+                    // intentionally left empty here — this is NOT dropped provenance: the current
+                    // report's evidence links still come from the in-memory repo, unchanged.
+                    best = new CompanyScoreSnapshot(
+                        Id: parsed.SnapshotId,
+                        CompanyId: parsed.CompanyId,
+                        ScoringVersion: parsed.ScoringVersion,
+                        TrajectoryScore: parsed.TrajectoryScore,
+                        OpportunityScore: parsed.OpportunityScore,
+                        AttentionScore: parsed.AttentionScore,
+                        EvidenceConfidenceScore: parsed.EvidenceConfidenceScore,
+                        SignalVelocityScore: parsed.SignalVelocityScore,
+                        Explanation: parsed.Explanation,
+                        ComponentJson: parsed.ComponentJson,
+                        WindowStartUtc: parsed.WindowStartUtc,
+                        WindowEndUtc: parsed.WindowEndUtc,
+                        CreatedAtUtc: parsed.CreatedAtUtc);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // One unreadable/malformed snapshot file must not break the whole read.
+                _logger.LogWarning(ex, "Failed to read score-snapshot file '{File}'; skipping.", file);
+            }
+        }
+
+        return best;
+    }
+
     private static string Serialize(CompanyScoreSnapshot snapshot, IReadOnlyList<ScoreEvidenceLink> links)
     {
         var file = new ScoreSnapshotFile(

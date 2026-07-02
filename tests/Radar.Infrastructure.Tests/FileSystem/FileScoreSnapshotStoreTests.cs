@@ -175,6 +175,121 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadLatestBeforeAsync_ReturnsLatestSnapshotStrictlyBeforeInstant()
+    {
+        var companyId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var t2 = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+
+        var first = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithOpportunityScore(40)
+            .WithTrajectoryScore(45)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+        var second = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithOpportunityScore(70)
+            .WithTrajectoryScore(66)
+            .WithCreatedAtUtc(t2)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        await store.WriteAsync(first, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        await store.WriteAsync(second, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        // A cutoff after T2 returns the T2 snapshot (the latest).
+        var afterT2 = t2.AddDays(1);
+        var latest = await store.ReadLatestBeforeAsync(companyId, afterT2, CancellationToken.None);
+        Assert.NotNull(latest);
+        Assert.Equal(second.Id, latest!.Id);
+        Assert.Equal(70, latest.OpportunityScore);
+        Assert.Equal(66, latest.TrajectoryScore);
+
+        // Strictly-before: a cutoff exactly at T2 excludes T2 and returns the T1 snapshot.
+        var beforeT2 = await store.ReadLatestBeforeAsync(companyId, t2, CancellationToken.None);
+        Assert.NotNull(beforeT2);
+        Assert.Equal(first.Id, beforeT2!.Id);
+        Assert.Equal(40, beforeT2.OpportunityScore);
+        Assert.Equal(45, beforeT2.TrajectoryScore);
+    }
+
+    [Fact]
+    public async Task ReadLatestBeforeAsync_NoQualifyingSnapshotOrUnknownCompany_ReturnsNull()
+    {
+        var companyId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithCompanyId(companyId)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        // Cutoff at (not before) the earliest snapshot → none qualify.
+        Assert.Null(await store.ReadLatestBeforeAsync(companyId, t1, CancellationToken.None));
+
+        // Unknown company (no directory) → null.
+        Assert.Null(await store.ReadLatestBeforeAsync(
+            Guid.NewGuid(), t1.AddYears(1), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReadLatestBeforeAsync_SkipsMalformedFileAndReturnsValidSnapshot()
+    {
+        var companyId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithOpportunityScore(55)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        // Drop a garbage JSON file into the same company directory.
+        var badFile = Path.Combine(_tempDir, companyId.ToString(), "bad.json");
+        await File.WriteAllTextAsync(badFile, "{ this is not valid json");
+
+        var latest = await store.ReadLatestBeforeAsync(
+            companyId, t1.AddDays(1), CancellationToken.None);
+
+        Assert.NotNull(latest);
+        Assert.Equal(snapshot.Id, latest!.Id);
+        Assert.Equal(55, latest.OpportunityScore);
+    }
+
+    [Fact]
+    public async Task ReadLatestBeforeAsync_AlreadyCancelledToken_Throws()
+    {
+        var companyId = Guid.NewGuid();
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithCompanyId(companyId)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        // At least one file must exist so the loop body runs ct.ThrowIfCancellationRequested().
+        await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        var cancelled = new CancellationToken(canceled: true);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => store.ReadLatestBeforeAsync(companyId, DateTimeOffset.MaxValue, cancelled));
+    }
+
+    [Fact]
     public async Task WriteAsync_IoFailure_ReturnsAttemptedPathWithoutThrowing()
     {
         // Point the root at an existing FILE so Directory.CreateDirectory throws IOException.

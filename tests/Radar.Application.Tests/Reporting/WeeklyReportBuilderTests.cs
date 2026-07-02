@@ -3,10 +3,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Collectors;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
+using Radar.Application.Scoring;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.TestSupport;
 
@@ -37,6 +39,28 @@ public sealed class WeeklyReportBuilderTests
             Task.FromResult<IReadOnlyList<PipelineRunRecord>>(records.Take(Math.Max(0, count)).ToList());
     }
 
+    // A minimal in-test IScoreSnapshotFileStore that serves the previous snapshot from a pre-seeded
+    // list, mirroring the real store's contract (latest strictly-before, CreatedAtUtc then Id
+    // descending). Keeps most builder tests disk-free.
+    private sealed class FakeScoreSnapshotFileStore(IReadOnlyList<CompanyScoreSnapshot> snapshots)
+        : IScoreSnapshotFileStore
+    {
+        public FakeScoreSnapshotFileStore() : this([]) { }
+
+        public Task<string> WriteAsync(
+            CompanyScoreSnapshot snapshot,
+            IReadOnlyList<ScoreEvidenceLink> links,
+            CancellationToken ct) => Task.FromResult("unused");
+
+        public Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
+            Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct) =>
+            Task.FromResult(snapshots
+                .Where(s => s.CompanyId == companyId && s.CreatedAtUtc < beforeUtc)
+                .OrderByDescending(s => s.CreatedAtUtc)
+                .ThenByDescending(s => s.Id)
+                .FirstOrDefault());
+    }
+
     private sealed class Harness
     {
         public InMemoryCompanyRepository Companies { get; } = new();
@@ -47,7 +71,10 @@ public sealed class WeeklyReportBuilderTests
         public InMemoryReportRepository Reports { get; } = new();
         public WeeklyReportBuilder Builder { get; }
 
-        public Harness(WeeklyReportOptions? options = null, IReadOnlyList<PipelineRunRecord>? runs = null)
+        public Harness(
+            WeeklyReportOptions? options = null,
+            IReadOnlyList<PipelineRunRecord>? runs = null,
+            IScoreSnapshotFileStore? scoreFiles = null)
         {
             Builder = new WeeklyReportBuilder(
                 Companies,
@@ -59,6 +86,7 @@ public sealed class WeeklyReportBuilderTests
                 new MarkdownWeeklyReportRenderer(),
                 Reports,
                 new FakeRunStore(runs ?? []),
+                scoreFiles ?? new FakeScoreSnapshotFileStore(),
                 options ?? new WeeklyReportOptions(),
                 new FixedTimeProvider(FixedNow),
                 NullLogger<WeeklyReportBuilder>.Instance);
@@ -364,10 +392,10 @@ public sealed class WeeklyReportBuilderTests
     [Fact]
     public async Task UsesLatestInPeriodAsCurrentAndPriorAsPreviousForPolicy()
     {
-        var h = new Harness();
         var companyId = Guid.NewGuid();
 
-        // Previous (before period, low trajectory).
+        // Previous (before period, low trajectory). Sourced from the file store (cross-run), NOT the
+        // in-memory repo, so seed the fake score file store with it.
         var prevSnapshot = new ScoreSnapshotBuilder()
             .WithId(Guid.NewGuid())
             .WithCompanyId(companyId)
@@ -375,6 +403,8 @@ public sealed class WeeklyReportBuilderTests
             .WithEvidenceConfidenceScore(80)
             .WithCreatedAtUtc(BeforePeriod)
             .Build();
+
+        var h = new Harness(scoreFiles: new FakeScoreSnapshotFileStore([prevSnapshot]));
 
         // Current (in period, clearly improved trajectory).
         var currentSnapshotId = Guid.NewGuid();
@@ -387,7 +417,6 @@ public sealed class WeeklyReportBuilderTests
             .Build();
 
         await h.Companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
-        await h.Scores.AddSnapshotAsync(prevSnapshot, default);
         await h.Scores.AddSnapshotAsync(currentSnapshot, default);
         // The current snapshot needs ≥1 score-evidence link to surface (spec 53).
         await SeedEvidenceLinkAsync(h, currentSnapshotId);
@@ -403,10 +432,9 @@ public sealed class WeeklyReportBuilderTests
     [Fact]
     public async Task RendersScoreDeltaClauseFromPreviousSnapshot()
     {
-        var h = new Harness();
         var companyId = Guid.NewGuid();
 
-        // Previous (before period): lower opportunity/trajectory.
+        // Previous (before period): lower opportunity/trajectory. Sourced from the file store.
         var prevSnapshot = new ScoreSnapshotBuilder()
             .WithId(Guid.NewGuid())
             .WithCompanyId(companyId)
@@ -414,6 +442,8 @@ public sealed class WeeklyReportBuilderTests
             .WithTrajectoryScore(56)
             .WithCreatedAtUtc(BeforePeriod)
             .Build();
+
+        var h = new Harness(scoreFiles: new FakeScoreSnapshotFileStore([prevSnapshot]));
 
         // Current (in period): clearly higher, so deltas are +19/+19.
         var currentSnapshotId = Guid.NewGuid();
@@ -426,7 +456,6 @@ public sealed class WeeklyReportBuilderTests
             .Build();
 
         await h.Companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
-        await h.Scores.AddSnapshotAsync(prevSnapshot, default);
         await h.Scores.AddSnapshotAsync(currentSnapshot, default);
         await SeedEvidenceLinkAsync(h, currentSnapshotId);
 
@@ -447,6 +476,69 @@ public sealed class WeeklyReportBuilderTests
 
         var markdown = result.Report.MarkdownContent;
         Assert.Contains("(first snapshot)", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PriorSnapshotPresentOnlyOnDiskYieldsCrossRunDelta()
+    {
+        // The core acceptance criterion: the prior snapshot exists ONLY in the on-disk score file
+        // store (an earlier run's persisted snapshot), never in this run's in-memory repo. The
+        // builder must still surface a real delta, proving the cross-run read-back works.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"radar-scores-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var companyId = Guid.NewGuid();
+
+            var fileStore = new FileScoreSnapshotStore(
+                new FileScoreSnapshotStoreOptions { RootDirectory = tempDir },
+                NullLogger<FileScoreSnapshotStore>.Instance);
+
+            // Prior snapshot: persisted to disk only (an earlier run), lower scores.
+            var priorSnapshot = new ScoreSnapshotBuilder()
+                .WithId(Guid.NewGuid())
+                .WithCompanyId(companyId)
+                .WithOpportunityScore(60)
+                .WithTrajectoryScore(55)
+                .WithCreatedAtUtc(BeforePeriod)
+                .Build();
+            await fileStore.WriteAsync(priorSnapshot, Array.Empty<ScoreEvidenceLink>(), default);
+
+            var h = new Harness(scoreFiles: fileStore);
+
+            // Current run's snapshot + link live ONLY in the in-memory repo (this run's provenance).
+            var currentSnapshotId = Guid.NewGuid();
+            var currentSnapshot = new ScoreSnapshotBuilder()
+                .WithId(currentSnapshotId)
+                .WithCompanyId(companyId)
+                .WithOpportunityScore(80)
+                .WithTrajectoryScore(70)
+                .WithCreatedAtUtc(InPeriod)
+                .Build();
+
+            await h.Companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
+            await h.Scores.AddSnapshotAsync(currentSnapshot, default);
+            await SeedEvidenceLinkAsync(h, currentSnapshotId);
+
+            var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, default);
+
+            var markdown = result.Report.MarkdownContent;
+            // Deltas are current - prior: Opportunity 80-60=+20, Trajectory 70-55=+15.
+            Assert.Contains(
+                "(Opportunity +20, Trajectory +15 vs last run)", markdown, StringComparison.Ordinal);
+            Assert.DoesNotContain("(first snapshot)", markdown, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Best-effort cleanup.
+            }
+        }
     }
 
     [Fact]
@@ -980,6 +1072,8 @@ public sealed class WeeklyReportBuilderTests
         // WeeklyReportBuilder now depends on IPipelineRunStore; register the file store (Infrastructure)
         // so the builder resolves from the container.
         services.AddFilePipelineRunStore(Path.Combine(Path.GetTempPath(), $"radar-runs-{Guid.NewGuid():N}"));
+        // WeeklyReportBuilder now also depends on IScoreSnapshotFileStore; register the file store.
+        services.AddFileScoreStore(Path.Combine(Path.GetTempPath(), $"radar-scores-{Guid.NewGuid():N}"));
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedNow));
         var provider = services.BuildServiceProvider();
 

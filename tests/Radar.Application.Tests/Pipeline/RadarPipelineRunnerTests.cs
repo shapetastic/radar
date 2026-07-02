@@ -180,6 +180,15 @@ public sealed class RadarPipelineRunnerTests
             Written.Add((snapshot, links));
             return Task.FromResult("written/score.json");
         }
+
+        public Task<Radar.Domain.Scoring.CompanyScoreSnapshot?> ReadLatestBeforeAsync(
+            Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct) =>
+            Task.FromResult(Written
+                .Select(w => w.Snapshot)
+                .Where(s => s.CompanyId == companyId && s.CreatedAtUtc < beforeUtc)
+                .OrderByDescending(s => s.CreatedAtUtc)
+                .ThenByDescending(s => s.Id)
+                .FirstOrDefault());
     }
 
     /// <summary>
@@ -276,6 +285,7 @@ public sealed class RadarPipelineRunnerTests
                 new MarkdownWeeklyReportRenderer(),
                 Reports,
                 RunStore,
+                ScoreStore,
                 new WeeklyReportOptions(),
                 time,
                 NullLogger<WeeklyReportBuilder>.Instance);
