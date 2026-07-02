@@ -127,6 +127,19 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_WithNewsCollector()
+    {
+        // The GDELT DOC API needs no key/User-Agent, so the news collector enables with just the kind and the
+        // RadarWorkerOptions defaults (2w window, cap 25, English-only, 3s pacing, 1 retry).
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "news"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+        Assert.Equal(2, provider.GetServices<IEvidenceCollector>().Count());
+    }
+
+    [Fact]
     public void DuplicateCollectorKind_RegistersOnce()
     {
         using var provider = BuildProvider(

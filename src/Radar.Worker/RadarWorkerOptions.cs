@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "usaspending".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "usaspending", "news".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -19,6 +19,12 @@ public sealed class RadarWorkerOptions
     /// with no USASpending config.
     /// </summary>
     public UsaSpendingWorkerOptions UsaSpending { get; init; } = new();
+
+    /// <summary>
+    /// GDELT DOC 2.0 news collector configuration (bound from "Radar:Gdelt"). Only read when the "news"
+    /// collector is enabled; the defaults let the rss-only configuration keep working with no Gdelt config.
+    /// </summary>
+    public GdeltWorkerOptions Gdelt { get; init; } = new();
 
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
@@ -104,4 +110,28 @@ public sealed class UsaSpendingWorkerOptions
 
     /// <summary>Maximum highest-value matching awards to collect per company per run. Defaults to 25.</summary>
     public int MaxAwardsPerCompany { get; init; } = 25;
+}
+
+/// <summary>
+/// GDELT DOC 2.0 news collector configuration (bound from "Radar:Gdelt"). Surfaces the recent-coverage
+/// window, the per-company cap, the English-only toggle, the inter-request pacing delay (GDELT throttles
+/// hard), and the 429 retry bound through to <c>GdeltCollectorOptions</c>. Defaults so the rss-only
+/// configuration works without any Gdelt config.
+/// </summary>
+public sealed class GdeltWorkerOptions
+{
+    /// <summary>Recent-coverage window as a GDELT timespan token. Defaults to "2w".</summary>
+    public string Timespan { get; init; } = "2w";
+
+    /// <summary>Maximum surviving (relevance-filtered, deduped) articles to collect per company per run. Defaults to 25.</summary>
+    public int MaxRecordsPerCompany { get; init; } = 25;
+
+    /// <summary>Whether to restrict the query to English-language coverage. Defaults to true.</summary>
+    public bool EnglishOnly { get; init; } = true;
+
+    /// <summary>Pause between successive per-company requests, in seconds (GDELT throttles hard). Defaults to 3.</summary>
+    public int InterRequestDelaySeconds { get; init; } = 3;
+
+    /// <summary>How many times the reader re-issues a request after an HTTP 429 before giving up. Defaults to 1.</summary>
+    public int MaxRetriesOn429 { get; init; } = 1;
 }

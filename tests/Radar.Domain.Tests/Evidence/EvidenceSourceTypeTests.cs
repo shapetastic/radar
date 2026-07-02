@@ -24,4 +24,14 @@ public sealed class EvidenceSourceTypeTests
         Assert.False(
             EvidenceSourceTypes.IsThirdPartyAttentionSource(EvidenceSourceType.GovernmentContract));
     }
+
+    [Fact]
+    public void NewsArticle_IsThirdPartyAttentionSource()
+    {
+        // A news article is third-party market attention (someone other than the company drawing attention
+        // to it), so producing NewsArticle evidence makes AttentionScore non-zero automatically (AD-6). This
+        // locks that classification — no production Domain change is needed for the GDELT news collector.
+        Assert.True(
+            EvidenceSourceTypes.IsThirdPartyAttentionSource(EvidenceSourceType.NewsArticle));
+    }
 }
