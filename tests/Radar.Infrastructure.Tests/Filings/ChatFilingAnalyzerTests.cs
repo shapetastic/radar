@@ -167,6 +167,50 @@ public sealed class ChatFilingAnalyzerTests
         Assert.Equal(0, client.CallCount);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task NonPositiveMaxInputLength_DegradesToUnknown_WithoutCallingModel(int maxInputLength)
+    {
+        var client = new FakeChatClient(
+            """{"direction":"Improving","confidence":0.8,"rationale":"x"}""");
+        var analyzer = Build(client, maxInputLength: maxInputLength);
+
+        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+
+        AssertUnknown(result);
+        Assert.Equal(0, client.CallCount);
+    }
+
+    [Fact]
+    public async Task RationaleWithAdviceLanguage_IsScrubbed_DirectionRetained()
+    {
+        // The model ignored the prompt and emitted advice language; the rationale must be dropped defensively.
+        var client = new FakeChatClient(
+            """{"direction":"Improving","confidence":0.8,"rationale":"Strong quarter — a guaranteed safe bet, buy now."}""");
+        var analyzer = Build(client);
+
+        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+
+        Assert.Equal(FilingDirection.Improving, result.Direction);
+        Assert.Equal(0.8m, result.Confidence);
+        Assert.Equal(string.Empty, result.Rationale);
+    }
+
+    [Fact]
+    public async Task LegitimateReleaseTerms_AreNotScrubbedAsAdvice()
+    {
+        // "buyback" / "seller" contain banned substrings but are not advice — whole-word matching keeps them.
+        var client = new FakeChatClient(
+            """{"direction":"Improving","confidence":0.7,"rationale":"Announced a share buyback; a top seller drove growth."}""");
+        var analyzer = Build(client);
+
+        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+
+        Assert.Equal(FilingDirection.Improving, result.Direction);
+        Assert.Equal("Announced a share buyback; a top seller drove growth.", result.Rationale);
+    }
+
     [Fact]
     public async Task Rationale_ContainsNoAdviceLanguage()
     {

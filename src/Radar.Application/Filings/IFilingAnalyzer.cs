@@ -18,5 +18,5 @@ public interface IFilingAnalyzer
     /// A malformed/empty/failed AI response degrades to <see cref="FilingSentiment.Unknown"/> and never throws;
     /// only genuine caller cancellation propagates.
     /// </summary>
-    Task<FilingSentiment> AnalyzeAsync(string earningsReleaseText, CancellationToken ct);
+    Task<FilingSentiment> AnalyzeAsync(string? earningsReleaseText, CancellationToken ct);
 }

@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -20,6 +22,15 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
 {
     /// <summary>Upper bound on the surfaced rationale length (transparency-only text is never unbounded).</summary>
     private const int MaxRationaleLength = 500;
+
+    /// <summary>
+    /// Advice language Radar must never surface (CLAUDE.md hard rule). The system prompt already forbids it,
+    /// but a model can ignore instructions, so the returned rationale is scrubbed defensively. Whole-word match
+    /// (word boundaries) so legitimate release terms like "share buyback" or "seller" are not false-positives.
+    /// </summary>
+    private static readonly Regex AdviceLanguage = new(
+        @"\b(?:buy|sell|guaranteed)\b|\bsafe bet\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Fixed, deterministic system instruction. States the task, forbids advice language, and instructs the
@@ -55,7 +66,7 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
         _logger = logger;
     }
 
-    public async Task<FilingSentiment> AnalyzeAsync(string earningsReleaseText, CancellationToken ct)
+    public async Task<FilingSentiment> AnalyzeAsync(string? earningsReleaseText, CancellationToken ct)
     {
         // Never call the model on empty text — an empty release carries no directional read.
         if (string.IsNullOrWhiteSpace(earningsReleaseText))
@@ -64,8 +75,16 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
         }
 
         // Truncate FIRST (cost/latency control): the headline beat/miss bullets are at the top of an EX-99.1
-        // release, so a leading substring is the right cap.
+        // release, so a leading substring is the right cap. A non-positive cap (misconfiguration) would make
+        // the substring throw, breaking the never-throw contract — degrade to Unknown instead.
         var max = _options.MaxInputLength;
+        if (max <= 0)
+        {
+            _logger.LogWarning(
+                "Filing analyzer MaxInputLength is non-positive ({MaxInputLength}); returning Unknown.", max);
+            return FilingSentiment.Unknown;
+        }
+
         var text = earningsReleaseText.Length > max ? earningsReleaseText[..max] : earningsReleaseText;
 
         var messages = new[]
@@ -104,9 +123,10 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
 
     /// <summary>
     /// Coerces a candidate into a known-good <see cref="FilingSentiment"/>: direction validated to a defined
-    /// enum value (else Unknown/0), confidence clamped to [0,1], rationale trimmed and bounded.
+    /// enum value (else Unknown/0), confidence clamped to [0,1], rationale trimmed, bounded, and scrubbed of
+    /// any advice language the model may have surfaced despite the system prompt.
     /// </summary>
-    private static FilingSentiment Validate(FilingSentiment candidate)
+    private FilingSentiment Validate(FilingSentiment candidate)
     {
         var direction = Enum.IsDefined(candidate.Direction) ? candidate.Direction : FilingDirection.Unknown;
 
@@ -118,6 +138,15 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
         if (rationale.Length > MaxRationaleLength)
         {
             rationale = rationale[..MaxRationaleLength];
+        }
+
+        // Radar must never surface advice language. If the model ignored the prompt and emitted it, drop the
+        // rationale rather than passing it through — the directional read itself is not advice and is retained.
+        if (rationale.Length > 0 && AdviceLanguage.IsMatch(rationale))
+        {
+            _logger.LogWarning(
+                "Filing analyzer rationale contained advice language; dropping the rationale.");
+            rationale = string.Empty;
         }
 
         return new FilingSentiment(direction, confidence, rationale);
