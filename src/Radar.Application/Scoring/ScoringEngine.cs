@@ -24,15 +24,19 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation ships spec 75 (directional filing signals): when AI is enabled, an
-    // earnings 8-K's EX-99.1 read now emits a directional GuidanceChange — a beat lifts Trajectory via a
-    // Positive GuidanceChange, a miss lowers it via a Negative one — output that did not exist pre-75. So a
-    // genuine beat and a genuine miss no longer score identically. (With AI disabled the scoring output is
-    // identical to v2, but the stamp still bumps because the generation that CAN now emit different scores
-    // has changed — the correct, conservative AD-10 behaviour.) Pre/post-75 snapshots are therefore not
-    // comparable, and a cross-run delta across that boundary correctly renders "(scoring updated)" rather
-    // than a fabricated thesis label.
-    private const string ScoringConfigVersion = "radar-scoring-config-v3";
+    // ScoringOptions). This generation ships spec 78 (directional filing supersedes Neutral): when AI is
+    // enabled, a confidence-gated directional GuidanceChange now REPLACES the deterministic Neutral
+    // GuidanceChange for the same earnings filing (suppress-before-store), so the Neutral no longer
+    // contributes to SignalVelocityScore (its Strength drops out of the current-window sum) nor emits a
+    // (weight-0) contribution row — Velocity and report content move, and the same filing stops appearing
+    // twice. (The formula math is unchanged: Neutral still weighs 0 in Trajectory; this slice changes WHICH
+    // signals are present, not the math — hence no ScoringVersion/formula Version bump.) With AI disabled
+    // nothing is superseded and the output is byte-for-byte identical to v3, but the stamp still bumps
+    // because the generation that CAN now emit different scores has changed — the correct, conservative
+    // AD-10 behaviour. Prior generation: spec 75 shipped the directional GuidanceChange itself (v3).
+    // Pre/post-boundary snapshots are not comparable, so a cross-run delta across it correctly renders
+    // "(scoring updated)" rather than a fabricated thesis label.
+    private const string ScoringConfigVersion = "radar-scoring-config-v4";
 
     private readonly ISignalRepository _signalRepository;
     private readonly IEvidenceRepository _evidenceRepository;

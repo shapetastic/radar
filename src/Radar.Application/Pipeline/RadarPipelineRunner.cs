@@ -197,9 +197,50 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // or after every CollectedAtUtc so freshly collected evidence is in-window.
         var asOfUtc = _timeProvider.GetUtcNow();
 
+        // OPT-IN directional filing enrichment (AI only). Null when AI is disabled -> skipped entirely, so
+        // the default pipeline is byte-for-byte unchanged. Produced BEFORE the deterministic extract loop
+        // stores signals (spec 78, Option B: suppress-before-store) so the extract loop knows which
+        // filings' deterministic Neutral GuidanceChange to suppress. ProduceAsync has no persistence side
+        // effects, and asOfUtc was already captured above (line ~198), so computing it here does NOT change
+        // the run instant or window semantics (AD-7 preserved) — only the storage ordering within the run.
+        IReadOnlyList<DirectionalFilingSignal> directional = [];
+        var hintsByEvidenceId = new Dictionary<Guid, IReadOnlyList<string>>();
+        var supersededFilingEvidenceIds = new HashSet<Guid>();
+        if (_directionalFilingSignals is not null)
+        {
+            var candidates = newEvidence
+                .Where(e => e.Evidence.SourceType == EvidenceSourceType.Filing)
+                .ToList();
+
+            // Preserve each Filing evidence's collector hints by Id: the source echoes back the SAME
+            // EvidenceItem instance it was handed, so directional.Evidence.Id keys straight back to the
+            // hints (e.g. ticker) the collector supplied. Threading them into the resolver drives the
+            // high-precedence hint path just like the keyword-extraction loop below, instead of forcing
+            // every directional signal down the CompanyMention fallback.
+            hintsByEvidenceId = candidates.ToDictionary(e => e.Evidence.Id, e => e.CompanyHints);
+
+            // Bail before the (potentially IO-bound: LLM/HTTP) directional read if the run was already
+            // cancelled — the deterministic extract loop's first check is below, so without this an
+            // already-cancelled run would still pay for ProduceAsync's work.
+            ct.ThrowIfCancellationRequested();
+
+            directional = await _directionalFilingSignals
+                .ProduceAsync(candidates.Select(e => e.Evidence).ToList(), asOfUtc, ct).ConfigureAwait(false);
+
+            // Supersede key: a directional GuidanceChange REPLACES the deterministic GuidanceChange over
+            // the SAME filing evidence. Key on EvidenceId (defensive on Type — every produced directional
+            // signal is a GuidanceChange today, but keying on type keeps the supersede exact/future-proof).
+            supersededFilingEvidenceIds = directional
+                .Where(d => d.Signal.SignalType == nameof(SignalType.GuidanceChange))
+                .Select(d => d.Evidence.Id)
+                .ToHashSet();
+        }
+
         // Stage 4 + 3 + 5: extract → resolve → review → store, per new evidence, in order. Each
         // evidence's collector hints (entry.CompanyHints) are passed to the resolver so a
-        // company-specific feed's binding can drive a high-confidence resolution.
+        // company-specific feed's binding can drive a high-confidence resolution. When a confidence-gated
+        // directional read superseded this filing's GuidanceChange, the deterministic Neutral is skipped
+        // before store (spec 78) — the directional signal carries the filing's GuidanceChange instead.
         foreach (var entry in newEvidence)
         {
             ct.ThrowIfCancellationRequested();
@@ -209,6 +250,18 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             foreach (var extracted in output.Signals)
             {
                 ct.ThrowIfCancellationRequested();
+
+                if (IsSupersededGuidanceChange(extracted, evidence, supersededFilingEvidenceIds))
+                {
+                    // A directional filing read supersedes this deterministic Neutral GuidanceChange for
+                    // the SAME filing evidence: do NOT store it and do NOT bump any counter (it is
+                    // replaced, not dropped-as-invalid). The directional signal below counts instead.
+                    _logger.LogDebug(
+                        "Suppressing deterministic Neutral GuidanceChange for filing evidence {EvidenceId}: " +
+                        "a directional filing read supersedes it.",
+                        evidence.Id);
+                    continue;
+                }
 
                 signalsExtracted++;
 
@@ -232,53 +285,36 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             }
         }
 
-        // OPT-IN directional filing enrichment (AI only). Null when AI is disabled -> skipped entirely, so
-        // the default pipeline is byte-for-byte unchanged. Runs AFTER the deterministic extract loop and
-        // BEFORE scoring, over this run's newly-stored Filing evidence (the source itself applies the
-        // earnings-2.02 + cap filtering), and threads each produced signal through the SAME
-        // map -> resolve -> review -> store path as keyword signals (provenance preserved).
-        if (_directionalFilingSignals is not null)
+        // Store the directional filing signals (opt-in; empty when AI disabled) through the SAME
+        // map -> resolve -> review -> store path as keyword signals (provenance preserved). Each
+        // directional GuidanceChange has already superseded the deterministic Neutral over the same
+        // filing evidence in the extract loop above.
+        foreach (var d in directional)
         {
-            var candidates = newEvidence
-                .Where(e => e.Evidence.SourceType == EvidenceSourceType.Filing)
-                .ToList();
+            ct.ThrowIfCancellationRequested();
 
-            // Preserve each Filing evidence's collector hints by Id: the source echoes back the SAME
-            // EvidenceItem instance it was handed, so directional.Evidence.Id keys straight back to the
-            // hints (e.g. ticker) the collector supplied. Threading them into the resolver drives the
-            // high-precedence hint path just like the keyword-extraction loop above, instead of forcing
-            // every directional signal down the CompanyMention fallback.
-            var hintsByEvidenceId = candidates.ToDictionary(e => e.Evidence.Id, e => e.CompanyHints);
+            signalsExtracted++;
 
-            var produced = await _directionalFilingSignals
-                .ProduceAsync(candidates.Select(e => e.Evidence).ToList(), asOfUtc, ct).ConfigureAwait(false);
-            foreach (var directional in produced)
+            // Resolve with the filing evidence's own collector hints when present; an absent entry
+            // (defensive — every produced signal's evidence came from candidates) falls back to the
+            // empty list, i.e. the CompanyMention (= filing SourceName) path.
+            var directionalHints = hintsByEvidenceId.GetValueOrDefault(d.Evidence.Id, []);
+            switch (await MapResolveReviewStoreAsync(d.Signal, d.Evidence, directionalHints, asOfUtc, ct)
+                .ConfigureAwait(false))
             {
-                ct.ThrowIfCancellationRequested();
-
-                signalsExtracted++;
-
-                // Resolve with the filing evidence's own collector hints when present; an absent entry
-                // (defensive — every produced signal's evidence came from candidates) falls back to the
-                // empty list, i.e. the CompanyMention (= filing SourceName) path.
-                var directionalHints = hintsByEvidenceId.GetValueOrDefault(directional.Evidence.Id, []);
-                switch (await MapResolveReviewStoreAsync(directional.Signal, directional.Evidence, directionalHints, asOfUtc, ct)
-                    .ConfigureAwait(false))
-                {
-                    case SignalStoreOutcome.Approved:
-                        signalsValid++;
-                        signalsApproved++;
-                        break;
-                    case SignalStoreOutcome.NeedsReview:
-                        signalsValid++;
-                        signalsNeedingReview++;
-                        break;
-                    case SignalStoreOutcome.OtherValid:
-                        signalsValid++;
-                        break;
-                    case SignalStoreOutcome.Dropped:
-                        break;
-                }
+                case SignalStoreOutcome.Approved:
+                    signalsValid++;
+                    signalsApproved++;
+                    break;
+                case SignalStoreOutcome.NeedsReview:
+                    signalsValid++;
+                    signalsNeedingReview++;
+                    break;
+                case SignalStoreOutcome.OtherValid:
+                    signalsValid++;
+                    break;
+                case SignalStoreOutcome.Dropped:
+                    break;
             }
         }
 
@@ -419,6 +455,24 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             _ => SignalStoreOutcome.OtherValid,
         };
     }
+
+    /// <summary>
+    /// True when a directional filing read supersedes this extracted signal (spec 78): the extracted
+    /// signal is a <see cref="SignalType.GuidanceChange"/> AND its filing evidence is in the supersede set
+    /// (the distinct EvidenceIds of the produced directional GuidanceChange signals). The runner then skips
+    /// storing this signal — by construction the only deterministic GuidanceChange an item-2.02 filing
+    /// produces today is the spec-57 Neutral, so this suppresses exactly that one signal and nothing on
+    /// non-filing evidence. Direction is intentionally NOT parsed: ANY GuidanceChange over a superseded
+    /// filing is replaced by the better-informed directional read; keying on type + evidence is sufficient.
+    /// The type compare is defensive against unknown/unparseable SignalType strings (a non-GuidanceChange
+    /// string simply never matches).
+    /// </summary>
+    private static bool IsSupersededGuidanceChange(
+        ExtractedSignal extracted,
+        EvidenceItem evidence,
+        HashSet<Guid> supersededFilingEvidenceIds) =>
+        extracted.SignalType == nameof(SignalType.GuidanceChange)
+        && supersededFilingEvidenceIds.Contains(evidence.Id);
 
     /// <summary>
     /// The result of <see cref="MapResolveReviewStoreAsync"/>: which run-summary counters the caller should
