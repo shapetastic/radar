@@ -30,50 +30,43 @@ internal sealed class HttpSecFilingReader : ISecFilingReader
 
     public async Task<SecFilingReadResult> ReadAsync(string submissionsUrl, CancellationToken ct)
     {
-        byte[] bytes;
-        try
-        {
-            using var response = await _httpClient
-                .GetAsync(submissionsUrl, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-
-            if ((int)response.StatusCode == 403)
+        var (failure, bytes) = await SecHttpFetch.GetAsync<SecFilingReadResult, byte[]>(
+            _httpClient,
+            submissionsUrl,
+            // Materialize the body before disposing the response so parsing can happen synchronously.
+            readBody: (content, c) => content.ReadAsByteArrayAsync(c),
+            onForbidden: () =>
             {
                 _logger.LogWarning(
                     "SEC submissions {SubmissionsUrl} returned HTTP 403 Forbidden; this is almost always a "
                         + "missing or invalid User-Agent (SEC requires a compliant 'Radar Research <email>' UA). Skipping.",
                     submissionsUrl);
                 return SecFilingReadResult.Failure(SecFilingReadOutcome.Forbidden, "HTTP 403 (User-Agent)");
-            }
-
-            if (!response.IsSuccessStatusCode)
+            },
+            onHttpError: status =>
             {
                 _logger.LogWarning(
                     "SEC submissions {SubmissionsUrl} returned non-success status {StatusCode}; skipping.",
                     submissionsUrl,
-                    (int)response.StatusCode);
-                return SecFilingReadResult.Failure(
-                    SecFilingReadOutcome.HttpError, $"HTTP {(int)response.StatusCode}");
-            }
+                    status);
+                return SecFilingReadResult.Failure(SecFilingReadOutcome.HttpError, $"HTTP {status}");
+            },
+            onUnreachable: ex =>
+            {
+                _logger.LogWarning(ex, "SEC submissions {SubmissionsUrl} fetch failed; skipping.", submissionsUrl);
+                return SecFilingReadResult.Failure(SecFilingReadOutcome.Unreachable, "transport error");
+            },
+            onTimeout: ex =>
+            {
+                // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+                _logger.LogWarning(ex, "SEC submissions {SubmissionsUrl} fetch timed out; skipping.", submissionsUrl);
+                return SecFilingReadResult.Failure(SecFilingReadOutcome.Timeout, "request timed out");
+            },
+            ct).ConfigureAwait(false);
 
-            // Materialize the body before disposing the response so parsing can happen synchronously.
-            bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-        }
-        catch (HttpRequestException ex)
+        if (failure is not null)
         {
-            _logger.LogWarning(ex, "SEC submissions {SubmissionsUrl} fetch failed; skipping.", submissionsUrl);
-            return SecFilingReadResult.Failure(SecFilingReadOutcome.Unreachable, "transport error");
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // Caller-requested cancellation must propagate so the run stops; do not hide it as a failure result.
-            throw;
-        }
-        catch (TaskCanceledException ex)
-        {
-            // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
-            _logger.LogWarning(ex, "SEC submissions {SubmissionsUrl} fetch timed out; skipping.", submissionsUrl);
-            return SecFilingReadResult.Failure(SecFilingReadOutcome.Timeout, "request timed out");
+            return failure;
         }
 
         try
@@ -119,7 +112,7 @@ internal sealed class HttpSecFilingReader : ISecFilingReader
             return items;
         }
 
-        var cik = StripLeadingZeros(GetString(root, "cik"));
+        var cik = GetString(root, "cik");
 
         if (!root.TryGetProperty("filings", out var filings)
             || filings.ValueKind != JsonValueKind.Object
@@ -164,20 +157,10 @@ internal sealed class HttpSecFilingReader : ISecFilingReader
                 PrimaryDocument: NullIfBlank(At(primaryDocument, i)),
                 PrimaryDocDescription: NullIfBlank(At(primaryDocDescription, i)),
                 Items: NullIfBlank(At(itemCodes, i)),
-                IndexUrl: BuildIndexUrl(cik, accessionValue)));
+                IndexUrl: SecEdgarUrls.BuildIndexUrl(cik, accessionValue, ".htm")));
         }
 
         return items;
-    }
-
-    /// <summary>
-    /// Builds the stable filing index landing page URL:
-    /// <c>https://www.sec.gov/Archives/edgar/data/{cik}/{accNoNoDashes}/{accessionWithDashes}-index.htm</c>.
-    /// </summary>
-    private static string BuildIndexUrl(string cik, string accession)
-    {
-        var accNoNoDashes = accession.Replace("-", string.Empty, StringComparison.Ordinal);
-        return $"https://www.sec.gov/Archives/edgar/data/{cik}/{accNoNoDashes}/{accession}-index.htm";
     }
 
     private static bool TryParseAcceptance(string? value, out DateTimeOffset utc)
@@ -222,12 +205,6 @@ internal sealed class HttpSecFilingReader : ISecFilingReader
         parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? string.Empty
             : string.Empty;
-
-    private static string StripLeadingZeros(string cik)
-    {
-        var trimmed = cik.TrimStart('0');
-        return trimmed.Length == 0 ? "0" : trimmed;
-    }
 
     private static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
