@@ -1207,6 +1207,45 @@ public sealed class RadarPipelineRunnerTests
     }
 
     [Fact]
+    public async Task DirectionalFilingSource_ThreadsCollectorHint_ResolvesSignalToHintedCompany()
+    {
+        var companyId = Guid.NewGuid();
+
+        // The Filing evidence carries the seeded company's ticker as a collector hint. The directional
+        // signal's mention is generic and would NOT resolve on its own — only the threaded hint can
+        // resolve it, so an approved signal proves the runner passes directional.Evidence's hints (not [])
+        // into the resolver.
+        var collector = new FakeEvidenceCollector(
+            [BuildFilingCollected() with { CompanyHints = ["NWR"] }]);
+        var extractor = new AnyEvidenceSignalExtractor(new([], "summary"));
+
+        var source = new FakeDirectionalFilingSignalSource(ev => new ExtractedSignal(
+            CompanyMention: "Some Generic Vendor Name",
+            SignalType: "GuidanceChange",
+            Direction: "Positive",
+            Strength: 6,
+            Novelty: 6,
+            Confidence: 0.9m,
+            SupportingExcerpt: ev.Title,
+            Reason: "Directional read: revenue up, guidance raised."));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: source);
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, result.SignalsValid);
+        Assert.Equal(1, result.SignalsApproved);
+
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(companyId, signal.CompanyId);
+        Assert.Equal(SignalReviewStatus.Approved, signal.ReviewStatus);
+    }
+
+    [Fact]
     public async Task NullDirectionalFilingSource_IsNoOp_NoDirectionalSignal()
     {
         var companyId = Guid.NewGuid();

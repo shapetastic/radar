@@ -240,21 +240,29 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         if (_directionalFilingSignals is not null)
         {
             var candidates = newEvidence
-                .Select(e => e.Evidence)
-                .Where(ev => ev.SourceType == EvidenceSourceType.Filing)
+                .Where(e => e.Evidence.SourceType == EvidenceSourceType.Filing)
                 .ToList();
 
+            // Preserve each Filing evidence's collector hints by Id: the source echoes back the SAME
+            // EvidenceItem instance it was handed, so directional.Evidence.Id keys straight back to the
+            // hints (e.g. ticker) the collector supplied. Threading them into the resolver drives the
+            // high-precedence hint path just like the keyword-extraction loop above, instead of forcing
+            // every directional signal down the CompanyMention fallback.
+            var hintsByEvidenceId = candidates.ToDictionary(e => e.Evidence.Id, e => e.CompanyHints);
+
             var produced = await _directionalFilingSignals
-                .ProduceAsync(candidates, asOfUtc, ct).ConfigureAwait(false);
+                .ProduceAsync(candidates.Select(e => e.Evidence).ToList(), asOfUtc, ct).ConfigureAwait(false);
             foreach (var directional in produced)
             {
                 ct.ThrowIfCancellationRequested();
 
                 signalsExtracted++;
 
-                // Directional filing signals carry no collector company hints; resolution falls back to the
-                // CompanyMention (= the filing SourceName), matching the keyword path's behaviour.
-                switch (await MapResolveReviewStoreAsync(directional.Signal, directional.Evidence, [], asOfUtc, ct)
+                // Resolve with the filing evidence's own collector hints when present; an absent entry
+                // (defensive — every produced signal's evidence came from candidates) falls back to the
+                // empty list, i.e. the CompanyMention (= filing SourceName) path.
+                var directionalHints = hintsByEvidenceId.GetValueOrDefault(directional.Evidence.Id, []);
+                switch (await MapResolveReviewStoreAsync(directional.Signal, directional.Evidence, directionalHints, asOfUtc, ct)
                     .ConfigureAwait(false))
                 {
                     case SignalStoreOutcome.Approved:
