@@ -21,6 +21,7 @@ public sealed class HttpSecEarningsReleaseReaderTests
     private const string EightKFile = "mrcy-20260505.htm";
     private const string Ex991File = "a2026q3earningsreleaseex.htm";
     private const string Ex992File = "q3fy26earningspresentati.htm";
+    private const string Ex993File = "q3fy26supplementaldata.htm";
 
     // Models the real SEC -index.html document table: columns Seq, Description, Document (anchored .htm),
     // Type, Size. Three rows: the boilerplate 8-K cover page, the EX-99.1 earnings release, and the EX-99.2
@@ -37,6 +38,16 @@ public sealed class HttpSecEarningsReleaseReaderTests
     [
         ("1", "mrcy-20260505.htm document", EightKFile, "8-K", "38 KB"),
         ("2", "q3fy26earningspresentati.htm document", Ex992File, "EX-99.2", "150 KB"),
+    ]);
+
+    // No exact EX-99.1 row, but two EX-99.* exhibits: the larger EX-99.3 (500 KB) appears *after* the smaller
+    // EX-99.2 (150 KB) in document order, so selecting it proves the fallback tie-break is largest-by-Size and
+    // not just first-in-order.
+    private static readonly string IndexWithMultipleEx99 = BuildIndex(
+    [
+        ("1", "mrcy-20260505.htm document", EightKFile, "8-K", "38 KB"),
+        ("2", "q3fy26earningspresentati.htm document", Ex992File, "EX-99.2", "150 KB"),
+        ("3", "q3fy26supplementaldata.htm document", Ex993File, "EX-99.3", "500 KB"),
     ]);
 
     // Only the 8-K cover page (plus a non-.htm EX-101 XBRL row that is not a document candidate) — no EX-99.*.
@@ -136,6 +147,32 @@ public sealed class HttpSecEarningsReleaseReaderTests
     }
 
     [Fact]
+    public async Task ReadAsync_MultipleEx99NoExact_SelectsLargestBySize()
+    {
+        var handler = new RoutingHandler(req =>
+        {
+            var url = req.RequestUri!.AbsoluteUri;
+            if (url.EndsWith("-index.html", StringComparison.Ordinal))
+                return Html(HttpStatusCode.OK, IndexWithMultipleEx99);
+            if (url.EndsWith(Ex993File, StringComparison.Ordinal))
+                return Html(HttpStatusCode.OK, "<html><body><p>Supplemental body.</p></body></html>");
+            return Html(HttpStatusCode.NotFound, "missing");
+        });
+        var reader = CreateReader(handler);
+
+        var result = await reader.ReadAsync(Cik, Accession, CancellationToken.None);
+
+        Assert.Equal(SecEarningsReleaseReadOutcome.Success, result.Outcome);
+        // EX-99.3 (500 KB) wins over EX-99.2 (150 KB) despite coming later in document order — size, not order.
+        Assert.Equal("EX-99.3", result.DocumentType);
+        Assert.Equal(Ex993File, result.DocumentFileName);
+        Assert.Contains("Supplemental body.", result.PlainText);
+        // The larger exhibit was fetched; the smaller EX-99.2 was not.
+        Assert.Contains(BaseUrl + "/" + Ex993File, handler.Requested);
+        Assert.DoesNotContain(BaseUrl + "/" + Ex992File, handler.Requested);
+    }
+
+    [Fact]
     public async Task ReadAsync_IndexHttp403_ReturnsForbiddenWithoutThrowing()
     {
         var handler = new RoutingHandler(_ => Html(HttpStatusCode.Forbidden, "forbidden"));
@@ -162,6 +199,26 @@ public sealed class HttpSecEarningsReleaseReaderTests
         var result = await reader.ReadAsync(Cik, Accession, CancellationToken.None);
 
         Assert.Equal(SecEarningsReleaseReadOutcome.Forbidden, result.Outcome);
+    }
+
+    [Fact]
+    public async Task ReadAsync_ExhibitHttp500_ReturnsHttpError()
+    {
+        // A non-403 non-success status (here 500 on the exhibit fetch) maps to the generic HttpError outcome,
+        // distinct from the dedicated Forbidden path.
+        var handler = new RoutingHandler(req =>
+        {
+            var url = req.RequestUri!.AbsoluteUri;
+            if (url.EndsWith("-index.html", StringComparison.Ordinal))
+                return Html(HttpStatusCode.OK, IndexWith991);
+            return Html(HttpStatusCode.InternalServerError, "server error");
+        });
+        var reader = CreateReader(handler);
+
+        var result = await reader.ReadAsync(Cik, Accession, CancellationToken.None);
+
+        Assert.Equal(SecEarningsReleaseReadOutcome.HttpError, result.Outcome);
+        Assert.False(result.IsSuccess);
     }
 
     [Fact]
