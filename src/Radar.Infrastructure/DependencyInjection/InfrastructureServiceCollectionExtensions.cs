@@ -318,7 +318,17 @@ public static class InfrastructureServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        var provider = options.Provider?.Trim() ?? string.Empty;
+        // Normalize (trim) every config string once so validation and the registered singleton agree, and so trailing
+        // whitespace from env vars / copied JSON can't defeat the URI parse or reach the provider SDK.
+        options = new AiClientOptions
+        {
+            Provider = options.Provider?.Trim() ?? string.Empty,
+            Model = options.Model?.Trim() ?? string.Empty,
+            AnthropicApiKey = options.AnthropicApiKey?.Trim() ?? string.Empty,
+            OllamaEndpoint = options.OllamaEndpoint?.Trim() ?? string.Empty,
+        };
+
+        var provider = options.Provider;
         var isAnthropic = string.Equals(provider, "anthropic", StringComparison.OrdinalIgnoreCase);
         var isOllama = string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase);
 

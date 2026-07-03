@@ -71,6 +71,33 @@ public sealed class ChatClientFactoryTests
     }
 
     [Fact]
+    public void Create_Ollama_TrimsWhitespaceInConfig()
+    {
+        // Trailing/leading whitespace (e.g. copied from env vars) must not defeat the endpoint URI parse.
+        var factory = new ChatClientFactory(new AiClientOptions
+        {
+            Provider = "  ollama  ",
+            Model = "  llama3.1  ",
+            OllamaEndpoint = "  http://localhost:11434  ",
+        });
+
+        Assert.IsType<OllamaApiClient>(factory.Create());
+    }
+
+    [Fact]
+    public void Create_Anthropic_TrimsWhitespaceInConfig()
+    {
+        var factory = new ChatClientFactory(new AiClientOptions
+        {
+            Provider = "  anthropic  ",
+            Model = "  claude-opus-4-8  ",
+            AnthropicApiKey = "  test-key  ",
+        });
+
+        Assert.IsAssignableFrom<IChatClient>(factory.Create());
+    }
+
+    [Fact]
     public void Create_UnknownProvider_Throws()
     {
         var factory = new ChatClientFactory(new AiClientOptions

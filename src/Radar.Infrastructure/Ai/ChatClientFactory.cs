@@ -17,19 +17,22 @@ internal sealed class ChatClientFactory(AiClientOptions options) : IChatClientFa
 
     public IChatClient Create()
     {
+        // Trim every config string at the point of use so trailing newlines/spaces (common when values come from
+        // env vars or copied JSON) don't reach the provider SDK and surface as hard-to-diagnose failures.
         var provider = _options.Provider?.Trim() ?? string.Empty;
+        var model = _options.Model?.Trim() ?? string.Empty;
 
         if (string.Equals(provider, "anthropic", StringComparison.OrdinalIgnoreCase))
         {
-            return new AnthropicClient { ApiKey = _options.AnthropicApiKey }
-                .AsIChatClient(_options.Model)
+            return new AnthropicClient { ApiKey = _options.AnthropicApiKey?.Trim() ?? string.Empty }
+                .AsIChatClient(model)
                 .AsBuilder()
                 .Build();
         }
 
         if (string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase))
         {
-            return new OllamaApiClient(new Uri(_options.OllamaEndpoint), _options.Model);
+            return new OllamaApiClient(new Uri((_options.OllamaEndpoint ?? string.Empty).Trim()), model);
         }
 
         throw new InvalidOperationException(

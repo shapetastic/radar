@@ -114,6 +114,28 @@ public sealed class AddRadarAiTests
     }
 
     [Fact]
+    public void AddRadarAi_OllamaWhitespacePaddedEndpoint_DoesNotFailValidation()
+    {
+        // A valid endpoint with surrounding whitespace must be trimmed, not rejected by the absolute-URI check.
+        using var provider = new ServiceCollection()
+            .AddRadarAi(new AiClientOptions
+            {
+                Provider = "  ollama  ",
+                Model = "  llama3.1  ",
+                OllamaEndpoint = "  http://localhost:11434  ",
+            })
+            .BuildServiceProvider();
+
+        Assert.NotNull(provider.GetService<IChatClient>());
+
+        // The registered options are the normalized (trimmed) copy so downstream consumers see clean values.
+        var options = provider.GetRequiredService<AiClientOptions>();
+        Assert.Equal("ollama", options.Provider);
+        Assert.Equal("llama3.1", options.Model);
+        Assert.Equal("http://localhost:11434", options.OllamaEndpoint);
+    }
+
+    [Fact]
     public void AddRadarAi_NullOptions_Throws()
     {
         Assert.Throws<ArgumentNullException>(
