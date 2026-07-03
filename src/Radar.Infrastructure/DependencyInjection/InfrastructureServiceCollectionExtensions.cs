@@ -172,6 +172,54 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the SEC EDGAR earnings-release (EX-99.1) body reader and the typed <c>HttpClient</c> its
+    /// <see cref="ISecEarningsReleaseReader"/> uses. Given a filing's CIK + dashed accession, the reader
+    /// fetches the filing index, selects the <c>EX-99.1</c> earnings-release exhibit (with an <c>EX-99.*</c>
+    /// fallback; never the primary 8-K), fetches it, and strips it to plain text via the shared
+    /// <see cref="IEvidenceNormalizer"/>. This is a standalone service (the analyzer in a later slice injects
+    /// it); it is <b>not</b> an <see cref="IEvidenceCollector"/> and is <b>not</b> added to
+    /// <c>Radar:Collectors</c>, so default pipeline behaviour is unchanged. All HTTP/HTML/SEC code stays in
+    /// Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="SecCollectorOptions.UserAgent"/> is null/blank (SEC returns HTTP 403 for
+    /// every request without a compliant declared User-Agent). The named client sends the configured UA plus
+    /// <c>Accept-Encoding: gzip, deflate</c> and enables automatic decompression (SEC recommends gzip).
+    /// <see cref="SecCollectorOptions"/> and <see cref="IEvidenceNormalizer"/> are registered with
+    /// <c>TryAdd</c> so this method coexists with <see cref="AddSecEdgarCollector"/> and
+    /// <see cref="AddRadarApplicationServices"/> without a double-registration conflict, and resolves the
+    /// reader's stripper dependency even when wired standalone.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddSecEarningsReleaseReader(
+        this IServiceCollection services, SecCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.IsNullOrWhiteSpace(options.UserAgent))
+        {
+            throw new InvalidOperationException(
+                "SEC EDGAR requires a compliant User-Agent (e.g. \"Radar Research <email>\"); configure "
+                    + "Radar:Sec:UserAgent before enabling the SEC earnings-release reader — every request 403s without it.");
+        }
+
+        services.AddHttpClient<ISecEarningsReleaseReader, HttpSecEarningsReleaseReader>(client =>
+            {
+                // Use TryAddWithoutValidation: the SEC-recommended UA form ("Radar Research <email>") is not a
+                // strict RFC product/comment token, so the strongly-typed UserAgent collection rejects it.
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(options);
+        services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the USASpending.gov government-contract collector and the typed <c>HttpClient</c> its
     /// <see cref="IUsaSpendingAwardReader"/> uses. The collector reads the per-company <c>usaspending</c>
     /// feeds supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's
