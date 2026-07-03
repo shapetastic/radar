@@ -1,8 +1,8 @@
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Collectors;
 using Radar.Application.Filings;
 using Radar.Application.SignalExtraction;
 using Radar.Domain.Evidence;
@@ -176,7 +176,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
             return null;
         }
 
-        var metadata = ReadMetadata(evidence.MetadataJson);
+        EvidenceMetadata.TryRead(evidence.MetadataJson, out var metadata, out _);
 
         var form = metadata.TryGetValue("form", out var f) ? f : null;
         if (!string.Equals(form, "8-K", StringComparison.OrdinalIgnoreCase))
@@ -270,44 +270,6 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
         var accession = match.Groups["accession"].Value;
         return string.IsNullOrWhiteSpace(accession) ? null : (cik, accession);
-    }
-
-    /// <summary>
-    /// Reads the flat metadata dictionary out of the persisted MetadataJson, whose shape is
-    /// <c>{ "metadata": { ... }, "companyHints": [ ... ] }</c> (produced by
-    /// <c>CollectedEvidenceMapper</c>). Returns an empty (ordinal) dictionary on any parse failure.
-    /// </summary>
-    private static Dictionary<string, string> ReadMetadata(string? metadataJson)
-    {
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (string.IsNullOrWhiteSpace(metadataJson))
-        {
-            return result;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(metadataJson);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("metadata", out var metadata)
-                && metadata.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var prop in metadata.EnumerateObject())
-                {
-                    if (prop.Value.ValueKind == JsonValueKind.String)
-                    {
-                        result[prop.Name] = prop.Value.GetString() ?? string.Empty;
-                    }
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            // Malformed metadata is treated as "no usable metadata" — the filing is simply skipped by the
-            // form/items gate above, never crashing the batch.
-        }
-
-        return result;
     }
 
     [GeneratedRegex(@"\[items:\s*(?<items>[^\]]+)\]", RegexOptions.IgnoreCase)]
