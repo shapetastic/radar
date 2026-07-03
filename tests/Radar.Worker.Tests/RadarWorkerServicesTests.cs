@@ -193,24 +193,40 @@ public sealed class RadarWorkerServicesTests
     public void DefaultConfig_RegistersNoAiClient_AiDisabled()
     {
         // A blank Radar:Ai:Provider (the default) means AI is opt-in disabled: the graph must register
-        // neither the factory nor the client, so the default pipeline is byte-for-byte unchanged.
+        // neither the factory nor the client, so the default pipeline is byte-for-byte unchanged. The
+        // directional filing enrichment (source + earnings reader) rides the same gate, so neither is
+        // registered and the runner's optional dependency stays null.
         using var provider = BuildProvider();
 
         Assert.Null(provider.GetService<IChatClientFactory>());
         Assert.Null(provider.GetService<IChatClient>());
         Assert.Null(provider.GetService<IFilingAnalyzer>());
+        Assert.Null(provider.GetService<IDirectionalFilingSignalSource>());
+
+        // The pipeline still resolves — its optional IDirectionalFilingSignalSource dependency defaults to
+        // null when the service is absent.
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
     }
 
     [Fact]
     public void AiProviderOllama_RegistersFactoryAndClient_OptInGateFlips()
     {
+        // Directional filing signals need a compliant SEC User-Agent (to fetch the EX-99.1 body), so the
+        // gate that enables AI also wires the earnings reader — supply the UA.
         using var provider = BuildProvider(
             ("Radar:Ai:Provider", "ollama"),
-            ("Radar:Ai:Model", "llama3.1"));
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
 
         Assert.NotNull(provider.GetService<IChatClientFactory>());
         Assert.NotNull(provider.GetService<IChatClient>());
         Assert.NotNull(provider.GetService<IFilingAnalyzer>());
+
+        // The directional filing signal source is registered and the pipeline resolves the optional source
+        // (case 15). Resolving the source also proves the internal earnings reader is registered — the
+        // source's constructor requires it, so resolution would throw otherwise.
+        Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
     }
 
     [Fact]

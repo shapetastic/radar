@@ -138,6 +138,23 @@ internal static class RadarWorkerServices
             // The filing analyzer rides the same opt-in gate: it consumes the IChatClient AddRadarAi just
             // registered, so it is only wired when a provider is configured. Blank Provider = neither runs.
             services.AddRadarFilingAnalyzer(new FilingAnalyzerOptions { MaxInputLength = options.Ai.MaxInputLength });
+
+            // The directional filing signal source completes the arc: it composes the EX-99.1 earnings
+            // reader + the filing analyzer into a confidence-gated directional GuidanceChange signal. Both
+            // ride this same opt-in gate, so with a blank Provider none of them are registered and the
+            // runner's optional IDirectionalFilingSignalSource stays null (default graph unchanged). The
+            // reader only strictly needs the UserAgent, but the SEC options are passed consistently.
+            services.AddSecEarningsReleaseReader(new SecCollectorOptions
+            {
+                UserAgent = options.Sec.UserAgent,
+                Forms = options.Sec.Forms,
+                MaxFilingsPerCompany = options.Sec.MaxFilingsPerCompany,
+            });
+            services.AddDirectionalFilingSignals(new DirectionalFilingSignalOptions
+            {
+                MinConfidence = options.Ai.MinConfidence,
+                MaxFilingsPerRun = options.Ai.MaxFilingsPerRun,
+            });
         }
 
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);

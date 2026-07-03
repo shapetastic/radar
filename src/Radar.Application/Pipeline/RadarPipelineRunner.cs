@@ -4,6 +4,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
+using Radar.Application.Filings;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
@@ -45,6 +46,11 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<RadarPipelineRunner> _logger;
 
+    // OPT-IN directional filing enrichment (AI only). Null when AI is disabled (the shipped default), in
+    // which case the enrichment step is skipped entirely and the default pipeline is byte-for-byte
+    // unchanged. .NET DI supplies the null default when the service is not registered.
+    private readonly IDirectionalFilingSignalSource? _directionalFilingSignals;
+
     public RadarPipelineRunner(
         IEnumerable<IEvidenceCollector> collectors,
         CollectedEvidenceMapper mapper,
@@ -64,7 +70,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         IPipelineRunStore runStore,
         PipelineOptions options,
         TimeProvider timeProvider,
-        ILogger<RadarPipelineRunner> logger)
+        ILogger<RadarPipelineRunner> logger,
+        IDirectionalFilingSignalSource? directionalFilingSignals = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
         ArgumentNullException.ThrowIfNull(mapper);
@@ -122,6 +129,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _directionalFilingSignals = directionalFilingSignals;
     }
 
     public async Task<RadarPipelineResult> RunAsync(CancellationToken ct)
@@ -204,54 +212,63 @@ public sealed class RadarPipelineRunner : IRadarPipeline
 
                 signalsExtracted++;
 
-                // The mapper owns the provenance check (excerpt must be found in the evidence) and
-                // validation — the runner does not re-validate.
-                var mapping = ExtractedSignalMapper.ToSignal(extracted, evidence, asOfUtc);
-                if (!mapping.IsValid)
+                switch (await MapResolveReviewStoreAsync(extracted, evidence, entry.CompanyHints, asOfUtc, ct)
+                    .ConfigureAwait(false))
                 {
-                    _logger.LogDebug(
-                        "Dropping invalid extracted signal for evidence {EvidenceId}: {Errors}",
-                        evidence.Id,
-                        string.Join("; ", mapping.Errors));
-                    continue;
-                }
-
-                var signal = mapping.Signal!;
-                signalsValid++;
-
-                // Resolve: only ADD a CompanyId when matched; never guess. An unresolved mention
-                // stays CompanyId == null and the reviewer routes it to human review.
-                var resolution = await _resolver
-                    .ResolveAsync(signal.CompanyMention, entry.CompanyHints, ct).ConfigureAwait(false);
-                if (resolution.CompanyId is { } companyId)
-                {
-                    signal = signal with { CompanyId = companyId };
-                }
-
-                // Review may only lower confidence and set the review status.
-                var outcome = await _reviewer.ReviewAsync(signal, evidence, ct).ConfigureAwait(false);
-
-                // Store the reviewed signal, then its immutable audit record alongside it. Provenance
-                // holds because outcome.Review.SignalId == outcome.ReviewedSignal.Id (the reviewer
-                // builds the review from signal.Id), so the persisted review traces to the stored signal.
-                await _signalRepository.AddAsync(outcome.ReviewedSignal, ct).ConfigureAwait(false);
-                await _signalReviewRepository.AddAsync(outcome.Review, ct).ConfigureAwait(false);
-
-                // Mirror the stored signal + its review to the on-disk signal store (AD-8), the
-                // durable twin of the in-memory repositories. Signals are upsert-by-Id (the store
-                // overwrites last-write-wins), and the store swallows disk errors, so this must not
-                // change any counter or abort the run.
-                await _signalFileStore
-                    .WriteAsync(outcome.ReviewedSignal, outcome.Review, ct).ConfigureAwait(false);
-
-                switch (outcome.ReviewedSignal.ReviewStatus)
-                {
-                    case SignalReviewStatus.Approved:
+                    case SignalStoreOutcome.Approved:
+                        signalsValid++;
                         signalsApproved++;
                         break;
-                    case SignalReviewStatus.NeedsHumanReview:
-                    case SignalReviewStatus.Pending:
+                    case SignalStoreOutcome.NeedsReview:
+                        signalsValid++;
                         signalsNeedingReview++;
+                        break;
+                    case SignalStoreOutcome.OtherValid:
+                        signalsValid++;
+                        break;
+                    case SignalStoreOutcome.Dropped:
+                        break;
+                }
+            }
+        }
+
+        // OPT-IN directional filing enrichment (AI only). Null when AI is disabled -> skipped entirely, so
+        // the default pipeline is byte-for-byte unchanged. Runs AFTER the deterministic extract loop and
+        // BEFORE scoring, over this run's newly-stored Filing evidence (the source itself applies the
+        // earnings-2.02 + cap filtering), and threads each produced signal through the SAME
+        // map -> resolve -> review -> store path as keyword signals (provenance preserved).
+        if (_directionalFilingSignals is not null)
+        {
+            var candidates = newEvidence
+                .Select(e => e.Evidence)
+                .Where(ev => ev.SourceType == EvidenceSourceType.Filing)
+                .ToList();
+
+            var produced = await _directionalFilingSignals
+                .ProduceAsync(candidates, asOfUtc, ct).ConfigureAwait(false);
+            foreach (var directional in produced)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                signalsExtracted++;
+
+                // Directional filing signals carry no collector company hints; resolution falls back to the
+                // CompanyMention (= the filing SourceName), matching the keyword path's behaviour.
+                switch (await MapResolveReviewStoreAsync(directional.Signal, directional.Evidence, [], asOfUtc, ct)
+                    .ConfigureAwait(false))
+                {
+                    case SignalStoreOutcome.Approved:
+                        signalsValid++;
+                        signalsApproved++;
+                        break;
+                    case SignalStoreOutcome.NeedsReview:
+                        signalsValid++;
+                        signalsNeedingReview++;
+                        break;
+                    case SignalStoreOutcome.OtherValid:
+                        signalsValid++;
+                        break;
+                    case SignalStoreOutcome.Dropped:
                         break;
                 }
             }
@@ -334,6 +351,78 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;
+    }
+
+    /// <summary>
+    /// The shared map -&gt; resolve -&gt; review -&gt; store -&gt; file tail used by BOTH the deterministic
+    /// keyword extract loop and the opt-in directional filing enrichment. The mapper owns the provenance
+    /// check (excerpt must be found in the evidence) and validation — the runner does not re-validate.
+    /// Returns which counters the caller should bump (kept in the caller so the run-summary locals stay in
+    /// one place).
+    /// </summary>
+    private async Task<SignalStoreOutcome> MapResolveReviewStoreAsync(
+        ExtractedSignal extracted,
+        EvidenceItem evidence,
+        IReadOnlyList<string> companyHints,
+        DateTimeOffset asOfUtc,
+        CancellationToken ct)
+    {
+        var mapping = ExtractedSignalMapper.ToSignal(extracted, evidence, asOfUtc);
+        if (!mapping.IsValid)
+        {
+            _logger.LogDebug(
+                "Dropping invalid extracted signal for evidence {EvidenceId}: {Errors}",
+                evidence.Id,
+                string.Join("; ", mapping.Errors));
+            return SignalStoreOutcome.Dropped;
+        }
+
+        var signal = mapping.Signal!;
+
+        // Resolve: only ADD a CompanyId when matched; never guess. An unresolved mention
+        // stays CompanyId == null and the reviewer routes it to human review.
+        var resolution = await _resolver
+            .ResolveAsync(signal.CompanyMention, companyHints, ct).ConfigureAwait(false);
+        if (resolution.CompanyId is { } companyId)
+        {
+            signal = signal with { CompanyId = companyId };
+        }
+
+        // Review may only lower confidence and set the review status.
+        var outcome = await _reviewer.ReviewAsync(signal, evidence, ct).ConfigureAwait(false);
+
+        // Store the reviewed signal, then its immutable audit record alongside it. Provenance
+        // holds because outcome.Review.SignalId == outcome.ReviewedSignal.Id (the reviewer
+        // builds the review from signal.Id), so the persisted review traces to the stored signal.
+        await _signalRepository.AddAsync(outcome.ReviewedSignal, ct).ConfigureAwait(false);
+        await _signalReviewRepository.AddAsync(outcome.Review, ct).ConfigureAwait(false);
+
+        // Mirror the stored signal + its review to the on-disk signal store (AD-8), the
+        // durable twin of the in-memory repositories. Signals are upsert-by-Id (the store
+        // overwrites last-write-wins), and the store swallows disk errors, so this must not
+        // change any counter or abort the run.
+        await _signalFileStore
+            .WriteAsync(outcome.ReviewedSignal, outcome.Review, ct).ConfigureAwait(false);
+
+        return outcome.ReviewedSignal.ReviewStatus switch
+        {
+            SignalReviewStatus.Approved => SignalStoreOutcome.Approved,
+            SignalReviewStatus.NeedsHumanReview or SignalReviewStatus.Pending => SignalStoreOutcome.NeedsReview,
+            _ => SignalStoreOutcome.OtherValid,
+        };
+    }
+
+    /// <summary>
+    /// The result of <see cref="MapResolveReviewStoreAsync"/>: which run-summary counters the caller should
+    /// bump. <see cref="Dropped"/> means the signal failed mapping/validation (no counters);
+    /// <see cref="OtherValid"/> means it was stored valid but with a non-approved, non-review status.
+    /// </summary>
+    private enum SignalStoreOutcome
+    {
+        Dropped,
+        Approved,
+        NeedsReview,
+        OtherValid,
     }
 
     /// <summary>

@@ -172,6 +172,19 @@ public sealed class AiWorkerOptions
     /// provider is configured. Defaults to 12000.
     /// </summary>
     public int MaxInputLength { get; init; } = 12000;
+
+    /// <summary>
+    /// Confidence gate for directional filing signals: an AI read below this yields no directional
+    /// GuidanceChange signal (the deterministic Neutral from spec 57 stands). In [0,1]. Only read when a
+    /// provider is configured. Defaults to 0.6.
+    /// </summary>
+    public decimal MinConfidence { get; init; } = 0.6m;
+
+    /// <summary>
+    /// Cost cap on the directional filing enrichment: the source reads/analyzes at most this many
+    /// earnings-8-K filings per run. Must be positive. Only read when a provider is configured. Defaults to 5.
+    /// </summary>
+    public int MaxFilingsPerRun { get; init; } = 5;
 }
 
 /// <summary>Anthropic (hosted) provider config (bound from "Radar:Ai:Anthropic").</summary>
