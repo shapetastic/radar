@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Scoring;
+using Radar.Application.Signals;
 using Radar.Domain.Evidence;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
@@ -80,9 +81,47 @@ public sealed class ScoringEngineTests
         }
     }
 
+    /// <summary>
+    /// An in-test <see cref="ISignalFileStore"/> standing in for the on-disk signal store. Records written
+    /// signals and any test-seeded prior-run signals in a list, and implements
+    /// <see cref="ReadApprovedInWindowAsync"/> by filtering that list exactly as the real store's contract
+    /// (companyId + Approved + <c>(start, end]</c>, ordered by ObservedAtUtc then Id). Lets tests place
+    /// prior-run signals "on disk" without touching the in-memory signal repository.
+    /// </summary>
+    private sealed class FakeSignalFileStore : ISignalFileStore
+    {
+        private readonly List<Signal> _signals = new();
+
+        public Task<string> WriteAsync(
+            Signal signal, Radar.Domain.Signals.SignalReview review, CancellationToken ct)
+        {
+            _signals.Add(signal);
+            return Task.FromResult("written/signal.json");
+        }
+
+        /// <summary>Seeds a prior-run signal "on disk" only (not into the in-memory repo).</summary>
+        public void Seed(Signal signal) => _signals.Add(signal);
+
+        public Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
+            Guid companyId,
+            DateTimeOffset startExclusiveUtc,
+            DateTimeOffset endInclusiveUtc,
+            CancellationToken ct)
+        {
+            IReadOnlyList<Signal> result = _signals
+                .Where(s => s.CompanyId == companyId)
+                .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)
+                .Where(s => s.ObservedAtUtc > startExclusiveUtc && s.ObservedAtUtc <= endInclusiveUtc)
+                .OrderBy(s => s.ObservedAtUtc).ThenBy(s => s.Id)
+                .ToList();
+            return Task.FromResult(result);
+        }
+    }
+
     private sealed class Harness
     {
         public InMemorySignalRepository Signals { get; } = new();
+        public FakeSignalFileStore SignalStore { get; } = new();
         public InMemoryEvidenceRepository Evidence { get; } = new();
         public InMemoryScoreRepository Scores { get; } = new();
         public ScoringEngine Engine { get; }
@@ -91,6 +130,7 @@ public sealed class ScoringEngineTests
         {
             Engine = new ScoringEngine(
                 Signals,
+                SignalStore,
                 Evidence,
                 Scores,
                 formula ?? new StubScoreFormula(),
@@ -124,6 +164,30 @@ public sealed class ScoringEngineTests
 
             await Signals.AddAsync(signal, CancellationToken.None);
             return (signal, evidence);
+        }
+
+        /// <summary>
+        /// Seeds a prior-run Approved signal ON DISK only (via the fake signal file store), representing a
+        /// signal persisted by an earlier process. It is NOT added to the in-memory <see cref="Signals"/>
+        /// repository, so it can only reach scoring through the cross-run read-back.
+        /// </summary>
+        public Signal SeedPriorRunSignalOnDisk(
+            Guid companyId,
+            DateTimeOffset observedAt,
+            SignalReviewStatus status = SignalReviewStatus.Approved,
+            int strength = 6)
+        {
+            var signal = new SignalBuilder()
+                .WithId(Guid.NewGuid())
+                .WithEvidenceId(Guid.NewGuid())
+                .WithCompanyId(companyId)
+                .WithReviewStatus(status)
+                .WithStrength(strength)
+                .WithObservedAtUtc(observedAt)
+                .Build();
+
+            SignalStore.Seed(signal);
+            return signal;
         }
     }
 
@@ -262,7 +326,7 @@ public sealed class ScoringEngineTests
 
         // Every new snapshot is stamped with the current scoring-generation constant (non-null), so the
         // report can gate cross-run comparability on it.
-        Assert.Equal("radar-scoring-config-v4", result.Snapshot.ScoringConfigVersion);
+        Assert.Equal("radar-scoring-config-v5", result.Snapshot.ScoringConfigVersion);
     }
 
     [Theory]
@@ -443,6 +507,10 @@ public sealed class ScoringEngineTests
         services.AddLogging();
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
+        // The engine now depends on ISignalFileStore (cross-run previous-window read); wire the real
+        // file store over a unique temp dir so the composition resolves.
+        services.AddFileSignalStore(
+            Path.Combine(Path.GetTempPath(), $"radar-signals-{Guid.NewGuid():N}"));
 
         using var provider = services.BuildServiceProvider();
 
@@ -476,20 +544,20 @@ public sealed class ScoringEngineTests
         var harness = new Harness(formula);
         var companyId = Guid.NewGuid();
 
-        // Current window (WindowStart, WindowEnd].
+        // Current window (WindowStart, WindowEnd] — in the in-memory repo (this run's signals).
         var windowStart = WindowEnd - Window;
         var current = await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-3));
-        // Previous window (WindowStart - Window, WindowStart].
-        var previous = await harness.SeedPairAsync(companyId, windowStart.AddDays(-3));
-        // Older than the previous window -> excluded from both.
-        await harness.SeedPairAsync(companyId, windowStart - Window - TimeSpan.FromDays(1));
+        // Previous window (WindowStart - Window, WindowStart] — ON DISK (a prior run's persisted signal).
+        var previous = harness.SeedPriorRunSignalOnDisk(companyId, windowStart.AddDays(-3));
+        // Older than the previous window ON DISK -> excluded by the window read.
+        harness.SeedPriorRunSignalOnDisk(companyId, windowStart - Window - TimeSpan.FromDays(1));
 
         await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
 
         var input = Assert.IsType<ScoringInput>(formula.LastInput);
 
         Assert.Equal(new[] { current.signal.Id }, input.Signals.Select(s => s.Signal.Id).ToArray());
-        Assert.Equal(new[] { previous.signal.Id }, input.PreviousSignals.Select(s => s.Id).ToArray());
+        Assert.Equal(new[] { previous.Id }, input.PreviousSignals.Select(s => s.Id).ToArray());
     }
 
     [Fact]
@@ -500,14 +568,16 @@ public sealed class ScoringEngineTests
         var companyId = Guid.NewGuid();
 
         var windowStart = WindowEnd - Window;
-        var atStart = await harness.SeedPairAsync(companyId, windowStart);
+        // A prior-run signal exactly at windowStart, ON DISK: the disk read's (start, end] boundary (AD-6)
+        // must place it in the previous window, never the current one.
+        var atStart = harness.SeedPriorRunSignalOnDisk(companyId, windowStart);
 
         await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
 
         var input = Assert.IsType<ScoringInput>(formula.LastInput);
 
-        Assert.DoesNotContain(input.Signals, s => s.Signal.Id == atStart.signal.Id);
-        Assert.Contains(input.PreviousSignals, s => s.Id == atStart.signal.Id);
+        Assert.DoesNotContain(input.Signals, s => s.Signal.Id == atStart.Id);
+        Assert.Contains(input.PreviousSignals, s => s.Id == atStart.Id);
     }
 
     [Fact]
@@ -518,16 +588,17 @@ public sealed class ScoringEngineTests
         var companyId = Guid.NewGuid();
 
         var windowStart = WindowEnd - Window;
-        var approved = await harness.SeedPairAsync(companyId, windowStart.AddDays(-5));
-        var pending = await harness.SeedPairAsync(
+        // Both prior-run signals ON DISK; only the Approved one survives the read's review filter.
+        var approved = harness.SeedPriorRunSignalOnDisk(companyId, windowStart.AddDays(-5));
+        var pending = harness.SeedPriorRunSignalOnDisk(
             companyId, windowStart.AddDays(-5), SignalReviewStatus.Pending);
 
         await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
 
         var input = Assert.IsType<ScoringInput>(formula.LastInput);
 
-        Assert.Contains(input.PreviousSignals, s => s.Id == approved.signal.Id);
-        Assert.DoesNotContain(input.PreviousSignals, s => s.Id == pending.signal.Id);
+        Assert.Contains(input.PreviousSignals, s => s.Id == approved.Id);
+        Assert.DoesNotContain(input.PreviousSignals, s => s.Id == pending.Id);
     }
 
     [Fact]
@@ -538,9 +609,8 @@ public sealed class ScoringEngineTests
         var companyId = Guid.NewGuid();
 
         var windowStart = WindowEnd - Window;
-        // Previous-window signal with missing evidence -> still carried.
-        var previousNoEvidence = await harness.SeedPairAsync(
-            companyId, windowStart.AddDays(-2), storeEvidence: false);
+        // Previous-window signal is sourced from disk and never needs evidence by construction.
+        var previousOnDisk = harness.SeedPriorRunSignalOnDisk(companyId, windowStart.AddDays(-2));
         // Current-window signal with missing evidence -> still dropped.
         var currentNoEvidence = await harness.SeedPairAsync(
             companyId, WindowEnd.AddDays(-2), storeEvidence: false);
@@ -549,7 +619,7 @@ public sealed class ScoringEngineTests
 
         var input = Assert.IsType<ScoringInput>(formula.LastInput);
 
-        Assert.Contains(input.PreviousSignals, s => s.Id == previousNoEvidence.signal.Id);
+        Assert.Contains(input.PreviousSignals, s => s.Id == previousOnDisk.Id);
         Assert.DoesNotContain(input.Signals, s => s.Signal.Id == currentNoEvidence.signal.Id);
     }
 
@@ -560,7 +630,7 @@ public sealed class ScoringEngineTests
         var harness = new Harness(formula);
         var companyId = Guid.NewGuid();
 
-        // Only a current-window signal; nothing at or before windowStart.
+        // Only a current-window signal in the in-memory repo; nothing on disk -> the disk read returns empty.
         await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-1));
 
         var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
@@ -570,5 +640,115 @@ public sealed class ScoringEngineTests
         Assert.NotNull(input.PreviousSignals);
         Assert.Empty(input.PreviousSignals);
         Assert.InRange(result.Snapshot.TrajectoryScore, 0, 100);
+    }
+
+    [Fact]
+    public async Task CrossRunVelocity_MoreCurrentActivityThanPriorOnDisk_ExceedsSteady()
+    {
+        // Real formula: velocity = 50·(actNow+10)/(actPrev+10) over Strength sums. Current-window strength
+        // (in the in-memory repo) sums to 16; prior-window strength (only on disk) sums to 6 → ratio > 1 →
+        // velocity > 50. This proves the previous window now comes from disk (cross-run).
+        var harness = new Harness(new RadarScoreFormulaV2());
+        var companyId = Guid.NewGuid();
+        var windowStart = WindowEnd - Window;
+
+        // Current window: two Approved signals in the in-memory repo (Strength 6 + 10 = 16).
+        await SeedCurrentSignalWithStrengthAsync(harness, companyId, WindowEnd.AddDays(-3), strength: 6);
+        await SeedCurrentSignalWithStrengthAsync(harness, companyId, WindowEnd.AddDays(-6), strength: 10);
+        // Prior window: one Approved signal ONLY on disk (Strength 6).
+        harness.SeedPriorRunSignalOnDisk(companyId, windowStart.AddDays(-3), strength: 6);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.True(
+            result.Snapshot.SignalVelocityScore > 50,
+            $"Expected velocity > 50, got {result.Snapshot.SignalVelocityScore}.");
+    }
+
+    [Fact]
+    public async Task CrossRunVelocity_LessCurrentActivityThanPriorOnDisk_FallsBelowSteady()
+    {
+        // Mirror case: current-window strength (6) < prior-window strength (on disk: 12 + 12 = 24) → ratio
+        // < 1 → velocity < 50.
+        var harness = new Harness(new RadarScoreFormulaV2());
+        var companyId = Guid.NewGuid();
+        var windowStart = WindowEnd - Window;
+
+        await SeedCurrentSignalWithStrengthAsync(harness, companyId, WindowEnd.AddDays(-3), strength: 6);
+        harness.SeedPriorRunSignalOnDisk(companyId, windowStart.AddDays(-3), strength: 12);
+        harness.SeedPriorRunSignalOnDisk(companyId, windowStart.AddDays(-6), strength: 12);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.True(
+            result.Snapshot.SignalVelocityScore < 50,
+            $"Expected velocity < 50, got {result.Snapshot.SignalVelocityScore}.");
+    }
+
+    [Fact]
+    public async Task CrossRunVelocity_NoPriorSignalsOnDisk_YieldsSteadyNoPreviousValue()
+    {
+        // Regression lock: with NO prior signals on disk (the pre-slice steady case), velocity is the
+        // no-previous value 50·(actNow+10)/(0+10). With actNow == 0 (a Neutral has 0? no — pick actNow to
+        // land exactly on steady) we assert against the same value a run with an empty previous window
+        // computes, proving no fabricated movement without a prior on disk.
+        var harness = new Harness(new RadarScoreFormulaV2());
+        var companyId = Guid.NewGuid();
+
+        // One current-window Approved signal, Strength 6; nothing on disk.
+        await SeedCurrentSignalWithStrengthAsync(harness, companyId, WindowEnd.AddDays(-3), strength: 6);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // No previous window: velocity = 50·(6+10)/(0+10) = 80 (the current, safe no-previous behaviour).
+        Assert.Equal(80, result.Snapshot.SignalVelocityScore);
+    }
+
+    [Fact]
+    public async Task CrossRunVelocity_Provenance_LinksTraceOnlyToCurrentWindowEvidence()
+    {
+        // Spec Test 7: the disk-sourced previous signals are activity-only and contribute NO links. Only
+        // the current-window signal's evidence produces a ScoreEvidenceLink.
+        var harness = new Harness(new RadarScoreFormulaV2());
+        var companyId = Guid.NewGuid();
+        var windowStart = WindowEnd - Window;
+
+        var current = await SeedCurrentSignalWithStrengthAsync(
+            harness, companyId, WindowEnd.AddDays(-3), strength: 6);
+        // A prior-run signal on disk drives velocity but must not appear in the provenance links.
+        var prior = harness.SeedPriorRunSignalOnDisk(companyId, windowStart.AddDays(-3), strength: 6);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var link = Assert.Single(result.Links);
+        Assert.Equal(current.signal.Id, link.SignalId);
+        Assert.Equal(current.evidence.Id, link.EvidenceId);
+        Assert.DoesNotContain(result.Links, l => l.SignalId == prior.Id);
+    }
+
+    /// <summary>
+    /// Seeds a current-window Approved signal (with evidence) of a given Strength into the in-memory repo,
+    /// so the real formula's velocity numerator (Strength sum) is controllable.
+    /// </summary>
+    private static async Task<(Signal signal, EvidenceItem evidence)> SeedCurrentSignalWithStrengthAsync(
+        Harness harness, Guid companyId, DateTimeOffset observedAt, int strength)
+    {
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash(Guid.NewGuid().ToString("N"))
+            .Build();
+
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithStrength(strength)
+            .WithObservedAtUtc(observedAt)
+            .Build();
+
+        await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+        await harness.Signals.AddAsync(signal, CancellationToken.None);
+        return (signal, evidence);
     }
 }

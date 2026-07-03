@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
+using Radar.Application.Signals;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
 
@@ -24,21 +25,21 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation ships spec 78 (directional filing supersedes Neutral): when AI is
-    // enabled, a confidence-gated directional GuidanceChange now REPLACES the deterministic Neutral
-    // GuidanceChange for the same earnings filing (suppress-before-store), so the Neutral no longer
-    // contributes to SignalVelocityScore (its Strength drops out of the current-window sum) nor emits a
-    // (weight-0) contribution row — Velocity and report content move, and the same filing stops appearing
-    // twice. (The formula math is unchanged: Neutral still weighs 0 in Trajectory; this slice changes WHICH
-    // signals are present, not the math — hence no ScoringVersion/formula Version bump.) With AI disabled
-    // nothing is superseded and the output is byte-for-byte identical to v3, but the stamp still bumps
-    // because the generation that CAN now emit different scores has changed — the correct, conservative
-    // AD-10 behaviour. Prior generation: spec 75 shipped the directional GuidanceChange itself (v3).
-    // Pre/post-boundary snapshots are not comparable, so a cross-run delta across it correctly renders
-    // "(scoring updated)" rather than a fabricated thesis label.
-    private const string ScoringConfigVersion = "radar-scoring-config-v4";
+    // ScoringOptions). This generation ships the cross-run signal read-back for velocity: the previous
+    // window that SignalVelocityScore compares against is now sourced from the on-disk signal store
+    // (ISignalFileStore.ReadApprovedInWindowAsync) instead of being sliced from the in-memory repository,
+    // which starts empty every process. As a result SignalVelocityScore (and thus OpportunityScore) can now
+    // differ from the pre-slice steady-50 across separate runs. Only the SOURCE of the previous-window
+    // input changed — the velocity formula math (50·(actNow+10)/(actPrev+10)), the (start, end] window and
+    // its shared boundary, and the "previous window is activity-only, no evidence/contributions/links" rule
+    // are all unchanged (AD-6), so ScoringVersion/EngineVersion/formula Version are NOT touched. Per AD-10 a
+    // scoring-affecting change bumps this stamp so a cross-run delta across the pre/post boundary renders
+    // "(scoring updated)" rather than a fabricated Thesis improving/deteriorating label. Prior generation:
+    // spec 78 shipped the directional-supersedes-Neutral change (v4).
+    private const string ScoringConfigVersion = "radar-scoring-config-v5";
 
     private readonly ISignalRepository _signalRepository;
+    private readonly ISignalFileStore _signalFileStore;
     private readonly IEvidenceRepository _evidenceRepository;
     private readonly IScoreRepository _scoreRepository;
     private readonly IScoreFormula _formula;
@@ -47,6 +48,7 @@ public sealed class ScoringEngine : IScoringEngine
 
     public ScoringEngine(
         ISignalRepository signalRepository,
+        ISignalFileStore signalFileStore,
         IEvidenceRepository evidenceRepository,
         IScoreRepository scoreRepository,
         IScoreFormula formula,
@@ -54,6 +56,7 @@ public sealed class ScoringEngine : IScoringEngine
         ILogger<ScoringEngine> logger)
     {
         ArgumentNullException.ThrowIfNull(signalRepository);
+        ArgumentNullException.ThrowIfNull(signalFileStore);
         ArgumentNullException.ThrowIfNull(evidenceRepository);
         ArgumentNullException.ThrowIfNull(scoreRepository);
         ArgumentNullException.ThrowIfNull(formula);
@@ -61,6 +64,7 @@ public sealed class ScoringEngine : IScoringEngine
         ArgumentNullException.ThrowIfNull(logger);
 
         _signalRepository = signalRepository;
+        _signalFileStore = signalFileStore;
         _evidenceRepository = evidenceRepository;
         _scoreRepository = scoreRepository;
         _formula = formula;
@@ -108,20 +112,23 @@ public sealed class ScoringEngine : IScoringEngine
             return byObserved != 0 ? byObserved : a.Signal.Id.CompareTo(b.Signal.Id);
         });
 
-        // The immediately-preceding window of the same length, sliced from the already-fetched signals
-        // (no extra repository call). It is carried as activity-only input for velocity measurement:
+        // The immediately-preceding window of the same length, now sourced from the ON-DISK signal store
+        // (cross-run) rather than the in-memory repo — the in-memory repo starts empty every process and
+        // holds only THIS run's signals, so slicing the previous window from it made velocity read a steady
+        // 50 across separate runs. It is carried as activity-only input for velocity measurement:
         //   * window rule: ObservedAtUtc in (previousWindowStartUtc, windowStartUtc] — note the shared
-        //     boundary with the current window means a signal exactly at windowStartUtc belongs here;
+        //     boundary with the current window means a signal exactly at windowStartUtc belongs here (AD-6);
         //   * review rule: same Approved-only filter as the current window.
-        // No evidence is loaded for it and it is NOT dropped for missing evidence — it never builds
-        // contributions / ScoreEvidenceLinks (provenance is only the current-window signals).
+        // The read returns Approved-only, window-filtered, deterministically-ordered signals (AD-3). No
+        // evidence is loaded for it and it never builds contributions / ScoreEvidenceLinks — provenance is
+        // only the current-window signals (AD-6). A failed/empty read degrades to an empty previous window
+        // (the safe no-previous velocity); the store swallows per-file failures, but OperationCanceledException
+        // still propagates (no broad catch here).
         var previousWindowStartUtc = windowStartUtc - _options.Window;
 
-        var previousSignals = allSignals
-            .Where(s => s.ObservedAtUtc > previousWindowStartUtc && s.ObservedAtUtc <= windowStartUtc)
-            .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)
-            .OrderBy(s => s.ObservedAtUtc).ThenBy(s => s.Id) // deterministic (AD-3)
-            .ToList();
+        var previousSignals = await _signalFileStore
+            .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, ct)
+            .ConfigureAwait(false);
 
         var input = new ScoringInput(companyId, windowStartUtc, windowEndUtc, pairs, previousSignals);
         var computation = _formula.Compute(input);
