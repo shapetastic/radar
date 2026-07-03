@@ -60,7 +60,9 @@ public sealed class SecEdgarUrlsTests
         var match = regex.Match(url);
 
         Assert.True(match.Success);
-        Assert.Equal("320193", match.Groups["cik"].Value.TrimStart('0'));
+        // Assert the CIK exactly as authored (no re-stripping) so the test fails if BuildIndexUrl ever
+        // leaves leading zeros in the path.
+        Assert.Equal("320193", match.Groups["cik"].Value);
         Assert.Equal("0000320193-23-000106", match.Groups["accession"].Value);
     }
 }

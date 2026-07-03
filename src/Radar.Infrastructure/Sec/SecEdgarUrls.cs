@@ -9,7 +9,7 @@ namespace Radar.Infrastructure.Sec;
 internal static class SecEdgarUrls
 {
     /// <summary>
-    /// Canonical CIK for a URL path: leading zeros stripped; an all-zero/blank CIK collapses to "0".
+    /// Canonical CIK for a URL path: leading zeros stripped; an all-zero or empty CIK collapses to "0".
     /// (Callers that receive a raw CIK trim it first — this method does not trim surrounding whitespace.)
     /// </summary>
     public static string StripLeadingZeros(string cik)

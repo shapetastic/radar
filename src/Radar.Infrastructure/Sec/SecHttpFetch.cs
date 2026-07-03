@@ -6,13 +6,14 @@ namespace Radar.Infrastructure.Sec;
 /// caller's User-Agent guidance log), non-success → HTTP error, <see cref="HttpRequestException"/> →
 /// unreachable, <see cref="TaskCanceledException"/> → timeout. Genuine caller-requested cancellation
 /// (<see cref="OperationCanceledException"/> when <c>ct.IsCancellationRequested</c>) is re-thrown, never
-/// mapped. On success returns <c>(null, body)</c>. The helper itself does NO logging — logging lives in the
+/// mapped. On success returns <c>(null, body)</c>; on any failure the body is <c>default</c> (null for a
+/// reference <c>TBody</c>), so callers MUST check <c>Failure</c> before using <c>Body</c>. The helper itself does NO logging — logging lives in the
 /// caller-supplied projection lambdas so each reader keeps its exact log wording. <c>TBody</c> lets the
 /// filing reader read bytes and the earnings reader read a string.
 /// </summary>
 internal static class SecHttpFetch
 {
-    public static async Task<(TFailure? Failure, TBody Body)> GetAsync<TFailure, TBody>(
+    public static async Task<(TFailure? Failure, TBody? Body)> GetAsync<TFailure, TBody>(
         HttpClient httpClient,
         string url,
         Func<HttpContent, CancellationToken, Task<TBody>> readBody,
@@ -30,17 +31,17 @@ internal static class SecHttpFetch
                 .ConfigureAwait(false);
 
             if ((int)response.StatusCode == 403)
-                return (onForbidden(), default!);
+                return (onForbidden(), default);
 
             if (!response.IsSuccessStatusCode)
-                return (onHttpError((int)response.StatusCode), default!);
+                return (onHttpError((int)response.StatusCode), default);
 
             var body = await readBody(response.Content, ct).ConfigureAwait(false);
             return (null, body);
         }
         catch (HttpRequestException ex)
         {
-            return (onUnreachable(ex), default!);
+            return (onUnreachable(ex), default);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -48,7 +49,7 @@ internal static class SecHttpFetch
         }
         catch (TaskCanceledException ex)
         {
-            return (onTimeout(ex), default!);
+            return (onTimeout(ex), default);
         }
     }
 }

@@ -142,7 +142,7 @@ internal sealed partial class HttpSecEarningsReleaseReader : ISecEarningsRelease
             },
             ct).ConfigureAwait(false);
 
-        return (failure, failure is null ? body : string.Empty);
+        return (failure, body ?? string.Empty);
     }
 
     /// <summary>

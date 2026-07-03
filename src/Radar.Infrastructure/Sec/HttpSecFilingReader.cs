@@ -71,7 +71,8 @@ internal sealed class HttpSecFilingReader : ISecFilingReader
 
         try
         {
-            using var document = JsonDocument.Parse(bytes);
+            // Non-null once we are past the failure guard above: SecHttpFetch only defaults the body on failure.
+            using var document = JsonDocument.Parse(bytes!);
 
             // The submissions endpoint always returns a JSON object. Valid JSON with any other root shape
             // (array, string, number, …) is a bad/changed response, not a quiet issuer: report it as
