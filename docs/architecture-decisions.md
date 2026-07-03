@@ -285,10 +285,12 @@ Introducing the seam standalone — with no consumer, no prompt, no `GetResponse
 a stable, tested, provider-neutral interface instead of re-litigating provider wiring inside a feature, while keeping
 concrete providers behind the AD-5 boundary and leaving existing runs untouched.
 
-**Status.** Proposed 2026-07-03; Accepted 2026-07-03 (spec 72; cross-references AD-5). The seam now has real
-consumers: `ISecEarningsReleaseReader` (spec 73), `IFilingAnalyzer` (spec 74), and
-`IDirectionalFilingSignalSource` (spec 75) all code against `IChatClient` / `IChatClientFactory` behind
-Infrastructure, all merged — confirming the abstraction held.
+**Status.** Proposed 2026-07-03; Accepted 2026-07-03 (spec 72; cross-references AD-5). The seam now has a real
+consumer: `IFilingAnalyzer`'s implementation (`ChatFilingAnalyzer`, spec 74) codes directly against
+`IChatClient` / `IChatClientFactory` behind Infrastructure. The surrounding directional-filing arc exercises the
+seam through that analyzer rather than touching `IChatClient` itself: `ISecEarningsReleaseReader` (spec 73) is a
+plain SEC HTTP reader with no AI dependency, and `IDirectionalFilingSignalSource` (spec 75) depends on
+`IFilingAnalyzer`. All three slices are merged — confirming the abstraction held.
 
 ---
 
