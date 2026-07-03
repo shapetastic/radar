@@ -14,7 +14,9 @@ namespace Radar.Application.Collectors;
 /// serialization. The collector-declared <see cref="EvidenceSourceType"/> is carried straight
 /// through. <c>Id</c> uses <see cref="Guid.NewGuid"/>; <c>CollectedAt</c> comes from the
 /// <see cref="CollectedEvidence"/> (the collector already stamped the run instant), so no
-/// <see cref="TimeProvider"/> is needed.
+/// <see cref="TimeProvider"/> is needed. This mapper is the sole author of the
+/// <c>{ "metadata": {...}, "companyHints": [...] }</c> envelope, which every consumer reads back through
+/// <see cref="EvidenceMetadata"/> so author and readers stay adjacent.
 /// </summary>
 public sealed class CollectedEvidenceMapper
 {

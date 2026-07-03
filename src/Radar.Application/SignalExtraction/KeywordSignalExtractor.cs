@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
+using Radar.Application.Collectors;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
@@ -289,46 +289,24 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     {
         amount = 0m;
 
-        if (string.IsNullOrWhiteSpace(evidence.MetadataJson))
+        EvidenceMetadata.TryRead(evidence.MetadataJson, out var metadata, out _);
+        if (!metadata.TryGetValue("awardAmount", out var value))
             return false;
 
-        try
-        {
-            using var document = JsonDocument.Parse(evidence.MetadataJson);
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
 
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return false;
-
-            if (!root.TryGetProperty("metadata", out var metadata)
-                || metadata.ValueKind != JsonValueKind.Object)
-                return false;
-
-            if (!metadata.TryGetProperty("awardAmount", out var awardAmount)
-                || awardAmount.ValueKind != JsonValueKind.String)
-                return false;
-
-            var value = awardAmount.GetString();
-            if (string.IsNullOrWhiteSpace(value))
-                return false;
-
-            // A non-positive amount (the collector's 0m sentinel for a missing/non-numeric "Award Amount",
-            // or any negative) is not a usable award magnitude: treat it as absent so the caller keeps the
-            // fixed rule Strength instead of mapping to the floor tier.
-            if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out amount)
-                || amount <= 0m)
-            {
-                amount = 0m;
-                return false;
-            }
-
-            return true;
-        }
-        catch (JsonException)
+        // A non-positive amount (the collector's 0m sentinel for a missing/non-numeric "Award Amount",
+        // or any negative) is not a usable award magnitude: treat it as absent so the caller keeps the
+        // fixed rule Strength instead of mapping to the floor tier.
+        if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out amount)
+            || amount <= 0m)
         {
             amount = 0m;
             return false;
         }
+
+        return true;
     }
 
     // Walks the descending tier table and returns the Strength of the first tier whose lower bound is

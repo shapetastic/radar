@@ -4,6 +4,7 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Collectors;
 using Radar.Application.Evidence;
 using Radar.Domain.Evidence;
 
@@ -129,11 +130,17 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore
 
     private static (string[] CompanyHints, JsonElement Metadata) ParseMetadataJson(string? metadataJson)
     {
-        var emptyMetadata = EmptyObject();
+        // The hints traversal is shared through the single envelope reader; the metadata element is cloned
+        // locally (option (b)) so the serialized RawEvidenceFile JSON stays byte-identical — the shared
+        // reader deliberately does not hand back a live JsonElement, and preserving the raw metadata element
+        // shape (not a string→string projection) keeps the on-disk output unchanged.
+        EvidenceMetadata.TryRead(metadataJson, out _, out var hints);
+
+        var metadata = EmptyObject();
 
         if (string.IsNullOrWhiteSpace(metadataJson))
         {
-            return ([], emptyMetadata);
+            return (hints.ToArray(), metadata);
         }
 
         try
@@ -141,19 +148,6 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore
             using var doc = JsonDocument.Parse(metadataJson);
             var root = doc.RootElement;
 
-            var hints = Array.Empty<string>();
-            if (root.ValueKind == JsonValueKind.Object
-                && root.TryGetProperty("companyHints", out var hintsElement)
-                && hintsElement.ValueKind == JsonValueKind.Array)
-            {
-                hints = hintsElement
-                    .EnumerateArray()
-                    .Where(h => h.ValueKind == JsonValueKind.String)
-                    .Select(h => h.GetString()!)
-                    .ToArray();
-            }
-
-            var metadata = emptyMetadata;
             if (root.ValueKind == JsonValueKind.Object
                 && root.TryGetProperty("metadata", out var metadataElement)
                 && metadataElement.ValueKind == JsonValueKind.Object)
@@ -161,13 +155,13 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore
                 // Clone so the element stays valid after the JsonDocument is disposed.
                 metadata = metadataElement.Clone();
             }
-
-            return (hints, metadata);
         }
         catch (JsonException)
         {
-            return ([], emptyMetadata);
+            // Malformed metadata degrades to the empty object; hints already defaulted to [] above.
         }
+
+        return (hints.ToArray(), metadata);
     }
 
     private static JsonElement EmptyObject()
