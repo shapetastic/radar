@@ -219,6 +219,11 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             // every directional signal down the CompanyMention fallback.
             hintsByEvidenceId = candidates.ToDictionary(e => e.Evidence.Id, e => e.CompanyHints);
 
+            // Bail before the (potentially IO-bound: LLM/HTTP) directional read if the run was already
+            // cancelled — the deterministic extract loop's first check is below, so without this an
+            // already-cancelled run would still pay for ProduceAsync's work.
+            ct.ThrowIfCancellationRequested();
+
             directional = await _directionalFilingSignals
                 .ProduceAsync(candidates.Select(e => e.Evidence).ToList(), asOfUtc, ct).ConfigureAwait(false);
 
