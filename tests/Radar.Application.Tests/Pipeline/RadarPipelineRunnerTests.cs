@@ -1267,4 +1267,265 @@ public sealed class RadarPipelineRunnerTests
             DateTimeOffset.MinValue, DateTimeOffset.MaxValue, default);
         Assert.Empty(observed);
     }
+
+    // A verbatim substring of BuildFilingCollected()'s Title, so a Neutral GuidanceChange carrying it as
+    // its SupportingExcerpt passes the mapper's provenance check (excerpt must be traceable to the evidence).
+    private const string FilingExcerpt = "Results of Operations and Financial Condition";
+
+    /// <summary>The deterministic (spec 57) Neutral GuidanceChange an earnings-2.02 filing yields.</summary>
+    private static ExtractedSignal NeutralGuidanceChange(string excerpt = FilingExcerpt) =>
+        new(
+            CompanyMention: CompanyName,
+            SignalType: "GuidanceChange",
+            Direction: "Neutral",
+            Strength: 3,
+            Novelty: 3,
+            Confidence: 0.6m,
+            SupportingExcerpt: excerpt,
+            Reason: "Results of operations reported by the company.");
+
+    /// <summary>The directional (spec 75) Positive GuidanceChange the AI earnings read yields.</summary>
+    private static ExtractedSignal PositiveGuidanceChange(string excerpt) =>
+        new(
+            CompanyMention: CompanyName,
+            SignalType: "GuidanceChange",
+            Direction: "Positive",
+            Strength: 6,
+            Novelty: 6,
+            Confidence: 0.9m,
+            SupportingExcerpt: excerpt,
+            Reason: "Directional read: revenue up, guidance raised.");
+
+    /// <summary>
+    /// An in-test extractor that returns caller-chosen signals per evidence (unlike
+    /// <see cref="AnyEvidenceSignalExtractor"/> which returns a fixed output for ANY evidence). Lets the
+    /// scoped-suppression test emit different signals for two distinct filings.
+    /// </summary>
+    private sealed class PerEvidenceSignalExtractor(
+        Func<EvidenceItem, IReadOnlyList<ExtractedSignal>> signalsFor) : ISignalExtractor
+    {
+        public Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence, CancellationToken ct) =>
+            Task.FromResult(new ExtractSignalsOutput(signalsFor(evidence), "summary"));
+    }
+
+    /// <summary>
+    /// A fake directional filing source that emits a directional signal only for the evidence a
+    /// caller-supplied factory returns non-null for (returning null models below-MinConfidence /
+    /// Mixed / Unknown / failure — i.e. "no directional read for this filing"). Lets tests model empty,
+    /// full, and scoped directional coverage without the real reader/analyzer (behind Infrastructure).
+    /// </summary>
+    private sealed class SelectiveDirectionalFilingSignalSource(
+        Func<EvidenceItem, ExtractedSignal?> signalFor) : IDirectionalFilingSignalSource
+    {
+        public Task<IReadOnlyList<DirectionalFilingSignal>> ProduceAsync(
+            IReadOnlyList<EvidenceItem> candidateEvidence, DateTimeOffset asOfUtc, CancellationToken ct)
+        {
+            IReadOnlyList<DirectionalFilingSignal> produced = candidateEvidence
+                .Select(ev => (Evidence: ev, Signal: signalFor(ev)))
+                .Where(x => x.Signal is not null)
+                .Select(x => new DirectionalFilingSignal(x.Signal!, x.Evidence))
+                .ToList();
+            return Task.FromResult(produced);
+        }
+    }
+
+    /// <summary>A second, distinct earnings-8-K Filing (different content hash) the directional source
+    /// can choose NOT to cover, for the scoped-suppression test.</summary>
+    private static CollectedEvidence BuildSecondFilingCollected() =>
+        new(
+            SourceType: EvidenceSourceType.Filing,
+            SourceName: "Northwind — SEC",
+            SourceUrl:
+                "https://www.sec.gov/Archives/edgar/data/1/000104952126000022/0001049521-26-000022-index.htm",
+            Title:
+                "8-K — Results (2026-02-05) [items: 2.02,9.01] Second filing Results of Operations and Financial Condition.",
+            RawText: "8-K filing accession 0001049521-26-000022 filed 2026-02-05: Report. 8-K item codes: 2.02,9.01.",
+            PublishedAt: Observed,
+            CollectedAt: FixedNow,
+            Metadata: new Dictionary<string, string> { ["quality"] = "High" });
+
+    [Fact]
+    public async Task DirectionalRead_SupersedesDeterministicNeutralGuidanceChange_ForSameFiling()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildFilingCollected()]);
+
+        // The deterministic extractor yields the Neutral GuidanceChange (spec 57) for the 2.02 filing.
+        var extractor = new AnyEvidenceSignalExtractor(new([NeutralGuidanceChange()], "summary"));
+
+        // The directional source returns one Positive GuidanceChange over the SAME filing evidence.
+        var source = new SelectiveDirectionalFilingSignalSource(ev => PositiveGuidanceChange(ev.Title));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: source);
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // The filing's GuidanceChange is counted ONCE (the directional), not twice — the Neutral is
+        // suppressed before store and increments no counter.
+        Assert.Equal(1, result.SignalsExtracted);
+        Assert.Equal(1, result.SignalsValid);
+        Assert.Equal(1, result.SignalsApproved);
+
+        // Exactly one GuidanceChange persisted for that evidence, and it is the directional (Positive) one.
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(SignalType.GuidanceChange, signal.Type);
+        Assert.Equal(SignalDirection.Positive, signal.Direction);
+
+        // No Neutral GuidanceChange was stored for the filing (superseded).
+        Assert.DoesNotContain(
+            signals, s => s.Type == SignalType.GuidanceChange && s.Direction == SignalDirection.Neutral);
+
+        // Provenance: the surviving directional signal references the same filing evidence.
+        Assert.NotNull(await h.Evidence.GetByIdAsync(signal.EvidenceId, default));
+
+        // On-disk twin: exactly one signal mirrored, the directional one — the Neutral has no on-disk file.
+        var write = Assert.Single(h.SignalStore.Written);
+        Assert.Equal(signal.Id, write.Signal.Id);
+        Assert.Equal(SignalDirection.Positive, write.Signal.Direction);
+    }
+
+    [Fact]
+    public async Task NoDirectionalRead_LeavesDeterministicNeutralGuidanceChangeStanding()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildFilingCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([NeutralGuidanceChange()], "summary"));
+
+        // The source returns NOTHING for the filing (below MinConfidence / Mixed / Unknown / failure), so
+        // no supersede occurs — the deterministic Neutral must stand exactly as today.
+        var source = new SelectiveDirectionalFilingSignalSource(_ => null);
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: source);
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, result.SignalsExtracted);
+        Assert.Equal(1, result.SignalsValid);
+
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(SignalType.GuidanceChange, signal.Type);
+        Assert.Equal(SignalDirection.Neutral, signal.Direction);
+    }
+
+    [Fact]
+    public async Task NullDirectionalSource_LeavesDeterministicNeutralGuidanceChangeStanding()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildFilingCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([NeutralGuidanceChange()], "summary"));
+
+        // AI disabled (null source): the supersede set is empty, nothing is suppressed — byte-for-byte
+        // unchanged from the pre-spec-78 default.
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, result.SignalsExtracted);
+        Assert.Equal(1, result.SignalsValid);
+
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(SignalType.GuidanceChange, signal.Type);
+        Assert.Equal(SignalDirection.Neutral, signal.Direction);
+    }
+
+    [Fact]
+    public async Task Supersede_IsScopedToTheCoveredFilingsGuidanceChangeOnly()
+    {
+        var companyId = Guid.NewGuid();
+
+        // Two distinct in-window earnings filings. The directional source will cover only the first
+        // (title contains "Second filing" distinguishes the uncovered one).
+        var collector = new FakeEvidenceCollector([BuildFilingCollected(), BuildSecondFilingCollected()]);
+
+        // Both filings get a deterministic Neutral GuidanceChange; the covered filing ALSO gets a
+        // non-GuidanceChange (CustomerWin) signal that must survive the supersede.
+        var extractor = new PerEvidenceSignalExtractor(ev =>
+        {
+            var list = new List<ExtractedSignal> { NeutralGuidanceChange(ev.Title) };
+            if (!ev.Title.Contains("Second filing", StringComparison.Ordinal))
+            {
+                list.Add(new ExtractedSignal(
+                    CompanyMention: CompanyName,
+                    SignalType: "CustomerWin",
+                    Direction: "Positive",
+                    Strength: 4,
+                    Novelty: 4,
+                    Confidence: 0.8m,
+                    SupportingExcerpt: ev.Title,
+                    Reason: "Material customer win noted alongside results."));
+            }
+
+            return list;
+        });
+
+        // Directional coverage ONLY for the first filing (not the "Second filing").
+        var source = new SelectiveDirectionalFilingSignalSource(ev =>
+            ev.Title.Contains("Second filing", StringComparison.Ordinal)
+                ? null
+                : PositiveGuidanceChange(ev.Title));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: source);
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+
+        // The covered filing keeps exactly one GuidanceChange — the directional Positive — and its Neutral
+        // is gone; its non-GuidanceChange CustomerWin survives.
+        var positive = Assert.Single(
+            signals, s => s.Type == SignalType.GuidanceChange && s.Direction == SignalDirection.Positive);
+        var coveredEvidenceId = positive.EvidenceId;
+        Assert.DoesNotContain(
+            signals,
+            s => s.Type == SignalType.GuidanceChange
+                 && s.Direction == SignalDirection.Neutral
+                 && s.EvidenceId == coveredEvidenceId);
+        Assert.Contains(
+            signals, s => s.Type == SignalType.CustomerWin && s.EvidenceId == coveredEvidenceId);
+
+        // The uncovered filing keeps its deterministic Neutral GuidanceChange (different EvidenceId).
+        Assert.Contains(
+            signals,
+            s => s.Type == SignalType.GuidanceChange
+                 && s.Direction == SignalDirection.Neutral
+                 && s.EvidenceId != coveredEvidenceId);
+    }
+
+    [Fact]
+    public async Task Cancellation_BeforeRun_ThrowsAndStoresNothing()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildFilingCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([NeutralGuidanceChange()], "summary"));
+        var source = new SelectiveDirectionalFilingSignalSource(ev => PositiveGuidanceChange(ev.Title));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: source);
+        await SeedCompanyAsync(h, companyId);
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => h.Runner.RunAsync(cts.Token));
+
+        // Nothing was stored before the run threw.
+        var observed = await h.Signals.GetObservedBetweenAsync(
+            DateTimeOffset.MinValue, DateTimeOffset.MaxValue, default);
+        Assert.Empty(observed);
+        Assert.Empty(h.SignalStore.Written);
+    }
 }

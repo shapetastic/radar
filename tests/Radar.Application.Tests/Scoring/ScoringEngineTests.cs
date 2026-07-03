@@ -262,7 +262,7 @@ public sealed class ScoringEngineTests
 
         // Every new snapshot is stamped with the current scoring-generation constant (non-null), so the
         // report can gate cross-run comparability on it.
-        Assert.Equal("radar-scoring-config-v3", result.Snapshot.ScoringConfigVersion);
+        Assert.Equal("radar-scoring-config-v4", result.Snapshot.ScoringConfigVersion);
     }
 
     [Theory]
