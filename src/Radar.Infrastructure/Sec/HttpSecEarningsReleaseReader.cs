@@ -47,11 +47,10 @@ internal sealed partial class HttpSecEarningsReleaseReader : ISecEarningsRelease
 
         // Same URL facts the spec-56 reader computes: CIK with leading zeros stripped, accession with dashes
         // removed in the path (but the dashed accession is kept in the index filename).
-        var cikNoZeros = StripLeadingZeros(cik.Trim());
-        var dashedAccession = accession.Trim();
-        var accNoNoDashes = dashedAccession.Replace("-", string.Empty, StringComparison.Ordinal);
-        var baseUrl = $"https://www.sec.gov/Archives/edgar/data/{cikNoZeros}/{accNoNoDashes}";
-        var indexUrl = $"{baseUrl}/{dashedAccession}-index.html";
+        var cikTrim = cik.Trim();
+        var accTrim = accession.Trim();
+        var baseUrl = SecEdgarUrls.BuildArchiveBaseUrl(cikTrim, accTrim);
+        var indexUrl = SecEdgarUrls.BuildIndexUrl(cikTrim, accTrim, ".html");
 
         var (indexFailure, indexBody) = await FetchAsync(indexUrl, ct).ConfigureAwait(false);
         if (indexFailure is not null)
@@ -106,59 +105,44 @@ internal sealed partial class HttpSecEarningsReleaseReader : ISecEarningsRelease
         // Honour caller cancellation before each (sequential) request, independent of transport timing.
         ct.ThrowIfCancellationRequested();
 
-        try
-        {
-            using var response = await _httpClient
-                .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-
-            if ((int)response.StatusCode == 403)
+        var (failure, body) = await SecHttpFetch.GetAsync<SecEarningsReleaseReadResult, string>(
+            _httpClient,
+            url,
+            readBody: (content, c) => content.ReadAsStringAsync(c),
+            onForbidden: () =>
             {
                 _logger.LogWarning(
                     "SEC {Url} returned HTTP 403 Forbidden; this is almost always a missing or invalid "
                         + "User-Agent (SEC requires a compliant 'Radar Research <email>' UA). Skipping.",
                     url);
-                return (
-                    SecEarningsReleaseReadResult.Failure(
-                        SecEarningsReleaseReadOutcome.Forbidden, "HTTP 403 (User-Agent)"),
-                    string.Empty);
-            }
-
-            if (!response.IsSuccessStatusCode)
+                return SecEarningsReleaseReadResult.Failure(
+                    SecEarningsReleaseReadOutcome.Forbidden, "HTTP 403 (User-Agent)");
+            },
+            onHttpError: status =>
             {
                 _logger.LogWarning(
                     "SEC {Url} returned non-success status {StatusCode}; skipping.",
                     url,
-                    (int)response.StatusCode);
-                return (
-                    SecEarningsReleaseReadResult.Failure(
-                        SecEarningsReleaseReadOutcome.HttpError, $"HTTP {(int)response.StatusCode}"),
-                    string.Empty);
-            }
+                    status);
+                return SecEarningsReleaseReadResult.Failure(
+                    SecEarningsReleaseReadOutcome.HttpError, $"HTTP {status}");
+            },
+            onUnreachable: ex =>
+            {
+                _logger.LogWarning(ex, "SEC {Url} fetch failed; skipping.", url);
+                return SecEarningsReleaseReadResult.Failure(
+                    SecEarningsReleaseReadOutcome.Unreachable, "transport error");
+            },
+            onTimeout: ex =>
+            {
+                // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+                _logger.LogWarning(ex, "SEC {Url} fetch timed out; skipping.", url);
+                return SecEarningsReleaseReadResult.Failure(
+                    SecEarningsReleaseReadOutcome.Timeout, "request timed out");
+            },
+            ct).ConfigureAwait(false);
 
-            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            return (null, body);
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogWarning(ex, "SEC {Url} fetch failed; skipping.", url);
-            return (
-                SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.Unreachable, "transport error"),
-                string.Empty);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // Caller-requested cancellation must propagate so the run stops; do not hide it as a failure result.
-            throw;
-        }
-        catch (TaskCanceledException ex)
-        {
-            // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
-            _logger.LogWarning(ex, "SEC {Url} fetch timed out; skipping.", url);
-            return (
-                SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.Timeout, "request timed out"),
-                string.Empty);
-        }
+        return (failure, body ?? string.Empty);
     }
 
     /// <summary>
@@ -308,12 +292,6 @@ internal sealed partial class HttpSecEarningsReleaseReader : ISecEarningsRelease
             "GB" => value * 1024L * 1024L * 1024L,
             _ => value,
         };
-    }
-
-    private static string StripLeadingZeros(string cik)
-    {
-        var trimmed = cik.TrimStart('0');
-        return trimmed.Length == 0 ? "0" : trimmed;
     }
 
     /// <summary>A candidate document row from the filing index table.</summary>
