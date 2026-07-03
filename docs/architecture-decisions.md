@@ -285,5 +285,48 @@ Introducing the seam standalone — with no consumer, no prompt, no `GetResponse
 a stable, tested, provider-neutral interface instead of re-litigating provider wiring inside a feature, while keeping
 concrete providers behind the AD-5 boundary and leaving existing runs untouched.
 
-**Status.** Proposed · 2026-07-03 (spec 72; cross-references AD-5). No consumer exists yet — this records the seam
-and its rules for the AI slices that follow.
+**Status.** Proposed 2026-07-03; Accepted 2026-07-03 (spec 72; cross-references AD-5). The seam now has a real
+consumer: `IFilingAnalyzer`'s implementation (`ChatFilingAnalyzer`, spec 74) codes directly against
+`IChatClient` / `IChatClientFactory` behind Infrastructure. The surrounding directional-filing arc exercises the
+seam through that analyzer rather than touching `IChatClient` itself: `ISecEarningsReleaseReader` (spec 73) is a
+plain SEC HTTP reader with no AI dependency, and `IDirectionalFilingSignalSource` (spec 75) depends on
+`IFilingAnalyzer`. All three slices are merged — confirming the abstraction held.
+
+---
+
+## AD-12 — AI enrichment is an opt-in `RadarPipelineRunner` step behind an Application interface (not a second extractor)
+
+**Decision.** AI enrichment of the pipeline is an **opt-in step in `RadarPipelineRunner`** behind a
+nullable-optional Application interface (the first being `IDirectionalFilingSignalSource`, spec 75), threaded
+through the **same** `map → resolve → review → store` tail (`MapResolveReviewStoreAsync`) as deterministic
+keyword signals. It is **not** a second `ISignalExtractor` (the runner injects a single extractor and has no
+multi-extractor composition seam), **not** a new collector, and **not** a new stage type. When AI is disabled
+(blank `Radar:Ai:Provider`) the service is not registered, the runner's optional dependency is `null`, and the
+step is skipped — the default graph is byte-for-byte unchanged.
+
+**Why.** Reuses the runner's existing provenance/validation/review/store machinery verbatim; keeps AI/HTTP
+entirely behind Infrastructure interfaces (materialises AD-5 + AD-11); leaves the deterministic extractor
+untouched (deterministic-before-AI); and makes "AI off ⇒ zero change" structural (the service is registered only
+inside the `Ai.Provider`-non-blank gate). The alternatives — a second extractor, a dedicated collector/stage —
+were evaluated and rejected in spec 75. Future AI consumers (further filing reads, other enrichment) should follow
+this same opt-in-runner-step-behind-an-Application-interface shape rather than re-debating the integration seam.
+
+**Status.** Accepted · 2026-07-03 (pattern established by spec 75; cross-references AD-5, AD-11).
+
+---
+
+## AD-13 — Domain `FilingSentiment` doubles as the AI structured-output DTO
+
+**Decision.** The Domain `FilingSentiment` record (`FilingDirection Direction`, `decimal Confidence`,
+`string Rationale`) is **reused as the `GetResponseAsync<T>` structured-output DTO** for the AI filing analyzer
+(spec 74), rather than maintaining a separate wire/DTO type. Accepted as-is for the MVP.
+
+**Why.** The Domain shape and the AI structured-output shape are currently identical; a separate DTO would be
+duplicative ceremony with a hand-written mapping for no present benefit. The analyzer already validates and clamps
+the AI output (spec 74) before it becomes a Domain value, so the coupling does not weaken the
+typed-and-validated-before-persistence rule.
+
+**Status.** Accepted · 2026-07-03 (L3, deferred by spec 76). **Revisit if** the AI wire shape must diverge from
+the Domain record (e.g. extra provider-specific fields, a different confidence encoding), or a second AI
+structured output needs its own DTO — at which point separate the DTO from the Domain record in a dedicated slice.
+Recorded so the reviewer does not flag the Domain-as-DTO coupling as unrecorded drift.
