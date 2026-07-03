@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
+using Radar.Application.Filings;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
@@ -252,8 +253,9 @@ public sealed class RadarPipelineRunnerTests
             IEvidenceCollector collector,
             ISignalExtractor extractor,
             PipelineOptions options,
-            TimeProvider? timeProvider = null)
-            : this([collector], extractor, options, timeProvider)
+            TimeProvider? timeProvider = null,
+            IDirectionalFilingSignalSource? directionalFilingSignals = null)
+            : this([collector], extractor, options, timeProvider, directionalFilingSignals)
         {
         }
 
@@ -261,7 +263,8 @@ public sealed class RadarPipelineRunnerTests
             IReadOnlyList<IEvidenceCollector> collectors,
             ISignalExtractor extractor,
             PipelineOptions options,
-            TimeProvider? timeProvider = null)
+            TimeProvider? timeProvider = null,
+            IDirectionalFilingSignalSource? directionalFilingSignals = null)
         {
             var time = timeProvider ?? new FixedTimeProvider(FixedNow);
 
@@ -312,7 +315,8 @@ public sealed class RadarPipelineRunnerTests
                 RunStore,
                 options,
                 time,
-                NullLogger<RadarPipelineRunner>.Instance);
+                NullLogger<RadarPipelineRunner>.Instance,
+                directionalFilingSignals);
         }
     }
 
@@ -1112,5 +1116,155 @@ public sealed class RadarPipelineRunnerTests
         var record = Assert.Single(h.RunStore.Written);
         Assert.Null(record.ReportId);
         Assert.Equal(result.ReportId, record.ReportId);
+    }
+
+    /// <summary>
+    /// A fake directional filing signal source that records the candidate evidence it receives and emits
+    /// one directional signal per candidate (via a caller-supplied factory) so the runner-threading test
+    /// stays decoupled from the real reader/analyzer (those live behind Infrastructure interfaces).
+    /// </summary>
+    private sealed class FakeDirectionalFilingSignalSource(
+        Func<EvidenceItem, ExtractedSignal> signalFor) : IDirectionalFilingSignalSource
+    {
+        public List<EvidenceItem> ReceivedCandidates { get; } = new();
+
+        public Task<IReadOnlyList<DirectionalFilingSignal>> ProduceAsync(
+            IReadOnlyList<EvidenceItem> candidateEvidence, DateTimeOffset asOfUtc, CancellationToken ct)
+        {
+            ReceivedCandidates.AddRange(candidateEvidence);
+            IReadOnlyList<DirectionalFilingSignal> produced = candidateEvidence
+                .Select(ev => new DirectionalFilingSignal(signalFor(ev), ev))
+                .ToList();
+            return Task.FromResult(produced);
+        }
+    }
+
+    /// <summary>An earnings-8-K Filing collected-evidence, in both windows so its signal can score.</summary>
+    private static CollectedEvidence BuildFilingCollected() =>
+        new(
+            SourceType: EvidenceSourceType.Filing,
+            SourceName: "Northwind — SEC",
+            SourceUrl:
+                "https://www.sec.gov/Archives/edgar/data/1/000104952126000011/0001049521-26-000011-index.htm",
+            Title:
+                "8-K — Results (2026-02-06) [items: 2.02,9.01] Items: Results of Operations and Financial Condition.",
+            RawText: "8-K filing accession 0001049521-26-000011 filed 2026-02-06: Report. 8-K item codes: 2.02,9.01.",
+            PublishedAt: Observed,
+            CollectedAt: FixedNow,
+            Metadata: new Dictionary<string, string> { ["quality"] = "High" });
+
+    [Fact]
+    public async Task DirectionalFilingSource_ThreadsPositiveGuidanceChange_ThroughStandardPath()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildFilingCollected()]);
+
+        // The deterministic extractor emits nothing so the ONLY stored signal is the directional one — the
+        // assertions then isolate the enrichment path.
+        var extractor = new AnyEvidenceSignalExtractor(new([], "summary"));
+
+        // The directional signal resolves to the seeded company by name, carries a verbatim excerpt from
+        // the evidence (its Title, preserved by the mapper), and the AI rationale in Reason.
+        var source = new FakeDirectionalFilingSignalSource(ev => new ExtractedSignal(
+            CompanyMention: CompanyName,
+            SignalType: "GuidanceChange",
+            Direction: "Positive",
+            Strength: 6,
+            Novelty: 6,
+            Confidence: 0.9m,
+            SupportingExcerpt: ev.Title,
+            Reason: "Directional read: revenue up, guidance raised."));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: source);
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // The source received the run's newly-stored Filing evidence as a candidate.
+        var candidate = Assert.Single(source.ReceivedCandidates);
+        Assert.Equal(EvidenceSourceType.Filing, candidate.SourceType);
+
+        // Exactly one signal stored: a Positive GuidanceChange, resolved + approved like a keyword signal.
+        Assert.Equal(1, result.SignalsExtracted);
+        Assert.Equal(1, result.SignalsValid);
+        Assert.Equal(1, result.SignalsApproved);
+
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(SignalType.GuidanceChange, signal.Type);
+        Assert.Equal(SignalDirection.Positive, signal.Direction);
+        Assert.Equal(companyId, signal.CompanyId);
+        Assert.Equal(SignalReviewStatus.Approved, signal.ReviewStatus);
+        Assert.Contains("revenue up, guidance raised", signal.Reason, StringComparison.Ordinal);
+
+        // Provenance: the signal references the stored filing evidence, and a review traces to the signal.
+        Assert.Equal(candidate.Id, signal.EvidenceId);
+        Assert.NotNull(await h.Evidence.GetByIdAsync(signal.EvidenceId, default));
+        var review = Assert.Single(await h.Reviews.GetBySignalAsync(signal.Id, default));
+        Assert.Equal(signal.Id, review.SignalId);
+    }
+
+    [Fact]
+    public async Task DirectionalFilingSource_ThreadsCollectorHint_ResolvesSignalToHintedCompany()
+    {
+        var companyId = Guid.NewGuid();
+
+        // The Filing evidence carries the seeded company's ticker as a collector hint. The directional
+        // signal's mention is generic and would NOT resolve on its own — only the threaded hint can
+        // resolve it, so an approved signal proves the runner passes directional.Evidence's hints (not [])
+        // into the resolver.
+        var collector = new FakeEvidenceCollector(
+            [BuildFilingCollected() with { CompanyHints = ["NWR"] }]);
+        var extractor = new AnyEvidenceSignalExtractor(new([], "summary"));
+
+        var source = new FakeDirectionalFilingSignalSource(ev => new ExtractedSignal(
+            CompanyMention: "Some Generic Vendor Name",
+            SignalType: "GuidanceChange",
+            Direction: "Positive",
+            Strength: 6,
+            Novelty: 6,
+            Confidence: 0.9m,
+            SupportingExcerpt: ev.Title,
+            Reason: "Directional read: revenue up, guidance raised."));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: source);
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, result.SignalsValid);
+        Assert.Equal(1, result.SignalsApproved);
+
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(companyId, signal.CompanyId);
+        Assert.Equal(SignalReviewStatus.Approved, signal.ReviewStatus);
+    }
+
+    [Fact]
+    public async Task NullDirectionalFilingSource_IsNoOp_NoDirectionalSignal()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildFilingCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([], "summary"));
+
+        // No directional source (AI disabled): the enrichment step is skipped entirely, so a Filing
+        // evidence yields no directional signal — the default byte-for-byte behaviour.
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, result.EvidenceNew);
+        Assert.Equal(0, result.SignalsExtracted);
+        Assert.Equal(0, result.SignalsValid);
+
+        var observed = await h.Signals.GetObservedBetweenAsync(
+            DateTimeOffset.MinValue, DateTimeOffset.MaxValue, default);
+        Assert.Empty(observed);
     }
 }

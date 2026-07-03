@@ -24,12 +24,15 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation ships spec 70 (news -> MediaAttention signals): the extractor now
-    // emits a MediaAttention signal for each NewsArticle evidence item, so news-covered companies gain
-    // AttentionScore they did not have pre-70. Pre/post-70 snapshots are therefore not comparable, and a
-    // cross-run delta across that boundary correctly renders "(scoring updated)" rather than a fabricated
-    // thesis label.
-    private const string ScoringConfigVersion = "radar-scoring-config-v2";
+    // ScoringOptions). This generation ships spec 75 (directional filing signals): when AI is enabled, an
+    // earnings 8-K's EX-99.1 read now emits a directional GuidanceChange — a beat lifts Trajectory via a
+    // Positive GuidanceChange, a miss lowers it via a Negative one — output that did not exist pre-75. So a
+    // genuine beat and a genuine miss no longer score identically. (With AI disabled the scoring output is
+    // identical to v2, but the stamp still bumps because the generation that CAN now emit different scores
+    // has changed — the correct, conservative AD-10 behaviour.) Pre/post-75 snapshots are therefore not
+    // comparable, and a cross-run delta across that boundary correctly renders "(scoring updated)" rather
+    // than a fabricated thesis label.
+    private const string ScoringConfigVersion = "radar-scoring-config-v3";
 
     private readonly ISignalRepository _signalRepository;
     private readonly IEvidenceRepository _evidenceRepository;

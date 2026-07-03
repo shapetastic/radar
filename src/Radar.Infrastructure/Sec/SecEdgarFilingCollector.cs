@@ -172,6 +172,15 @@ internal sealed class SecEdgarFilingCollector : IEvidenceCollector
             metadata["primaryDocument"] = filing.PrimaryDocument;
         }
 
+        // Discrete item-codes key (strictly additive): lets the directional filing signal source gate on
+        // the earnings item 2.02 from a clean field instead of parsing the Title. Only written when the
+        // filing carries item codes (8-Ks). Does NOT feed the Title/RawText/ContentHash, so evidence text
+        // and dedupe are unchanged.
+        if (hasItems)
+        {
+            metadata["items"] = filing.Items!;
+        }
+
         return new CollectedEvidence(
             SourceType: SourceType,
             SourceName: feed.Name,

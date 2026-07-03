@@ -107,6 +107,53 @@ public sealed class SecEdgarFilingCollectorTests
     }
 
     [Fact]
+    public async Task CollectAsync_EightKWithItems_WritesDiscreteItemsMetadataKey_LeavingTitleAndRawTextUnchanged()
+    {
+        const string url = "https://data.sec.gov/submissions/CIK0001049521.json";
+        var feed = Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000001"), MrcyId, "Mercury — SEC", url);
+
+        var acceptance = new DateTimeOffset(2026, 6, 2, 16, 30, 0, TimeSpan.Zero);
+        var reader = new FakeSecFilingReader
+        {
+            [url] = [Filing("8-K", "2026-06-02", "0001049521-26-000011", acceptance, items: "2.02,9.01")],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        // The strictly-additive discrete key carries the raw item codes for a clean 2.02 gate downstream.
+        Assert.Equal("2.02,9.01", item.Metadata["items"]);
+
+        // Title/RawText (the ContentHash inputs) are unchanged: the raw codes still surface in both exactly
+        // as before, so the metadata key does not perturb dedupe.
+        Assert.Equal(
+            "8-K — Report (2026-06-02) [items: 2.02,9.01] Items: Results of Operations and Financial Condition.",
+            item.Title);
+        Assert.Contains("8-K item codes: 2.02,9.01.", item.RawText);
+    }
+
+    [Fact]
+    public async Task CollectAsync_NonEightKForm_HasNoItemsMetadataKey()
+    {
+        const string url = "https://data.sec.gov/submissions/CIK.json";
+        var feed = Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000002"), MrcyId, "Mercury — SEC", url);
+
+        var reader = new FakeSecFilingReader
+        {
+            [url] = [Filing("10-Q", "2026-06-02", "acc-1", new DateTimeOffset(2026, 6, 2, 0, 0, 0, TimeSpan.Zero), items: null)],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        Assert.False(item.Metadata.ContainsKey("items"));
+    }
+
+    [Fact]
     public async Task CollectAsync_KnownItemCodes_ExpandToOfficialTitlesWhileKeepingRawCodes()
     {
         const string url = "https://data.sec.gov/submissions/CIK0001049521.json";

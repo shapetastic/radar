@@ -262,7 +262,86 @@ public sealed class ScoringEngineTests
 
         // Every new snapshot is stamped with the current scoring-generation constant (non-null), so the
         // report can gate cross-run comparability on it.
-        Assert.Equal("radar-scoring-config-v2", result.Snapshot.ScoringConfigVersion);
+        Assert.Equal("radar-scoring-config-v3", result.Snapshot.ScoringConfigVersion);
+    }
+
+    [Theory]
+    [InlineData(SignalDirection.Positive, true)]   // a beat lifts Trajectory above the 50 baseline
+    [InlineData(SignalDirection.Negative, false)]  // a miss lowers it below 50
+    public async Task DirectionalGuidanceChange_OverFilingEvidence_MovesTrajectory(
+        SignalDirection direction, bool aboveBaseline)
+    {
+        // Spec 75: a directional GuidanceChange (the AI earnings read) over Filing evidence moves
+        // Trajectory the right way under the real radar-formula-v2 — a beat up, a miss down.
+        var harness = new Harness(new RadarScoreFormulaV2());
+        var companyId = Guid.NewGuid();
+
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash(Guid.NewGuid().ToString("N"))
+            .WithSourceType(EvidenceSourceType.Filing)
+            .WithQuality(EvidenceQuality.High)
+            .Build();
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithType(SignalType.GuidanceChange)
+            .WithDirection(direction)
+            .WithStrength(6)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(WindowEnd.AddDays(-1))
+            .Build();
+
+        // The signal passes domain validation (all fields in range).
+        Assert.True(Radar.Domain.Validation.SignalValidation.IsValid(signal));
+
+        await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+        await harness.Signals.AddAsync(signal, CancellationToken.None);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        if (aboveBaseline)
+        {
+            Assert.True(result.Snapshot.TrajectoryScore > 50);
+        }
+        else
+        {
+            Assert.True(result.Snapshot.TrajectoryScore < 50);
+        }
+    }
+
+    [Fact]
+    public async Task NeutralGuidanceChangeOnly_LeavesTrajectoryAtBaseline()
+    {
+        // The deterministic Neutral GuidanceChange (spec 57) contributes 0 to Trajectory, so a window whose
+        // only signal is Neutral still scores the 50 baseline (coexistence with the directional read).
+        var harness = new Harness(new RadarScoreFormulaV2());
+        var companyId = Guid.NewGuid();
+
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash(Guid.NewGuid().ToString("N"))
+            .WithSourceType(EvidenceSourceType.Filing)
+            .WithQuality(EvidenceQuality.High)
+            .Build();
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithType(SignalType.GuidanceChange)
+            .WithDirection(SignalDirection.Neutral)
+            .WithStrength(3)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(WindowEnd.AddDays(-1))
+            .Build();
+
+        await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+        await harness.Signals.AddAsync(signal, CancellationToken.None);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.Equal(50, result.Snapshot.TrajectoryScore);
     }
 
     [Fact]

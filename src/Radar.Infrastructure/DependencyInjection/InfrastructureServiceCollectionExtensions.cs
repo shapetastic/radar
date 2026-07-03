@@ -450,6 +450,47 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the opt-in directional filing-signal source (<see cref="DirectionalFilingSignalSource"/>,
+    /// singleton) behind the Application <see cref="IDirectionalFilingSignalSource"/> seam. For an
+    /// in-window earnings 8-K (form 8-K + item 2.02) it composes the merged
+    /// <see cref="ISecEarningsReleaseReader"/> (EX-99.1 body) and <see cref="IFilingAnalyzer"/> (typed
+    /// directional read) into at most one confidence-gated directional <c>GuidanceChange</c> signal
+    /// (Improving -&gt; Positive, Deteriorating -&gt; Negative). It depends on the reader and analyzer, so
+    /// call this only inside the same opt-in gate as (and after) <see cref="AddSecEarningsReleaseReader"/>
+    /// and <see cref="AddRadarFilingAnalyzer"/>; it does NOT register either of those here. All HTTP/AI
+    /// specifics stay behind the injected interfaces (AD-5).
+    /// <para>
+    /// Fails fast when <paramref name="options"/> is null, when
+    /// <see cref="DirectionalFilingSignalOptions.MinConfidence"/> is outside [0,1], or when
+    /// <see cref="DirectionalFilingSignalOptions.MaxFilingsPerRun"/> is zero/negative: each is a
+    /// configuration error that would otherwise gate every read to nothing or surface as an opaque failure.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddDirectionalFilingSignals(
+        this IServiceCollection services, DirectionalFilingSignalOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.MinConfidence is < 0m or > 1m)
+        {
+            throw new InvalidOperationException(
+                "Radar directional filing signals require a confidence gate in [0,1]; configure "
+                    + "Radar:Ai:MinConfidence (default 0.6) — a value outside [0,1] can never gate a signal.");
+        }
+
+        if (options.MaxFilingsPerRun <= 0)
+        {
+            throw new InvalidOperationException(
+                "Radar directional filing signals require a positive per-run cap; configure "
+                    + "Radar:Ai:MaxFilingsPerRun (default 5) — a zero/negative value analyzes nothing while still running.");
+        }
+
+        services.AddSingleton(options);
+        services.AddSingleton<IDirectionalFilingSignalSource, DirectionalFilingSignalSource>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the local-file company watch-universe seed source and the idempotent seeder. The seed file
     /// at <paramref name="filePath"/> defines the companies/aliases that entity resolution can match
     /// against. Safe to invoke the seeder on every startup (upsert-by-Id, AD-1).

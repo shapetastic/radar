@@ -1,0 +1,64 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+using Radar.Application.Filings;
+using Radar.Infrastructure.Ai;
+using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.Filings;
+using Radar.Infrastructure.Sec;
+
+namespace Radar.Infrastructure.Tests.Filings;
+
+public sealed class AddDirectionalFilingSignalsTests
+{
+    [Fact]
+    public void AddDirectionalFilingSignals_ComposesAgainstReaderAndAnalyzer_ResolvesSource()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        using var provider = services
+            .AddRadarAi(new AiClientOptions
+            {
+                Provider = "ollama",
+                Model = "llama3.1",
+                OllamaEndpoint = "http://localhost:11434",
+            })
+            .AddRadarFilingAnalyzer(new FilingAnalyzerOptions { MaxInputLength = 12000 })
+            .AddSecEarningsReleaseReader(new SecCollectorOptions { UserAgent = "Radar Research test@example.com" })
+            .AddDirectionalFilingSignals(new DirectionalFilingSignalOptions())
+            .BuildServiceProvider();
+
+        Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+    }
+
+    [Theory]
+    [InlineData(-0.1)]
+    [InlineData(1.1)]
+    public void AddDirectionalFilingSignals_MinConfidenceOutOfRange_FailsFast(double minConfidence)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddDirectionalFilingSignals(
+                new DirectionalFilingSignalOptions { MinConfidence = (decimal)minConfidence }));
+
+        Assert.Contains("Radar:Ai:MinConfidence", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void AddDirectionalFilingSignals_NonPositiveMaxFilingsPerRun_FailsFast(int maxFilingsPerRun)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddDirectionalFilingSignals(
+                new DirectionalFilingSignalOptions { MaxFilingsPerRun = maxFilingsPerRun }));
+
+        Assert.Contains("Radar:Ai:MaxFilingsPerRun", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddDirectionalFilingSignals_NullOptions_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => new ServiceCollection().AddDirectionalFilingSignals(null!));
+    }
+}
