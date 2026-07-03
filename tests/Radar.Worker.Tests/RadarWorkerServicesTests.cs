@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Radar.Application.Ai;
 using Radar.Application.Collectors;
+using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
@@ -197,6 +198,7 @@ public sealed class RadarWorkerServicesTests
 
         Assert.Null(provider.GetService<IChatClientFactory>());
         Assert.Null(provider.GetService<IChatClient>());
+        Assert.Null(provider.GetService<IFilingAnalyzer>());
     }
 
     [Fact]
@@ -208,6 +210,7 @@ public sealed class RadarWorkerServicesTests
 
         Assert.NotNull(provider.GetService<IChatClientFactory>());
         Assert.NotNull(provider.GetService<IChatClient>());
+        Assert.NotNull(provider.GetService<IFilingAnalyzer>());
     }
 
     [Fact]

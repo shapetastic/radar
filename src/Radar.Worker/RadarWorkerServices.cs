@@ -3,6 +3,7 @@ using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.UsaSpending;
@@ -133,6 +134,10 @@ internal static class RadarWorkerServices
                 AnthropicApiKey = options.Ai.Anthropic.ApiKey,
                 OllamaEndpoint = options.Ai.Ollama.Endpoint,
             });
+
+            // The filing analyzer rides the same opt-in gate: it consumes the IChatClient AddRadarAi just
+            // registered, so it is only wired when a provider is configured. Blank Provider = neither runs.
+            services.AddRadarFilingAnalyzer(new FilingAnalyzerOptions { MaxInputLength = options.Ai.MaxInputLength });
         }
 
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);

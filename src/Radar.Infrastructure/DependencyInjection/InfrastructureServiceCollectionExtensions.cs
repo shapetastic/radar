@@ -6,6 +6,7 @@ using Radar.Application.Ai;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
+using Radar.Application.Filings;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
@@ -13,6 +14,7 @@ using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
 using Radar.Infrastructure.Ai;
+using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -411,6 +413,39 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton(options);
         services.AddSingleton<IChatClientFactory, ChatClientFactory>();
         services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<IChatClientFactory>().Create());
+        return services;
+    }
+
+    /// <summary>
+    /// Registers Radar's first real AI capability: the config-selected <see cref="IChatClient"/>-backed
+    /// <see cref="IFilingAnalyzer"/> (<see cref="ChatFilingAnalyzer"/>, singleton), which turns an earnings-release
+    /// plain text (spec 73) into a typed, validated <see cref="Radar.Domain.Filings.FilingSentiment"/> — a
+    /// directional read AS REPORTED (improving vs deteriorating trajectory), never advice. It does NOT register an
+    /// <see cref="IChatClient"/>: it depends on the singleton client that <see cref="AddRadarAi"/> already
+    /// registered, so call this only after (and inside the same opt-in gate as) <see cref="AddRadarAi"/>. All
+    /// model-calling code stays in Infrastructure and uses only <c>Microsoft.Extensions.AI</c> abstractions (AD-5).
+    /// <para>
+    /// Fails fast when <paramref name="options"/> is null, or when
+    /// <see cref="FilingAnalyzerOptions.MaxInputLength"/> is zero/negative: a non-positive cap would truncate
+    /// every release to nothing (or throw at the substring), so it is treated as a configuration error rather
+    /// than surfacing as an opaque failure at first use.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarFilingAnalyzer(
+        this IServiceCollection services, FilingAnalyzerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.MaxInputLength <= 0)
+        {
+            throw new InvalidOperationException(
+                "Radar AI filing analyzer requires a positive input cap; configure Radar:Ai:MaxInputLength "
+                    + "to a positive character count (default 12000) — a zero/negative value would truncate every "
+                    + "earnings release to nothing.");
+        }
+
+        services.AddSingleton(options);
+        services.AddSingleton<IFilingAnalyzer, ChatFilingAnalyzer>();
         return services;
     }
 
