@@ -1,6 +1,7 @@
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Sec;
@@ -118,6 +119,20 @@ internal static class RadarWorkerServices
                 throw new InvalidOperationException(
                     $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", and \"news\".");
             }
+        }
+
+        // Wire the AI chat-client seam ONLY when a provider is configured (opt-in gate). AI is not a collector,
+        // so it is gated on Provider presence rather than the Collectors list. A blank Provider (the default)
+        // leaves the graph byte-for-byte identical to today — no IChatClient/IChatClientFactory is registered.
+        if (!string.IsNullOrWhiteSpace(options.Ai.Provider))
+        {
+            services.AddRadarAi(new AiClientOptions
+            {
+                Provider = options.Ai.Provider,
+                Model = options.Ai.Model,
+                AnthropicApiKey = options.Ai.Anthropic.ApiKey,
+                OllamaEndpoint = options.Ai.Ollama.Endpoint,
+            });
         }
 
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);

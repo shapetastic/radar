@@ -26,6 +26,13 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public GdeltWorkerOptions Gdelt { get; init; } = new();
 
+    /// <summary>
+    /// AI chat-client seam configuration (bound from "Radar:Ai"). A blank <see cref="AiWorkerOptions.Provider"/>
+    /// (the default) means AI is DISABLED — no <c>IChatClient</c> is wired and no provider packages load — so the
+    /// default configuration surfaces no AI. Only read when a provider is configured.
+    /// </summary>
+    public AiWorkerOptions Ai { get; init; } = new();
+
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
 
@@ -137,4 +144,39 @@ public sealed class GdeltWorkerOptions
 
     /// <summary>Base cool-down before the first 429 retry, in seconds; the reader doubles it per retry. Defaults to 60 (→ 60s/120s).</summary>
     public int RetryBackoffSeconds { get; init; } = 60;
+}
+
+/// <summary>
+/// AI chat-client seam configuration (bound from "Radar:Ai"). Surfaces the provider selection and model id plus the
+/// nested <see cref="AiAnthropicWorkerOptions"/> / <see cref="AiOllamaWorkerOptions"/> config blocks through to
+/// <c>AiClientOptions</c>. A blank <see cref="Provider"/> (the default) means AI is DISABLED — nothing is wired and
+/// no provider packages load — so the default rss-only configuration keeps working with no AI config.
+/// </summary>
+public sealed class AiWorkerOptions
+{
+    /// <summary>The AI provider: "anthropic" (hosted Claude) or "ollama" (local, keyless). Blank by default = AI DISABLED.</summary>
+    public string Provider { get; init; } = string.Empty;
+
+    /// <summary>The model id (e.g. "claude-opus-4-8" for anthropic or an Ollama tag like "llama3.1"). Required when a provider is set.</summary>
+    public string Model { get; init; } = string.Empty;
+
+    /// <summary>Anthropic (hosted) provider config. Only read when Provider is "anthropic".</summary>
+    public AiAnthropicWorkerOptions Anthropic { get; init; } = new();
+
+    /// <summary>Ollama (local, keyless) provider config. Only read when Provider is "ollama".</summary>
+    public AiOllamaWorkerOptions Ollama { get; init; } = new();
+}
+
+/// <summary>Anthropic (hosted) provider config (bound from "Radar:Ai:Anthropic").</summary>
+public sealed class AiAnthropicWorkerOptions
+{
+    /// <summary>The Anthropic API key. Required when Provider is "anthropic". Defaults to empty.</summary>
+    public string ApiKey { get; init; } = string.Empty;
+}
+
+/// <summary>Ollama (local, keyless) provider config (bound from "Radar:Ai:Ollama").</summary>
+public sealed class AiOllamaWorkerOptions
+{
+    /// <summary>The Ollama base URL. Only used when Provider is "ollama". Defaults to http://localhost:11434.</summary>
+    public string Endpoint { get; init; } = "http://localhost:11434";
 }

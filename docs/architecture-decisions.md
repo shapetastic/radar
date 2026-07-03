@@ -255,3 +255,35 @@ Cross-reference AD-6 (formula versioning) and spec 69 (the stamp and its compara
 
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
 by spec 70).
+
+---
+
+## AD-11 — AI capability seam: a config-driven `IChatClient` factory, provider SDKs Infrastructure-only, opt-in
+
+**Decision (proposed for maintainer approval — spec 72).** Radar's AI capability is introduced as a **seam**,
+not a behaviour:
+
+- **`IChatClient` (`Microsoft.Extensions.AI`) is Radar's single AI abstraction.** Every future AI consumer codes
+  against `IChatClient` (and the typed `GetResponseAsync<T>` structured-output extension in later slices), never
+  against a provider SDK. The seam is exposed through `Radar.Application.Ai.IChatClientFactory` (`IChatClient Create()`)
+  — Application depends only on the `Microsoft.Extensions.AI` abstraction family (permitted by AD-5).
+- **Config-driven provider selection.** `Radar:Ai:Provider` (case-insensitive) selects the provider at startup, with
+  **Anthropic** (hosted Claude) and **Ollama** (local, keyless) as the initial providers. `ChatClientFactory`
+  (Infrastructure) switches on the provider and news up the concrete client; `AddRadarAi` fails fast with clear
+  `Radar:Ai:*` messages on blank/unknown provider, blank model, `anthropic` with a blank key, and `ollama` with a
+  blank/non-absolute-URI endpoint. Both the factory and a factory-produced singleton `IChatClient` are registered
+  (plain `AddSingleton`; the provider SDKs manage their own HTTP transport, so no named `HttpClient`).
+- **Provider SDKs are confined to `Radar.Infrastructure`.** `Anthropic` and `OllamaSharp` are referenced **only**
+  inside `ChatClientFactory` — no provider SDK type leaks to Application/Domain/Worker (materialises AD-5's
+  `Microsoft.Extensions.AI` clause and its "concrete provider SDKs stay in Infrastructure" rule into a concrete seam).
+- **AI is opt-in.** A blank `Radar:Ai:Provider` (the default) means **AI is DISABLED** — `AddRadarAi` is not called,
+  no `IChatClientFactory`/`IChatClient` is registered, and no provider packages load at runtime. The default pipeline
+  is byte-for-byte unchanged.
+
+**Why.** `IChatClient` is the universal abstraction later AI slices (the directional filing-signal arc) will depend on.
+Introducing the seam standalone — with no consumer, no prompt, no `GetResponseAsync` call — lets those slices build on
+a stable, tested, provider-neutral interface instead of re-litigating provider wiring inside a feature, while keeping
+concrete providers behind the AD-5 boundary and leaving existing runs untouched.
+
+**Status.** Proposed · 2026-07-03 (spec 72; cross-references AD-5). No consumer exists yet — this records the seam
+and its rules for the AI slices that follow.
