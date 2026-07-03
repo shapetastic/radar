@@ -1,6 +1,8 @@
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Radar.Application.Abstractions.Persistence;
+using Radar.Application.Ai;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
@@ -10,6 +12,7 @@ using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
+using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -292,6 +295,64 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, GdeltNewsCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers Radar's config-driven AI chat-client seam: the <see cref="IChatClientFactory"/> (singleton) and a
+    /// factory-produced singleton provider-neutral <see cref="IChatClient"/>, so future consumers can inject either.
+    /// The provider is fixed at startup by <see cref="AiClientOptions.Provider"/> (case-insensitive) — <c>"anthropic"</c>
+    /// (hosted) or <c>"ollama"</c> (local, keyless). All concrete provider SDK types stay in Infrastructure (AD-5).
+    /// Uses plain <c>AddSingleton</c> — the provider SDKs manage their own HTTP transport, so no named <c>HttpClient</c>
+    /// is wired. There is no consumer of the client yet; this only proves a config-selected client can be obtained.
+    /// <para>
+    /// Fails fast when <see cref="AiClientOptions.Provider"/> is blank or unknown, when <see cref="AiClientOptions.Model"/>
+    /// is blank, when the <c>anthropic</c> provider has a blank <see cref="AiClientOptions.AnthropicApiKey"/>, or when the
+    /// <c>ollama</c> provider has a blank or non-absolute-URI <see cref="AiClientOptions.OllamaEndpoint"/>: each of those is
+    /// a configuration error that would otherwise surface as an opaque failure at first use. The provider is validated
+    /// first so a blank provider yields the provider message, not a spurious key/endpoint message.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarAi(
+        this IServiceCollection services, AiClientOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var provider = options.Provider?.Trim() ?? string.Empty;
+        var isAnthropic = string.Equals(provider, "anthropic", StringComparison.OrdinalIgnoreCase);
+        var isOllama = string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase);
+
+        if (!isAnthropic && !isOllama)
+        {
+            throw new InvalidOperationException(
+                "Radar AI requires a supported provider; configure Radar:Ai:Provider to \"anthropic\" (hosted) or "
+                    + "\"ollama\" (local, keyless) — a blank/unknown value has no client to build.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.Model))
+        {
+            throw new InvalidOperationException(
+                "Radar AI requires a model id; configure Radar:Ai:Model (e.g. \"claude-opus-4-8\" for anthropic or "
+                    + "an installed tag like \"llama3.1\" for ollama) — a blank value has no model to call.");
+        }
+
+        if (isAnthropic && string.IsNullOrWhiteSpace(options.AnthropicApiKey))
+        {
+            throw new InvalidOperationException(
+                "Radar AI \"anthropic\" is a hosted provider and requires an API key; configure Radar:Ai:Anthropic:ApiKey "
+                    + "before selecting the anthropic provider — every request fails without it.");
+        }
+
+        if (isOllama && !Uri.TryCreate(options.OllamaEndpoint, UriKind.Absolute, out _))
+        {
+            throw new InvalidOperationException(
+                "Radar AI \"ollama\" requires an absolute endpoint URI; configure Radar:Ai:Ollama:Endpoint "
+                    + "(default http://localhost:11434) — a blank or relative value cannot address the local Ollama server.");
+        }
+
+        services.AddSingleton(options);
+        services.AddSingleton<IChatClientFactory, ChatClientFactory>();
+        services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<IChatClientFactory>().Create());
         return services;
     }
 

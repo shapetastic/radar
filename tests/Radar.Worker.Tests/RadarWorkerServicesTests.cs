@@ -1,6 +1,8 @@
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Radar.Application.Ai;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -185,6 +187,28 @@ public sealed class RadarWorkerServicesTests
     // cannot express a non-null empty list — omitting the key yields the ["rss"] default, not an empty
     // list. The unknown-kind test above covers the sibling fail-fast branch, and the default/single/two/
     // duplicate tests cover the additive enablement paths.
+
+    [Fact]
+    public void DefaultConfig_RegistersNoAiClient_AiDisabled()
+    {
+        // A blank Radar:Ai:Provider (the default) means AI is opt-in disabled: the graph must register
+        // neither the factory nor the client, so the default pipeline is byte-for-byte unchanged.
+        using var provider = BuildProvider();
+
+        Assert.Null(provider.GetService<IChatClientFactory>());
+        Assert.Null(provider.GetService<IChatClient>());
+    }
+
+    [Fact]
+    public void AiProviderOllama_RegistersFactoryAndClient_OptInGateFlips()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"));
+
+        Assert.NotNull(provider.GetService<IChatClientFactory>());
+        Assert.NotNull(provider.GetService<IChatClient>());
+    }
 
     [Fact]
     public void Configuration_GenerateReportFalse_FlowsThroughToPipelineOptions()
