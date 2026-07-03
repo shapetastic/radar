@@ -165,6 +165,13 @@ public sealed class AiWorkerOptions
 
     /// <summary>Ollama (local, keyless) provider config. Only read when Provider is "ollama".</summary>
     public AiOllamaWorkerOptions Ollama { get; init; } = new();
+
+    /// <summary>
+    /// Maximum earnings-release characters sent to the filing analyzer (token/latency control). The analyzer
+    /// truncates the release to this leading-substring length before calling the model. Only read when a
+    /// provider is configured. Defaults to 12000.
+    /// </summary>
+    public int MaxInputLength { get; init; } = 12000;
 }
 
 /// <summary>Anthropic (hosted) provider config (bound from "Radar:Ai:Anthropic").</summary>
