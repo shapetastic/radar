@@ -73,80 +73,90 @@ public sealed class FileSignalStore : ISignalFileStore
         Guid companyId, DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc, CancellationToken ct)
     {
         // WriteAsync stores each signal date-partitioned at {RootDirectory}/{yyyy}/{MM}/{signalId}.json
-        // (by ObservedAtUtc), NOT grouped by company — so there is no per-company directory to open.
-        // Enumerate the whole tree recursively and filter by the persisted CompanyId instead.
+        // (by ObservedAtUtc), NOT grouped by company. Rather than scan the whole tree on every
+        // per-company read (scoring calls this once per company, so a full-tree scan would be
+        // O(companies × totalSignalFiles) and degrade as the store grows), open only the year/month
+        // directories the requested window can touch and filter those files by the persisted CompanyId.
+        // Files are streamed rather than materialised into a list so cancellation stays responsive.
         if (!Directory.Exists(_options.RootDirectory))
         {
             return Array.Empty<Signal>();
         }
 
-        List<string> files;
-        try
-        {
-            files = Directory
-                .EnumerateFiles(_options.RootDirectory, "*.json", SearchOption.AllDirectories)
-                .ToList();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to enumerate signal files in '{RootDirectory}'; returning no previous-window signals.",
-                _options.RootDirectory);
-            return Array.Empty<Signal>();
-        }
-
         var matches = new List<Signal>();
-        foreach (var file in files)
+        foreach (var monthDirectory in EnumerateWindowMonthDirectories(startExclusiveUtc, endInclusiveUtc))
         {
-            ct.ThrowIfCancellationRequested();
+            if (!Directory.Exists(monthDirectory))
+            {
+                continue;
+            }
 
             try
             {
-                var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
-                var parsed = JsonSerializer.Deserialize<SignalFile>(text, RadarFileStoreJson.Options);
-                if (parsed is null)
+                // Files live directly under {yyyy}/{MM}/, so a top-directory enumeration suffices.
+                foreach (var file in Directory.EnumerateFiles(monthDirectory, "*.json", SearchOption.TopDirectoryOnly))
                 {
-                    // A JSON literal `null` deserializes to a null record — treat it as a malformed
-                    // entry so operators can spot corrupted signal files.
-                    _logger.LogWarning("Signal file '{File}' contained a null signal; skipping.", file);
-                    continue;
-                }
+                    ct.ThrowIfCancellationRequested();
 
-                // Approved-only + in the (startExclusive, endInclusive] window for this company. The shared
-                // boundary (AD-6): a signal exactly at endInclusiveUtc (== the current window's start)
-                // belongs to THIS previous window and is never double-counted against the current window.
-                if (parsed.CompanyId != companyId
-                    || parsed.ReviewStatus != SignalReviewStatus.Approved
-                    || parsed.ObservedAt <= startExclusiveUtc
-                    || parsed.ObservedAt > endInclusiveUtc)
-                {
-                    continue;
-                }
+                    try
+                    {
+                        var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+                        var parsed = JsonSerializer.Deserialize<SignalFile>(text, RadarFileStoreJson.Options);
+                        if (parsed is null)
+                        {
+                            // A JSON literal `null` deserializes to a null record — treat it as a malformed
+                            // entry so operators can spot corrupted signal files.
+                            _logger.LogWarning("Signal file '{File}' contained a null signal; skipping.", file);
+                            continue;
+                        }
 
-                // Reconstruct the full Signal from the persisted fields. Evidence / ScoreEvidenceLinks are
-                // intentionally NOT rehydrated: this is the activity-only previous window for velocity
-                // (Strength magnitude), NOT dropped provenance — AD-6 says it carries none by design.
-                matches.Add(new Signal(
-                    Id: parsed.SignalId,
-                    EvidenceId: parsed.EvidenceId,
-                    CompanyId: parsed.CompanyId,
-                    CompanyMention: parsed.CompanyMention,
-                    Type: parsed.Type,
-                    Direction: parsed.Direction,
-                    Strength: parsed.Strength,
-                    Novelty: parsed.Novelty,
-                    Confidence: parsed.Confidence,
-                    SupportingExcerpt: parsed.SupportingExcerpt,
-                    Reason: parsed.Reason,
-                    ReviewStatus: parsed.ReviewStatus,
-                    ObservedAtUtc: parsed.ObservedAt,
-                    CreatedAtUtc: parsed.CreatedAt));
+                        // Approved-only + in the (startExclusive, endInclusive] window for this company. The
+                        // shared boundary (AD-6): a signal exactly at endInclusiveUtc (== the current window's
+                        // start) belongs to THIS previous window and is never double-counted against the
+                        // current window.
+                        if (parsed.CompanyId != companyId
+                            || parsed.ReviewStatus != SignalReviewStatus.Approved
+                            || parsed.ObservedAt <= startExclusiveUtc
+                            || parsed.ObservedAt > endInclusiveUtc)
+                        {
+                            continue;
+                        }
+
+                        // Reconstruct the full Signal from the persisted fields. Evidence / ScoreEvidenceLinks
+                        // are intentionally NOT rehydrated: this is the activity-only previous window for
+                        // velocity (Strength magnitude), NOT dropped provenance — AD-6 says it carries none.
+                        matches.Add(new Signal(
+                            Id: parsed.SignalId,
+                            EvidenceId: parsed.EvidenceId,
+                            CompanyId: parsed.CompanyId,
+                            CompanyMention: parsed.CompanyMention,
+                            Type: parsed.Type,
+                            Direction: parsed.Direction,
+                            Strength: parsed.Strength,
+                            Novelty: parsed.Novelty,
+                            Confidence: parsed.Confidence,
+                            SupportingExcerpt: parsed.SupportingExcerpt,
+                            Reason: parsed.Reason,
+                            ReviewStatus: parsed.ReviewStatus,
+                            ObservedAtUtc: parsed.ObservedAt,
+                            CreatedAtUtc: parsed.CreatedAt));
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+                    {
+                        // One unreadable/malformed signal file must not break the whole read.
+                        _logger.LogWarning(ex, "Failed to read signal file '{File}'; skipping.", file);
+                    }
+                }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // One unreadable/malformed signal file must not break the whole read.
-                _logger.LogWarning(ex, "Failed to read signal file '{File}'; skipping.", file);
+                // Enumeration of one month directory failed (thrown lazily during iteration); skip that
+                // month rather than abandoning the whole read. OperationCanceledException is not caught
+                // here, so cancellation still propagates.
+                _logger.LogWarning(
+                    ex,
+                    "Failed to enumerate signal files in '{MonthDirectory}'; skipping that month.",
+                    monthDirectory);
             }
         }
 
@@ -155,6 +165,37 @@ public sealed class FileSignalStore : ISignalFileStore
             .OrderBy(s => s.ObservedAtUtc)
             .ThenBy(s => s.Id)
             .ToList();
+    }
+
+    /// <summary>
+    /// Yields the <c>{RootDirectory}/{yyyy}/{MM}</c> partition directories that the
+    /// <c>(startExclusiveUtc, endInclusiveUtc]</c> window can contain signals for — every month from the
+    /// start bound's month through the end bound's month, inclusive. The start bound is exclusive, but a
+    /// signal later in that same month is still in-window, so its month is still scanned. Bounding the
+    /// scan to the window (typically one or two months) keeps each per-company read from touching files
+    /// that cannot possibly match.
+    /// </summary>
+    private IEnumerable<string> EnumerateWindowMonthDirectories(
+        DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc)
+    {
+        // Partition names come from the persisted ObservedAtUtc, so compare in UTC.
+        var startUtc = startExclusiveUtc.ToUniversalTime();
+        var endUtc = endInclusiveUtc.ToUniversalTime();
+        if (endUtc < startUtc)
+        {
+            yield break;
+        }
+
+        var cursor = new DateTime(startUtc.Year, startUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var last = new DateTime(endUtc.Year, endUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        while (cursor <= last)
+        {
+            yield return Path.Combine(
+                _options.RootDirectory,
+                cursor.ToString("yyyy", CultureInfo.InvariantCulture),
+                cursor.ToString("MM", CultureInfo.InvariantCulture));
+            cursor = cursor.AddMonths(1);
+        }
     }
 
     private static string Serialize(Signal signal, SignalReview review)

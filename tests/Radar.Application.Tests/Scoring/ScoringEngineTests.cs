@@ -108,6 +108,7 @@ public sealed class ScoringEngineTests
             DateTimeOffset endInclusiveUtc,
             CancellationToken ct)
         {
+            ct.ThrowIfCancellationRequested();
             IReadOnlyList<Signal> result = _signals
                 .Where(s => s.CompanyId == companyId)
                 .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)

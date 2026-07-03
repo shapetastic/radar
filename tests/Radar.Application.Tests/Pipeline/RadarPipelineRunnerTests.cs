@@ -168,6 +168,7 @@ public sealed class RadarPipelineRunnerTests
             DateTimeOffset endInclusiveUtc,
             CancellationToken ct)
         {
+            ct.ThrowIfCancellationRequested();
             IReadOnlyList<Signal> result = Written
                 .Select(w => w.Signal)
                 .Where(s => s.CompanyId == companyId)

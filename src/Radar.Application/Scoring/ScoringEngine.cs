@@ -114,8 +114,10 @@ public sealed class ScoringEngine : IScoringEngine
 
         // The immediately-preceding window of the same length, now sourced from the ON-DISK signal store
         // (cross-run) rather than the in-memory repo — the in-memory repo starts empty every process and
-        // holds only THIS run's signals, so slicing the previous window from it made velocity read a steady
-        // 50 across separate runs. It is carried as activity-only input for velocity measurement:
+        // holds only THIS run's signals, so slicing the previous window from it left previous-window
+        // activity at 0 on every fresh run. Velocity then collapsed to its no-previous behaviour: exactly
+        // 50 only on a quiet current window, and above 50 whenever the current window had any activity.
+        // It is carried as activity-only input for velocity measurement:
         //   * window rule: ObservedAtUtc in (previousWindowStartUtc, windowStartUtc] — note the shared
         //     boundary with the current window means a signal exactly at windowStartUtc belongs here (AD-6);
         //   * review rule: same Approved-only filter as the current window.
