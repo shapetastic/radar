@@ -242,6 +242,56 @@ public sealed class RadarScoreFormulaV2Tests
     }
 
     [Fact]
+    public void Attention_DistinctPublisherSourceNames_RaiseBreadth_SameMediaCount()
+    {
+        // Spec 84: once the collector maps SourceName to the real outlet, distinct-publisher breadth becomes
+        // real. Three signals with THREE distinct third-party SourceNames outscore three signals sharing ONE
+        // SourceName. mediaCount (RadarScoreFormulaV2 counts SignalType.MediaAttention, not set size) is 0 in
+        // both because BuildSignal defaults to the non-media CustomerWin type, so reach moves on breadth alone.
+        var formula = new RadarScoreFormulaV2();
+
+        var oneOutlet = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Reuters"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Reuters"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Reuters"),
+        }));
+
+        var threeOutlets = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Reuters"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Yahoo Finance"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "MarketBeat"),
+        }));
+
+        Assert.True(threeOutlets.Components.AttentionScore > oneOutlet.Components.AttentionScore);
+    }
+
+    [Fact]
+    public void Attention_RepeatedSamePublisher_DoesNotInflateBreadth()
+    {
+        // Regression lock the fix relies on for outlet-dedupe: three NewsArticle items sharing one SourceName
+        // deliver the same breadth as a single one (the formula's existing Distinct(SourceName)). mediaCount
+        // (RadarScoreFormulaV2 counts SignalType.MediaAttention) stays 0 in both because BuildSignal defaults to
+        // the non-media CustomerWin type — not overridden here — so breadth is isolated.
+        var formula = new RadarScoreFormulaV2();
+
+        var one = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Reuters"),
+        }));
+
+        var threeSameOutlet = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Reuters"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Reuters"),
+            BuildSignal(sourceType: EvidenceSourceType.NewsArticle, sourceName: "Reuters"),
+        }));
+
+        Assert.Equal(one.Components.AttentionScore, threeSameOutlet.Components.AttentionScore);
+    }
+
+    [Fact]
     public void EvidenceConfidence_RewardsQualityAndDiversity()
     {
         var formula = new RadarScoreFormulaV2();
