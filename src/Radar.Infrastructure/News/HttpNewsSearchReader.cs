@@ -35,8 +35,10 @@ namespace Radar.Infrastructure.News;
 /// </summary>
 internal sealed class HttpNewsSearchReader : INewsSearchReader
 {
-    private const string EndpointTemplate =
-        "https://news.google.com/rss/search?q={0}&hl=en-US&gl=US&ceid=US:en";
+    // Single source of truth for the endpoint. The English/US locale params are appended only when the query
+    // asks for English-only coverage (see BuildRequestUri) — do NOT bake them into the base template.
+    private const string SearchEndpointTemplate = "https://news.google.com/rss/search?q={0}";
+    private const string EnglishUsLocaleParams = "&hl=en-US&gl=US&ceid=US:en";
     private const string TitleSuffixSeparator = " - ";
     private const int MinRecords = 1;
     private const int MaxRecords = 100;
@@ -114,13 +116,20 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
 
     /// <summary>
     /// Builds the Google News RSS search GET URL: the phrase is trimmed and URL-encoded into the <c>q=</c>
-    /// parameter; the <c>hl=en-US&amp;gl=US&amp;ceid=US:en</c> locale params (already in the template) pin
-    /// English/US coverage, so <see cref="NewsSearchQuery.EnglishOnly"/> needs no extra term.
+    /// parameter; when <see cref="NewsSearchQuery.EnglishOnly"/> is set the <c>hl=en-US&amp;gl=US&amp;ceid=US:en</c>
+    /// locale params are appended to pin English/US coverage (mirroring how the GDELT reader honors its own
+    /// <c>EnglishOnly</c> flag). When it is clear the params are omitted, so Google News applies its default
+    /// locale rather than the flag silently doing nothing.
     /// </summary>
     private static Uri BuildRequestUri(NewsSearchQuery query)
     {
         var phrase = Uri.EscapeDataString(query.QueryPhrase.Trim());
-        var url = string.Format(CultureInfo.InvariantCulture, EndpointTemplate, phrase);
+        var url = string.Format(CultureInfo.InvariantCulture, SearchEndpointTemplate, phrase);
+        if (query.EnglishOnly)
+        {
+            url += EnglishUsLocaleParams;
+        }
+
         return new Uri(url);
     }
 

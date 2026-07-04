@@ -244,6 +244,41 @@ public sealed class HttpNewsSearchReaderTests
             () => reader.ReadAsync(Query, cts.Token));
     }
 
+    [Fact]
+    public async Task ReadAsync_EnglishOnly_TogglesLocaleParamsOnTheRequestUrl()
+    {
+        // EnglishOnly=true appends the en-US locale params; EnglishOnly=false omits them (the flag is honored,
+        // not silently ignored). The query phrase is always URL-encoded into q=.
+        var handler = new CapturingHandler(HttpStatusCode.OK, ValidFeed);
+        var reader = CreateReader(handler);
+
+        await reader.ReadAsync(Query with { EnglishOnly = true }, CancellationToken.None);
+        Assert.NotNull(handler.LastRequestUri);
+        Assert.Contains("q=Rocket%20Lab", handler.LastRequestUri!.Query, StringComparison.Ordinal);
+        Assert.Contains("hl=en-US&gl=US&ceid=US:en", handler.LastRequestUri.Query, StringComparison.Ordinal);
+
+        await reader.ReadAsync(Query with { EnglishOnly = false }, CancellationToken.None);
+        Assert.NotNull(handler.LastRequestUri);
+        Assert.Contains("q=Rocket%20Lab", handler.LastRequestUri!.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("hl=en-US", handler.LastRequestUri.Query, StringComparison.Ordinal);
+    }
+
+    private sealed class CapturingHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        public Uri? LastRequestUri { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastRequestUri = request.RequestUri;
+            var response = new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/xml"),
+            };
+            return Task.FromResult(response);
+        }
+    }
+
     private sealed class StubHandler(HttpStatusCode status, string body) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
