@@ -204,6 +204,17 @@ Do not hand back broken code.
   Application + Infrastructure. Nothing references Worker.
 - **No provider SDK leakage.** No class outside `Radar.Infrastructure` may call a specific
   AI provider SDK directly. Use provider-independent application interfaces.
+- **Reuse over copy — extract shared primitives, do not paste a second copy.** When a slice
+  needs a helper/primitive that a sibling reader/collector/store already has (a feed-token
+  parser, a URL/HTTP builder, a company-hint/quality mapper, JSON/file scaffolding, etc.),
+  **extract it into a shared type and route both call sites through it** — do not copy it. The
+  established shared homes: `Radar.Infrastructure.Sources` (e.g. `CollectorCompanyHints`,
+  `QueryFeedTarget`), the SEC helpers `SecEdgarUrls`/`SecHttpFetch`, `EvidenceMetadata`,
+  `RadarFileStoreJson`, `GracefulFileWriter`. Duplicated primitives silently drift (only one
+  copy gets the next fix), and the `radar-architecture-reviewer` has flagged exactly this as a
+  recurring MEDIUM (specs 76, 77, 83). Keep genuinely per-source behaviour (e.g. a title-suffix
+  strip that applies to one source only) as an explicit per-caller hook rather than forcing it
+  into the shared type — share the common core, not the divergent edges.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,
