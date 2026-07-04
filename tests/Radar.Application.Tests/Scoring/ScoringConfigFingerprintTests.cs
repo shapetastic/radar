@@ -62,11 +62,13 @@ public sealed class ScoringConfigFingerprintTests
     public void Compute_DefaultConfig_MatchesPinnedFingerprint()
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight or
-        // default-tier drift is caught (the automatic AD-10 replacement for the hand-bumped constant).
+        // default-tier drift is caught (the automatic AD-10 replacement for the hand-bumped constant). This value
+        // is the automatic AD-10 re-stamp for the spec-90 attention tier recalibration (unknown 0.5→0.25, mill
+        // denylist expanded, domain-form key normalization) — all feed DefaultTierDescriptor().
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor());
 
-        Assert.Equal("radar-scoring-fp-7dcf0bea7b8f", fp);
+        Assert.Equal("radar-scoring-fp-c1e71b26adf3", fp);
     }
 
     [Fact]
