@@ -342,6 +342,21 @@ identical; only the *identity* changes (`v4` → `v5`) to mark the structural ch
   ledger: because the stamp is derived, the "bump" obligation is discharged by derivation — the remaining human
   obligation is only to bump `_formula.Version` (structure) when the *shape* changes (AD-6). Mark **Proposed
   pending maintainer sign-off**; update AD-10's Status line accordingly. Cross-reference AD-6, AD-3, spec 69.
+- **CLAUDE.md update (REQUIRED — this is an architecture change, per the spec-implementation checklist item 5).**
+  CLAUDE.md, the AD ledger, and the code must move together in this one merge:
+  1. **Rewrite spec-implementation-checklist item 6** ("Bump `ScoringEngine.ScoringConfigVersion` when a change
+     affects scoring output"). It is now stale: the stamp is an auto-derived fingerprint. Replace it with: a
+     tunable **magnitude/weight** change is a **config edit** (a new/edited `Radar:Scoring` profile) — it needs
+     **no code version bump**, and the fingerprint re-stamps automatically; the only remaining code-version
+     obligation is bumping `_formula.Version` (a new `radar-formula-vN` class) when the formula **structure/shape**
+     changes (AD-6). Reference AD-10-as-amended.
+  2. **Add one Architecture-rules bullet** (alongside "Reuse over copy"): **"Scoring: tunable magnitudes/weights
+     live in config (`Radar:Scoring` profiles bound onto `ScoringWeights`); the formula *structure* (component
+     shape, direction-sign semantics) stays versioned code (`radar-formula-vN`). Don't add a new formula class to
+     change a number — edit/add a profile."**
+  Keep both edits minimal and consistent with the existing CLAUDE.md tone. (Do NOT add this rule if, for scope
+  reasons, you ship the 89a fingerprint-only split first without the config-weights — in that case the rule lands
+  with 89b, since the config surface it references does not exist until then.)
 
 ---
 
@@ -556,6 +571,10 @@ spec exists to prevent. State in the PR whether you split and along which line.
 - [ ] `docs/architecture-decisions.md`: **AD-6 amended** (v5 refinement subsection — magnitudes → config,
       structure stays versioned, defaults == v4; **Proposed**) and **AD-10 amended** (stamp becomes a derived
       fingerprint; property preserved and automatic; **Proposed**); both Status lines updated.
+- [ ] **CLAUDE.md updated** in the same slice (unless the 89a-only split ships first): spec-implementation
+      checklist item 6 rewritten (magnitude/weight change = config edit, no code bump; only `_formula.Version`
+      bumps for structural/shape changes; fingerprint auto-re-stamps) + one Architecture-rules bullet added
+      (magnitudes/weights → config; structure stays versioned `radar-formula-vN`).
 - [ ] `RadarScoreFormulaV4Tests` ported to `RadarScoreFormulaV5Tests` (V4 file deleted) with the byte-identical
       regression + config-driven pins; `ScoringConfigFingerprintTests` added; all scoring / pipeline / report /
       extractor tests green.
