@@ -39,6 +39,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly ICompanyRepository _companyRepository;
     private readonly IScoringEngine _scoringEngine;
     private readonly IScoreSnapshotFileStore _scoreFileStore;
+    private readonly IScoringConfigStore _scoringConfigStore;
     private readonly IWeeklyReportBuilder _reportBuilder;
     private readonly IReportFileWriter _reportFileWriter;
     private readonly IPipelineRunStore _runStore;
@@ -65,6 +66,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ICompanyRepository companyRepository,
         IScoringEngine scoringEngine,
         IScoreSnapshotFileStore scoreFileStore,
+        IScoringConfigStore scoringConfigStore,
         IWeeklyReportBuilder reportBuilder,
         IReportFileWriter reportFileWriter,
         IPipelineRunStore runStore,
@@ -86,6 +88,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(scoringEngine);
         ArgumentNullException.ThrowIfNull(scoreFileStore);
+        ArgumentNullException.ThrowIfNull(scoringConfigStore);
         ArgumentNullException.ThrowIfNull(reportBuilder);
         ArgumentNullException.ThrowIfNull(reportFileWriter);
         ArgumentNullException.ThrowIfNull(runStore);
@@ -123,6 +126,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _companyRepository = companyRepository;
         _scoringEngine = scoringEngine;
         _scoreFileStore = scoreFileStore;
+        _scoringConfigStore = scoringConfigStore;
         _reportBuilder = reportBuilder;
         _reportFileWriter = reportFileWriter;
         _runStore = runStore;
@@ -327,6 +331,17 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // last-write-wins), and the store swallows disk errors, so this must not change any counter or
         // abort the run. Every scored company still increments companiesScored, including neutral
         // zero-signal snapshots.
+        //
+        // The effective scoring config is identical for every company this run (same engine, formula,
+        // weights, tier map), so persist it ONCE here — not per company — content-addressed by its
+        // fingerprint (insert-if-new), so a historical snapshot's ScoringConfigVersion stamp dereferences
+        // back to the exact weights (provenance completion, AD-10-as-amended, spec 91). Best-effort like
+        // the other file stores: the store swallows disk errors, so a failure logs + continues and the
+        // snapshots still carry the stamp — it never aborts the run or changes any counter.
+        await _scoringConfigStore
+            .WriteIfNewAsync(_scoringEngine.EffectiveConfig, ct)
+            .ConfigureAwait(false);
+
         foreach (var company in companies)
         {
             ct.ThrowIfCancellationRequested();

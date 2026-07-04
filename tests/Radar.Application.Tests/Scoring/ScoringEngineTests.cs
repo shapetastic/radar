@@ -372,6 +372,43 @@ public sealed class ScoringEngineTests
             changedResult.Snapshot.ScoringConfigVersion);
     }
 
+    [Fact]
+    public async Task EffectiveConfig_MatchesStampedFingerprint_AndCarriesInjectedInputs()
+    {
+        // The engine's EffectiveConfig is a pure accessor built from the SAME inputs the fingerprint uses,
+        // so EffectiveConfig.Fingerprint equals the ScoringConfigVersion stamped on every snapshot it
+        // produces — the content-addressed persistence key (spec 91) dereferences back to these inputs.
+        var defaultWeights = new ScoringWeights();
+        var defaultHarness = new Harness(new StubScoreFormula(), defaultWeights);
+        var companyId = Guid.NewGuid();
+        await defaultHarness.SeedPairAsync(companyId, WindowEnd.AddDays(-1));
+
+        var defaultResult =
+            await defaultHarness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+        var defaultConfig = defaultHarness.Engine.EffectiveConfig;
+
+        Assert.Equal(defaultResult.Snapshot.ScoringConfigVersion, defaultConfig.Fingerprint);
+
+        // EffectiveConfig carries the injected structure identities, weights, and attention descriptor.
+        Assert.Equal("mvp-engine-v1", defaultConfig.EngineVersion);
+        Assert.Equal("stub-formula-vX", defaultConfig.FormulaVersion);
+        Assert.Equal(defaultWeights, defaultConfig.Weights);
+        Assert.Equal(Weights.CanonicalDescriptor(), defaultConfig.AttentionDescriptor);
+
+        // Under a changed weight a second engine's EffectiveConfig differs and still matches its own stamp.
+        var changedWeights = new ScoringWeights { AttentionHalfSaturation = 12.0 };
+        var changedHarness = new Harness(new StubScoreFormula(), changedWeights);
+        await changedHarness.SeedPairAsync(companyId, WindowEnd.AddDays(-1));
+
+        var changedResult =
+            await changedHarness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+        var changedConfig = changedHarness.Engine.EffectiveConfig;
+
+        Assert.Equal(changedResult.Snapshot.ScoringConfigVersion, changedConfig.Fingerprint);
+        Assert.NotEqual(defaultConfig.Fingerprint, changedConfig.Fingerprint);
+        Assert.Equal(12.0, changedConfig.Weights.AttentionHalfSaturation);
+    }
+
     [Theory]
     [InlineData(SignalDirection.Positive, true)]   // a beat lifts Trajectory above the 50 baseline
     [InlineData(SignalDirection.Negative, false)]  // a miss lowers it below 50

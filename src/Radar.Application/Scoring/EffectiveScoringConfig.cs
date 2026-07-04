@@ -1,0 +1,23 @@
+namespace Radar.Application.Scoring;
+
+/// <summary>
+/// The FULL effective resolved scoring config for one run — the exact inputs the ScoringConfigVersion
+/// fingerprint (spec 89) hashes: engine identity, formula structure identity, every <see cref="ScoringWeights"/>
+/// value, and the attention tier-map canonical descriptor. Persisted content-addressed by the
+/// fingerprint so a historical snapshot's stamp dereferences back to the weights that produced it
+/// (provenance completion — AD-10-as-amended). Immutable and Domain-free (an Application projection,
+/// not an aggregate). Recomputing the fingerprint from Engine/FormulaVersion/Weights/AttentionDescriptor
+/// via <see cref="ScoringConfigFingerprint"/> MUST equal <paramref name="Fingerprint"/> — the store's
+/// self-verification invariant.
+/// </summary>
+/// <param name="Fingerprint">The generation stamp (== the <c>CompanyScoreSnapshot.ScoringConfigVersion</c>).</param>
+/// <param name="EngineVersion">The engine structure identity (e.g. <c>mvp-engine-v1</c>).</param>
+/// <param name="FormulaVersion">The formula structure identity (e.g. <c>radar-formula-v5</c>).</param>
+/// <param name="Weights">Every scoring magnitude value (the spec-89 record).</param>
+/// <param name="AttentionDescriptor">The attention tier-map <c>CanonicalDescriptor()</c>, stored verbatim.</param>
+public sealed record EffectiveScoringConfig(
+    string Fingerprint,
+    string EngineVersion,
+    string FormulaVersion,
+    ScoringWeights Weights,
+    string AttentionDescriptor);

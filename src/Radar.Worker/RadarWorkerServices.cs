@@ -190,6 +190,7 @@ internal static class RadarWorkerServices
         services.AddFileScoreStore(options.ScoresDirectory);
         services.AddFileReportWriter(options.ReportDirectory);
         services.AddFilePipelineRunStore(options.RunsDirectory);
+        services.AddFileScoringConfigStore(options.ScoringConfigsDirectory);
         services.AddRadarPipeline();
 
         services.AddHostedService<Worker>();

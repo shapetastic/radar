@@ -699,6 +699,22 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the content-addressed effective-scoring-config store that writes the resolved scoring
+    /// config to <c>{rootDirectory}/{fingerprint}.json</c> once per distinct config (spec 91), completing
+    /// the spec-89 provenance chain: a snapshot's <c>ScoringConfigVersion</c> stamp dereferences back to the
+    /// weights that produced it. The pipeline runner requires <see cref="IScoringConfigStore"/>; all file
+    /// I/O stays in Infrastructure. Insert-if-new (immutable, AD-1 mirror): an existing file is never
+    /// overwritten.
+    /// </summary>
+    public static IServiceCollection AddFileScoringConfigStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FileScoringConfigStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IScoringConfigStore, FileScoringConfigStore>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the end-to-end pipeline runner. Requires the persistence registration
     /// (<see cref="AddInMemoryRadarPersistence"/>), the application services
     /// (<see cref="AddRadarApplicationServices"/>), and an evidence collector
