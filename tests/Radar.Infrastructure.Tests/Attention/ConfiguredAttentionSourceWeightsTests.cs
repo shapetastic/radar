@@ -69,7 +69,43 @@ public sealed class ConfiguredAttentionSourceWeightsTests
 
         Assert.Equal(0.1, weights.WeightFor("Zacks"));
         Assert.Equal(1.0, weights.WeightFor("Bloomberg"));
-        Assert.Equal(0.5, weights.WeightFor("Definitely Not Listed"));
+        // Newly-listed long-tail aggregators tier as mill (spec 90 denylist-expand).
+        Assert.Equal(0.1, weights.WeightFor("Finviz"));
+        Assert.Equal(0.1, weights.WeightFor("Investing.com"));
+        // A truly-unlisted publisher falls to the recalibrated 0.25 unknown default (was 0.5).
+        Assert.Equal(0.25, weights.WeightFor("Definitely Not Listed"));
+    }
+
+    [Fact]
+    public void WeightFor_DomainFormVariants_ResolveToMillWeight()
+    {
+        // Observed Google-News domain-form variants normalize onto their curated mill entries: a trailing
+        // common-TLD token is stripped and punctuation/case is removed, so ".com" forms match the bare outlet
+        // and the explicit "Simplywall.st" alias covers the word-eliding domain.
+        var weights = new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default);
+
+        Assert.Equal(0.1, weights.WeightFor("marketscreener.com"));
+        Assert.Equal(0.1, weights.WeightFor("MarketScreener.COM"));
+        Assert.Equal(0.1, weights.WeightFor("marketbeat.com"));
+        Assert.Equal(0.1, weights.WeightFor("simplywall.st"));
+        Assert.Equal(0.1, weights.WeightFor("finviz.com"));
+        Assert.Equal(0.1, weights.WeightFor("investing.com"));
+    }
+
+    [Fact]
+    public void WeightFor_DistinctOutlets_DoNotCollapse()
+    {
+        // Non-collision guard: conservative normalization (no fuzzy/vowel stripping) must not over-collapse two
+        // genuinely-distinct names. A listed genuine outlet keeps its weight while a made-up outlet that merely
+        // shares a prefix falls to the unknown default — the two are not equal.
+        var weights = new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default);
+
+        var reuters = weights.WeightFor("Reuters");
+        var fake = weights.WeightFor("Reuters Breakingviews Fake");
+
+        Assert.Equal(1.0, reuters);
+        Assert.Equal(0.25, fake);
+        Assert.NotEqual(reuters, fake);
     }
 
     [Fact]
@@ -103,11 +139,11 @@ public sealed class ConfiguredAttentionSourceWeightsTests
     }
 
     [Fact]
-    public void CanonicalDescriptor_EscapesReservedDelimitersInPublisherKeys()
+    public void CanonicalDescriptor_NormalizesReservedDelimitersOutOfKeys()
     {
         var options = new AttentionSourceTierOptions
         {
-            UnknownWeight = 0.5,
+            UnknownWeight = 0.25,
             SourceTiers = new Dictionary<string, AttentionSourceTierOptions.SourceTier>(StringComparer.OrdinalIgnoreCase)
             {
                 ["Weird"] = new AttentionSourceTierOptions.SourceTier
@@ -120,18 +156,21 @@ public sealed class ConfiguredAttentionSourceWeightsTests
 
         var descriptor = new ConfiguredAttentionSourceWeights(options).CanonicalDescriptor();
 
-        // The reserved delimiters (= ; %) are percent-escaped inside the key so they cannot be mistaken for
-        // structural separators. The escaped forms are present; the literals only ever appear as separators.
-        Assert.Contains("p%3D0.25%3Bq=0.25;", descriptor);
-        Assert.Contains("100%25 News=0.25;", descriptor);
+        // Post-spec-90, Normalize strips ALL non-alphanumerics before a key can reach the descriptor, so the
+        // reserved delimiters (= ; %) can never appear in a key: "p=0.25;q" → "p025q" and "100% News" → "100news".
+        // The normalized keys are present; the raw/escaped delimiter forms are not.
+        Assert.Contains("p025q=0.25;", descriptor);
+        Assert.Contains("100news=0.25;", descriptor);
+        Assert.DoesNotContain("%3D", descriptor);
+        Assert.DoesNotContain("%25", descriptor);
     }
 
     [Fact]
     public void CanonicalDescriptor_DistinctTierMapsThatWouldCollide_ProduceDistinctDescriptors()
     {
-        // Without escaping, a single publisher literally named "p=0.25;q" serializes to the same bytes as two
-        // separate publishers "p" and "q" (both weight 0.25) — a non-injective fingerprint input. Escaping the
-        // reserved delimiters keeps the two maps distinguishable.
+        // Post-spec-90 the injectivity comes from normalization stripping the reserved delimiters out of the
+        // key: a single publisher literally named "p=0.25;q" normalizes to the key "p025q", whereas two separate
+        // publishers "p" and "q" normalize to keys "p" and "q" — distinct keys, so the descriptors still differ.
         var single = new AttentionSourceTierOptions
         {
             UnknownWeight = 0.5,

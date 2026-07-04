@@ -20,6 +20,7 @@ param(
     [string]$DefaultBranch = "main",
     [int]   $WorktreeIndex = 1,        # which <project>-claude-N worktree to drive
     [switch]$Plan,                     # force work-planner mode even if specs exist
+    [string]$Spec          = "",       # implement THIS docs/next spec (number e.g. "90", base name, or filename) instead of the lowest-numbered; omit to take next
     [string]$PermissionFlag = "--dangerously-skip-permissions", # set "" to be prompted
     [switch]$CopilotReview,            # after the PR opens, wait for Copilot's FIRST review and fix its comments
     [int]   $CopilotPollSeconds = 180, # poll interval while waiting for the review (default 3 min)
@@ -73,8 +74,22 @@ if (Test-Path $nextDir) {
     $specs = Get-ChildItem -Path $nextDir -Filter *.md -File | Sort-Object Name
 }
 
-# --- planner mode: no specs (or forced) — architecture-gated ---
-if ($Plan -or $specs.Count -eq 0) {
+# --- explicit spec requested via -Spec: resolve it and skip planner/lowest-numbered selection ---
+# Accepts a full filename ("90-foo.md"), the base name ("90-foo"), or just the leading number ("90").
+$spec = $null
+if ($Spec) {
+    if ($specs.Count -eq 0) { throw "-Spec '$Spec' requested but docs/next/ has no pending specs." }
+    $match = @($specs | Where-Object {
+        $_.Name -ieq $Spec -or $_.BaseName -ieq $Spec -or $_.Name -ilike "$Spec-*"
+    })
+    if ($match.Count -eq 0) { throw "-Spec '$Spec' not found in docs/next/. Available: $($specs.Name -join ', ')" }
+    if ($match.Count -gt 1) { throw "-Spec '$Spec' is ambiguous - matched: $($match.Name -join ', ')" }
+    $spec = $match[0]
+    Write-Section "Explicit spec requested (-Spec '$Spec'): $($spec.Name)"
+}
+
+# --- planner mode: no specs (or forced) — architecture-gated (skipped when -Spec resolved a spec) ---
+if (-not $spec -and ($Plan -or $specs.Count -eq 0)) {
     if ($Plan) {
         Write-Section "Planner mode (forced, architecture-gated)"
     } else {
@@ -113,7 +128,7 @@ Do not write production code. Reference: .claude/agents/radar-architecture-revie
     exit $LASTEXITCODE
 }
 
-$spec    = $specs[0]
+if (-not $spec) { $spec = $specs[0] }
 $specRel = "docs/next/$($spec.Name)"
 Write-Section "Next spec: $specRel"
 

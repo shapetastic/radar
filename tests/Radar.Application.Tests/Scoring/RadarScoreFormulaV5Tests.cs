@@ -762,6 +762,26 @@ public sealed class RadarScoreFormulaV5Tests
         Assert.Equal(once, manyCopies);
     }
 
+    [Fact]
+    public void Attention_AllAggregator_ScoresMateriallyLower_ThanGenuine_UnderRecalibratedWeights()
+    {
+        // Spec 90 headline property: under the recalibrated posture (unknown 0.25 + expanded mill denylist), an
+        // all-aggregator name scores materially LOWER Attention than a genuinely-covered one at the SAME distinct
+        // publisher count. The Tiered fake encodes the 0.25 posture, so this does not depend on production Default.
+        //
+        // Input A — 10 mills: reach = 10·0.1 = 1.0 → Att = 100·1/(1+3) = 25 (< 30 absolute).
+        // Input B — 10 genuine: reach = 10·1.0 = 10 → Att = 100·10/(10+3) = 77.
+        // Margin B−A = 52 (> 25): the all-aggregator name is materially lower.
+        var formula = Formula(Tiered(unknown: 0.25));
+
+        var aggregator = formula.Compute(InputFrom(News(10, "mill"))).Components.AttentionScore;   // 25
+        var genuine = formula.Compute(InputFrom(News(10, "genuine"))).Components.AttentionScore;    // 77
+
+        Assert.True(aggregator < 30, $"all-aggregator name must score low; was {aggregator}");
+        Assert.True(genuine - aggregator > 25,
+            $"genuine coverage must materially beat aggregator; genuine={genuine}, aggregator={aggregator}");
+    }
+
     // ---- spec 89 config-driven weights pins ----
 
     [Fact]
