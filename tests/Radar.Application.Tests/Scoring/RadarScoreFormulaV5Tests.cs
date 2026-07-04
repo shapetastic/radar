@@ -6,15 +6,15 @@ using Radar.TestSupport;
 
 namespace Radar.Application.Tests.Scoring;
 
-public sealed class RadarScoreFormulaV4Tests
+public sealed class RadarScoreFormulaV5Tests
 {
     private static readonly DateTimeOffset WindowStart = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset WindowEnd = new(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
 
     /// <summary>
     /// In-test <see cref="IAttentionSourceWeights"/> that counts every publisher as a full genuine outlet
-    /// (weight 1.0). Under it the v4 weighted-breadth sum equals the distinct-publisher count, so the ported
-    /// v3 behavioural tests keep their reach semantics and only the re-tuned saturation (12→3) moves values.
+    /// (weight 1.0). Under it the weighted-breadth sum equals the distinct-publisher count, so the ported
+    /// behavioural tests keep their reach semantics.
     /// </summary>
     private static readonly IAttentionSourceWeights AllGenuine = new FuncWeights(_ => 1.0);
 
@@ -23,10 +23,11 @@ public sealed class RadarScoreFormulaV4Tests
         private readonly Func<string?, double> _fn;
         public FuncWeights(Func<string?, double> fn) => _fn = fn;
         public double WeightFor(string? sourceName) => _fn(sourceName);
+        public string CanonicalDescriptor() => "test-func-weights";
     }
 
     // A tiered fake matching the spec seed weights: names starting "mill" → 0.1, "genuine" → 1.0, anything
-    // else (incl. blank/null) → the unknown default (0.5). Lets the v4 pins control the tier of each publisher.
+    // else (incl. blank/null) → the unknown default (0.5). Lets the pins control the tier of each publisher.
     private static IAttentionSourceWeights Tiered(double mill = 0.1, double genuine = 1.0, double unknown = 0.5) =>
         new FuncWeights(name =>
         {
@@ -35,6 +36,10 @@ public sealed class RadarScoreFormulaV4Tests
             if (name.StartsWith("genuine", StringComparison.OrdinalIgnoreCase)) return genuine;
             return unknown;
         });
+
+    // Convenience: construct the default-weights formula (byte-identical to v4) over the given source weights.
+    private static RadarScoreFormulaV5 Formula(IAttentionSourceWeights sourceWeights) =>
+        new(new ScoringWeights(), sourceWeights);
 
     private static ScoringSignal BuildSignal(
         int strength = 6,
@@ -72,26 +77,39 @@ public sealed class RadarScoreFormulaV4Tests
         PreviousSignals: previous ?? Array.Empty<Signal>());
 
     [Fact]
-    public void Version_IsRadarFormulaV4_AndAppearsInExplanation()
+    public void Version_IsRadarFormulaV5_AndAppearsInExplanation()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
-        Assert.Equal("radar-formula-v4", formula.Version);
+        Assert.Equal("radar-formula-v5", formula.Version);
 
         var result = formula.Compute(InputFrom(new[] { BuildSignal() }));
-        Assert.Contains("radar-formula-v4", result.Explanation);
+        Assert.Contains("radar-formula-v5", result.Explanation);
     }
 
     [Fact]
     public void Constructor_NullWeights_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV4(null!));
+        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV5(null!, AllGenuine));
+    }
+
+    [Fact]
+    public void Constructor_NullSourceWeights_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV5(new ScoringWeights(), null!));
+    }
+
+    [Fact]
+    public void Constructor_InvalidWeight_Throws()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => new RadarScoreFormulaV5(new ScoringWeights { OpportunityAttentionDivisor = 0 }, AllGenuine));
     }
 
     [Fact]
     public void NeutralBaseline_SingleNeutralSignal_TrajectoryIs50()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var input = InputFrom(new[] { BuildSignal(direction: SignalDirection.Neutral) });
 
         var result = formula.Compute(input);
@@ -102,7 +120,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void AllPositive_Improves_AllNegative_Declines()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var positive = formula.Compute(InputFrom(new[]
         {
@@ -122,7 +140,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void MixedInput_AllComponentsInRange()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var input = InputFrom(
             new[]
             {
@@ -145,7 +163,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void ClampHoldsAtExtremes()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var maxPositive = new List<ScoringSignal>();
         var maxNegative = new List<ScoringSignal>();
@@ -169,7 +187,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Trajectory_NeutralSignals_DoNotDilute_DirectionalRead()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var positiveOnly = formula.Compute(InputFrom(new[]
         {
@@ -192,7 +210,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Trajectory_OnlyNeutralSignals_Is50()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var result = formula.Compute(InputFrom(new[]
         {
@@ -206,7 +224,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Attention_FirstPartyOnly_IsZero_ThirdPartyRaisesIt()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         // A company's own press release + filing: both first-party → no market attention.
         var firstParty = formula.Compute(InputFrom(new[]
@@ -231,7 +249,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void MediaAttentionSignals_OverNews_LiftAttention_LeaveTrajectoryAtBaseline()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         // The downstream payoff of spec 70: each NewsArticle evidence item now carries a Neutral
         // MediaAttention signal. Two such signals (mediaCount 2 + at least one distinct third-party
@@ -251,7 +269,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Attention_Saturates_AndIsMonotonic()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         // Third-party source types so attention is measurable.
         var one = formula.Compute(InputFrom(new[]
@@ -280,7 +298,7 @@ public sealed class RadarScoreFormulaV4Tests
         // SourceName. mediaCount (the formula counts SignalType.MediaAttention, not set size) is 0 in both
         // because BuildSignal defaults to the non-media CustomerWin type, so reach moves on breadth alone.
         // Under the all-genuine weights fake each distinct publisher weighs 1.0, so breadth == distinct count.
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var oneOutlet = formula.Compute(InputFrom(new[]
         {
@@ -305,7 +323,7 @@ public sealed class RadarScoreFormulaV4Tests
         // Regression lock for outlet-dedupe: three NewsArticle items sharing one SourceName deliver the same
         // breadth as a single one (the formula's Distinct(SourceName)). mediaCount stays 0 in both because
         // BuildSignal defaults to the non-media CustomerWin type — so breadth is isolated.
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var one = formula.Compute(InputFrom(new[]
         {
@@ -325,7 +343,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void EvidenceConfidence_RewardsQualityAndDiversity()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         // High quality + diverse source types.
         var rich = formula.Compute(InputFrom(new[]
@@ -355,7 +373,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void EvidenceConfidence_IsMonotonic_UnderCorroboration()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var baseSignal = new[]
         {
@@ -388,7 +406,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void EvidenceConfidence_HighQualityItem_RaisesBestQualWeight()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var allLow = formula.Compute(InputFrom(new[]
         {
@@ -412,7 +430,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void HeliosScenario_Corroboration_ReachesWatchTerritory()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         // A strong Positive press-release guidance change plus two Neutral High-quality 8-K filings.
         var input = InputFrom(new[]
@@ -441,14 +459,14 @@ public sealed class RadarScoreFormulaV4Tests
         Assert.InRange(c.EvidenceConfidenceScore, 53, 57);
 
         // Opportunity: Trajectory 80 · (EC/100) · (1 − 0/250) ≈ 44 — comfortably in Watch territory.
-        // Attention is 0 so the discount divisor (250) leaves this scenario unchanged from v3.
+        // Attention is 0 so the discount divisor (250) leaves this scenario unchanged from v4.
         Assert.True(c.OpportunityScore >= 40);
     }
 
     [Fact]
     public void Velocity_Acceleration_AbovePrevious_IsAbove50()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var input = InputFrom(
             new[] { BuildSignal(strength: 10), BuildSignal(strength: 10) },
             new[] { BuildSignal(strength: 1).Signal });
@@ -459,7 +477,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Velocity_Deceleration_BelowPrevious_IsBelow50()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var input = InputFrom(
             new[] { BuildSignal(strength: 1) },
             new[] { BuildSignal(strength: 10).Signal, BuildSignal(strength: 10).Signal });
@@ -470,7 +488,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Velocity_EqualActivity_Is50()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var input = InputFrom(
             new[] { BuildSignal(strength: 6) },
             new[] { BuildSignal(strength: 6).Signal });
@@ -481,7 +499,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Velocity_EmptyPreviousWithCurrent_IsAbove50()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var input = InputFrom(
             new[] { BuildSignal(strength: 8) },
             Array.Empty<Signal>());
@@ -492,7 +510,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Opportunity_FallsAsAttentionRises_NeverZeroes()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         // Low attention: single third-party source.
         var lowAttention = formula.Compute(InputFrom(new[]
@@ -520,7 +538,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Contributions_OnePerCurrentSignal_InOrder_WithProvenance_AndSignedWeight()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var current = new[]
         {
             BuildSignal(strength: 8, direction: SignalDirection.Positive, sourceName: "src-a"),
@@ -550,7 +568,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Contributions_IncludeNeutralSignals_WithZeroWeight()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var current = new[]
         {
             BuildSignal(strength: 6, direction: SignalDirection.Positive, sourceName: "src-a"),
@@ -568,7 +586,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void EmptyCurrentWindow_EvenWithPrevious_AllZero_EmptyContributions_ValidJson()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var input = InputFrom(
             Array.Empty<ScoringSignal>(),
             new[] { BuildSignal(strength: 9).Signal });
@@ -586,7 +604,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Determinism_SameInput_ProducesEqualOutputs()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
         var input = InputFrom(
             new[]
             {
@@ -608,7 +626,7 @@ public sealed class RadarScoreFormulaV4Tests
     [Fact]
     public void Recency_NewerPositiveSignal_WeighsAtLeastAsMuch()
     {
-        var formula = new RadarScoreFormulaV4(AllGenuine);
+        var formula = Formula(AllGenuine);
 
         var older = formula.Compute(InputFrom(new[]
         {
@@ -625,11 +643,11 @@ public sealed class RadarScoreFormulaV4Tests
         Assert.True(newer.Components.TrajectoryScore >= older.Components.TrajectoryScore);
     }
 
-    // ---- v4 source-quality tiering + saturation pins (spec 88) ----
+    // ---- source-quality tiering + saturation pins (spec 88, carried forward to v5) ----
     //
-    // The v4 Attention breadth term is a tier-weighted distinct-publisher SUM (mill 0.1 / unknown 0.5 /
-    // genuine 1.0) instead of a flat distinct count, and the half-saturation is re-tuned 12→3. All expected
-    // Attention values below are the direct closed form 100·reach/(reach+3), rounded away-from-zero.
+    // The Attention breadth term is a tier-weighted distinct-publisher SUM (mill 0.1 / unknown 0.5 /
+    // genuine 1.0) instead of a flat distinct count, and the half-saturation is 3. All expected Attention
+    // values below are the direct closed form 100·reach/(reach+3), rounded away-from-zero.
 
     // Build N distinct-publisher Positive third-party NewsArticle signals under the given name prefix
     // (non-media type so mediaCount = 0; strength 10 / confidence 1.0 / PrimarySource quality → Trajectory
@@ -647,7 +665,7 @@ public sealed class RadarScoreFormulaV4Tests
         // Pin 1 (headline property): five distinct MILL publishers (weight 0.1 → reach 0.5 → Att 14) score
         // materially LOWER than five distinct GENUINE publishers (weight 1.0 → reach 5 → Att 63), at the same
         // publisher count. Breadth is now earned by genuine notice, not raw publisher count.
-        var formula = new RadarScoreFormulaV4(Tiered());
+        var formula = Formula(Tiered());
 
         var mill = formula.Compute(InputFrom(News(5, "mill"))).Components.AttentionScore;      // 100·0.5/3.5 = 14
         var genuine = formula.Compute(InputFrom(News(5, "genuine"))).Components.AttentionScore; // 100·5/8   = 63
@@ -662,7 +680,7 @@ public sealed class RadarScoreFormulaV4Tests
     {
         // Pin 2: a thinly-but-genuinely-covered name (2 genuine → reach 2 → Att 40) is NOT wrongly zeroed and
         // beats a larger pile of mills whose weighted reach is smaller (10 mills → reach 1.0 → Att 25).
-        var formula = new RadarScoreFormulaV4(Tiered());
+        var formula = Formula(Tiered());
 
         var thinGenuine = formula.Compute(InputFrom(News(2, "genuine"))).Components.AttentionScore; // 100·2/5 = 40
         var manyMills = formula.Compute(InputFrom(News(10, "mill"))).Components.AttentionScore;      // 100·1/4 = 25
@@ -678,7 +696,7 @@ public sealed class RadarScoreFormulaV4Tests
     {
         // Pin 3: publishers in no tier default to the non-zero UnknownWeight (0.5), never silently zeroed.
         // Six unknown publishers → weighted reach 6·0.5 = 3.0 → Att 100·3/6 = 50.
-        var formula = new RadarScoreFormulaV4(Tiered());
+        var formula = Formula(Tiered());
 
         var att = formula.Compute(InputFrom(News(6, "unknown"))).Components.AttentionScore;
 
@@ -699,9 +717,9 @@ public sealed class RadarScoreFormulaV4Tests
                 sourceType: EvidenceSourceType.NewsArticle, sourceName: "AcmeWire"),
         };
 
-        var asGenuine = new RadarScoreFormulaV4(new FuncWeights(_ => 1.0))
+        var asGenuine = Formula(new FuncWeights(_ => 1.0))
             .Compute(InputFrom(single)).Components.AttentionScore;   // 100·1/4   = 25
-        var asMill = new RadarScoreFormulaV4(new FuncWeights(_ => 0.1))
+        var asMill = Formula(new FuncWeights(_ => 0.1))
             .Compute(InputFrom(single)).Components.AttentionScore;   // 100·0.1/3.1 = 3
 
         Assert.True(asGenuine > asMill,
@@ -715,7 +733,7 @@ public sealed class RadarScoreFormulaV4Tests
     {
         // Pin 5: on the +3 scale a weighted reach ≈ 5 lands in the ~60s and a mill-only thin reach ≈ 0.6 lands
         // low (~15–20), locking the useful spread of the re-tuned saturation.
-        var formula = new RadarScoreFormulaV4(Tiered());
+        var formula = Formula(Tiered());
 
         var mid = formula.Compute(InputFrom(News(5, "genuine"))).Components.AttentionScore; // reach 5   → 100·5/8   = 63
         var thin = formula.Compute(InputFrom(News(6, "mill"))).Components.AttentionScore;    // reach 0.6 → 100·0.6/3.6 = 17
@@ -729,7 +747,7 @@ public sealed class RadarScoreFormulaV4Tests
     {
         // Pin 6: the same mill publisher appearing many times contributes its weight ONCE (distinct-by-publisher
         // preserved). Ten copies of one mill outlet score identically to a single copy (both reach 0.1 → Att 3).
-        var formula = new RadarScoreFormulaV4(Tiered());
+        var formula = Formula(Tiered());
 
         var once = formula.Compute(InputFrom(new[]
         {
@@ -742,5 +760,66 @@ public sealed class RadarScoreFormulaV4Tests
                 .ToArray())).Components.AttentionScore;
 
         Assert.Equal(once, manyCopies);
+    }
+
+    // ---- spec 89 config-driven weights pins ----
+
+    [Fact]
+    public void DefaultConfig_IsByteIdenticalToV4_ForARepresentativeInput()
+    {
+        // Headline regression guarantee: default ScoringWeights == the radar-formula-v4 constants, so a
+        // representative multi-signal input yields the EXACT v4 component integers, ComponentJson, and
+        // explanation body (only the version prefix differs). These pinned integers ARE the v4 output.
+        var formula = Formula(Tiered());
+
+        var input = InputFrom(new[]
+        {
+            BuildSignal(strength: 6, direction: SignalDirection.Positive, confidence: 0.65m,
+                type: SignalType.GuidanceChange, quality: EvidenceQuality.Medium,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "genuine-a"),
+            BuildSignal(strength: 8, direction: SignalDirection.Positive, confidence: 0.8m,
+                type: SignalType.CustomerWin, quality: EvidenceQuality.High,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "genuine-b"),
+            BuildSignal(strength: 4, direction: SignalDirection.Neutral, confidence: 0.40m,
+                type: SignalType.MediaAttention, quality: EvidenceQuality.High,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "mill-c"),
+        });
+
+        var result = formula.Compute(input);
+        var c = result.Components;
+
+        // reach = genuine(1.0) + genuine(1.0) + mill(0.1) + 0.25·mediaCount(1) = 2.35 → Att 100·2.35/5.35 = 44.
+        // Velocity has no previous window → 50·(18+10)/(0+10) = 140 → clamped 100.
+        Assert.Equal(new ScoreComponents(
+            TrajectoryScore: 86,
+            OpportunityScore: 43,
+            AttentionScore: 44,
+            EvidenceConfidenceScore: 60,
+            SignalVelocityScore: 100),
+            c);
+
+        Assert.Equal(JsonSerializer.Serialize(c), result.ComponentJson);
+        Assert.Equal(
+            "radar-formula-v5: 3 signal(s) over 30d → Trajectory 86, Opportunity 43 (Attention 44, "
+                + "Confidence 60, Velocity 100).",
+            result.Explanation);
+    }
+
+    [Fact]
+    public void ChangedWeight_MovesTheScore_ProvingConfigIsRead()
+    {
+        // Constructing V5 with a changed AttentionHalfSaturation (old v3 value 12.0) must move Attention (and
+        // the Opportunity that consumes it) versus the default weights on the same input — proving the formula
+        // reads the injected config, not const fields.
+        var input = InputFrom(News(5, "genuine"));
+
+        var defaultResult = new RadarScoreFormulaV5(new ScoringWeights(), Tiered()).Compute(input).Components;
+        var retunedResult = new RadarScoreFormulaV5(
+            new ScoringWeights { AttentionHalfSaturation = 12.0 }, Tiered()).Compute(input).Components;
+
+        Assert.NotEqual(defaultResult.AttentionScore, retunedResult.AttentionScore);
+        Assert.NotEqual(defaultResult.OpportunityScore, retunedResult.OpportunityScore);
+        // Larger half-saturation lowers Attention for the same reach.
+        Assert.True(retunedResult.AttentionScore < defaultResult.AttentionScore);
     }
 }

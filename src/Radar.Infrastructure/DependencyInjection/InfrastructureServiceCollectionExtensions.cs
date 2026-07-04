@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Radar.Application.Abstractions.Persistence;
@@ -70,7 +71,12 @@ public static class InfrastructureServiceCollectionExtensions
         // options in its ctor (fails fast on a weight outside [0,1]).
         services.TryAddSingleton(AttentionSourceTierOptions.Default);
         services.TryAddSingleton<IAttentionSourceWeights, ConfiguredAttentionSourceWeights>();
-        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV4>();
+        // Scoring magnitude weights (spec 89): the default == the radar-formula-v4 constants, so a blank/absent
+        // config yields byte-identical v4 output. TryAdd keeps a composition-root-registered concrete
+        // ScoringWeights (bound via AddRadarScoringWeights) winning over this default (mirrors ScoringOptions /
+        // AttentionSourceTierOptions).
+        services.TryAddSingleton(new ScoringWeights());
+        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV5>();
         services.TryAddSingleton(new ScoringOptions());
         services.AddSingleton<IScoringEngine, ScoringEngine>();
         services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();
@@ -82,6 +88,58 @@ public static class InfrastructureServiceCollectionExtensions
         // registration (e.g. AddLocalFileCollector) from conflicting.
         services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
         services.AddSingleton<CollectedEvidenceMapper>();
+        return services;
+    }
+
+    /// <summary>
+    /// Resolves the effective scoring-weight profile and registers the concrete <see cref="ScoringWeights"/>
+    /// as a singleton so it wins over the library's <c>TryAddSingleton</c> default (call this BEFORE
+    /// <see cref="AddRadarApplicationServices"/>, mirroring the <c>Radar:Attention</c> binding). Precedence:
+    /// <list type="bullet">
+    /// <item><c>Radar:Scoring:Profile</c> selects a named profile; blank/absent ⇒ <c>"default"</c>.</item>
+    /// <item>If <c>Radar:Scoring:Profiles:{name}</c> exists, its present fields bind ONTO a fresh
+    /// <see cref="ScoringWeights"/> (unspecified fields keep the code default == v4).</item>
+    /// <item>A <b>named</b> (non-default) profile that is requested but absent <b>fails fast</b> — a silent
+    /// fallthrough to defaults would mask a typo'd profile name in an experiment.</item>
+    /// <item>A blank/absent profile, or an absent <c>"default"</c> profile, ⇒ all code defaults
+    /// (⇒ byte-identical v4 output and the pinned default fingerprint).</item>
+    /// </list>
+    /// The resolved weights are validated (<see cref="ScoringWeights.Validate"/>) so an out-of-range weight
+    /// (e.g. <c>OpportunityAttentionDivisor = 0</c>) fails fast at registration, never silently distorting
+    /// scoring.
+    /// </summary>
+    public static IServiceCollection AddRadarScoringWeights(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var name = configuration["Radar:Scoring:Profile"];
+        var effectiveName = string.IsNullOrWhiteSpace(name) ? "default" : name.Trim();
+        var section = configuration.GetSection($"Radar:Scoring:Profiles:{effectiveName}");
+
+        ScoringWeights weights;
+        if (section.Exists())
+        {
+            weights = section.Get<ScoringWeights>() ?? new ScoringWeights();
+        }
+        else if (!string.IsNullOrWhiteSpace(name)
+            && !string.Equals(effectiveName, "default", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Radar:Scoring:Profile '{effectiveName}' was requested but no matching profile exists under "
+                    + "Radar:Scoring:Profiles — a named-but-missing profile is almost certainly a typo. Add the "
+                    + $"profile under Radar:Scoring:Profiles:{effectiveName} or clear Radar:Scoring:Profile to use "
+                    + "the code defaults.");
+        }
+        else
+        {
+            weights = new ScoringWeights();
+        }
+
+        // Fail fast at registration on a nonsensical weight (also enforced in the formula ctor).
+        weights.Validate();
+
+        services.AddSingleton(weights);
         return services;
     }
 

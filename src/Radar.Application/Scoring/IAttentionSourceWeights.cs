@@ -2,7 +2,7 @@ namespace Radar.Application.Scoring;
 
 /// <summary>
 /// Per-publisher attention-breadth weighting for the scoring formula's reach term. Injected into
-/// <see cref="RadarScoreFormulaV4"/> so the curated "what counts as genuine market notice" policy lives as
+/// <see cref="RadarScoreFormulaV5"/> so the curated "what counts as genuine market notice" policy lives as
 /// Infrastructure config data (AD-5) while the formula stays a pure function of its input plus this immutable
 /// lookup (AD-3).
 /// </summary>
@@ -16,4 +16,13 @@ public interface IAttentionSourceWeights
     /// silently zeroed. Case-insensitive; blank/null returns the unknown default.
     /// </summary>
     double WeightFor(string? sourceName);
+
+    /// <summary>
+    /// An ordered, culture-invariant serialization of the effective publisher→weight entries plus the
+    /// unknown default, for provenance / scoring-config fingerprinting only (read-only, additive). The
+    /// tier map affects Attention output, so it is folded into the <c>ScoringConfigVersion</c> content
+    /// fingerprint (AD-10) — two runs with different tier maps must not be judged comparable. The
+    /// descriptor MUST be deterministic (stable ordering, culture-invariant number formatting; AD-3).
+    /// </summary>
+    string CanonicalDescriptor();
 }

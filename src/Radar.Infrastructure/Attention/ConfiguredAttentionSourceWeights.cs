@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using Radar.Application.Scoring;
 
 namespace Radar.Infrastructure.Attention;
@@ -73,6 +75,28 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
         return _weightByPublisher.TryGetValue(Normalize(sourceName), out var weight)
             ? weight
             : _unknownWeight;
+    }
+
+    /// <inheritdoc />
+    public string CanonicalDescriptor()
+    {
+        // Deterministic serialization for the scoring-config fingerprint (AD-3): the unknown default first,
+        // then each publisher entry ordered by its already-normalised key (Ordinal), with culture-invariant
+        // round-trip weight formatting. Stable regardless of dictionary insertion order.
+        var builder = new StringBuilder();
+        builder.Append("unknown=")
+            .Append(_unknownWeight.ToString("R", CultureInfo.InvariantCulture))
+            .Append(';');
+
+        foreach (var key in _weightByPublisher.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        {
+            builder.Append(key)
+                .Append('=')
+                .Append(_weightByPublisher[key].ToString("R", CultureInfo.InvariantCulture))
+                .Append(';');
+        }
+
+        return builder.ToString();
     }
 
     // Trim and collapse internal whitespace runs so "Simply  Wall St" and "Simply Wall St" resolve equally;
