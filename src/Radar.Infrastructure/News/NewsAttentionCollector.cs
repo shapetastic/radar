@@ -84,7 +84,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
             ct.ThrowIfCancellationRequested();
             feedsChecked++;
 
-            var target = NewsFeedTarget.Parse(feed.Url);
+            var target = QueryFeedTarget.Parse(feed.Url);
             if (target is null)
             {
                 feedsFailed++;
@@ -174,7 +174,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         return new CollectionResult(results.ToArray(), summary);
     }
 
-    private NewsSearchQuery BuildQuery(NewsFeedTarget target) => new(
+    private NewsSearchQuery BuildQuery(QueryFeedTarget target) => new(
         QueryPhrase: target.QueryPhrase,
         MaxRecords: Math.Clamp(_options.MaxRecordsPerCompany, ApiMinRecords, ApiMaxRecords),
         EnglishOnly: _options.EnglishOnly);
@@ -186,7 +186,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
     /// both sides are whitespace-normalised first, so a spaced <c>"( RKLB )"</c> still matches an
     /// <c>RKLB</c> ticker and <c>"Rocket Lab USA , Inc ."</c> still matches the <c>Rocket Lab</c> phrase.
     /// </summary>
-    private static bool IsRelevant(string? title, NewsFeedTarget target)
+    private static bool IsRelevant(string? title, QueryFeedTarget target)
     {
         var normalizedTitle = NormalizeWhitespace(StripPublisherSuffix(title));
         if (normalizedTitle.Length == 0)
