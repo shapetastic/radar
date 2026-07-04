@@ -12,9 +12,14 @@
 >
 > This is a **directed** slice (the maintainer asked for it), **NOT** the generic planner loop, and **NOT**
 > architecture-gated. It **amends AD-6** (magnitudes become config, not `const`s) and **amends AD-10** (the
-> stamp becomes content-derived, not hand-bumped) — both amendments are **Proposed pending maintainer
-> sign-off** because they change settled conventions. Ship the ledger edits marked **Proposed**; the
-> maintainer confirms the profile ergonomic, the canonicalization/hash choice, and the AD-6/AD-10 amendments.
+> stamp becomes content-derived, not hand-bumped) because they change settled conventions.
+> **MAINTAINER SIGN-OFF: GRANTED 2026-07-04 (authoritative — overrides every "Proposed pending sign-off"
+> reference below).** The maintainer approved this session: the named-profile ergonomic (`Radar:Scoring:Profiles:{name}`),
+> the canonical SHA256 fingerprint of the effective config as `ScoringConfigVersion`, and both the AD-6 and
+> AD-10 amendments. Therefore mark the AD-6 `radar-formula-v5` refinement and the AD-10 amendment
+> **Accepted · 2026-07-04** (NOT Proposed), and treat every "Proposed until maintainer sign-off" note elsewhere
+> in this spec as **SATISFIED**. Also perform the required CLAUDE.md edits (checklist item 6 + the
+> config-for-weights Architecture rule) in this same merge.
 
 > **STRICT SEQUENCING — implement AFTER spec 88 (`radar-formula-v4`) merges. Do NOT run in parallel.** This
 > slice builds directly ON `radar-formula-v4`: it ports v4's constants (including the `IAttentionSourceWeights`
