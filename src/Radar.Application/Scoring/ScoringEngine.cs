@@ -25,18 +25,17 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation ships NEWS ATTENTION BREADTH BY PUBLISHER (spec 84): the newssearch
-    // collector now maps each article's evidence SourceName to the real OUTLET (Reuters, Yahoo Finance, ...)
-    // instead of the per-company feed name, so AttentionScore's breadth term — which counts distinct
-    // third-party SourceNames — finally sees how many distinct outlets cover a company rather than a constant
-    // 1 per company. AttentionScore (and thus OpportunityScore, ranking, and possibly action labels) now
-    // differentiates companies with multi-outlet coverage. This is a COLLECTOR/EVIDENCE-INPUT change, NOT a
-    // formula-math change: RadarScoreFormulaV2.Compute (100·reach/(reach+5), reach = distinctThirdPartySources
-    // + 0.5·mediaCount) is byte-for-byte unchanged, so ScoringVersion/EngineVersion/formula Version are NOT
-    // touched. Per AD-10 a scoring-affecting change bumps this stamp so a cross-run delta across the pre/post
-    // boundary renders "(scoring updated)" rather than a fabricated Thesis improving/deteriorating label. Prior
-    // generation: spec 85 shipped the cross-run signal DEDUP in the velocity previous window (v6).
-    private const string ScoringConfigVersion = "radar-scoring-config-v7";
+    // ScoringOptions). This generation adds NEGATIVE-DIRECTION DILUTIVE CapitalRaise cues (spec 86): the
+    // KeywordSignalExtractor now emits Negative CapitalRaise signals for rights / registered-direct / ATM /
+    // shelf / warrant / reverse-split offerings (and "dilution"/"dilutive"), ordered first so a mixed
+    // dilutive/growth headline resolves Negative; and it demotes "convertible note" / "credit facility" /
+    // "debt financing" from Positive to Neutral (a capital event whose valence the code cannot read). This
+    // is an EXTRACTOR-RULE change that moves scoring output — new Negative signals lower Trajectory and the
+    // demoted cues now weigh 0 — so per AD-10 the stamp bumps. It is NOT a formula-math change:
+    // RadarScoreFormulaV2.Compute already maps Negative -> -1 and excludes Neutral/Mixed from Trajectory, so
+    // ScoringVersion/EngineVersion/formula Version are NOT touched. Prior generation: spec 84 shipped news
+    // attention breadth by publisher (v7).
+    private const string ScoringConfigVersion = "radar-scoring-config-v8";
 
     private readonly ISignalRepository _signalRepository;
     private readonly ISignalFileStore _signalFileStore;
