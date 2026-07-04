@@ -108,7 +108,8 @@ was **co-designed with and approved by the maintainer**. Its five components are
 - **TrajectoryScore** — confidence-and-recency-weighted mean of directional strength, mapped `50 + 5·T_raw`
   (50 = neutral). Direction signs: `Positive +1`, `Negative −1`, **`Neutral` and `Mixed` = 0**.
 - **AttentionScore** — saturating breadth `100·reach/(reach+5)`, `reach = distinctSourceNames + 0.5·mediaSignals`.
-  *(Superseded by radar-formula-v3 — see the spec-87 refinement below: `+12` saturation, `0.25·mediaSignals`.)*
+  *(Superseded by radar-formula-v4 for the Attention component — see the spec-88 refinement below: tier-weighted
+  distinct-publisher breadth and `+3` saturation; the spec-87 v3 step took it via `+12` / `0.25·mediaSignals`.)*
 - **EvidenceConfidenceScore** — `100·avgConf·(0.6+0.4·qualFactor)·(0.7+0.3·divFactor)`; quality weights
   Primary 1.0 / High .85 / Med .6 / Low .35 / Unknown .4; diversity saturates at 3 distinct source types.
 - **SignalVelocityScore** — `50·(actNow+10)/(actPrev+10)` over `Strength` sums (50 = steady).
@@ -180,7 +181,10 @@ radar-formula-v3* for those two components:
   spread; same saturating shape (asymptotic to 100, monotone in reach), gentler slope. `MediaReachWeight 0.5 →
   0.25` (`reach = distinctThirdPartySourceNames + 0.25·mediaSignals`): one event routinely spawns many
   near-duplicate articles, so raw media volume is duplication-prone — lean on distinct-publisher breadth
-  (unchanged) while still letting a media-only source contribute *something*.
+  (unchanged) while still letting a media-only source contribute *something*. *(The Attention component — the
+  breadth definition and the `+12` saturation — is further superseded by radar-formula-v4 for Attention; see
+  the spec-88 refinement below. The `0.25·mediaSignals` media term and the `÷250` divisor carry forward to v4
+  unchanged.)*
 - **OpportunityScore** — `OpportunityAttentionDivisor 200 → 250` (`Trajectory·(EC/100)·(1 − Attention/250)`):
   the near-uniform ~40% haircut is what compressed the board and demoted MRCY/AGYS. Combined with the raised
   saturation, `/250` softens the covered cluster's haircut to ~24–28% while a genuinely under-followed name
@@ -196,9 +200,56 @@ ported. This is the sanctioned AD-6 formula-change mechanism (bump `Version`, up
 `v8 → v9` (AD-10). *Accepted · 2026-07-04 — maintainer reviewed and approved the exact constants (`+12`,
 `0.25`, `÷250`) and the 8-company before/after Opportunity table.*
 
+### Refinement — `radar-formula-v4` (spec 88): source-quality tiering of attention breadth
+
+Two live runs on 2026-07-04 (the 8-company watch universe, after spec 84 made `SourceName` the real publisher)
+exposed the **root cause** behind the undifferentiated Attention that v3 recalibrated around: the distinct
+third-party "publishers" driving reach are dominated by **algorithmic finance-content mills that cover
+essentially every ticker** (MarketBeat, Zacks, Simply Wall St, StockStory, Moomoo, TradingView, Stock Titan,
+GuruFocus, Defense World, Pluang, MarketScreener, …). Because v3 counted *distinct third-party `SourceName`s
+equally*, "20 content mills auto-generated a blurb" scored the same breadth as "Reuters, Bloomberg, WSJ, CNBC
+and an industry trade covered a real development" — Attention measured **media-noise breadth**, not genuine
+market notice, so every normally-covered small-cap saturated. `RadarScoreFormulaV4`
+(`Version = "radar-formula-v4"`) fixes the **Attention component only**; **Trajectory, EvidenceConfidence,
+SignalVelocity, the media term (`0.25·mediaSignals`), the Opportunity discount *shape* (`÷250`), recency, the
+empty-window behaviour, and the `PreviousSignals`/window/provenance/contribution rules are byte-for-byte
+unchanged from v3**. The v1/v2/v3 Attention component formula above is therefore *superseded by
+radar-formula-v4* for Attention:
+
+- **AttentionScore breadth** — the flat distinct-publisher count becomes a **tier-weighted distinct-publisher
+  sum**: `breadth = Σ over distinct third-party publishers of tierWeight(publisher)`, with content mills
+  ≈`0.1`, unknown outlets `0.5`, and genuine outlets (Reuters, Bloomberg, WSJ, CNBC, AP, Financial Times,
+  industry trades such as SpaceNews) `1.0`. `reach = breadth + 0.25·mediaSignals` (media term unchanged;
+  it is a `MediaAttention` count, not a per-publisher term, so tiering does not apply). Distinct-by-publisher
+  is preserved — a mill that appears 10× still contributes its weight once. The tier map is **config data in
+  Infrastructure** (`Radar:Attention`, bound to `AttentionSourceTierOptions` / `ConfiguredAttentionSource
+  Weights`), injected into the formula behind the Application `IAttentionSourceWeights` abstraction (AD-5); the
+  formula stays a pure, deterministic function of `(input, immutable weights)` (AD-3). **Unknown publishers
+  default to a non-zero weight (`0.5`)** so real coverage is never silently zeroed — worst case an un-listed
+  real outlet is *under*-counted, not dropped.
+- **AttentionHalfSaturation `12 → 3`** — tiering *shrinks* reach: a covered name drops from ~20 distinct
+  publishers to ≈**2–6** genuine-equivalent ones. At that filtered scale v3's `+12` would re-collapse Attention
+  at the *bottom* (everyone back near zero), so the saturation is re-tuned down to `+3`, re-centring the
+  filtered covered cluster at ~**40–70** and leaving thin/mill-only names low (~15–20). Same saturating shape
+  (asymptotic to 100, monotone in reach).
+
+Because only Attention moves, the **under-the-radar principle is preserved**: Opportunity still falls
+monotonically as Attention rises and never zeroes (the `÷250` divisor is unchanged), a mill-covered name now
+gets a *low* Attention and thus a *smaller* discount but it also has a low reach so it is not spuriously
+boosted, and a name with **more genuine outlets** now sits above one with fewer even at similar article counts
+— differentiation on the right axis (genuine breadth over mill breadth). Existing on-disk snapshots keep their
+recorded `ScoringVersion` and remain reproducible; only the live formula moved to v4. Per the
+spec-implementation checklist, `RadarScoreFormulaV3` was **deleted** (not left dormant) and its tests ported.
+This is the sanctioned AD-6 formula-change mechanism (bump `Version`, update this entry), not drift;
+`ScoringVersion` advances automatically via `_formula.Version` and `ScoringEngine.ScoringConfigVersion` bumped
+`v9 → v10` (AD-10). *Accepted · 2026-07-04 — maintainer reviewed and approved the tier weights (mill `0.1`,
+unknown `0.5`, genuine `1.0`), the curated mill/genuine publisher lists, and the re-tuned
+`AttentionHalfSaturation = 3.0`.*
+
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
-`radar-formula-v3` — maintainer-approved).
+`radar-formula-v3` — maintainer-approved). Refined · 2026-07-04 (spec 88, `radar-formula-v4` — Accepted,
+source-quality tiering).
 
 ---
 

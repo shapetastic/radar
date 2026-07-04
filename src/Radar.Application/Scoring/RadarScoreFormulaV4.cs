@@ -5,22 +5,29 @@ using Radar.Domain.Signals;
 namespace Radar.Application.Scoring;
 
 /// <summary>
-/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v3</c>: an AD-6 refinement of
-/// <c>radar-formula-v2</c> that re-tunes the attention saturation and the under-the-radar discount so
-/// Attention separates under-followed from widely-covered names again. Live data showed the v2 Attention
-/// saturating at 76–85 across almost the whole board (the small <c>+5</c> half-saturation maxed out at
-/// normal coverage), and the <c>(1 − Attention/200)</c> discount haircutting a near-uniform ~40% that
-/// compressed the board and penalised the most-covered quality names. v3 raises the half-saturation
-/// (5→12), down-weights the raw media term (0.5→0.25 — distinct-publisher breadth is the cleaner signal),
-/// and softens the discount divisor (200→250). Only <b>Attention</b> and <b>Opportunity</b> change; every
-/// other component is byte-for-byte identical to v2. Pure and deterministic (no clock, no randomness, no
-/// I/O); every component clamps to [0,100]. Trajectory excludes zero-direction signals, Attention counts
-/// only third-party (market) sources, EvidenceConfidence anchors on the strongest signal/quality with a
-/// saturating diversity bonus, and SignalVelocity is unchanged. Emits exactly one provenance-carrying
-/// contribution per current-window signal, in input order (including Neutral/Mixed, which naturally weigh
-/// 0), and never from <see cref="ScoringInput.PreviousSignals"/>.
+/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v4</c>: an AD-6 refinement of
+/// <c>radar-formula-v3</c> that applies <b>source-quality tiering</b> to the Attention reach breadth and
+/// re-tunes the saturation for the resulting smaller distribution. Live data showed the distinct third-party
+/// "publishers" driving reach were dominated by algorithmic finance-content mills that cover essentially
+/// every ticker, so v3's flat distinct-publisher count measured media-noise breadth, not genuine market
+/// notice. v4 replaces the flat count with a <b>tier-weighted distinct-publisher sum</b> via an injected
+/// <see cref="IAttentionSourceWeights"/> (content mills contribute little, unknown outlets a conservative
+/// default, genuine outlets full), so a name's reach now reflects who actually covered it. Because tiering
+/// shrinks reach (a covered name drops from ~20 distinct publishers to ~2–6 genuine-equivalent ones), the
+/// v3 half-saturation (12) is re-tuned down to 3 so Attention still spans a useful range. Only
+/// <b>Attention</b> (and the Opportunity that consumes it) changes; every other component — Trajectory,
+/// EvidenceConfidence, SignalVelocity, the media term (<c>0.25·mediaSignals</c>), the Opportunity discount
+/// shape (<c>÷250</c>), recency, clamps, the empty-window behaviour, and the
+/// <see cref="ScoringInput.PreviousSignals"/>/window/provenance/contribution rules — is byte-for-byte
+/// identical to v3. Pure and deterministic (no clock, no randomness, no I/O; <see cref="_weights"/> is an
+/// immutable lookup); every component clamps to [0,100]. Trajectory excludes zero-direction signals,
+/// Attention counts only third-party (market) sources, EvidenceConfidence anchors on the strongest
+/// signal/quality with a saturating diversity bonus, and SignalVelocity is unchanged. Emits exactly one
+/// provenance-carrying contribution per current-window signal, in input order (including Neutral/Mixed,
+/// which naturally weigh 0), and never from <see cref="ScoringInput.PreviousSignals"/>. Supersedes
+/// <c>radar-formula-v3</c>.
 /// </summary>
-public sealed class RadarScoreFormulaV3 : IScoreFormula
+public sealed class RadarScoreFormulaV4 : IScoreFormula
 {
     // Direction → sign used in trajectory.
     private const int DirPositive = +1;
@@ -34,12 +41,14 @@ public sealed class RadarScoreFormulaV3 : IScoreFormula
     private const double TrajectoryNeutral = 50.0;
     private const double TrajectoryScale   = 5.0;
 
-    // Attention saturation: reach / (reach + K) → 0..1. v3 raised the half-saturation point (5→12) so
-    // normal coverage (reach ≈ 16–28) no longer saturates at 76–85; the covered cluster now lands ~57–70
-    // and thinly-covered names stay low, restoring the discriminator. MediaAttention signals add a quarter
-    // unit of reach: v3 halved the raw media weight (0.5→0.25) because one event routinely spawns many
-    // near-duplicate articles, so raw media volume is duplication-prone — lean on distinct-publisher breadth.
-    private const double AttentionHalfSaturation = 12.0;
+    // Attention saturation: reach / (reach + K) → 0..1. v4 re-tuned the half-saturation point (12→3) for
+    // the smaller filtered reach distribution after tier-weighting: once mills are down-weighted a covered
+    // name's reach falls to ≈2–6 genuine-equivalent publishers, at which scale the v3 +12 would push everyone
+    // back down to near-zero Attention. +3 re-centres the saturation so the filtered covered cluster lands
+    // ~40–70 and a thin/mill-only name stays low. MediaAttention signals add a quarter unit of reach: the raw
+    // media weight is unchanged from v3 (0.25) — it is a MediaAttention count, not a per-publisher term, so
+    // tier weighting does not apply to it.
+    private const double AttentionHalfSaturation = 3.0;
     private const double MediaReachWeight        = 0.25;
 
     // EvidenceConfidence quality weights (by EvidenceQuality).
@@ -62,10 +71,25 @@ public sealed class RadarScoreFormulaV3 : IScoreFormula
 
     // Opportunity: v3 softened the under-the-radar discount divisor (200→250) so covered quality names are
     // not uniformly crushed; attention at 100 now costs at most a 40% haircut (100/250), still never zeroes.
+    // v4 leaves this shape unchanged — the filtered-and-re-saturated Attention now feeds it, which is the point.
     private const double OpportunityAttentionDivisor = 250.0;
 
+    private readonly IAttentionSourceWeights _weights;
+
+    /// <summary>
+    /// Constructs the formula with the per-publisher attention-breadth weights it applies to the reach
+    /// term. There is deliberately <b>no</b> parameterless construction: the tier policy is config data
+    /// supplied by Infrastructure (AD-5). <paramref name="weights"/> must be an immutable lookup so the
+    /// formula stays a pure, deterministic function of <c>(input, weights)</c> (AD-3).
+    /// </summary>
+    public RadarScoreFormulaV4(IAttentionSourceWeights weights)
+    {
+        ArgumentNullException.ThrowIfNull(weights);
+        _weights = weights;
+    }
+
     /// <inheritdoc />
-    public string Version => "radar-formula-v3";
+    public string Version => "radar-formula-v4";
 
     private static int DirectionSign(SignalDirection d) => d switch
     {
@@ -97,7 +121,7 @@ public sealed class RadarScoreFormulaV3 : IScoreFormula
             var emptyComponents = new ScoreComponents(0, 0, 0, 0, 0);
             return new ScoreComputation(
                 emptyComponents,
-                "radar-formula-v3: no signals in window.",
+                "radar-formula-v4: no signals in window.",
                 JsonSerializer.Serialize(emptyComponents),
                 new List<ScoreContribution>());
         }
@@ -148,16 +172,18 @@ public sealed class RadarScoreFormulaV3 : IScoreFormula
 
         // ---- 2. AttentionScore (saturating on breadth) ----
         // v2: only third-party (market attention) evidence source names count toward reach; a company's
-        // own disclosures (press releases, filings, ...) are not market attention. v3 raised the
-        // half-saturation constant (12) and down-weighted the raw media term (0.25) — see field comments.
-        var distinctThirdPartySources = signals
+        // own disclosures (press releases, filings, ...) are not market attention. v4 weights each distinct
+        // third-party publisher by its source-quality tier (mills ≈0.1, unknown 0.5, genuine 1.0) instead of
+        // counting every distinct publisher as 1, so breadth reflects genuine notice, not mill volume; the
+        // half-saturation constant was re-tuned (12→3) for the resulting smaller reach — see field comments.
+        var weightedBreadth = signals
             .Where(s => EvidenceSourceTypes.IsThirdPartyAttentionSource(s.Evidence.SourceType))
             .Select(s => s.Evidence.SourceName)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
+            .Sum(name => _weights.WeightFor(name));
         var mediaCount = signals.Count(s => s.Signal.Type == SignalType.MediaAttention);
-        var reach = distinctThirdPartySources + MediaReachWeight * mediaCount;
+        var reach = weightedBreadth + MediaReachWeight * mediaCount;
         var attentionScore = Score(100 * reach / (reach + AttentionHalfSaturation));
 
         // ---- 3. EvidenceConfidenceScore ----
@@ -214,7 +240,7 @@ public sealed class RadarScoreFormulaV3 : IScoreFormula
 
         var windowDays = (int)Math.Round(windowLength.TotalDays, MidpointRounding.AwayFromZero);
         var explanation =
-            $"radar-formula-v3: {input.Signals.Count} signal(s) over {windowDays}d → " +
+            $"radar-formula-v4: {input.Signals.Count} signal(s) over {windowDays}d → " +
             $"Trajectory {trajectoryScore}, Opportunity {opportunityScore} (Attention {attentionScore}, " +
             $"Confidence {evidenceConfidenceScore}, Velocity {signalVelocityScore}).";
 
