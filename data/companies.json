@@ -247,6 +247,40 @@
           "url": "query=Helios Technologies&ticker=HLIO"
         }
       ]
+    },
+    {
+      "id": "23ddc629-d6d2-4877-9ea8-aa597de3606e",
+      "name": "Eos Energy Enterprises, Inc.",
+      "legalName": "Eos Energy Enterprises, Inc.",
+      "ticker": "EOSE",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Electrical Equipment & Parts",
+      "aliases": ["Eos Energy", "Eos"],
+      "themes": ["long-duration energy storage", "zinc batteries", "grid-scale storage"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Eos Energy Enterprises — Press Releases",
+          "url": "https://www.eose.com/feed/"
+        },
+        {
+          "type": "sec",
+          "name": "Eos Energy Enterprises — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001805077.json"
+        },
+        {
+          "type": "news",
+          "name": "Eos Energy Enterprises — News coverage (GDELT)",
+          "url": "query=Eos Energy Enterprises&ticker=EOSE"
+        },
+        {
+          "type": "newssearch",
+          "name": "Eos Energy Enterprises — News attention (Google News)",
+          "url": "query=Eos Energy Enterprises&ticker=EOSE"
+        }
+      ]
     }
   ]
 }
