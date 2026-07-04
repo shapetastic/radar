@@ -281,11 +281,24 @@ snapshots keep their recorded `ScoringVersion` and remain reproducible. Per the 
 *Accepted · 2026-07-04 — maintainer approved the named-profile ergonomic and the magnitudes-→-config
 refinement.*
 
+Spec 90 (attention tier-calibration + publisher-name normalization) recalibrated the *attention weights*
+without touching the formula: the unknown default dropped `0.5 → 0.25`, the mill denylist was expanded with
+the observed long-tail aggregators (Finviz, Investing.com, Insider Monkey, Benzinga, TipRanks, StockAnalysis,
+plus an explicit `Simplywall.st` alias), and `ConfiguredAttentionSourceWeights.Normalize` now folds domain-form
+/ punctuation / spacing / case variants onto their curated key (lowercase, strip one trailing common-TLD token,
+remove non-alphanumerics). This is **NOT a new formula version** — the reach *shape* is byte-for-byte unchanged
+(same weighted-distinct-sum, `+3` saturation, media term); only `WeightFor`'s answers move. It therefore stays
+`radar-formula-v5`, and the fingerprint **auto-re-stamps** (the effective attention descriptor changed) — no
+manual `ScoringConfigVersion` bump; only the pinned default-fingerprint test constant was recomputed.
+*Accepted · 2026-07-04 — maintainer sign-off granted on the recalibrated defaults / posture (denylist-expand +
+`UnknownWeight 0.25`, with the allowlist flip as the documented config-only alternative).*
+
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
 `radar-formula-v3` — maintainer-approved). Refined · 2026-07-04 (spec 88, `radar-formula-v4` — Accepted,
 source-quality tiering). Refined · 2026-07-04 (spec 89, `radar-formula-v5` — Accepted, magnitudes → config;
-structure stays versioned).
+structure stays versioned). Refined · 2026-07-04 (spec 90 — attention tier recalibration + publisher-name
+normalization; **not** a formula-version bump, fingerprint auto-re-stamps; Accepted · 2026-07-04).
 
 ---
 
