@@ -186,4 +186,144 @@ public sealed class FileSignalStoreTests : IDisposable
         var expectedPath = Path.Combine(rootAsFile, "2026", "02", signal.Id + ".json");
         Assert.Equal(expectedPath, path);
     }
+
+    private static Signal SignalFor(
+        Guid companyId,
+        DateTimeOffset observedAt,
+        SignalReviewStatus status = SignalReviewStatus.Approved) =>
+        new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithReviewStatus(status)
+            .WithObservedAtUtc(observedAt)
+            .Build();
+
+    [Fact]
+    public async Task ReadApprovedInWindow_ReturnsInWindowApproved_OrderedAndBoundaryHonoured()
+    {
+        var companyId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+
+        // Exactly at start -> EXCLUDED (exclusive start).
+        var atStart = SignalFor(companyId, start);
+        // Inside the window (two, seeded out of chronological order to prove ordering).
+        var later = SignalFor(companyId, new DateTimeOffset(2026, 2, 6, 0, 0, 0, TimeSpan.Zero));
+        var earlier = SignalFor(companyId, new DateTimeOffset(2026, 2, 3, 0, 0, 0, TimeSpan.Zero));
+        // Exactly at end -> INCLUDED (inclusive end).
+        var atEnd = SignalFor(companyId, end);
+        // After the end -> EXCLUDED.
+        var afterEnd = SignalFor(companyId, new DateTimeOffset(2026, 2, 10, 0, 0, 0, TimeSpan.Zero));
+
+        foreach (var s in new[] { atStart, later, earlier, atEnd, afterEnd })
+        {
+            await store.WriteAsync(s, ReviewFor(s), CancellationToken.None);
+        }
+
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+
+        // In-window (start, end]: earlier, later, atEnd — ordered by ObservedAtUtc.
+        Assert.Equal(
+            new[] { earlier.Id, later.Id, atEnd.Id },
+            result.Select(s => s.Id).ToArray());
+        Assert.DoesNotContain(result, s => s.Id == atStart.Id);
+        Assert.DoesNotContain(result, s => s.Id == afterEnd.Id);
+    }
+
+    [Fact]
+    public async Task ReadApprovedInWindow_ExcludesNonApproved()
+    {
+        var companyId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+        var inWindow = new DateTimeOffset(2026, 2, 4, 0, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+
+        var approved = SignalFor(companyId, inWindow);
+        var needsReview = SignalFor(companyId, inWindow, SignalReviewStatus.NeedsHumanReview);
+        var rejected = SignalFor(companyId, inWindow, SignalReviewStatus.Rejected);
+        var pending = SignalFor(companyId, inWindow, SignalReviewStatus.Pending);
+
+        foreach (var s in new[] { approved, needsReview, rejected, pending })
+        {
+            await store.WriteAsync(s, ReviewFor(s), CancellationToken.None);
+        }
+
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+
+        var only = Assert.Single(result);
+        Assert.Equal(approved.Id, only.Id);
+    }
+
+    [Fact]
+    public async Task ReadApprovedInWindow_NoMatches_ReturnsEmpty()
+    {
+        var companyId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+
+        // An Approved signal OUTSIDE the window for this company.
+        var outside = SignalFor(companyId, new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero));
+        await store.WriteAsync(outside, ReviewFor(outside), CancellationToken.None);
+
+        // Window with no matching signals.
+        Assert.Empty(await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None));
+
+        // Unknown company (no matching files).
+        Assert.Empty(await store.ReadApprovedInWindowAsync(
+            Guid.NewGuid(), start, end, CancellationToken.None));
+
+        // Root directory that does not exist.
+        var missingRootStore = CreateStore(Path.Combine(_tempDir, "does-not-exist"));
+        Assert.Empty(await missingRootStore.ReadApprovedInWindowAsync(
+            companyId, start, end, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReadApprovedInWindow_SkipsMalformedFile_ReturnsValid()
+    {
+        var companyId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+        var inWindow = new DateTimeOffset(2026, 2, 6, 0, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+
+        var valid = SignalFor(companyId, inWindow);
+        await store.WriteAsync(valid, ReviewFor(valid), CancellationToken.None);
+
+        // Drop a garbage *.json into the same {yyyy}/{MM} directory as the valid signal.
+        var garbagePath = Path.Combine(_tempDir, "2026", "02", "garbage.json");
+        await File.WriteAllTextAsync(garbagePath, "{ this is not valid json ]");
+
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+
+        var only = Assert.Single(result);
+        Assert.Equal(valid.Id, only.Id);
+    }
+
+    [Fact]
+    public async Task ReadApprovedInWindow_AlreadyCancelledToken_Throws()
+    {
+        var companyId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+
+        // Seed at least one file so the per-file cancellation check runs.
+        var seeded = SignalFor(companyId, new DateTimeOffset(2026, 2, 4, 0, 0, 0, TimeSpan.Zero));
+        await store.WriteAsync(seeded, ReviewFor(seeded), CancellationToken.None);
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => store.ReadApprovedInWindowAsync(companyId, start, end, cts.Token));
+    }
 }

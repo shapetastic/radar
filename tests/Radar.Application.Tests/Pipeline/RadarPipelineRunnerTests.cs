@@ -161,6 +161,23 @@ public sealed class RadarPipelineRunnerTests
             Written.Add((signal, review));
             return Task.FromResult("written/signal.json");
         }
+
+        public Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
+            Guid companyId,
+            DateTimeOffset startExclusiveUtc,
+            DateTimeOffset endInclusiveUtc,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            IReadOnlyList<Signal> result = Written
+                .Select(w => w.Signal)
+                .Where(s => s.CompanyId == companyId)
+                .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)
+                .Where(s => s.ObservedAtUtc > startExclusiveUtc && s.ObservedAtUtc <= endInclusiveUtc)
+                .OrderBy(s => s.ObservedAtUtc).ThenBy(s => s.Id)
+                .ToList();
+            return Task.FromResult(result);
+        }
     }
 
     /// <summary>
@@ -273,6 +290,7 @@ public sealed class RadarPipelineRunnerTests
                 time, NullLogger<DeterministicSignalReviewer>.Instance);
             var scoringEngine = new ScoringEngine(
                 Signals,
+                SignalStore,
                 Evidence,
                 Scores,
                 new RadarScoreFormulaV2(),
