@@ -250,8 +250,9 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         // many distinct outlets cover a company — the feed name is one constant value per company and would
         // pin breadth at 1. Fall back to feed.Name only when the publisher is blank so an unattributable
         // article still carries a human-readable source label for the report; that fallback never manufactures
-        // false breadth — it is a single per-company-constant bucket the formula's Distinct() collapses, and a
-        // blank publisher is skipped by the formula anyway (contributes 0 breadth, still counts as media).
+        // false breadth — feed.Name is a single per-company-constant bucket, so every blank-publisher article
+        // collapses to that same one value under the formula's Distinct() and together they add at most 1 to
+        // breadth (not one per article — and not 0: the non-blank fallback IS counted, unlike a truly blank name).
         var sourceName = string.IsNullOrWhiteSpace(publisher) ? feed.Name : publisher;
 
         // RawText: synthesized from REAL fields only. The url + title + pubDate are included so two distinct

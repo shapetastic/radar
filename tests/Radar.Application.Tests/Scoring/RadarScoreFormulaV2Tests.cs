@@ -246,7 +246,8 @@ public sealed class RadarScoreFormulaV2Tests
     {
         // Spec 84: once the collector maps SourceName to the real outlet, distinct-publisher breadth becomes
         // real. Three signals with THREE distinct third-party SourceNames outscore three signals sharing ONE
-        // SourceName, holding the signal set size (and thus media-count) constant so only breadth varies.
+        // SourceName. mediaCount (RadarScoreFormulaV2 counts SignalType.MediaAttention, not set size) is 0 in
+        // both because BuildSignal defaults to the non-media CustomerWin type, so reach moves on breadth alone.
         var formula = new RadarScoreFormulaV2();
 
         var oneOutlet = formula.Compute(InputFrom(new[]
@@ -270,8 +271,9 @@ public sealed class RadarScoreFormulaV2Tests
     public void Attention_RepeatedSamePublisher_DoesNotInflateBreadth()
     {
         // Regression lock the fix relies on for outlet-dedupe: three NewsArticle items sharing one SourceName
-        // deliver the same breadth as a single one (the formula's existing Distinct(SourceName)). Non-media
-        // signals keep media-count at 0 in both, isolating breadth.
+        // deliver the same breadth as a single one (the formula's existing Distinct(SourceName)). mediaCount
+        // (RadarScoreFormulaV2 counts SignalType.MediaAttention) stays 0 in both because BuildSignal defaults to
+        // the non-media CustomerWin type — not overridden here — so breadth is isolated.
         var formula = new RadarScoreFormulaV2();
 
         var one = formula.Compute(InputFrom(new[]
