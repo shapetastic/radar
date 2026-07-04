@@ -460,8 +460,68 @@ public class KeywordSignalExtractorTests
     [InlineData("Acme secures a new credit facility from its lenders.")]
     [InlineData("Acme completes a debt financing round.")]
     [InlineData("Acme issues a convertible note to investors.")]
-    public async Task NewCapitalRaisePhrases_YieldSingleCapitalRaiseSignal(string rawText)
+    public async Task DemotedDebtCapitalRaisePhrases_YieldSingleNeutralCapitalRaiseSignal(string rawText)
     {
+        // Spec 86: "credit facility" / "debt financing" / "convertible note" are debt/hybrid capital events
+        // whose valence the code cannot read, so they were demoted from Positive to Neutral (contribute 0 to
+        // Trajectory) rather than over-claim growth.
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CapitalRaise.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+    }
+
+    [Theory]
+    [InlineData("Boilerplate about the company.", "Eos Energy Announces Commencement of Rights Offering")]
+    [InlineData("Announces Proposed Registered Direct Offering of Common Stock and Warrants.", "Untitled")]
+    [InlineData("Company enters into an at-the-market offering program.", "Untitled")]
+    [InlineData("ATM offering of up to $50 million.", "Untitled")]
+    [InlineData("Files shelf registration statement.", "Untitled")]
+    [InlineData("The company prices a shelf offering.", "Untitled")]
+    [InlineData("The board announces a 1-for-10 reverse stock split.", "Untitled")]
+    [InlineData("Issues warrants to purchase up to 5,000,000 shares.", "Untitled")]
+    [InlineData("The transaction is dilutive to existing shareholders.", "Untitled")]
+    public async Task DilutiveOfferingPhrases_YieldSingleNegativeCapitalRaiseSignal(string rawText, string title)
+    {
+        // Spec 86: dilutive / distress capital-structure events (rights / registered-direct / ATM / shelf /
+        // warrant / reverse-split offerings, "dilutive") are Negative CapitalRaise signals so a diluted
+        // company is no longer scored neutral-to-positive.
+        var evidence = MakeEvidence(rawText, title: title);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CapitalRaise.ToString(), signal.SignalType);
+        Assert.Equal("Negative", signal.Direction);
+    }
+
+    [Fact]
+    public async Task MixedDilutiveAndRaisesHeadline_YieldsSingleNegativeCapitalRaise()
+    {
+        // Ordering guarantee: the Negative dilution cues are placed before the Positive "raises $" cue, so a
+        // headline mixing both resolves to Negative via first-match-per-type.
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Announces Registered Direct Offering; raises $30 million");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CapitalRaise.ToString(), signal.SignalType);
+        Assert.Equal("Negative", signal.Direction);
+    }
+
+    [Theory]
+    [InlineData("Acme raises $12 million in a funding round.")]
+    [InlineData("Acme closes its Series B.")]
+    [InlineData("Acme completes a series seed round.")]
+    public async Task VentureRaisePhrases_StillYieldSinglePositiveCapitalRaiseSignal(string rawText)
+    {
+        // Regression: the demotion of the debt cues must not over-reach — genuine growth-leaning venture
+        // financing stays Positive.
         var evidence = MakeEvidence(rawText);
 
         var output = await ExtractAsync(evidence);
@@ -469,6 +529,40 @@ public class KeywordSignalExtractorTests
         var signal = Assert.Single(output.Signals);
         Assert.Equal(SignalType.CapitalRaise.ToString(), signal.SignalType);
         Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Theory]
+    [InlineData("Acme launches a new product offering for enterprises.")]
+    [InlineData("Acme extends the standard warranty to five years.")]
+    public async Task NonDilutiveOfferingPhrases_DoNotYieldCapitalRaiseSignal(string rawText)
+    {
+        // Scope guard: bare "offering" ("product offering") and "warranty" must NOT match the tightly-scoped
+        // multi-word dilution cues ("...offering" phrases, "warrants to purchase").
+        var evidence = MakeEvidence(rawText);
+
+        var output = await ExtractAsync(evidence);
+
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.CapitalRaise.ToString());
+    }
+
+    [Fact]
+    public async Task DilutiveOfferingSignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeEvidence(
+            rawText: "Boilerplate about the company.",
+            title: "Eos Energy Announces Commencement of Rights Offering",
+            publishedAtUtc: PublishedAt);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CapitalRaise.ToString(), signal.SignalType);
+        Assert.Equal("Negative", signal.Direction);
+
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
     }
 
     [Theory]

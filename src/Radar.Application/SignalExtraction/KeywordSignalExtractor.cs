@@ -83,15 +83,37 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("unveils", SignalType.ProductLaunch, SignalDirection.Positive, 5, 6, 0.6m),
         new("introduces", SignalType.ProductLaunch, SignalDirection.Positive, 5, 6, 0.6m),
 
-        new("convertible note", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
-        new("credit facility", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
-        new("debt financing", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
+        // CapitalRaise, ordered Negative -> Positive -> Neutral. Dilution/distress capital events are
+        // Negative and ordered FIRST so they win first-match-per-type over a co-occurring "raises $" (a
+        // registered direct offering that also says "raises $30 million" resolves to Negative). The phrases
+        // are deliberately multi-word/specific to avoid false positives — no bare "offering" ("product
+        // offering"), no bare "warrant"/"warranty". Going-concern / substantial-doubt is NOT here: it lives
+        // in 10-K/10-Q body text Radar does not ingest (SEC evidence carries only 8-K item-title metadata),
+        // so a keyword rule would never fire — deferred to a future AI/full-text distress read.
+        new("rights offering", SignalType.CapitalRaise, SignalDirection.Negative, 6, 5, 0.6m),
+        new("registered direct offering", SignalType.CapitalRaise, SignalDirection.Negative, 6, 5, 0.6m),
+        new("at-the-market offering", SignalType.CapitalRaise, SignalDirection.Negative, 6, 5, 0.6m),
+        new("atm offering", SignalType.CapitalRaise, SignalDirection.Negative, 6, 5, 0.6m),
+        new("shelf registration", SignalType.CapitalRaise, SignalDirection.Negative, 5, 5, 0.55m),
+        new("shelf offering", SignalType.CapitalRaise, SignalDirection.Negative, 5, 5, 0.55m),
+        new("reverse stock split", SignalType.CapitalRaise, SignalDirection.Negative, 6, 5, 0.6m),
+        new("warrants to purchase", SignalType.CapitalRaise, SignalDirection.Negative, 5, 5, 0.55m),
+        new("dilution", SignalType.CapitalRaise, SignalDirection.Negative, 5, 4, 0.5m),
+        new("dilutive", SignalType.CapitalRaise, SignalDirection.Negative, 5, 4, 0.5m),
+        // Positive venture cues: a named funding round / "series" raise / "raises $" is a growth-leaning
+        // primary-market capital event.
         new("raises $", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("funding round", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("series a", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("series b", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("series c", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
         new("series seed", SignalType.CapitalRaise, SignalDirection.Positive, 5, 5, 0.6m),
+        // Neutral cues: debt/hybrid capital events whose valence the code cannot read (a distressed
+        // refinancing reads identical to expansion financing at the keyword level; a convertible can be
+        // accretive or a death spiral) -> Neutral, contributing 0 to Trajectory.
+        new("convertible note", SignalType.CapitalRaise, SignalDirection.Neutral, 4, 5, 0.5m),
+        new("credit facility", SignalType.CapitalRaise, SignalDirection.Neutral, 4, 5, 0.5m),
+        new("debt financing", SignalType.CapitalRaise, SignalDirection.Neutral, 4, 5, 0.5m),
         // SEC 8-K item titles (2.03 / 3.02): a debt facility or an equity issuance. Both are capital
         // events but the code reveals no directional read, so Neutral.
         new("direct financial obligation", SignalType.CapitalRaise, SignalDirection.Neutral, 4, 5, 0.5m),
