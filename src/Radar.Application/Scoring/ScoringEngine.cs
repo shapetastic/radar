@@ -25,19 +25,18 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation ships the cross-run signal DEDUP in the velocity previous window
-    // (spec 85): ReadApprovedInWindowAsync now returns at most one signal per stable identity
-    // (CompanyId, EvidenceId, Type, Direction), collapsing the cross-run duplicate copies the same signal
-    // accumulates on disk (a fresh SignalId per run). This restores determinism (AD-3) and a like-for-like
-    // velocity comparison — SignalVelocityScore (and thus OpportunityScore) no longer depends on how many
-    // times the pipeline has run. Only the SET of previous-window signals fed to the formula is deduplicated
-    // upstream in the store read — the velocity formula math (50·(actNow+10)/(actPrev+10)), the (start, end]
-    // window and its shared boundary, and the "previous window is activity-only, no evidence/contributions/
-    // links" rule are all unchanged (AD-6), so ScoringVersion/EngineVersion/formula Version are NOT touched.
-    // Per AD-10 a scoring-affecting change bumps this stamp so a cross-run delta across the pre/post boundary
-    // renders "(scoring updated)" rather than a fabricated Thesis improving/deteriorating label. Prior
-    // generation: spec 82 shipped the cross-run signal read-back for velocity (v5).
-    private const string ScoringConfigVersion = "radar-scoring-config-v6";
+    // ScoringOptions). This generation ships NEWS ATTENTION BREADTH BY PUBLISHER (spec 84): the newssearch
+    // collector now maps each article's evidence SourceName to the real OUTLET (Reuters, Yahoo Finance, ...)
+    // instead of the per-company feed name, so AttentionScore's breadth term — which counts distinct
+    // third-party SourceNames — finally sees how many distinct outlets cover a company rather than a constant
+    // 1 per company. AttentionScore (and thus OpportunityScore, ranking, and possibly action labels) now
+    // differentiates companies with multi-outlet coverage. This is a COLLECTOR/EVIDENCE-INPUT change, NOT a
+    // formula-math change: RadarScoreFormulaV2.Compute (100·reach/(reach+5), reach = distinctThirdPartySources
+    // + 0.5·mediaCount) is byte-for-byte unchanged, so ScoringVersion/EngineVersion/formula Version are NOT
+    // touched. Per AD-10 a scoring-affecting change bumps this stamp so a cross-run delta across the pre/post
+    // boundary renders "(scoring updated)" rather than a fabricated Thesis improving/deteriorating label. Prior
+    // generation: spec 85 shipped the cross-run signal DEDUP in the velocity previous window (v6).
+    private const string ScoringConfigVersion = "radar-scoring-config-v7";
 
     private readonly ISignalRepository _signalRepository;
     private readonly ISignalFileStore _signalFileStore;

@@ -82,7 +82,8 @@ public sealed class NewsAttentionCollectorTests
         var item = Assert.Single(result.Evidence);
 
         Assert.Equal(EvidenceSourceType.NewsArticle, item.SourceType);
-        Assert.Equal("Mercury — News", item.SourceName);
+        // SourceName is the article's real outlet (the breadth input), not the per-company feed name.
+        Assert.Equal("Yahoo Finance", item.SourceName);
         Assert.Equal("https://news.google.com/rss/articles/mrcy-defense", item.SourceUrl);
 
         // Title is stored as-is (the " - Publisher" suffix is kept for provenance).
@@ -97,6 +98,8 @@ public sealed class NewsAttentionCollectorTests
         Assert.Equal("Medium", item.Metadata["quality"]);
         Assert.Equal("https://news.google.com/rss/articles/mrcy-defense", item.Metadata["url"]);
         Assert.Equal("Yahoo Finance", item.Metadata["publisher"]);
+        // The per-company feed attribution is retained in metadata now that SourceName is the outlet.
+        Assert.Equal("Mercury — News", item.Metadata["feedName"]);
         Assert.Equal("2026-06-27T12:30:00Z", item.Metadata["pubDate"]);
         Assert.Equal(MrcyToken, item.Metadata["newsSearchFeedUrl"]);
 
@@ -113,6 +116,82 @@ public sealed class NewsAttentionCollectorTests
 
         // No advice language.
         AssertNoAdviceLanguage(item);
+    }
+
+    [Fact]
+    public async Task CollectAsync_DistinctPublishers_ProduceDistinctSourceNames()
+    {
+        // Breadth becomes real: three distinct outlets covering the same company yield three distinct
+        // evidence SourceNames, so the formula's Distinct(SourceName) counts three outlets.
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000d"), MrcyId, "Mercury — News", MrcyToken);
+
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] =
+            [
+                Article("https://ok.example/1", "Mercury Systems wins radar deal - Reuters", sourceName: "Reuters"),
+                Article("https://ok.example/2", "Mercury Systems beats estimates - Yahoo Finance",
+                    sourceName: "Yahoo Finance"),
+                Article("https://ok.example/3", "Mercury Systems upgraded - MarketBeat", sourceName: "MarketBeat"),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        Assert.Equal(3, result.Evidence.Count);
+        Assert.Equal(
+            new HashSet<string> { "Reuters", "Yahoo Finance", "MarketBeat" },
+            result.Evidence.Select(e => e.SourceName).ToHashSet());
+    }
+
+    [Fact]
+    public async Task CollectAsync_SamePublisherRepeated_KeepsSameSourceName()
+    {
+        // Outlet dedupe holds: three distinct-URL Reuters articles all carry SourceName "Reuters", so the
+        // formula's Distinct(SourceName) counts a single outlet.
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000e"), MrcyId, "Mercury — News", MrcyToken);
+
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] =
+            [
+                Article("https://ok.example/1", "Mercury Systems news 1 - Reuters", sourceName: "Reuters"),
+                Article("https://ok.example/2", "Mercury Systems news 2 - Reuters", sourceName: "Reuters"),
+                Article("https://ok.example/3", "Mercury Systems news 3 - Reuters", sourceName: "Reuters"),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        Assert.Equal(3, result.Evidence.Count);
+        Assert.All(result.Evidence, e => Assert.Equal("Reuters", e.SourceName));
+    }
+
+    [Fact]
+    public async Task CollectAsync_BlankPublisher_FallsBackToFeedName()
+    {
+        // An unattributable article (blank publisher) still carries a readable label — the feed name — while
+        // metadata["publisher"] preserves the (blank) parsed value. Breadth is unaffected: the formula skips
+        // blank names, and the feed-name bucket is per-company constant.
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000f"), MrcyId, "Mercury — News", MrcyToken);
+
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] = [Article("https://ok.example/blank", "Mercury Systems update", sourceName: "")],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        var item = Assert.Single(result.Evidence);
+        Assert.Equal("Mercury — News", item.SourceName);
+        Assert.Equal("", item.Metadata["publisher"]);
+        Assert.Equal("Mercury — News", item.Metadata["feedName"]);
     }
 
     [Fact]
@@ -343,7 +422,9 @@ public sealed class NewsAttentionCollectorTests
         var result = await collector.CollectAsync(context, CancellationToken.None);
 
         var item = Assert.Single(result.Evidence);
-        Assert.Equal("Mercury — News", item.SourceName);
+        // SourceName is now the article's outlet; the feed name is retained in metadata.
+        Assert.Equal("Reuters", item.SourceName);
+        Assert.Equal("Mercury — News", item.Metadata["feedName"]);
 
         // The reader saw the phrases strictly sequentially in the deterministic (CompanyId, Id) order.
         Assert.Equal([MrcyPhrase, RklbPhrase], reader.QueryPhrasesInOrder);

@@ -245,6 +245,15 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
 
         var publisher = article.SourceName;
 
+        // SourceName is the article's real OUTLET (Reuters, Yahoo Finance, ...), NOT the per-company feed:
+        // AttentionScore's breadth term counts distinct third-party evidence SourceNames, so it must see how
+        // many distinct outlets cover a company — the feed name is one constant value per company and would
+        // pin breadth at 1. Fall back to feed.Name only when the publisher is blank so an unattributable
+        // article still carries a human-readable source label for the report; that fallback never manufactures
+        // false breadth — it is a single per-company-constant bucket the formula's Distinct() collapses, and a
+        // blank publisher is skipped by the formula anyway (contributes 0 breadth, still counts as media).
+        var sourceName = string.IsNullOrWhiteSpace(publisher) ? feed.Name : publisher;
+
         // RawText: synthesized from REAL fields only. The url + title + pubDate are included so two distinct
         // articles never collide under the mapper's Title+RawText ContentHash dedupe. No body text is fabricated.
         var rawText =
@@ -259,12 +268,15 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
             ["newsSearchFeedUrl"] = feed.Url,
             ["url"] = article.Url,
             ["publisher"] = publisher,
+            // The per-company feed attribution, still recoverable for provenance/display now that SourceName
+            // carries the outlet.
+            ["feedName"] = feed.Name,
             ["pubDate"] = pubDateText,
         };
 
         return new CollectedEvidence(
             SourceType: SourceType,
-            SourceName: feed.Name,
+            SourceName: sourceName,
             SourceUrl: article.Url,
             Title: title,
             RawText: rawText,
