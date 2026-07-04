@@ -215,6 +215,9 @@ Do not hand back broken code.
   recurring MEDIUM (specs 76, 77, 83). Keep genuinely per-source behaviour (e.g. a title-suffix
   strip that applies to one source only) as an explicit per-caller hook rather than forcing it
   into the shared type — share the common core, not the divergent edges.
+- **Scoring weights live in config.** Tunable magnitudes/weights live in config (`Radar:Scoring` profiles
+  bound onto `ScoringWeights`); the formula *structure* (component shape, direction-sign semantics) stays
+  versioned code (`radar-formula-vN`). Don't add a new formula class to change a number — edit/add a profile.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,
@@ -250,5 +253,7 @@ When implementing a spec that replaces existing functionality:
 3. Ensure tests exercise the new production path.
 4. Delete deprecated code rather than leaving it dormant.
 5. Update this CLAUDE.md if the architecture changes.
-6. Bump `ScoringEngine.ScoringConfigVersion` when a change affects scoring output (formula, extractor
-   rules incl. materiality tiers, or `ScoringOptions`) — see AD-10.
+6. A tunable **magnitude/weight** change is now a **config edit** (a new/edited `Radar:Scoring` profile bound
+   onto `ScoringWeights`) — it needs **no code version bump**, and the `ScoringConfigVersion` fingerprint
+   re-stamps automatically. The only remaining code-version obligation is bumping `_formula.Version` (a new
+   `radar-formula-vN` class) when the formula **structure/shape** changes (AD-6). See AD-10 (as amended).

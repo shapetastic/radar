@@ -101,4 +101,65 @@ public sealed class ConfiguredAttentionSourceWeightsTests
             () => new ConfiguredAttentionSourceWeights(options));
         Assert.Contains("Radar:Attention", ex.Message);
     }
+
+    [Fact]
+    public void CanonicalDescriptor_EscapesReservedDelimitersInPublisherKeys()
+    {
+        var options = new AttentionSourceTierOptions
+        {
+            UnknownWeight = 0.5,
+            SourceTiers = new Dictionary<string, AttentionSourceTierOptions.SourceTier>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Weird"] = new AttentionSourceTierOptions.SourceTier
+                {
+                    Weight = 0.25,
+                    Publishers = new[] { "p=0.25;q", "100% News" },
+                },
+            },
+        };
+
+        var descriptor = new ConfiguredAttentionSourceWeights(options).CanonicalDescriptor();
+
+        // The reserved delimiters (= ; %) are percent-escaped inside the key so they cannot be mistaken for
+        // structural separators. The escaped forms are present; the literals only ever appear as separators.
+        Assert.Contains("p%3D0.25%3Bq=0.25;", descriptor);
+        Assert.Contains("100%25 News=0.25;", descriptor);
+    }
+
+    [Fact]
+    public void CanonicalDescriptor_DistinctTierMapsThatWouldCollide_ProduceDistinctDescriptors()
+    {
+        // Without escaping, a single publisher literally named "p=0.25;q" serializes to the same bytes as two
+        // separate publishers "p" and "q" (both weight 0.25) — a non-injective fingerprint input. Escaping the
+        // reserved delimiters keeps the two maps distinguishable.
+        var single = new AttentionSourceTierOptions
+        {
+            UnknownWeight = 0.5,
+            SourceTiers = new Dictionary<string, AttentionSourceTierOptions.SourceTier>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["T"] = new AttentionSourceTierOptions.SourceTier
+                {
+                    Weight = 0.25,
+                    Publishers = new[] { "p=0.25;q" },
+                },
+            },
+        };
+        var pair = new AttentionSourceTierOptions
+        {
+            UnknownWeight = 0.5,
+            SourceTiers = new Dictionary<string, AttentionSourceTierOptions.SourceTier>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["T"] = new AttentionSourceTierOptions.SourceTier
+                {
+                    Weight = 0.25,
+                    Publishers = new[] { "p", "q" },
+                },
+            },
+        };
+
+        var singleDescriptor = new ConfiguredAttentionSourceWeights(single).CanonicalDescriptor();
+        var pairDescriptor = new ConfiguredAttentionSourceWeights(pair).CanonicalDescriptor();
+
+        Assert.NotEqual(pairDescriptor, singleDescriptor);
+    }
 }

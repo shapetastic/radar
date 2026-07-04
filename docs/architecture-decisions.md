@@ -246,10 +246,46 @@ This is the sanctioned AD-6 formula-change mechanism (bump `Version`, update thi
 unknown `0.5`, genuine `1.0`), the curated mill/genuine publisher lists, and the re-tuned
 `AttentionHalfSaturation = 3.0`.*
 
+### Refinement — `radar-formula-v5` (spec 89): magnitudes become config; structure stays versioned
+
+`radar-formula-v2 → v3 → v4` all shipped within about a week purely to change **numbers** (attention
+half-saturation, media weight, discount divisor, source-tier weights). Each number change spawned a new
+`IScoreFormula` class (delete-old, port-tests) and a manual `ScoringConfigVersion` bump, because the ~20
+magnitude constants lived as `const`s in the formula — the cost of encoding *tunable numbers* as *code
+identity*. `RadarScoreFormulaV5` (`Version = "radar-formula-v5"`, **maintainer-approved**) ends that treadmill
+by separating **structure** (which stays versioned code) from **magnitudes** (which move to config):
+
+- **Magnitudes → `ScoringWeights`.** The ~20 magnitude `const`s (`RecencyFloor`, `TrajectoryNeutral`/`Scale`,
+  `AttentionHalfSaturation`, `MediaReachWeight`, the five quality weights, the four EC base/span values,
+  `DiversityTarget`, `VelocitySmoothing`/`Steady`, `OpportunityAttentionDivisor`) move into an immutable
+  `Radar.Application.Scoring.ScoringWeights` record, bound from `Radar:Scoring:*` (a named-profile map:
+  `Radar:Scoring:Profile` selects `Radar:Scoring:Profiles:{name}`, bound onto code defaults) and injected into
+  the formula, which reads `_weights.X` instead of `const`s. **Every `ScoringWeights` default EQUALS the v4
+  constant**, so a blank/absent config is **byte-identical** to v4 (pinned by test). This makes weight
+  experimentation a **config edit** (run different profiles in parallel to distinct `--Radar:*Directory`
+  outputs), **not** a new formula class. The v1–v4 magnitude/constant references above are therefore
+  *superseded by radar-formula-v5*: the magnitudes now live in `ScoringWeights` and the recorded default values
+  are the v4 values.
+- **Only structure stays versioned.** The component shape, the fixed field-ordering used by the fingerprint,
+  and the **direction signs** (`Positive +1` / `Negative −1`, `Neutral`/`Mixed` = 0) remain structural `const`s
+  in the formula — flipping a sign is a structural change, not a weight experiment. A structural/shape change
+  still bumps `_formula.Version` (a new `radar-formula-vN` class); a magnitude change no longer does.
+- Fail-fast validation (`ScoringWeights.Validate`, called from the formula ctor AND the DI binder) throws on a
+  nonsensical weight (zero/negative denominators `DiversityTarget` / `OpportunityAttentionDivisor` /
+  `AttentionHalfSaturation`, negative quality/EC weights) so a misconfiguration cannot silently distort scoring.
+
+Because defaults == v4, numeric output is identical; only the *identity* advances v4 → v5, marking the
+structural change (a new injected dependency plus the content-fingerprint stamp — see AD-10). Existing on-disk
+snapshots keep their recorded `ScoringVersion` and remain reproducible. Per the spec-implementation checklist,
+`RadarScoreFormulaV4` was **deleted** (not left dormant) and its tests ported to `RadarScoreFormulaV5Tests`.
+*Accepted · 2026-07-04 — maintainer approved the named-profile ergonomic and the magnitudes-→-config
+refinement.*
+
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
 `radar-formula-v3` — maintainer-approved). Refined · 2026-07-04 (spec 88, `radar-formula-v4` — Accepted,
-source-quality tiering).
+source-quality tiering). Refined · 2026-07-04 (spec 89, `radar-formula-v5` — Accepted, magnitudes → config;
+structure stays versioned).
 
 ---
 
@@ -343,8 +379,30 @@ author discipline against a convention that lived nowhere discoverable. Recordin
 `CLAUDE.md` checklist) gives the next scoring-affecting change a single documented obligation.
 Cross-reference AD-6 (formula versioning) and spec 69 (the stamp and its comparability gate).
 
+### Amendment — spec 89: the stamp becomes a derived content fingerprint (property preserved, made automatic)
+
+Spec 89 makes scoring magnitudes runtime-configurable (`ScoringWeights`, AD-6 v5 refinement). A hand-typed
+`ScoringConfigVersion` string can no longer *uniquely determine* the score — two runs with the same string but
+different bound weights would be wrongly judged comparable, silently re-creating the spec-69 defect. So
+`ScoringConfigVersion` is **no longer a hand-bumped code constant** but a **deterministic content fingerprint of
+the effective resolved scoring config**: the structure identity (`EngineVersion` + `_formula.Version`) **plus
+every `ScoringWeights` value plus the attention tier-map descriptor**
+(`IAttentionSourceWeights.CanonicalDescriptor()`), serialized with a fixed explicit field ordering and
+culture-invariant round-trip number formatting, then hashed via a canonical lowercase-hex SHA256 (the shared
+`EvidenceNormalizer` idiom, AD-3). It is computed **once** in `ScoringEngine` (`ScoringConfigFingerprint.Compute`)
+and stamped on every snapshot. The AD-10 correctness property is **preserved and strengthened**: any
+output-affecting change (formula shape, any weight, the tier map) changes the fingerprint **automatically**, so
+it can no longer be silently forgotten — the "bump" obligation is now discharged by *derivation*. The spec-69
+comparability gate is **unchanged in shape** (still `Ordinal` string equality of `ScoringConfigVersion`, now
+comparing fingerprints); a pinned default fingerprint keeps default runs comparable and catches accidental
+default-weight/tier drift. The **only remaining human code-version obligation** is bumping `_formula.Version`
+(structure) when the formula *shape* changes (AD-6). Cross-reference AD-6 (formula/weight versioning), AD-3
+(determinism), and spec 69 (the stamp and its comparability gate). *Accepted · 2026-07-04 — maintainer
+approved the content-fingerprint stamp.*
+
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
-by spec 70).
+by spec 70). Amended · 2026-07-04 (spec 89 — stamp becomes a derived content fingerprint; property preserved
+and made automatic; Accepted).
 
 ---
 

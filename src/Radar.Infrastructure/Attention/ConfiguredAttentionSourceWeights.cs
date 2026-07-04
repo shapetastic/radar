@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using Radar.Application.Scoring;
 
 namespace Radar.Infrastructure.Attention;
@@ -74,6 +76,38 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
             ? weight
             : _unknownWeight;
     }
+
+    /// <inheritdoc />
+    public string CanonicalDescriptor()
+    {
+        // Deterministic serialization for the scoring-config fingerprint (AD-3): the unknown default first,
+        // then each publisher entry ordered by its already-normalised key (Ordinal), with culture-invariant
+        // round-trip weight formatting. Stable regardless of dictionary insertion order. Publisher keys are
+        // escaped so the reserved delimiters (=, ;, and the % escape char itself) cannot appear literally —
+        // otherwise a name containing one could collide with a different tier map and yield the same
+        // descriptor (a non-injective fingerprint input). Normal names (spaces etc.) are left unchanged.
+        var builder = new StringBuilder();
+        builder.Append("unknown=")
+            .Append(_unknownWeight.ToString("R", CultureInfo.InvariantCulture))
+            .Append(';');
+
+        foreach (var key in _weightByPublisher.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        {
+            builder.Append(Escape(key))
+                .Append('=')
+                .Append(_weightByPublisher[key].ToString("R", CultureInfo.InvariantCulture))
+                .Append(';');
+        }
+
+        return builder.ToString();
+    }
+
+    // Percent-escape the reserved descriptor delimiters so the key→value;key→value serialization stays
+    // injective. The % (escape marker) MUST be replaced first, before the delimiters it encodes.
+    private static string Escape(string key) =>
+        key.Replace("%", "%25", StringComparison.Ordinal)
+            .Replace("=", "%3D", StringComparison.Ordinal)
+            .Replace(";", "%3B", StringComparison.Ordinal);
 
     // Trim and collapse internal whitespace runs so "Simply  Wall St" and "Simply Wall St" resolve equally;
     // the lookup itself is OrdinalIgnoreCase so case need not be normalised here.

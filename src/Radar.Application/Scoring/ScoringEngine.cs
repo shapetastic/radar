@@ -18,20 +18,21 @@ namespace Radar.Application.Scoring;
 /// knobs introduced here (the window length and the "only Approved signals" rule) are tunable pipeline
 /// scaffolding, not formula weights.
 /// </para>
+/// <para>
+/// GENERATION STAMP: the <c>ScoringConfigVersion</c> stamped on every snapshot is no longer a hand-bumped
+/// code constant but a <b>deterministic content fingerprint</b> of the effective resolved scoring config —
+/// the structure identity (<see cref="EngineVersion"/> + <c>_formula.Version</c>) plus every
+/// <see cref="ScoringWeights"/> value plus the attention tier-map descriptor
+/// (<see cref="IAttentionSourceWeights.CanonicalDescriptor"/>), computed once via
+/// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape,
+/// any weight, the tier map) re-stamps automatically, so the spec-69 comparability gate keeps working when
+/// weights are runtime-configurable. <c>ScoringVersion</c> (structure identity,
+/// <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
+/// </para>
 /// </summary>
 public sealed class ScoringEngine : IScoringEngine
 {
     private const string EngineVersion = "mvp-engine-v1";
-
-    // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
-    // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation is the radar-formula-v4 source-quality tiering (spec 88): reach
-    // breadth is now a tier-weighted distinct-publisher sum (content mills down-weighted, unknowns at a
-    // conservative default, genuine outlets full) instead of a flat distinct count, and AttentionHalf
-    // Saturation was re-tuned 12→3 for the smaller filtered reach distribution; a formula-math change so
-    // ScoringVersion advances via _formula.Version and per AD-10 the stamp bumps. Prior generation: spec 87
-    // radar-formula-v3 attention-discount retune (v9).
-    private const string ScoringConfigVersion = "radar-scoring-config-v10";
 
     private readonly ISignalRepository _signalRepository;
     private readonly ISignalFileStore _signalFileStore;
@@ -41,12 +42,20 @@ public sealed class ScoringEngine : IScoringEngine
     private readonly ScoringOptions _options;
     private readonly ILogger<ScoringEngine> _logger;
 
+    // The whole scoring-generation stamp: a content fingerprint of the effective resolved scoring config
+    // (structure + all weights + tier map), computed once and stamped on every snapshot's
+    // ScoringConfigVersion (AD-10 amended, spec 89). Gates cross-run comparability (distinct from
+    // ScoringVersion).
+    private readonly string _scoringConfigFingerprint;
+
     public ScoringEngine(
         ISignalRepository signalRepository,
         ISignalFileStore signalFileStore,
         IEvidenceRepository evidenceRepository,
         IScoreRepository scoreRepository,
         IScoreFormula formula,
+        ScoringWeights weights,
+        IAttentionSourceWeights sourceWeights,
         ScoringOptions options,
         ILogger<ScoringEngine> logger)
     {
@@ -55,6 +64,8 @@ public sealed class ScoringEngine : IScoringEngine
         ArgumentNullException.ThrowIfNull(evidenceRepository);
         ArgumentNullException.ThrowIfNull(scoreRepository);
         ArgumentNullException.ThrowIfNull(formula);
+        ArgumentNullException.ThrowIfNull(weights);
+        ArgumentNullException.ThrowIfNull(sourceWeights);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -65,6 +76,9 @@ public sealed class ScoringEngine : IScoringEngine
         _formula = formula;
         _options = options;
         _logger = logger;
+
+        _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
+            EngineVersion, formula.Version, weights, sourceWeights.CanonicalDescriptor());
     }
 
     public async Task<CompanyScoreResult> ScoreCompanyAsync(
@@ -152,7 +166,7 @@ public sealed class ScoringEngine : IScoringEngine
             // would have CreatedAtUtc > periodEndUtc and be excluded by the report's inclusive
             // upper-bound window — the run could never report the snapshots it just created.
             CreatedAtUtc: windowEndUtc,
-            ScoringConfigVersion: ScoringConfigVersion);
+            ScoringConfigVersion: _scoringConfigFingerprint);
 
         var links = new List<ScoreEvidenceLink>(computation.Contributions.Count);
         foreach (var contribution in computation.Contributions)

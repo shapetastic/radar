@@ -58,6 +58,13 @@ internal static class RadarWorkerServices
             configuration.GetSection("Radar:Attention").Get<AttentionSourceTierOptions>()
                 ?? AttentionSourceTierOptions.Default);
 
+        // Scoring magnitude weights (spec 89): resolve the Radar:Scoring:Profile / Profiles selection and
+        // register the concrete ScoringWeights BEFORE AddRadarApplicationServices so configuration wins over
+        // the library default (its TryAddSingleton is a no-op once this concrete instance is registered).
+        // A blank/absent profile binds all code defaults == v4 (byte-identical). Fails fast on a
+        // named-but-missing profile or an invalid weight.
+        services.AddRadarScoringWeights(configuration);
+
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
 
