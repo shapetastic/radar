@@ -167,4 +167,20 @@ public sealed class FileScoringConfigStoreTests : IDisposable
 
         Assert.Equal(Path.Combine(rootAsFile, config.Fingerprint + ".json"), path);
     }
+
+    [Fact]
+    public async Task WriteIfNewAsync_SerializationFailure_ReturnsAttemptedPathWithoutThrowingOrWriting()
+    {
+        // A non-finite weight (NaN) cannot be serialized under the store's JSON options (named floating-point
+        // literals are not enabled), so JsonSerializer.Serialize throws. The store must degrade like a disk
+        // failure — log + return the attempted path — so the run keeps going and the snapshot still carries
+        // its fingerprint; no file is written.
+        var config = ConfigFor(new ScoringWeights { AttentionHalfSaturation = double.NaN });
+        var store = CreateStore();
+
+        var path = await store.WriteIfNewAsync(config, CancellationToken.None);
+
+        Assert.Equal(Path.Combine(_tempDir, config.Fingerprint + ".json"), path);
+        Assert.False(File.Exists(path), "Serialization failure must not leave a file on disk.");
+    }
 }

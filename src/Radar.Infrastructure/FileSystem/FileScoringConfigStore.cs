@@ -59,7 +59,22 @@ public sealed class FileScoringConfigStore : IScoringConfigStore
             return path;
         }
 
-        var json = JsonSerializer.Serialize(config, RadarFileStoreJson.Options);
+        string json;
+        try
+        {
+            json = JsonSerializer.Serialize(config, RadarFileStoreJson.Options);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
+        {
+            // Serialization must not crash the run either (matches GracefulFileWriter's disk-failure posture):
+            // the snapshot still carries its fingerprint; only the dereferenceable config file is skipped.
+            _logger.LogWarning(
+                ex,
+                "Failed to serialize effective scoring config {Fingerprint}; skipping write to {Path}.",
+                config.Fingerprint,
+                path);
+            return path;
+        }
 
         if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
         {
