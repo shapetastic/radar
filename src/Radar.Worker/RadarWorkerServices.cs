@@ -2,6 +2,7 @@ using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Infrastructure.Ai;
+using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.Gdelt;
@@ -47,6 +48,15 @@ internal static class RadarWorkerServices
             RunOnce = options.RunOnce,
             Interval = TimeSpan.FromMinutes(options.IntervalMinutes),
         });
+
+        // Attention source-quality tiers (spec 88): bind the optional Radar:Attention section and register it
+        // BEFORE AddRadarApplicationServices so configuration wins over the library default (its TryAddSingleton
+        // is a no-op once this concrete instance is registered). Falls back to the curated code default when the
+        // section is absent/null. ConfiguredAttentionSourceWeights validates the bound options at startup and
+        // fails fast on an invalid weight.
+        services.AddSingleton(
+            configuration.GetSection("Radar:Attention").Get<AttentionSourceTierOptions>()
+                ?? AttentionSourceTierOptions.Default);
 
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();

@@ -14,6 +14,7 @@ using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
 using Radar.Infrastructure.Ai;
+using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
@@ -63,7 +64,13 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ISignalExtractor, KeywordSignalExtractor>();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ISignalReviewer, DeterministicSignalReviewer>();
-        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV3>();
+        // Attention source-quality tiering (spec 88): register the curated default tier map BEFORE the formula
+        // so a composition root that bound its own Radar:Attention options via AddSingleton wins over this
+        // default (mirrors the ScoringOptions pattern). ConfiguredAttentionSourceWeights validates the bound
+        // options in its ctor (fails fast on a weight outside [0,1]).
+        services.TryAddSingleton(AttentionSourceTierOptions.Default);
+        services.TryAddSingleton<IAttentionSourceWeights, ConfiguredAttentionSourceWeights>();
+        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV4>();
         services.TryAddSingleton(new ScoringOptions());
         services.AddSingleton<IScoringEngine, ScoringEngine>();
         services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();

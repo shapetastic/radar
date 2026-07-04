@@ -29,6 +29,13 @@ public sealed class RadarPipelineRunnerTests
     // Evidence is observed inside both windows so its signal can score and surface in the report.
     private static readonly DateTimeOffset Observed = new(2026, 2, 6, 0, 0, 0, TimeSpan.Zero);
 
+    // Minimal IAttentionSourceWeights for the real RadarScoreFormulaV4 (every publisher = full genuine
+    // outlet). The pipeline tests exercise end-to-end orchestration, not the attention tiering math.
+    private sealed class AllGenuineWeights : IAttentionSourceWeights
+    {
+        public double WeightFor(string? sourceName) => 1.0;
+    }
+
     private const string CompanyName = "Northwind Robotics";
     private const string RawText =
         "Northwind Robotics announced a major new customer win with a Fortune 100 partner today.";
@@ -293,7 +300,7 @@ public sealed class RadarPipelineRunnerTests
                 SignalStore,
                 Evidence,
                 Scores,
-                new RadarScoreFormulaV3(),
+                new RadarScoreFormulaV4(new AllGenuineWeights()),
                 new ScoringOptions(),
                 NullLogger<ScoringEngine>.Instance);
             var reportBuilder = new WeeklyReportBuilder(

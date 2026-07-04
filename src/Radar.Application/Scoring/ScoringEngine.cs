@@ -25,13 +25,13 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation is the radar-formula-v3 attention-discount retune (spec 87): raised
-    // Attention half-saturation 5→12, down-weighted the raw media term 0.5→0.25 so Attention separates
-    // under-followed from widely-covered again, softened the under-the-radar discount divisor 200→250 so it
-    // stops uniformly crushing covered quality names; formula-math change so ScoringVersion advances via
-    // _formula.Version and per AD-10 the stamp bumps. Prior generation: spec 86 added Negative dilutive
-    // CapitalRaise cues (v8).
-    private const string ScoringConfigVersion = "radar-scoring-config-v9";
+    // ScoringOptions). This generation is the radar-formula-v4 source-quality tiering (spec 88): reach
+    // breadth is now a tier-weighted distinct-publisher sum (content mills down-weighted, unknowns at a
+    // conservative default, genuine outlets full) instead of a flat distinct count, and AttentionHalf
+    // Saturation was re-tuned 12→3 for the smaller filtered reach distribution; a formula-math change so
+    // ScoringVersion advances via _formula.Version and per AD-10 the stamp bumps. Prior generation: spec 87
+    // radar-formula-v3 attention-discount retune (v9).
+    private const string ScoringConfigVersion = "radar-scoring-config-v10";
 
     private readonly ISignalRepository _signalRepository;
     private readonly ISignalFileStore _signalFileStore;
