@@ -143,6 +143,42 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_WithNewsSearchCollector()
+    {
+        // Google News RSS needs no key/User-Agent, so the newssearch collector enables with just the kind and
+        // the RadarWorkerOptions defaults (cap 25, English-only, 1s pacing). It is a DISTINCT kind from "news".
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "newssearch"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+        Assert.Equal(2, provider.GetServices<IEvidenceCollector>().Count());
+    }
+
+    [Fact]
+    public void Graph_Resolves_WithNewsAndNewsSearch_Independently()
+    {
+        // The GDELT "news" collector and the Google News "newssearch" collector are independently enable-able
+        // and coexist as distinct IEvidenceCollector registrations (alongside the rss collector).
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "news"),
+            ("Radar:Collectors:2", "newssearch"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+        Assert.Equal(3, provider.GetServices<IEvidenceCollector>().Count());
+    }
+
+    [Fact]
+    public void DefaultCollectors_DoNotRegisterNewsSearch()
+    {
+        // The default ["rss"] config registers exactly one collector; newssearch is opt-in.
+        using var provider = BuildProvider(("Radar:Collectors:0", "rss"));
+
+        Assert.Single(provider.GetServices<IEvidenceCollector>());
+    }
+
+    [Fact]
     public void DuplicateCollectorKind_RegistersOnce()
     {
         using var provider = BuildProvider(
