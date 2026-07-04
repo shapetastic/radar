@@ -1,13 +1,14 @@
-using Radar.Infrastructure.Gdelt;
+using Radar.Infrastructure.Sources;
 
-namespace Radar.Infrastructure.Tests.Gdelt;
+namespace Radar.Infrastructure.Tests.Sources;
 
-public sealed class GdeltFeedTargetTests
+public sealed class QueryFeedTargetTests
 {
     [Fact]
     public void Parse_ValidToken_ReturnsPhrasePreservingSpacesAndTicker()
     {
-        var target = GdeltFeedTarget.Parse("query=Mercury Systems&ticker=MRCY");
+        // Retains a literal from the former GDELT world (Mercury Systems / MRCY).
+        var target = QueryFeedTarget.Parse("query=Mercury Systems&ticker=MRCY");
 
         Assert.NotNull(target);
         // The literal space in the phrase is preserved (the token is not URL-decoded).
@@ -16,9 +17,21 @@ public sealed class GdeltFeedTargetTests
     }
 
     [Fact]
+    public void Parse_ValidToken_FromNewsWorld_ReturnsPhrasePreservingSpacesAndTicker()
+    {
+        // Retains a literal from the former News world (Rocket Lab / RKLB) so neither collector's
+        // coverage is silently dropped; the parser is source-agnostic.
+        var target = QueryFeedTarget.Parse("query=Rocket Lab&ticker=RKLB");
+
+        Assert.NotNull(target);
+        Assert.Equal("Rocket Lab", target.QueryPhrase);
+        Assert.Equal("RKLB", target.Ticker);
+    }
+
+    [Fact]
     public void Parse_TickerBeforeQuery_IsRobustToKeyOrdering()
     {
-        var target = GdeltFeedTarget.Parse("ticker=HLIO&query=Helios Technologies");
+        var target = QueryFeedTarget.Parse("ticker=HLIO&query=Helios Technologies");
 
         Assert.NotNull(target);
         Assert.Equal("Helios Technologies", target.QueryPhrase);
@@ -28,7 +41,7 @@ public sealed class GdeltFeedTargetTests
     [Fact]
     public void Parse_QueryOnly_ReturnsPhraseWithNullTicker()
     {
-        var target = GdeltFeedTarget.Parse("query=Energy Recovery");
+        var target = QueryFeedTarget.Parse("query=Energy Recovery");
 
         Assert.NotNull(target);
         Assert.Equal("Energy Recovery", target.QueryPhrase);
@@ -38,7 +51,7 @@ public sealed class GdeltFeedTargetTests
     [Fact]
     public void Parse_EmptyTickerValue_TreatedAsNoTicker()
     {
-        var target = GdeltFeedTarget.Parse("query=Sapiens International&ticker=");
+        var target = QueryFeedTarget.Parse("query=Sapiens International&ticker=");
 
         Assert.NotNull(target);
         Assert.Equal("Sapiens International", target.QueryPhrase);
@@ -48,7 +61,7 @@ public sealed class GdeltFeedTargetTests
     [Fact]
     public void Parse_SurroundingWhitespace_IsTrimmed()
     {
-        var target = GdeltFeedTarget.Parse("  query=Agilysys&ticker=AGYS  ");
+        var target = QueryFeedTarget.Parse("  query=Agilysys&ticker=AGYS  ");
 
         Assert.NotNull(target);
         Assert.Equal("Agilysys", target.QueryPhrase);
@@ -65,6 +78,6 @@ public sealed class GdeltFeedTargetTests
     [InlineData("query=&ticker=MRCY")]
     public void Parse_MalformedOrMissingQuery_ReturnsNull(string? token)
     {
-        Assert.Null(GdeltFeedTarget.Parse(token));
+        Assert.Null(QueryFeedTarget.Parse(token));
     }
 }

@@ -80,7 +80,7 @@ internal sealed class GdeltNewsCollector : IEvidenceCollector
             ct.ThrowIfCancellationRequested();
             feedsChecked++;
 
-            var target = GdeltFeedTarget.Parse(feed.Url);
+            var target = QueryFeedTarget.Parse(feed.Url);
             if (target is null)
             {
                 feedsFailed++;
@@ -169,7 +169,7 @@ internal sealed class GdeltNewsCollector : IEvidenceCollector
         return new CollectionResult(results.ToArray(), summary);
     }
 
-    private GdeltNewsQuery BuildQuery(GdeltFeedTarget target) => new(
+    private GdeltNewsQuery BuildQuery(QueryFeedTarget target) => new(
         QueryPhrase: target.QueryPhrase,
         Timespan: _options.Timespan,
         MaxRecords: Math.Clamp(_options.MaxRecordsPerCompany, ApiMinRecords, ApiMaxRecords),
@@ -187,7 +187,7 @@ internal sealed class GdeltNewsCollector : IEvidenceCollector
     /// whitespace-normalised first — that is what lets a spaced <c>"( MRCY )"</c> still match a <c>MRCY</c>
     /// ticker and <c>"Mercury Systems , Inc ."</c> still match the <c>Mercury Systems</c> phrase.
     /// </summary>
-    private static bool IsRelevant(string? title, GdeltFeedTarget target)
+    private static bool IsRelevant(string? title, QueryFeedTarget target)
     {
         var normalizedTitle = NormalizeWhitespace(title);
         if (normalizedTitle.Length == 0)

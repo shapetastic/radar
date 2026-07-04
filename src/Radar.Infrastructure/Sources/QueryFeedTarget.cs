@@ -1,16 +1,17 @@
-namespace Radar.Infrastructure.Gdelt;
+namespace Radar.Infrastructure.Sources;
 
 /// <summary>
-/// The per-company inputs a <c>news</c> feed carries in its single <c>Url</c> field, parsed from the
-/// documented token <c>query=&lt;company phrase&gt;&amp;ticker=&lt;TICKER&gt;</c>
-/// (e.g. <c>query=Mercury Systems&amp;ticker=MRCY</c>). This keeps the shared
-/// <see cref="Radar.Domain.Companies.CompanySourceFeed"/> record unchanged. <see cref="QueryPhrase"/> is the
-/// precise company name sent to the DOC API; <see cref="Ticker"/> is an optional explicit ticker token the
-/// collector also matches against in the client-side title relevance filter (GDELT phrase search has no
+/// The per-company inputs a query-driven attention feed carries in its single <c>Url</c> field, parsed
+/// from the documented token <c>query=&lt;company phrase&gt;&amp;ticker=&lt;TICKER&gt;</c>
+/// (e.g. <c>query=Mercury Systems&amp;ticker=MRCY</c>). Shared by the GDELT and Google-News attention
+/// collectors — the same token shape both readers consume — so the shared
+/// <see cref="Radar.Domain.Companies.CompanySourceFeed"/> record stays unchanged. <see cref="QueryPhrase"/>
+/// is the precise company name sent to the search API; <see cref="Ticker"/> is an optional explicit ticker
+/// token the collector also matches against in its client-side title relevance filter (phrase search has no
 /// exact-entity key). An unparsable/empty token — or one missing the required <c>query=</c> key — yields
 /// <see langword="null"/> so the collector can degrade it to a source failure rather than throwing.
 /// </summary>
-internal sealed record GdeltFeedTarget(string QueryPhrase, string? Ticker)
+internal sealed record QueryFeedTarget(string QueryPhrase, string? Ticker)
 {
     private const string QueryKey = "query=";
     private const string TickerKey = "ticker=";
@@ -21,7 +22,7 @@ internal sealed record GdeltFeedTarget(string QueryPhrase, string? Ticker)
     /// optional — a bare <c>query=&lt;phrase&gt;</c> token parses with a null ticker. Returns
     /// <see langword="null"/> when the token is blank, the <c>query=</c> key is missing, or the phrase is empty.
     /// </summary>
-    public static GdeltFeedTarget? Parse(string? token)
+    public static QueryFeedTarget? Parse(string? token)
     {
         if (string.IsNullOrWhiteSpace(token))
         {
@@ -86,6 +87,6 @@ internal sealed record GdeltFeedTarget(string QueryPhrase, string? Ticker)
             ticker = null;
         }
 
-        return new GdeltFeedTarget(phrase, ticker);
+        return new QueryFeedTarget(phrase, ticker);
     }
 }
