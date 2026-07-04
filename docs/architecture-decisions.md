@@ -290,15 +290,15 @@ remove non-alphanumerics). This is **NOT a new formula version** — the reach *
 (same weighted-distinct-sum, `+3` saturation, media term); only `WeightFor`'s answers move. It therefore stays
 `radar-formula-v5`, and the fingerprint **auto-re-stamps** (the effective attention descriptor changed) — no
 manual `ScoringConfigVersion` bump; only the pinned default-fingerprint test constant was recomputed.
-*Proposed pending maintainer sign-off on the recalibrated defaults / posture (denylist-expand + `UnknownWeight
-0.25`, with the allowlist flip as the documented config-only alternative).*
+*Accepted · 2026-07-04 — maintainer sign-off granted on the recalibrated defaults / posture (denylist-expand +
+`UnknownWeight 0.25`, with the allowlist flip as the documented config-only alternative).*
 
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
 `radar-formula-v3` — maintainer-approved). Refined · 2026-07-04 (spec 88, `radar-formula-v4` — Accepted,
 source-quality tiering). Refined · 2026-07-04 (spec 89, `radar-formula-v5` — Accepted, magnitudes → config;
 structure stays versioned). Refined · 2026-07-04 (spec 90 — attention tier recalibration + publisher-name
-normalization; **not** a formula-version bump, fingerprint auto-re-stamps; Proposed pending sign-off).
+normalization; **not** a formula-version bump, fingerprint auto-re-stamps; Accepted · 2026-07-04).
 
 ---
 

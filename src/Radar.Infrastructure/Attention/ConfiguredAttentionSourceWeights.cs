@@ -8,8 +8,8 @@ namespace Radar.Infrastructure.Attention;
 /// Config-driven <see cref="IAttentionSourceWeights"/> over <see cref="AttentionSourceTierOptions"/>: builds
 /// an immutable, normalised publisher → tier-weight lookup once at construction so the scoring formula stays a
 /// pure, deterministic function (AD-3). Publisher names are normalised to a domain-form-tolerant key (lowercase,
-/// a single trailing common-TLD token stripped, then all non-alphanumerics removed) so observed variants such as
-/// <c>"marketscreener.com"</c> and <c>"Simply Wall St"</c> resolve to the same curated entry. The same
+/// a single trailing common-TLD token stripped, then all non-alphanumerics removed) so observed variants of the
+/// same outlet such as <c>"marketscreener.com"</c> and <c>"MarketScreener"</c> resolve to the same curated entry. The same
 /// normalization is applied to the configured keys at load and to the incoming <c>SourceName</c> at lookup. A
 /// publisher not in any tier resolves to <see cref="AttentionSourceTierOptions.UnknownWeight"/>; a blank/null
 /// name likewise returns the unknown default. Fails fast (throws in the constructor) on a configured weight
@@ -121,8 +121,9 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
     // Normalize a publisher name to a domain-form / punctuation / spacing / case tolerant key: lowercase
     // (invariant), strip a single trailing common-TLD token (dot-prefixed, from the closed set above), then
     // remove ALL non-alphanumeric characters. So "Simply Wall St" → "simplywallst", "marketscreener.com" →
-    // "marketscreener", "simplywall.st" → "simplywall". Conservative by design (no fuzzy/vowel stripping) so
-    // two genuinely-distinct outlets are never collapsed onto one key. Pure static (AD-3).
+    // "marketscreener", "simplywall.st" → "simplywall". Conservative by design (no fuzzy/vowel stripping); it
+    // still removes punctuation/spacing, so distinct names differing only by those characters can collapse onto
+    // one key — it minimises, not eliminates, cross-outlet collisions. Pure static (AD-3).
     private static string Normalize(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
