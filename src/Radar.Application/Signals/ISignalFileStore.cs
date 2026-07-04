@@ -34,7 +34,10 @@ public interface ISignalFileStore
     /// velocity) — callers do NOT need evidence, so the returned signals need not rehydrate any provenance
     /// links; this is a targeted scalar read, not a general repository rehydration. A read/deserialization
     /// failure of one file is skipped, never thrown; cancellation propagates. Results are deterministically
-    /// ordered (ObservedAtUtc, then Id — AD-3).
+    /// ordered (ObservedAtUtc, then Id — AD-3). The read returns at most ONE signal per stable identity
+    /// <c>(CompanyId, EvidenceId, Type, Direction)</c>, collapsing cross-run duplicate persisted copies (the
+    /// same signal re-minted with a fresh id each run) so this activity-only previous window is deterministic
+    /// and not inflated by how many times the pipeline has run.
     /// </summary>
     Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
         Guid companyId, DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc, CancellationToken ct);

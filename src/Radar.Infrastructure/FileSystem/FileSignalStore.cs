@@ -160,8 +160,32 @@ public sealed class FileSignalStore : ISignalFileStore
             }
         }
 
+        // Collapse cross-run duplicate signals before ordering (spec 85). The same underlying signal is
+        // re-minted with a fresh SignalId (and CreatedAt) on every pipeline run — WriteAsync path-keys on
+        // signal.Id, so N runs leave N files for ONE signal — inflating this activity-only previous window
+        // and making SignalVelocityScore depend on how many times the pipeline has run (an AD-3 violation).
+        // The stable identity of a signal is (CompanyId, EvidenceId, Type, Direction):
+        //  - EvidenceId + Type + Direction distinguishes the genuinely-DISTINCT signals ONE evidence item
+        //    can legitimately produce (e.g. a CustomerWin AND a GuidanceChange, or a Positive vs a Neutral),
+        //    so the key never collapses distinct signals into one.
+        //  - CompanyId is already fixed per read (filtered above), but is kept in the key so it stays
+        //    self-describing and correct even if this read were ever called differently.
+        //  - ObservedAt is intentionally EXCLUDED: it is derived from the same evidence and is therefore
+        //    constant across a signal's cross-run copies, so it adds nothing; including it would risk NOT
+        //    collapsing copies if a future change perturbed ObservedAt derivation. Strength, Confidence,
+        //    Novelty, SupportingExcerpt, Reason are likewise evidence/extractor-derived and identical across
+        //    copies — excluded too (a legitimately re-scored signal is out of scope for this activity-only
+        //    velocity dedup).
+        // Deterministic tie-break (AD-3): keep the copy with the LOWEST SignalId — a total, stable order over
+        // Guid, independent of filesystem enumeration order. All copies carry identical activity fields
+        // (Strength), so the choice cannot change the velocity result; lowest SignalId is simply the simplest
+        // reproducible total order. Grouping is order-independent, so the survivor is the same every read.
+        var deduped = matches
+            .GroupBy(s => (s.CompanyId, s.EvidenceId, s.Type, s.Direction))
+            .Select(group => group.OrderBy(s => s.Id).First());
+
         // Deterministic order (AD-3): ObservedAtUtc then Id.
-        return matches
+        return deduped
             .OrderBy(s => s.ObservedAtUtc)
             .ThenBy(s => s.Id)
             .ToList();
