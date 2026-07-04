@@ -25,17 +25,13 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation adds NEGATIVE-DIRECTION DILUTIVE CapitalRaise cues (spec 86): the
-    // KeywordSignalExtractor now emits Negative CapitalRaise signals for rights / registered-direct / ATM /
-    // shelf / warrant / reverse-split offerings (and "dilution"/"dilutive"), ordered first so a mixed
-    // dilutive/growth headline resolves Negative; and it demotes "convertible note" / "credit facility" /
-    // "debt financing" from Positive to Neutral (a capital event whose valence the code cannot read). This
-    // is an EXTRACTOR-RULE change that moves scoring output — new Negative signals lower Trajectory and the
-    // demoted cues now weigh 0 — so per AD-10 the stamp bumps. It is NOT a formula-math change:
-    // RadarScoreFormulaV2.Compute already maps Negative -> -1 and excludes Neutral/Mixed from Trajectory, so
-    // ScoringVersion/EngineVersion/formula Version are NOT touched. Prior generation: spec 84 shipped news
-    // attention breadth by publisher (v7).
-    private const string ScoringConfigVersion = "radar-scoring-config-v8";
+    // ScoringOptions). This generation is the radar-formula-v3 attention-discount retune (spec 87): raised
+    // Attention half-saturation 5→12, down-weighted the raw media term 0.5→0.25 so Attention separates
+    // under-followed from widely-covered again, softened the under-the-radar discount divisor 200→250 so it
+    // stops uniformly crushing covered quality names; formula-math change so ScoringVersion advances via
+    // _formula.Version and per AD-10 the stamp bumps. Prior generation: spec 86 added Negative dilutive
+    // CapitalRaise cues (v8).
+    private const string ScoringConfigVersion = "radar-scoring-config-v9";
 
     private readonly ISignalRepository _signalRepository;
     private readonly ISignalFileStore _signalFileStore;

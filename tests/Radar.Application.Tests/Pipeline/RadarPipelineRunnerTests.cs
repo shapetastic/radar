@@ -293,7 +293,7 @@ public sealed class RadarPipelineRunnerTests
                 SignalStore,
                 Evidence,
                 Scores,
-                new RadarScoreFormulaV2(),
+                new RadarScoreFormulaV3(),
                 new ScoringOptions(),
                 NullLogger<ScoringEngine>.Instance);
             var reportBuilder = new WeeklyReportBuilder(
