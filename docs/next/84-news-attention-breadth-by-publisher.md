@@ -1,5 +1,12 @@
 # Task: Make AttentionScore breadth real — map news evidence SourceName to the article publisher
 
+> **SEQUENCING + VERSION (read first).** The signal cross-run dedup slice (**spec 85**) is prioritized to
+> land BEFORE this one, and it also bumps `ScoringEngine.ScoringConfigVersion`. Both slices touch
+> `ScoringEngine.cs` — sequence them, do not run in parallel. The version numbers written below as
+> `v5 → v6` assume this slice lands first; if the dedup slice (85) has already merged, **read the current
+> `ScoringConfigVersion` from `ScoringEngine.cs` and bump to the next integer instead** (i.e. `v6 → v7`).
+> Treat every `radar-scoring-config-v5 → v6` reference below as "current value + 1", not a hard-coded target.
+
 ## Overview
 
 The first four-collector live run (`["rss","sec","usaspending","newssearch"]`, Ollama/llama3.1, 2026-07-04)
