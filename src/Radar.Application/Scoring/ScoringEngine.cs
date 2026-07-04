@@ -25,18 +25,19 @@ public sealed class ScoringEngine : IScoringEngine
 
     // Whole scoring-generation stamp gating cross-run comparability (distinct from ScoringVersion).
     // CONVENTION: bump on ANY scoring-affecting change (formula, extractor rules, materiality tiers,
-    // ScoringOptions). This generation ships the cross-run signal read-back for velocity: the previous
-    // window that SignalVelocityScore compares against is now sourced from the on-disk signal store
-    // (ISignalFileStore.ReadApprovedInWindowAsync) instead of being sliced from the in-memory repository,
-    // which starts empty every process. As a result SignalVelocityScore (and thus OpportunityScore) can now
-    // differ from the pre-slice steady-50 across separate runs. Only the SOURCE of the previous-window
-    // input changed — the velocity formula math (50·(actNow+10)/(actPrev+10)), the (start, end] window and
-    // its shared boundary, and the "previous window is activity-only, no evidence/contributions/links" rule
-    // are all unchanged (AD-6), so ScoringVersion/EngineVersion/formula Version are NOT touched. Per AD-10 a
-    // scoring-affecting change bumps this stamp so a cross-run delta across the pre/post boundary renders
-    // "(scoring updated)" rather than a fabricated Thesis improving/deteriorating label. Prior generation:
-    // spec 78 shipped the directional-supersedes-Neutral change (v4).
-    private const string ScoringConfigVersion = "radar-scoring-config-v5";
+    // ScoringOptions). This generation ships the cross-run signal DEDUP in the velocity previous window
+    // (spec 85): ReadApprovedInWindowAsync now returns at most one signal per stable identity
+    // (CompanyId, EvidenceId, Type, Direction), collapsing the cross-run duplicate copies the same signal
+    // accumulates on disk (a fresh SignalId per run). This restores determinism (AD-3) and a like-for-like
+    // velocity comparison — SignalVelocityScore (and thus OpportunityScore) no longer depends on how many
+    // times the pipeline has run. Only the SET of previous-window signals fed to the formula is deduplicated
+    // upstream in the store read — the velocity formula math (50·(actNow+10)/(actPrev+10)), the (start, end]
+    // window and its shared boundary, and the "previous window is activity-only, no evidence/contributions/
+    // links" rule are all unchanged (AD-6), so ScoringVersion/EngineVersion/formula Version are NOT touched.
+    // Per AD-10 a scoring-affecting change bumps this stamp so a cross-run delta across the pre/post boundary
+    // renders "(scoring updated)" rather than a fabricated Thesis improving/deteriorating label. Prior
+    // generation: spec 82 shipped the cross-run signal read-back for velocity (v5).
+    private const string ScoringConfigVersion = "radar-scoring-config-v6";
 
     private readonly ISignalRepository _signalRepository;
     private readonly ISignalFileStore _signalFileStore;

@@ -307,6 +307,128 @@ public sealed class FileSignalStoreTests : IDisposable
         Assert.Equal(valid.Id, only.Id);
     }
 
+    private static Signal DuplicateSignalFor(
+        Guid companyId,
+        Guid evidenceId,
+        DateTimeOffset observedAt,
+        SignalType type = SignalType.CustomerWin,
+        SignalDirection direction = SignalDirection.Positive,
+        int strength = 6,
+        Guid? id = null,
+        DateTimeOffset? createdAt = null) =>
+        new SignalBuilder()
+            .WithId(id ?? Guid.NewGuid())
+            .WithEvidenceId(evidenceId)
+            .WithCompanyId(companyId)
+            .WithType(type)
+            .WithDirection(direction)
+            .WithStrength(strength)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(observedAt)
+            .WithCreatedAtUtc(createdAt ?? new DateTimeOffset(2026, 2, 7, 12, 0, 0, TimeSpan.Zero))
+            .Build();
+
+    [Fact]
+    public async Task ReadApprovedInWindow_CrossRunDuplicatesOfOneIdentity_CountedOnce()
+    {
+        // Three cross-run copies of the SAME underlying signal: identical EvidenceId, Type, Direction,
+        // Strength, ObservedAt — differing ONLY in SignalId (fresh Guid per run) and CreatedAt. The read
+        // must collapse them to exactly one so the activity-only previous window is not run-count-inflated.
+        var companyId = Guid.NewGuid();
+        var evidenceId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+        var inWindow = new DateTimeOffset(2026, 2, 5, 0, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+        for (var run = 0; run < 3; run++)
+        {
+            var copy = DuplicateSignalFor(
+                companyId, evidenceId, inWindow,
+                createdAt: new DateTimeOffset(2026, 2, 6, run, 0, 0, TimeSpan.Zero));
+            await store.WriteAsync(copy, ReviewFor(copy), CancellationToken.None);
+        }
+
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+
+        var only = Assert.Single(result);
+        Assert.Equal(evidenceId, only.EvidenceId);
+    }
+
+    [Fact]
+    public async Task ReadApprovedInWindow_DistinctSignals_AreNotCollapsed()
+    {
+        // Genuinely-distinct signals one evidence item can produce, plus a same-(Type,Direction) signal on a
+        // DIFFERENT evidence — none may be collapsed. The identity key is (CompanyId, EvidenceId, Type,
+        // Direction), so all four survive.
+        var companyId = Guid.NewGuid();
+        var evidenceA = Guid.NewGuid();
+        var evidenceB = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+        var inWindow = new DateTimeOffset(2026, 2, 5, 0, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+
+        // Same evidence, differing Type.
+        var customerWin = DuplicateSignalFor(companyId, evidenceA, inWindow, SignalType.CustomerWin, SignalDirection.Positive);
+        var guidanceChange = DuplicateSignalFor(companyId, evidenceA, inWindow, SignalType.GuidanceChange, SignalDirection.Positive);
+        // Same evidence + Type, differing Direction.
+        var guidanceNeutral = DuplicateSignalFor(companyId, evidenceA, inWindow, SignalType.GuidanceChange, SignalDirection.Neutral);
+        // Same (Type, Direction) as customerWin but DIFFERENT evidence -> distinct signal.
+        var customerWinOtherEvidence = DuplicateSignalFor(companyId, evidenceB, inWindow, SignalType.CustomerWin, SignalDirection.Positive);
+
+        foreach (var s in new[] { customerWin, guidanceChange, guidanceNeutral, customerWinOtherEvidence })
+        {
+            await store.WriteAsync(s, ReviewFor(s), CancellationToken.None);
+        }
+
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+
+        var ids = result.Select(s => s.Id).ToHashSet();
+        Assert.Equal(4, ids.Count);
+        Assert.Contains(customerWin.Id, ids);
+        Assert.Contains(guidanceChange.Id, ids);
+        Assert.Contains(guidanceNeutral.Id, ids);
+        Assert.Contains(customerWinOtherEvidence.Id, ids);
+    }
+
+    [Fact]
+    public async Task ReadApprovedInWindow_DeterministicTieBreak_KeepsLowestSignalIdAcrossReads()
+    {
+        // Several duplicate copies of one identity, with KNOWN SignalIds. The survivor must be the lowest
+        // SignalId (the fixed total order over Guid) and must be identical across repeated reads (AD-3),
+        // independent of write/enumeration order.
+        var companyId = Guid.NewGuid();
+        var evidenceId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+        var inWindow = new DateTimeOffset(2026, 2, 5, 0, 0, 0, TimeSpan.Zero);
+
+        var ids = new[]
+        {
+            Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Guid.Parse("99999999-9999-9999-9999-999999999999"),
+            Guid.Parse("55555555-5555-5555-5555-555555555555"),
+        };
+        var expectedSurvivor = ids.Min();
+
+        var store = CreateStore();
+        // Write in an order NOT matching the sort so the tie-break, not enumeration order, decides.
+        foreach (var id in ids)
+        {
+            var copy = DuplicateSignalFor(companyId, evidenceId, inWindow, id: id);
+            await store.WriteAsync(copy, ReviewFor(copy), CancellationToken.None);
+        }
+
+        var first = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+        var second = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+
+        Assert.Equal(expectedSurvivor, Assert.Single(first).Id);
+        Assert.Equal(expectedSurvivor, Assert.Single(second).Id);
+    }
+
     [Fact]
     public async Task ReadApprovedInWindow_AlreadyCancelledToken_Throws()
     {

@@ -7,6 +7,7 @@ using Radar.Domain.Evidence;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.TestSupport;
 
@@ -327,7 +328,7 @@ public sealed class ScoringEngineTests
 
         // Every new snapshot is stamped with the current scoring-generation constant (non-null), so the
         // report can gate cross-run comparability on it.
-        Assert.Equal("radar-scoring-config-v5", result.Snapshot.ScoringConfigVersion);
+        Assert.Equal("radar-scoring-config-v6", result.Snapshot.ScoringConfigVersion);
     }
 
     [Theory]
@@ -725,6 +726,100 @@ public sealed class ScoringEngineTests
         Assert.Equal(current.signal.Id, link.SignalId);
         Assert.Equal(current.evidence.Id, link.EvidenceId);
         Assert.DoesNotContain(result.Links, l => l.SignalId == prior.Id);
+    }
+
+    [Fact]
+    public async Task CrossRunVelocity_StableRegardlessOfDuplicatePriorCopiesOnDisk()
+    {
+        // Spec 85 Test (d): with the REAL FileSignalStore deduping cross-run copies on read,
+        // SignalVelocityScore must be identical whether ONE copy or MANY duplicate copies (same identity,
+        // fresh ids) of a prior signal sit on disk — velocity no longer depends on how many times the
+        // pipeline ran. Without dedup the many-copy case would inflate actPrev and drive velocity down.
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var fileStore = new FileSignalStore(
+                new FileSignalStoreOptions { RootDirectory = tempDir },
+                NullLogger<FileSignalStore>.Instance);
+
+            var signals = new InMemorySignalRepository();
+            var evidence = new InMemoryEvidenceRepository();
+            var scores = new InMemoryScoreRepository();
+            var engine = new ScoringEngine(
+                signals, fileStore, evidence, scores, new RadarScoreFormulaV2(),
+                new ScoringOptions { Window = Window }, NullLogger<ScoringEngine>.Instance);
+
+            var companyId = Guid.NewGuid();
+
+            // Current window (in-memory repo, one clean run): one Approved signal + evidence, Strength 6.
+            var currentEvidence = new EvidenceBuilder()
+                .WithId(Guid.NewGuid())
+                .WithContentHash(Guid.NewGuid().ToString("N"))
+                .Build();
+            var currentSignal = new SignalBuilder()
+                .WithId(Guid.NewGuid())
+                .WithEvidenceId(currentEvidence.Id)
+                .WithCompanyId(companyId)
+                .WithReviewStatus(SignalReviewStatus.Approved)
+                .WithStrength(6)
+                .WithObservedAtUtc(WindowEnd.AddDays(-3))
+                .Build();
+            await evidence.AddIfNewAsync(currentEvidence, CancellationToken.None);
+            await signals.AddAsync(currentSignal, CancellationToken.None);
+
+            // Prior window ON DISK: one canonical prior signal identity (Strength 12).
+            var priorEvidenceId = Guid.NewGuid();
+            var priorObserved = (WindowEnd - Window).AddDays(-3);
+            await WritePriorRunCopyAsync(fileStore, companyId, priorEvidenceId, priorObserved);
+
+            var oneCopy = await engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+            // Add FIVE more cross-run duplicate copies (same identity, fresh SignalId/CreatedAt) on disk.
+            for (var i = 0; i < 5; i++)
+            {
+                await WritePriorRunCopyAsync(fileStore, companyId, priorEvidenceId, priorObserved);
+            }
+
+            var manyCopies = await engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+            Assert.Equal(
+                oneCopy.Snapshot.SignalVelocityScore,
+                manyCopies.Snapshot.SignalVelocityScore);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Writes one cross-run copy of a prior-run Approved signal to the real on-disk store: a fresh SignalId
+    /// each call, but the SAME identity (companyId, evidenceId, Type, Direction) and Strength — exactly the
+    /// duplicate shape the dedup collapses.
+    /// </summary>
+    private static async Task WritePriorRunCopyAsync(
+        FileSignalStore fileStore, Guid companyId, Guid evidenceId, DateTimeOffset observedAt)
+    {
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidenceId)
+            .WithCompanyId(companyId)
+            .WithType(SignalType.CustomerWin)
+            .WithDirection(SignalDirection.Positive)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithStrength(12)
+            .WithObservedAtUtc(observedAt)
+            .Build();
+        var review = new Radar.Domain.Signals.SignalReview(
+            Id: Guid.NewGuid(),
+            SignalId: signal.Id,
+            ReviewerName: "DeterministicSignalReviewer",
+            Decision: SignalReviewDecision.Approve,
+            Summary: "prior run copy",
+            IssuesJson: null,
+            ReviewedAtUtc: observedAt.AddDays(1));
+        await fileStore.WriteAsync(signal, review, CancellationToken.None);
     }
 
     /// <summary>
