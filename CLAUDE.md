@@ -176,6 +176,29 @@ fix pass for its inline comments. The headless session the script launches is th
 follows Steps 0–4 above; this interactive session only launches, monitors, and reports its
 outcome.
 
+### Running the app live (`run-radar.ps1`) — measurements & scoring experiments
+
+`scripts/run-radar.ps1` runs the **Worker itself** for a live measurement (distinct from `run-next.ps1`,
+which dispatches the coder/reviewer pipeline). Config comes from named JSON profiles under
+`scripts/run-profiles/`:
+
+```
+powershell -File scripts/run-radar.ps1                     # 'default' profile = the canonical baseline run
+powershell -File scripts/run-radar.ps1 -Profile low-media  # an experiment: overlays a delta on default
+powershell -File scripts/run-radar.ps1 -Profile low-media -WhatIf   # print the resolved --Radar args, don't run
+```
+
+- **`default.json` captures how we run** (the 4 collectors + Ollama AI). Every other profile is loaded
+  **on top of** it and carries only its delta (e.g. `low-media.json` overrides `MediaReachWeight`) — so the
+  baseline is never lost and experiments are minimal diffs. This pairs with the config-driven `ScoringWeights`
+  (a profile can set `Radar:Scoring:Profiles:{name}:*`), which the snapshot fingerprint (AD-10) then stamps.
+- **A named profile writes to `data/experiments/<profile>/`** (baseline `data/` is untouched), so runs are
+  comparable side-by-side.
+- **SEC User-Agent is not committed** (public repo): pass `-SecUserAgent "Name email"` or set
+  `$env:RADAR_SEC_UA`; the placeholder default deliberately 403s so a missing UA fails loudly.
+- The script supplies all `Radar:*Directory` overrides itself (they default to relative paths that would
+  otherwise write cruft under `src/Radar.Worker/`).
+
 ### Tech stack
 
 - Target framework `.NET 10` / `net10.0`, C# 14.

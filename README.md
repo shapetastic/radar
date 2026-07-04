@@ -228,6 +228,7 @@ Two rules keep it from misbehaving:
 | `.github/workflows/ci.yml` | CI build/test gate. |
 | `.github/copilot-instructions.md` | Repository rules that guide Copilot’s reviews. |
 | `scripts/run-next.ps1` | The driver (implement / plan / Copilot stage). |
+| `scripts/run-radar.ps1` | Runs the **Worker** for a live measurement from a named JSON profile (`scripts/run-profiles/`, `default` = baseline; experiments overlay a delta and write to `data/experiments/<profile>/`). Not the dev driver — this runs the app. |
 | `scripts/setup-claude-worktrees.ps1` | One-time worktree creation. |
 | `src/` , `tests/` | The .NET 10 solution. |
 
