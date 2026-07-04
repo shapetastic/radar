@@ -108,11 +108,12 @@ was **co-designed with and approved by the maintainer**. Its five components are
 - **TrajectoryScore** — confidence-and-recency-weighted mean of directional strength, mapped `50 + 5·T_raw`
   (50 = neutral). Direction signs: `Positive +1`, `Negative −1`, **`Neutral` and `Mixed` = 0**.
 - **AttentionScore** — saturating breadth `100·reach/(reach+5)`, `reach = distinctSourceNames + 0.5·mediaSignals`.
+  *(Superseded by radar-formula-v3 — see the spec-87 refinement below: `+12` saturation, `0.25·mediaSignals`.)*
 - **EvidenceConfidenceScore** — `100·avgConf·(0.6+0.4·qualFactor)·(0.7+0.3·divFactor)`; quality weights
   Primary 1.0 / High .85 / Med .6 / Low .35 / Unknown .4; diversity saturates at 3 distinct source types.
 - **SignalVelocityScore** — `50·(actNow+10)/(actPrev+10)` over `Strength` sums (50 = steady).
 - **OpportunityScore** — **multiplicative** `Trajectory·(EC/100)·(1 − Attention/200)` (under-the-radar:
-  high attention halves, never zeroes).
+  high attention halves, never zeroes). *(Divisor superseded by radar-formula-v3 — `÷250`, see below.)*
 
 To feed velocity, **`ScoringInput` carries `PreviousSignals`** — the immediately-preceding equal-length
 window `(start−W, start]`, **signals only, no evidence loaded** (velocity needs `Strength` magnitude, not
@@ -158,8 +159,46 @@ Rationale: for a research tool whose whole premise is corroboration, more (and m
 (`radar-formula-v1`) and remain reproducible under it; only the live formula moved to v2. Per the
 spec-implementation checklist, `RadarScoreFormulaV1` was **deleted** (not left dormant) and its tests ported.
 
+### Refinement — `radar-formula-v3` (spec 87): re-tune attention saturation and the under-the-radar discount
+
+Two live runs on 2026-07-04 (the 8-company watch universe, after spec 84 made attention breadth real by
+mapping `SourceName` to the actual publisher) exposed that **`AttentionScore` no longer discriminated**. The
+v2 formula `100·reach/(reach+5)` with the small `+5` half-saturation put every ticker with normal coverage
+(reach ≈ 16–28) on the flat top of the curve: seven of the eight companies clustered at **Attention 76–85**,
+only the thinly-covered SPNS (~4 articles) sat low. The `(1 − Attention/200)` discount then haircut a
+near-uniform **38–43%** off almost everyone, which **compressed the whole board** (the quality cluster jammed
+at Opportunity ~40) and **penalised the most-covered quality names** — MRCY slid Investigate→Watch and AGYS
+fell to Ignore purely because good coverage inflated its Attention into the saturated top of the curve.
+`RadarScoreFormulaV3` (`Version = "radar-formula-v3"`, **maintainer-approved**) re-tunes exactly two
+components via three constants; **Trajectory, EvidenceConfidence, SignalVelocity, the recency weighting, the
+empty-window behaviour, and the `PreviousSignals`/window/provenance/contribution rules are byte-for-byte
+unchanged from v2**. The v1/v2 Attention and Opportunity component formulas above are therefore *superseded by
+radar-formula-v3* for those two components:
+
+- **AttentionScore** — `AttentionHalfSaturation 5 → 12` (`100·reach/(reach+12)`): at the live reach values the
+  covered cluster now lands at **57–70** and thinly-covered names at ~**15**, restoring a real 42–55-point
+  spread; same saturating shape (asymptotic to 100, monotone in reach), gentler slope. `MediaReachWeight 0.5 →
+  0.25` (`reach = distinctThirdPartySourceNames + 0.25·mediaSignals`): one event routinely spawns many
+  near-duplicate articles, so raw media volume is duplication-prone — lean on distinct-publisher breadth
+  (unchanged) while still letting a media-only source contribute *something*.
+- **OpportunityScore** — `OpportunityAttentionDivisor 200 → 250` (`Trajectory·(EC/100)·(1 − Attention/250)`):
+  the near-uniform ~40% haircut is what compressed the board and demoted MRCY/AGYS. Combined with the raised
+  saturation, `/250` softens the covered cluster's haircut to ~24–28% while a genuinely under-followed name
+  (Att 15) keeps ~94% of its base.
+
+The **under-the-radar principle is preserved**: Opportunity still falls monotonically as Attention rises, low
+attention still earns a strictly larger multiplier than high attention, and it **never zeroes** — the maximum
+haircut at Attention 100 is `100/250 = 40%`, still leaving 60%. Existing on-disk snapshots keep their recorded
+`ScoringVersion` (`…+radar-formula-v2`) and remain reproducible under it; only the live formula moved to v3.
+Per the spec-implementation checklist, `RadarScoreFormulaV2` was **deleted** (not left dormant) and its tests
+ported. This is the sanctioned AD-6 formula-change mechanism (bump `Version`, update this entry), not drift;
+`ScoringVersion` advances automatically via `_formula.Version` and `ScoringEngine.ScoringConfigVersion` bumped
+`v8 → v9` (AD-10). *Accepted · 2026-07-04 — maintainer reviewed and approved the exact constants (`+12`,
+`0.25`, `÷250`) and the 8-company before/after Opportunity table.*
+
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
-2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved).
+2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
+`radar-formula-v3` — maintainer-approved).
 
 ---
 

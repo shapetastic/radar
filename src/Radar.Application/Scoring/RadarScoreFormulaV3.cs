@@ -5,17 +5,22 @@ using Radar.Domain.Signals;
 namespace Radar.Application.Scoring;
 
 /// <summary>
-/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v2</c>: an AD-6 refinement of
-/// <c>radar-formula-v1</c> so that corroboration and source diversity <b>raise</b> scores rather than
-/// lower them. Pure and deterministic (no clock, no randomness, no I/O); every component clamps to
-/// [0,100]. Only three components change from v1 — Trajectory excludes zero-direction signals,
-/// Attention counts only third-party (market) sources, and EvidenceConfidence anchors on the strongest
-/// signal/quality with a saturating diversity bonus. SignalVelocity and Opportunity are byte-for-byte
-/// identical to v1. Emits exactly one provenance-carrying contribution per current-window signal, in
-/// input order (including Neutral/Mixed, which naturally weigh 0), and never from
-/// <see cref="ScoringInput.PreviousSignals"/>.
+/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v3</c>: an AD-6 refinement of
+/// <c>radar-formula-v2</c> that re-tunes the attention saturation and the under-the-radar discount so
+/// Attention separates under-followed from widely-covered names again. Live data showed the v2 Attention
+/// saturating at 76–85 across almost the whole board (the small <c>+5</c> half-saturation maxed out at
+/// normal coverage), and the <c>(1 − Attention/200)</c> discount haircutting a near-uniform ~40% that
+/// compressed the board and penalised the most-covered quality names. v3 raises the half-saturation
+/// (5→12), down-weights the raw media term (0.5→0.25 — distinct-publisher breadth is the cleaner signal),
+/// and softens the discount divisor (200→250). Only <b>Attention</b> and <b>Opportunity</b> change; every
+/// other component is byte-for-byte identical to v2. Pure and deterministic (no clock, no randomness, no
+/// I/O); every component clamps to [0,100]. Trajectory excludes zero-direction signals, Attention counts
+/// only third-party (market) sources, EvidenceConfidence anchors on the strongest signal/quality with a
+/// saturating diversity bonus, and SignalVelocity is unchanged. Emits exactly one provenance-carrying
+/// contribution per current-window signal, in input order (including Neutral/Mixed, which naturally weigh
+/// 0), and never from <see cref="ScoringInput.PreviousSignals"/>.
 /// </summary>
-public sealed class RadarScoreFormulaV2 : IScoreFormula
+public sealed class RadarScoreFormulaV3 : IScoreFormula
 {
     // Direction → sign used in trajectory.
     private const int DirPositive = +1;
@@ -29,9 +34,13 @@ public sealed class RadarScoreFormulaV2 : IScoreFormula
     private const double TrajectoryNeutral = 50.0;
     private const double TrajectoryScale   = 5.0;
 
-    // Attention saturation: reach / (reach + K) → 0..1. MediaAttention signals add half a unit of reach.
-    private const double AttentionHalfSaturation = 5.0;
-    private const double MediaReachWeight        = 0.5;
+    // Attention saturation: reach / (reach + K) → 0..1. v3 raised the half-saturation point (5→12) so
+    // normal coverage (reach ≈ 16–28) no longer saturates at 76–85; the covered cluster now lands ~57–70
+    // and thinly-covered names stay low, restoring the discriminator. MediaAttention signals add a quarter
+    // unit of reach: v3 halved the raw media weight (0.5→0.25) because one event routinely spawns many
+    // near-duplicate articles, so raw media volume is duplication-prone — lean on distinct-publisher breadth.
+    private const double AttentionHalfSaturation = 12.0;
+    private const double MediaReachWeight        = 0.25;
 
     // EvidenceConfidence quality weights (by EvidenceQuality).
     private const double QualPrimarySource = 1.00;
@@ -51,11 +60,12 @@ public sealed class RadarScoreFormulaV2 : IScoreFormula
     private const double VelocitySmoothing = 10.0;
     private const double VelocitySteady    = 50.0;
 
-    // Opportunity: attention at 100 halves the score (divisor 200), never zeroes it.
-    private const double OpportunityAttentionDivisor = 200.0;
+    // Opportunity: v3 softened the under-the-radar discount divisor (200→250) so covered quality names are
+    // not uniformly crushed; attention at 100 now costs at most a 40% haircut (100/250), still never zeroes.
+    private const double OpportunityAttentionDivisor = 250.0;
 
     /// <inheritdoc />
-    public string Version => "radar-formula-v2";
+    public string Version => "radar-formula-v3";
 
     private static int DirectionSign(SignalDirection d) => d switch
     {
@@ -87,7 +97,7 @@ public sealed class RadarScoreFormulaV2 : IScoreFormula
             var emptyComponents = new ScoreComponents(0, 0, 0, 0, 0);
             return new ScoreComputation(
                 emptyComponents,
-                "radar-formula-v2: no signals in window.",
+                "radar-formula-v3: no signals in window.",
                 JsonSerializer.Serialize(emptyComponents),
                 new List<ScoreContribution>());
         }
@@ -138,7 +148,8 @@ public sealed class RadarScoreFormulaV2 : IScoreFormula
 
         // ---- 2. AttentionScore (saturating on breadth) ----
         // v2: only third-party (market attention) evidence source names count toward reach; a company's
-        // own disclosures (press releases, filings, ...) are not market attention.
+        // own disclosures (press releases, filings, ...) are not market attention. v3 raised the
+        // half-saturation constant (12) and down-weighted the raw media term (0.25) — see field comments.
         var distinctThirdPartySources = signals
             .Where(s => EvidenceSourceTypes.IsThirdPartyAttentionSource(s.Evidence.SourceType))
             .Select(s => s.Evidence.SourceName)
@@ -168,7 +179,7 @@ public sealed class RadarScoreFormulaV2 : IScoreFormula
         var ratio = (actNow + VelocitySmoothing) / (actPrev + VelocitySmoothing);
         var signalVelocityScore = Score(VelocitySteady * ratio);
 
-        // ---- 5. OpportunityScore (multiplicative; uses clamped int components above) ---- (unchanged)
+        // ---- 5. OpportunityScore (multiplicative; uses clamped int components above) ---- (v3 divisor 250)
         var opportunityScore = Score(
             trajectoryScore
             * (evidenceConfidenceScore / 100.0)
@@ -203,7 +214,7 @@ public sealed class RadarScoreFormulaV2 : IScoreFormula
 
         var windowDays = (int)Math.Round(windowLength.TotalDays, MidpointRounding.AwayFromZero);
         var explanation =
-            $"radar-formula-v2: {input.Signals.Count} signal(s) over {windowDays}d → " +
+            $"radar-formula-v3: {input.Signals.Count} signal(s) over {windowDays}d → " +
             $"Trajectory {trajectoryScore}, Opportunity {opportunityScore} (Attention {attentionScore}, " +
             $"Confidence {evidenceConfidenceScore}, Velocity {signalVelocityScore}).";
 

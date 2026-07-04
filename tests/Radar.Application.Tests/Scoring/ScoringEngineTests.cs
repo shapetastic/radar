@@ -328,7 +328,7 @@ public sealed class ScoringEngineTests
 
         // Every new snapshot is stamped with the current scoring-generation constant (non-null), so the
         // report can gate cross-run comparability on it.
-        Assert.Equal("radar-scoring-config-v8", result.Snapshot.ScoringConfigVersion);
+        Assert.Equal("radar-scoring-config-v9", result.Snapshot.ScoringConfigVersion);
     }
 
     [Theory]
@@ -338,8 +338,8 @@ public sealed class ScoringEngineTests
         SignalDirection direction, bool aboveBaseline)
     {
         // Spec 75: a directional GuidanceChange (the AI earnings read) over Filing evidence moves
-        // Trajectory the right way under the real radar-formula-v2 — a beat up, a miss down.
-        var harness = new Harness(new RadarScoreFormulaV2());
+        // Trajectory the right way under the real radar-formula-v3 — a beat up, a miss down.
+        var harness = new Harness(new RadarScoreFormulaV3());
         var companyId = Guid.NewGuid();
 
         var evidence = new EvidenceBuilder()
@@ -382,7 +382,7 @@ public sealed class ScoringEngineTests
     {
         // The deterministic Neutral GuidanceChange (spec 57) contributes 0 to Trajectory, so a window whose
         // only signal is Neutral still scores the 50 baseline (coexistence with the directional read).
-        var harness = new Harness(new RadarScoreFormulaV2());
+        var harness = new Harness(new RadarScoreFormulaV3());
         var companyId = Guid.NewGuid();
 
         var evidence = new EvidenceBuilder()
@@ -650,7 +650,7 @@ public sealed class ScoringEngineTests
         // Real formula: velocity = 50·(actNow+10)/(actPrev+10) over Strength sums. Current-window strength
         // (in the in-memory repo) sums to 16; prior-window strength (only on disk) sums to 6 → ratio > 1 →
         // velocity > 50. This proves the previous window now comes from disk (cross-run).
-        var harness = new Harness(new RadarScoreFormulaV2());
+        var harness = new Harness(new RadarScoreFormulaV3());
         var companyId = Guid.NewGuid();
         var windowStart = WindowEnd - Window;
 
@@ -672,7 +672,7 @@ public sealed class ScoringEngineTests
     {
         // Mirror case: current-window strength (6) < prior-window strength (on disk: 12 + 12 = 24) → ratio
         // < 1 → velocity < 50.
-        var harness = new Harness(new RadarScoreFormulaV2());
+        var harness = new Harness(new RadarScoreFormulaV3());
         var companyId = Guid.NewGuid();
         var windowStart = WindowEnd - Window;
 
@@ -694,7 +694,7 @@ public sealed class ScoringEngineTests
         // no-previous value 50·(actNow+10)/(0+10). With actNow == 0 (a Neutral has 0? no — pick actNow to
         // land exactly on steady) we assert against the same value a run with an empty previous window
         // computes, proving no fabricated movement without a prior on disk.
-        var harness = new Harness(new RadarScoreFormulaV2());
+        var harness = new Harness(new RadarScoreFormulaV3());
         var companyId = Guid.NewGuid();
 
         // One current-window Approved signal, Strength 6; nothing on disk.
@@ -711,7 +711,7 @@ public sealed class ScoringEngineTests
     {
         // Spec Test 7: the disk-sourced previous signals are activity-only and contribute NO links. Only
         // the current-window signal's evidence produces a ScoreEvidenceLink.
-        var harness = new Harness(new RadarScoreFormulaV2());
+        var harness = new Harness(new RadarScoreFormulaV3());
         var companyId = Guid.NewGuid();
         var windowStart = WindowEnd - Window;
 
@@ -747,7 +747,7 @@ public sealed class ScoringEngineTests
             var evidence = new InMemoryEvidenceRepository();
             var scores = new InMemoryScoreRepository();
             var engine = new ScoringEngine(
-                signals, fileStore, evidence, scores, new RadarScoreFormulaV2(),
+                signals, fileStore, evidence, scores, new RadarScoreFormulaV3(),
                 new ScoringOptions { Window = Window }, NullLogger<ScoringEngine>.Instance);
 
             var companyId = Guid.NewGuid();
