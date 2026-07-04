@@ -5,10 +5,13 @@
 > domain-form / punctuation variants (`marketscreener.com`, `simplywall.st`) resolve to the outlets
 > already curated in the mill list; and (B) a **recalibration of the default tier map / unknown weight**
 > (mostly config) so an all-aggregator name scores materially LOWER Attention than a genuinely-covered
-> one. Both are **maintainer judgment calls on the calibration posture** — mark the recalibrated defaults
-> and any AD note **Proposed pending maintainer sign-off** (exactly as specs 87/88/89 were shipped as
-> Proposed). This is a **directed** slice (the maintainer asked for it), **NOT** the generic planner loop,
-> and **NOT** architecture-gated.
+> one. **MAINTAINER SIGN-OFF: GRANTED 2026-07-04 (authoritative — overrides "Proposed pending sign-off"
+> references below).** The maintainer approved the calibration posture this session: the normalization
+> approach + explicit `Simplywall.st` alias, the **denylist-expand + `UnknownWeight 0.5→0.25`** recommendation
+> (the expanded mill list incl. Finviz/Investing.com/Benzinga/TipRanks/…), and the recalibrated defaults —
+> ship them as **Accepted · 2026-07-04**, treat every "Proposed until sign-off" note as SATISFIED. This is a
+> **directed** slice (the maintainer asked for it), **NOT** the generic planner loop, and **NOT**
+> architecture-gated.
 >
 > **NO formula-shape change and NO new formula-version class.** The reach formula is unchanged — only the
 > *weights* it reads (the tier map / unknown default) and the *matcher* that resolves a `SourceName` to a
