@@ -9,9 +9,13 @@
 > v3 edit), deletes/supersedes `RadarScoreFormulaV3` (spec-impl checklist: delete deprecated code, port
 > tests), amends the AD-6 ledger, updates `ScoringVersion` composition automatically (via `_formula.Version`),
 > and bumps `ScoringEngine.ScoringConfigVersion` (AD-10) to the next integer.
-> **The tier list + the re-tuned constants are PROPOSED pending maintainer sign-off** (mark the AD-6 v4
-> subsection **Proposed**, as v3 was Proposed→Accepted) — the coder ships them as proposed. This is a
-> **directed** slice (maintainer asked), **NOT** the generic planner loop, and **NOT** architecture-gated.
+> **MAINTAINER SIGN-OFF: GRANTED 2026-07-04 (authoritative — overrides every "Proposed pending sign-off"
+> reference below).** The maintainer reviewed and approved this session: the tier weights (mill `0.1`,
+> unknown `0.5`, genuine `1.0`), the seed mill/genuine publisher lists, and the re-tuned
+> `AttentionHalfSaturation 12→3`. Therefore mark the AD-6 v4 subsection **Accepted · 2026-07-04** (NOT
+> Proposed), and treat every "Proposed until maintainer sign-off" / "confirm before merge" note elsewhere in
+> this spec as **SATISFIED** — ship these exact values. This is a **directed** slice (maintainer asked),
+> **NOT** the generic planner loop, and **NOT** architecture-gated.
 
 > **STRICT SEQUENCING — implement AFTER spec 87 merges. Do NOT run in parallel.** This slice builds directly
 > ON `radar-formula-v3` (spec 87, currently in flight): it supersedes `RadarScoreFormulaV3` and re-tunes the
