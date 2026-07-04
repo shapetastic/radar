@@ -5,6 +5,7 @@ using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.Gdelt;
+using Radar.Infrastructure.News;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.UsaSpending;
 
@@ -57,7 +58,7 @@ internal static class RadarWorkerServices
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
-                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", and \"news\".");
+                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", \"news\", and \"newssearch\".");
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -68,7 +69,7 @@ internal static class RadarWorkerServices
             if (string.IsNullOrWhiteSpace(rawKind))
             {
                 throw new InvalidOperationException(
-                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", and \"news\".");
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", \"news\", and \"newssearch\".");
             }
 
             var kind = rawKind.Trim();
@@ -115,10 +116,19 @@ internal static class RadarWorkerServices
                     RetryBackoff = TimeSpan.FromSeconds(options.Gdelt.RetryBackoffSeconds),
                 });
             }
+            else if (string.Equals(kind, "newssearch", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddNewsAttentionCollector(new NewsCollectorOptions
+                {
+                    MaxRecordsPerCompany = options.News.MaxRecordsPerCompany,
+                    EnglishOnly = options.News.EnglishOnly,
+                    InterRequestDelay = TimeSpan.FromSeconds(options.News.InterRequestDelaySeconds),
+                });
+            }
             else
             {
                 throw new InvalidOperationException(
-                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", and \"news\".");
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", \"news\", and \"newssearch\".");
             }
         }
 

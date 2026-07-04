@@ -31,6 +31,11 @@
           "type": "news",
           "name": "Mercury Systems — News coverage (GDELT)",
           "url": "query=Mercury Systems&ticker=MRCY"
+        },
+        {
+          "type": "newssearch",
+          "name": "Mercury Systems — News attention (Google News)",
+          "url": "query=Mercury Systems&ticker=MRCY"
         }
       ]
     },
@@ -59,6 +64,11 @@
         {
           "type": "news",
           "name": "Aehr Test Systems — News coverage (GDELT)",
+          "url": "query=Aehr Test Systems&ticker=AEHR"
+        },
+        {
+          "type": "newssearch",
+          "name": "Aehr Test Systems — News attention (Google News)",
           "url": "query=Aehr Test Systems&ticker=AEHR"
         }
       ]
@@ -94,6 +104,11 @@
           "type": "news",
           "name": "Agilysys — News coverage (GDELT)",
           "url": "query=Agilysys&ticker=AGYS"
+        },
+        {
+          "type": "newssearch",
+          "name": "Agilysys — News attention (Google News)",
+          "url": "query=Agilysys&ticker=AGYS"
         }
       ]
     },
@@ -128,6 +143,11 @@
           "type": "news",
           "name": "Cryoport — News coverage (GDELT)",
           "url": "query=Cryoport&ticker=CYRX"
+        },
+        {
+          "type": "newssearch",
+          "name": "Cryoport — News attention (Google News)",
+          "url": "query=Cryoport&ticker=CYRX"
         }
       ]
     },
@@ -157,6 +177,11 @@
           "type": "news",
           "name": "Energy Recovery — News coverage (GDELT)",
           "url": "query=Energy Recovery&ticker=ERII"
+        },
+        {
+          "type": "newssearch",
+          "name": "Energy Recovery — News attention (Google News)",
+          "url": "query=Energy Recovery&ticker=ERII"
         }
       ]
     },
@@ -180,6 +205,11 @@
         {
           "type": "news",
           "name": "Sapiens — News coverage (GDELT)",
+          "url": "query=Sapiens International&ticker=SPNS"
+        },
+        {
+          "type": "newssearch",
+          "name": "Sapiens International — News attention (Google News)",
           "url": "query=Sapiens International&ticker=SPNS"
         }
       ]
@@ -209,6 +239,11 @@
         {
           "type": "news",
           "name": "Helios Technologies — News coverage (GDELT)",
+          "url": "query=Helios Technologies&ticker=HLIO"
+        },
+        {
+          "type": "newssearch",
+          "name": "Helios Technologies — News attention (Google News)",
           "url": "query=Helios Technologies&ticker=HLIO"
         }
       ]

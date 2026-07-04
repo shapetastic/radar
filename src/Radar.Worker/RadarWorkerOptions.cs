@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "usaspending", "news".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "usaspending", "news", "newssearch".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -25,6 +25,13 @@ public sealed class RadarWorkerOptions
     /// collector is enabled; the defaults let the rss-only configuration keep working with no Gdelt config.
     /// </summary>
     public GdeltWorkerOptions Gdelt { get; init; } = new();
+
+    /// <summary>
+    /// Google News RSS news-attention collector configuration (bound from "Radar:News"). Only read when the
+    /// "newssearch" collector is enabled; the defaults let the rss-only configuration keep working with no News
+    /// config.
+    /// </summary>
+    public NewsWorkerOptions News { get; init; } = new();
 
     /// <summary>
     /// AI chat-client seam configuration (bound from "Radar:Ai"). A blank <see cref="AiWorkerOptions.Provider"/>
@@ -144,6 +151,24 @@ public sealed class GdeltWorkerOptions
 
     /// <summary>Base cool-down before the first 429 retry, in seconds; the reader doubles it per retry. Defaults to 60 (→ 60s/120s).</summary>
     public int RetryBackoffSeconds { get; init; } = 60;
+}
+
+/// <summary>
+/// Google News RSS news-attention collector configuration (bound from "Radar:News"). Surfaces the per-company
+/// cap, the English-only toggle, and the inter-request pacing delay through to <c>NewsCollectorOptions</c>.
+/// Unlike GDELT, Google News RSS is NOT per-IP throttled, so only a small polite pace is needed. Defaults so
+/// the rss-only configuration works without any News config.
+/// </summary>
+public sealed class NewsWorkerOptions
+{
+    /// <summary>Maximum surviving (relevance-filtered, deduped) articles to collect per company per run. Defaults to 25.</summary>
+    public int MaxRecordsPerCompany { get; init; } = 25;
+
+    /// <summary>Whether to restrict coverage to English/US. Defaults to true.</summary>
+    public bool EnglishOnly { get; init; } = true;
+
+    /// <summary>Pause between successive per-company requests, in seconds. Defaults to 1 (Google News RSS is not per-IP throttled).</summary>
+    public int InterRequestDelaySeconds { get; init; } = 1;
 }
 
 /// <summary>

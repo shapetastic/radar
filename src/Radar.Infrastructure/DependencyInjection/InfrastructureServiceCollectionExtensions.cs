@@ -17,6 +17,7 @@ using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
+using Radar.Infrastructure.News;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sec;
@@ -345,6 +346,56 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, GdeltNewsCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the Google News RSS news-attention collector (Radar's third-party market-attention source
+    /// that is NOT per-IP throttled — the fix for GDELT's per-IP quota) and the typed <c>HttpClient</c> its
+    /// <see cref="INewsSearchReader"/> uses. The collector reads the per-company <c>newssearch</c> feeds
+    /// supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's <c>Url</c> is
+    /// a <c>query=...&amp;ticker=...</c> token) and produces raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> news articles; it does not persist them.
+    /// All HTTP/XML/source specifics stay in Infrastructure behind the reader (AD-5). This is a DISTINCT kind
+    /// from the GDELT <c>news</c> collector, so both can be enabled independently.
+    /// <para>
+    /// Fails fast when <see cref="NewsCollectorOptions.MaxRecordsPerCompany"/> is zero/negative or when
+    /// <see cref="NewsCollectorOptions.InterRequestDelay"/> is negative: each would let the collector run yet
+    /// either collect nothing or carry nonsensical config, so they are treated as configuration errors. The
+    /// endpoint needs no User-Agent or key (Google News RSS is keyless); the named client only enables
+    /// automatic gzip/deflate decompression (polite).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddNewsAttentionCollector(
+        this IServiceCollection services, NewsCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.MaxRecordsPerCompany <= 0)
+        {
+            throw new InvalidOperationException(
+                "News search MaxRecordsPerCompany must be greater than zero; configure "
+                    + "Radar:News:MaxRecordsPerCompany to a positive cap (default 25) — a zero/negative value "
+                    + "collects nothing while still running.");
+        }
+
+        if (options.InterRequestDelay < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                "News search InterRequestDelay must not be negative; configure Radar:News:InterRequestDelaySeconds "
+                    + "to a non-negative pacing delay (default 1s) — Google News RSS is not per-IP throttled, so a small polite pace suffices.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<INewsSearchReader, HttpNewsSearchReader>()
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, NewsAttentionCollector>();
         return services;
     }
 
