@@ -1,0 +1,11 @@
+{
+  "_comment": "EXPERIMENT profile 'low-media' — overlays the default profile. Dampens the raw-article-count term (MediaReachWeight 0.25 -> 0.05) so AttentionScore is driven by tier-weighted DISTINCT-PUBLISHER breadth rather than sheer article volume. Hypothesis (from the post-91 re-measure): an all-aggregator name (HLIO) should drop to ~Att 30 while a genuinely-covered name holds higher. Selects a named scoring profile so the effective config gets its own fingerprint + data/scoring-configs artifact (fully traceable). Output is routed to data/experiments/low-media/ so the baseline data is untouched.",
+  "Radar": {
+    "Scoring": {
+      "Profile": "low-media",
+      "Profiles": {
+        "low-media": { "MediaReachWeight": 0.05 }
+      }
+    }
+  }
+}

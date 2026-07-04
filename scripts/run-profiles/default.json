@@ -1,0 +1,11 @@
+{
+  "_comment": "BASELINE Radar live-run profile ('default') — the canonical record of how we run the Worker for a live measurement. run-radar.ps1 always loads this as the base; other profiles overlay small deltas on top. Machine-specific bits are NOT in here: the output directories and the SEC User-Agent (a real contact email) are supplied by run-radar.ps1 at runtime. Scoring is intentionally omitted so it uses the code defaults (radar-formula-v5; MediaReachWeight 0.25; fingerprint radar-scoring-fp-c1e71b26adf3).",
+  "Radar": {
+    "Collectors": [ "rss", "sec", "usaspending", "newssearch" ],
+    "Ai": {
+      "Provider": "ollama",
+      "Model": "llama3.1",
+      "Ollama": { "Endpoint": "http://localhost:11434" }
+    }
+  }
+}
