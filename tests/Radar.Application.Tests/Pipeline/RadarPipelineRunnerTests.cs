@@ -259,12 +259,33 @@ public sealed class RadarPipelineRunnerTests
         }
     }
 
+    /// <summary>
+    /// A fake <see cref="IScoringConfigStore"/> mirroring the real store's best-effort, non-throwing
+    /// contract (it never throws — the real store swallows disk errors via GracefulFileWriter). Counts
+    /// every <see cref="WriteIfNewAsync"/> call and records the configs written, so tests can assert the
+    /// runner writes the effective config exactly once per run (not once per company).
+    /// </summary>
+    private sealed class RecordingScoringConfigStore : IScoringConfigStore
+    {
+        public int WriteCallCount { get; private set; }
+
+        public List<EffectiveScoringConfig> Written { get; } = new();
+
+        public Task<string> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct)
+        {
+            WriteCallCount++;
+            Written.Add(config);
+            return Task.FromResult($"written/scoring-configs/{config.Fingerprint}.json");
+        }
+    }
+
     private sealed class Harness
     {
         public InMemoryEvidenceRepository Evidence { get; } = new();
         public RecordingRawEvidenceStore RawStore { get; } = new();
         public RecordingReportFileWriter ReportWriter { get; } = new();
         public RecordingPipelineRunStore RunStore { get; } = new();
+        public RecordingScoringConfigStore ScoringConfigStore { get; } = new();
         public InMemoryCompanyRepository Companies { get; } = new();
         public InMemorySignalRepository Signals { get; } = new();
         public InMemorySignalReviewRepository Reviews { get; } = new();
@@ -340,6 +361,7 @@ public sealed class RadarPipelineRunnerTests
                 Companies,
                 scoringEngine,
                 ScoreStore,
+                ScoringConfigStore,
                 reportBuilder,
                 ReportWriter,
                 RunStore,
@@ -965,6 +987,7 @@ public sealed class RadarPipelineRunnerTests
             services.AddFileScoreStore(Path.Combine(tempDir, "scores"));
             services.AddFileReportWriter(Path.Combine(tempDir, "reports"));
             services.AddFilePipelineRunStore(Path.Combine(tempDir, "runs"));
+            services.AddFileScoringConfigStore(Path.Combine(tempDir, "scoring-configs"));
             services.AddRadarPipeline();
 
             using var provider = services.BuildServiceProvider();
@@ -1146,6 +1169,35 @@ public sealed class RadarPipelineRunnerTests
         var record = Assert.Single(h.RunStore.Written);
         Assert.Null(record.ReportId);
         Assert.Equal(result.ReportId, record.ReportId);
+    }
+
+    [Fact]
+    public async Task Run_WritesEffectiveScoringConfig_OncePerRun_NotOncePerCompany()
+    {
+        // A multi-company universe: the effective scoring config is identical for every company, so the
+        // runner must persist it ONCE per run (content-addressed, insert-if-new), not once per scored
+        // company. The config-store write is best-effort and must not change any run-summary count.
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, Guid.NewGuid(), "Northwind Robotics");
+        await SeedCompanyAsync(h, Guid.NewGuid(), "Contoso Instruments");
+        await SeedCompanyAsync(h, Guid.NewGuid(), "Fabrikam Dynamics");
+
+        var result = await h.Runner.RunAsync(default);
+
+        // Every company was scored, but the config store was written exactly once.
+        Assert.Equal(3, result.CompaniesScored);
+        Assert.Equal(1, h.ScoringConfigStore.WriteCallCount);
+
+        // The written config is the engine's effective config: its fingerprint matches every snapshot's
+        // ScoringConfigVersion stamp (provenance completion — the stamp dereferences to these weights).
+        var written = Assert.Single(h.ScoringConfigStore.Written);
+        foreach (var (snapshot, _) in h.ScoreStore.Written)
+        {
+            Assert.Equal(written.Fingerprint, snapshot.ScoringConfigVersion);
+        }
     }
 
     /// <summary>

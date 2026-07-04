@@ -60,6 +60,7 @@ public sealed class PipelineEndToEndTests
         services.AddFileScoreStore(Path.Combine(fixtures.RootDir, "scores"));
         services.AddFileReportWriter(Path.Combine(fixtures.RootDir, "reports"));
         services.AddFilePipelineRunStore(Path.Combine(fixtures.RootDir, "runs"));
+        services.AddFileScoringConfigStore(Path.Combine(fixtures.RootDir, "scoring-configs"));
         services.AddRadarPipeline();
         return services.BuildServiceProvider();
     }

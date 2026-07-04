@@ -58,6 +58,9 @@ public sealed class RadarWorkerOptions
     /// <summary>Root directory for the pipeline run-history file store.</summary>
     public string RunsDirectory { get; init; } = "data/runs";
 
+    /// <summary>Root directory for the content-addressed effective-scoring-config file store (spec 91).</summary>
+    public string ScoringConfigsDirectory { get; init; } = "data/scoring-configs";
+
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
 

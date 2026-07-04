@@ -400,9 +400,34 @@ default-weight/tier drift. The **only remaining human code-version obligation** 
 (determinism), and spec 69 (the stamp and its comparability gate). *Accepted · 2026-07-04 — maintainer
 approved the content-fingerprint stamp.*
 
+### Amendment — spec 91: the effective config is persisted content-addressed by the fingerprint (weights become recoverable)
+
+Spec 89 made `ScoringConfigVersion` a **one-way** SHA256 fingerprint: it gates comparability and proves
+integrity, but the actual weight **values** cannot be recovered from the hash. Spec 91 closes that provenance
+gap **additively** — it does **not** change scoring output, the formula, the component math, or the fingerprint
+**value** (no `_formula.Version` bump, no `ScoringConfigVersion` change). On each run the `ScoringEngine` exposes
+its `EffectiveConfig` (the same tuple the fingerprint hashes: engine + `_formula.Version` + every `ScoringWeights`
+value + the attention `CanonicalDescriptor()`, plus the resulting fingerprint), and the runner persists it
+**once per run** via `IScoringConfigStore` to `data/scoring-configs/{fingerprint}.json`. The store is
+**content-addressed** (filename == the fingerprint) and **insert-if-new / immutable** — a given fingerprint's
+config is by definition fixed, so an existing file is never overwritten (the AD-1 evidence-immutability mirror,
+the deliberate opposite of `FileScoreSnapshotStore`'s upsert-by-Id). This makes the hash **checkable** rather
+than opaque: recomputing the fingerprint from the stored config equals the filename. A historical snapshot's
+`ScoringConfigVersion` stamp now dereferences back to the exact weights that produced it — the natural
+completion of AD-10-as-amended, required **before** any custom-`Radar:Scoring:Profile` experiment run persists
+snapshots whose weights would otherwise live nowhere durable. Files-first + best-effort/graceful-degrade
+posture (AD-8): a disk failure logs + continues and never aborts scoring (the snapshot still carries the stamp).
+No run-record pointer was added (default) — the snapshot→fingerprint→config chain already closes the loop.
+Cross-reference AD-1 (insert-if-new immutability), AD-3 (canonical/deterministic serialization reused from
+spec 89 — the store must not invent a second serialization), AD-8 (files-first), and spec 89 (the fingerprint).
+*Accepted · 2026-07-04 — provenance completion (natural completion of AD-10-as-amended-by-89), not a
+settled-convention reversal.*
+
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
 by spec 70). Amended · 2026-07-04 (spec 89 — stamp becomes a derived content fingerprint; property preserved
-and made automatic; Accepted).
+and made automatic; Accepted). Amended · 2026-07-04 (spec 91 — the effective config is persisted
+content-addressed by the fingerprint so the weights behind a historical snapshot are recoverable; additive,
+no fingerprint-value change; Accepted).
 
 ---
 

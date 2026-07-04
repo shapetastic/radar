@@ -48,6 +48,11 @@ public sealed class ScoringEngine : IScoringEngine
     // ScoringVersion).
     private readonly string _scoringConfigFingerprint;
 
+    // The effective resolved scoring config projection (same tuple the fingerprint hashes), built once in
+    // the constructor and exposed as a pure accessor for content-addressed persistence (spec 91). Additive:
+    // it does not change scoring output or the stamped fingerprint value.
+    private readonly EffectiveScoringConfig _effectiveConfig;
+
     public ScoringEngine(
         ISignalRepository signalRepository,
         ISignalFileStore signalFileStore,
@@ -77,9 +82,21 @@ public sealed class ScoringEngine : IScoringEngine
         _options = options;
         _logger = logger;
 
+        var attentionDescriptor = sourceWeights.CanonicalDescriptor();
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
-            EngineVersion, formula.Version, weights, sourceWeights.CanonicalDescriptor());
+            EngineVersion, formula.Version, weights, attentionDescriptor);
+
+        // Build the effective-config projection from the SAME tuple the fingerprint hashes, so
+        // EffectiveConfig.Fingerprint always equals the stamp on every snapshot this engine produces.
+        _effectiveConfig = new EffectiveScoringConfig(
+            Fingerprint: _scoringConfigFingerprint,
+            EngineVersion: EngineVersion,
+            FormulaVersion: formula.Version,
+            Weights: weights,
+            AttentionDescriptor: attentionDescriptor);
     }
+
+    public EffectiveScoringConfig EffectiveConfig => _effectiveConfig;
 
     public async Task<CompanyScoreResult> ScoreCompanyAsync(
         Guid companyId, DateTimeOffset windowEndUtc, CancellationToken ct)
