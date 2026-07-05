@@ -9,6 +9,7 @@ using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
 using Radar.Application.Pipeline;
+using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
@@ -21,6 +22,7 @@ using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.News;
 using Radar.Infrastructure.Persistence.InMemory;
+using Radar.Infrastructure.Prices;
 using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.Sources;
@@ -711,6 +713,65 @@ public static class InfrastructureServiceCollectionExtensions
     {
         services.AddSingleton(new FileScoringConfigStoreOptions { RootDirectory = rootDirectory });
         services.AddSingleton<IScoringConfigStore, FileScoringConfigStore>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the keyless Yahoo Finance <c>chart</c> price-history reader behind the Application
+    /// <see cref="IPriceHistoryReader"/> seam, with a typed <c>HttpClient</c> carrying a browser
+    /// <c>User-Agent</c> and gzip/deflate decompression (mirrors <see cref="AddSecEarningsReleaseReader"/>).
+    /// This is a REFERENCE/VALIDATION seam (AD-14): the reader is <b>not</b> an <c>IEvidenceCollector</c>,
+    /// produces <b>no</b> <c>CollectedEvidence</c>, and is <b>not</b> in the collector <c>IEnumerable</c> — a
+    /// price bar can never enter the evidence → signal → score path. All HTTP/JSON/Yahoo specifics stay in
+    /// Infrastructure (AD-5); no key, no secret, no paid service.
+    /// <para>
+    /// Fails fast when <paramref name="range"/> is not one of the Yahoo <c>chart</c> endpoint's
+    /// <c>validRanges</c> (blank ⇒ the default <c>1y</c>) — a bad range would 400 every request while still
+    /// running. The typed <c>PriceReaderOptions</c> is <c>internal</c>, so this helper accepts a public
+    /// <c>string</c> range the Worker can supply and builds the options itself.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddHttpPriceHistoryReader(
+        this IServiceCollection services, string range)
+    {
+        var effectiveRange = string.IsNullOrWhiteSpace(range) ? "1y" : range.Trim();
+        if (!PriceReaderOptions.ValidRanges.Contains(effectiveRange))
+        {
+            throw new InvalidOperationException(
+                $"Radar:Prices:Range '{effectiveRange}' is not a valid Yahoo chart range; configure "
+                    + "Radar:Prices:Range to one of 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max "
+                    + "(default 1y) — a bad range 400s every request while still running.");
+        }
+
+        services.AddSingleton(new PriceReaderOptions { Range = effectiveRange });
+
+        services.AddHttpClient<IPriceHistoryReader, HttpPriceHistoryReader>(client =>
+            {
+                // The Yahoo chart endpoint requires a browser-like User-Agent; a bare HttpClient UA is rejected.
+                client.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the file price-history reference store (AD-14, files-first AD-8) that persists a ticker's daily
+    /// bars to <c>{rootDirectory}/{ticker}.json</c> (append-merged/deduped by <c>Date</c>) behind the Application
+    /// <see cref="IPriceHistoryStore"/> seam. Mirrors <see cref="AddFilePipelineRunStore"/>; all file I/O stays
+    /// in Infrastructure. Consumed by NOTHING in the scoring/evidence/signal/report path — it is the reference
+    /// dataset a future price-efficacy backtest will read.
+    /// </summary>
+    public static IServiceCollection AddFilePriceHistoryStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FilePriceHistoryStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IPriceHistoryStore, FilePriceHistoryStore>();
         return services;
     }
 

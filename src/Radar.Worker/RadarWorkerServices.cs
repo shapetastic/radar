@@ -1,4 +1,5 @@
 using Radar.Application.Pipeline;
+using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Infrastructure.Ai;
@@ -182,6 +183,32 @@ internal static class RadarWorkerServices
                 MinConfidence = options.Ai.MinConfidence,
                 MaxFilingsPerRun = options.Ai.MaxFilingsPerRun,
             });
+        }
+
+        // Wire the price-history REFERENCE seam ONLY when Radar:Prices:Enabled is true (opt-in gate, AD-14).
+        // Price is validation/reference data — never evidence, never a signal, never a scoring input — so this
+        // registers a SEPARATE reader + store + acquisition step, none of which is a collector or touches the
+        // evidence → signal → score path. When disabled (the default) NOTHING price-related is registered, the
+        // Worker's optional IPriceHistoryAcquirer stays null, the step is skipped, and the graph is byte-for-byte
+        // unchanged (mirrors the Radar:Ai opt-in gate).
+        if (options.Prices.Enabled)
+        {
+            if (options.Prices.InterRequestDelaySeconds < 0)
+            {
+                throw new InvalidOperationException(
+                    "Radar:Prices:InterRequestDelaySeconds must not be negative; configure it to a non-negative "
+                        + "pacing delay (default 1) — a negative value is nonsensical configuration.");
+            }
+
+            // AddHttpPriceHistoryReader validates the range and fails fast on a bad one.
+            services.AddHttpPriceHistoryReader(options.Prices.Range);
+            services.AddFilePriceHistoryStore(options.Prices.Directory);
+            services.AddSingleton(new PriceAcquisitionOptions
+            {
+                InterRequestDelay = TimeSpan.FromSeconds(options.Prices.InterRequestDelaySeconds),
+                Source = "yahoo-chart-v8",
+            });
+            services.AddSingleton<IPriceHistoryAcquirer, PriceHistoryAcquirer>();
         }
 
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);

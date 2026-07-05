@@ -40,6 +40,15 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public AiWorkerOptions Ai { get; init; } = new();
 
+    /// <summary>
+    /// Daily price-history acquisition configuration (bound from "Radar:Prices"). DISABLED by default
+    /// (<see cref="PricesWorkerOptions.Enabled"/> = false): when disabled NOTHING price-related is registered and
+    /// the pipeline graph is byte-for-byte unchanged. Price is REFERENCE/VALIDATION data only (AD-14) — never
+    /// evidence, never a signal, never a scoring input — acquired on a seam structurally separate from the
+    /// evidence pipeline.
+    /// </summary>
+    public PricesWorkerOptions Prices { get; init; } = new();
+
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
 
@@ -213,6 +222,28 @@ public sealed class AiWorkerOptions
     /// earnings-8-K filings per run. Must be positive. Only read when a provider is configured. Defaults to 5.
     /// </summary>
     public int MaxFilingsPerRun { get; init; } = 5;
+}
+
+/// <summary>
+/// Daily price-history acquisition configuration (bound from "Radar:Prices"). Surfaces the opt-in
+/// <see cref="Enabled"/> gate, the Yahoo chart <see cref="Range"/> window, the inter-request pacing delay, and
+/// the reference-store directory. Only read when <see cref="Enabled"/> is true; the defaults let every other
+/// configuration keep working with no Prices config. Price is REFERENCE/VALIDATION data (AD-14), never a
+/// collector/evidence/signal/scoring input.
+/// </summary>
+public sealed class PricesWorkerOptions
+{
+    /// <summary>Whether to acquire daily price history for the watch universe. Blank/absent = DISABLED (default).</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>The Yahoo chart range window (one of 1d,5d,1mo,3mo,6mo,1y,2y,5y,10y,ytd,max). Defaults to 1y.</summary>
+    public string Range { get; init; } = "1y";
+
+    /// <summary>Pause between successive per-ticker reads, in seconds. Defaults to 1 (endpoint is not per-IP throttled).</summary>
+    public int InterRequestDelaySeconds { get; init; } = 1;
+
+    /// <summary>Root directory for the price-history reference file store. Defaults to data/prices.</summary>
+    public string Directory { get; init; } = "data/prices";
 }
 
 /// <summary>Anthropic (hosted) provider config (bound from "Radar:Ai:Anthropic").</summary>
