@@ -88,7 +88,10 @@ if (Test-Path $nextDir) {
 
 # --- explicit spec requested via -Spec: resolve it and skip planner/lowest-numbered selection ---
 # Accepts a full filename ("90-foo.md"), the base name ("90-foo"), or just the leading number ("90").
-$spec = $null
+# NB: this local MUST NOT be named $spec — PowerShell variable names are case-insensitive, so $spec
+# and the $Spec parameter are the SAME variable; assigning $spec here would wipe the caller's -Spec
+# before the `if ($Spec)` test below, silently disabling explicit spec selection.
+$specFile = $null
 if ($Spec) {
     if ($specs.Count -eq 0) { throw "-Spec '$Spec' requested but docs/next/ has no pending specs." }
     $match = @($specs | Where-Object {
@@ -96,12 +99,12 @@ if ($Spec) {
     })
     if ($match.Count -eq 0) { throw "-Spec '$Spec' not found in docs/next/. Available: $($specs.Name -join ', ')" }
     if ($match.Count -gt 1) { throw "-Spec '$Spec' is ambiguous - matched: $($match.Name -join ', ')" }
-    $spec = $match[0]
-    Write-Section "Explicit spec requested (-Spec '$Spec'): $($spec.Name)"
+    $specFile = $match[0]
+    Write-Section "Explicit spec requested (-Spec '$Spec'): $($specFile.Name)"
 }
 
 # --- planner mode: no specs (or forced) — architecture-gated (skipped when -Spec resolved a spec) ---
-if (-not $spec -and ($Plan -or $specs.Count -eq 0)) {
+if (-not $specFile -and ($Plan -or $specs.Count -eq 0)) {
     if ($Plan) {
         Write-Section "Planner mode (forced, architecture-gated)"
     } else {
@@ -140,8 +143,8 @@ Do not write production code. Reference: .claude/agents/radar-architecture-revie
     exit $LASTEXITCODE
 }
 
-if (-not $spec) { $spec = $specs[0] }
-$specRel = "docs/next/$($spec.Name)"
+if (-not $specFile) { $specFile = $specs[0] }
+$specRel = "docs/next/$($specFile.Name)"
 Write-Section "Next spec: $specRel"
 
 # --- ensure the target worktree exists ---
