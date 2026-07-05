@@ -149,4 +149,5 @@ secrets.json
 /data/reports/
 /data/runs/
 /data/scoring-configs/
+/data/prices/
 /data/experiments/
