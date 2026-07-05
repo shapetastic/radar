@@ -734,7 +734,7 @@ public static class InfrastructureServiceCollectionExtensions
     {
         var options = new PriceReaderOptions { Range = range };
 
-        // Fail fast at registration on an invalid range (also revalidated defensively before the request).
+        // Fail fast at registration on an invalid range.
         options.Validate();
 
         services.AddSingleton(options);

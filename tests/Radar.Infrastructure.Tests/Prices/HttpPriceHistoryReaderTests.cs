@@ -12,9 +12,9 @@ public sealed class HttpPriceHistoryReaderTests
 {
     private const string Ticker = "MRCY";
 
-    // Two aligned bars. Timestamps are market-open instants on two consecutive UTC trading days.
-    //   1782480600 = 2026-06-06T05:30:00Z -> UTC date 2026-06-06
-    //   1782739800 = 2026-06-09T05:30:00Z -> UTC date 2026-06-09
+    // Two aligned bars. Timestamps are market-open instants (13:30:00Z = 09:30 ET) on two UTC trading days.
+    //   1782480600 = 2026-06-26T13:30:00Z -> UTC date 2026-06-26
+    //   1782739800 = 2026-06-29T13:30:00Z -> UTC date 2026-06-29
     private const long Ts0 = 1782480600L;
     private const long Ts1 = 1782739800L;
     private static readonly DateOnly Date0 = DateOnly.FromDateTime(
