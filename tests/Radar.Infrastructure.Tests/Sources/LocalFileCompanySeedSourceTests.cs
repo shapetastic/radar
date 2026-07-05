@@ -174,6 +174,36 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
         }
     }
 
+    private const string WhitespacePaddedUrlJson = """
+        {
+          "companies": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Acme Corp",
+              "ticker": "ACME",
+              "sourceFeeds": [
+                { "type": "rss", "name": "Padded", "url": "  https://example.com/acme.rss  " },
+                { "type": "rss", "name": "Clean", "url": "https://example.com/acme.rss" }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_FeedUrlWhitespace_DoesNotAffectStoredUrlOrId()
+    {
+        var path = WriteSeedFile(WhitespacePaddedUrlJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        // The padded and clean feeds normalize to the same trimmed Url and therefore the same
+        // deterministic Id (the whitespace never leaks into the seed via the "type|url" composite).
+        Assert.Equal(2, seed.SourceFeeds.Count);
+        Assert.All(seed.SourceFeeds, f => Assert.Equal("https://example.com/acme.rss", f.Url));
+        Assert.Single(seed.SourceFeeds.Select(f => f.Id).Distinct());
+    }
+
     private const string SameUrlDifferentTypeSecJson = """
         {
           "companies": [

@@ -156,13 +156,14 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                 }
 
                 var feedType = string.IsNullOrWhiteSpace(feed.Type) ? "rss" : feed.Type.Trim();
+                var feedUrl = feed.Url.Trim();
 
                 feeds.Add(new CompanySourceFeed(
-                    Id: DeterministicGuid(companyId, "feed", $"{feedType}|{feed.Url}"),
+                    Id: DeterministicGuid(companyId, "feed", $"{feedType}|{feedUrl}"),
                     CompanyId: companyId,
                     FeedType: feedType,
                     Name: feed.Name?.Trim() ?? string.Empty,
-                    Url: feed.Url.Trim(),
+                    Url: feedUrl,
                     CreatedAtUtc: now));
             }
         }
