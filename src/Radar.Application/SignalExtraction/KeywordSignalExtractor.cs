@@ -41,6 +41,14 @@ namespace Radar.Application.SignalExtraction;
 /// </summary>
 public sealed class KeywordSignalExtractor : ISignalExtractor
 {
+    // The deterministic extractor's rule-set IDENTITY — the phrase→direction/strength table shape. It is
+    // folded into the ScoringConfigVersion content fingerprint (via SignalSourceDescriptor / AD-10) and is
+    // human-bumped when the rule table changes in a scoring-affecting STRUCTURAL way, exactly as
+    // _formula.Version is bumped for a formula-shape change (AD-6). NOTE for spec 96: once the insider
+    // materiality magnitudes move to config they will be hashed by VALUE and no longer require a
+    // RuleSetVersion bump — only rule STRUCTURE changes will.
+    public const string RuleSetVersion = "radar-keyword-rules-v1";
+
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
     // searchable text (Title + "\n" + RawText).

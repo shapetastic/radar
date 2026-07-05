@@ -37,6 +37,13 @@ public sealed class RadarPipelineRunnerTests
         public string CanonicalDescriptor() => "test-all-genuine";
     }
 
+    // Minimal ISignalSourceDescriptor for the ScoringEngine (spec 95): a fixed descriptor; these pipeline
+    // tests exercise end-to-end orchestration, not the signal-source fingerprint input.
+    private sealed class StubSourceDescriptor : ISignalSourceDescriptor
+    {
+        public string CanonicalDescriptor() => "test-src-desc";
+    }
+
     private const string CompanyName = "Northwind Robotics";
     private const string RawText =
         "Northwind Robotics announced a major new customer win with a Fortune 100 partner today.";
@@ -327,6 +334,7 @@ public sealed class RadarPipelineRunnerTests
                 new RadarScoreFormulaV5(scoringWeights, sourceWeights),
                 scoringWeights,
                 sourceWeights,
+                new StubSourceDescriptor(),
                 new ScoringOptions(),
                 NullLogger<ScoringEngine>.Instance);
             var reportBuilder = new WeeklyReportBuilder(

@@ -23,11 +23,13 @@ namespace Radar.Application.Scoring;
 /// code constant but a <b>deterministic content fingerprint</b> of the effective resolved scoring config —
 /// the structure identity (<see cref="EngineVersion"/> + <c>_formula.Version</c>) plus every
 /// <see cref="ScoringWeights"/> value plus the attention tier-map descriptor
-/// (<see cref="IAttentionSourceWeights.CanonicalDescriptor"/>), computed once via
+/// (<see cref="IAttentionSourceWeights.CanonicalDescriptor"/>) plus the signal-source descriptor
+/// (<see cref="ISignalSourceDescriptor.CanonicalDescriptor"/> — the enabled collector set + extractor
+/// rule-set identity, spec 95), computed once via
 /// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape,
-/// any weight, the tier map) re-stamps automatically, so the spec-69 comparability gate keeps working when
-/// weights are runtime-configurable. <c>ScoringVersion</c> (structure identity,
-/// <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
+/// any weight, the tier map, enabling/disabling a collector) re-stamps automatically, so the spec-69
+/// comparability gate keeps working when weights are runtime-configurable. <c>ScoringVersion</c> (structure
+/// identity, <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
 /// </para>
 /// </summary>
 public sealed class ScoringEngine : IScoringEngine
@@ -61,6 +63,7 @@ public sealed class ScoringEngine : IScoringEngine
         IScoreFormula formula,
         ScoringWeights weights,
         IAttentionSourceWeights sourceWeights,
+        ISignalSourceDescriptor sourceDescriptor,
         ScoringOptions options,
         ILogger<ScoringEngine> logger)
     {
@@ -71,6 +74,7 @@ public sealed class ScoringEngine : IScoringEngine
         ArgumentNullException.ThrowIfNull(formula);
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
+        ArgumentNullException.ThrowIfNull(sourceDescriptor);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -83,8 +87,9 @@ public sealed class ScoringEngine : IScoringEngine
         _logger = logger;
 
         var attentionDescriptor = sourceWeights.CanonicalDescriptor();
+        var signalSourceDescriptor = sourceDescriptor.CanonicalDescriptor();
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
-            EngineVersion, formula.Version, weights, attentionDescriptor);
+            EngineVersion, formula.Version, weights, attentionDescriptor, signalSourceDescriptor);
 
         // Build the effective-config projection from the SAME tuple the fingerprint hashes, so
         // EffectiveConfig.Fingerprint always equals the stamp on every snapshot this engine produces.
@@ -93,7 +98,8 @@ public sealed class ScoringEngine : IScoringEngine
             EngineVersion: EngineVersion,
             FormulaVersion: formula.Version,
             Weights: weights,
-            AttentionDescriptor: attentionDescriptor);
+            AttentionDescriptor: attentionDescriptor,
+            SignalSourceDescriptor: signalSourceDescriptor);
     }
 
     public EffectiveScoringConfig EffectiveConfig => _effectiveConfig;

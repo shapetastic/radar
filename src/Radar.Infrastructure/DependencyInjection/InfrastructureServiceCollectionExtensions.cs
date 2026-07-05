@@ -80,6 +80,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton(new ScoringWeights());
         services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV5>();
         services.TryAddSingleton(new ScoringOptions());
+        // Signal-source descriptor (spec 95): folds the enabled collector NAMES + the extractor rule-set
+        // identity into the ScoringConfigVersion fingerprint. DI resolves IEnumerable<IEvidenceCollector> at
+        // RESOLUTION time, so this sees ALL collectors even though the Worker registers them AFTER
+        // AddRadarApplicationServices. TryAdd lets a composition root substitute its own descriptor.
+        services.TryAddSingleton<ISignalSourceDescriptor, SignalSourceDescriptor>();
         services.AddSingleton<IScoringEngine, ScoringEngine>();
         services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();
         services.TryAddSingleton<IWeeklyReportRenderer, MarkdownWeeklyReportRenderer>();

@@ -167,8 +167,11 @@ public interface ISignalSourceDescriptor
 - `ScoringConfigFingerprintTests` (MODIFIED): thread the new `signalSourceDescriptor` arg through every case;
   add a `Compute_ChangedSignalSourceDescriptor_ChangesFingerprint` case; **repin**
   `Compute_DefaultConfig_MatchesPinnedFingerprint` to the recomputed hex (pass an explicit representative
-  descriptor literal, e.g. the baseline `rules=radar-keyword-rules-v1;collectors=newssearch,rss,sec,sec-form4,usaspending;`
-  — recompute and pin the resulting `radar-scoring-fp-…` value; do not guess it). Update the pin comment to
+  descriptor literal built from the concrete `IEvidenceCollector.CollectorName` values the default DI graph
+  registers — NOT the `Radar:Collectors` config kinds — i.e. the baseline
+  `rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,sec-form4,usaspending;`
+  (`rss`→`RssPressReleaseCollector`, `sec`→`sec-edgar`) — recompute and pin the resulting
+  `radar-scoring-fp-…` value; do not guess it). Update the pin comment to
   note the signal-source descriptor is now hashed. Keep the culture-invariance and lowercase-hex-shape
   assertions.
 - Worker/DI graph test: resolving `ISignalSourceDescriptor` (or `IScoringEngine`) from the fully-composed

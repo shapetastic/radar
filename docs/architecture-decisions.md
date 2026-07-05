@@ -459,11 +459,43 @@ spec 89 — the store must not invent a second serialization), AD-8 (files-first
 *Accepted · 2026-07-04 — provenance completion (natural completion of AD-10-as-amended-by-89), not a
 settled-convention reversal.*
 
+### Amendment — spec 95: the fingerprint folds the enabled signal-source set
+
+Spec 89 folded structure + weights + attention descriptor into the fingerprint, but **not the enabled
+signal-source set** — the set of enabled evidence collectors, nor the deterministic extractor's rule identity.
+So enabling/disabling a collector changed scoring **output** while leaving the stamp **unchanged**: a run
+*with* the `secform4` insider collector (spec 93, which adds directional `InsiderBuying` signals that move
+`TrajectoryScore`) and a run *without* it carried the **same** fingerprint and were therefore **falsely judged
+comparable** — the exact spec-69 defect the stamp exists to prevent. Spec 95 closes that gap: the derived
+fingerprint now **also folds a canonical signal-source descriptor** — the enabled collector **NAMES** (distinct,
+`Ordinal`-ordered, escaped) plus the extractor rule-set identity `KeywordSignalExtractor.RuleSetVersion` —
+appended as a new `srcDesc` field **after** the attention descriptor (existing field ordering unchanged). It is
+computed once in `ScoringEngine` from the injected `ISignalSourceDescriptor` (default `SignalSourceDescriptor`,
+DI-resolved over `IEnumerable<IEvidenceCollector>` at resolution time so it sees every collector even though the
+Worker registers them after `AddRadarApplicationServices`; it reads only `CollectorName`, never collects). So
+enabling/disabling a collector (or bumping `RuleSetVersion` for a scoring-affecting rule-STRUCTURE change) now
+re-stamps `ScoringConfigVersion` **automatically**, restoring the spec-69 comparability guarantee across a
+collector-set transition. The self-verifying content-fingerprint property is **preserved and strengthened**: no
+new hand-bumped constant gates comparability — the descriptor is derived from the composed graph; the persisted
+`EffectiveScoringConfig` carries the `SignalSourceDescriptor` field verbatim so recompute-from-stored still
+equals the filename. No scoring **math** change — only the fingerprint *input* widens; the default fingerprint
+re-stamps automatically **`radar-scoring-fp-5cd50423f408 → radar-scoring-fp-55270b9d8fad`** (default descriptor
+`rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,sec-form4,usaspending;` —
+the collector tokens are the concrete `IEvidenceCollector.CollectorName` values, `Ordinal`-sorted, NOT the
+`Radar:Collectors` config "kind" tokens; e.g. `rss` reports `RssPressReleaseCollector` and `sec` reports
+`sec-edgar`). This is
+the first of two sequenced slices; spec 96 (move the insider materiality tiers to config) builds on this
+plumbing and, once those magnitudes are hashed by value, they will no longer require a `RuleSetVersion` bump —
+only rule STRUCTURE changes will. *Accepted · 2026-07-05 — comparability-gap closure; property preserved and
+strengthened, no math change.*
+
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
 by spec 70). Amended · 2026-07-04 (spec 89 — stamp becomes a derived content fingerprint; property preserved
 and made automatic; Accepted). Amended · 2026-07-04 (spec 91 — the effective config is persisted
 content-addressed by the fingerprint so the weights behind a historical snapshot are recoverable; additive,
-no fingerprint-value change; Accepted).
+no fingerprint-value change; Accepted). Amended · 2026-07-05 (spec 95 — the fingerprint folds the enabled
+signal-source set (collector names + extractor rule-set identity); enabling/disabling a collector re-stamps
+automatically; default re-stamps radar-scoring-fp-5cd50423f408 → radar-scoring-fp-55270b9d8fad; Accepted).
 
 ---
 
