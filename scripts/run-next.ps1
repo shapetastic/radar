@@ -15,8 +15,8 @@
 [CmdletBinding()]
 param(
     [string]$ProjectName   = "radar",
-    [string]$RepoPath      = (Split-Path $PSScriptRoot -Parent),
-    [string]$WorktreeBase  = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
+    [string]$RepoPath      = "",   # defaults to <repo> (parent of scripts/); resolved below
+    [string]$WorktreeBase  = "",   # defaults to <repo>'s parent; resolved below
     [string]$DefaultBranch = "main",
     [int]   $WorktreeIndex = 1,        # which <project>-claude-N worktree to drive
     [switch]$Plan,                     # force work-planner mode even if specs exist
@@ -26,6 +26,18 @@ param(
     [int]   $CopilotPollSeconds = 180, # poll interval while waiting for the review (default 3 min)
     [int]   $CopilotTimeoutSeconds = 1200 # give up waiting after this long (default 20 min)
 )
+
+# Resolve the script's own directory robustly. $PSScriptRoot is normally correct, but it can come
+# back empty when the script is launched via `powershell -File` from certain host contexts (e.g. a
+# nested/wrapped invocation), which then makes the Split-Path-based path defaults blow up at param
+# binding. Fall back to $PSCommandPath / $MyInvocation before deriving the repo paths from it.
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir -and $PSCommandPath) { $ScriptDir = Split-Path -Parent $PSCommandPath }
+if (-not $ScriptDir -and $MyInvocation.MyCommand.Path) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $ScriptDir) { throw "Could not determine script directory; pass -RepoPath and -WorktreeBase explicitly." }
+
+if (-not $RepoPath)     { $RepoPath     = Split-Path $ScriptDir -Parent }
+if (-not $WorktreeBase) { $WorktreeBase = Split-Path $RepoPath -Parent }
 
 # Native tools (git, claude) write progress to stderr. Under 'Stop' that stderr gets turned into
 # a terminating error, so we use 'Continue' and gate on exit codes via Invoke-Git instead.
