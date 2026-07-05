@@ -335,6 +335,7 @@ public sealed class RadarPipelineRunnerTests
                 scoringWeights,
                 sourceWeights,
                 new StubSourceDescriptor(),
+                new InsiderMaterialityWeights(),
                 new ScoringOptions(),
                 NullLogger<ScoringEngine>.Instance);
             var reportBuilder = new WeeklyReportBuilder(

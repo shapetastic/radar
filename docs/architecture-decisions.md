@@ -489,6 +489,31 @@ plumbing and, once those magnitudes are hashed by value, they will no longer req
 only rule STRUCTURE changes will. *Accepted · 2026-07-05 — comparability-gap closure; property preserved and
 strengthened, no math change.*
 
+### Amendment — spec 96: the insider materiality tiers move to config and are hashed by value
+
+Spec 93's `InsiderBuying` materiality — the buy/sell net-value **tier tables** and the multi-insider
+**cluster boost** — lived as **code constants** in `KeywordSignalExtractor`, so tuning the buy-vs-sell
+asymmetry required a code change (and, being part of the extractor rule identity, a `RuleSetVersion` bump).
+Spec 96 relocates those magnitudes into a config-bound Application options record `InsiderMaterialityWeights`
+(`BuyTiers`, `SellTiers`, `ClusterBoost`; `Radar:Insider:Profiles:{name}:*`), exactly mirroring the spec-89
+`ScoringWeights` pattern — injected into the extractor (which `Validate()`s it in its ctor) and bound via a new
+`AddRadarInsiderMateriality` binder (named-profile select, fail-fast on a missing profile or an invalid tier).
+**The code defaults == the spec-93 values**, so default insider signal Strengths are **byte-identical** (pinned
+by the extractor tests); only the fingerprint *input* widens. Splitting the single symmetric spec-93 table into
+separate buy/sell tables (both defaulting to the same values) is what makes a deliberate buy-vs-sell asymmetry
+expressible from a run profile with **no code change**. Because the tiers are now part of the **effective scoring
+config**, their values are folded into the `ScoringConfigVersion` fingerprint **by value** (building on spec 95):
+`ScoringConfigFingerprint.Compute` gains an `insiderDesc` field appended **after** `srcDesc` (existing ordering
+unchanged), computed once in `ScoringEngine` from `InsiderMaterialityWeights.CanonicalDescriptor()`; the persisted
+`EffectiveScoringConfig` carries the descriptor verbatim so recompute-from-stored still equals the filename. So an
+insider **magnitude** change now re-stamps the fingerprint **automatically** and is a **config edit** — it needs
+**no `RuleSetVersion` bump**; only a rule **STRUCTURE** change (the phrase→direction table shape) still bumps
+`RuleSetVersion`. No scoring **math** change — the default fingerprint re-stamps automatically
+**`radar-scoring-fp-55270b9d8fad → radar-scoring-fp-7e56a8007342`** (default insider descriptor
+`buy=5000000:8,1000000:7,250000:6,50000:4,-79228162514264337593543950335:2;sell=<same>;cluster=1;`). The
+`GovernmentContract` award tiers deliberately remain code constants (a parallel config move is a possible future
+slice). *Accepted · 2026-07-05 — magnitude→config relocation; property preserved and strengthened, no math change.*
+
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
 by spec 70). Amended · 2026-07-04 (spec 89 — stamp becomes a derived content fingerprint; property preserved
 and made automatic; Accepted). Amended · 2026-07-04 (spec 91 — the effective config is persisted
@@ -496,6 +521,10 @@ content-addressed by the fingerprint so the weights behind a historical snapshot
 no fingerprint-value change; Accepted). Amended · 2026-07-05 (spec 95 — the fingerprint folds the enabled
 signal-source set (collector names + extractor rule-set identity); enabling/disabling a collector re-stamps
 automatically; default re-stamps radar-scoring-fp-5cd50423f408 → radar-scoring-fp-55270b9d8fad; Accepted).
+Amended · 2026-07-05 (spec 96 — the insider buy/sell materiality tiers + cluster boost move to config
+(`InsiderMaterialityWeights`, default == spec 93) and are folded into the fingerprint by value; an insider
+magnitude change is now a config edit needing no `RuleSetVersion` bump; default re-stamps
+radar-scoring-fp-55270b9d8fad → radar-scoring-fp-7e56a8007342; Accepted).
 
 ---
 

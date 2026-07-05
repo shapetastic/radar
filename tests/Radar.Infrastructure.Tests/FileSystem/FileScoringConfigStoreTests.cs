@@ -13,6 +13,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     private const string FormulaVersion = "radar-formula-v5";
     private const string AttentionDescriptor = "attn:v1;unknown=0.4";
     private const string SignalSourceDescriptor = "rules=radar-keyword-rules-v1;collectors=sec-edgar;";
+    private const string InsiderMaterialityDescriptor = "buy=5000000:8;sell=5000000:8;cluster=1;";
 
     private readonly string _tempDir;
 
@@ -49,12 +50,14 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     private static EffectiveScoringConfig ConfigFor(ScoringWeights weights) =>
         new(
             Fingerprint: ScoringConfigFingerprint.Compute(
-                EngineVersion, FormulaVersion, weights, AttentionDescriptor, SignalSourceDescriptor),
+                EngineVersion, FormulaVersion, weights, AttentionDescriptor, SignalSourceDescriptor,
+                InsiderMaterialityDescriptor),
             EngineVersion: EngineVersion,
             FormulaVersion: FormulaVersion,
             Weights: weights,
             AttentionDescriptor: AttentionDescriptor,
-            SignalSourceDescriptor: SignalSourceDescriptor);
+            SignalSourceDescriptor: SignalSourceDescriptor,
+            InsiderMaterialityDescriptor: InsiderMaterialityDescriptor);
 
     private static EffectiveScoringConfig ReadStored(string path)
     {
@@ -81,6 +84,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         Assert.Equal(config.FormulaVersion, stored.FormulaVersion);
         Assert.Equal(config.AttentionDescriptor, stored.AttentionDescriptor);
         Assert.Equal(config.SignalSourceDescriptor, stored.SignalSourceDescriptor);
+        Assert.Equal(config.InsiderMaterialityDescriptor, stored.InsiderMaterialityDescriptor);
         // Every ScoringWeights value round-trips (record equality compares all init properties).
         Assert.Equal(config.Weights, stored.Weights);
     }
@@ -122,7 +126,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         // equals both the filename (sans .json) and the stored Fingerprint field.
         var recomputed = ScoringConfigFingerprint.Compute(
             stored.EngineVersion, stored.FormulaVersion, stored.Weights, stored.AttentionDescriptor,
-            stored.SignalSourceDescriptor);
+            stored.SignalSourceDescriptor, stored.InsiderMaterialityDescriptor);
 
         Assert.Equal(Path.GetFileNameWithoutExtension(path), recomputed);
         Assert.Equal(stored.Fingerprint, recomputed);

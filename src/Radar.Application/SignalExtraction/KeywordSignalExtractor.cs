@@ -25,9 +25,11 @@ namespace Radar.Application.SignalExtraction;
 /// materiality reads that scale an already-fired signal's <b>Strength</b> through one generic mechanism:
 /// (2) a <see cref="SignalType.GovernmentContract"/> Positive signal by the <c>awardAmount</c> key (spec 66),
 /// and (3) a <see cref="SignalType.InsiderBuying"/> Positive-or-Negative signal by the <c>insiderNetValue</c>
-/// key (the Form 4 collector's discretionary buy/sell $; spec 93), with an additional +1 (capped at the
-/// domain max 10) when the filing carries an <c>insiderCluster</c> flag (>= 2 insiders same direction). Both
-/// materiality reads share the generic
+/// key (the Form 4 collector's discretionary buy/sell $; spec 93), with an additional cluster boost (capped at
+/// the domain max 10) when the filing carries an <c>insiderCluster</c> flag (>= 2 insiders same direction). The
+/// insider buy/sell materiality tiers and the cluster boost are config-tunable magnitudes injected via
+/// <see cref="InsiderMaterialityWeights"/> (spec 96, default == spec 93); the GovernmentContract award tiers
+/// remain code constants. Both materiality reads share the generic
 /// <c>TryGetDecimalMetadata</c>/<c>StrengthForAmount(amount, tiers)</c> helper — each key is parsed once per
 /// evidence. All other signal types stay purely keyword-driven and read neither source type nor metadata.
 /// </para>
@@ -44,9 +46,9 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // The deterministic extractor's rule-set IDENTITY — the phrase→direction/strength table shape. It is
     // folded into the ScoringConfigVersion content fingerprint (via SignalSourceDescriptor / AD-10) and is
     // human-bumped when the rule table changes in a scoring-affecting STRUCTURAL way, exactly as
-    // _formula.Version is bumped for a formula-shape change (AD-6). NOTE for spec 96: once the insider
-    // materiality magnitudes move to config they will be hashed by VALUE and no longer require a
-    // RuleSetVersion bump — only rule STRUCTURE changes will.
+    // _formula.Version is bumped for a formula-shape change (AD-6). Spec 96: the insider materiality
+    // magnitudes now live in config (InsiderMaterialityWeights) and are hashed by VALUE into the fingerprint,
+    // so a tier MAGNITUDE change no longer needs a RuleSetVersion bump — only a rule STRUCTURE change does.
     public const string RuleSetVersion = "radar-keyword-rules-v1";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
@@ -188,12 +190,14 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // NewsArticle -> Neutral MediaAttention branch in ExtractAsync). Both reads share one generic mechanism
     // (TryGetDecimalMetadata + StrengthForAmount(amount, tiers)) — see the per-match Strength selection below.
     //
-    // Each table is visibly-constant, ordered DESCENDING by threshold, with inclusive-lower / exclusive-upper
-    // boundaries: e.g. exactly $1,000,000 maps to the GovernmentContract Strength 6 and $999,999.99 maps to 4.
-    // Monotonic non-decreasing in amount; every Strength is within domain range (1-10) so mapped signals still
-    // pass SignalValidation.
+    // Each table is ordered DESCENDING by threshold, with inclusive-lower / exclusive-upper boundaries: e.g.
+    // exactly $1,000,000 maps to the GovernmentContract Strength 6 and $999,999.99 maps to 4. Monotonic
+    // non-decreasing in amount; every Strength is within domain range (1-10) so mapped signals still pass
+    // SignalValidation.
     //
-    // GovernmentContract (awardAmount key; federal-contract magnitudes):
+    // GovernmentContract (awardAmount key; federal-contract magnitudes) stays a CODE CONSTANT — only the
+    // InsiderBuying magnitudes moved to config in spec 96 (a parallel GovernmentContract config move is a
+    // possible future slice):
     //   >= $100,000,000  -> 9   very large, thesis-moving award
     //   >= $10,000,000   -> 8   large, clearly material award
     //   >= $1,000,000    -> 6   baseline material award (equals the old fixed Strength => no regression)
@@ -201,40 +205,32 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     //   <  $100,000      -> 2   sub-material routine order; deliberately <= 2 so the existing
     //                           DeterministicSignalReviewer (MinMaterialStrength = 3, strict < 3) flags
     //                           it NeedsMoreEvidence — reuse that guardrail, do not add a drop path.
-    private static readonly (decimal MinInclusive, int Strength)[] GovernmentContractAmountTiers =
+    private static readonly IReadOnlyList<InsiderMaterialityTier> GovernmentContractAmountTiers =
     [
-        (100_000_000m, 9),
-        (10_000_000m, 8),
-        (1_000_000m, 6),
-        (100_000m, 4),
-        (decimal.MinValue, 2),
+        new(100_000_000m, 9),
+        new(10_000_000m, 8),
+        new(1_000_000m, 6),
+        new(100_000m, 4),
+        new(decimal.MinValue, 2),
     ];
 
-    // InsiderBuying (insiderNetValue key; discretionary insider buy/sell $, spec 93). Insider $ magnitudes are
-    // naturally smaller than federal-contract awards, so the boundaries are lower than GovernmentContract's.
-    // Applies to a Positive OR Negative InsiderBuying signal (buy or sell materiality); a Neutral routine
-    // phrase or an absent/zero value keeps the fixed rule Strength 3/6.
-    //   >= $5,000,000  -> 8   very large, thesis-moving insider trade
-    //   >= $1,000,000  -> 7   large, clearly material insider trade
-    //   >= $250,000    -> 6   solidly material (~ the fixed baseline)
-    //   >= $50,000     -> 4   modest but real
-    //   <  $50,000     -> 2   small/routine; deliberately <= 2 so the existing DeterministicSignalReviewer
-    //                         (MinMaterialStrength = 3, strict < 3) flags it NeedsMoreEvidence.
-    private static readonly (decimal MinInclusive, int Strength)[] InsiderNetValueTiers =
-    [
-        (5_000_000m, 8),
-        (1_000_000m, 7),
-        (250_000m, 6),
-        (50_000m, 4),
-        (decimal.MinValue, 2),
-    ];
+    // InsiderBuying (insiderNetValue key; discretionary insider buy/sell $, spec 93) magnitudes now come from
+    // the injected InsiderMaterialityWeights (spec 96): a Positive signal scales via BuyTiers, a Negative via
+    // SellTiers, and a multi-insider cluster adds ClusterBoost (capped at the domain max). Defaults == spec 93,
+    // so a blank/absent config is byte-identical. The buy/sell tables are hashed by value into the
+    // ScoringConfigVersion fingerprint, so a magnitude change re-stamps automatically without a RuleSetVersion
+    // bump. A Neutral routine phrase or an absent/zero value keeps the fixed rule Strength 3/6.
 
     private readonly ILogger<KeywordSignalExtractor> _logger;
+    private readonly InsiderMaterialityWeights _insiderWeights;
 
-    public KeywordSignalExtractor(ILogger<KeywordSignalExtractor> logger)
+    public KeywordSignalExtractor(ILogger<KeywordSignalExtractor> logger, InsiderMaterialityWeights insiderWeights)
     {
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(insiderWeights);
+        insiderWeights.Validate();
         _logger = logger;
+        _insiderWeights = insiderWeights;
     }
 
     public Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence, CancellationToken ct)
@@ -329,12 +325,17 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
                 && rule.Type == SignalType.InsiderBuying
                 && (rule.Direction == SignalDirection.Positive || rule.Direction == SignalDirection.Negative))
             {
-                strength = StrengthForAmount(insiderNetValue, InsiderNetValueTiers);
+                // A Positive (buy) scales via BuyTiers, a Negative (sell) via SellTiers — separate tables so a
+                // deliberate buy-vs-sell asymmetry is expressible from config with no code change (spec 96).
+                var tiers = rule.Direction == SignalDirection.Positive
+                    ? _insiderWeights.BuyTiers
+                    : _insiderWeights.SellTiers;
+                strength = StrengthForAmount(insiderNetValue, tiers);
                 if (insiderCluster)
                 {
-                    // Multi-insider cluster: several insiders acting together is a stronger read; +1, capped
-                    // at the domain max so mapped signals still pass SignalValidation.
-                    strength = Math.Min(10, strength + 1);
+                    // Multi-insider cluster: several insiders acting together is a stronger read; add the
+                    // config ClusterBoost, capped at the domain max so mapped signals still pass SignalValidation.
+                    strength = Math.Min(10, strength + _insiderWeights.ClusterBoost);
                 }
             }
             else
@@ -416,16 +417,19 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     }
 
     // Walks the given descending tier table and returns the Strength of the first tier whose lower bound is
-    // at or below the amount. The floor tier's bound is decimal.MinValue, so any amount maps.
-    private static int StrengthForAmount(decimal amount, (decimal MinInclusive, int Strength)[] tiers)
+    // at or below the amount. The floor tier's bound is decimal.MinValue, so any amount maps. One signature
+    // serves both the const GovernmentContract tiers and the config-injected InsiderBuying buy/sell tiers.
+    private static int StrengthForAmount(decimal amount, IReadOnlyList<InsiderMaterialityTier> tiers)
     {
-        foreach (var (minInclusive, strength) in tiers)
+        foreach (var tier in tiers)
         {
-            if (minInclusive <= amount)
-                return strength;
+            if (tier.MinInclusive <= amount)
+                return tier.Strength;
         }
 
-        // Unreachable: the floor tier (decimal.MinValue) always matches. Kept as a defensive fallback.
-        return 2;
+        // Unreachable: the floor tier (decimal.MinValue) always matches. Kept as a defensive fallback —
+        // return the last (floor) tier's Strength rather than a constant, so it stays correct if the tier
+        // table evolves (both tables are validated non-empty).
+        return tiers[^1].Strength;
     }
 }

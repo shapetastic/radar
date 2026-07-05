@@ -31,7 +31,17 @@ public class KeywordSignalExtractorTests
             .Build();
 
     private static async Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence) =>
-        await new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance).ExtractAsync(evidence, CancellationToken.None);
+        await new KeywordSignalExtractor(
+            NullLogger<KeywordSignalExtractor>.Instance, new InsiderMaterialityWeights())
+            .ExtractAsync(evidence, CancellationToken.None);
+
+    // Builds an extractor with the given insider-materiality weights (spec 96): the default tiers reproduce
+    // the spec-93 table, while custom weights let a test exercise buy/sell asymmetry or a non-default cluster
+    // boost with no code change.
+    private static async Task<ExtractSignalsOutput> ExtractWithWeightsAsync(
+        EvidenceItem evidence, InsiderMaterialityWeights weights) =>
+        await new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance, weights)
+            .ExtractAsync(evidence, CancellationToken.None);
 
     // Builds the nested metadata JSON shape written by the USASpending collector:
     // { "metadata": { … "awardAmount": "<value>" … }, "companyHints": [ … ] }, so the tests exercise
@@ -1042,6 +1052,58 @@ public class KeywordSignalExtractorTests
     }
 
     [Fact]
+    public async Task InsiderAsymmetricWeights_BuyOutScoresSellAtSameNetValue()
+    {
+        // Spec 96: separate buy/sell tables make a deliberate buy-vs-sell asymmetry expressible with no code
+        // change. With buy strengths above sell strengths at the same $250,000 net value, a purchase must
+        // out-score a sale of identical size.
+        var asymmetric = new InsiderMaterialityWeights
+        {
+            BuyTiers =
+            [
+                new(250_000m, 8),
+                new(decimal.MinValue, 2),
+            ],
+            SellTiers =
+            [
+                new(250_000m, 4),
+                new(decimal.MinValue, 2),
+            ],
+        };
+
+        var buy = await ExtractWithWeightsAsync(
+            MakeInsiderEvidence("insider open-market purchase", InsiderMetadataJson("250000")), asymmetric);
+        var sell = await ExtractWithWeightsAsync(
+            MakeInsiderEvidence("insider open-market sale", InsiderMetadataJson("250000")), asymmetric);
+
+        var buySignal = Assert.Single(buy.Signals);
+        var sellSignal = Assert.Single(sell.Signals);
+        Assert.Equal("Positive", buySignal.Direction);
+        Assert.Equal("Negative", sellSignal.Direction);
+        Assert.Equal(8, buySignal.Strength);
+        Assert.Equal(4, sellSignal.Strength);
+        Assert.True(buySignal.Strength > sellSignal.Strength);
+    }
+
+    [Fact]
+    public async Task InsiderCustomClusterBoost_AppliesAndCapsAtDomainMax()
+    {
+        // Spec 96: the cluster boost is a config magnitude. With ClusterBoost = 2 the $1,000,000 base tier
+        // Strength 7 becomes 9, and the $5,000,000 top-tier Strength 8 becomes Math.Min(10, 8 + 2) = 10.
+        var boosted = new InsiderMaterialityWeights { ClusterBoost = 2 };
+
+        var mid = await ExtractWithWeightsAsync(
+            MakeInsiderEvidence("insider open-market purchase", InsiderClusterMetadataJson("1000000")), boosted);
+        var top = await ExtractWithWeightsAsync(
+            MakeInsiderEvidence("insider open-market purchase", InsiderClusterMetadataJson("5000000")), boosted);
+
+        Assert.Equal(9, Assert.Single(mid.Signals).Strength);
+        var topSignal = Assert.Single(top.Signals);
+        Assert.Equal(10, topSignal.Strength);
+        Assert.True(topSignal.Strength <= 10);
+    }
+
+    [Fact]
     public async Task InsiderRoutine_WithClusterFlag_IsUnaffected()
     {
         // A Neutral routine phrase never scales and never takes the cluster boost, even if both keys appear.
@@ -1179,7 +1241,8 @@ public class KeywordSignalExtractorTests
     public async Task NullEvidence_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(
-            () => new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance).ExtractAsync(null!, CancellationToken.None));
+            () => new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance, new InsiderMaterialityWeights())
+                .ExtractAsync(null!, CancellationToken.None));
     }
 
     [Fact]
@@ -1190,6 +1253,7 @@ public class KeywordSignalExtractorTests
         cts.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance).ExtractAsync(evidence, cts.Token));
+            () => new KeywordSignalExtractor(NullLogger<KeywordSignalExtractor>.Instance, new InsiderMaterialityWeights())
+                .ExtractAsync(evidence, cts.Token));
     }
 }

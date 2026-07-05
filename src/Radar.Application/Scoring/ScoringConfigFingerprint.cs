@@ -8,7 +8,8 @@ namespace Radar.Application.Scoring;
 /// Computes a deterministic content fingerprint of the effective resolved scoring config — the structure
 /// identity (engine + formula version) plus every <see cref="ScoringWeights"/> value plus the attention
 /// tier-map descriptor plus the signal-source descriptor (the enabled collector set + extractor rule-set
-/// identity) — so a snapshot's <c>ScoringConfigVersion</c> uniquely identifies the generation
+/// identity) plus the insider-materiality descriptor (the config-tunable buy/sell tiers + cluster boost,
+/// spec 96) — so a snapshot's <c>ScoringConfigVersion</c> uniquely identifies the generation
 /// that produced it (AD-10 as amended). The canonical string uses a FIXED, explicit field ordering (never
 /// reflection order, which is unstable across runtimes) and culture-invariant round-trip number formatting
 /// (AD-3), then hashes with the shared EvidenceNormalizer idiom
@@ -27,13 +28,15 @@ public static class ScoringConfigFingerprint
         string formulaVersion,
         ScoringWeights weights,
         string attentionDescriptor,
-        string signalSourceDescriptor)
+        string signalSourceDescriptor,
+        string insiderMaterialityDescriptor)
     {
         ArgumentNullException.ThrowIfNull(engineVersion);
         ArgumentNullException.ThrowIfNull(formulaVersion);
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(attentionDescriptor);
         ArgumentNullException.ThrowIfNull(signalSourceDescriptor);
+        ArgumentNullException.ThrowIfNull(insiderMaterialityDescriptor);
 
         var builder = new StringBuilder();
         Append(builder, "engine", engineVersion);
@@ -58,6 +61,7 @@ public static class ScoringConfigFingerprint
         Append(builder, nameof(weights.OpportunityAttentionDivisor), weights.OpportunityAttentionDivisor);
         Append(builder, "attnDesc", attentionDescriptor);
         Append(builder, "srcDesc", signalSourceDescriptor);
+        Append(builder, "insiderDesc", insiderMaterialityDescriptor);
 
         var canonical = builder.ToString();
         var hex = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));

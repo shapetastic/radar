@@ -284,4 +284,7 @@ When implementing a spec that replaces existing functionality:
    table shape) bumps `KeywordSignalExtractor.RuleSetVersion` (parallel to `_formula.Version`) — it is folded into
    the `ScoringConfigVersion` fingerprint via `SignalSourceDescriptor` (spec 95, AD-10 amended). The
    **enabled-collector set** is captured automatically by that same fingerprint, so enabling/disabling a collector
-   needs **no** bump — it re-stamps on its own.
+   needs **no** bump — it re-stamps on its own. The **insider buy/sell materiality tiers + cluster boost** are now
+   config too (`Radar:Insider` profiles bound onto `InsiderMaterialityWeights`, default == spec 93) and are hashed
+   into that fingerprint **by value** (spec 96, AD-10 amended) — so a tier **magnitude** change is a **config edit**
+   needing **no** `RuleSetVersion` bump; only a rule **structure** change bumps `RuleSetVersion`.

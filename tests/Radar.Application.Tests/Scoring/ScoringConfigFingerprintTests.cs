@@ -1,5 +1,6 @@
 using System.Globalization;
 using Radar.Application.Scoring;
+using Radar.Application.SignalExtraction;
 using Radar.Infrastructure.Attention;
 
 namespace Radar.Application.Tests.Scoring;
@@ -20,13 +21,20 @@ public sealed class ScoringConfigFingerprintTests
     private const string SourceDescriptor =
         "rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,sec-form4,usaspending;";
 
+    // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
+    // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
+    // so it can't drift from the code default (== spec 93).
+    private static readonly string InsiderDescriptor = new InsiderMaterialityWeights().CanonicalDescriptor();
+
     [Fact]
     public void Compute_SameInputs_ProduceSameFingerprint()
     {
         var a = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
         var b = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         Assert.Equal(a, b);
     }
@@ -35,7 +43,8 @@ public sealed class ScoringConfigFingerprintTests
     public void Compute_ReturnsLowercaseHexToken_OfStableLength()
     {
         var fp = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         const string prefix = "radar-scoring-fp-";
         Assert.StartsWith(prefix, fp, StringComparison.Ordinal);
@@ -49,7 +58,8 @@ public sealed class ScoringConfigFingerprintTests
     public void Compute_IsCultureInvariant()
     {
         var invariant = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         var original = CultureInfo.CurrentCulture;
         try
@@ -57,7 +67,8 @@ public sealed class ScoringConfigFingerprintTests
             // A comma-decimal locale would corrupt any non-invariant number formatting.
             CultureInfo.CurrentCulture = new CultureInfo("de-DE");
             var underDeDe = ScoringConfigFingerprint.Compute(
-                "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+                "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+                InsiderDescriptor);
 
             Assert.Equal(invariant, underDeDe);
         }
@@ -71,27 +82,29 @@ public sealed class ScoringConfigFingerprintTests
     public void Compute_DefaultConfig_MatchesPinnedFingerprint()
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
-        // default-tier, or signal-source drift is caught (the automatic AD-10 replacement for the hand-bumped
-        // constant). This value is the spec-95 re-stamp: the signal-source descriptor (the enabled collector
-        // set + extractor rule-set identity, KeywordSignalExtractor.RuleSetVersion) is now part of the hashed
-        // canonical string, appended after the attention descriptor, so the default fingerprint changed
-        // automatically — no manual version bump. It supersedes the spec-94 MediaReachWeight re-stamp
-        // (radar-scoring-fp-5cd50423f408).
+        // default-tier, signal-source, or insider-materiality drift is caught (the automatic AD-10 replacement
+        // for the hand-bumped constant). This value is the spec-96 re-stamp: the insider-materiality descriptor
+        // (config-tunable buy/sell tiers + cluster boost) is now part of the hashed canonical string, appended
+        // after the signal-source descriptor, so the default fingerprint changed automatically — no manual
+        // version bump. It supersedes the spec-95 signal-source re-stamp (radar-scoring-fp-55270b9d8fad).
         var fp = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
-        Assert.Equal("radar-scoring-fp-55270b9d8fad", fp);
+        Assert.Equal("radar-scoring-fp-7e56a8007342", fp);
     }
 
     [Fact]
     public void Compute_ChangedWeight_ChangesFingerprint()
     {
         var baseline = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5",
-            new ScoringWeights { AttentionHalfSaturation = 12.0 }, DefaultTierDescriptor(), SourceDescriptor);
+            new ScoringWeights { AttentionHalfSaturation = 12.0 }, DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         Assert.NotEqual(baseline, changed);
     }
@@ -100,10 +113,12 @@ public sealed class ScoringConfigFingerprintTests
     public void Compute_ChangedTierDescriptor_ChangesFingerprint()
     {
         var baseline = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         var changed = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), "unknown=0.9;", SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), "unknown=0.9;", SourceDescriptor,
+            InsiderDescriptor);
 
         Assert.NotEqual(baseline, changed);
     }
@@ -112,13 +127,32 @@ public sealed class ScoringConfigFingerprintTests
     public void Compute_ChangedSignalSourceDescriptor_ChangesFingerprint()
     {
         var baseline = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         // Dropping a collector from the enabled set changes the signal-production surface, so the fingerprint
         // must re-stamp (spec 95 — restores the spec-69 comparability guarantee across a collector transition).
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(),
-            "rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;");
+            "rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
+            InsiderDescriptor);
+
+        Assert.NotEqual(baseline, changed);
+    }
+
+    [Fact]
+    public void Compute_ChangedInsiderTiers_ChangesFingerprint()
+    {
+        var baseline = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
+
+        // Changing an insider tier (or the cluster boost) changes the effective scoring config, so the
+        // fingerprint must re-stamp automatically (spec 96 — magnitudes hashed by value, no RuleSetVersion bump).
+        var changedInsider = new InsiderMaterialityWeights { ClusterBoost = 2 }.CanonicalDescriptor();
+        var changed = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            changedInsider);
 
         Assert.NotEqual(baseline, changed);
     }
@@ -127,10 +161,12 @@ public sealed class ScoringConfigFingerprintTests
     public void Compute_ChangedFormulaVersion_ChangesFingerprint()
     {
         var v5 = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         var v4 = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", "radar-formula-v4", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
+            "mvp-engine-v1", "radar-formula-v4", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
 
         Assert.NotEqual(v5, v4);
     }
