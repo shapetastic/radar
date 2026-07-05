@@ -280,3 +280,8 @@ When implementing a spec that replaces existing functionality:
    onto `ScoringWeights`) — it needs **no code version bump**, and the `ScoringConfigVersion` fingerprint
    re-stamps automatically. The only remaining code-version obligation is bumping `_formula.Version` (a new
    `radar-formula-vN` class) when the formula **structure/shape** changes (AD-6). See AD-10 (as amended).
+7. A scoring-affecting **extractor rule-STRUCTURE** change (the `KeywordSignalExtractor` phrase→direction/strength
+   table shape) bumps `KeywordSignalExtractor.RuleSetVersion` (parallel to `_formula.Version`) — it is folded into
+   the `ScoringConfigVersion` fingerprint via `SignalSourceDescriptor` (spec 95, AD-10 amended). The
+   **enabled-collector set** is captured automatically by that same fingerprint, so enabling/disabling a collector
+   needs **no** bump — it re-stamps on its own.

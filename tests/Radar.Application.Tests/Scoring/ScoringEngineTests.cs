@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Abstractions.Persistence;
+using Radar.Application.Collectors;
 using Radar.Application.Scoring;
 using Radar.Application.Signals;
 using Radar.Domain.Evidence;
@@ -31,6 +32,20 @@ public sealed class ScoringEngineTests
         public double WeightFor(string? sourceName) => 1.0;
         public string CanonicalDescriptor() => "test-all-genuine";
     }
+
+    /// <summary>
+    /// In-test <see cref="ISignalSourceDescriptor"/> with a fixed descriptor: the engine folds it into the
+    /// fingerprint + EffectiveConfig (spec 95). Tests recomputing the fingerprint directly pass the same
+    /// literal so equality holds.
+    /// </summary>
+    private const string SourceDescriptor = "test-src-desc";
+
+    private sealed class StubSourceDescriptor : ISignalSourceDescriptor
+    {
+        public string CanonicalDescriptor() => SourceDescriptor;
+    }
+
+    private static readonly ISignalSourceDescriptor SourceDesc = new StubSourceDescriptor();
 
     /// <summary>
     /// In-test formula stub: returns a fixed, in-range computation and echoes exactly one
@@ -152,6 +167,7 @@ public sealed class ScoringEngineTests
                 formula ?? new StubScoreFormula(),
                 weights ?? new ScoringWeights(),
                 Weights,
+                SourceDesc,
                 new ScoringOptions { Window = Window },
                 NullLogger<ScoringEngine>.Instance);
         }
@@ -347,7 +363,8 @@ public sealed class ScoringEngineTests
         // (AD-10 amended): recompute it with the SAME inputs the engine used (engine version mvp-engine-v1,
         // the formula's Version, default weights, the source-weights descriptor) and assert equality.
         var expected = ScoringConfigFingerprint.Compute(
-            "mvp-engine-v1", formula.Version, new ScoringWeights(), Weights.CanonicalDescriptor());
+            "mvp-engine-v1", formula.Version, new ScoringWeights(), Weights.CanonicalDescriptor(),
+            SourceDescriptor);
         Assert.Equal(expected, result.Snapshot.ScoringConfigVersion);
     }
 
@@ -394,6 +411,7 @@ public sealed class ScoringEngineTests
         Assert.Equal("stub-formula-vX", defaultConfig.FormulaVersion);
         Assert.Equal(defaultWeights, defaultConfig.Weights);
         Assert.Equal(Weights.CanonicalDescriptor(), defaultConfig.AttentionDescriptor);
+        Assert.Equal(SourceDescriptor, defaultConfig.SignalSourceDescriptor);
 
         // Under a changed weight a second engine's EffectiveConfig differs and still matches its own stamp.
         var changedWeights = new ScoringWeights { AttentionHalfSaturation = 12.0 };
@@ -617,6 +635,42 @@ public sealed class ScoringEngineTests
         Assert.Contains("mvp-engine-v1", result.Snapshot.ScoringVersion);
     }
 
+    /// <summary>A fake collector exposing a fixed name; CollectAsync is never invoked by the descriptor.</summary>
+    private sealed class NamedFakeCollector(string name) : IEvidenceCollector
+    {
+        public string CollectorName { get; } = name;
+
+        public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
+
+        public Task<CollectionResult> CollectAsync(CollectionContext context, CancellationToken ct) =>
+            throw new InvalidOperationException("The descriptor must never call CollectAsync.");
+    }
+
+    [Fact]
+    public void DiWiring_SignalSourceDescriptor_SeesCollectorsRegisteredAfterApplicationServices()
+    {
+        // Spec 95: collectors are registered AFTER AddRadarApplicationServices in the real Worker graph, yet
+        // the descriptor (resolving IEnumerable<IEvidenceCollector> lazily) must still see ALL of them.
+        var services = new ServiceCollection();
+        services.AddInMemoryRadarPersistence();
+        services.AddRadarApplicationServices();
+
+        // Register several collectors AFTER the application services — mirrors the Worker composition order.
+        services.AddSingleton<IEvidenceCollector>(new NamedFakeCollector("usaspending"));
+        services.AddSingleton<IEvidenceCollector>(new NamedFakeCollector("sec-form4"));
+        services.AddSingleton<IEvidenceCollector>(new NamedFakeCollector("rss"));
+        services.AddSingleton<IEvidenceCollector>(new NamedFakeCollector("newssearch"));
+
+        using var provider = services.BuildServiceProvider();
+
+        var descriptor = provider.GetRequiredService<ISignalSourceDescriptor>().CanonicalDescriptor();
+
+        // All late-registered collectors appear, sorted Ordinal, alongside the extractor rule-set identity.
+        Assert.Equal(
+            "rules=radar-keyword-rules-v1;collectors=newssearch,rss,sec-form4,usaspending;",
+            descriptor);
+    }
+
     [Fact]
     public async Task PreviousWindow_IsSlicedAndPassed_SeparateFromCurrentAndOlder()
     {
@@ -826,7 +880,7 @@ public sealed class ScoringEngineTests
             var scores = new InMemoryScoreRepository();
             var engine = new ScoringEngine(
                 signals, fileStore, evidence, scores, new RadarScoreFormulaV5(new ScoringWeights(), Weights),
-                new ScoringWeights(), Weights,
+                new ScoringWeights(), Weights, SourceDesc,
                 new ScoringOptions { Window = Window }, NullLogger<ScoringEngine>.Instance);
 
             var companyId = Guid.NewGuid();

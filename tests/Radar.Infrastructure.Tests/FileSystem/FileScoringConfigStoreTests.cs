@@ -12,6 +12,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     private const string EngineVersion = "mvp-engine-v1";
     private const string FormulaVersion = "radar-formula-v5";
     private const string AttentionDescriptor = "attn:v1;unknown=0.4";
+    private const string SignalSourceDescriptor = "rules=radar-keyword-rules-v1;collectors=sec-edgar;";
 
     private readonly string _tempDir;
 
@@ -48,11 +49,12 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     private static EffectiveScoringConfig ConfigFor(ScoringWeights weights) =>
         new(
             Fingerprint: ScoringConfigFingerprint.Compute(
-                EngineVersion, FormulaVersion, weights, AttentionDescriptor),
+                EngineVersion, FormulaVersion, weights, AttentionDescriptor, SignalSourceDescriptor),
             EngineVersion: EngineVersion,
             FormulaVersion: FormulaVersion,
             Weights: weights,
-            AttentionDescriptor: AttentionDescriptor);
+            AttentionDescriptor: AttentionDescriptor,
+            SignalSourceDescriptor: SignalSourceDescriptor);
 
     private static EffectiveScoringConfig ReadStored(string path)
     {
@@ -78,6 +80,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         Assert.Equal(config.EngineVersion, stored.EngineVersion);
         Assert.Equal(config.FormulaVersion, stored.FormulaVersion);
         Assert.Equal(config.AttentionDescriptor, stored.AttentionDescriptor);
+        Assert.Equal(config.SignalSourceDescriptor, stored.SignalSourceDescriptor);
         // Every ScoringWeights value round-trips (record equality compares all init properties).
         Assert.Equal(config.Weights, stored.Weights);
     }
@@ -118,7 +121,8 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         // Self-verification: the hash is no longer opaque — recomputing it from the DESERIALIZED config
         // equals both the filename (sans .json) and the stored Fingerprint field.
         var recomputed = ScoringConfigFingerprint.Compute(
-            stored.EngineVersion, stored.FormulaVersion, stored.Weights, stored.AttentionDescriptor);
+            stored.EngineVersion, stored.FormulaVersion, stored.Weights, stored.AttentionDescriptor,
+            stored.SignalSourceDescriptor);
 
         Assert.Equal(Path.GetFileNameWithoutExtension(path), recomputed);
         Assert.Equal(stored.Fingerprint, recomputed);
