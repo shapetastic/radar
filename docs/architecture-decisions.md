@@ -293,12 +293,34 @@ manual `ScoringConfigVersion` bump; only the pinned default-fingerprint test con
 *Accepted · 2026-07-04 — maintainer sign-off granted on the recalibrated defaults / posture (denylist-expand +
 `UnknownWeight 0.25`, with the allowlist flip as the documented config-only alternative).*
 
+Spec 94 (recalibrate the default `MediaReachWeight` `0.25 → 0.10`) de-saturates `AttentionScore` without
+touching the formula. A post-spec-91 live re-measure across the watch universe found Attention **saturated** —
+every normally-covered small-cap landed ~**64–75** — because in `reach = weightedBreadth + MediaReachWeight·
+mediaCount` the raw **article-count** term (`0.25·mediaCount`) dominated the tier-weighted **distinct-publisher**
+breadth term roughly **5:1**, so Attention tracked article **volume** (the content-mill noise every ticker gets),
+not genuine market **notice**, and the under-the-radar discount fired ~uniformly. A live `MediaReachWeight` sweep
+(baseline `0.25` vs `0.15 / 0.10 / 0.05`, via `scripts/run-radar.ps1` profiles into isolated output dirs) widened
+the quality gap between a genuinely-covered name (ERII) and a known all-aggregator name (HLIO) monotonically as
+the weight dropped — ERII−HLIO Attention gap `4 → 7 → 9 → 14`. **`0.10` is the chosen de-saturating middle**
+(Attention spread ~**49–63**), keeping Attention a light, breadth-leaning modifier while Trajectory + Evidence
+drive the score. This is a `ScoringWeights` **magnitude** change, **NOT** a structural one: the reach *shape* is
+byte-for-byte unchanged, so it **stays `radar-formula-v5`** — no new formula class, no manual `ScoringConfigVersion`
+bump. Because `MediaReachWeight` is in the hashed canonical string, the **default fingerprint re-stamps
+automatically** (`radar-scoring-fp-c1e71b26adf3 → radar-scoring-fp-5cd50423f408`); the pinned default-fingerprint
+test **and** the v4-equivalence pin were **intentionally** updated (representative-input Attention `44 → 42`) — the
+spec-89 "blank config == v4 byte-identical" property is **deliberately superseded** here, not regressed. A
+tier-weighted-article-count `v6` (weighting the media term by publisher tier) was considered and **skipped as
+marginal** for this mostly-aggregator-covered universe. *Accepted · 2026-07-04.*
+
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
 `radar-formula-v3` — maintainer-approved). Refined · 2026-07-04 (spec 88, `radar-formula-v4` — Accepted,
 source-quality tiering). Refined · 2026-07-04 (spec 89, `radar-formula-v5` — Accepted, magnitudes → config;
 structure stays versioned). Refined · 2026-07-04 (spec 90 — attention tier recalibration + publisher-name
-normalization; **not** a formula-version bump, fingerprint auto-re-stamps; Accepted · 2026-07-04).
+normalization; **not** a formula-version bump, fingerprint auto-re-stamps; Accepted · 2026-07-04). Refined ·
+2026-07-04 (spec 94 — default `MediaReachWeight 0.25 → 0.10` de-saturating recalibration; a `ScoringWeights`
+magnitude change, **not** a formula-version bump; fingerprint auto-re-stamps and the v4-byte-identical property is
+deliberately superseded; Accepted · 2026-07-04).
 
 ---
 
