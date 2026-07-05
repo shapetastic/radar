@@ -11,11 +11,14 @@ public sealed class ScoringConfigFingerprintTests
     private static string DefaultTierDescriptor() =>
         new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default).CanonicalDescriptor();
 
-    // A representative signal-source descriptor literal (spec 95): the enabled collector set + the extractor
-    // rule-set identity, canonicalized. It is folded into the fingerprint after the attention descriptor, so
-    // the default fingerprint value depends on it.
+    // The signal-source descriptor of the default run profile (spec 95): the enabled collector set + the
+    // extractor rule-set identity, canonicalized. It is folded into the fingerprint after the attention
+    // descriptor, so the default fingerprint value depends on it. The collector tokens are the concrete
+    // IEvidenceCollector.CollectorName values the default DI graph registers (rss→"RssPressReleaseCollector",
+    // sec→"sec-edgar", secform4→"sec-form4", usaspending→"usaspending", newssearch→"newssearch"),
+    // Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it matches what the Worker actually produces.
     private const string SourceDescriptor =
-        "rules=radar-keyword-rules-v1;collectors=newssearch,rss,sec,sec-form4,usaspending;";
+        "rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,sec-form4,usaspending;";
 
     [Fact]
     public void Compute_SameInputs_ProduceSameFingerprint()
@@ -77,7 +80,7 @@ public sealed class ScoringConfigFingerprintTests
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor);
 
-        Assert.Equal("radar-scoring-fp-4aefc5a0b676", fp);
+        Assert.Equal("radar-scoring-fp-55270b9d8fad", fp);
     }
 
     [Fact]
@@ -115,7 +118,7 @@ public sealed class ScoringConfigFingerprintTests
         // must re-stamp (spec 95 — restores the spec-69 comparability guarantee across a collector transition).
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(),
-            "rules=radar-keyword-rules-v1;collectors=newssearch,rss,sec,usaspending;");
+            "rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;");
 
         Assert.NotEqual(baseline, changed);
     }

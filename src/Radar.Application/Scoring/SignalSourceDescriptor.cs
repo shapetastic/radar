@@ -30,9 +30,10 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
 
         var csv = string.Join(',', names);
 
-        // Collector names are a controlled, delimiter-free vocabulary today (rss/sec/sec-form4/usaspending/
-        // newssearch/news/localfile), but escaping keeps the serialization injective (AD-3) — a name that ever
-        // contained a reserved delimiter cannot collide with a different collector set.
+        // CollectorName is each collector's stable provenance identifier (e.g. "RssPressReleaseCollector",
+        // "sec-edgar", "sec-form4", "usaspending", "newssearch") — NOT the Radar:Collectors config "kind"
+        // token. Treat it as opaque: it is delimiter-free today, but escaping keeps the serialization injective
+        // (AD-3) so a name that ever contained a reserved delimiter cannot collide with a different collector set.
         _descriptor = $"rules={KeywordSignalExtractor.RuleSetVersion};collectors={csv};";
     }
 
