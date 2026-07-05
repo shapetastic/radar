@@ -9,6 +9,7 @@ using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
 using Radar.Application.Pipeline;
+using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
@@ -21,6 +22,7 @@ using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.News;
 using Radar.Infrastructure.Persistence.InMemory;
+using Radar.Infrastructure.Prices;
 using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.Sources;
@@ -711,6 +713,60 @@ public static class InfrastructureServiceCollectionExtensions
     {
         services.AddSingleton(new FileScoringConfigStoreOptions { RootDirectory = rootDirectory });
         services.AddSingleton<IScoringConfigStore, FileScoringConfigStore>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the keyless Yahoo chart v8 daily price-history reader behind the Application
+    /// <see cref="IPriceHistoryReader"/> seam (AD-14), plus the typed <c>HttpClient</c> it uses (browser
+    /// <c>User-Agent</c> + gzip/deflate decompression, mirroring <see cref="AddSecEarningsReleaseReader"/>). This
+    /// is a SEPARATE seam from the evidence collectors: it is NOT an <see cref="IEvidenceCollector"/>, produces no
+    /// <c>CollectedEvidence</c>, and is not added to <c>Radar:Collectors</c>. All HTTP/JSON/Yahoo specifics stay in
+    /// Infrastructure (AD-5). No key/secret/paid service.
+    /// <para>
+    /// Fails fast when <paramref name="range"/> is not a known Yahoo <c>validRanges</c> value — a typo'd range
+    /// would otherwise silently return an empty series. <c>PriceReaderOptions</c> stays Infrastructure-internal
+    /// (AD-5); the caller supplies only the range token.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddHttpPriceHistoryReader(
+        this IServiceCollection services, string range)
+    {
+        var options = new PriceReaderOptions { Range = range };
+
+        // Fail fast at registration on an invalid range.
+        options.Validate();
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<IPriceHistoryReader, HttpPriceHistoryReader>(client =>
+            {
+                // The Yahoo chart endpoint requires a browser-like User-Agent (verified) but no cookie/crumb.
+                client.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the file price-history reference store that persists each ticker's daily bars to
+    /// <c>{rootDirectory}/{ticker}.json</c> (AD-14) via the shared <c>GracefulFileWriter</c> +
+    /// <c>RadarFileStoreJson.Options</c> scaffolding, merging/deduping bars by <c>Date</c> (last-write-wins per
+    /// date, ascending). Consumers require the Application <see cref="IPriceHistoryStore"/>; all file I/O stays in
+    /// Infrastructure. This store is consumed by NOTHING in the scoring/evidence/signal/report path — it exists
+    /// solely for a future price-efficacy validation/backtest spec.
+    /// </summary>
+    public static IServiceCollection AddFilePriceHistoryStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FilePriceHistoryStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IPriceHistoryStore, FilePriceHistoryStore>();
         return services;
     }
 

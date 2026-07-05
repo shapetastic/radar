@@ -1,5 +1,6 @@
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
+using Radar.Application.Prices;
 
 namespace Radar.Worker;
 
@@ -8,6 +9,12 @@ namespace Radar.Worker;
 /// once (then stops the application) or on a <see cref="PeriodicTimer"/> interval. Contains no pipeline
 /// logic; all stage behaviour lives behind the injected interfaces. Takes time only from the injected
 /// <see cref="TimeProvider"/> (no inline clock).
+/// <para>
+/// When the opt-in price-history acquisition is enabled (<c>Radar:Prices:Enabled</c>), the optional
+/// <see cref="IPriceHistoryAcquirer"/> is invoked after seeding as a SEPARATE step, DISTINCT from and OUTSIDE
+/// <see cref="IRadarPipeline"/> (AD-14): price is validation/reference data and must never enter the
+/// evidence → signal → score path. When disabled the dependency is <c>null</c> and the step is skipped.
+/// </para>
 /// </summary>
 public sealed class Worker : BackgroundService
 {
@@ -17,6 +24,7 @@ public sealed class Worker : BackgroundService
     private readonly WorkerRunOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<Worker> _logger;
+    private readonly IPriceHistoryAcquirer? _priceHistoryAcquirer;
 
     public Worker(
         ICompanyUniverseSeeder seeder,
@@ -24,7 +32,8 @@ public sealed class Worker : BackgroundService
         IHostApplicationLifetime lifetime,
         WorkerRunOptions options,
         TimeProvider timeProvider,
-        ILogger<Worker> logger)
+        ILogger<Worker> logger,
+        IPriceHistoryAcquirer? priceHistoryAcquirer = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -39,6 +48,7 @@ public sealed class Worker : BackgroundService
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _priceHistoryAcquirer = priceHistoryAcquirer;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -48,6 +58,14 @@ public sealed class Worker : BackgroundService
             // Seed the watch-universe once at startup (idempotent, AD-1) before any pipeline run.
             var seeded = await _seeder.SeedAsync(stoppingToken).ConfigureAwait(false);
             _logger.LogInformation("Seeded {Count} companies into the watch-universe.", seeded);
+
+            // Opt-in price-history acquisition (AD-14): a SEPARATE step after seeding, DISTINCT from and OUTSIDE
+            // IRadarPipeline. Skipped (dependency null) unless Radar:Prices:Enabled. Price is reference/validation
+            // data — it never enters the evidence → signal → score path.
+            if (_priceHistoryAcquirer is not null)
+            {
+                await _priceHistoryAcquirer.AcquireAsync(stoppingToken).ConfigureAwait(false);
+            }
 
             if (_options.RunOnce)
             {

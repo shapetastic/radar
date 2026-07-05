@@ -7,6 +7,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
+using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 
@@ -263,6 +264,60 @@ public sealed class RadarWorkerServicesTests
         // source's constructor requires it, so resolution would throw otherwise.
         Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
         Assert.NotNull(provider.GetService<IRadarPipeline>());
+    }
+
+    [Fact]
+    public void DefaultConfig_RegistersNoPriceSeam_PricesDisabled()
+    {
+        // Radar:Prices:Enabled defaults to false: nothing price-related is registered, the collector list and
+        // the rest of the pipeline graph are unchanged, and Worker's optional acquirer resolves to null (AD-14).
+        using var provider = BuildProvider(("Radar:Collectors:0", "rss"));
+
+        Assert.Null(provider.GetService<IPriceHistoryReader>());
+        Assert.Null(provider.GetService<IPriceHistoryStore>());
+        Assert.Null(provider.GetService<IPriceHistoryAcquirer>());
+
+        // The collector list is unchanged (just the single rss collector) and the pipeline still resolves.
+        Assert.Single(provider.GetServices<IEvidenceCollector>());
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+
+        // Worker resolves with its optional IPriceHistoryAcquirer? defaulting to null.
+        var worker = provider.GetServices<IHostedService>().OfType<Worker>().Single();
+        Assert.NotNull(worker);
+    }
+
+    [Fact]
+    public void PricesEnabled_RegistersReaderStoreAndAcquirer_OptInGateFlips()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Prices:Enabled", "true"));
+
+        Assert.NotNull(provider.GetService<IPriceHistoryReader>());
+        Assert.NotNull(provider.GetService<IPriceHistoryStore>());
+        Assert.NotNull(provider.GetService<IPriceHistoryAcquirer>());
+
+        // The price seam is NOT an evidence collector — enabling it does not change the collector list.
+        Assert.Single(provider.GetServices<IEvidenceCollector>());
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+    }
+
+    [Fact]
+    public void PricesEnabled_WithInvalidRange_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+            ("Radar:Prices:Enabled", "true"),
+            ("Radar:Prices:Range", "bogus")));
+        Assert.Contains("Range", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PricesEnabled_WithNegativeDelay_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+            ("Radar:Prices:Enabled", "true"),
+            ("Radar:Prices:InterRequestDelaySeconds", "-1")));
+        Assert.Contains("InterRequestDelaySeconds", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
