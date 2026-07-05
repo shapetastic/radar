@@ -118,6 +118,27 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_WithSecForm4Collector_WhenUserAgentConfigured()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "secform4"),
+            ("Radar:SecForm4:UserAgent", "Radar Research test@example.com"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+        Assert.Equal(2, provider.GetServices<IEvidenceCollector>().Count());
+    }
+
+    [Fact]
+    public void SecForm4Collector_WithoutUserAgent_FailsFast()
+    {
+        // A blank Radar:SecForm4:UserAgent must fail fast: every SEC request 403s without a compliant UA.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => BuildProvider(("Radar:Collectors:0", "secform4")));
+        Assert.Contains("User-Agent", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Graph_Resolves_WithUsaSpendingCollector()
     {
         // The USASpending API needs no key/User-Agent, so the collector enables with just the kind and the

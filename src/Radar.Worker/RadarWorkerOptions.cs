@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "usaspending", "news", "newssearch".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "usaspending", "news", "newssearch".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -12,6 +12,13 @@ public sealed class RadarWorkerOptions
     /// compliant User-Agent).
     /// </summary>
     public SecWorkerOptions Sec { get; init; } = new();
+
+    /// <summary>
+    /// SEC Form 4 (insider-transaction) collector configuration (bound from "Radar:SecForm4"). Only read when
+    /// the "secform4" collector is enabled; a blank <see cref="SecForm4WorkerOptions.UserAgent"/> fails fast at
+    /// that point (SEC requires a compliant User-Agent).
+    /// </summary>
+    public SecForm4WorkerOptions SecForm4 { get; init; } = new();
 
     /// <summary>
     /// USASpending.gov government-contract collector configuration (bound from "Radar:UsaSpending"). Only read
@@ -121,6 +128,27 @@ public sealed class SecWorkerOptions
 
     /// <summary>Maximum most-recent matching filings to collect per company per run.</summary>
     public int MaxFilingsPerCompany { get; init; } = 25;
+}
+
+/// <summary>
+/// SEC Form 4 (insider-transaction) collector configuration (bound from "Radar:SecForm4"). Surfaces the
+/// required, compliant User-Agent and the per-company cap through to <c>SecForm4CollectorOptions</c>. Defaults
+/// so the rss-only configuration works without any SecForm4 config.
+/// </summary>
+public sealed class SecForm4WorkerOptions
+{
+    /// <summary>
+    /// The compliant SEC User-Agent (e.g. "Radar Research example@example.com"). Required when the "secform4"
+    /// collector is enabled — every SEC request 403s without it. Defaults to empty so the default rss-only
+    /// configuration stays working without any SecForm4 config.
+    /// </summary>
+    public string UserAgent { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Maximum most-recent Form 4 filings to fetch/parse per company per run. Defaults to 15 (Form 4s are
+    /// numerous, so the cap keeps the per-run fetch bounded).
+    /// </summary>
+    public int MaxFilingsPerCompany { get; init; } = 15;
 }
 
 /// <summary>

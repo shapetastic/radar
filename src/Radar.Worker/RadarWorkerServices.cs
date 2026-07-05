@@ -76,7 +76,7 @@ internal static class RadarWorkerServices
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
-                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", \"news\", and \"newssearch\".");
+                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"usaspending\", \"news\", and \"newssearch\".");
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -87,7 +87,7 @@ internal static class RadarWorkerServices
             if (string.IsNullOrWhiteSpace(rawKind))
             {
                 throw new InvalidOperationException(
-                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", \"news\", and \"newssearch\".");
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"usaspending\", \"news\", and \"newssearch\".");
             }
 
             var kind = rawKind.Trim();
@@ -111,6 +111,14 @@ internal static class RadarWorkerServices
                     UserAgent = options.Sec.UserAgent,
                     Forms = options.Sec.Forms,
                     MaxFilingsPerCompany = options.Sec.MaxFilingsPerCompany,
+                });
+            }
+            else if (string.Equals(kind, "secform4", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddSecForm4Collector(new SecForm4CollectorOptions
+                {
+                    UserAgent = options.SecForm4.UserAgent,
+                    MaxFilingsPerCompany = options.SecForm4.MaxFilingsPerCompany,
                 });
             }
             else if (string.Equals(kind, "usaspending", StringComparison.OrdinalIgnoreCase))
@@ -146,7 +154,7 @@ internal static class RadarWorkerServices
             else
             {
                 throw new InvalidOperationException(
-                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"usaspending\", \"news\", and \"newssearch\".");
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"usaspending\", \"news\", and \"newssearch\".");
             }
         }
 
