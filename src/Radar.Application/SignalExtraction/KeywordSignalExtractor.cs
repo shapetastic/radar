@@ -427,7 +427,9 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
                 return tier.Strength;
         }
 
-        // Unreachable: the floor tier (decimal.MinValue) always matches. Kept as a defensive fallback.
-        return 2;
+        // Unreachable: the floor tier (decimal.MinValue) always matches. Kept as a defensive fallback —
+        // return the last (floor) tier's Strength rather than a constant, so it stays correct if the tier
+        // table evolves (both tables are validated non-empty).
+        return tiers[^1].Strength;
     }
 }

@@ -4,11 +4,14 @@ using System.Text;
 namespace Radar.Application.SignalExtraction;
 
 /// <summary>
-/// One insider-materiality tier: an inclusive lower dollar bound and the Strength an
-/// <see cref="Radar.Domain.Signals.SignalType.InsiderBuying"/> signal takes when the discretionary net
-/// value is at or above that bound. Tables are ordered DESCENDING by <see cref="MinInclusive"/>; the floor
-/// tier's bound is <see cref="decimal.MinValue"/> so any amount maps. Init-only auto-properties so an
-/// <c>IConfiguration</c> JSON array of <c>{ MinInclusive, Strength }</c> binds cleanly.
+/// One dollar-materiality tier: an inclusive lower dollar bound and the Strength a signal takes when its
+/// amount is at or above that bound. Reused for both the config-provided
+/// <see cref="Radar.Domain.Signals.SignalType.InsiderBuying"/> net-value tiers (this file) and the code-const
+/// <see cref="Radar.Domain.Signals.SignalType.GovernmentContract"/> award-amount tiers
+/// (<see cref="KeywordSignalExtractor"/>) — one tier shape, one <c>StrengthForAmount</c> walk. Tables are
+/// ordered DESCENDING by <see cref="MinInclusive"/>; the floor tier's bound is <see cref="decimal.MinValue"/>
+/// so any amount maps. Init-only auto-properties so an <c>IConfiguration</c> JSON array of
+/// <c>{ MinInclusive, Strength }</c> binds cleanly.
 /// </summary>
 public sealed record InsiderMaterialityTier
 {
