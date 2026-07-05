@@ -367,6 +367,44 @@ public sealed class HttpSecForm4ReaderTests
     }
 
     [Fact]
+    public async Task ReadAsync_MissingCik_ReturnsMalformed()
+    {
+        // Valid JSON, valid filings.recent, but no 'cik' — proceeding would derive archive URLs from CIK "0"
+        // and report a false zero-item Success, so this is a typed Malformed failure instead.
+        const string noCik = """
+            {
+              "name": "MERCURY SYSTEMS INC",
+              "filings": { "recent": { "form": ["4"], "filingDate": ["2026-06-02"],
+                "acceptanceDateTime": ["2026-06-02T20:00:00.000Z"],
+                "accessionNumber": ["0001049521-26-000030"], "primaryDocument": ["form4.xml"] } }
+            }
+            """;
+        var handler = new RoutingHandler();
+        handler.Add(SubmissionsUrl, HttpStatusCode.OK, noCik);
+
+        var result = await CreateReader(handler).ReadAsync(SubmissionsUrl, CancellationToken.None);
+
+        Assert.Equal(SecForm4ReadOutcome.Malformed, result.Outcome);
+        Assert.Empty(result.Items);
+        // No archive fetch attempted once the submissions payload is judged malformed.
+        Assert.DoesNotContain(handler.RequestedUrls, u => u.Contains("form4.xml"));
+    }
+
+    [Fact]
+    public async Task ReadAsync_MissingFilingsRecent_ReturnsMalformed()
+    {
+        // An object root with a cik but no filings.recent shape is a changed/malformed payload, not a quiet issuer.
+        const string noRecent = """{ "cik": "1049521", "name": "MERCURY SYSTEMS INC" }""";
+        var handler = new RoutingHandler();
+        handler.Add(SubmissionsUrl, HttpStatusCode.OK, noRecent);
+
+        var result = await CreateReader(handler).ReadAsync(SubmissionsUrl, CancellationToken.None);
+
+        Assert.Equal(SecForm4ReadOutcome.Malformed, result.Outcome);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
     public async Task ReadAsync_OneFilingXml404_SkipsThatFiling_OthersParse()
     {
         var handler = new RoutingHandler();

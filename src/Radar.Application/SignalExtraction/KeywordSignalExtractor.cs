@@ -238,9 +238,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // NewsArticle evidence is the attention event (spec 70). Emit exactly one Neutral MediaAttention signal
         // and return, deliberately SUPPRESSING the directional keyword rules for news (news framing != the
         // company's own disclosure; avoids double-counting a press release + its news echo — see spec 70).
-        // This is the second source-type-aware branch in this deterministic extractor (spec 66 was the first,
-        // metadata-aware for GovernmentContract materiality); all keyword behaviour for other sources is
-        // unchanged below.
+        // This is the one and only EvidenceSourceType-driven branch in this deterministic extractor. (The
+        // spec 66 GovernmentContract and spec 93 InsiderBuying reads are metadata-driven, not source-type-driven,
+        // so they do NOT count as source-type branches — see the class XML doc.) All keyword behaviour for other
+        // sources is unchanged below.
         if (evidence.SourceType == EvidenceSourceType.NewsArticle)
         {
             var searchable = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);

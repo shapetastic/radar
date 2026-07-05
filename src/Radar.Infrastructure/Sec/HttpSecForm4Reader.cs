@@ -100,8 +100,29 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
                     SecForm4ReadOutcome.Malformed, "unexpected root JSON shape");
             }
 
+            // A blank cik or an absent filings.recent object is a malformed/changed payload, NOT a quiet
+            // issuer: proceeding would derive archive URLs from a CIK of "0" and report Success with zero
+            // items, hiding the feed breakage. Report it as a typed Malformed failure instead (mirrors the
+            // unexpected-root-shape guard above and HttpSecFilingReader).
             cik = GetString(document.RootElement, "cik");
-            rows = ParseForm4Rows(document.RootElement, _maxFilingsPerCompany, ct);
+            if (string.IsNullOrWhiteSpace(cik))
+            {
+                _logger.LogWarning(
+                    "SEC Form 4 submissions {SubmissionsUrl} JSON is missing or blank 'cik'; treating as malformed and skipping.",
+                    submissionsUrl);
+                return SecForm4ReadResult.Failure(SecForm4ReadOutcome.Malformed, "missing cik");
+            }
+
+            if (!TryGetRecent(document.RootElement, out var recent))
+            {
+                _logger.LogWarning(
+                    "SEC Form 4 submissions {SubmissionsUrl} JSON lacks the expected 'filings.recent' object; "
+                        + "treating as malformed and skipping.",
+                    submissionsUrl);
+                return SecForm4ReadResult.Failure(SecForm4ReadOutcome.Malformed, "missing filings.recent");
+            }
+
+            rows = ParseForm4Rows(recent, _maxFilingsPerCompany, ct);
         }
         catch (JsonException ex)
         {
@@ -380,22 +401,34 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
     }
 
     /// <summary>
+    /// Resolves the <c>filings.recent</c> object (both must be present and objects). Returns <c>false</c> when
+    /// the expected submissions shape is absent — the caller treats that as a typed <c>Malformed</c> failure
+    /// rather than a quiet zero-item success.
+    /// </summary>
+    private static bool TryGetRecent(JsonElement root, out JsonElement recent)
+    {
+        if (root.TryGetProperty("filings", out var filings)
+            && filings.ValueKind == JsonValueKind.Object
+            && filings.TryGetProperty("recent", out var r)
+            && r.ValueKind == JsonValueKind.Object)
+        {
+            recent = r;
+            return true;
+        }
+
+        recent = default;
+        return false;
+    }
+
+    /// <summary>
     /// Flattens the columnar <c>filings.recent</c> parallel arrays (newest-first), keeps only <c>form == "4"</c>
     /// rows with a parseable acceptance instant, and takes the most-recent <paramref name="maxFilings"/>. This
     /// is a small Form-4-only helper deliberately local to this reader (it reads only the four columns Form 4
     /// needs); it does not reuse or modify <see cref="HttpSecFilingReader"/>'s general parse.
     /// </summary>
-    private static IReadOnlyList<Form4Row> ParseForm4Rows(JsonElement root, int maxFilings, CancellationToken ct)
+    private static IReadOnlyList<Form4Row> ParseForm4Rows(JsonElement recent, int maxFilings, CancellationToken ct)
     {
         var rows = new List<Form4Row>();
-
-        if (!root.TryGetProperty("filings", out var filings)
-            || filings.ValueKind != JsonValueKind.Object
-            || !filings.TryGetProperty("recent", out var recent)
-            || recent.ValueKind != JsonValueKind.Object)
-        {
-            return rows;
-        }
 
         var form = GetArray(recent, "form");
         var filingDate = GetArray(recent, "filingDate");
