@@ -82,6 +82,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         AppendNamedActionSection(sb, model, RadarReportAction.Ignore, "Ignore / Low signal");
         AppendSignalsNeedingReview(sb, model);
         AppendCollectionSummary(sb, model);
+        AppendCollectionHealth(sb, model);
         AppendRecentRuns(sb, model);
 
         return sb.ToString();
@@ -360,6 +361,37 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             }
         }
 
+        sb.Append(Lf);
+    }
+
+    // Collection-health diagnostics: one bullet per collection-health warning (spec 98), in the
+    // model-supplied deterministic order. Observational metadata only — no labels, no scoring, no advice
+    // language, so it does not interact with the AD-9 allowed-label enforcement. Omitted entirely when
+    // there are no warnings (a clean run adds nothing to the report), preserving back-compat for
+    // direct-model callers that pass no health report.
+    private static void AppendCollectionHealth(StringBuilder sb, WeeklyReportModel model)
+    {
+        if (model.Health is not { HasWarnings: true } health)
+        {
+            return;
+        }
+
+        sb.Append("## Collection health").Append(Lf);
+        sb.Append(Lf);
+        foreach (var w in health.Warnings)
+        {
+            sb.Append("- [")
+                .Append(w.Severity.ToString())
+                .Append("] ")
+                .Append(w.FeedType)
+                .Append(": declared ")
+                .Append(w.DeclaredInSeed.ToString(CultureInfo.InvariantCulture))
+                .Append(", reached ")
+                .Append(w.ReachedCollectors.ToString(CultureInfo.InvariantCulture))
+                .Append(" — ")
+                .Append(w.Message)
+                .Append(Lf);
+        }
         sb.Append(Lf);
     }
 

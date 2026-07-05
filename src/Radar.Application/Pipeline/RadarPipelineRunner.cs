@@ -43,6 +43,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly IWeeklyReportBuilder _reportBuilder;
     private readonly IReportFileWriter _reportFileWriter;
     private readonly IPipelineRunStore _runStore;
+    private readonly ICollectionHealthValidator _healthValidator;
     private readonly PipelineOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<RadarPipelineRunner> _logger;
@@ -70,6 +71,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         IWeeklyReportBuilder reportBuilder,
         IReportFileWriter reportFileWriter,
         IPipelineRunStore runStore,
+        ICollectionHealthValidator healthValidator,
         PipelineOptions options,
         TimeProvider timeProvider,
         ILogger<RadarPipelineRunner> logger,
@@ -92,6 +94,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(reportBuilder);
         ArgumentNullException.ThrowIfNull(reportFileWriter);
         ArgumentNullException.ThrowIfNull(runStore);
+        ArgumentNullException.ThrowIfNull(healthValidator);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -130,6 +133,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _reportBuilder = reportBuilder;
         _reportFileWriter = reportFileWriter;
         _runStore = runStore;
+        _healthValidator = healthValidator;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -157,6 +161,16 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
         var sourceFeeds = await _companyRepository.GetSourceFeedsAsync(ct).ConfigureAwait(false);
         var context = new CollectionContext(companies, sourceFeeds);
+
+        // Collection-health validation (spec 98): reconcile the seed-declared feed-type inventory against
+        // what actually reached this context and log any per-feed-type shrinkage (regression guard for the
+        // spec-97 feed-Id collision). Diagnostic ONLY — read-only over the already-built context; it never
+        // touches a counter, the scoring loop, the evidence/signal path, or asOfUtc, and never fails the run.
+        var health = await _healthValidator.ValidateAsync(context, ct).ConfigureAwait(false);
+        foreach (var w in health.Warnings)
+        {
+            _logger.LogWarning("Collection health [{Code}]: {Message}", w.Code, w.Message);
+        }
 
         // Run every registered collector sequentially in the stable order fixed in the constructor
         // (keeps determinism and avoids hammering the network), then merge their results into one. The
@@ -356,7 +370,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         if (_options.GenerateReport)
         {
             var report = await _reportBuilder
-                .GenerateAsync(asOfUtc, collected.Summary, ct)
+                .GenerateAsync(asOfUtc, collected.Summary, health, ct)
                 .ConfigureAwait(false);
             await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
             reportId = report.Report.Id;
@@ -406,7 +420,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             CompaniesScored: pipelineResult.CompaniesScored,
             SourcesChecked: pipelineResult.SourcesChecked,
             SourcesFailed: pipelineResult.SourcesFailed,
-            ReportId: pipelineResult.ReportId);
+            ReportId: pipelineResult.ReportId,
+            CollectionWarnings: health.Warnings);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

@@ -1,4 +1,5 @@
 using Radar.Application.Collectors;
+using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -50,7 +51,8 @@ public sealed class MarkdownWeeklyReportRendererTests
         IReadOnlyList<WeeklyReportEntry>? entries = null,
         IReadOnlyList<NeedsReviewSignalRef>? signalsNeedingReview = null,
         CollectionSummary? collection = null,
-        IReadOnlyList<RecentRunSummary>? recentRuns = null) =>
+        IReadOnlyList<RecentRunSummary>? recentRuns = null,
+        CollectionHealthReport? health = null) =>
         new(
             Title: "Radar Weekly",
             PeriodStartUtc: PeriodStart,
@@ -59,7 +61,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             Entries: entries ?? [],
             SignalsNeedingReview: signalsNeedingReview ?? [],
             Collection: collection,
-            RecentRuns: recentRuns);
+            RecentRuns: recentRuns,
+            Health: health);
 
     [Fact]
     public void Render_Null_Model_Throws()
@@ -856,5 +859,42 @@ public sealed class MarkdownWeeklyReportRendererTests
         {
             Assert.DoesNotContain(forbidden, output, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void Render_CollectionHealth_WithWarning_RendersSectionAndText()
+    {
+        var warning = new CollectionHealthWarning(
+            Code: "feeds-lost-before-collection",
+            Severity: CollectionHealthSeverity.Warning,
+            FeedType: "sec",
+            DeclaredInSeed: 7,
+            ReachedCollectors: 0,
+            Message: "Seed declares 7 'sec' feed(s) but only 0 reached the collectors.");
+        var model = CreateModel(health: new CollectionHealthReport([warning]));
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("## Collection health", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "- [Warning] sec: declared 7, reached 0 — Seed declares 7 'sec' feed(s) but only 0 reached the collectors.",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_CollectionHealth_NullHealth_RendersNoSection()
+    {
+        var output = CreateRenderer().Render(CreateModel());
+
+        Assert.DoesNotContain("## Collection health", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_CollectionHealth_EmptyReport_RendersNoSection()
+    {
+        var output = CreateRenderer().Render(CreateModel(health: CollectionHealthReport.Empty));
+
+        Assert.DoesNotContain("## Collection health", output, StringComparison.Ordinal);
     }
 }

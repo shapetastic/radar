@@ -44,6 +44,18 @@ public sealed class RadarPipelineRunnerTests
         public string CanonicalDescriptor() => "test-src-desc";
     }
 
+    // Minimal ICollectionHealthValidator (spec 98): returns a fixed report. Defaults to Empty (clean),
+    // so the health check is a no-op for the existing runner tests; one test injects a warning to assert
+    // the runner surfaces it into the PipelineRunRecord without touching any scoring counter.
+    private sealed class StubCollectionHealthValidator(CollectionHealthReport? report = null)
+        : ICollectionHealthValidator
+    {
+        private readonly CollectionHealthReport _report = report ?? CollectionHealthReport.Empty;
+
+        public Task<CollectionHealthReport> ValidateAsync(CollectionContext context, CancellationToken ct) =>
+            Task.FromResult(_report);
+    }
+
     private const string CompanyName = "Northwind Robotics";
     private const string RawText =
         "Northwind Robotics announced a major new customer win with a Fortune 100 partner today.";
@@ -307,8 +319,10 @@ public sealed class RadarPipelineRunnerTests
             ISignalExtractor extractor,
             PipelineOptions options,
             TimeProvider? timeProvider = null,
-            IDirectionalFilingSignalSource? directionalFilingSignals = null)
-            : this([collector], extractor, options, timeProvider, directionalFilingSignals)
+            IDirectionalFilingSignalSource? directionalFilingSignals = null,
+            ICollectionHealthValidator? healthValidator = null)
+            : this(
+                [collector], extractor, options, timeProvider, directionalFilingSignals, healthValidator)
         {
         }
 
@@ -317,7 +331,8 @@ public sealed class RadarPipelineRunnerTests
             ISignalExtractor extractor,
             PipelineOptions options,
             TimeProvider? timeProvider = null,
-            IDirectionalFilingSignalSource? directionalFilingSignals = null)
+            IDirectionalFilingSignalSource? directionalFilingSignals = null,
+            ICollectionHealthValidator? healthValidator = null)
         {
             var time = timeProvider ?? new FixedTimeProvider(FixedNow);
 
@@ -374,6 +389,7 @@ public sealed class RadarPipelineRunnerTests
                 reportBuilder,
                 ReportWriter,
                 RunStore,
+                healthValidator ?? new StubCollectionHealthValidator(),
                 options,
                 time,
                 NullLogger<RadarPipelineRunner>.Instance,
@@ -990,6 +1006,9 @@ public sealed class RadarPipelineRunnerTests
             services.AddLogging();
             services.AddInMemoryRadarPersistence();
             services.AddRadarApplicationServices();
+            // The collection-health validator (spec 98) depends on ICompanySeedSource; register the
+            // local-file seed (degrades to an empty seed when the file is absent, so no warnings).
+            services.AddLocalFileCompanySeed(Path.Combine(tempDir, "companies.json"));
             services.AddLocalFileCollector(tempDir);
             services.AddFileRawEvidenceStore(Path.Combine(tempDir, "raw"));
             services.AddFileSignalStore(Path.Combine(tempDir, "signals"));
@@ -1161,6 +1180,64 @@ public sealed class RadarPipelineRunnerTests
 
         var record = Assert.Single(h.RunStore.Written);
         Assert.Equal(new[] { "AAA", "ZZZ" }, record.Collectors);
+    }
+
+    [Fact]
+    public async Task Run_SurfacesCollectionHealthWarnings_IntoRunRecord_WithoutChangingCounters()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var warning = new CollectionHealthWarning(
+            Code: "feeds-lost-before-collection",
+            Severity: CollectionHealthSeverity.Warning,
+            FeedType: "sec",
+            DeclaredInSeed: 7,
+            ReachedCollectors: 0,
+            Message: "Seed declares 7 'sec' feed(s) but only 0 reached the collectors.");
+        var validator = new StubCollectionHealthValidator(new CollectionHealthReport([warning]));
+
+        var h = new Harness(
+            collector,
+            extractor,
+            new PipelineOptions { GenerateReport = true },
+            healthValidator: validator);
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // The warning is surfaced verbatim on the durable run record.
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.NotNull(record.CollectionWarnings);
+        var surfaced = Assert.Single(record.CollectionWarnings!);
+        Assert.Equal(warning, surfaced);
+
+        // The health check is side-effect-free: scoring counters/output are unchanged by the warning.
+        Assert.Equal(1, result.EvidenceCollected);
+        Assert.Equal(1, result.EvidenceNew);
+        Assert.Equal(1, result.SignalsExtracted);
+        Assert.Equal(1, result.SignalsValid);
+        Assert.Equal(1, result.SignalsApproved);
+        Assert.Equal(1, result.CompaniesScored);
+    }
+
+    [Fact]
+    public async Task Run_CleanCollectionHealth_RunRecordCarriesEmptyWarnings()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        // Default stub returns CollectionHealthReport.Empty.
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.NotNull(record.CollectionWarnings);
+        Assert.Empty(record.CollectionWarnings!);
     }
 
     [Fact]
