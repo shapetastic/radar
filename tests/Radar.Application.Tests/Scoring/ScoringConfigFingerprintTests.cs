@@ -63,12 +63,13 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight or
         // default-tier drift is caught (the automatic AD-10 replacement for the hand-bumped constant). This value
-        // is the automatic AD-10 re-stamp for the spec-90 attention tier recalibration (unknown 0.5→0.25, mill
-        // denylist expanded, domain-form key normalization) — all feed DefaultTierDescriptor().
+        // is the automatic AD-10 re-stamp for the spec-94 MediaReachWeight 0.25 → 0.10 recalibration (which
+        // de-saturates Attention); it superseded the spec-90 attention-tier re-stamp. MediaReachWeight is part of
+        // the hashed canonical string, so the default fingerprint changed automatically — no manual version bump.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor());
 
-        Assert.Equal("radar-scoring-fp-c1e71b26adf3", fp);
+        Assert.Equal("radar-scoring-fp-5cd50423f408", fp);
     }
 
     [Fact]

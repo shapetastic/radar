@@ -3,8 +3,10 @@ namespace Radar.Application.Scoring;
 /// <summary>
 /// The tunable MAGNITUDES of the scoring formula (distinct from ScoringOptions, which holds only the
 /// operational Window). Bound from Radar:Scoring:*; injected into the formula, which reads weights from
-/// here instead of const fields. Every default EQUALS the radar-formula-v4 constant, so a blank/absent
-/// config yields byte-identical v4 output. Immutable → the formula stays a pure function. These are for
+/// here instead of const fields. Defaults matched the radar-formula-v4 constants at spec 89; the spec-94
+/// recalibration then dropped MediaReachWeight 0.25 → 0.10 (de-saturating Attention), so a blank/absent
+/// config is now the recalibrated v5 default and no longer byte-identical to v4 — this is intentional (see
+/// AD-6 spec-94 refinement), not drift. Immutable → the formula stays a pure function. These are for
 /// DELIBERATE, reasoned experiments (run different profiles to compare weightings), NOT for curve-fitting
 /// weights to price/backtest outcomes — see the spec's Out of scope.
 /// </summary>
@@ -14,7 +16,7 @@ public sealed record ScoringWeights
     public double TrajectoryNeutral { get; init; } = 50.0;
     public double TrajectoryScale { get; init; } = 5.0;
     public double AttentionHalfSaturation { get; init; } = 3.0;   // v4 value (post spec 88)
-    public double MediaReachWeight { get; init; } = 0.25;         // v4 value
+    public double MediaReachWeight { get; init; } = 0.10;         // spec 94 recalibration (was 0.25, the v4 value)
     public double QualityPrimarySource { get; init; } = 1.00;
     public double QualityHigh { get; init; } = 0.85;
     public double QualityMedium { get; init; } = 0.60;

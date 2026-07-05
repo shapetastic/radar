@@ -785,11 +785,14 @@ public sealed class RadarScoreFormulaV5Tests
     // ---- spec 89 config-driven weights pins ----
 
     [Fact]
-    public void DefaultConfig_IsByteIdenticalToV4_ForARepresentativeInput()
+    public void DefaultConfig_MatchesRecalibratedV5Baseline_ForARepresentativeInput()
     {
-        // Headline regression guarantee: default ScoringWeights == the radar-formula-v4 constants, so a
-        // representative multi-signal input yields the EXACT v4 component integers, ComponentJson, and
-        // explanation body (only the version prefix differs). These pinned integers ARE the v4 output.
+        // Headline baseline pin for the RECALIBRATED radar-formula-v5 default. As of spec 94 the default
+        // MediaReachWeight is 0.10 (was 0.25, the v4 value), which de-saturates Attention — so the default is
+        // DELIBERATELY no longer byte-identical to radar-formula-v4. This is the sanctioned spec-94 recalibration,
+        // NOT drift: the only divergence from the old v4-identical pin is the lower reach → Attention (44 → 42)
+        // and its dependent Opportunity/ComponentJson/Explanation. The formula SHAPE is unchanged (still
+        // radar-formula-v5). These pinned integers ARE the recalibrated v5 default output for this input.
         var formula = Formula(Tiered());
 
         var input = InputFrom(new[]
@@ -808,21 +811,30 @@ public sealed class RadarScoreFormulaV5Tests
         var result = formula.Compute(input);
         var c = result.Components;
 
-        // reach = genuine(1.0) + genuine(1.0) + mill(0.1) + 0.25·mediaCount(1) = 2.35 → Att 100·2.35/5.35 = 44.
-        // Velocity has no previous window → 50·(18+10)/(0+10) = 140 → clamped 100.
+        // reach = genuine(1.0) + genuine(1.0) + mill(0.1) + 0.10·mediaCount(1) = 2.20 → Att 100·2.20/5.20 = 42
+        // (was 44 at the pre-spec-94 MediaReachWeight 0.25). Opportunity = 86·(60/100)·(1 − 42/250) = 42.93 → 43
+        // (unchanged). Velocity has no previous window → 50·(18+10)/(0+10) = 140 → clamped 100.
         Assert.Equal(new ScoreComponents(
             TrajectoryScore: 86,
             OpportunityScore: 43,
-            AttentionScore: 44,
+            AttentionScore: 42,
             EvidenceConfidenceScore: 60,
             SignalVelocityScore: 100),
             c);
 
         Assert.Equal(JsonSerializer.Serialize(c), result.ComponentJson);
         Assert.Equal(
-            "radar-formula-v5: 3 signal(s) over 30d → Trajectory 86, Opportunity 43 (Attention 44, "
+            "radar-formula-v5: 3 signal(s) over 30d → Trajectory 86, Opportunity 43 (Attention 42, "
                 + "Confidence 60, Velocity 100).",
             result.Explanation);
+    }
+
+    [Fact]
+    public void DefaultMediaReachWeight_IsSpec94Recalibrated_0_10()
+    {
+        // Direct pin so an accidental future revert of the spec-94 recalibration (back to the v4 value 0.25)
+        // is caught at the source, independent of any derived fingerprint/component pin.
+        Assert.Equal(0.10, new ScoringWeights().MediaReachWeight);
     }
 
     [Fact]
