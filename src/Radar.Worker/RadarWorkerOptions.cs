@@ -40,6 +40,14 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public AiWorkerOptions Ai { get; init; } = new();
 
+    /// <summary>
+    /// Daily price-history reference acquisition configuration (bound from "Radar:Prices"). DISABLED by default
+    /// (<see cref="PricesWorkerOptions.Enabled"/> is <c>false</c>): when disabled, nothing price-related is
+    /// registered and the pipeline graph is byte-for-byte unchanged. Price is validation/reference data only —
+    /// never evidence, never a signal, never a scoring input (AD-14).
+    /// </summary>
+    public PricesWorkerOptions Prices { get; init; } = new();
+
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
 
@@ -60,6 +68,9 @@ public sealed class RadarWorkerOptions
 
     /// <summary>Root directory for the content-addressed effective-scoring-config file store (spec 91).</summary>
     public string ScoringConfigsDirectory { get; init; } = "data/scoring-configs";
+
+    /// <summary>Root directory for the daily price-history reference store (AD-14). Only used when "Radar:Prices:Enabled" is true.</summary>
+    public string PricesDirectory { get; init; } = "data/prices";
 
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
@@ -227,4 +238,22 @@ public sealed class AiOllamaWorkerOptions
 {
     /// <summary>The Ollama base URL. Only used when Provider is "ollama". Defaults to http://localhost:11434.</summary>
     public string Endpoint { get; init; } = "http://localhost:11434";
+}
+
+/// <summary>
+/// Daily price-history reference acquisition configuration (bound from "Radar:Prices"). DISABLED by default: a
+/// <see cref="Enabled"/> of <c>false</c> means nothing price-related is registered and the pipeline graph is
+/// byte-for-byte unchanged. Price is validation/reference data only — never evidence, never a signal, never a
+/// scoring input (AD-14); acquisition runs OUTSIDE the evidence → signal → score pipeline.
+/// </summary>
+public sealed class PricesWorkerOptions
+{
+    /// <summary>Whether to acquire daily price history for the watch-universe tickers. DISABLED by default.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>The daily-bar window as a Yahoo chart range token (1d/5d/1mo/3mo/6mo/1y/2y/5y/10y/ytd/max). Defaults to "1y".</summary>
+    public string Range { get; init; } = "1y";
+
+    /// <summary>Pause between successive per-ticker reads, in seconds. Defaults to 1 (a small polite pace). Must not be negative.</summary>
+    public int InterRequestDelaySeconds { get; init; } = 1;
 }
