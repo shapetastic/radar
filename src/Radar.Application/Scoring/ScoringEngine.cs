@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
+using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
@@ -25,9 +26,12 @@ namespace Radar.Application.Scoring;
 /// <see cref="ScoringWeights"/> value plus the attention tier-map descriptor
 /// (<see cref="IAttentionSourceWeights.CanonicalDescriptor"/>) plus the signal-source descriptor
 /// (<see cref="ISignalSourceDescriptor.CanonicalDescriptor"/> — the enabled collector set + extractor
-/// rule-set identity, spec 95), computed once via
+/// rule-set identity, spec 95) plus the insider-materiality descriptor
+/// (<see cref="InsiderMaterialityWeights.CanonicalDescriptor"/> — the config-tunable buy/sell tiers +
+/// cluster boost, spec 96), computed once via
 /// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape,
-/// any weight, the tier map, enabling/disabling a collector) re-stamps automatically, so the spec-69
+/// any weight, the tier map, enabling/disabling a collector, an insider materiality tier) re-stamps
+/// automatically, so the spec-69
 /// comparability gate keeps working when weights are runtime-configurable. <c>ScoringVersion</c> (structure
 /// identity, <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
 /// </para>
@@ -64,6 +68,7 @@ public sealed class ScoringEngine : IScoringEngine
         ScoringWeights weights,
         IAttentionSourceWeights sourceWeights,
         ISignalSourceDescriptor sourceDescriptor,
+        InsiderMaterialityWeights insiderMaterialityWeights,
         ScoringOptions options,
         ILogger<ScoringEngine> logger)
     {
@@ -75,6 +80,7 @@ public sealed class ScoringEngine : IScoringEngine
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
         ArgumentNullException.ThrowIfNull(sourceDescriptor);
+        ArgumentNullException.ThrowIfNull(insiderMaterialityWeights);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -88,8 +94,10 @@ public sealed class ScoringEngine : IScoringEngine
 
         var attentionDescriptor = sourceWeights.CanonicalDescriptor();
         var signalSourceDescriptor = sourceDescriptor.CanonicalDescriptor();
+        var insiderMaterialityDescriptor = insiderMaterialityWeights.CanonicalDescriptor();
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
-            EngineVersion, formula.Version, weights, attentionDescriptor, signalSourceDescriptor);
+            EngineVersion, formula.Version, weights, attentionDescriptor, signalSourceDescriptor,
+            insiderMaterialityDescriptor);
 
         // Build the effective-config projection from the SAME tuple the fingerprint hashes, so
         // EffectiveConfig.Fingerprint always equals the stamp on every snapshot this engine produces.
@@ -99,7 +107,8 @@ public sealed class ScoringEngine : IScoringEngine
             FormulaVersion: formula.Version,
             Weights: weights,
             AttentionDescriptor: attentionDescriptor,
-            SignalSourceDescriptor: signalSourceDescriptor);
+            SignalSourceDescriptor: signalSourceDescriptor,
+            InsiderMaterialityDescriptor: insiderMaterialityDescriptor);
     }
 
     public EffectiveScoringConfig EffectiveConfig => _effectiveConfig;

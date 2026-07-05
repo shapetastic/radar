@@ -66,6 +66,13 @@ internal static class RadarWorkerServices
         // named-but-missing profile or an invalid weight.
         services.AddRadarScoringWeights(configuration);
 
+        // Insider materiality magnitudes (spec 96): resolve the Radar:Insider:Profile / Profiles selection and
+        // register the concrete InsiderMaterialityWeights BEFORE AddRadarApplicationServices so configuration
+        // wins over the library default (its TryAddSingleton is a no-op once this concrete instance is
+        // registered). A blank/absent profile binds all code defaults == spec 93 (byte-identical). Fails fast
+        // on a named-but-missing profile or an invalid tier table.
+        services.AddRadarInsiderMateriality(configuration);
+
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
 

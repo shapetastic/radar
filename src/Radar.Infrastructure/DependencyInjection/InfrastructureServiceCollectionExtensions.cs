@@ -80,6 +80,12 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton(new ScoringWeights());
         services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV5>();
         services.TryAddSingleton(new ScoringOptions());
+        // Insider materiality magnitudes (spec 96): the default == the spec-93 buy/sell tiers + cluster boost,
+        // so a blank/absent config yields byte-identical insider Strengths. TryAdd keeps a
+        // composition-root-registered concrete InsiderMaterialityWeights (bound via AddRadarInsiderMateriality)
+        // winning over this default (mirrors ScoringWeights). Injected into KeywordSignalExtractor and folded
+        // into the ScoringConfigVersion fingerprint (via ScoringEngine).
+        services.TryAddSingleton(new InsiderMaterialityWeights());
         // Signal-source descriptor (spec 95): folds the enabled collector NAMES + the extractor rule-set
         // identity into the ScoringConfigVersion fingerprint. DI resolves IEnumerable<IEvidenceCollector> at
         // RESOLUTION time, so this sees ALL collectors even though the Worker registers them AFTER
@@ -149,6 +155,78 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton(weights);
         return services;
     }
+
+    /// <summary>
+    /// Resolves the effective insider-materiality profile and registers the concrete
+    /// <see cref="InsiderMaterialityWeights"/> as a singleton so it wins over the library's
+    /// <c>TryAddSingleton</c> default (call this BEFORE <see cref="AddRadarApplicationServices"/>, mirroring
+    /// <see cref="AddRadarScoringWeights"/>). Precedence:
+    /// <list type="bullet">
+    /// <item><c>Radar:Insider:Profile</c> selects a named profile; blank/absent ⇒ <c>"default"</c>.</item>
+    /// <item>If <c>Radar:Insider:Profiles:{name}</c> exists, its present fields bind ONTO a fresh
+    /// <see cref="InsiderMaterialityWeights"/> (unspecified fields keep the code default == spec 93).</item>
+    /// <item>A <b>named</b> (non-default) profile that is requested but absent <b>fails fast</b> — a silent
+    /// fallthrough to defaults would mask a typo'd profile name in an experiment.</item>
+    /// <item>A blank/absent profile, or an absent <c>"default"</c> profile, ⇒ all code defaults
+    /// (⇒ byte-identical spec-93 insider Strengths and the pinned default fingerprint).</item>
+    /// </list>
+    /// The resolved weights are validated (<see cref="InsiderMaterialityWeights.Validate"/>) so a
+    /// misconfigured tier (an out-of-range Strength, a missing floor, a non-descending table) fails fast at
+    /// registration, never silently producing a Strength that fails <c>SignalValidation</c> at runtime.
+    /// </summary>
+    public static IServiceCollection AddRadarInsiderMateriality(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var name = configuration["Radar:Insider:Profile"];
+        var effectiveName = string.IsNullOrWhiteSpace(name) ? "default" : name.Trim();
+        var section = configuration.GetSection($"Radar:Insider:Profiles:{effectiveName}");
+
+        InsiderMaterialityWeights weights;
+        if (section.Exists())
+        {
+            // Bind each list sub-section into a FRESH list (Get<List<T>> starts empty), overriding a whole
+            // table only when the profile supplies it — otherwise keep the code default. Binding the record
+            // directly with Get<InsiderMaterialityWeights>() would APPEND the profile's tiers onto the
+            // default 5-tier table (the binder preserves existing collection items), producing a non-descending
+            // table that fails Validate(); binding the tables explicitly gives clean replace-or-default semantics.
+            var defaults = new InsiderMaterialityWeights();
+            weights = defaults with
+            {
+                BuyTiers = BindTiersOrDefault(section.GetSection("BuyTiers"), defaults.BuyTiers),
+                SellTiers = BindTiersOrDefault(section.GetSection("SellTiers"), defaults.SellTiers),
+                ClusterBoost = section.GetValue("ClusterBoost", defaults.ClusterBoost),
+            };
+        }
+        else if (!string.IsNullOrWhiteSpace(name)
+            && !string.Equals(effectiveName, "default", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Radar:Insider:Profile '{effectiveName}' was requested but no matching profile exists under "
+                    + "Radar:Insider:Profiles — a named-but-missing profile is almost certainly a typo. Add the "
+                    + $"profile under Radar:Insider:Profiles:{effectiveName} or clear Radar:Insider:Profile to use "
+                    + "the code defaults.");
+        }
+        else
+        {
+            weights = new InsiderMaterialityWeights();
+        }
+
+        // Fail fast at registration on a misconfigured tier table (also enforced in the extractor ctor).
+        weights.Validate();
+
+        services.AddSingleton(weights);
+        return services;
+    }
+
+    // Binds a tier table from its config sub-section into a FRESH list (clean replace semantics); returns the
+    // supplied fallback (the code default) when the profile does not define the table at all.
+    private static IReadOnlyList<InsiderMaterialityTier> BindTiersOrDefault(
+        IConfigurationSection section, IReadOnlyList<InsiderMaterialityTier> fallback) =>
+        section.Exists()
+            ? section.Get<List<InsiderMaterialityTier>>() ?? fallback
+            : fallback;
 
     /// <summary>
     /// Registers the deterministic local-file evidence collector along with the evidence

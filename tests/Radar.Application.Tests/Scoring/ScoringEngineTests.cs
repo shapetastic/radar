@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.Scoring;
+using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
 using Radar.Domain.Evidence;
 using Radar.Domain.Scoring;
@@ -168,6 +169,7 @@ public sealed class ScoringEngineTests
                 weights ?? new ScoringWeights(),
                 Weights,
                 SourceDesc,
+                new InsiderMaterialityWeights(),
                 new ScoringOptions { Window = Window },
                 NullLogger<ScoringEngine>.Instance);
         }
@@ -364,7 +366,7 @@ public sealed class ScoringEngineTests
         // the formula's Version, default weights, the source-weights descriptor) and assert equality.
         var expected = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", formula.Version, new ScoringWeights(), Weights.CanonicalDescriptor(),
-            SourceDescriptor);
+            SourceDescriptor, new InsiderMaterialityWeights().CanonicalDescriptor());
         Assert.Equal(expected, result.Snapshot.ScoringConfigVersion);
     }
 
@@ -412,6 +414,7 @@ public sealed class ScoringEngineTests
         Assert.Equal(defaultWeights, defaultConfig.Weights);
         Assert.Equal(Weights.CanonicalDescriptor(), defaultConfig.AttentionDescriptor);
         Assert.Equal(SourceDescriptor, defaultConfig.SignalSourceDescriptor);
+        Assert.Equal(new InsiderMaterialityWeights().CanonicalDescriptor(), defaultConfig.InsiderMaterialityDescriptor);
 
         // Under a changed weight a second engine's EffectiveConfig differs and still matches its own stamp.
         var changedWeights = new ScoringWeights { AttentionHalfSaturation = 12.0 };
@@ -880,7 +883,7 @@ public sealed class ScoringEngineTests
             var scores = new InMemoryScoreRepository();
             var engine = new ScoringEngine(
                 signals, fileStore, evidence, scores, new RadarScoreFormulaV5(new ScoringWeights(), Weights),
-                new ScoringWeights(), Weights, SourceDesc,
+                new ScoringWeights(), Weights, SourceDesc, new InsiderMaterialityWeights(),
                 new ScoringOptions { Window = Window }, NullLogger<ScoringEngine>.Instance);
 
             var companyId = Guid.NewGuid();
