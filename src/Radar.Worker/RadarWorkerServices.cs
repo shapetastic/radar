@@ -1,4 +1,5 @@
 using Radar.Application.Pipeline;
+using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Infrastructure.Ai;
@@ -182,6 +183,30 @@ internal static class RadarWorkerServices
                 MinConfidence = options.Ai.MinConfidence,
                 MaxFilingsPerRun = options.Ai.MaxFilingsPerRun,
             });
+        }
+
+        // Wire the daily price-history acquisition seam ONLY when explicitly enabled (opt-in gate, mirror the
+        // Radar:Ai gate). Price is validation/reference-only — never evidence, never a signal, never a scoring
+        // input (AD-14). When disabled (the default) NONE of the reader/store/acquirer is registered, Worker's
+        // optional IPriceHistoryAcquirer stays null, and the pipeline graph is byte-for-byte unchanged. The
+        // acquisition step runs OUTSIDE IRadarPipeline (invoked separately from Worker after seeding).
+        if (options.Prices.Enabled)
+        {
+            if (options.Prices.InterRequestDelaySeconds < 0)
+            {
+                throw new InvalidOperationException(
+                    "Radar:Prices:InterRequestDelaySeconds must not be negative when Radar:Prices:Enabled is true "
+                        + $"(was {options.Prices.InterRequestDelaySeconds}) — a small polite pace suffices (default 1s).");
+            }
+
+            // AddHttpPriceHistoryReader fails fast on an invalid Range (only reached when enabled).
+            services.AddHttpPriceHistoryReader(options.Prices.Range);
+            services.AddFilePriceHistoryStore(options.PricesDirectory);
+            services.AddSingleton(new PriceHistoryAcquirerOptions
+            {
+                InterRequestDelay = TimeSpan.FromSeconds(options.Prices.InterRequestDelaySeconds),
+            });
+            services.AddSingleton<IPriceHistoryAcquirer, PriceHistoryAcquirer>();
         }
 
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);

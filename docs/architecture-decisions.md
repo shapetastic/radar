@@ -516,3 +516,33 @@ typed-and-validated-before-persistence rule.
 the Domain record (e.g. extra provider-specific fields, a different confidence encoding), or a second AI
 structured output needs its own DTO — at which point separate the DTO from the Domain record in a dedicated slice.
 Recorded so the reviewer does not flag the Domain-as-DTO coupling as unrecorded drift.
+
+---
+
+## AD-14 — Price data is validation/reference-only: never evidence, never a signal, never a scoring input
+
+**Decision.** Daily stock-price history is acquired and persisted as a **reference / validation dataset**
+(`data/prices/{ticker}.json`) via a **dedicated seam** — `IPriceHistoryReader` (Application) + an
+Infrastructure HTTP reader + `IPriceHistoryStore` — that is **structurally separate** from the evidence
+pipeline. Price is **NOT** an `IEvidenceCollector`, produces **no** `CollectedEvidence`/`EvidenceItem`, is
+**not** in the collector `IEnumerable` the runner consumes, and its acquisition step runs **outside**
+`IRadarPipeline` (the collect→map→resolve→review→store→score→report path). Price is therefore **never**
+extracted into a signal and **never** an input to scoring. The `data/prices/` store is consumed by nothing
+in the scoring/evidence/signal/report path today; it exists solely for a **future** price-efficacy
+validation/backtest spec. Price acquisition is **opt-in** (`Radar:Prices:Enabled`, default `false`); when
+disabled the pipeline graph is byte-for-byte unchanged.
+
+**Why.** Radar is a research assistant, not a trading bot ("signals before stories", "avoid hype loops" —
+philosophy). If price entered the evidence pipeline it would become eligible for signal extraction and
+scoring, turning business-trajectory research into price-chasing — the exact failure mode Radar exists to
+avoid. Making the boundary **structural** (a separate seam and store, not a convention) means a future
+change cannot accidentally let price influence a signal or a score without deleting this seam and tripping a
+reviewer. The price reference dataset lets a later spec **validate** whether Radar's signals preceded
+business improvement, without ever feeding price back into the signals being validated. The reviewer/planner
+must **not** propose making price a collector/evidence/signal/scoring input; doing so requires superseding
+this decision.
+
+**Status.** Accepted · 2026-07-04 (maintainer established this intent; spec 92). Cross-references the
+philosophy (signals before stories / not a trading bot), AD-5 (layering), AD-8 (files-first),
+AD-9 (no advice language), AD-3 (determinism). Surfacing a reference price in the report is **deferred** to
+the future validation-report spec.

@@ -7,6 +7,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
+using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 
@@ -263,6 +264,50 @@ public sealed class RadarWorkerServicesTests
         // source's constructor requires it, so resolution would throw otherwise.
         Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
         Assert.NotNull(provider.GetService<IRadarPipeline>());
+    }
+
+    [Fact]
+    public void DefaultConfig_RegistersNoPriceSeam_PricesDisabled()
+    {
+        // Radar:Prices:Enabled defaults to false: NOTHING price-related is registered (AD-14), the collector
+        // list is unchanged, Worker's optional acquirer resolves to null, and the pipeline graph is unchanged.
+        using var provider = BuildProvider();
+
+        Assert.Null(provider.GetService<IPriceHistoryReader>());
+        Assert.Null(provider.GetService<IPriceHistoryStore>());
+        Assert.Null(provider.GetService<IPriceHistoryAcquirer>());
+
+        // Price rides a SEPARATE seam — it must never appear as a collector.
+        Assert.DoesNotContain(
+            provider.GetServices<IEvidenceCollector>(),
+            c => c.GetType().Namespace?.Contains("Prices", StringComparison.Ordinal) == true);
+
+        // The Worker still resolves — its optional IPriceHistoryAcquirer defaults to null when absent.
+        var worker = provider.GetServices<IHostedService>().OfType<Worker>().Single();
+        Assert.NotNull(worker);
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+    }
+
+    [Fact]
+    public void PricesEnabled_RegistersReaderStoreAndAcquirer_OptInGateFlips()
+    {
+        using var provider = BuildProvider(("Radar:Prices:Enabled", "true"));
+
+        Assert.NotNull(provider.GetService<IPriceHistoryReader>());
+        Assert.NotNull(provider.GetService<IPriceHistoryStore>());
+        Assert.NotNull(provider.GetService<IPriceHistoryAcquirer>());
+
+        // The acquirer is NOT a collector — enabling prices must not add to the collector IEnumerable.
+        Assert.Single(provider.GetServices<IEvidenceCollector>());
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+    }
+
+    [Fact]
+    public void PricesEnabled_WithInvalidRange_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => BuildProvider(("Radar:Prices:Enabled", "true"), ("Radar:Prices:Range", "bogus")));
+        Assert.Contains("Range", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

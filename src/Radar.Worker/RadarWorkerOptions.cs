@@ -40,6 +40,14 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public AiWorkerOptions Ai { get; init; } = new();
 
+    /// <summary>
+    /// Daily price-history acquisition configuration (bound from "Radar:Prices"). DISABLED by default
+    /// (<see cref="PricesWorkerOptions.Enabled"/> = false): nothing price-related is registered and the pipeline
+    /// graph is byte-for-byte unchanged. Price is validation/reference-only — never evidence, never a signal,
+    /// never a scoring input (AD-14).
+    /// </summary>
+    public PricesWorkerOptions Prices { get; init; } = new();
+
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
 
@@ -60,6 +68,9 @@ public sealed class RadarWorkerOptions
 
     /// <summary>Root directory for the content-addressed effective-scoring-config file store (spec 91).</summary>
     public string ScoringConfigsDirectory { get; init; } = "data/scoring-configs";
+
+    /// <summary>Root directory for the daily price-history reference store (AD-14). Only used when prices are enabled.</summary>
+    public string PricesDirectory { get; init; } = "data/prices";
 
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
@@ -227,4 +238,22 @@ public sealed class AiOllamaWorkerOptions
 {
     /// <summary>The Ollama base URL. Only used when Provider is "ollama". Defaults to http://localhost:11434.</summary>
     public string Endpoint { get; init; } = "http://localhost:11434";
+}
+
+/// <summary>
+/// Daily price-history acquisition configuration (bound from "Radar:Prices"). DISABLED by default: a false
+/// <see cref="Enabled"/> means no price reader/store/acquirer is wired and the pipeline graph is byte-for-byte
+/// unchanged. Price is validation/reference-only — never evidence, never a signal, never a scoring input
+/// (AD-14). The keyless Yahoo <c>chart</c> endpoint needs no key/secret/paid service.
+/// </summary>
+public sealed class PricesWorkerOptions
+{
+    /// <summary>Whether the opt-in price-history acquisition step runs. Blank/false by default = DISABLED.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>The daily-bar range window (a Yahoo <c>validRanges</c> token). Defaults to "1y". Validated when enabled.</summary>
+    public string Range { get; init; } = "1y";
+
+    /// <summary>Polite pause between successive per-ticker reads, in seconds. Defaults to 1. Must be non-negative when enabled.</summary>
+    public int InterRequestDelaySeconds { get; init; } = 1;
 }
