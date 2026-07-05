@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Radar.Application.Collectors;
 using Radar.Domain.Companies;
 using Radar.Infrastructure.Sources;
 
@@ -169,6 +170,94 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
         {
             var match = second.SourceFeeds.Single(
                 f => f.CompanyId == feed.CompanyId && f.Url == feed.Url);
+            Assert.Equal(feed.Id, match.Id);
+        }
+    }
+
+    private const string SameUrlDifferentTypeSecJson = """
+        {
+          "companies": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Acme Corp",
+              "ticker": "ACME",
+              "sourceFeeds": [
+                { "type": "sec", "name": "Acme SEC Filings", "url": "https://data.sec.gov/submissions/CIK0000123456.json" },
+                { "type": "secform4", "name": "Acme Insider Form 4", "url": "https://data.sec.gov/submissions/CIK0000123456.json" }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_SameUrlDifferentType_SecAndSecForm4_YieldsTwoDistinctFeeds()
+    {
+        var path = WriteSeedFile(SameUrlDifferentTypeSecJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        // Two feeds sharing one URL but differing by type no longer collide on Id.
+        Assert.Equal(2, seed.SourceFeeds.Count);
+        Assert.Equal(2, seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
+
+        // In the collection context they no longer collapse: each type surfaces exactly its feed.
+        var context = new CollectionContext(seed.Companies, seed.SourceFeeds);
+        var secFeed = Assert.Single(context.FeedsOfType("sec"));
+        Assert.Equal("sec", secFeed.FeedType);
+        var form4Feed = Assert.Single(context.FeedsOfType("secform4"));
+        Assert.Equal("secform4", form4Feed.FeedType);
+        Assert.NotEqual(secFeed.Id, form4Feed.Id);
+    }
+
+    private const string SameUrlDifferentTypeNewsJson = """
+        {
+          "companies": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Acme Corp",
+              "ticker": "ACME",
+              "sourceFeeds": [
+                { "type": "news", "name": "Acme GDELT", "url": "query=Acme%20Corp&ticker=ACME" },
+                { "type": "newssearch", "name": "Acme Google News", "url": "query=Acme%20Corp&ticker=ACME" }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_SameUrlDifferentType_NewsAndNewsSearch_YieldsTwoDistinctFeeds()
+    {
+        var path = WriteSeedFile(SameUrlDifferentTypeNewsJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        Assert.Equal(2, seed.SourceFeeds.Count);
+        Assert.Equal(2, seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
+
+        var context = new CollectionContext(seed.Companies, seed.SourceFeeds);
+        var newsFeed = Assert.Single(context.FeedsOfType("news"));
+        Assert.Equal("news", newsFeed.FeedType);
+        var newsSearchFeed = Assert.Single(context.FeedsOfType("newssearch"));
+        Assert.Equal("newssearch", newsSearchFeed.FeedType);
+        Assert.NotEqual(newsFeed.Id, newsSearchFeed.Id);
+    }
+
+    [Fact]
+    public async Task GetSeedAsync_SameUrlDifferentType_FeedIdsStableAcrossCalls()
+    {
+        var path = WriteSeedFile(SameUrlDifferentTypeSecJson);
+
+        var first = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+        var second = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        Assert.Equal(first.SourceFeeds.Count, second.SourceFeeds.Count);
+
+        foreach (var feed in first.SourceFeeds)
+        {
+            var match = second.SourceFeeds.Single(
+                f => f.CompanyId == feed.CompanyId && f.FeedType == feed.FeedType);
             Assert.Equal(feed.Id, match.Id);
         }
     }

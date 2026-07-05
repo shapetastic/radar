@@ -155,10 +155,12 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                     continue;
                 }
 
+                var feedType = string.IsNullOrWhiteSpace(feed.Type) ? "rss" : feed.Type.Trim();
+
                 feeds.Add(new CompanySourceFeed(
-                    Id: DeterministicGuid(companyId, "feed", feed.Url),
+                    Id: DeterministicGuid(companyId, "feed", $"{feedType}|{feed.Url}"),
                     CompanyId: companyId,
-                    FeedType: string.IsNullOrWhiteSpace(feed.Type) ? "rss" : feed.Type.Trim(),
+                    FeedType: feedType,
                     Name: feed.Name?.Trim() ?? string.Empty,
                     Url: feed.Url.Trim(),
                     CreatedAtUtc: now));
@@ -170,7 +172,7 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
 
     /// <summary>
     /// Derives a stable <see cref="Guid"/> for a seed child row (an alias keyed on its text, or a
-    /// source feed keyed on its url) from its identifying tuple so that re-seeding upserts the same
+    /// source feed keyed on its <c>type|url</c>) from its identifying tuple so that re-seeding upserts the same
     /// row rather than creating a new one. The Id is the MD5 hash of the canonical string
     /// <c>$"{companyId}|{kind}|{normalizedValue}"</c> (the value normalized by trim + lower-invariant)
     /// reinterpreted as a 16-byte Guid. MD5 is used purely as a fast non-cryptographic hash to obtain
