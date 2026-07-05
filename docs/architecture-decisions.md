@@ -295,8 +295,9 @@ manual `ScoringConfigVersion` bump; only the pinned default-fingerprint test con
 
 Spec 94 (recalibrate the default `MediaReachWeight` `0.25 → 0.10`) de-saturates `AttentionScore` without
 touching the formula. A post-spec-91 live re-measure across the watch universe found Attention **saturated** —
-every normally-covered small-cap landed ~**64–75** — because in `reach = weightedBreadth + MediaReachWeight·
-mediaCount` the raw **article-count** term (`0.25·mediaCount`) dominated the tier-weighted **distinct-publisher**
+every normally-covered small-cap landed ~**64–75** — because in
+`reach = weightedBreadth + MediaReachWeight·mediaCount` the raw **article-count** term (`0.25·mediaCount`)
+dominated the tier-weighted **distinct-publisher**
 breadth term roughly **5:1**, so Attention tracked article **volume** (the content-mill noise every ticker gets),
 not genuine market **notice**, and the under-the-radar discount fired ~uniformly. A live `MediaReachWeight` sweep
 (baseline `0.25` vs `0.15 / 0.10 / 0.05`, via `scripts/run-radar.ps1` profiles into isolated output dirs) widened
