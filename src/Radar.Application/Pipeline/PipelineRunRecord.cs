@@ -21,4 +21,9 @@ public sealed record PipelineRunRecord(
     int CompaniesScored,
     int SourcesChecked,
     int SourcesFailed,
-    Guid? ReportId);
+    Guid? ReportId,
+    // Observational collection-health findings for this run (spec 98): reconciliation warnings for
+    // feed types declared in the seed that did not reach the collectors. Trailing + optional so old
+    // on-disk run JSON (written before this slice) still deserializes (null == no findings recorded);
+    // never evidence/signal/scoring input, and RecentRunSummary does not read it.
+    IReadOnlyList<CollectionHealthWarning>? CollectionWarnings = null);

@@ -95,6 +95,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();
         services.TryAddSingleton<IWeeklyReportRenderer, MarkdownWeeklyReportRenderer>();
         services.TryAddSingleton(new WeeklyReportOptions());
+        // Collection-health validation (spec 98): reconciles seed-declared vs reached feed-type
+        // inventory and warns on shrinkage (regression guard for the spec-97 feed-Id collision).
+        // Diagnostic only — never evidence/signal/scoring input. Depends on ICompanySeedSource
+        // (registered by AddLocalFileCompanySeed).
+        services.TryAddSingleton<ICollectionHealthValidator, SeedFeedInventoryValidator>();
         services.AddSingleton<IWeeklyReportBuilder, WeeklyReportBuilder>();
         // The mapper is a core pipeline service used regardless of which collector is wired, so its
         // IEvidenceNormalizer dependency is registered here. TryAdd keeps a collector-specific

@@ -89,6 +89,60 @@ public sealed class FilePipelineRunStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_ThenReadRecent_RoundTripsCollectionWarnings()
+    {
+        var warning = new CollectionHealthWarning(
+            Code: "feeds-lost-before-collection",
+            Severity: CollectionHealthSeverity.Warning,
+            FeedType: "sec",
+            DeclaredInSeed: 7,
+            ReachedCollectors: 0,
+            Message: "Seed declares 7 'sec' feed(s) but only 0 reached the collectors.");
+        var record = RecordAt(BaseInstant) with { CollectionWarnings = [warning] };
+
+        var store = CreateStore();
+        await store.WriteAsync(record, CancellationToken.None);
+
+        var read = await store.ReadRecentAsync(10, CancellationToken.None);
+        var roundTripped = Assert.Single(read);
+
+        Assert.NotNull(roundTripped.CollectionWarnings);
+        var surfaced = Assert.Single(roundTripped.CollectionWarnings!);
+        Assert.Equal(warning, surfaced);
+    }
+
+    [Fact]
+    public async Task ReadRecentAsync_JsonWithoutCollectionWarnings_DeserializesToNull()
+    {
+        // Back-compat: an on-disk run file written before spec 98 has no collectionWarnings field. It must
+        // still deserialize, with CollectionWarnings == null (the trailing optional default).
+        const string legacyJson = """
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "createdAtUtc": "2026-02-08T12:00:00+00:00",
+              "collectors": ["sec-edgar"],
+              "evidenceCollected": 12,
+              "evidenceNew": 5,
+              "signalsExtracted": 7,
+              "signalsValid": 6,
+              "signalsApproved": 4,
+              "signalsNeedingReview": 2,
+              "companiesScored": 9,
+              "sourcesChecked": 3,
+              "sourcesFailed": 1,
+              "reportId": null
+            }
+            """;
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "legacy-run.json"), legacyJson);
+
+        var store = CreateStore();
+        var read = await store.ReadRecentAsync(10, CancellationToken.None);
+
+        var record = Assert.Single(read);
+        Assert.Null(record.CollectionWarnings);
+    }
+
+    [Fact]
     public async Task ReadRecentAsync_ReturnsNewestFirst_LimitedToCount()
     {
         var oldest = RecordAt(BaseInstant);

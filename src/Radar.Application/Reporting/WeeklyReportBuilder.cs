@@ -100,7 +100,10 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     }
 
     public async Task<WeeklyReportResult> GenerateAsync(
-        DateTimeOffset periodEndUtc, CollectionSummary collection, CancellationToken ct)
+        DateTimeOffset periodEndUtc,
+        CollectionSummary collection,
+        CollectionHealthReport? health,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(collection);
         ct.ThrowIfCancellationRequested();
@@ -326,7 +329,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             Entries: entries,
             SignalsNeedingReview: needsReview,
             Collection: collection,
-            RecentRuns: recentRuns);
+            RecentRuns: recentRuns,
+            Health: health);
 
         var markdown = _renderer.Render(model);
 
