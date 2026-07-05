@@ -242,6 +242,62 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the SEC Form 4 (insider-transaction) collector and the typed <c>HttpClient</c> its
+    /// <see cref="ISecForm4Reader"/> uses. The collector reads the per-company <c>secform4</c> feeds supplied
+    /// on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's <c>Url</c> is that
+    /// company's EDGAR submissions JSON endpoint), fetches each Form 4's raw ownership XML, classifies its
+    /// insider transactions by SEC transaction code (deterministic, NO AI), and produces raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> filings carrying an insider-activity
+    /// direction; it does not persist them. All HTTP/JSON/XML/SEC code stays in Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="SecForm4CollectorOptions.UserAgent"/> is null/blank (SEC returns HTTP 403 for
+    /// every request without a compliant declared User-Agent) or when
+    /// <see cref="SecForm4CollectorOptions.MaxFilingsPerCompany"/> is zero/negative: each would let the
+    /// collector run yet silently collect nothing, so they are treated as configuration errors. The named
+    /// client sends the configured UA plus <c>Accept-Encoding: gzip, deflate</c> and enables automatic
+    /// decompression (SEC recommends gzip).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddSecForm4Collector(
+        this IServiceCollection services, SecForm4CollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.IsNullOrWhiteSpace(options.UserAgent))
+        {
+            throw new InvalidOperationException(
+                "SEC EDGAR requires a compliant User-Agent (e.g. \"Radar Research <email>\"); configure "
+                    + "Radar:SecForm4:UserAgent before enabling the \"secform4\" collector — every request 403s without it.");
+        }
+
+        if (options.MaxFilingsPerCompany <= 0)
+        {
+            throw new InvalidOperationException(
+                "SEC Form 4 MaxFilingsPerCompany must be greater than zero; configure "
+                    + "Radar:SecForm4:MaxFilingsPerCompany to a positive cap (default 15) — a zero/negative value "
+                    + "collects nothing while still running.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<ISecForm4Reader, HttpSecForm4Reader>(client =>
+            {
+                // Use TryAddWithoutValidation: the SEC-recommended UA form ("Radar Research <email>") is not a
+                // strict RFC product/comment token, so the strongly-typed UserAgent collection rejects it.
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, SecForm4Collector>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the SEC EDGAR earnings-release (EX-99.1) body reader and the typed <c>HttpClient</c> its
     /// <see cref="ISecEarningsReleaseReader"/> uses. Given a filing's CIK + dashed accession, the reader
     /// fetches the filing index, selects the <c>EX-99.1</c> earnings-release exhibit (with an <c>EX-99.*</c>

@@ -871,6 +871,204 @@ public class KeywordSignalExtractorTests
         Assert.Equal(firstKeys, secondKeys);
     }
 
+    // --- InsiderBuying (SEC Form 4; spec 93) ---
+
+    // Builds the nested metadata JSON shape written by the Form 4 collector:
+    // { "metadata": { … "insiderNetValue": "<value>" … }, "companyHints": [ … ] }, so the tests exercise
+    // the real production parse path (root.metadata.insiderNetValue as a string).
+    private static string InsiderMetadataJson(string insiderNetValue) =>
+        $$"""
+        { "metadata": { "quality": "High", "insiderNetValue": "{{insiderNetValue}}", "form": "4" }, "companyHints": [ "MRCY" ] }
+        """;
+
+    private static EvidenceItem MakeInsiderEvidence(string phrase, string? metadataJson = null) =>
+        new EvidenceBuilder()
+            .WithTitle($"Form 4 — {phrase}: JANE DOE ({"2026-06-02"})")
+            .WithRawText($"Form 4 accession 0001-26-1 filed 2026-06-02: {phrase} — JANE DOE.")
+            .WithCollectedAtUtc(CollectedAt)
+            .WithMetadataJson(metadataJson)
+            .Build();
+
+    [Fact]
+    public async Task InsiderPurchasePhrase_YieldsPositiveInsiderBuying()
+    {
+        var evidence = MakeInsiderEvidence("insider open-market purchase");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.InsiderBuying.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+    }
+
+    [Fact]
+    public async Task InsiderSalePhrase_YieldsNegativeInsiderBuying()
+    {
+        var evidence = MakeInsiderEvidence("insider open-market sale");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.InsiderBuying.ToString(), signal.SignalType);
+        Assert.Equal("Negative", signal.Direction);
+    }
+
+    [Fact]
+    public async Task InsiderRoutinePhrase_YieldsNeutralInsiderBuying_KeepsFixedStrength()
+    {
+        var evidence = MakeInsiderEvidence("insider stock transaction (routine)");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.InsiderBuying.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+    }
+
+    [Theory]
+    [InlineData("5000000", 8)]
+    [InlineData("1000000", 7)]
+    [InlineData("250000", 6)]
+    [InlineData("50000", 4)]
+    [InlineData("10000", 2)]
+    public async Task InsiderPurchase_StrengthScalesByNetValueTiers(string netValue, int expectedStrength)
+    {
+        var evidence = MakeInsiderEvidence("insider open-market purchase", InsiderMetadataJson(netValue));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal("Positive", signal.Direction);
+        Assert.Equal(expectedStrength, signal.Strength);
+    }
+
+    [Theory]
+    [InlineData("5000000", 8)]
+    [InlineData("250000", 6)]
+    [InlineData("10000", 2)]
+    public async Task InsiderSale_StrengthScalesByNetValueTiers(string netValue, int expectedStrength)
+    {
+        var evidence = MakeInsiderEvidence("insider open-market sale", InsiderMetadataJson(netValue));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal("Negative", signal.Direction);
+        Assert.Equal(expectedStrength, signal.Strength);
+    }
+
+    [Fact]
+    public async Task InsiderPurchase_NoNetValueMetadata_KeepsFixedStrength()
+    {
+        var evidence = MakeInsiderEvidence("insider open-market purchase");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal("Positive", signal.Direction);
+        Assert.Equal(6, signal.Strength);
+    }
+
+    [Fact]
+    public async Task InsiderRoutine_WithNetValueMetadata_StillKeepsFixedNeutralStrength()
+    {
+        // A Neutral routine phrase never scales, even if an insiderNetValue somehow appears.
+        var evidence = MakeInsiderEvidence("insider stock transaction (routine)", InsiderMetadataJson("5000000"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+    }
+
+    [Fact]
+    public async Task InsiderBuyingSignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeInsiderEvidence("insider open-market purchase", InsiderMetadataJson("5000000"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    // Metadata JSON with both the net value and the multi-insider cluster flag (spec 93 cluster boost).
+    private static string InsiderClusterMetadataJson(string insiderNetValue) =>
+        $$"""
+        { "metadata": { "quality": "High", "insiderNetValue": "{{insiderNetValue}}", "insiderCluster": "true", "form": "4" }, "companyHints": [ "MRCY" ] }
+        """;
+
+    [Theory]
+    [InlineData("insider open-market purchase", "Positive")]
+    [InlineData("insider open-market sale", "Negative")]
+    public async Task InsiderCluster_AddsOneToTierStrength(string phrase, string expectedDirection)
+    {
+        // $1,000,000 -> base tier Strength 7; the cluster flag adds +1 -> 8.
+        var evidence = MakeInsiderEvidence(phrase, InsiderClusterMetadataJson("1000000"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(expectedDirection, signal.Direction);
+        Assert.Equal(8, signal.Strength);
+    }
+
+    [Fact]
+    public async Task InsiderCluster_TopTier_AppliesBoostAndNeverExceedsDomainMax()
+    {
+        // $5,000,000 -> base top-tier Strength 8; cluster +1 -> 9, and Math.Min(10, ...) keeps it <= 10.
+        var evidence = MakeInsiderEvidence("insider open-market purchase", InsiderClusterMetadataJson("5000000"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(9, signal.Strength);
+        Assert.True(signal.Strength <= 10);
+    }
+
+    [Fact]
+    public async Task InsiderDirectional_WithoutClusterFlag_KeepsPlainTierStrength()
+    {
+        // No insiderCluster flag: the plain $1,000,000 tier Strength 7 stands (no +1).
+        var evidence = MakeInsiderEvidence("insider open-market purchase", InsiderMetadataJson("1000000"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(7, signal.Strength);
+    }
+
+    [Fact]
+    public async Task InsiderRoutine_WithClusterFlag_IsUnaffected()
+    {
+        // A Neutral routine phrase never scales and never takes the cluster boost, even if both keys appear.
+        var evidence = MakeInsiderEvidence("insider stock transaction (routine)", InsiderClusterMetadataJson("5000000"));
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+    }
+
+    [Fact]
+    public async Task GovContract_WithInsiderClusterFlag_IsUnaffectedByClusterBoost()
+    {
+        // The cluster boost is gated strictly to InsiderBuying: a GovernmentContract signal carrying a stray
+        // insiderCluster flag keeps its plain award-tier Strength (no +1).
+        var metadata =
+            """{ "metadata": { "quality": "High", "awardAmount": "1000000", "insiderCluster": "true" }, "companyHints": [ ] }""";
+        var evidence = MakeGovContractEvidence(metadata);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = SingleGovContractSignal(output);
+        Assert.Equal(6, signal.Strength);
+    }
+
     // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
     // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
     // publication masthead — and RawText is synthesized from real article metadata

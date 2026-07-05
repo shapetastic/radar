@@ -17,18 +17,26 @@ namespace Radar.Application.SignalExtraction;
 /// placeholder and a company/ticker is never guessed. The placeholder heuristics here are not a tuned
 /// scoring model; the real AI extractor is a later, human-owned slice.
 /// <para>
-/// Beyond pure keyword scanning it is <b>source-type-aware in exactly two defined ways</b>:
+/// Beyond pure keyword scanning it is <b>source/metadata-aware in exactly three defined ways</b>:
 /// (1) <see cref="EvidenceSourceType.NewsArticle"/> evidence emits exactly one <b>Neutral
 /// <see cref="SignalType.MediaAttention"/></b> signal — the directional keyword rules are suppressed for
-/// news, since third-party coverage is an attention event, not the company's own disclosure (spec 70);
-/// (2) a <see cref="SignalType.GovernmentContract"/> signal's <b>Strength</b> is scaled by the award
-/// amount read from <c>evidence</c> metadata (the <c>awardAmount</c> key; spec 66). All other signal
-/// types stay purely keyword-driven and read neither <see cref="EvidenceItem.SourceType"/> nor metadata.
+/// news, since third-party coverage is an attention event, not the company's own disclosure (spec 70) —
+/// the one and only <see cref="EvidenceItem.SourceType"/>-driven branch; and TWO <b>metadata-driven</b>
+/// materiality reads that scale an already-fired signal's <b>Strength</b> through one generic mechanism:
+/// (2) a <see cref="SignalType.GovernmentContract"/> Positive signal by the <c>awardAmount</c> key (spec 66),
+/// and (3) a <see cref="SignalType.InsiderBuying"/> Positive-or-Negative signal by the <c>insiderNetValue</c>
+/// key (the Form 4 collector's discretionary buy/sell $; spec 93), with an additional +1 (capped at the
+/// domain max 10) when the filing carries an <c>insiderCluster</c> flag (>= 2 insiders same direction). Both
+/// materiality reads share the generic
+/// <c>TryGetDecimalMetadata</c>/<c>StrengthForAmount(amount, tiers)</c> helper — each key is parsed once per
+/// evidence. All other signal types stay purely keyword-driven and read neither source type nor metadata.
 /// </para>
 /// <para>
-/// WATCH-ITEM: these are two justified branches. If a <b>third</b> source-type special-case is ever
-/// needed, refactor to an explicit per-<see cref="EvidenceSourceType"/> dispatch/strategy rather than
-/// adding a third inline branch here — do not keep growing inline special-cases.
+/// WATCH-ITEM: the InsiderBuying read (3) is <b>metadata-driven, not <see cref="EvidenceSourceType"/>-driven</b>,
+/// so it extends the existing generic materiality mechanism rather than adding a third inline source-type
+/// branch — there is still exactly ONE <see cref="EvidenceSourceType"/> branch (the NewsArticle one). If a
+/// <b>second</b> source-type special-case is ever needed, refactor to an explicit per-<see cref="EvidenceSourceType"/>
+/// dispatch/strategy rather than adding a second inline source-type branch here.
 /// </para>
 /// </summary>
 public sealed class KeywordSignalExtractor : ISignalExtractor
@@ -154,20 +162,30 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("government grant", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("dod ", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
         new("nasa", SignalType.GovernmentContract, SignalDirection.Positive, 6, 5, 0.6m),
+
+        // InsiderBuying (SEC Form 4; spec 93). Each fixed phrase is chosen by the Form 4 collector after it
+        // deterministically classifies the filing's transaction codes (the extractor only maps phrase ->
+        // direction, exactly like the GovernmentContract precedent). Ordered Negative -> Positive -> Neutral
+        // so a defensive mixed phrase (should never occur — the collector emits one phrase) resolves
+        // conservatively. Positive/Negative Strength is scaled by the insiderNetValue metadata materiality
+        // tiers below; the Neutral routine phrase keeps its fixed Strength.
+        new("insider open-market sale", SignalType.InsiderBuying, SignalDirection.Negative, 6, 5, 0.6m),
+        new("insider open-market purchase", SignalType.InsiderBuying, SignalDirection.Positive, 6, 5, 0.6m),
+        new("insider stock transaction (routine)", SignalType.InsiderBuying, SignalDirection.Neutral, 3, 4, 0.45m),
     ];
 
-    // First metadata-aware rule (spec 66): scales the Strength of an already-fired GovernmentContract
-    // Positive signal by the award dollar amount (materiality). This is the ONLY signal type whose
-    // magnitude is refined by evidence metadata; every other SignalType stays source/metadata-agnostic.
-    // This metadata read is one of the two defined source/metadata-aware behaviours of the extractor
-    // (the other being the spec 70 NewsArticle -> Neutral MediaAttention branch in ExtractAsync). The
-    // amount is read from a generic, provider-neutral metadata key (awardAmount), not from any source type.
+    // Metadata-aware materiality tiers (spec 66 + spec 93): scale an already-fired signal's Strength by a $
+    // amount read from a generic, provider-neutral evidence-metadata key (NOT from any source type). These are
+    // two of the three defined source/metadata-aware behaviours of the extractor (the third being the spec 70
+    // NewsArticle -> Neutral MediaAttention branch in ExtractAsync). Both reads share one generic mechanism
+    // (TryGetDecimalMetadata + StrengthForAmount(amount, tiers)) — see the per-match Strength selection below.
     //
-    // Visibly-constant, ordered tier table sorted DESCENDING by threshold. Boundaries are
-    // inclusive-lower / exclusive-upper: e.g. exactly $1,000,000 maps to Strength 6, and $999,999.99
-    // maps to Strength 4. Monotonic non-decreasing in amount; every Strength is within domain range
-    // (1-10) so mapped signals still pass SignalValidation.
+    // Each table is visibly-constant, ordered DESCENDING by threshold, with inclusive-lower / exclusive-upper
+    // boundaries: e.g. exactly $1,000,000 maps to the GovernmentContract Strength 6 and $999,999.99 maps to 4.
+    // Monotonic non-decreasing in amount; every Strength is within domain range (1-10) so mapped signals still
+    // pass SignalValidation.
     //
+    // GovernmentContract (awardAmount key; federal-contract magnitudes):
     //   >= $100,000,000  -> 9   very large, thesis-moving award
     //   >= $10,000,000   -> 8   large, clearly material award
     //   >= $1,000,000    -> 6   baseline material award (equals the old fixed Strength => no regression)
@@ -181,6 +199,25 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         (10_000_000m, 8),
         (1_000_000m, 6),
         (100_000m, 4),
+        (decimal.MinValue, 2),
+    ];
+
+    // InsiderBuying (insiderNetValue key; discretionary insider buy/sell $, spec 93). Insider $ magnitudes are
+    // naturally smaller than federal-contract awards, so the boundaries are lower than GovernmentContract's.
+    // Applies to a Positive OR Negative InsiderBuying signal (buy or sell materiality); a Neutral routine
+    // phrase or an absent/zero value keeps the fixed rule Strength 3/6.
+    //   >= $5,000,000  -> 8   very large, thesis-moving insider trade
+    //   >= $1,000,000  -> 7   large, clearly material insider trade
+    //   >= $250,000    -> 6   solidly material (~ the fixed baseline)
+    //   >= $50,000     -> 4   modest but real
+    //   <  $50,000     -> 2   small/routine; deliberately <= 2 so the existing DeterministicSignalReviewer
+    //                         (MinMaterialStrength = 3, strict < 3) flags it NeedsMoreEvidence.
+    private static readonly (decimal MinInclusive, int Strength)[] InsiderNetValueTiers =
+    [
+        (5_000_000m, 8),
+        (1_000_000m, 7),
+        (250_000m, 6),
+        (50_000m, 4),
         (decimal.MinValue, 2),
     ];
 
@@ -201,9 +238,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // NewsArticle evidence is the attention event (spec 70). Emit exactly one Neutral MediaAttention signal
         // and return, deliberately SUPPRESSING the directional keyword rules for news (news framing != the
         // company's own disclosure; avoids double-counting a press release + its news echo — see spec 70).
-        // This is the second source-type-aware branch in this deterministic extractor (spec 66 was the first,
-        // metadata-aware for GovernmentContract materiality); all keyword behaviour for other sources is
-        // unchanged below.
+        // This is the one and only EvidenceSourceType-driven branch in this deterministic extractor. (The
+        // spec 66 GovernmentContract and spec 93 InsiderBuying reads are metadata-driven, not source-type-driven,
+        // so they do NOT count as source-type branches — see the class XML doc.) All keyword behaviour for other
+        // sources is unchanged below.
         if (evidence.SourceType == EvidenceSourceType.NewsArticle)
         {
             var searchable = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);
@@ -227,9 +265,13 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // uses, so a title-drawn excerpt survives the mapper's excerpt-in-evidence round-trip.
         var searchableText = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);
 
-        // Parse the award amount ONCE per evidence (not per rule) for determinism and efficiency. Any
-        // absent/blank/unparseable/malformed input yields hasAmount == false and never throws.
-        var hasAmount = TryGetAwardAmount(evidence, out var awardAmount);
+        // Parse each materiality key ONCE per evidence (not per rule) for determinism and efficiency. Any
+        // absent/blank/unparseable/malformed input yields false and never throws.
+        var hasAwardAmount = TryGetDecimalMetadata(evidence, "awardAmount", out var awardAmount);
+        var hasInsiderNetValue = TryGetDecimalMetadata(evidence, "insiderNetValue", out var insiderNetValue);
+        // Multi-insider cluster flag (spec 93): parsed ONCE per evidence, applied only to a directional
+        // InsiderBuying signal below (a +1 boost to the materiality tier Strength, capped at the domain max).
+        var insiderCluster = TryGetBoolMetadata(evidence, "insiderCluster");
 
         var emittedTypes = new HashSet<SignalType>();
         var matches = new List<(KeywordSignalRule Rule, int Index)>();
@@ -260,15 +302,37 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         var signals = new List<ExtractedSignal>(matches.Count);
         foreach (var (rule, index) in matches)
         {
-            // Only a GovernmentContract Positive signal with a parseable award amount has its Strength
-            // scaled by materiality; every other signal keeps its fixed rule Strength. Novelty,
-            // Confidence, excerpt, CompanyMention, Reason, ordering and dedupe are unchanged — this
-            // slice calibrates Strength alone.
-            var strength = hasAmount
-                    && rule.Type == SignalType.GovernmentContract
-                    && rule.Direction == SignalDirection.Positive
-                ? StrengthForAmount(awardAmount)
-                : rule.Strength;
+            // Two metadata-driven materiality reads through one generic mechanism; every other signal keeps
+            // its fixed rule Strength. A GovernmentContract Positive scales by awardAmount (spec 66); an
+            // InsiderBuying Positive-OR-Negative scales by insiderNetValue (spec 93 — buy or sell materiality),
+            // and additionally gets +1 (capped at the domain max 10) when the filing is a multi-insider cluster
+            // (>= 2 owners transacting the same direction — a stronger read than one). A Neutral routine phrase
+            // or an absent/zero value keeps the fixed rule Strength; the cluster boost never applies to
+            // GovernmentContract or the Neutral routine phrase. Novelty, Confidence, excerpt, CompanyMention,
+            // Reason, ordering and dedupe are unchanged — this calibrates Strength alone.
+            int strength;
+            if (hasAwardAmount
+                && rule.Type == SignalType.GovernmentContract
+                && rule.Direction == SignalDirection.Positive)
+            {
+                strength = StrengthForAmount(awardAmount, GovernmentContractAmountTiers);
+            }
+            else if (hasInsiderNetValue
+                && rule.Type == SignalType.InsiderBuying
+                && (rule.Direction == SignalDirection.Positive || rule.Direction == SignalDirection.Negative))
+            {
+                strength = StrengthForAmount(insiderNetValue, InsiderNetValueTiers);
+                if (insiderCluster)
+                {
+                    // Multi-insider cluster: several insiders acting together is a stronger read; +1, capped
+                    // at the domain max so mapped signals still pass SignalValidation.
+                    strength = Math.Min(10, strength + 1);
+                }
+            }
+            else
+            {
+                strength = rule.Strength;
+            }
 
             signals.Add(new ExtractedSignal(
                 CompanyMention: evidence.SourceName,
@@ -300,27 +364,24 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         return searchableText[start..end];
     }
 
-    // Reads the invariant-culture decimal award amount from the nested evidence metadata written by the
-    // USASpending collector: root -> "metadata" object -> "awardAmount" string. Defensive at every hop;
-    // returns false (and amount = 0) for null/blank MetadataJson, malformed JSON, a missing/mistyped
-    // property, a blank/unparseable value, or a non-positive amount. The USASpending reader normalizes a
-    // missing/non-numeric "Award Amount" to 0m and still serializes it, so a "0" (or negative) is treated
-    // as an absent amount here and falls back to the fixed rule Strength 6 rather than the floor tier.
-    // Never throws.
-    private static bool TryGetAwardAmount(EvidenceItem evidence, out decimal amount)
+    // Generic materiality read: reads the invariant-culture decimal at root -> "metadata" object -> the given
+    // key from the nested evidence-metadata envelope. Defensive at every hop; returns false (and amount = 0)
+    // for null/blank MetadataJson, malformed JSON, a missing/mistyped property, a blank/unparseable value, or
+    // a non-positive amount. A collector may serialize a "0" sentinel for a missing/non-numeric value, so a
+    // "0" (or negative) is treated as an absent amount here and the caller keeps the fixed rule Strength
+    // rather than mapping to the floor tier. Never throws. Used for both awardAmount (spec 66) and
+    // insiderNetValue (spec 93) — one mechanism, one parse per key per evidence.
+    private static bool TryGetDecimalMetadata(EvidenceItem evidence, string key, out decimal amount)
     {
         amount = 0m;
 
         EvidenceMetadata.TryRead(evidence.MetadataJson, out var metadata, out _);
-        if (!metadata.TryGetValue("awardAmount", out var value))
+        if (!metadata.TryGetValue(key, out var value))
             return false;
 
         if (string.IsNullOrWhiteSpace(value))
             return false;
 
-        // A non-positive amount (the collector's 0m sentinel for a missing/non-numeric "Award Amount",
-        // or any negative) is not a usable award magnitude: treat it as absent so the caller keeps the
-        // fixed rule Strength instead of mapping to the floor tier.
         if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out amount)
             || amount <= 0m)
         {
@@ -331,11 +392,26 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         return true;
     }
 
-    // Walks the descending tier table and returns the Strength of the first tier whose lower bound is
-    // at or below the amount. The floor tier's bound is decimal.MinValue, so any amount maps.
-    private static int StrengthForAmount(decimal amount)
+    // Generic boolean-flag read from the nested evidence-metadata envelope: root -> "metadata" object -> the
+    // given key, treated as true when the value is "true"/"1" (case-insensitive, trimmed). Defensive at every
+    // hop; returns false for null/blank/malformed JSON, a missing/mistyped property, or any other value.
+    // Never throws. Used for the InsiderBuying cluster flag (spec 93), mirroring the single-parse
+    // TryGetDecimalMetadata pattern.
+    private static bool TryGetBoolMetadata(EvidenceItem evidence, string key)
     {
-        foreach (var (minInclusive, strength) in GovernmentContractAmountTiers)
+        EvidenceMetadata.TryRead(evidence.MetadataJson, out var metadata, out _);
+        if (!metadata.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var trimmed = value.Trim();
+        return string.Equals(trimmed, "true", StringComparison.OrdinalIgnoreCase) || trimmed == "1";
+    }
+
+    // Walks the given descending tier table and returns the Strength of the first tier whose lower bound is
+    // at or below the amount. The floor tier's bound is decimal.MinValue, so any amount maps.
+    private static int StrengthForAmount(decimal amount, (decimal MinInclusive, int Strength)[] tiers)
+    {
+        foreach (var (minInclusive, strength) in tiers)
         {
             if (minInclusive <= amount)
                 return strength;
