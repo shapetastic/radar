@@ -188,7 +188,7 @@ powershell -File scripts/run-radar.ps1 -Profile low-media  # an experiment: over
 powershell -File scripts/run-radar.ps1 -Profile low-media -WhatIf   # print the resolved --Radar args, don't run
 ```
 
-- **`default.json` captures how we run** (the 4 collectors + Ollama AI). Every other profile is loaded
+- **`default.json` captures how we run** (the 5 collectors — rss/sec/usaspending/newssearch/secform4 — + Ollama AI). Every other profile is loaded
   **on top of** it and carries only its delta (e.g. `low-media.json` overrides `MediaReachWeight`) — so the
   baseline is never lost and experiments are minimal diffs. This pairs with the config-driven `ScoringWeights`
   (a profile can set `Radar:Scoring:Profiles:{name}:*`), which the snapshot fingerprint (AD-10) then stamps.
