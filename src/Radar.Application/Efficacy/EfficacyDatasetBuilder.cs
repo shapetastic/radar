@@ -100,17 +100,21 @@ public sealed class EfficacyDatasetBuilder
     /// </summary>
     private static PriceBar? FindBarAtOrBefore(IReadOnlyList<PriceBar> bars, DateOnly scoreDate)
     {
+        // Binary search over the ascending-by-date list: find the LAST bar with Date <= scoreDate.
+        var lo = 0;
+        var hi = bars.Count - 1;
         PriceBar? best = null;
-        foreach (var bar in bars)
+        while (lo <= hi)
         {
-            if (bar.Date <= scoreDate)
+            var mid = lo + ((hi - lo) / 2);
+            if (bars[mid].Date <= scoreDate)
             {
-                best = bar;
+                best = bars[mid];
+                lo = mid + 1;
             }
             else
             {
-                // Ascending by date: once we pass the score date, no later bar qualifies.
-                break;
+                hi = mid - 1;
             }
         }
 

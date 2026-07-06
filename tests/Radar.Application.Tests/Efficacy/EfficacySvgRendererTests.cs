@@ -63,8 +63,13 @@ public sealed class EfficacySvgRendererTests
 
         Assert.StartsWith("<svg", svg, StringComparison.Ordinal);
         Assert.DoesNotContain("<script", svg, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("http", svg, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("href", svg, StringComparison.OrdinalIgnoreCase);
+
+        // The root carries the standard SVG namespace (required for standalone .svg viewers); it must be the
+        // ONLY URI in the document — no other external reference is allowed.
+        Assert.Contains($"<svg xmlns=\"{EfficacySvgRenderer.SvgNamespace}\"", svg, StringComparison.Ordinal);
+        var withoutNamespace = svg.Replace(EfficacySvgRenderer.SvgNamespace, string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("http", withoutNamespace, StringComparison.OrdinalIgnoreCase);
 
         // A left score axis (0–100) and a right price axis are present.
         Assert.Contains("score 0-100", svg, StringComparison.Ordinal);

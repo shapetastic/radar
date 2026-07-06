@@ -26,6 +26,9 @@ namespace Radar.Application.Efficacy;
 /// </summary>
 public sealed class EfficacySvgRenderer
 {
+    /// <summary>The standard SVG XML namespace — the ONLY URI the self-contained artifact may carry.</summary>
+    public const string SvgNamespace = "http://www.w3.org/2000/svg";
+
     // Fixed canvas (AD-3: no dynamic sizing that could vary output).
     private const int Width = 900;
     private const int Height = 340;
@@ -89,9 +92,10 @@ public sealed class EfficacySvgRenderer
 
         var sb = new StringBuilder();
 
-        // NOTE: no xmlns http URI is emitted — the artifact is a SELF-CONTAINED INLINE SVG (AD: no "http"/no
-        // external reference). It renders inline in HTML; it deliberately carries no remote namespace/asset.
-        sb.Append(CultureInfo.InvariantCulture, $"<svg viewBox=\"0 0 {Width} {Height}\" width=\"{Width}\" height=\"{Height}\" font-family=\"monospace\">\n");
+        // The xmlns declaration is the standard SVG namespace IDENTIFIER (required by XML/SVG viewers when the
+        // artifact is opened as a standalone .svg file) — it is not a fetched external reference, so the
+        // self-contained guarantee (no <script>, no href, no remote asset) still holds.
+        sb.Append(CultureInfo.InvariantCulture, $"<svg xmlns=\"{SvgNamespace}\" viewBox=\"0 0 {Width} {Height}\" width=\"{Width}\" height=\"{Height}\" font-family=\"monospace\">\n");
         sb.Append(CultureInfo.InvariantCulture, $"<title>{Escape(series.CompanyName)} ({Escape(series.Ticker)}) score vs price</title>\n");
         sb.Append(CultureInfo.InvariantCulture, $"<rect x=\"0\" y=\"0\" width=\"{Width}\" height=\"{Height}\" fill=\"#ffffff\" stroke=\"#cccccc\"/>\n");
 

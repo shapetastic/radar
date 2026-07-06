@@ -31,7 +31,8 @@ public sealed class EfficacyReadOnlyGuardrailTests
     public void EfficacySources_ReferenceNoEvidenceSignalOrScoringWriteType()
     {
         var efficacyDir = LocateEfficacySourceDirectory();
-        var files = Directory.GetFiles(efficacyDir, "*.cs", SearchOption.TopDirectoryOnly);
+        // AllDirectories: the guardrail must keep covering efficacy code if it later grows subfolders.
+        var files = Directory.GetFiles(efficacyDir, "*.cs", SearchOption.AllDirectories);
         Assert.NotEmpty(files);
 
         foreach (var file in files)
