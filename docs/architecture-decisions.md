@@ -626,7 +626,24 @@ business improvement, without ever feeding price back into the signals being val
 must **not** propose making price a collector/evidence/signal/scoring input; doing so requires superseding
 this decision.
 
-**Status.** Accepted · 2026-07-04 (maintainer established this intent; spec 92). Cross-references the
-philosophy (signals before stories / not a trading bot), AD-5 (layering), AD-8 (files-first),
-AD-9 (no advice language), AD-3 (determinism). Surfacing a reference price in the report is **deferred** to
-the future validation-report spec.
+**Status.** Accepted · 2026-07-04 (maintainer established this intent; spec 92). **Amended 2026-07-06 (spec
+101 — the read side: a price-efficacy visual, read-only over score history + price; see below).**
+Cross-references the philosophy (signals before stories / not a trading bot), AD-5 (layering), AD-8
+(files-first), AD-9 (no advice language), AD-3 (determinism). Surfacing a reference price in the report is
+**deferred** to the future validation-report spec.
+
+### Amendment — spec 101: the efficacy/validation-reporting layer is the READ side of AD-14 (read-only over score history + price)
+
+The price reference dataset (this AD) gains its first consumer: a **price-efficacy visual** that JOINs a
+company's persisted score-snapshot history (`IScoreSnapshotFileStore`) to its daily price series
+(`IPriceHistoryStore`) and emits a per-company score-vs-price **SVG + CSV** under `data/efficacy/`. This
+efficacy subsystem is **strictly read-only over score history + price and emits artifacts only** — it
+**never** writes back into `evidence → signal → score`, is **not** in `IRadarPipeline`, and depends on no
+collector/evidence/signal/scoring **write** path. It runs as an **opt-in** Worker step
+(`Radar:Efficacy:Enabled`, default `false`); disabled leaves the graph byte-for-byte unchanged. The score
+series is **segmented by `ScoringConfigVersion`** (AD-10) so a trend line is never drawn across a
+formula/weight change. Framing stays AD-9-clean: a score-vs-price overlay is a **research statistic**, never
+a performance/advice claim (no "return/outperform/buy"). This amendment records that the READ side of AD-14
+exists and is bounded: **price (and score history) may be READ for validation/visualisation but must never
+flow back into scoring** — doing so still requires superseding AD-14. *Accepted · 2026-07-06 — the read side
+of the price-validation boundary; no scoring math change.*

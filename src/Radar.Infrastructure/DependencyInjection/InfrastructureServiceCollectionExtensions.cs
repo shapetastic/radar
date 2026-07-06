@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Ai;
 using Radar.Application.Collectors;
+using Radar.Application.Efficacy;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
@@ -968,6 +969,39 @@ public static class InfrastructureServiceCollectionExtensions
     {
         services.AddSingleton(new FilePriceHistoryStoreOptions { RootDirectory = rootDirectory });
         services.AddSingleton<IPriceHistoryStore, FilePriceHistoryStore>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the file efficacy-artifact store that writes each company's price-efficacy SVG + CSV to
+    /// <c>{rootDirectory}/{ticker}.{svg,csv}</c> (AD-14 read side) via the shared <c>GracefulFileWriter</c>,
+    /// keyed by the shared <c>FileTickerKey</c> (the same on-disk ticker key the price store uses). Consumers
+    /// require the Application <see cref="IEfficacyArtifactStore"/>; all file I/O stays in Infrastructure. This
+    /// store writes ONLY efficacy artifacts — never evidence/signal/score.
+    /// </summary>
+    public static IServiceCollection AddFileEfficacyArtifactStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FileEfficacyArtifactStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IEfficacyArtifactStore, FileEfficacyArtifactStore>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the opt-in price-efficacy reporting step (AD-14 read side): the <see cref="EfficacyDatasetBuilder"/>
+    /// (the deterministic no-look-ahead JOIN over score history + price), the pure <see cref="EfficacySvgRenderer"/>
+    /// + <see cref="EfficacyCsvRenderer"/>, and the <see cref="IEfficacyReportGenerator"/> that composes them. It
+    /// depends on <see cref="ICompanyRepository"/>, <see cref="IScoreSnapshotFileStore"/>,
+    /// <see cref="IPriceHistoryStore"/> (all read-only) and <see cref="IEfficacyArtifactStore"/>; call
+    /// <see cref="AddFileEfficacyArtifactStore"/> alongside it. It has NO evidence/signal/scoring write dependency
+    /// and runs OUTSIDE <c>IRadarPipeline</c>.
+    /// </summary>
+    public static IServiceCollection AddRadarEfficacyReport(this IServiceCollection services)
+    {
+        services.AddSingleton<EfficacyDatasetBuilder>();
+        services.AddSingleton<EfficacySvgRenderer>();
+        services.AddSingleton<EfficacyCsvRenderer>();
+        services.AddSingleton<IEfficacyReportGenerator, EfficacyReportGenerator>();
         return services;
     }
 

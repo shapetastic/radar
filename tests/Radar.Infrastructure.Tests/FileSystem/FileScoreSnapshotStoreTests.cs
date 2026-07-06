@@ -364,6 +364,117 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadAllForCompanyAsync_ReturnsAllSnapshotsAscendingByCreatedThenId()
+    {
+        var companyId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var t2 = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+
+        // Two snapshots share the SAME CreatedAtUtc so the Id tie-break is exercised.
+        var idA = new Guid("00000000-0000-0000-0000-0000000000aa");
+        var idB = new Guid("00000000-0000-0000-0000-0000000000bb");
+
+        var later = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithCreatedAtUtc(t2)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+        var tieB = new ScoreSnapshotBuilder()
+            .WithId(idB)
+            .WithCompanyId(companyId)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+        var tieA = new ScoreSnapshotBuilder()
+            .WithId(idA)
+            .WithCompanyId(companyId)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        // Write out of order to prove the read sorts, not the disk order.
+        await store.WriteAsync(later, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        await store.WriteAsync(tieB, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        await store.WriteAsync(tieA, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        var all = await store.ReadAllForCompanyAsync(companyId, CancellationToken.None);
+
+        // Ascending by CreatedAtUtc (t1 before t2), tie-broken by Id (idA before idB).
+        Assert.Equal([idA, idB, later.Id], all.Select(s => s.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task ReadAllForCompanyAsync_SkipsForeignCompanyIdAndMalformedFiles()
+    {
+        var companyId = Guid.NewGuid();
+        var foreignId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var mine = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        await store.WriteAsync(mine, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        // A foreign-CompanyId snapshot physically filed under this company's directory must be skipped.
+        var foreignSnapshot = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(foreignId)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+        // FileScoreSnapshotStore files by the snapshot's own CompanyId, so write it then move it under companyId.
+        var foreignPath = await store.WriteAsync(
+            foreignSnapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        var misfiledPath = Path.Combine(_tempDir, companyId.ToString(), foreignSnapshot.Id + ".json");
+        File.Move(foreignPath, misfiledPath);
+
+        // Plus a garbage file.
+        await File.WriteAllTextAsync(
+            Path.Combine(_tempDir, companyId.ToString(), "bad.json"), "{ not valid json");
+
+        var all = await store.ReadAllForCompanyAsync(companyId, CancellationToken.None);
+
+        var only = Assert.Single(all);
+        Assert.Equal(mine.Id, only.Id);
+    }
+
+    [Fact]
+    public async Task ReadAllForCompanyAsync_MissingDirectory_ReturnsEmpty()
+    {
+        var store = CreateStore();
+
+        var all = await store.ReadAllForCompanyAsync(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.Empty(all);
+    }
+
+    [Fact]
+    public async Task ReadAllForCompanyAsync_AlreadyCancelledToken_Throws()
+    {
+        var companyId = Guid.NewGuid();
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithCompanyId(companyId)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        // At least one file must exist so the loop body runs ct.ThrowIfCancellationRequested().
+        await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        var cancelled = new CancellationToken(canceled: true);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => store.ReadAllForCompanyAsync(companyId, cancelled));
+    }
+
+    [Fact]
     public async Task WriteAsync_IoFailure_ReturnsAttemptedPathWithoutThrowing()
     {
         // Point the root at an existing FILE so Directory.CreateDirectory throws IOException.

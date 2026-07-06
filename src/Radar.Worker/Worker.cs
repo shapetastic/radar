@@ -1,3 +1,4 @@
+using Radar.Application.Efficacy;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
@@ -15,6 +16,13 @@ namespace Radar.Worker;
 /// <see cref="IRadarPipeline"/> (AD-14): price is validation/reference data and must never enter the
 /// evidence → signal → score path. When disabled the dependency is <c>null</c> and the step is skipped.
 /// </para>
+/// <para>
+/// When the opt-in price-efficacy reporting is enabled (<c>Radar:Efficacy:Enabled</c>), the optional
+/// <see cref="IEfficacyReportGenerator"/> is invoked AFTER each pipeline run (so the freshly-persisted snapshot
+/// is included in the join) as a SEPARATE step, DISTINCT from and OUTSIDE <see cref="IRadarPipeline"/> (AD-14
+/// read side): it READS score history + price and writes only efficacy artifacts. When disabled the dependency
+/// is <c>null</c> and the step is skipped.
+/// </para>
 /// </summary>
 public sealed class Worker : BackgroundService
 {
@@ -25,6 +33,7 @@ public sealed class Worker : BackgroundService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<Worker> _logger;
     private readonly IPriceHistoryAcquirer? _priceHistoryAcquirer;
+    private readonly IEfficacyReportGenerator? _efficacyReportGenerator;
 
     public Worker(
         ICompanyUniverseSeeder seeder,
@@ -33,7 +42,8 @@ public sealed class Worker : BackgroundService
         WorkerRunOptions options,
         TimeProvider timeProvider,
         ILogger<Worker> logger,
-        IPriceHistoryAcquirer? priceHistoryAcquirer = null)
+        IPriceHistoryAcquirer? priceHistoryAcquirer = null,
+        IEfficacyReportGenerator? efficacyReportGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -49,6 +59,7 @@ public sealed class Worker : BackgroundService
         _timeProvider = timeProvider;
         _logger = logger;
         _priceHistoryAcquirer = priceHistoryAcquirer;
+        _efficacyReportGenerator = efficacyReportGenerator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -70,15 +81,18 @@ public sealed class Worker : BackgroundService
             if (_options.RunOnce)
             {
                 await RunPipelineAsync(stoppingToken).ConfigureAwait(false);
+                await RunEfficacyReportAsync(stoppingToken).ConfigureAwait(false);
                 _lifetime.StopApplication();
                 return;
             }
 
             using var timer = new PeriodicTimer(_options.Interval, _timeProvider);
             await RunPipelineAsync(stoppingToken).ConfigureAwait(false);
+            await RunEfficacyReportAsync(stoppingToken).ConfigureAwait(false);
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
                 await RunPipelineAsync(stoppingToken).ConfigureAwait(false);
+                await RunEfficacyReportAsync(stoppingToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -100,5 +114,17 @@ public sealed class Worker : BackgroundService
             result.SourcesFailed,
             result.SourcesChecked,
             result.ReportId);
+    }
+
+    // Opt-in price-efficacy reporting (AD-14 read side): a SEPARATE step AFTER the pipeline run, DISTINCT from
+    // and OUTSIDE IRadarPipeline, so the current run's freshly-persisted score snapshot is included in the join.
+    // Skipped (dependency null) unless Radar:Efficacy:Enabled. It READS score history + price and writes only
+    // efficacy artifacts — it never enters the evidence → signal → score path.
+    private async Task RunEfficacyReportAsync(CancellationToken ct)
+    {
+        if (_efficacyReportGenerator is not null)
+        {
+            await _efficacyReportGenerator.GenerateAsync(ct).ConfigureAwait(false);
+        }
     }
 }

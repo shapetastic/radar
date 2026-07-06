@@ -150,4 +150,5 @@ secrets.json
 /data/runs/
 /data/scoring-configs/
 /data/prices/
+/data/efficacy/
 /data/experiments/

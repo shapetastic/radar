@@ -233,6 +233,27 @@ internal static class RadarWorkerServices
             services.AddSingleton<IPriceHistoryAcquirer, PriceHistoryAcquirer>();
         }
 
+        // Wire the price-efficacy reporting seam ONLY when Radar:Efficacy:Enabled is true (opt-in gate, mirroring
+        // the Radar:Prices gate). The efficacy layer is READ-ONLY over score history + price (AD-14 read side): it
+        // JOINs persisted score snapshots to the price reference store and writes a per-company score-vs-price
+        // SVG + CSV; it never feeds evidence/signal/scoring and runs OUTSIDE IRadarPipeline. When disabled (the
+        // default) NONE of these are registered, Worker's optional IEfficacyReportGenerator? stays null, and the
+        // pipeline graph is byte-for-byte unchanged.
+        if (options.Efficacy.Enabled)
+        {
+            // The efficacy JOIN READS the price reference store. When price ACQUISITION is disabled the store is
+            // not registered by the block above, so register the read-only file store here (pointing at the same
+            // data/prices root) so the builder can read any existing {ticker}.json. When Prices.Enabled it is
+            // already registered — avoid a duplicate registration.
+            if (!options.Prices.Enabled)
+            {
+                services.AddFilePriceHistoryStore(options.PricesDirectory);
+            }
+
+            services.AddFileEfficacyArtifactStore(options.EfficacyDirectory);
+            services.AddRadarEfficacyReport();
+        }
+
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
         services.AddFileRawEvidenceStore(options.EvidenceRawDirectory);
         services.AddFileSignalStore(options.SignalsDirectory);

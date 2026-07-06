@@ -59,6 +59,14 @@ public sealed class WeeklyReportBuilderTests
                 .OrderByDescending(s => s.CreatedAtUtc)
                 .ThenByDescending(s => s.Id)
                 .FirstOrDefault());
+
+        public Task<IReadOnlyList<CompanyScoreSnapshot>> ReadAllForCompanyAsync(
+            Guid companyId, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<CompanyScoreSnapshot>>(snapshots
+                .Where(s => s.CompanyId == companyId)
+                .OrderBy(s => s.CreatedAtUtc)
+                .ThenBy(s => s.Id)
+                .ToList());
     }
 
     private sealed class Harness

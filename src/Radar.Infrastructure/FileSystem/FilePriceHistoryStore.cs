@@ -49,7 +49,7 @@ public sealed class FilePriceHistoryStore : IPriceHistoryStore
     {
         ArgumentNullException.ThrowIfNull(history);
 
-        var sanitized = SanitizeTicker(history.Ticker);
+        var sanitized = FileTickerKey.Sanitize(history.Ticker);
         if (sanitized is null)
         {
             // A blank/invalid ticker has no safe filename — skip rather than write outside the root. Return a
@@ -83,7 +83,7 @@ public sealed class FilePriceHistoryStore : IPriceHistoryStore
 
     public async Task<PriceHistory?> ReadAsync(string ticker, CancellationToken ct)
     {
-        var sanitized = SanitizeTicker(ticker);
+        var sanitized = FileTickerKey.Sanitize(ticker);
         if (sanitized is null)
         {
             return null;
@@ -135,25 +135,5 @@ public sealed class FilePriceHistoryStore : IPriceHistoryStore
         }
 
         return byDate.Values.OrderBy(b => b.Date).ToList();
-    }
-
-    /// <summary>
-    /// Lowercases the ticker (invariant) and validates it carries no <see cref="Path.GetInvalidFileNameChars"/>;
-    /// a blank or invalid ticker returns <c>null</c> so the caller never writes outside the root.
-    /// </summary>
-    private static string? SanitizeTicker(string? ticker)
-    {
-        if (string.IsNullOrWhiteSpace(ticker))
-        {
-            return null;
-        }
-
-        var trimmed = ticker.Trim().ToLowerInvariant();
-        if (trimmed.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-        {
-            return null;
-        }
-
-        return trimmed;
     }
 }
