@@ -31,7 +31,12 @@ namespace Radar.Application.SignalExtraction;
 /// <see cref="InsiderMaterialityWeights"/> (spec 96, default == spec 93); the GovernmentContract award tiers
 /// remain code constants. Both materiality reads share the generic
 /// <c>TryGetDecimalMetadata</c>/<c>StrengthForAmount(amount, tiers)</c> helper — each key is parsed once per
-/// evidence. All other signal types stay purely keyword-driven and read neither source type nor metadata.
+/// evidence. All other signal types stay purely keyword-driven and read neither source type nor metadata —
+/// including the <see cref="SignalType.InstitutionalOwnership"/> group (spec 99: SEC Schedule 13D/13G — the
+/// three fixed <c>… beneficial-ownership …</c> phrases, 13D Positive / 13G + amendment Neutral), which carries
+/// <b>no</b> materiality metadata read (the collector does not parse % of class in v1), so this slice adds
+/// neither a source-type branch nor a metadata read and the "exactly ONE <see cref="EvidenceSourceType"/>
+/// branch + two metadata reads" invariant stays intact.
 /// </para>
 /// <para>
 /// WATCH-ITEM: the InsiderBuying read (3) is <b>metadata-driven, not <see cref="EvidenceSourceType"/>-driven</b>,
@@ -49,7 +54,7 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // _formula.Version is bumped for a formula-shape change (AD-6). Spec 96: the insider materiality
     // magnitudes now live in config (InsiderMaterialityWeights) and are hashed by VALUE into the fingerprint,
     // so a tier MAGNITUDE change no longer needs a RuleSetVersion bump — only a rule STRUCTURE change does.
-    public const string RuleSetVersion = "radar-keyword-rules-v1";
+    public const string RuleSetVersion = "radar-keyword-rules-v2";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
@@ -182,6 +187,20 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("insider open-market sale", SignalType.InsiderBuying, SignalDirection.Negative, 6, 5, 0.6m),
         new("insider open-market purchase", SignalType.InsiderBuying, SignalDirection.Positive, 6, 5, 0.6m),
         new("insider stock transaction (routine)", SignalType.InsiderBuying, SignalDirection.Neutral, 3, 4, 0.45m),
+
+        // InstitutionalOwnership (SEC Schedule 13D/13G; spec 99). The 13D/13G collector (spec 100) classifies
+        // the filing by SEC form type and synthesizes exactly one of these fixed phrases into the evidence
+        // Title/RawText; the extractor only maps phrase -> fixed type+direction+strength (never re-derives
+        // valence — the GovernmentContract/InsiderBuying precedent). Ordered Negative -> Positive -> Neutral by
+        // the group convention (v1 has NO Negative phrase yet). Unlike InsiderBuying there is NO materiality
+        // metadata read here — the collector does not parse % of class in v1 (deferred), so Strength is the
+        // fixed rule Strength. A 13D = activist with declared intent -> Positive (the only bullish ownership
+        // read in v1); a passive 13G and any /A amendment -> Neutral (v1 cannot tell a conviction 13G from an
+        // index-fund one, nor an increasing amendment from an exit — Neutral contributes 0 to Trajectory so it
+        // never misfires as bullish/bearish; both deferred to a spec 100 follow-up).
+        new("activist beneficial-ownership stake (13d)", SignalType.InstitutionalOwnership, SignalDirection.Positive, 6, 5, 0.6m),
+        new("passive beneficial-ownership stake (13g)", SignalType.InstitutionalOwnership, SignalDirection.Neutral, 3, 5, 0.5m),
+        new("beneficial-ownership amendment (routine)", SignalType.InstitutionalOwnership, SignalDirection.Neutral, 3, 4, 0.45m),
     ];
 
     // Metadata-aware materiality tiers (spec 66 + spec 93): scale an already-fired signal's Strength by a $

@@ -84,14 +84,14 @@ public sealed class SignalSourceDescriptorTests
         var descriptor = DescriptorFor("rss");
 
         Assert.Contains(KeywordSignalExtractor.RuleSetVersion, descriptor, StringComparison.Ordinal);
-        Assert.Contains("radar-keyword-rules-v1", descriptor, StringComparison.Ordinal);
+        Assert.Contains("radar-keyword-rules-v2", descriptor, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Descriptor_OrdersCollectorsOrdinal()
     {
         Assert.Equal(
-            "rules=radar-keyword-rules-v1;collectors=newssearch,rss,sec,sec-form4,usaspending;",
+            "rules=radar-keyword-rules-v2;collectors=newssearch,rss,sec,sec-form4,usaspending;",
             DescriptorFor("usaspending", "sec-form4", "rss", "newssearch", "sec"));
     }
 
@@ -99,7 +99,7 @@ public sealed class SignalSourceDescriptorTests
     public void EmptyCollectorSet_YieldsStableDescriptor()
     {
         Assert.Equal(
-            "rules=radar-keyword-rules-v1;collectors=;",
+            "rules=radar-keyword-rules-v2;collectors=;",
             new SignalSourceDescriptor(Array.Empty<IEvidenceCollector>()).CanonicalDescriptor());
     }
 

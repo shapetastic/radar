@@ -11,6 +11,7 @@ public enum SignalType
     GovernmentContract,
     HiringExpansion,
     InsiderBuying,
+    InstitutionalOwnership,
     PatentActivity,
     DeveloperAdoption,
     MediaAttention,

@@ -19,7 +19,7 @@ public sealed class ScoringConfigFingerprintTests
     // sec→"sec-edgar", secform4→"sec-form4", usaspending→"usaspending", newssearch→"newssearch"),
     // Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it matches what the Worker actually produces.
     private const string SourceDescriptor =
-        "rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,sec-form4,usaspending;";
+        "rules=radar-keyword-rules-v2;collectors=RssPressReleaseCollector,newssearch,sec-edgar,sec-form4,usaspending;";
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -83,15 +83,15 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
         // default-tier, signal-source, or insider-materiality drift is caught (the automatic AD-10 replacement
-        // for the hand-bumped constant). This value is the spec-96 re-stamp: the insider-materiality descriptor
-        // (config-tunable buy/sell tiers + cluster boost) is now part of the hashed canonical string, appended
-        // after the signal-source descriptor, so the default fingerprint changed automatically — no manual
-        // version bump. It supersedes the spec-95 signal-source re-stamp (radar-scoring-fp-55270b9d8fad).
+        // for the hand-bumped constant). This value is the spec-99 re-stamp: the KeywordSignalExtractor
+        // RuleSetVersion bump (radar-keyword-rules-v1 -> v2, for the new InstitutionalOwnership 13D/13G rule
+        // group) widens the signal-source descriptor, so the default fingerprint changed automatically — no
+        // scoring-math change. It supersedes the spec-96 insider-materiality re-stamp (radar-scoring-fp-7e56a8007342).
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor);
 
-        Assert.Equal("radar-scoring-fp-7e56a8007342", fp);
+        Assert.Equal("radar-scoring-fp-eee8ed0665f2", fp);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public sealed class ScoringConfigFingerprintTests
         // must re-stamp (spec 95 — restores the spec-69 comparability guarantee across a collector transition).
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(),
-            "rules=radar-keyword-rules-v1;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
+            "rules=radar-keyword-rules-v2;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
             InsiderDescriptor);
 
         Assert.NotEqual(baseline, changed);
