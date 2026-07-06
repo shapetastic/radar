@@ -39,4 +39,13 @@ public interface IScoreSnapshotFileStore
     /// </summary>
     Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
         Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct);
+
+    /// <summary>
+    /// Returns ALL persisted snapshots for the company, ascending by CreatedAtUtc then Id (AD-3), scalar fields
+    /// only (Links intentionally empty — same posture as <see cref="ReadLatestBeforeAsync"/>). The
+    /// efficacy/validation layer's read seam over score history (AD-14 amendment); read-only, never writes. A
+    /// malformed or foreign-CompanyId file is skipped + logged, never thrown; a missing directory returns an
+    /// empty list; cancellation propagates.
+    /// </summary>
+    Task<IReadOnlyList<CompanyScoreSnapshot>> ReadAllForCompanyAsync(Guid companyId, CancellationToken ct);
 }

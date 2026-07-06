@@ -332,8 +332,9 @@ Offline/deterministic (no network, no real disk beyond temp dirs). Match the exi
 
 ### `EfficacySvgRendererTests`
 4. **Deterministic:** identical input rendered twice yields **byte-identical** SVG (no embedded wall-clock).
-5. **Self-contained:** output starts with `<svg`, contains no `<script>`, no `http`/`href`/external-asset
-   reference; contains a score axis (0–100) and a price axis.
+5. **Self-contained:** output starts with `<svg`, contains no `<script>`, no `href`/external-asset
+   reference, and no URI other than the standard SVG `xmlns` namespace on the root (required for standalone
+   `.svg` viewers); contains a score axis (0–100) and a price axis.
 6. **Fingerprint segmentation (hard requirement):** a series whose points span **two** `ScoringConfigVersion`
    values renders **two** separate score polyline segments (no line drawn across the boundary) plus a boundary
    marker; a length-1 segment renders as an isolated dot with no connecting line.

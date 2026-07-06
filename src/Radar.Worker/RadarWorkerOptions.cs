@@ -63,6 +63,15 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public PricesWorkerOptions Prices { get; init; } = new();
 
+    /// <summary>
+    /// Price-efficacy reporting configuration (bound from "Radar:Efficacy"). DISABLED by default
+    /// (<see cref="EfficacyWorkerOptions.Enabled"/> is <c>false</c>): when disabled, nothing efficacy-related is
+    /// registered and the pipeline graph is byte-for-byte unchanged. The efficacy layer is READ-ONLY over score
+    /// history + price and emits a per-company score-vs-price SVG + CSV only — never evidence, never a signal,
+    /// never a scoring input (AD-14 read side).
+    /// </summary>
+    public EfficacyWorkerOptions Efficacy { get; init; } = new();
+
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
 
@@ -86,6 +95,9 @@ public sealed class RadarWorkerOptions
 
     /// <summary>Root directory for the daily price-history reference store (AD-14). Only used when "Radar:Prices:Enabled" is true.</summary>
     public string PricesDirectory { get; init; } = "data/prices";
+
+    /// <summary>Root directory for the per-company price-efficacy artifacts (AD-14 read side). Only used when "Radar:Efficacy:Enabled" is true.</summary>
+    public string EfficacyDirectory { get; init; } = "data/efficacy";
 
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
@@ -313,4 +325,18 @@ public sealed class PricesWorkerOptions
 
     /// <summary>Pause between successive per-ticker reads, in seconds. Defaults to 1 (a small polite pace). Must not be negative.</summary>
     public int InterRequestDelaySeconds { get; init; } = 1;
+}
+
+/// <summary>
+/// Price-efficacy reporting configuration (bound from "Radar:Efficacy"). DISABLED by default: a
+/// <see cref="Enabled"/> of <c>false</c> means nothing efficacy-related is registered and the pipeline graph is
+/// byte-for-byte unchanged. The efficacy layer is READ-ONLY over score history + price (AD-14 read side): it
+/// JOINs a company's persisted score snapshots to its daily price series and emits a per-company score-vs-price
+/// SVG + CSV under <c>data/efficacy/</c>; it never writes back into evidence → signal → score and runs OUTSIDE
+/// <c>IRadarPipeline</c>.
+/// </summary>
+public sealed class EfficacyWorkerOptions
+{
+    /// <summary>Whether to render the per-company price-efficacy SVG + CSV artifacts. DISABLED by default.</summary>
+    public bool Enabled { get; init; }
 }

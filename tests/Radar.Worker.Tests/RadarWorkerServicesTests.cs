@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Radar.Application.Ai;
 using Radar.Application.Collectors;
+using Radar.Application.Efficacy;
 using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -360,6 +361,53 @@ public sealed class RadarWorkerServicesTests
             ("Radar:Prices:Enabled", "true"),
             ("Radar:Prices:InterRequestDelaySeconds", "-1")));
         Assert.Contains("InterRequestDelaySeconds", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DefaultConfig_RegistersNoEfficacySeam_EfficacyDisabled()
+    {
+        // Radar:Efficacy:Enabled defaults to false: nothing efficacy-related is registered, the collector list
+        // and the rest of the pipeline graph are unchanged, and Worker's optional generator resolves to null
+        // (AD-14 read side).
+        using var provider = BuildProvider(("Radar:Collectors:0", "rss"));
+
+        Assert.Null(provider.GetService<IEfficacyReportGenerator>());
+        Assert.Null(provider.GetService<IEfficacyArtifactStore>());
+        Assert.Null(provider.GetService<EfficacyDatasetBuilder>());
+        Assert.Null(provider.GetService<EfficacySvgRenderer>());
+        Assert.Null(provider.GetService<EfficacyCsvRenderer>());
+
+        // The collector list is unchanged (just the single rss collector) and the pipeline still resolves.
+        Assert.Single(provider.GetServices<IEvidenceCollector>());
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+
+        // Worker resolves with its optional IEfficacyReportGenerator? defaulting to null.
+        var worker = provider.GetServices<IHostedService>().OfType<Worker>().Single();
+        Assert.NotNull(worker);
+    }
+
+    [Fact]
+    public void EfficacyEnabled_RegistersBuilderRenderersStoreAndGenerator_OptInGateFlips()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"));
+
+        Assert.NotNull(provider.GetService<EfficacyDatasetBuilder>());
+        Assert.NotNull(provider.GetService<EfficacySvgRenderer>());
+        Assert.NotNull(provider.GetService<EfficacyCsvRenderer>());
+        Assert.NotNull(provider.GetService<IEfficacyArtifactStore>());
+        Assert.NotNull(provider.GetService<IEfficacyReportGenerator>());
+
+        // The efficacy JOIN reads the price reference store, so enabling it also registers the read-only price
+        // store (price ACQUISITION stays disabled — no reader/acquirer).
+        Assert.NotNull(provider.GetService<IPriceHistoryStore>());
+        Assert.Null(provider.GetService<IPriceHistoryReader>());
+        Assert.Null(provider.GetService<IPriceHistoryAcquirer>());
+
+        // The efficacy seam is NOT an evidence collector — enabling it does not change the collector list.
+        Assert.Single(provider.GetServices<IEvidenceCollector>());
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
     }
 
     [Fact]

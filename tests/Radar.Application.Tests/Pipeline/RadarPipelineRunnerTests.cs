@@ -234,6 +234,15 @@ public sealed class RadarPipelineRunnerTests
                 .OrderByDescending(s => s.CreatedAtUtc)
                 .ThenByDescending(s => s.Id)
                 .FirstOrDefault());
+
+        public Task<IReadOnlyList<Radar.Domain.Scoring.CompanyScoreSnapshot>> ReadAllForCompanyAsync(
+            Guid companyId, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Radar.Domain.Scoring.CompanyScoreSnapshot>>(Written
+                .Select(w => w.Snapshot)
+                .Where(s => s.CompanyId == companyId)
+                .OrderBy(s => s.CreatedAtUtc)
+                .ThenBy(s => s.Id)
+                .ToList());
     }
 
     /// <summary>
