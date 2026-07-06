@@ -240,6 +240,43 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
         Assert.NotEqual(secFeed.Id, form4Feed.Id);
     }
 
+    private const string SameUrlThreeSecTypesJson = """
+        {
+          "companies": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Acme Corp",
+              "ticker": "ACME",
+              "sourceFeeds": [
+                { "type": "sec", "name": "Acme SEC Filings", "url": "https://data.sec.gov/submissions/CIK0000123456.json" },
+                { "type": "secform4", "name": "Acme Insider Form 4", "url": "https://data.sec.gov/submissions/CIK0000123456.json" },
+                { "type": "sec13dg", "name": "Acme 13D/13G", "url": "https://data.sec.gov/submissions/CIK0000123456.json" }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_SameUrlThreeSecTypes_YieldsThreeDistinctFeeds()
+    {
+        // Per spec 97 the feed-Id folds the feed type, so sec + secform4 + sec13dg sharing one submissions URL
+        // no longer collide — each surfaces its own feed with a distinct Id (spec 100 adds the third).
+        var path = WriteSeedFile(SameUrlThreeSecTypesJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        Assert.Equal(3, seed.SourceFeeds.Count);
+        Assert.Equal(3, seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
+
+        var context = new CollectionContext(seed.Companies, seed.SourceFeeds);
+        var secFeed = Assert.Single(context.FeedsOfType("sec"));
+        var form4Feed = Assert.Single(context.FeedsOfType("secform4"));
+        var ownershipFeed = Assert.Single(context.FeedsOfType("sec13dg"));
+        Assert.Equal("sec13dg", ownershipFeed.FeedType);
+        Assert.Equal(3, new[] { secFeed.Id, form4Feed.Id, ownershipFeed.Id }.Distinct().Count());
+    }
+
     private const string SameUrlDifferentTypeNewsJson = """
         {
           "companies": [

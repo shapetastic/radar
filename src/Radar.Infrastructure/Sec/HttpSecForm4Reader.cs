@@ -83,7 +83,7 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
         }
 
         string cik;
-        IReadOnlyList<Form4Row> rows;
+        IReadOnlyList<SecRecentFilingRow> rows;
         try
         {
             // Non-null once we are past the failure guard above: SecHttpFetch only defaults the body on failure.
@@ -122,7 +122,13 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
                 return SecForm4ReadResult.Failure(SecForm4ReadOutcome.Malformed, "missing filings.recent");
             }
 
-            rows = ParseForm4Rows(recent, _maxFilingsPerCompany, ct);
+            // Reuse the shared columnar filings.recent flattener; Form 4's per-source hook is simply the
+            // form == "4" predicate (the subsequent ownership-XML fetch + classify stays below).
+            rows = SecRecentFilings.Flatten(
+                recent,
+                form => string.Equals(form, "4", StringComparison.Ordinal),
+                _maxFilingsPerCompany,
+                ct);
         }
         catch (JsonException ex)
         {
@@ -147,7 +153,7 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
         return SecForm4ReadResult.Success(filings);
     }
 
-    private async Task<SecForm4Filing?> ReadOneFilingAsync(string cik, Form4Row row, CancellationToken ct)
+    private async Task<SecForm4Filing?> ReadOneFilingAsync(string cik, SecRecentFilingRow row, CancellationToken ct)
     {
         // Step 2 — derive the raw ownership-XML file name from primaryDocument (strip any leading
         // xslF345XNN/ path segment); a non-.xml primary document is a typed no-op (not a throw).
@@ -242,7 +248,7 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
     /// transaction; classifies every transaction by code; and resolves a single filing-level direction +
     /// net value per the deterministic rules (a 10b5-1 plan forces every transaction Neutral).
     /// </summary>
-    private static SecForm4Filing Classify(string cik, Form4Row row, XElement root)
+    private static SecForm4Filing Classify(string cik, SecRecentFilingRow row, XElement root)
     {
         var is10b5Plan = ReadIs10b5Plan(root);
 
@@ -420,92 +426,6 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
         return false;
     }
 
-    /// <summary>
-    /// Flattens the columnar <c>filings.recent</c> parallel arrays (newest-first), keeps only <c>form == "4"</c>
-    /// rows with a parseable acceptance instant, and takes the most-recent <paramref name="maxFilings"/>. This
-    /// is a small Form-4-only helper deliberately local to this reader (it reads only the four columns Form 4
-    /// needs); it does not reuse or modify <see cref="HttpSecFilingReader"/>'s general parse.
-    /// </summary>
-    private static IReadOnlyList<Form4Row> ParseForm4Rows(JsonElement recent, int maxFilings, CancellationToken ct)
-    {
-        var rows = new List<Form4Row>();
-
-        var form = GetArray(recent, "form");
-        var filingDate = GetArray(recent, "filingDate");
-        var acceptance = GetArray(recent, "acceptanceDateTime");
-        var accession = GetArray(recent, "accessionNumber");
-        var primaryDocument = GetArray(recent, "primaryDocument");
-
-        var count = form.Count;
-        for (var i = 0; i < count && rows.Count < maxFilings; i++)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var formValue = At(form, i);
-            if (!string.Equals(formValue, "4", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var accessionValue = At(accession, i);
-            if (string.IsNullOrWhiteSpace(accessionValue))
-            {
-                continue;
-            }
-
-            if (!TryParseAcceptance(At(acceptance, i), out var acceptanceUtc))
-            {
-                continue;
-            }
-
-            rows.Add(new Form4Row(
-                Accession: accessionValue,
-                FilingDate: At(filingDate, i) ?? string.Empty,
-                AcceptanceDateTimeUtc: acceptanceUtc,
-                PrimaryDocument: NullIfBlank(At(primaryDocument, i))));
-        }
-
-        return rows;
-    }
-
-    private static bool TryParseAcceptance(string? value, out DateTimeOffset utc)
-    {
-        if (!string.IsNullOrWhiteSpace(value)
-            && DateTimeOffset.TryParse(
-                value,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out var parsed))
-        {
-            utc = parsed.ToUniversalTime();
-            return true;
-        }
-
-        utc = default;
-        return false;
-    }
-
-    private static IReadOnlyList<JsonElement> GetArray(JsonElement parent, string name)
-    {
-        if (parent.TryGetProperty(name, out var array) && array.ValueKind == JsonValueKind.Array)
-        {
-            return array.EnumerateArray().ToList();
-        }
-
-        return [];
-    }
-
-    private static string? At(IReadOnlyList<JsonElement> array, int index)
-    {
-        if (index < 0 || index >= array.Count)
-        {
-            return null;
-        }
-
-        var element = array[index];
-        return element.ValueKind == JsonValueKind.String ? element.GetString() : null;
-    }
-
     private static string GetString(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? string.Empty
@@ -513,11 +433,4 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
 
     private static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
-
-    /// <summary>A single Form 4 submissions row, before its ownership XML is fetched.</summary>
-    private sealed record Form4Row(
-        string Accession,
-        string FilingDate,
-        DateTimeOffset AcceptanceDateTimeUtc,
-        string? PrimaryDocument);
 }

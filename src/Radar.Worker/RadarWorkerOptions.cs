@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "usaspending", "news", "newssearch".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -19,6 +19,14 @@ public sealed class RadarWorkerOptions
     /// that point (SEC requires a compliant User-Agent).
     /// </summary>
     public SecForm4WorkerOptions SecForm4 { get; init; } = new();
+
+    /// <summary>
+    /// SEC Schedule 13D/13G (institutional/activist beneficial-ownership) collector configuration (bound from
+    /// "Radar:Sec13DG"). Only read when the "sec13dg" collector is enabled; a blank
+    /// <see cref="Sec13DGWorkerOptions.UserAgent"/> fails fast at that point (SEC requires a compliant
+    /// User-Agent).
+    /// </summary>
+    public Sec13DGWorkerOptions Sec13DG { get; init; } = new();
 
     /// <summary>
     /// USASpending.gov government-contract collector configuration (bound from "Radar:UsaSpending"). Only read
@@ -149,6 +157,27 @@ public sealed class SecForm4WorkerOptions
     /// numerous, so the cap keeps the per-run fetch bounded).
     /// </summary>
     public int MaxFilingsPerCompany { get; init; } = 15;
+}
+
+/// <summary>
+/// SEC Schedule 13D/13G (beneficial-ownership) collector configuration (bound from "Radar:Sec13DG"). Surfaces
+/// the required, compliant User-Agent and the per-company cap through to <c>Sec13DGCollectorOptions</c>.
+/// Defaults so the rss-only configuration works without any Sec13DG config.
+/// </summary>
+public sealed class Sec13DGWorkerOptions
+{
+    /// <summary>
+    /// The compliant SEC User-Agent (e.g. "Radar Research example@example.com"). Required when the "sec13dg"
+    /// collector is enabled — every SEC request 403s without it. Defaults to empty so the default rss-only
+    /// configuration stays working without any Sec13DG config.
+    /// </summary>
+    public string UserAgent { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Maximum most-recent 13D/13G filings to fetch/classify per company per run. Defaults to 20 (13D/13G are
+    /// far less frequent than Form 4, but the cap keeps the per-run fetch bounded).
+    /// </summary>
+    public int MaxFilingsPerCompany { get; init; } = 20;
 }
 
 /// <summary>
