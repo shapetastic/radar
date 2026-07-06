@@ -386,6 +386,63 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the SEC Schedule 13D/13G (institutional/activist beneficial-ownership) collector and the
+    /// typed <c>HttpClient</c> its <see cref="ISec13DGReader"/> uses. The collector reads the per-company
+    /// <c>sec13dg</c> feeds supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each
+    /// feed's <c>Url</c> is that company's EDGAR submissions JSON endpoint), filters <c>filings.recent</c> to
+    /// the 13D/13G form types, classifies each by form (deterministic, NO AI, metadata-only — no filing body
+    /// fetch), and produces raw <see cref="Radar.Application.Collectors.CollectedEvidence"/> filings carrying
+    /// the fixed spec-99 ownership phrases; it does not persist them. All HTTP/JSON/SEC code stays in
+    /// Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="Sec13DGCollectorOptions.UserAgent"/> is null/blank (SEC returns HTTP 403 for
+    /// every request without a compliant declared User-Agent) or when
+    /// <see cref="Sec13DGCollectorOptions.MaxFilingsPerCompany"/> is zero/negative: each would let the
+    /// collector run yet silently collect nothing, so they are treated as configuration errors. The named
+    /// client sends the configured UA plus <c>Accept-Encoding: gzip, deflate</c> and enables automatic
+    /// decompression (SEC recommends gzip).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddSec13DGCollector(
+        this IServiceCollection services, Sec13DGCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.IsNullOrWhiteSpace(options.UserAgent))
+        {
+            throw new InvalidOperationException(
+                "SEC EDGAR requires a compliant User-Agent (e.g. \"Radar Research <email>\"); configure "
+                    + "Radar:Sec13DG:UserAgent before enabling the \"sec13dg\" collector — every request 403s without it.");
+        }
+
+        if (options.MaxFilingsPerCompany <= 0)
+        {
+            throw new InvalidOperationException(
+                "SEC 13D/13G MaxFilingsPerCompany must be greater than zero; configure "
+                    + "Radar:Sec13DG:MaxFilingsPerCompany to a positive cap (default 20) — a zero/negative value "
+                    + "collects nothing while still running.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<ISec13DGReader, HttpSec13DGReader>(client =>
+            {
+                // Use TryAddWithoutValidation: the SEC-recommended UA form ("Radar Research <email>") is not a
+                // strict RFC product/comment token, so the strongly-typed UserAgent collection rejects it.
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, Sec13DGCollector>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the SEC EDGAR earnings-release (EX-99.1) body reader and the typed <c>HttpClient</c> its
     /// <see cref="ISecEarningsReleaseReader"/> uses. Given a filing's CIK + dashed accession, the reader
     /// fetches the filing index, selects the <c>EX-99.1</c> earnings-release exhibit (with an <c>EX-99.*</c>
