@@ -351,6 +351,390 @@
           "url": "query=Eos Energy Enterprises&ticker=EOSE"
         }
       ]
+    },
+    {
+      "id": "6c05d3bf-7a58-4da3-a588-27b455d71665",
+      "name": "Powell Industries, Inc.",
+      "legalName": "Powell Industries, Inc.",
+      "ticker": "POWL",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Electrical Equipment & Parts",
+      "aliases": ["Powell", "Powell Industries"],
+      "themes": ["electrical equipment", "grid infrastructure", "data center power"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Powell Industries — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000080420.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Powell Industries — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000080420.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Powell Industries — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000080420.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Powell Industries — News attention (Google News)",
+          "url": "query=Powell Industries&ticker=POWL"
+        }
+      ]
+    },
+    {
+      "id": "c29674f6-1409-4d91-8451-a5674fdb9f5c",
+      "name": "Commvault Systems, Inc.",
+      "legalName": "Commvault Systems, Inc.",
+      "ticker": "CVLT",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Software—Infrastructure",
+      "aliases": ["Commvault"],
+      "themes": ["data protection", "cyber resilience", "SaaS"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Commvault Systems — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001169561.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Commvault Systems — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001169561.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Commvault Systems — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001169561.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Commvault Systems — News attention (Google News)",
+          "url": "query=Commvault&ticker=CVLT"
+        }
+      ]
+    },
+    {
+      "id": "6edd30f5-3322-4cc3-9e29-54bd721f8f46",
+      "name": "Kulicke and Soffa Industries, Inc.",
+      "legalName": "Kulicke and Soffa Industries, Inc.",
+      "ticker": "KLIC",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Semiconductor Equipment & Materials",
+      "aliases": ["Kulicke & Soffa", "Kulicke and Soffa", "K&S"],
+      "themes": ["semiconductor assembly", "advanced packaging", "back-end equipment"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Kulicke and Soffa Industries — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000056978.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Kulicke and Soffa Industries — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000056978.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Kulicke and Soffa Industries — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000056978.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Kulicke and Soffa Industries — News attention (Google News)",
+          "url": "query=Kulicke and Soffa&ticker=KLIC"
+        }
+      ]
+    },
+    {
+      "id": "3ba9066c-4280-42fd-8a7f-79045462c922",
+      "name": "UFP Technologies, Inc.",
+      "legalName": "UFP Technologies, Inc.",
+      "ticker": "UFPT",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Devices & Engineered Packaging",
+      "aliases": ["UFP Technologies"],
+      "themes": ["medical device packaging", "engineered materials", "single-use components"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "UFP Technologies — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000914156.json"
+        },
+        {
+          "type": "secform4",
+          "name": "UFP Technologies — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000914156.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "UFP Technologies — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000914156.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "UFP Technologies — News attention (Google News)",
+          "url": "query=UFP Technologies&ticker=UFPT"
+        }
+      ]
+    },
+    {
+      "id": "e0df23ce-fa50-4c36-9eef-dac80ef9e418",
+      "name": "Napco Security Technologies, Inc.",
+      "legalName": "Napco Security Technologies, Inc.",
+      "ticker": "NSSC",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Security & Protection Services",
+      "aliases": ["Napco", "Napco Security"],
+      "themes": ["security hardware", "recurring service revenue", "alarm communications"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Napco Security Technologies — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000069633.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Napco Security Technologies — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000069633.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Napco Security Technologies — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000069633.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Napco Security Technologies — News attention (Google News)",
+          "url": "query=Napco Security&ticker=NSSC"
+        }
+      ]
+    },
+    {
+      "id": "780af212-c991-4880-9cda-5aab48c1e3dc",
+      "name": "Tootsie Roll Industries, Inc.",
+      "legalName": "Tootsie Roll Industries, Inc.",
+      "ticker": "TR",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Consumer Defensive",
+      "industry": "Confectioners",
+      "aliases": ["Tootsie Roll", "Tootsie"],
+      "themes": ["confectionery", "consumer staples"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Tootsie Roll Industries — Press Releases",
+          "url": "https://www.tootsie.com/feed/"
+        },
+        {
+          "type": "sec",
+          "name": "Tootsie Roll Industries — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000098677.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Tootsie Roll Industries — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000098677.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Tootsie Roll Industries — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000098677.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Tootsie Roll Industries — News attention (Google News)",
+          "url": "query=Tootsie Roll&ticker=TR"
+        }
+      ]
+    },
+    {
+      "id": "4c177966-03ab-49d5-aeb4-e7dfadf694ef",
+      "name": "National Presto Industries, Inc.",
+      "legalName": "National Presto Industries, Inc.",
+      "ticker": "NPK",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Consumer Defensive",
+      "industry": "Housewares & Accessories",
+      "aliases": ["National Presto", "Presto"],
+      "themes": ["housewares", "defense products", "absorbent products"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "National Presto Industries — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000080172.json"
+        },
+        {
+          "type": "secform4",
+          "name": "National Presto Industries — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000080172.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "National Presto Industries — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000080172.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "National Presto Industries — News attention (Google News)",
+          "url": "query=National Presto&ticker=NPK"
+        }
+      ]
+    },
+    {
+      "id": "47a2c96c-e863-47d6-b5ab-44da04074152",
+      "name": "Flowers Foods, Inc.",
+      "legalName": "Flowers Foods, Inc.",
+      "ticker": "FLO",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Consumer Defensive",
+      "industry": "Packaged Foods",
+      "aliases": ["Flowers Foods"],
+      "themes": ["packaged bakery", "consumer staples"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Flowers Foods — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001128928.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Flowers Foods — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001128928.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Flowers Foods — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001128928.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Flowers Foods — News attention (Google News)",
+          "url": "query=Flowers Foods&ticker=FLO"
+        }
+      ]
+    },
+    {
+      "id": "752a461d-932b-43e4-8bb7-13f0ee815185",
+      "name": "Caterpillar Inc.",
+      "legalName": "Caterpillar Inc.",
+      "ticker": "CAT",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Farm & Heavy Construction Machinery",
+      "aliases": ["Caterpillar"],
+      "themes": ["heavy machinery", "construction equipment", "industrial bellwether"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Caterpillar Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000018230.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Caterpillar Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000018230.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Caterpillar Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000018230.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Caterpillar Inc. — News attention (Google News)",
+          "url": "query=Caterpillar Inc&ticker=CAT"
+        }
+      ]
+    },
+    {
+      "id": "fc79f8db-05ab-44f0-b695-96e61a849c51",
+      "name": "Johnson & Johnson",
+      "legalName": "Johnson & Johnson",
+      "ticker": "JNJ",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Drug Manufacturers—General",
+      "aliases": ["Johnson & Johnson", "J&J"],
+      "themes": ["pharmaceuticals", "medical devices", "healthcare mega-cap"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Johnson & Johnson — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000200406.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Johnson & Johnson — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000200406.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Johnson & Johnson — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000200406.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Johnson & Johnson — News attention (Google News)",
+          "url": "query=Johnson and Johnson&ticker=JNJ"
+        }
+      ]
+    },
+    {
+      "id": "2a72d8e8-6ee0-4cbd-98dc-4fc8f34793a3",
+      "name": "Apple Inc.",
+      "legalName": "Apple Inc.",
+      "ticker": "AAPL",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Consumer Electronics",
+      "aliases": ["Apple"],
+      "themes": ["consumer electronics", "services", "mega-cap tech"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Apple Inc. — Press Releases",
+          "url": "https://www.apple.com/newsroom/rss-feed.rss"
+        },
+        {
+          "type": "sec",
+          "name": "Apple Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000320193.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Apple Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000320193.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Apple Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000320193.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Apple Inc. — News attention (Google News)",
+          "url": "query=Apple Inc&ticker=AAPL"
+        }
+      ]
     }
   ]
 }
