@@ -94,7 +94,7 @@ internal sealed class HttpSec13DGReader : ISec13DGReader
             // A blank cik or an absent filings.recent object is a malformed/changed payload, NOT a quiet
             // issuer: proceeding would derive index URLs from a CIK of "0" and report Success with zero items,
             // hiding the feed breakage. Report it as a typed Malformed failure instead (mirrors HttpSecForm4Reader).
-            var cik = GetString(document.RootElement, "cik");
+            var cik = SecRecentFilings.GetString(document.RootElement, "cik");
             if (string.IsNullOrWhiteSpace(cik))
             {
                 _logger.LogWarning(
@@ -103,7 +103,7 @@ internal sealed class HttpSec13DGReader : ISec13DGReader
                 return Sec13DGReadResult.Failure(Sec13DGReadOutcome.Malformed, "missing cik");
             }
 
-            if (!TryGetRecent(document.RootElement, out var recent))
+            if (!SecRecentFilings.TryGetRecent(document.RootElement, out var recent))
             {
                 _logger.LogWarning(
                     "SEC 13D/13G submissions {SubmissionsUrl} JSON lacks the expected 'filings.recent' object; "
@@ -147,28 +147,4 @@ internal sealed class HttpSec13DGReader : ISec13DGReader
         }
     }
 
-    /// <summary>
-    /// Resolves the <c>filings.recent</c> object (both <c>filings</c> and <c>recent</c> must be present and
-    /// objects). Returns <c>false</c> when the expected submissions shape is absent — the caller treats that as
-    /// a typed <c>Malformed</c> failure rather than a quiet zero-item success.
-    /// </summary>
-    private static bool TryGetRecent(JsonElement root, out JsonElement recent)
-    {
-        if (root.TryGetProperty("filings", out var filings)
-            && filings.ValueKind == JsonValueKind.Object
-            && filings.TryGetProperty("recent", out var r)
-            && r.ValueKind == JsonValueKind.Object)
-        {
-            recent = r;
-            return true;
-        }
-
-        recent = default;
-        return false;
-    }
-
-    private static string GetString(JsonElement parent, string name) =>
-        parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString() ?? string.Empty
-            : string.Empty;
 }

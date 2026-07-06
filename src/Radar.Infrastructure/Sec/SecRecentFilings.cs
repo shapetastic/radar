@@ -27,6 +27,14 @@ internal sealed record SecRecentFilingRow(
 /// <see cref="HttpSecForm4Reader"/> so <see cref="HttpSec13DGReader"/> reuses it rather than pasting a second
 /// copy (reuse-over-copy). Pure parsing, no HTTP; the divergent per-source behaviour (Form 4's ownership-XML
 /// fetch, 13D/13G's form-classify) stays in each reader.
+/// <para>
+/// This type is also the single home for the low-level submissions-JSON guards/primitives shared by the three
+/// SEC submissions readers (<see cref="HttpSecFilingReader"/>, <see cref="HttpSecForm4Reader"/>,
+/// <see cref="HttpSec13DGReader"/>): <see cref="TryGetRecent"/> (the <c>filings.recent</c> shape guard),
+/// <see cref="GetArray"/>, <see cref="At"/>, <see cref="GetString"/>, <see cref="TryParseAcceptance"/>, and
+/// <see cref="NullIfBlank"/>. They were previously byte-identical copies scattered across those readers;
+/// consolidating them here keeps a single source of truth (reuse-over-copy) so a fix cannot drift across copies.
+/// </para>
 /// </summary>
 internal static class SecRecentFilings
 {
@@ -85,7 +93,28 @@ internal static class SecRecentFilings
         return rows;
     }
 
-    private static bool TryParseAcceptance(string? value, out DateTimeOffset utc)
+    /// <summary>
+    /// Resolves the <c>filings.recent</c> object (both <c>filings</c> and <c>recent</c> must be present and
+    /// objects). Returns <c>false</c> (with <paramref name="recent"/> = <c>default</c>) when the expected
+    /// submissions shape is absent — a caller may treat that as a typed <c>Malformed</c> failure rather than a
+    /// quiet zero-item success.
+    /// </summary>
+    internal static bool TryGetRecent(JsonElement root, out JsonElement recent)
+    {
+        if (root.TryGetProperty("filings", out var filings)
+            && filings.ValueKind == JsonValueKind.Object
+            && filings.TryGetProperty("recent", out var r)
+            && r.ValueKind == JsonValueKind.Object)
+        {
+            recent = r;
+            return true;
+        }
+
+        recent = default;
+        return false;
+    }
+
+    internal static bool TryParseAcceptance(string? value, out DateTimeOffset utc)
     {
         if (!string.IsNullOrWhiteSpace(value)
             && DateTimeOffset.TryParse(
@@ -102,7 +131,7 @@ internal static class SecRecentFilings
         return false;
     }
 
-    private static IReadOnlyList<JsonElement> GetArray(JsonElement parent, string name)
+    internal static IReadOnlyList<JsonElement> GetArray(JsonElement parent, string name)
     {
         if (parent.TryGetProperty(name, out var array) && array.ValueKind == JsonValueKind.Array)
         {
@@ -112,7 +141,7 @@ internal static class SecRecentFilings
         return [];
     }
 
-    private static string? At(IReadOnlyList<JsonElement> array, int index)
+    internal static string? At(IReadOnlyList<JsonElement> array, int index)
     {
         if (index < 0 || index >= array.Count)
         {
@@ -123,6 +152,15 @@ internal static class SecRecentFilings
         return element.ValueKind == JsonValueKind.String ? element.GetString() : null;
     }
 
-    private static string? NullIfBlank(string? value) =>
+    /// <summary>
+    /// Reads a top-level string property, returning <see cref="string.Empty"/> when it is absent or not a JSON
+    /// string. Non-nullable empty fallback — distinct from <see cref="At"/>, which returns <c>string?</c>.
+    /// </summary>
+    internal static string GetString(JsonElement parent, string name) =>
+        parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+
+    internal static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
 }
