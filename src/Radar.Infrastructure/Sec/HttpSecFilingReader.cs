@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
@@ -113,100 +112,51 @@ internal sealed class HttpSecFilingReader : ISecFilingReader
             return items;
         }
 
-        var cik = GetString(root, "cik");
+        var cik = SecRecentFilings.GetString(root, "cik");
 
-        if (!root.TryGetProperty("filings", out var filings)
-            || filings.ValueKind != JsonValueKind.Object
-            || !filings.TryGetProperty("recent", out var recent)
-            || recent.ValueKind != JsonValueKind.Object)
+        if (!SecRecentFilings.TryGetRecent(root, out var recent))
         {
             return items;
         }
 
-        var form = GetArray(recent, "form");
-        var filingDate = GetArray(recent, "filingDate");
-        var reportDate = GetArray(recent, "reportDate");
-        var acceptance = GetArray(recent, "acceptanceDateTime");
-        var accession = GetArray(recent, "accessionNumber");
-        var primaryDocument = GetArray(recent, "primaryDocument");
-        var primaryDocDescription = GetArray(recent, "primaryDocDescription");
-        var itemCodes = GetArray(recent, "items");
+        var form = SecRecentFilings.GetArray(recent, "form");
+        var filingDate = SecRecentFilings.GetArray(recent, "filingDate");
+        var reportDate = SecRecentFilings.GetArray(recent, "reportDate");
+        var acceptance = SecRecentFilings.GetArray(recent, "acceptanceDateTime");
+        var accession = SecRecentFilings.GetArray(recent, "accessionNumber");
+        var primaryDocument = SecRecentFilings.GetArray(recent, "primaryDocument");
+        var primaryDocDescription = SecRecentFilings.GetArray(recent, "primaryDocDescription");
+        var itemCodes = SecRecentFilings.GetArray(recent, "items");
 
         var count = form.Count;
         for (var i = 0; i < count; i++)
         {
             ct.ThrowIfCancellationRequested();
 
-            var formValue = At(form, i);
-            var accessionValue = At(accession, i);
+            var formValue = SecRecentFilings.At(form, i);
+            var accessionValue = SecRecentFilings.At(accession, i);
             if (string.IsNullOrWhiteSpace(formValue) || string.IsNullOrWhiteSpace(accessionValue))
             {
                 continue;
             }
 
-            if (!TryParseAcceptance(At(acceptance, i), out var acceptanceUtc))
+            if (!SecRecentFilings.TryParseAcceptance(SecRecentFilings.At(acceptance, i), out var acceptanceUtc))
             {
                 continue;
             }
 
             items.Add(new SecFilingItem(
                 Form: formValue,
-                FilingDate: At(filingDate, i) ?? string.Empty,
-                ReportDate: NullIfBlank(At(reportDate, i)),
+                FilingDate: SecRecentFilings.At(filingDate, i) ?? string.Empty,
+                ReportDate: SecRecentFilings.NullIfBlank(SecRecentFilings.At(reportDate, i)),
                 AcceptanceDateTimeUtc: acceptanceUtc,
                 Accession: accessionValue,
-                PrimaryDocument: NullIfBlank(At(primaryDocument, i)),
-                PrimaryDocDescription: NullIfBlank(At(primaryDocDescription, i)),
-                Items: NullIfBlank(At(itemCodes, i)),
+                PrimaryDocument: SecRecentFilings.NullIfBlank(SecRecentFilings.At(primaryDocument, i)),
+                PrimaryDocDescription: SecRecentFilings.NullIfBlank(SecRecentFilings.At(primaryDocDescription, i)),
+                Items: SecRecentFilings.NullIfBlank(SecRecentFilings.At(itemCodes, i)),
                 IndexUrl: SecEdgarUrls.BuildIndexUrl(cik, accessionValue, ".htm")));
         }
 
         return items;
     }
-
-    private static bool TryParseAcceptance(string? value, out DateTimeOffset utc)
-    {
-        if (!string.IsNullOrWhiteSpace(value)
-            && DateTimeOffset.TryParse(
-                value,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out var parsed))
-        {
-            utc = parsed.ToUniversalTime();
-            return true;
-        }
-
-        utc = default;
-        return false;
-    }
-
-    private static IReadOnlyList<JsonElement> GetArray(JsonElement parent, string name)
-    {
-        if (parent.TryGetProperty(name, out var array) && array.ValueKind == JsonValueKind.Array)
-        {
-            return array.EnumerateArray().ToList();
-        }
-
-        return [];
-    }
-
-    private static string? At(IReadOnlyList<JsonElement> array, int index)
-    {
-        if (index < 0 || index >= array.Count)
-        {
-            return null;
-        }
-
-        var element = array[index];
-        return element.ValueKind == JsonValueKind.String ? element.GetString() : null;
-    }
-
-    private static string GetString(JsonElement parent, string name) =>
-        parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString() ?? string.Empty
-            : string.Empty;
-
-    private static string? NullIfBlank(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value;
 }

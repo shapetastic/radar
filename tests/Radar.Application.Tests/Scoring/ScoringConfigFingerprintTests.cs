@@ -16,10 +16,13 @@ public sealed class ScoringConfigFingerprintTests
     // extractor rule-set identity, canonicalized. It is folded into the fingerprint after the attention
     // descriptor, so the default fingerprint value depends on it. The collector tokens are the concrete
     // IEvidenceCollector.CollectorName values the default DI graph registers (rss→"RssPressReleaseCollector",
-    // sec→"sec-edgar", secform4→"sec-form4", usaspending→"usaspending", newssearch→"newssearch"),
-    // Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it matches what the Worker actually produces.
+    // sec→"sec-edgar", secform4→"sec-form4", sec13dg→"sec-13dg", usaspending→"usaspending",
+    // newssearch→"newssearch"), Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it matches what
+    // the Worker actually produces. This is the 6-collector default after spec 100 promoted sec13dg into
+    // scripts/run-profiles/default.json (commit 58c55f5). Ordinal sort places "sec-13dg" before "sec-edgar"
+    // (the char after "sec-" is '1' 0x31 < 'e' 0x65).
     private const string SourceDescriptor =
-        "rules=radar-keyword-rules-v2;collectors=RssPressReleaseCollector,newssearch,sec-edgar,sec-form4,usaspending;";
+        "rules=radar-keyword-rules-v2;collectors=RssPressReleaseCollector,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;";
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -83,15 +86,16 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
         // default-tier, signal-source, or insider-materiality drift is caught (the automatic AD-10 replacement
-        // for the hand-bumped constant). This value is the spec-99 re-stamp: the KeywordSignalExtractor
-        // RuleSetVersion bump (radar-keyword-rules-v1 -> v2, for the new InstitutionalOwnership 13D/13G rule
-        // group) widens the signal-source descriptor, so the default fingerprint changed automatically — no
-        // scoring-math change. It supersedes the spec-96 insider-materiality re-stamp (radar-scoring-fp-7e56a8007342).
+        // for the hand-bumped constant). This value is the 6-collector default after spec 100 promoted the
+        // sec13dg collector into scripts/run-profiles/default.json (commit 58c55f5): adding "sec-13dg" to the
+        // enabled collector set widens the signal-source descriptor, so the default fingerprint re-stamped
+        // automatically — no scoring-math change. It supersedes the spec-99 5-collector re-stamp
+        // (radar-scoring-fp-eee8ed0665f2) and matches default.json's recorded live default.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor);
 
-        Assert.Equal("radar-scoring-fp-eee8ed0665f2", fp);
+        Assert.Equal("radar-scoring-fp-8d638b90d4aa", fp);
     }
 
     [Fact]
