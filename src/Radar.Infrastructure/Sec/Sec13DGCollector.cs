@@ -141,12 +141,20 @@ internal sealed class Sec13DGCollector : IEvidenceCollector
                 rawText = $"SEC Schedule 13G ({filing.Form}) accession {filing.Accession} filed {filing.FilingDate}: "
                     + "passive beneficial-ownership stake (13g).";
                 break;
-            default:
+            case Sec13DGCategory.Amendment:
                 title = $"Schedule 13D/13G — beneficial-ownership amendment (routine) filed {filing.FilingDate} "
                     + $"(accession {filing.Accession})";
                 rawText = $"SEC Schedule 13D/13G ({filing.Form}) accession {filing.Accession} filed {filing.FilingDate}: "
                     + "beneficial-ownership amendment (routine).";
                 break;
+            default:
+                // The reader's form predicate (Sec13DGFormType.IsBeneficialOwnershipForm) filters out
+                // NotApplicable upstream, so only the three in-scope categories should reach here. Fail fast
+                // rather than silently mislabel an out-of-scope filing as an amendment (provenance is sacred).
+                throw new ArgumentOutOfRangeException(
+                    nameof(filing),
+                    filing.Category,
+                    $"Unexpected 13D/13G category for form '{filing.Form}' (accession {filing.Accession}).");
         }
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
