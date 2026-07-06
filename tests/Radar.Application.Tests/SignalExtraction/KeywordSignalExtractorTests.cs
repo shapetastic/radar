@@ -1131,6 +1131,93 @@ public class KeywordSignalExtractorTests
         Assert.Equal(6, signal.Strength);
     }
 
+    // --- InstitutionalOwnership (SEC Schedule 13D/13G; spec 99) ---
+
+    // Builds evidence carrying one of the fixed 13D/13G ownership phrases the collector (spec 100) will
+    // synthesize. The extractor maps phrase -> fixed type+direction+strength; there is NO materiality metadata
+    // read for InstitutionalOwnership in v1, so no metadata JSON is needed.
+    private static EvidenceItem MakeOwnershipEvidence(string phrase) =>
+        new EvidenceBuilder()
+            .WithTitle($"SC 13 filing — {phrase}")
+            .WithRawText($"SEC Schedule 13 filing: {phrase} reported by an external beneficial owner.")
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+    [Fact]
+    public async Task Activist13dPhrase_YieldsPositiveInstitutionalOwnership_Strength6()
+    {
+        var evidence = MakeOwnershipEvidence("activist beneficial-ownership stake (13d)");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.InstitutionalOwnership.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+        Assert.Equal(6, signal.Strength);
+        Assert.Equal(5, signal.Novelty);
+        Assert.Equal(0.6m, signal.Confidence);
+    }
+
+    [Fact]
+    public async Task Passive13gPhrase_YieldsNeutralInstitutionalOwnership_Strength3()
+    {
+        var evidence = MakeOwnershipEvidence("passive beneficial-ownership stake (13g)");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.InstitutionalOwnership.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+        Assert.Equal(5, signal.Novelty);
+        Assert.Equal(0.5m, signal.Confidence);
+    }
+
+    [Fact]
+    public async Task AmendmentPhrase_YieldsNeutralInstitutionalOwnership_Strength3()
+    {
+        var evidence = MakeOwnershipEvidence("beneficial-ownership amendment (routine)");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.InstitutionalOwnership.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+        Assert.Equal(4, signal.Novelty);
+        Assert.Equal(0.45m, signal.Confidence);
+    }
+
+    [Fact]
+    public async Task InstitutionalOwnershipSignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeOwnershipEvidence("activist beneficial-ownership stake (13d)");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public async Task NewsArticle_With13dPhrase_YieldsOnlyMediaAttention_NoInstitutionalOwnership()
+    {
+        // The ownership rules are directional keyword rules, so — like every directional rule — they are
+        // suppressed on NewsArticle evidence (spec 70). A 13D phrase in a news headline yields only the
+        // Neutral MediaAttention signal, never an InstitutionalOwnership signal.
+        var evidence = MakeNewsEvidence(title: "Activist beneficial-ownership stake (13D) reported in Acme");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.MediaAttention.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.InstitutionalOwnership.ToString());
+    }
+
     // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
     // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
     // publication masthead — and RawText is synthesized from real article metadata
