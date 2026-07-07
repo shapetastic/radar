@@ -47,10 +47,17 @@ internal sealed class HiringBoardCollector : IEvidenceCollector
         ArgumentNullException.ThrowIfNull(options);
 
         // Build the platform→reader map once (case-insensitive, matching the feed token's platform value).
+        // Duplicate platforms fail fast: silently keeping the last-registered reader would make behaviour
+        // depend on DI registration order and hide a misconfiguration.
         var readersByPlatform = new Dictionary<string, IJobBoardReader>(StringComparer.OrdinalIgnoreCase);
         foreach (var reader in readers)
         {
-            readersByPlatform[reader.Platform] = reader;
+            if (!readersByPlatform.TryAdd(reader.Platform, reader))
+            {
+                throw new InvalidOperationException(
+                    $"Multiple {nameof(IJobBoardReader)} registrations claim hiring platform "
+                        + $"'{reader.Platform}'; each platform must have exactly one reader.");
+            }
         }
 
         _readersByPlatform = readersByPlatform;
@@ -159,19 +166,24 @@ internal sealed class HiringBoardCollector : IEvidenceCollector
         var total = board.TotalRoles;
         var (senior, engineering) = JobTitleClassifier.Classify(board.Titles);
 
+        // Canonical platform name from the reader, NOT the feed token's verbatim casing: the reader lookup
+        // is case-insensitive, so a feed configured as 'Greenhouse' must stamp the same Title/RawText/
+        // metadata (and therefore the same ContentHash) as one configured 'greenhouse'.
+        var platform = reader.Platform;
+
         // NO-CONTAMINATION RULE (spec 103): Title/RawText carry ONLY the fixed phrase + numeric counts +
         // platform/board — NEVER raw job titles. A title like "VP, Strategic Partnerships" would otherwise
         // trip the extractor's 'partnership' rule. Sample titles go in metadata ONLY (the extractor never
         // scans metadata for phrases).
         var title =
             $"Hiring activity (open roles) — {total} open roles ({senior} senior/leadership, "
-                + $"{engineering} engineering/R&D) via {target.Platform} board '{target.BoardToken}'";
+                + $"{engineering} engineering/R&D) via {platform} board '{target.BoardToken}'";
 
         // The RawText timestamp makes each run's Title+RawText ContentHash distinct, so every run persists
         // a distinct timestamped snapshot evidence — this accrued, timestamped open-role history IS the
         // record the deferred slice-B surge detection will read (no separate history store is built).
         var rawText =
-            $"{target.Platform} job board '{target.BoardToken}': {total} open roles as of "
+            $"{platform} job board '{target.BoardToken}': {total} open roles as of "
                 + $"{retrievedAtToken}; {senior} senior/leadership, {engineering} engineering/R&D. "
                 + "Signal: hiring activity (open roles).";
 
@@ -185,7 +197,7 @@ internal sealed class HiringBoardCollector : IEvidenceCollector
             // matching the news Medium.
             ["quality"] = "Medium",
             ["hiringFeedUrl"] = feed.Url,
-            ["platform"] = target.Platform,
+            ["platform"] = platform,
             ["board"] = target.BoardToken,
             // The three counts are the accrued hiring history slice B will read.
             ["totalRoles"] = total.ToString(CultureInfo.InvariantCulture),

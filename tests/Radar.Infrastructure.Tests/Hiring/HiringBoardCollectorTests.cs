@@ -202,7 +202,7 @@ public sealed class HiringBoardCollectorTests
     }
 
     [Fact]
-    public async Task CollectAsync_PlatformLookup_IsCaseInsensitive()
+    public async Task CollectAsync_PlatformLookup_IsCaseInsensitiveAndStampsCanonicalPlatform()
     {
         var feed = Feed(
             Guid.Parse("aaaaaaaa-0000-0000-0000-000000000006"), MrcyId, "Mercury — Hiring",
@@ -215,8 +215,25 @@ public sealed class HiringBoardCollectorTests
 
         var result = await CreateCollector([reader]).CollectAsync(context, CancellationToken.None);
 
-        Assert.Single(result.Evidence);
+        var item = Assert.Single(result.Evidence);
         Assert.Equal(0, result.Summary.SourcesFailed);
+
+        // Evidence stamps the reader's canonical platform name, not the feed token's verbatim casing —
+        // 'Greenhouse' and 'greenhouse' feeds must produce identical Title/RawText/metadata (same
+        // ContentHash for the same board snapshot).
+        Assert.Contains("via greenhouse board 'mercury'", item.Title, StringComparison.Ordinal);
+        Assert.StartsWith("greenhouse job board 'mercury'", item.RawText, StringComparison.Ordinal);
+        Assert.Equal("greenhouse", item.Metadata["platform"]);
+    }
+
+    [Fact]
+    public void Constructor_DuplicatePlatformReaders_ThrowsInsteadOfSilentlyOverwriting()
+    {
+        var first = new FakeJobBoardReader("greenhouse");
+        var second = new FakeJobBoardReader("Greenhouse"); // case-insensitive duplicate
+
+        var ex = Assert.Throws<InvalidOperationException>(() => CreateCollector([first, second]));
+        Assert.Contains("Greenhouse", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
