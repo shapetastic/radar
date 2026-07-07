@@ -223,6 +223,37 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_WithHiringAtsCollector()
+    {
+        // The Greenhouse/Lever ATS APIs need no key/User-Agent, so the hiringats collector enables with
+        // just the kind and the RadarWorkerOptions defaults (MaxSampleTitles 5).
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "hiringats"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+
+        var collectors = provider.GetServices<IEvidenceCollector>().ToArray();
+        Assert.Equal(2, collectors.Length);
+        Assert.Contains(collectors, c => c.CollectorName == "hiring-ats");
+    }
+
+    [Fact]
+    public void DefaultCollectors_DoNotRegisterHiringAts_AndSeededHiringFeedsCauseNoFailure()
+    {
+        // Spec-103 default composition: hiringats is opt-in OFF — a default (no-hiringats) config
+        // registers the collector set WITHOUT hiring-ats even though data/companies.json now declares
+        // hiringats feeds (the seed is collector-agnostic; the spec-98 validator sees declared == reached
+        // because CollectionContext.SourceFeeds is populated from the seed regardless of enabled
+        // collectors — pinned in SeedFeedInventoryValidatorTests).
+        using var provider = BuildProvider(("Radar:Collectors:0", "rss"));
+
+        var collectors = provider.GetServices<IEvidenceCollector>().ToArray();
+        Assert.Single(collectors);
+        Assert.DoesNotContain(collectors, c => c.CollectorName == "hiring-ats");
+    }
+
+    [Fact]
     public void DuplicateCollectorKind_RegistersOnce()
     {
         using var provider = BuildProvider(

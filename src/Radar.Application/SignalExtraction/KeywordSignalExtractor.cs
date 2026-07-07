@@ -33,9 +33,12 @@ namespace Radar.Application.SignalExtraction;
 /// <c>TryGetDecimalMetadata</c>/<c>StrengthForAmount(amount, tiers)</c> helper — each key is parsed once per
 /// evidence. All other signal types stay purely keyword-driven and read neither source type nor metadata —
 /// including the <see cref="SignalType.InstitutionalOwnership"/> group (spec 99: SEC Schedule 13D/13G — the
-/// three fixed <c>… beneficial-ownership …</c> phrases, 13D Positive / 13G + amendment Neutral), which carries
-/// <b>no</b> materiality metadata read (the collector does not parse % of class in v1), so this slice adds
-/// neither a source-type branch nor a metadata read and the "exactly ONE <see cref="EvidenceSourceType"/>
+/// three fixed <c>… beneficial-ownership …</c> phrases, 13D Positive / 13G + amendment Neutral) and the
+/// <see cref="SignalType.HiringActivity"/> group (spec 103: the ATS job-board collector's fixed
+/// <c>hiring activity (open roles)</c> phrase, Neutral), each of which carries
+/// <b>no</b> materiality metadata read (the 13D/13G collector does not parse % of class in v1; the hiring
+/// collector's open-role counts live in metadata only for the deferred slice-B surge read), so neither slice
+/// adds a source-type branch nor a metadata read and the "exactly ONE <see cref="EvidenceSourceType"/>
 /// branch + two metadata reads" invariant stays intact.
 /// </para>
 /// <para>
@@ -54,7 +57,9 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // _formula.Version is bumped for a formula-shape change (AD-6). Spec 96: the insider materiality
     // magnitudes now live in config (InsiderMaterialityWeights) and are hashed by VALUE into the fingerprint,
     // so a tier MAGNITUDE change no longer needs a RuleSetVersion bump — only a rule STRUCTURE change does.
-    public const string RuleSetVersion = "radar-keyword-rules-v2";
+    // v3 (spec 103): adds the HiringActivity rule group (the ATS job-board collector's fixed
+    // "hiring activity (open roles)" phrase, Neutral) — a rule-STRUCTURE change, hence the bump.
+    public const string RuleSetVersion = "radar-keyword-rules-v3";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
@@ -201,6 +206,15 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("activist beneficial-ownership stake (13d)", SignalType.InstitutionalOwnership, SignalDirection.Positive, 6, 5, 0.6m),
         new("passive beneficial-ownership stake (13g)", SignalType.InstitutionalOwnership, SignalDirection.Neutral, 3, 5, 0.5m),
         new("beneficial-ownership amendment (routine)", SignalType.InstitutionalOwnership, SignalDirection.Neutral, 3, 4, 0.45m),
+
+        // HiringActivity (public ATS job board; spec 103). The HiringBoardCollector synthesizes exactly this fixed
+        // phrase into the JobPosting evidence Title/RawText; the extractor only maps phrase -> fixed type+direction+
+        // strength (never re-derives valence — the InstitutionalOwnership precedent). v1 is NEUTRAL by design: a
+        // single-snapshot open-role COUNT cannot tell genuine expansion from an always-large hirer, so it never
+        // misfires bullish (Neutral contributes 0 to Trajectory). Directional SURGE detection vs accrued hiring
+        // history is deferred to slice B (changes DIRECTION, not this type name). NO materiality metadata read here
+        // (unlike InsiderBuying) — Strength is the fixed rule Strength.
+        new("hiring activity (open roles)", SignalType.HiringActivity, SignalDirection.Neutral, 3, 4, 0.45m),
     ];
 
     // Metadata-aware materiality tiers (spec 66 + spec 93): scale an already-fired signal's Strength by a $

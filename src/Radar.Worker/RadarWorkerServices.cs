@@ -7,6 +7,7 @@ using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.Gdelt;
+using Radar.Infrastructure.Hiring;
 using Radar.Infrastructure.News;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.UsaSpending;
@@ -83,7 +84,7 @@ internal static class RadarWorkerServices
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
-                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", and \"newssearch\".");
+                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", and \"hiringats\".");
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -94,7 +95,7 @@ internal static class RadarWorkerServices
             if (string.IsNullOrWhiteSpace(rawKind))
             {
                 throw new InvalidOperationException(
-                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", and \"newssearch\".");
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", and \"hiringats\".");
             }
 
             var kind = rawKind.Trim();
@@ -166,10 +167,17 @@ internal static class RadarWorkerServices
                     InterRequestDelay = TimeSpan.FromSeconds(options.News.InterRequestDelaySeconds),
                 });
             }
+            else if (string.Equals(kind, "hiringats", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddHiringBoardCollector(new HiringCollectorOptions
+                {
+                    MaxSampleTitles = options.Hiring.MaxSampleTitles,
+                });
+            }
             else
             {
                 throw new InvalidOperationException(
-                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", and \"newssearch\".");
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", and \"hiringats\".");
             }
         }
 

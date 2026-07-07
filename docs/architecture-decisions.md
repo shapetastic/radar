@@ -514,6 +514,23 @@ insider **magnitude** change now re-stamps the fingerprint **automatically** and
 `GovernmentContract` award tiers deliberately remain code constants (a parallel config move is a possible future
 slice). *Accepted · 2026-07-05 — magnitude→config relocation; property preserved and strengthened, no math change.*
 
+### Lineage — spec 103: `RuleSetVersion` v2 → v3 (new `HiringActivity` rule group); default re-stamps automatically
+
+Spec 103 adds the ATS job-board hiring collector (`hiringats`, opt-in **OFF** by default) and one new
+`KeywordSignalExtractor` rule group mapping its fixed phrase `hiring activity (open roles)` to a **Neutral**
+`SignalType.HiringActivity` — a rule-**STRUCTURE** change, so `RuleSetVersion` bumps
+`radar-keyword-rules-v2 → radar-keyword-rules-v3` and the spec-95 signal-source descriptor re-stamps the default
+fingerprint **automatically**: **`radar-scoring-fp-8d638b90d4aa → radar-scoring-fp-c9e609ed53e9`**. The enabled
+default collector set is **unchanged** (still the 6-collector baseline — `hiringats` is not in `default.json`);
+the fingerprint moves solely on the rules identity. **Scoring math is byte-identical** — the new rule matches
+only the hiring phrase, which no existing evidence contains, and the collector is opt-in-off, so every company
+scores exactly as before; there is no fingerprint-safe way to add a scoring-affecting signal type (spec 95
+working as intended). No `_formula.Version` / weight / attention-tier / insider-tier change (`radar-formula-v5`
+stays). Note for the efficacy visual (spec 101 / AD-14 read side): the current renderer segments on raw
+`ScoringConfigVersion` equality, so it will draw a **cosmetic** segment boundary at this re-stamp even though the
+scores are fully continuous — an input-hash artifact, not a measurement break; the real fix is the deferred
+efficacy slice-2 score-continuity-aware segmentation.
+
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
 by spec 70). Amended · 2026-07-04 (spec 89 — stamp becomes a derived content fingerprint; property preserved
 and made automatic; Accepted). Amended · 2026-07-04 (spec 91 — the effective config is persisted
@@ -524,7 +541,10 @@ automatically; default re-stamps radar-scoring-fp-5cd50423f408 → radar-scoring
 Amended · 2026-07-05 (spec 96 — the insider buy/sell materiality tiers + cluster boost move to config
 (`InsiderMaterialityWeights`, default == spec 93) and are folded into the fingerprint by value; an insider
 magnitude change is now a config edit needing no `RuleSetVersion` bump; default re-stamps
-radar-scoring-fp-55270b9d8fad → radar-scoring-fp-7e56a8007342; Accepted).
+radar-scoring-fp-55270b9d8fad → radar-scoring-fp-7e56a8007342; Accepted). Lineage · 2026-07-07 (spec 103 —
+`RuleSetVersion` radar-keyword-rules-v2 → v3 for the new `HiringActivity` rule group; default re-stamps
+radar-scoring-fp-8d638b90d4aa → radar-scoring-fp-c9e609ed53e9; scoring math byte-identical, `hiringats`
+collector opt-in-off).
 
 ---
 

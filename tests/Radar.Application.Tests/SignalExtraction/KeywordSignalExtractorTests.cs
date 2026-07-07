@@ -1218,6 +1218,87 @@ public class KeywordSignalExtractorTests
             s => s.SignalType == SignalType.InstitutionalOwnership.ToString());
     }
 
+    // --- HiringActivity (ATS job-board collector; spec 103) ---
+
+    // Builds JobPosting evidence in the exact shape the HiringBoardCollector synthesizes: the fixed
+    // "hiring activity (open roles)" phrase + numeric counts + platform/board — and NEVER raw job titles
+    // (those live in metadata only, which the extractor does not scan). There is NO materiality metadata
+    // read for HiringActivity, so no metadata JSON is needed.
+    private static EvidenceItem MakeHiringEvidence(
+        string title =
+            "Hiring activity (open roles) — 42 open roles (5 senior/leadership, 12 engineering/R&D) "
+                + "via greenhouse board 'mercury'",
+        string rawText =
+            "greenhouse job board 'mercury': 42 open roles as of 2026-07-07T12:00:00.0000000+00:00; "
+                + "5 senior/leadership, 12 engineering/R&D. Signal: hiring activity (open roles).") =>
+        new EvidenceBuilder()
+            .WithSourceType(EvidenceSourceType.JobPosting)
+            .WithTitle(title)
+            .WithRawText(rawText)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+    [Fact]
+    public async Task HiringPhrase_YieldsNeutralHiringActivity_Strength3()
+    {
+        // v1 is Neutral by design: a single-snapshot open-role count cannot tell genuine expansion from an
+        // always-large hirer (directional surge detection is the deferred slice B).
+        var evidence = MakeHiringEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.HiringActivity.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+        Assert.Equal(4, signal.Novelty);
+        Assert.Equal(0.45m, signal.Confidence);
+        Assert.Contains("hiring activity (open roles)", signal.SupportingExcerpt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task HiringEvidence_CollectorShapedText_FiresNoUnrelatedRule()
+    {
+        // The collector's full synthesized Title/RawText must map to EXACTLY one HiringActivity signal —
+        // no other keyword rule (partnership, hires, launches, …) may fire on the fixed phrase + counts +
+        // platform/board framing. This is the no-contamination guard: raw job titles (e.g. "VP, Strategic
+        // Partnerships") stay in metadata, which the extractor never scans.
+        var evidence = MakeHiringEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.HiringActivity.ToString(), signal.SignalType);
+    }
+
+    [Fact]
+    public async Task HiringActivitySignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeHiringEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public async Task NewsArticle_WithHiringPhrase_YieldsOnlyMediaAttention_NoHiringActivity()
+    {
+        // Like every keyword rule, the hiring rule is suppressed on NewsArticle evidence (spec 70): a
+        // hiring phrase in a news headline yields only the Neutral MediaAttention signal.
+        var evidence = MakeNewsEvidence(title: "Acme hiring activity (open roles) reportedly climbing");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.MediaAttention.ToString(), signal.SignalType);
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.HiringActivity.ToString());
+    }
+
     // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
     // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
     // publication masthead — and RawText is synthesized from real article metadata

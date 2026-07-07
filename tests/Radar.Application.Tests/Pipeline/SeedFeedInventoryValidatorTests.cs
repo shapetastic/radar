@@ -133,6 +133,25 @@ public sealed class SeedFeedInventoryValidatorTests
     }
 
     [Fact]
+    public async Task DeclaredButDisabledCollectorKind_DeclaredEqualsReached_NoWarning()
+    {
+        // Spec-103/spec-98 interaction: the seed declares hiringats feeds but the hiringats COLLECTOR is
+        // disabled (opt-in OFF by default). CollectionContext.SourceFeeds is populated from ALL seeded
+        // feeds regardless of which collectors are enabled, so declared == reached and NO
+        // feeds-lost-before-collection warning may fire — a disabled collector is not a lost feed.
+        // No validator change is needed; this pins that.
+        var hiring = Feeds("hiringats", 4).ToArray();
+        var sec = Feeds("sec", 7).ToArray();
+        var validator = CreateValidator(Seed([.. hiring, .. sec]));
+
+        var report = await validator.ValidateAsync(
+            Context([.. hiring, .. sec]), CancellationToken.None);
+
+        Assert.False(report.HasWarnings);
+        Assert.DoesNotContain(report.Warnings, w => w.FeedType == "hiringats");
+    }
+
+    [Fact]
     public async Task CaseInsensitive_ReachedTypeMatchesDeclaredType()
     {
         // Seed declares "sec"; the context reaches "SEC" (different case) — same type, so no shrinkage.
