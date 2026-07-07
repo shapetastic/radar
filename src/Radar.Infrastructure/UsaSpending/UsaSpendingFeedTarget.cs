@@ -1,3 +1,5 @@
+using Radar.Infrastructure.Sources;
+
 namespace Radar.Infrastructure.UsaSpending;
 
 /// <summary>
@@ -19,7 +21,8 @@ internal sealed record UsaSpendingFeedTarget(string RecipientId, string Recipien
     /// Parses a <c>recipientId=...&amp;recipientSearchText=...</c> token. Robust to key ordering and
     /// surrounding whitespace; the search text's literal spaces are preserved (the token is NOT
     /// URL-decoded). Returns <see langword="null"/> when either key is missing/empty or the token is
-    /// blank/malformed.
+    /// blank/malformed. The two-key split routes through the shared <see cref="TwoKeyFeedToken"/>; the
+    /// both-keys-required and no-blank-value semantics stay this parser's own hooks.
     /// </summary>
     public static UsaSpendingFeedTarget? Parse(string? token)
     {
@@ -30,44 +33,12 @@ internal sealed record UsaSpendingFeedTarget(string RecipientId, string Recipien
 
         var trimmed = token.Trim();
 
-        // Locate both keys, then split on the FIRST '&' that sits between the two so the recipient name's
-        // own characters (which never contain '&' in our seeds) stay intact. Whichever key comes first
-        // owns everything up to that boundary; the other owns everything after.
-        var idKeyIndex = trimmed.IndexOf(RecipientIdKey, StringComparison.Ordinal);
-        var searchKeyIndex = trimmed.IndexOf(SearchTextKey, StringComparison.Ordinal);
-        if (idKeyIndex < 0 || searchKeyIndex < 0)
+        // The shared order-robust split (first '&' between the two keys, so the recipient name's own
+        // characters — which never contain '&' in our seeds — stay intact).
+        if (!TwoKeyFeedToken.TrySplit(
+                trimmed, RecipientIdKey, SearchTextKey, out var recipientId, out var searchText))
         {
             return null;
-        }
-
-        string recipientId;
-        string searchText;
-
-        if (idKeyIndex < searchKeyIndex)
-        {
-            // recipientId=<id>&recipientSearchText=<name>
-            var idValueStart = idKeyIndex + RecipientIdKey.Length;
-            var boundary = trimmed.IndexOf('&', idValueStart);
-            if (boundary < 0 || boundary >= searchKeyIndex)
-            {
-                return null;
-            }
-
-            recipientId = trimmed[idValueStart..boundary].Trim();
-            searchText = trimmed[(searchKeyIndex + SearchTextKey.Length)..].Trim();
-        }
-        else
-        {
-            // recipientSearchText=<name>&recipientId=<id>
-            var searchValueStart = searchKeyIndex + SearchTextKey.Length;
-            var boundary = trimmed.IndexOf('&', searchValueStart);
-            if (boundary < 0 || boundary >= idKeyIndex)
-            {
-                return null;
-            }
-
-            searchText = trimmed[searchValueStart..boundary].Trim();
-            recipientId = trimmed[(idKeyIndex + RecipientIdKey.Length)..].Trim();
         }
 
         if (string.IsNullOrEmpty(recipientId) || string.IsNullOrEmpty(searchText))

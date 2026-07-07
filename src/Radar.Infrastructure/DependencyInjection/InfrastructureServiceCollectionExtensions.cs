@@ -21,6 +21,7 @@ using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
+using Radar.Infrastructure.Hiring;
 using Radar.Infrastructure.News;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Prices;
@@ -665,6 +666,58 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, NewsAttentionCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the ATS job-board hiring collector (spec 103) and the two named typed <c>HttpClient</c>s
+    /// its per-platform <see cref="IJobBoardReader"/>s use (Greenhouse and Lever have different JSON
+    /// shapes, so each platform gets its own reader + client). The collector reads the per-company
+    /// <c>hiringats</c> feeds supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/>
+    /// (each feed's <c>Url</c> is a <c>platform=…&amp;board=…</c> token) and produces exactly one raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> open-role snapshot per board carrying
+    /// the fixed spec-103 hiring phrase; it does not persist them. All HTTP/JSON code stays in
+    /// Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="HiringCollectorOptions.MaxSampleTitles"/> is negative: a negative sample
+    /// bound is nonsensical configuration (zero is valid — it simply omits the metadata title sample). The
+    /// APIs need no User-Agent or key (verified keyless access); the named clients only enable automatic
+    /// gzip/deflate decompression (polite).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddHiringBoardCollector(
+        this IServiceCollection services, HiringCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.MaxSampleTitles < 0)
+        {
+            throw new InvalidOperationException(
+                "Hiring MaxSampleTitles must not be negative; configure Radar:Hiring:MaxSampleTitles to a "
+                    + "non-negative sample bound (default 5) — a negative value is nonsensical configuration.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<GreenhouseBoardReader>()
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.AddHttpClient<LeverBoardReader>()
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        // Surface both typed-client readers through the IJobBoardReader seam the collector's
+        // platform→reader map consumes.
+        services.AddSingleton<IJobBoardReader>(sp => sp.GetRequiredService<GreenhouseBoardReader>());
+        services.AddSingleton<IJobBoardReader>(sp => sp.GetRequiredService<LeverBoardReader>());
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, HiringBoardCollector>();
         return services;
     }
 

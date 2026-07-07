@@ -46,6 +46,11 @@
           "type": "newssearch",
           "name": "Mercury Systems — News attention (Google News)",
           "url": "query=Mercury Systems&ticker=MRCY"
+        },
+        {
+          "type": "hiringats",
+          "name": "Mercury Systems — Open roles (Greenhouse ATS)",
+          "url": "platform=greenhouse&board=mercury"
         }
       ]
     },
@@ -139,6 +144,11 @@
           "type": "newssearch",
           "name": "Agilysys — News attention (Google News)",
           "url": "query=Agilysys&ticker=AGYS"
+        },
+        {
+          "type": "hiringats",
+          "name": "Agilysys — Open roles (Greenhouse ATS)",
+          "url": "platform=greenhouse&board=agilysys"
         }
       ]
     },
@@ -232,6 +242,11 @@
           "type": "newssearch",
           "name": "Energy Recovery — News attention (Google News)",
           "url": "query=Energy Recovery&ticker=ERII"
+        },
+        {
+          "type": "hiringats",
+          "name": "Energy Recovery — Open roles (Lever ATS)",
+          "url": "platform=lever&board=energyrecovery"
         }
       ]
     },
@@ -417,6 +432,11 @@
           "type": "newssearch",
           "name": "Commvault Systems — News attention (Google News)",
           "url": "query=Commvault&ticker=CVLT"
+        },
+        {
+          "type": "hiringats",
+          "name": "Commvault Systems — Open roles (Greenhouse ATS)",
+          "url": "platform=greenhouse&board=commvault"
         }
       ]
     },

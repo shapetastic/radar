@@ -19,10 +19,12 @@ public sealed class ScoringConfigFingerprintTests
     // sec→"sec-edgar", secform4→"sec-form4", sec13dg→"sec-13dg", usaspending→"usaspending",
     // newssearch→"newssearch"), Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it matches what
     // the Worker actually produces. This is the 6-collector default after spec 100 promoted sec13dg into
-    // scripts/run-profiles/default.json (commit 58c55f5). Ordinal sort places "sec-13dg" before "sec-edgar"
+    // scripts/run-profiles/default.json (commit 58c55f5); spec 103 bumps the rule-set identity to
+    // radar-keyword-rules-v3 (the new HiringActivity group) while the enabled collector CSV stays this same
+    // 6-collector set (hiringats is opt-in OFF). Ordinal sort places "sec-13dg" before "sec-edgar"
     // (the char after "sec-" is '1' 0x31 < 'e' 0x65).
     private const string SourceDescriptor =
-        "rules=radar-keyword-rules-v2;collectors=RssPressReleaseCollector,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;";
+        "rules=radar-keyword-rules-v3;collectors=RssPressReleaseCollector,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;";
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -86,16 +88,16 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
         // default-tier, signal-source, or insider-materiality drift is caught (the automatic AD-10 replacement
-        // for the hand-bumped constant). This value is the 6-collector default after spec 100 promoted the
-        // sec13dg collector into scripts/run-profiles/default.json (commit 58c55f5): adding "sec-13dg" to the
-        // enabled collector set widens the signal-source descriptor, so the default fingerprint re-stamped
-        // automatically — no scoring-math change. It supersedes the spec-99 5-collector re-stamp
-        // (radar-scoring-fp-eee8ed0665f2) and matches default.json's recorded live default.
+        // for the hand-bumped constant). This value is the spec-103 re-stamp: the RuleSetVersion bump
+        // radar-keyword-rules-v2 → v3 (the new HiringActivity rule group) moves the signal-source descriptor,
+        // so the default fingerprint re-stamped automatically — the enabled 6-collector set is UNCHANGED
+        // (hiringats is opt-in OFF) and scoring math is byte-identical. It supersedes the spec-100
+        // 6-collector stamp (radar-scoring-fp-8d638b90d4aa) and matches default.json's recorded live default.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor);
 
-        Assert.Equal("radar-scoring-fp-8d638b90d4aa", fp);
+        Assert.Equal("radar-scoring-fp-c9e609ed53e9", fp);
     }
 
     [Fact]
@@ -138,7 +140,7 @@ public sealed class ScoringConfigFingerprintTests
         // must re-stamp (spec 95 — restores the spec-69 comparability guarantee across a collector transition).
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(),
-            "rules=radar-keyword-rules-v2;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
+            "rules=radar-keyword-rules-v3;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
             InsiderDescriptor);
 
         Assert.NotEqual(baseline, changed);

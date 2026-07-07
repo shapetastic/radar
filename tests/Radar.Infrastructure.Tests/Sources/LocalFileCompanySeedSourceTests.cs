@@ -311,6 +311,86 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
         Assert.NotEqual(newsFeed.Id, newsSearchFeed.Id);
     }
 
+    // The four spec-103 hiringats seed rows exactly as data/companies.json declares them (real company
+    // ids + hand-verified board tokens from the 2026-07-06 reachability spike), each alongside another
+    // feed so the spec-97 type|url feed-Id composite is exercised per company.
+    private const string HiringAtsSeedJson = """
+        {
+          "companies": [
+            {
+              "id": "885ea986-041f-4fc2-8163-b815ae930a78",
+              "name": "Mercury Systems, Inc.",
+              "ticker": "MRCY",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "Mercury Systems — News attention (Google News)", "url": "query=Mercury Systems&ticker=MRCY" },
+                { "type": "hiringats", "name": "Mercury Systems — Open roles (Greenhouse ATS)", "url": "platform=greenhouse&board=mercury" }
+              ]
+            },
+            {
+              "id": "c29674f6-1409-4d91-8451-a5674fdb9f5c",
+              "name": "Commvault Systems, Inc.",
+              "ticker": "CVLT",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "Commvault Systems — News attention (Google News)", "url": "query=Commvault&ticker=CVLT" },
+                { "type": "hiringats", "name": "Commvault Systems — Open roles (Greenhouse ATS)", "url": "platform=greenhouse&board=commvault" }
+              ]
+            },
+            {
+              "id": "f0d50897-7161-40e6-a367-4ce63fc5aa8c",
+              "name": "Agilysys, Inc.",
+              "ticker": "AGYS",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "Agilysys — News attention (Google News)", "url": "query=Agilysys&ticker=AGYS" },
+                { "type": "hiringats", "name": "Agilysys — Open roles (Greenhouse ATS)", "url": "platform=greenhouse&board=agilysys" }
+              ]
+            },
+            {
+              "id": "a825bf45-a23f-431c-b392-a04a029f2400",
+              "name": "Energy Recovery, Inc.",
+              "ticker": "ERII",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "Energy Recovery — News attention (Google News)", "url": "query=Energy Recovery&ticker=ERII" },
+                { "type": "hiringats", "name": "Energy Recovery — Open roles (Lever ATS)", "url": "platform=lever&board=energyrecovery" }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_HiringAtsFeeds_ParseWithExactTokensAndDistinctIds()
+    {
+        // Spec 103: the four verified companies each carry one hiringats feed with the exact
+        // platform=…&board=… token; every feed Id is distinct (spec 97 folds the feed TYPE into the Id,
+        // so a hiringats feed can never collide with the same company's other feeds).
+        var path = WriteSeedFile(HiringAtsSeedJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        var context = new CollectionContext(seed.Companies, seed.SourceFeeds);
+        var hiringFeeds = context.FeedsOfType("hiringats");
+        Assert.Equal(4, hiringFeeds.Count);
+
+        var byCompany = hiringFeeds.ToDictionary(f => f.CompanyId, f => f.Url);
+        Assert.Equal(
+            "platform=greenhouse&board=mercury",
+            byCompany[Guid.Parse("885ea986-041f-4fc2-8163-b815ae930a78")]);
+        Assert.Equal(
+            "platform=greenhouse&board=commvault",
+            byCompany[Guid.Parse("c29674f6-1409-4d91-8451-a5674fdb9f5c")]);
+        Assert.Equal(
+            "platform=greenhouse&board=agilysys",
+            byCompany[Guid.Parse("f0d50897-7161-40e6-a367-4ce63fc5aa8c")]);
+        Assert.Equal(
+            "platform=lever&board=energyrecovery",
+            byCompany[Guid.Parse("a825bf45-a23f-431c-b392-a04a029f2400")]);
+
+        // Every feed Id in the whole seed (hiringats + the sibling newssearch feeds) is distinct.
+        Assert.Equal(
+            seed.SourceFeeds.Count,
+            seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
+    }
+
     [Fact]
     public async Task GetSeedAsync_SameUrlDifferentType_FeedIdsStableAcrossCalls()
     {

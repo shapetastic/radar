@@ -21,6 +21,8 @@ internal sealed record QueryFeedTarget(string QueryPhrase, string? Ticker)
     /// the phrase's literal spaces are preserved (the token is NOT URL-decoded). The <c>ticker=</c> key is
     /// optional — a bare <c>query=&lt;phrase&gt;</c> token parses with a null ticker. Returns
     /// <see langword="null"/> when the token is blank, the <c>query=</c> key is missing, or the phrase is empty.
+    /// The two-key split routes through the shared <see cref="TwoKeyFeedToken"/>; the optional-ticker and
+    /// empty-ticker-means-no-ticker semantics stay this parser's own hooks.
     /// </summary>
     public static QueryFeedTarget? Parse(string? token)
     {
@@ -38,42 +40,25 @@ internal sealed record QueryFeedTarget(string QueryPhrase, string? Ticker)
             return null;
         }
 
-        var tickerKeyIndex = trimmed.IndexOf(TickerKey, StringComparison.Ordinal);
-
         string phrase;
-        string? ticker = null;
+        string? ticker;
 
-        if (tickerKeyIndex < 0)
+        if (trimmed.IndexOf(TickerKey, StringComparison.Ordinal) < 0)
         {
             // query=<phrase> only — the ticker is optional.
             phrase = trimmed[(queryKeyIndex + QueryKey.Length)..].Trim();
-        }
-        else if (queryKeyIndex < tickerKeyIndex)
-        {
-            // query=<phrase>&ticker=<TICKER> — split on the FIRST '&' between the two keys so the phrase's
-            // own spaces stay intact (our seeds never put '&' inside a phrase).
-            var phraseStart = queryKeyIndex + QueryKey.Length;
-            var boundary = trimmed.IndexOf('&', phraseStart);
-            if (boundary < 0 || boundary >= tickerKeyIndex)
-            {
-                return null;
-            }
-
-            phrase = trimmed[phraseStart..boundary].Trim();
-            ticker = trimmed[(tickerKeyIndex + TickerKey.Length)..].Trim();
+            ticker = null;
         }
         else
         {
-            // ticker=<TICKER>&query=<phrase>
-            var tickerStart = tickerKeyIndex + TickerKey.Length;
-            var boundary = trimmed.IndexOf('&', tickerStart);
-            if (boundary < 0 || boundary >= queryKeyIndex)
+            // Both keys present: the shared order-robust split (first '&' between the two keys, so the
+            // phrase's own spaces stay intact — our seeds never put '&' inside a phrase).
+            if (!TwoKeyFeedToken.TrySplit(trimmed, QueryKey, TickerKey, out phrase, out var tickerValue))
             {
                 return null;
             }
 
-            ticker = trimmed[tickerStart..boundary].Trim();
-            phrase = trimmed[(queryKeyIndex + QueryKey.Length)..].Trim();
+            ticker = tickerValue;
         }
 
         if (string.IsNullOrEmpty(phrase))

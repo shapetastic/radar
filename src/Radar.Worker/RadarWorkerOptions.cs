@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -47,6 +47,13 @@ public sealed class RadarWorkerOptions
     /// config.
     /// </summary>
     public NewsWorkerOptions News { get; init; } = new();
+
+    /// <summary>
+    /// ATS job-board hiring collector configuration (bound from "Radar:Hiring"). Only read when the
+    /// "hiringats" collector is enabled (opt-in, OFF by default — it is not in the default Collectors); the
+    /// defaults let the rss-only configuration keep working with no Hiring config.
+    /// </summary>
+    public HiringWorkerOptions Hiring { get; init; } = new();
 
     /// <summary>
     /// AI chat-client seam configuration (bound from "Radar:Ai"). A blank <see cref="AiWorkerOptions.Provider"/>
@@ -252,6 +259,17 @@ public sealed class NewsWorkerOptions
 
     /// <summary>Pause between successive per-company requests, in seconds. Defaults to 1 (Google News RSS is not per-IP throttled).</summary>
     public int InterRequestDelaySeconds { get; init; } = 1;
+}
+
+/// <summary>
+/// ATS job-board hiring collector configuration (bound from "Radar:Hiring"). Surfaces the metadata title-sample
+/// bound through to <c>HiringCollectorOptions</c>. The Greenhouse/Lever endpoints need no User-Agent or key
+/// (keyless access verified). Defaults so the rss-only configuration works without any Hiring config.
+/// </summary>
+public sealed class HiringWorkerOptions
+{
+    /// <summary>Maximum job titles carried in the evidence <c>sampleTitles</c> metadata (provenance/debug only — never in Title/RawText). Defaults to 5.</summary>
+    public int MaxSampleTitles { get; init; } = 5;
 }
 
 /// <summary>
