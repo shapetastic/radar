@@ -3,6 +3,8 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Infrastructure.Sources;
+
 namespace Radar.Infrastructure.Gdelt;
 
 /// <summary>
@@ -54,72 +56,76 @@ internal sealed class HttpGdeltNewsReader : IGdeltNewsReader
         byte[] bytes;
         while (true)
         {
-            try
-            {
-                using var response = await _httpClient
-                    .GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, ct)
-                    .ConfigureAwait(false);
-
-                if ((int)response.StatusCode == 429)
-                {
-                    // GDELT's aggressive throttle (published limit: 1 request / 5s per IP). Own a bounded,
-                    // EXPONENTIAL delayed retry here (base, 2×base, …) so the collector stays simple; after
-                    // retries are exhausted still return RateLimited (never throw). GDELT recommends a long
-                    // cool-down after a 429 (≈60s then 120s), which a few-second pacing delay cannot satisfy.
-                    if (attempt < maxRetries)
-                    {
-                        var backoff = ComputeBackoff(query.RetryDelay, attempt);
-                        attempt++;
-                        _logger.LogWarning(
-                            "GDELT news search for '{QueryPhrase}' returned HTTP 429 (rate limited); "
-                                + "retry {Attempt}/{MaxRetries} after {BackoffSeconds:0.#}s.",
-                            query.QueryPhrase,
-                            attempt,
-                            maxRetries,
-                            backoff.TotalSeconds);
-                        await Task.Delay(backoff, ct).ConfigureAwait(false);
-                        continue;
-                    }
-
-                    _logger.LogWarning(
-                        "GDELT news search for '{QueryPhrase}' returned HTTP 429 (rate limited) after retries; "
-                            + "skipping.",
-                        query.QueryPhrase);
-                    return GdeltReadResult.Failure(GdeltReadOutcome.RateLimited, "HTTP 429 (rate limited)");
-                }
-
-                if (!response.IsSuccessStatusCode)
+            var (failure, body) = await HttpOutcomeFetch.GetAsync<GdeltReadResult, byte[]>(
+                _httpClient,
+                requestUri,
+                // Materialize the body before disposing the response so parsing can happen synchronously.
+                readBody: (content, c) => content.ReadAsByteArrayAsync(c),
+                // The 429 is mapped to RateLimited WITHOUT logging here: the retry loop below owns the
+                // retry-vs-final wording (and the log-before-delay ordering), which needs the attempt state.
+                onStatus: status => status == 429
+                    ? GdeltReadResult.Failure(GdeltReadOutcome.RateLimited, "HTTP 429 (rate limited)")
+                    : null,
+                onHttpError: status =>
                 {
                     _logger.LogWarning(
                         "GDELT news search for '{QueryPhrase}' returned non-success status {StatusCode}; skipping.",
                         query.QueryPhrase,
-                        (int)response.StatusCode);
+                        status);
                     return GdeltReadResult.Failure(
-                        GdeltReadOutcome.HttpError, $"HTTP {(int)response.StatusCode}");
-                }
+                        GdeltReadOutcome.HttpError, $"HTTP {status}");
+                },
+                onUnreachable: ex =>
+                {
+                    _logger.LogWarning(
+                        ex, "GDELT news search for '{QueryPhrase}' failed; skipping.", query.QueryPhrase);
+                    return GdeltReadResult.Failure(GdeltReadOutcome.Unreachable, "transport error");
+                },
+                onTimeout: ex =>
+                {
+                    // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+                    _logger.LogWarning(
+                        ex, "GDELT news search for '{QueryPhrase}' timed out; skipping.", query.QueryPhrase);
+                    return GdeltReadResult.Failure(GdeltReadOutcome.Timeout, "request timed out");
+                },
+                ct).ConfigureAwait(false);
 
-                // Materialize the body before disposing the response so parsing can happen synchronously.
-                bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            if (failure is null)
+            {
+                // Non-null once we are past the failure guard: the fetch only defaults the body on failure.
+                bytes = body!;
                 break;
             }
-            catch (HttpRequestException ex)
+
+            if (failure.Outcome != GdeltReadOutcome.RateLimited)
             {
+                return failure;
+            }
+
+            // GDELT's aggressive throttle (published limit: 1 request / 5s per IP). Own a bounded,
+            // EXPONENTIAL delayed retry here (base, 2×base, …) so the collector stays simple; after
+            // retries are exhausted still return RateLimited (never throw). GDELT recommends a long
+            // cool-down after a 429 (≈60s then 120s), which a few-second pacing delay cannot satisfy.
+            if (attempt < maxRetries)
+            {
+                var backoff = ComputeBackoff(query.RetryDelay, attempt);
+                attempt++;
                 _logger.LogWarning(
-                    ex, "GDELT news search for '{QueryPhrase}' failed; skipping.", query.QueryPhrase);
-                return GdeltReadResult.Failure(GdeltReadOutcome.Unreachable, "transport error");
+                    "GDELT news search for '{QueryPhrase}' returned HTTP 429 (rate limited); "
+                        + "retry {Attempt}/{MaxRetries} after {BackoffSeconds:0.#}s.",
+                    query.QueryPhrase,
+                    attempt,
+                    maxRetries,
+                    backoff.TotalSeconds);
+                await Task.Delay(backoff, ct).ConfigureAwait(false);
+                continue;
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                // Caller-requested cancellation must propagate so the run stops; do not hide it as a failure.
-                throw;
-            }
-            catch (TaskCanceledException ex)
-            {
-                // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
-                _logger.LogWarning(
-                    ex, "GDELT news search for '{QueryPhrase}' timed out; skipping.", query.QueryPhrase);
-                return GdeltReadResult.Failure(GdeltReadOutcome.Timeout, "request timed out");
-            }
+
+            _logger.LogWarning(
+                "GDELT news search for '{QueryPhrase}' returned HTTP 429 (rate limited) after retries; "
+                    + "skipping.",
+                query.QueryPhrase);
+            return failure;
         }
 
         try
