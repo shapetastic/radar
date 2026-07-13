@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Prices;
+using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Prices;
 
@@ -65,53 +66,53 @@ internal sealed class HttpPriceHistoryReader : IPriceHistoryReader
 
         var url = _options.BuildRequestUrl(ticker);
 
-        string body;
-        try
-        {
-            using var response = await _httpClient
-                .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-
-            if ((int)response.StatusCode == 429)
+        var (failure, body) = await HttpOutcomeFetch.GetAsync<PriceHistoryReadResult, string>(
+            _httpClient,
+            url,
+            readBody: (content, c) => content.ReadAsStringAsync(c),
+            onStatus: status =>
             {
+                if (status != 429)
+                {
+                    return null;
+                }
+
                 _logger.LogWarning(
                     "Price history for '{Ticker}' returned HTTP 429 (rate limited); skipping.", ticker);
                 return PriceHistoryReadResult.Failure(
                     PriceHistoryReadOutcome.RateLimited, "HTTP 429 (rate limited)");
-            }
-
-            if (!response.IsSuccessStatusCode)
+            },
+            onHttpError: status =>
             {
                 // A delisted/unknown ticker returns HTTP 404 (verified) — that, and any other non-success
                 // status, maps to the generic HttpError outcome.
                 _logger.LogWarning(
                     "Price history for '{Ticker}' returned non-success status {StatusCode}; skipping.",
                     ticker,
-                    (int)response.StatusCode);
+                    status);
                 return PriceHistoryReadResult.Failure(
-                    PriceHistoryReadOutcome.HttpError, $"HTTP {(int)response.StatusCode}");
-            }
+                    PriceHistoryReadOutcome.HttpError, $"HTTP {status}");
+            },
+            onUnreachable: ex =>
+            {
+                _logger.LogWarning(ex, "Price history for '{Ticker}' fetch failed; skipping.", ticker);
+                return PriceHistoryReadResult.Failure(PriceHistoryReadOutcome.Unreachable, "transport error");
+            },
+            onTimeout: ex =>
+            {
+                // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+                _logger.LogWarning(ex, "Price history for '{Ticker}' timed out; skipping.", ticker);
+                return PriceHistoryReadResult.Failure(PriceHistoryReadOutcome.Timeout, "request timed out");
+            },
+            ct).ConfigureAwait(false);
 
-            body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        }
-        catch (HttpRequestException ex)
+        if (failure is not null)
         {
-            _logger.LogWarning(ex, "Price history for '{Ticker}' fetch failed; skipping.", ticker);
-            return PriceHistoryReadResult.Failure(PriceHistoryReadOutcome.Unreachable, "transport error");
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // Caller-requested cancellation must propagate so the run stops; do not hide it as a failure.
-            throw;
-        }
-        catch (TaskCanceledException ex)
-        {
-            // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
-            _logger.LogWarning(ex, "Price history for '{Ticker}' timed out; skipping.", ticker);
-            return PriceHistoryReadResult.Failure(PriceHistoryReadOutcome.Timeout, "request timed out");
+            return failure;
         }
 
-        return Parse(body, ticker);
+        // Non-null once we are past the failure guard above: the fetch only defaults the body on failure.
+        return Parse(body!, ticker);
     }
 
     /// <summary>

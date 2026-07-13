@@ -3,6 +3,8 @@ using System.Xml;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Infrastructure.Sources;
+
 namespace Radar.Infrastructure.Rss;
 
 /// <summary>
@@ -28,43 +30,41 @@ internal sealed class HttpRssFeedReader : IRssFeedReader
 
     public async Task<RssFeedReadResult> ReadAsync(string feedUrl, CancellationToken ct)
     {
-        Stream stream;
-        try
-        {
-            using var response = await _httpClient
-                .GetAsync(feedUrl, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-
-            if (!response.IsSuccessStatusCode)
+        var (failure, bytes) = await HttpOutcomeFetch.GetAsync<RssFeedReadResult, byte[]>(
+            _httpClient,
+            feedUrl,
+            // Materialize the body before disposing the response so parsing can happen synchronously.
+            readBody: (content, c) => content.ReadAsByteArrayAsync(c),
+            onStatus: null,
+            onHttpError: status =>
             {
                 _logger.LogWarning(
                     "RSS feed {FeedUrl} returned non-success status {StatusCode}; skipping.",
                     feedUrl,
-                    (int)response.StatusCode);
+                    status);
                 return RssFeedReadResult.Failure(
-                    RssFeedReadOutcome.HttpError, $"HTTP {(int)response.StatusCode}");
-            }
+                    RssFeedReadOutcome.HttpError, $"HTTP {status}");
+            },
+            onUnreachable: ex =>
+            {
+                _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch failed; skipping.", feedUrl);
+                return RssFeedReadResult.Failure(RssFeedReadOutcome.Unreachable, "transport error");
+            },
+            onTimeout: ex =>
+            {
+                // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+                _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch timed out; skipping.", feedUrl);
+                return RssFeedReadResult.Failure(RssFeedReadOutcome.Timeout, "request timed out");
+            },
+            ct).ConfigureAwait(false);
 
-            // Materialize the body before disposing the response so parsing can happen synchronously.
-            var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            stream = new MemoryStream(bytes, writable: false);
-        }
-        catch (HttpRequestException ex)
+        if (failure is not null)
         {
-            _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch failed; skipping.", feedUrl);
-            return RssFeedReadResult.Failure(RssFeedReadOutcome.Unreachable, "transport error");
+            return failure;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // Caller-requested cancellation must propagate so the run stops; do not hide it as a failure result.
-            throw;
-        }
-        catch (TaskCanceledException ex)
-        {
-            // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
-            _logger.LogWarning(ex, "RSS feed {FeedUrl} fetch timed out; skipping.", feedUrl);
-            return RssFeedReadResult.Failure(RssFeedReadOutcome.Timeout, "request timed out");
-        }
+
+        // Non-null once we are past the failure guard above: the fetch only defaults the body on failure.
+        Stream stream = new MemoryStream(bytes!, writable: false);
 
         using (stream)
         {

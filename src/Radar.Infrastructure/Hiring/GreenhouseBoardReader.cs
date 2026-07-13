@@ -3,6 +3,8 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Infrastructure.Sources;
+
 namespace Radar.Infrastructure.Hiring;
 
 /// <summary>
@@ -48,48 +50,45 @@ internal sealed class GreenhouseBoardReader : IJobBoardReader
 
         var requestUri = new Uri(BoardUrl(boardToken));
 
-        byte[] bytes;
-        try
-        {
-            using var response = await _httpClient
-                .GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-
-            if (!response.IsSuccessStatusCode)
+        var (failure, bytes) = await HttpOutcomeFetch.GetAsync<JobBoardReadResult, byte[]>(
+            _httpClient,
+            requestUri,
+            // Materialize the body before disposing the response so parsing can happen synchronously.
+            readBody: (content, c) => content.ReadAsByteArrayAsync(c),
+            onStatus: null,
+            onHttpError: status =>
             {
                 _logger.LogWarning(
                     "Greenhouse board '{BoardToken}' returned non-success status {StatusCode}; skipping.",
                     boardToken,
-                    (int)response.StatusCode);
+                    status);
                 return JobBoardReadResult.Failure(
-                    JobBoardReadOutcome.HttpError, $"HTTP {(int)response.StatusCode}");
-            }
+                    JobBoardReadOutcome.HttpError, $"HTTP {status}");
+            },
+            onUnreachable: ex =>
+            {
+                _logger.LogWarning(
+                    ex, "Greenhouse board '{BoardToken}' could not be reached; skipping.", boardToken);
+                return JobBoardReadResult.Failure(JobBoardReadOutcome.Unreachable, "transport error");
+            },
+            onTimeout: ex =>
+            {
+                // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+                _logger.LogWarning(
+                    ex, "Greenhouse board '{BoardToken}' timed out; skipping.", boardToken);
+                return JobBoardReadResult.Failure(JobBoardReadOutcome.Timeout, "request timed out");
+            },
+            ct).ConfigureAwait(false);
 
-            // Materialize the body before disposing the response so parsing can happen synchronously.
-            bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-        }
-        catch (HttpRequestException ex)
+        if (failure is not null)
         {
-            _logger.LogWarning(
-                ex, "Greenhouse board '{BoardToken}' could not be reached; skipping.", boardToken);
-            return JobBoardReadResult.Failure(JobBoardReadOutcome.Unreachable, "transport error");
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // Caller-requested cancellation must propagate so the run stops; do not hide it as a failure result.
-            throw;
-        }
-        catch (TaskCanceledException ex)
-        {
-            // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
-            _logger.LogWarning(
-                ex, "Greenhouse board '{BoardToken}' timed out; skipping.", boardToken);
-            return JobBoardReadResult.Failure(JobBoardReadOutcome.Timeout, "request timed out");
+            return failure;
         }
 
         try
         {
-            using var document = JsonDocument.Parse(bytes);
+            // Non-null once we are past the failure guard above: the fetch only defaults the body on failure.
+            using var document = JsonDocument.Parse(bytes!);
 
             // The board endpoint returns a JSON object. Valid JSON with any other root shape (array, string,
             // number, …) is a bad/changed response, not a quiet board: report it as Malformed so the collector

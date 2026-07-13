@@ -4,6 +4,8 @@ using System.Xml.Linq;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Infrastructure.Sources;
+
 namespace Radar.Infrastructure.News;
 
 /// <summary>
@@ -61,15 +63,18 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
 
         var requestUri = BuildRequestUri(query);
 
-        string body;
-        try
-        {
-            using var response = await _httpClient
-                .GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-
-            if ((int)response.StatusCode == 429)
+        var (failure, body) = await HttpOutcomeFetch.GetAsync<NewsSearchReadResult, string>(
+            _httpClient,
+            requestUri,
+            // Materialize the body before disposing the response so parsing can happen synchronously.
+            readBody: (content, c) => content.ReadAsStringAsync(c),
+            onStatus: status =>
             {
+                if (status != 429)
+                {
+                    return null;
+                }
+
                 // A 429 is not expected (Google News RSS is not per-IP throttled), but it is a distinct
                 // outcome. No retry here — collector-level pacing/sequencing is spec 81; degrade to no evidence.
                 _logger.LogWarning(
@@ -77,41 +82,38 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
                     query.QueryPhrase);
                 return NewsSearchReadResult.Failure(
                     NewsSearchReadOutcome.RateLimited, "HTTP 429 (rate limited)");
-            }
-
-            if (!response.IsSuccessStatusCode)
+            },
+            onHttpError: status =>
             {
                 _logger.LogWarning(
                     "News search for '{QueryPhrase}' returned non-success status {StatusCode}; skipping.",
                     query.QueryPhrase,
-                    (int)response.StatusCode);
+                    status);
                 return NewsSearchReadResult.Failure(
-                    NewsSearchReadOutcome.HttpError, $"HTTP {(int)response.StatusCode}");
-            }
+                    NewsSearchReadOutcome.HttpError, $"HTTP {status}");
+            },
+            onUnreachable: ex =>
+            {
+                _logger.LogWarning(
+                    ex, "News search for '{QueryPhrase}' failed; skipping.", query.QueryPhrase);
+                return NewsSearchReadResult.Failure(NewsSearchReadOutcome.Unreachable, "transport error");
+            },
+            onTimeout: ex =>
+            {
+                // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+                _logger.LogWarning(
+                    ex, "News search for '{QueryPhrase}' timed out; skipping.", query.QueryPhrase);
+                return NewsSearchReadResult.Failure(NewsSearchReadOutcome.Timeout, "request timed out");
+            },
+            ct).ConfigureAwait(false);
 
-            // Materialize the body before disposing the response so parsing can happen synchronously.
-            body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        }
-        catch (HttpRequestException ex)
+        if (failure is not null)
         {
-            _logger.LogWarning(
-                ex, "News search for '{QueryPhrase}' failed; skipping.", query.QueryPhrase);
-            return NewsSearchReadResult.Failure(NewsSearchReadOutcome.Unreachable, "transport error");
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // Caller-requested cancellation must propagate so the run stops; do not hide it as a failure.
-            throw;
-        }
-        catch (TaskCanceledException ex)
-        {
-            // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
-            _logger.LogWarning(
-                ex, "News search for '{QueryPhrase}' timed out; skipping.", query.QueryPhrase);
-            return NewsSearchReadResult.Failure(NewsSearchReadOutcome.Timeout, "request timed out");
+            return failure;
         }
 
-        return Parse(body, query, ct);
+        // Non-null once we are past the failure guard above: the fetch only defaults the body on failure.
+        return Parse(body!, query, ct);
     }
 
     /// <summary>
