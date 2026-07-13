@@ -114,7 +114,7 @@ public sealed class HttpOutcomeFetchTests
     {
         // The `when (ct.IsCancellationRequested)` catch MUST sit ahead of the TaskCanceledException catch:
         // genuine caller cancellation stops the run, it does not degrade to a typed failure. (The stub honours
-        // the token the way a real transport does — a cancelled send surfaces as a TaskCanceledException.)
+        // the token the way a real transport does — a cancelled send surfaces as an OperationCanceledException.)
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
@@ -170,7 +170,7 @@ public sealed class HttpOutcomeFetchTests
 
     /// <summary>
     /// Like <see cref="StubHandler"/> but observing the request's cancellation token, as a real transport does:
-    /// a cancelled send throws <see cref="TaskCanceledException"/> from inside the ladder's try.
+    /// a cancelled send throws <see cref="OperationCanceledException"/> from inside the ladder's try.
     /// </summary>
     private sealed class CancellationHonouringHandler(HttpStatusCode status, string body) : HttpMessageHandler
     {
