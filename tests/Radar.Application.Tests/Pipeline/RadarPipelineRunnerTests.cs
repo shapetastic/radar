@@ -1314,6 +1314,8 @@ public sealed class RadarPipelineRunnerTests
                 .ToList();
             return Task.FromResult(produced);
         }
+
+        public string ScoringDescriptor() => "directional-filing:str=6;nov=6;minconf=0.6";
     }
 
     /// <summary>An earnings-8-K Filing collected-evidence, in both windows so its signal can score.</summary>
@@ -1504,6 +1506,8 @@ public sealed class RadarPipelineRunnerTests
                 .ToList();
             return Task.FromResult(produced);
         }
+
+        public string ScoringDescriptor() => "directional-filing:str=6;nov=6;minconf=0.6";
     }
 
     /// <summary>A second, distinct earnings-8-K Filing (different content hash) the directional source

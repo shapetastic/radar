@@ -89,10 +89,16 @@ public static class InfrastructureServiceCollectionExtensions
         // into the ScoringConfigVersion fingerprint (via ScoringEngine).
         services.TryAddSingleton(new InsiderMaterialityWeights());
         // Signal-source descriptor (spec 95): folds the enabled collector NAMES + the extractor rule-set
-        // identity into the ScoringConfigVersion fingerprint. DI resolves IEnumerable<IEvidenceCollector> at
-        // RESOLUTION time, so this sees ALL collectors even though the Worker registers them AFTER
-        // AddRadarApplicationServices. TryAdd lets a composition root substitute its own descriptor.
-        services.TryAddSingleton<ISignalSourceDescriptor, SignalSourceDescriptor>();
+        // identity into the ScoringConfigVersion fingerprint. The optional AI directional-filing source (spec
+        // 106) is also folded in when registered — its per-signal magnitudes contribute an ai=… segment, so
+        // enabling the AI path (and tuning Strength/Novelty/MinConfidence) re-stamps the fingerprint
+        // automatically; it is null (AI off) => byte-identical AI-off descriptor. Both dependencies are
+        // lazy-resolved INSIDE the factory (RESOLUTION time), so this sees ALL collectors AND the AI source even
+        // though the Worker registers them AFTER AddRadarApplicationServices. TryAdd lets a composition root
+        // substitute its own descriptor.
+        services.TryAddSingleton<ISignalSourceDescriptor>(sp => new SignalSourceDescriptor(
+            sp.GetRequiredService<IEnumerable<IEvidenceCollector>>(),
+            sp.GetService<IDirectionalFilingSignalSource>()));
         services.AddSingleton<IScoringEngine, ScoringEngine>();
         services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();
         services.TryAddSingleton<IWeeklyReportRenderer, MarkdownWeeklyReportRenderer>();
@@ -869,9 +875,12 @@ public static class InfrastructureServiceCollectionExtensions
     /// specifics stay behind the injected interfaces (AD-5).
     /// <para>
     /// Fails fast when <paramref name="options"/> is null, when
-    /// <see cref="DirectionalFilingSignalOptions.MinConfidence"/> is outside [0,1], or when
-    /// <see cref="DirectionalFilingSignalOptions.MaxFilingsPerRun"/> is zero/negative: each is a
-    /// configuration error that would otherwise gate every read to nothing or surface as an opaque failure.
+    /// <see cref="DirectionalFilingSignalOptions.MinConfidence"/> is outside [0,1], when
+    /// <see cref="DirectionalFilingSignalOptions.MaxFilingsPerRun"/> is zero/negative, when
+    /// <see cref="DirectionalFilingSignalOptions.MaxConsecutiveRateLimited"/> is negative, or when
+    /// <see cref="DirectionalFilingSignalOptions.Strength"/> / <see cref="DirectionalFilingSignalOptions.Novelty"/>
+    /// is outside the signal's valid [1,10] range: each is a configuration error that would otherwise gate every
+    /// read to nothing, emit a signal that fails <c>SignalValidation</c>, or surface as an opaque failure.
     /// </para>
     /// </summary>
     public static IServiceCollection AddDirectionalFilingSignals(
@@ -898,6 +907,20 @@ public static class InfrastructureServiceCollectionExtensions
             throw new InvalidOperationException(
                 "Radar directional filing signals require a non-negative 429 circuit-breaker threshold; configure "
                     + "Radar:Ai:MaxConsecutiveRateLimited (default 2, 0 disables) — a negative value is nonsensical configuration.");
+        }
+
+        if (options.Strength is < 1 or > 10)
+        {
+            throw new InvalidOperationException(
+                "Radar directional filing signals require a signal strength in [1,10]; configure Radar:Ai:Strength "
+                    + "(default 6) — a value outside the signal's valid range fails SignalValidation at runtime.");
+        }
+
+        if (options.Novelty is < 1 or > 10)
+        {
+            throw new InvalidOperationException(
+                "Radar directional filing signals require a signal novelty in [1,10]; configure Radar:Ai:Novelty "
+                    + "(default 6) — a value outside the signal's valid range fails SignalValidation at runtime.");
         }
 
         services.AddSingleton(options);

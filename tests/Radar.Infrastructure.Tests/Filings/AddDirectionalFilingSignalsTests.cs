@@ -80,6 +80,30 @@ public sealed class AddDirectionalFilingSignalsTests
         Assert.Contains("Radar:Ai:MaxFilingsPerRun", ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(11)]
+    public void AddDirectionalFilingSignals_StrengthOutOfRange_FailsFast(int strength)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddDirectionalFilingSignals(
+                new DirectionalFilingSignalOptions { Strength = strength }));
+
+        Assert.Contains("Radar:Ai:Strength", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(11)]
+    public void AddDirectionalFilingSignals_NoveltyOutOfRange_FailsFast(int novelty)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddDirectionalFilingSignals(
+                new DirectionalFilingSignalOptions { Novelty = novelty }));
+
+        Assert.Contains("Radar:Ai:Novelty", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void AddDirectionalFilingSignals_NullOptions_Throws()
     {

@@ -20,6 +20,18 @@ public interface IDirectionalFilingSignalSource
         IReadOnlyList<EvidenceItem> candidateEvidence,
         DateTimeOffset asOfUtc,
         CancellationToken ct);
+
+    /// <summary>
+    /// This AI signal source's canonical contribution to the scoring fingerprint — the value read by
+    /// <see cref="Radar.Application.Scoring.SignalSourceDescriptor"/> exactly as it reads
+    /// <see cref="Radar.Application.Collectors.IEvidenceCollector.CollectorName"/>. It is a deterministic
+    /// (AD-3), delimiter-free-or-escaped string encoding the enrichment's <b>per-signal magnitudes</b> that set
+    /// an emitted directional <c>GuidanceChange</c> signal's Strength/Novelty/confidence-gate — so enabling the
+    /// AI path (vs. disabling it) and tuning those magnitudes both re-stamp <c>ScoringConfigVersion</c>
+    /// automatically (restoring AD-10 comparability). Cost/operational caps (per-run fetch limits, rate-limit
+    /// breakers) are deliberately excluded, mirroring how <c>ScoringWindowDays</c> is not a fingerprint input.
+    /// </summary>
+    string ScoringDescriptor();
 }
 
 /// <summary>An extracted directional filing signal paired with its source evidence (provenance).</summary>
