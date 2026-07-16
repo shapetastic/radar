@@ -50,7 +50,19 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
         try
         {
             var text = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-            return JsonSerializer.Deserialize<AnalyzedFilingRecord>(text, RadarFileStoreJson.Options);
+            var record = JsonSerializer.Deserialize<AnalyzedFilingRecord>(text, RadarFileStoreJson.Options);
+            if (record is null || !IsConsistent(record, accession))
+            {
+                // A malformed-but-parseable record (wrong accession, or an outcome/signal that disagree) is just as
+                // untrustworthy as unreadable JSON: returning it as a hit would silently suppress a real signal
+                // forever. Degrade to a cache miss so the filing is re-fetched (AD-8).
+                _logger.LogWarning(
+                    "Analyzed-filing cache file '{Path}' is semantically inconsistent (accession/outcome/signal); treating as a cache miss.",
+                    path);
+                return null;
+            }
+
+            return record;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -81,6 +93,27 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
                 record.Outcome,
                 path);
         }
+    }
+
+    /// <summary>
+    /// Confirms a deserialized record is trustworthy for the accession it was looked up under: the stored
+    /// accession must match the requested key, and the outcome and signal must agree (a produced signal must
+    /// carry one; a confirmed no-signal must not). An inconsistent record is treated as a miss so a corrupt file
+    /// can never permanently suppress a real signal.
+    /// </summary>
+    private static bool IsConsistent(AnalyzedFilingRecord record, string accession)
+    {
+        if (!string.Equals(record.Accession, accession, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return record.Outcome switch
+        {
+            AnalyzedFilingOutcome.DirectionalSignalProduced => record.Signal is not null,
+            AnalyzedFilingOutcome.NoDirectionalSignal => record.Signal is null,
+            _ => false,
+        };
     }
 
     private string? ResolvePath(string accession)

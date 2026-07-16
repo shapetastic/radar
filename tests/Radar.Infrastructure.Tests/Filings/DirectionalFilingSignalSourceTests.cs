@@ -456,6 +456,35 @@ public sealed class DirectionalFilingSignalSourceTests
     }
 
     [Fact]
+    public async Task CircuitBreaker_NonRateLimitedFailure_ResetsConsecutiveCount()
+    {
+        var candidates = Enumerable.Range(1, 4)
+            .Select(n => EarningsFiling(
+                accession: $"0001049521-26-00000{n}",
+                publishedAt: new DateTimeOffset(2026, 6, 10 - n, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+
+        // 429, then a NON-429 failure, then 429, then a success. With breaker 2 the two 429s are NOT consecutive
+        // (the Unreachable read between them resets the counter), so the breaker must not trip and every
+        // candidate is attempted — the final success still produces its signal.
+        var reader = new FakeSecEarningsReleaseReader(
+        [
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.Unreachable, "boom"),
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
+            SecEarningsReleaseReadResult.Success("Revenue up, guidance raised.", "EX-99.1", "ex991.htm"),
+        ]);
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 2 };
+
+        var result = await CreateSource(reader, analyzer, options)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Single(result); // the final successful filing produced a signal.
+        Assert.Equal(4, reader.ReadCount); // breaker never tripped: all four candidates attempted.
+    }
+
+    [Fact]
     public async Task CircuitBreaker_Disabled_AttemptsAllCandidates()
     {
         var candidates = Enumerable.Range(1, 5)

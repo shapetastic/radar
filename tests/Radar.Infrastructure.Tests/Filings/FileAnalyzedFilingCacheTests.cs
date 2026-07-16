@@ -1,7 +1,10 @@
+using System.Text.Json;
+
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Filings;
 using Radar.Application.SignalExtraction;
+using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Filings;
 
 namespace Radar.Infrastructure.Tests.Filings;
@@ -109,6 +112,60 @@ public sealed class FileAnalyzedFilingCacheTests
         {
             Directory.Delete(dir, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task TryGet_AccessionMismatch_DegradesToMiss()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var cache = CreateCache(dir);
+            // A parseable record whose stored accession disagrees with the file it lives in is untrustworthy —
+            // returning it as a hit would replay a signal against the wrong filing, so it must degrade to a miss.
+            var wrongAccession = new AnalyzedFilingRecord(
+                "9999999999-99-999999", AnalyzedFilingOutcome.NoDirectionalSignal, null, null);
+            await WriteRecordForAsync(dir, Accession, wrongAccession);
+
+            var read = await cache.TryGetAsync(Accession, CancellationToken.None);
+            Assert.Null(read);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TryGet_ProducedOutcomeWithNullSignal_DegradesToMiss()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var cache = CreateCache(dir);
+            // DirectionalSignalProduced but no signal to replay is a self-contradictory record; treating it as a
+            // hit would silently suppress the filing forever, so it must degrade to a miss and be re-fetched.
+            var inconsistent = new AnalyzedFilingRecord(
+                Accession, AnalyzedFilingOutcome.DirectionalSignalProduced, null, null);
+            await WriteRecordForAsync(dir, Accession, inconsistent);
+
+            var read = await cache.TryGetAsync(Accession, CancellationToken.None);
+            Assert.Null(read);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>Serializes <paramref name="record"/> exactly as the cache would and writes it to the file the
+    /// cache reads for <paramref name="accessionKey"/> (sanitized == lowercased), so a deliberately inconsistent
+    /// record can be planted for the validation tests.</summary>
+    private static async Task WriteRecordForAsync(string dir, string accessionKey, AnalyzedFilingRecord record)
+    {
+        var path = Path.Combine(dir, accessionKey.ToLowerInvariant() + ".json");
+        var json = JsonSerializer.Serialize(record, RadarFileStoreJson.Options);
+        await File.WriteAllTextAsync(path, json, CancellationToken.None);
     }
 
     private static FileAnalyzedFilingCache CreateCache(string dir) =>

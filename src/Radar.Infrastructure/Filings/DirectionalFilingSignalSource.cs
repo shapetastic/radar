@@ -30,8 +30,9 @@ namespace Radar.Infrastructure.Filings;
 /// fetch or AI call. A miss fetches + analyzes, then caches ONLY a successful read (a signal or a confirmed
 /// no-signal) — a failed read is NEVER cached, so a transient block cannot permanently suppress a filing. A
 /// per-run 429 circuit breaker (<see cref="DirectionalFilingSignalOptions.MaxConsecutiveRateLimited"/>) stops
-/// attempting the remaining filings once the host appears blocked; a success or a cache hit resets it, a non-429
-/// failure does not trip it. The cache only changes WHETHER a fetch happens — the scored signal set is unchanged.
+/// attempting the remaining filings once the host appears blocked; a success, a cache hit, or any non-429 failure
+/// resets the count, so only an unbroken run of 429s trips it. The cache only changes WHETHER a fetch happens — the
+/// scored signal set is unchanged.
 /// </para>
 /// </summary>
 internal sealed partial class DirectionalFilingSignalSource : IDirectionalFilingSignalSource
@@ -85,8 +86,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         var produced = new List<DirectionalFilingSignal>();
 
         // Per-run 429 circuit breaker (spec 107): stop after this many CONSECUTIVE rate-limited reads (the host
-        // appears blocked). 0 disables it (unbounded — the pre-spec-107 behaviour). A success or a cache hit
-        // resets the count; a non-429 failure does not touch it.
+        // appears blocked). 0 disables it (unbounded — the pre-spec-107 behaviour). A success, a cache hit, or any
+        // non-429 failure resets the count, so only an unbroken run of 429s trips the breaker.
         var breaker = Math.Max(0, _options.MaxConsecutiveRateLimited);
         var consecutiveRateLimited = 0;
 
@@ -154,9 +155,13 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         break;
                     }
                 }
-
-                // A non-429 read failure is not cached and does NOT touch the consecutive-429 counter (a
-                // per-filing problem, not a host block).
+                else
+                {
+                    // A non-429 read failure is not cached and BREAKS the consecutive-429 run (it is a per-filing
+                    // problem, not a host block): reset the counter so two 429s separated by a different failure
+                    // (e.g. a timeout) are not counted as consecutive and cannot trip the breaker.
+                    consecutiveRateLimited = 0;
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -165,7 +170,10 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
             catch (Exception ex)
             {
                 // Graceful degradation: one bad filing must never abort the batch (mirrors the reader /
-                // analyzer discipline). No directional signal for this filing; the run continues.
+                // analyzer discipline). No directional signal for this filing; the run continues. A thrown
+                // failure (e.g. an HttpClient timeout) is also a non-429 outcome that breaks the consecutive-429
+                // run — reset the counter so it cannot make separated 429s trip the breaker.
+                consecutiveRateLimited = 0;
                 _logger.LogWarning(
                     ex,
                     "Directional filing read failed for evidence {EvidenceId}; skipping (no directional signal).",
