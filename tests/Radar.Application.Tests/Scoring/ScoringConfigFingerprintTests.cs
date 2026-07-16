@@ -163,6 +163,46 @@ public sealed class ScoringConfigFingerprintTests
         Assert.NotEqual(baseline, changed);
     }
 
+    // The AI-ON signal-source descriptor (spec 106): the same AI-OFF SourceDescriptor with the directional-filing
+    // source's per-signal magnitudes appended as an escaped ai=… segment (the default Strength/Novelty/MinConfidence
+    // == 6/6/0.6). This is what SignalSourceDescriptor produces when the opt-in AI path is registered.
+    private const string AiOnSourceDescriptor =
+        SourceDescriptor + "ai=directional-filing:str=6;nov=6;minconf=0.6;";
+
+    [Fact]
+    public void Compute_AiOnSourceDescriptor_DiffersFromAiOff()
+    {
+        // Enabling the AI directional-filing path widens the signal-production surface (it emits directional
+        // GuidanceChange signals), so the fingerprint MUST re-stamp — closing the AD-10 comparability gap between
+        // an AI-on and an AI-off run (the AI analogue of spec 95's secform4 fix). The AI-OFF pin above is unmoved.
+        var aiOff = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor);
+
+        var aiOn = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
+            InsiderDescriptor);
+
+        Assert.NotEqual(aiOff, aiOn);
+    }
+
+    [Fact]
+    public void Compute_ChangedAiStrength_ChangesFingerprint()
+    {
+        // Tuning the AI signal's Strength re-stamps the fingerprint by value (spec 106) — the deferred Strength
+        // recalibration cannot silently produce falsely-comparable snapshots.
+        var baseline = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
+            InsiderDescriptor);
+
+        var changed = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(),
+            SourceDescriptor + "ai=directional-filing:str=9;nov=6;minconf=0.6;",
+            InsiderDescriptor);
+
+        Assert.NotEqual(baseline, changed);
+    }
+
     [Fact]
     public void Compute_ChangedFormulaVersion_ChangesFingerprint()
     {

@@ -346,6 +346,22 @@ public sealed class AiWorkerOptions
     /// configured. Defaults to 2; set to 0 to disable the breaker.
     /// </summary>
     public int MaxConsecutiveRateLimited { get; init; } = 2;
+
+    /// <summary>
+    /// Strength stamped on each emitted directional <c>GuidanceChange</c> signal. In-range [1,10] (fails fast at
+    /// registration otherwise). It is a per-signal magnitude folded into the scoring fingerprint (spec 106), so
+    /// tuning it re-stamps <c>ScoringConfigVersion</c> automatically. Only read when a provider is configured.
+    /// Defaults to 6.
+    /// </summary>
+    public int Strength { get; init; } = 6;
+
+    /// <summary>
+    /// Novelty stamped on each emitted directional <c>GuidanceChange</c> signal. In-range [1,10] (fails fast at
+    /// registration otherwise). It is a per-signal magnitude folded into the scoring fingerprint (spec 106), so
+    /// tuning it re-stamps <c>ScoringConfigVersion</c> automatically. Only read when a provider is configured.
+    /// Defaults to 6.
+    /// </summary>
+    public int Novelty { get; init; } = 6;
 }
 
 /// <summary>Anthropic (hosted) provider config (bound from "Radar:Ai:Anthropic").</summary>

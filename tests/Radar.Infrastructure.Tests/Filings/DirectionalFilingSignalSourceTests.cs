@@ -85,6 +85,59 @@ public sealed class DirectionalFilingSignalSourceTests
             MetadataJson: metadataJson);
     }
 
+    // A descriptor-only source: the reader/analyzer are never touched by ScoringDescriptor(), so any fakes do.
+    private static string ScoringDescriptorFor(DirectionalFilingSignalOptions options) =>
+        CreateSource(
+            new FakeSecEarningsReleaseReader(
+                SecEarningsReleaseReadResult.Success("body", "EX-99.1", "ex991.htm")),
+            new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "rationale")),
+            options).ScoringDescriptor();
+
+    [Fact]
+    public void ScoringDescriptor_EncodesPerSignalMagnitudes_InCanonicalForm()
+    {
+        Assert.Equal(
+            "directional-filing:str=6;nov=6;minconf=0.6",
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions()));
+
+        Assert.Equal(
+            "directional-filing:str=9;nov=4;minconf=0.75",
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions
+            {
+                Strength = 9,
+                Novelty = 4,
+                MinConfidence = 0.75m,
+            }));
+    }
+
+    [Fact]
+    public void ScoringDescriptor_ExcludesMaxFilingsPerRun()
+    {
+        // MaxFilingsPerRun is an operational cost cap, not a per-signal magnitude — changing it must NOT change
+        // the descriptor (so tuning it does not falsely re-stamp otherwise-comparable runs).
+        Assert.Equal(
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { MaxFilingsPerRun = 5 }),
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { MaxFilingsPerRun = 50 }));
+    }
+
+    [Fact]
+    public void ScoringDescriptor_ExcludesMaxConsecutiveRateLimited()
+    {
+        // The per-run 429 circuit breaker is operational scaffolding — changing it must NOT change the descriptor.
+        Assert.Equal(
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 2 }),
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 0 }));
+    }
+
+    [Fact]
+    public void ScoringDescriptor_ChangesWhenStrengthChanges()
+    {
+        // A per-signal magnitude is folded by value — a Strength change must re-stamp the descriptor.
+        Assert.NotEqual(
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { Strength = 6 }),
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { Strength = 9 }));
+    }
+
     [Fact]
     public async Task Improving_HighConfidence_ProducesOnePositiveGuidanceChange()
     {

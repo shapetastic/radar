@@ -221,6 +221,8 @@ internal static class RadarWorkerServices
                 MinConfidence = options.Ai.MinConfidence,
                 MaxFilingsPerRun = options.Ai.MaxFilingsPerRun,
                 MaxConsecutiveRateLimited = options.Ai.MaxConsecutiveRateLimited,
+                Strength = options.Ai.Strength,
+                Novelty = options.Ai.Novelty,
             });
 
             // Per-accession earnings-analysis-result cache (spec 107, AD-14 analogue): lets the directional
