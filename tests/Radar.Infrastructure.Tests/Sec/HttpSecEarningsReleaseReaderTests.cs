@@ -69,7 +69,11 @@ public sealed class HttpSecEarningsReleaseReaderTests
         """;
 
     private static HttpSecEarningsReleaseReader CreateReader(HttpMessageHandler handler) =>
-        new(new HttpClient(handler), new EvidenceNormalizer(), NullLogger<HttpSecEarningsReleaseReader>.Instance);
+        new(
+            new HttpClient(handler),
+            new EvidenceNormalizer(),
+            new SecEarningsReleaseReaderOptions(),
+            NullLogger<HttpSecEarningsReleaseReader>.Instance);
 
     [Fact]
     public async Task ReadAsync_SelectsEx991_ReturnsStrippedPlainText()

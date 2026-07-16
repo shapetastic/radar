@@ -13,6 +13,12 @@ namespace Radar.Infrastructure.Sec;
 /// (null for a reference <c>TBody</c>), so callers MUST check <c>Failure</c> before using <c>Body</c>. It does NO
 /// logging — logging lives in the caller-supplied projection lambdas so each reader keeps its exact log wording.
 /// <c>TBody</c> lets the filing reader read bytes and the earnings reader read a string.
+/// <para>
+/// The optional <paramref name="onRateLimited"/> hook lets a reader that owns a bounded 429 backoff-retry (the
+/// earnings-release reader) map HTTP 429 to a distinct failure. When it is <see langword="null"/> (the default,
+/// used by the other 3 SEC readers) a 429 falls through to <paramref name="onHttpError"/> exactly as before, so
+/// those readers are byte-for-byte unchanged.
+/// </para>
 /// </summary>
 internal static class SecHttpFetch
 {
@@ -24,15 +30,19 @@ internal static class SecHttpFetch
         Func<int, TFailure> onHttpError,
         Func<HttpRequestException, TFailure> onUnreachable,
         Func<TaskCanceledException, TFailure> onTimeout,
-        CancellationToken ct)
+        CancellationToken ct,
+        Func<TFailure>? onRateLimited = null)
         where TFailure : class =>
         HttpOutcomeFetch.GetAsync(
             httpClient,
             url,
             readBody,
-            // SEC's one status specialization: 403 = missing/invalid User-Agent, mapped ahead of the generic
-            // non-success branch. Every other status falls through to onHttpError.
-            onStatus: status => status == 403 ? onForbidden() : null,
+            // SEC's status specializations: 403 = missing/invalid User-Agent, mapped ahead of the generic
+            // non-success branch. 429 = rate limited, mapped only when a caller supplies onRateLimited (so it
+            // can own a bounded backoff-retry); otherwise 429 falls through to onHttpError as before. Every
+            // other status falls through to onHttpError.
+            onStatus: status => status == 403 ? onForbidden()
+                : (status == 429 && onRateLimited is not null ? onRateLimited() : null),
             onHttpError,
             onUnreachable,
             onTimeout,

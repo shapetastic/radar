@@ -203,12 +203,18 @@ internal static class RadarWorkerServices
             // ride this same opt-in gate, so with a blank Provider none of them are registered and the
             // runner's optional IDirectionalFilingSignalSource stays null (default graph unchanged). The
             // reader only strictly needs the UserAgent, but the SEC options are passed consistently.
-            services.AddSecEarningsReleaseReader(new SecCollectorOptions
-            {
-                UserAgent = options.Sec.UserAgent,
-                Forms = options.Sec.Forms,
-                MaxFilingsPerCompany = options.Sec.MaxFilingsPerCompany,
-            });
+            services.AddSecEarningsReleaseReader(
+                new SecCollectorOptions
+                {
+                    UserAgent = options.Sec.UserAgent,
+                    Forms = options.Sec.Forms,
+                    MaxFilingsPerCompany = options.Sec.MaxFilingsPerCompany,
+                },
+                new SecEarningsReleaseReaderOptions
+                {
+                    MaxRetriesOn429 = options.Sec.MaxRetriesOn429,
+                    RetryBackoff = TimeSpan.FromSeconds(options.Sec.RetryBackoffSeconds),
+                });
             services.AddDirectionalFilingSignals(new DirectionalFilingSignalOptions
             {
                 MinConfidence = options.Ai.MinConfidence,

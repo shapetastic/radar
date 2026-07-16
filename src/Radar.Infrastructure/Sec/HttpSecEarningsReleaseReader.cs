@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Evidence;
+using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Sec;
 
@@ -24,19 +25,23 @@ internal sealed partial class HttpSecEarningsReleaseReader : ISecEarningsRelease
 {
     private readonly HttpClient _httpClient;
     private readonly IEvidenceNormalizer _normalizer;
+    private readonly SecEarningsReleaseReaderOptions _retryOptions;
     private readonly ILogger<HttpSecEarningsReleaseReader> _logger;
 
     public HttpSecEarningsReleaseReader(
         HttpClient httpClient,
         IEvidenceNormalizer normalizer,
+        SecEarningsReleaseReaderOptions retryOptions,
         ILogger<HttpSecEarningsReleaseReader> logger)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(normalizer);
+        ArgumentNullException.ThrowIfNull(retryOptions);
         ArgumentNullException.ThrowIfNull(logger);
 
         _httpClient = httpClient;
         _normalizer = normalizer;
+        _retryOptions = retryOptions;
         _logger = logger;
     }
 
@@ -97,52 +102,96 @@ internal sealed partial class HttpSecEarningsReleaseReader : ISecEarningsRelease
     /// <summary>
     /// Fetches a URL as a string, mapping SEC's HTTP outcomes to typed failures exactly as
     /// <see cref="HttpSecFilingReader"/> does. Returns a non-null failure (and empty body) on any bad
-    /// response; caller-requested cancellation re-throws.
+    /// response; caller-requested cancellation re-throws. An HTTP 429 (rate limited — SEC returns it under the
+    /// Archives burst this reader fires) is not skipped straight away: this method owns a bounded exponential
+    /// backoff-retry (per <see cref="SecEarningsReleaseReaderOptions"/>, mirroring GDELT) and only returns a
+    /// typed <see cref="SecEarningsReleaseReadOutcome.RateLimited"/> failure once retries are exhausted — it
+    /// never throws on 429. Because both call sites (index and exhibit) route through here, both get the retry.
     /// </summary>
     private async Task<(SecEarningsReleaseReadResult? Failure, string Body)> FetchAsync(
         string url, CancellationToken ct)
     {
-        // Honour caller cancellation before each (sequential) request, independent of transport timing.
-        ct.ThrowIfCancellationRequested();
+        var maxRetries = Math.Max(0, _retryOptions.MaxRetriesOn429);
+        var attempt = 0;
 
-        var (failure, body) = await SecHttpFetch.GetAsync<SecEarningsReleaseReadResult, string>(
-            _httpClient,
-            url,
-            readBody: (content, c) => content.ReadAsStringAsync(c),
-            onForbidden: () =>
+        while (true)
+        {
+            // Honour caller cancellation before each (sequential) request, independent of transport timing.
+            ct.ThrowIfCancellationRequested();
+
+            var (failure, body) = await SecHttpFetch.GetAsync<SecEarningsReleaseReadResult, string>(
+                _httpClient,
+                url,
+                readBody: (content, c) => content.ReadAsStringAsync(c),
+                onForbidden: () =>
+                {
+                    _logger.LogWarning(
+                        "SEC {Url} returned HTTP 403 Forbidden; this is almost always a missing or invalid "
+                            + "User-Agent (SEC requires a compliant 'Radar Research <email>' UA). Skipping.",
+                        url);
+                    return SecEarningsReleaseReadResult.Failure(
+                        SecEarningsReleaseReadOutcome.Forbidden, "HTTP 403 (User-Agent)");
+                },
+                onHttpError: status =>
+                {
+                    _logger.LogWarning(
+                        "SEC {Url} returned non-success status {StatusCode}; skipping.",
+                        url,
+                        status);
+                    return SecEarningsReleaseReadResult.Failure(
+                        SecEarningsReleaseReadOutcome.HttpError, $"HTTP {status}");
+                },
+                onUnreachable: ex =>
+                {
+                    _logger.LogWarning(ex, "SEC {Url} fetch failed; skipping.", url);
+                    return SecEarningsReleaseReadResult.Failure(
+                        SecEarningsReleaseReadOutcome.Unreachable, "transport error");
+                },
+                onTimeout: ex =>
+                {
+                    // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
+                    _logger.LogWarning(ex, "SEC {Url} fetch timed out; skipping.", url);
+                    return SecEarningsReleaseReadResult.Failure(
+                        SecEarningsReleaseReadOutcome.Timeout, "request timed out");
+                },
+                ct,
+                // Map 429 to RateLimited WITHOUT logging here: the retry loop below owns the retry-vs-final
+                // wording (and the log-before-delay ordering), which needs the attempt state.
+                onRateLimited: () => SecEarningsReleaseReadResult.Failure(
+                    SecEarningsReleaseReadOutcome.RateLimited, "HTTP 429 (rate limited)")).ConfigureAwait(false);
+
+            if (failure is null)
             {
-                _logger.LogWarning(
-                    "SEC {Url} returned HTTP 403 Forbidden; this is almost always a missing or invalid "
-                        + "User-Agent (SEC requires a compliant 'Radar Research <email>' UA). Skipping.",
-                    url);
-                return SecEarningsReleaseReadResult.Failure(
-                    SecEarningsReleaseReadOutcome.Forbidden, "HTTP 403 (User-Agent)");
-            },
-            onHttpError: status =>
+                return (null, body ?? string.Empty);
+            }
+
+            if (failure.Outcome != SecEarningsReleaseReadOutcome.RateLimited)
             {
+                return (failure, string.Empty);
+            }
+
+            // SEC's fair-access limit 429s the Archives burst this reader fires. Own a bounded, EXPONENTIAL
+            // delayed retry here (base, 2×base, …) so a transient throttle stops starving the AI directional
+            // path; after retries are exhausted still return RateLimited (never throw).
+            if (attempt < maxRetries)
+            {
+                var backoff = ExponentialBackoff.Compute(_retryOptions.RetryBackoff, attempt);
+                attempt++;
                 _logger.LogWarning(
-                    "SEC {Url} returned non-success status {StatusCode}; skipping.",
+                    "SEC {Url} returned HTTP 429 (rate limited); retry {Attempt}/{MaxRetries} after {BackoffSeconds:0.#}s.",
                     url,
-                    status);
-                return SecEarningsReleaseReadResult.Failure(
-                    SecEarningsReleaseReadOutcome.HttpError, $"HTTP {status}");
-            },
-            onUnreachable: ex =>
-            {
-                _logger.LogWarning(ex, "SEC {Url} fetch failed; skipping.", url);
-                return SecEarningsReleaseReadResult.Failure(
-                    SecEarningsReleaseReadOutcome.Unreachable, "transport error");
-            },
-            onTimeout: ex =>
-            {
-                // Non-ct cancellation here is an HTTP timeout (the request's own deadline); treat it as a skip.
-                _logger.LogWarning(ex, "SEC {Url} fetch timed out; skipping.", url);
-                return SecEarningsReleaseReadResult.Failure(
-                    SecEarningsReleaseReadOutcome.Timeout, "request timed out");
-            },
-            ct).ConfigureAwait(false);
+                    attempt,
+                    maxRetries,
+                    backoff.TotalSeconds);
+                await Task.Delay(backoff, ct).ConfigureAwait(false);
+                continue;
+            }
 
-        return (failure, body ?? string.Empty);
+            _logger.LogWarning(
+                "SEC {Url} returned HTTP 429 (rate limited) after retries; skipping.",
+                url);
+            return (failure, string.Empty);
+        }
     }
 
     /// <summary>

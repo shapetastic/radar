@@ -12,7 +12,8 @@ internal enum SecEarningsReleaseReadOutcome
     Success,            // EX-99.1 (or EX-99.* fallback) fetched and stripped to plain text
     NoEarningsExhibit,  // index parsed OK but no EX-99.* document row present
     Unreachable,        // transport error (HttpRequestException — DNS, connection refused, TLS, etc.)
-    HttpError,          // a non-success HTTP status (other than 403) on the index or the exhibit
+    HttpError,          // a non-success HTTP status (other than 403/429) on the index or the exhibit
+    RateLimited,        // HTTP 429 (rate limited) on index or exhibit — retried with bounded backoff, then skipped
     Forbidden,          // HTTP 403 on index or exhibit — almost always a missing/invalid User-Agent
     Timeout,            // the request's own HTTP deadline elapsed (TaskCanceledException, ct NOT requested)
     Malformed,          // the index page could not be parsed / had no usable document table
