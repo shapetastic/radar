@@ -20,28 +20,43 @@ namespace Radar.Infrastructure.Sec;
 /// <see cref="SecEarningsReleaseReadResult"/> (with a warning) rather than swallowed; caller-requested
 /// cancellation still throws. A 403 is called out distinctly because SEC returns it when the mandatory
 /// <c>User-Agent</c> is missing/invalid. All HTTP/HTML/SEC code stays in Infrastructure (AD-5).
+/// <para>
+/// To reduce the sustained www.sec.gov footprint that gets the IP fair-access-flagged (spec 107), the reader
+/// PACES its requests: before each actual network fetch it waits so successive requests are at least
+/// <see cref="SecEarningsReleaseReaderOptions.MinRequestInterval"/> apart (driven by the injected
+/// <see cref="TimeProvider"/> so it is deterministic under test). A <see cref="TimeSpan.Zero"/> interval
+/// restores the un-paced behaviour.
+/// </para>
 /// </summary>
 internal sealed partial class HttpSecEarningsReleaseReader : ISecEarningsReleaseReader
 {
     private readonly HttpClient _httpClient;
     private readonly IEvidenceNormalizer _normalizer;
     private readonly SecEarningsReleaseReaderOptions _retryOptions;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<HttpSecEarningsReleaseReader> _logger;
+
+    // The instant of the reader's last actual www.sec.gov request, used to pace successive requests at least
+    // MinRequestInterval apart (spec 107). Null until the first request is issued.
+    private DateTimeOffset? _lastRequestAtUtc;
 
     public HttpSecEarningsReleaseReader(
         HttpClient httpClient,
         IEvidenceNormalizer normalizer,
         SecEarningsReleaseReaderOptions retryOptions,
+        TimeProvider timeProvider,
         ILogger<HttpSecEarningsReleaseReader> logger)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(normalizer);
         ArgumentNullException.ThrowIfNull(retryOptions);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _httpClient = httpClient;
         _normalizer = normalizer;
         _retryOptions = retryOptions;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -118,6 +133,22 @@ internal sealed partial class HttpSecEarningsReleaseReader : ISecEarningsRelease
         {
             // Honour caller cancellation before each (sequential) request, independent of transport timing.
             ct.ThrowIfCancellationRequested();
+
+            // Pace the www.sec.gov footprint (spec 107): wait so this request is at least MinRequestInterval after
+            // the previous one. Retries are paced too (inside this loop). MinRequestInterval == Zero ⇒ no delay
+            // (parity). The TimeProvider overload makes a FakeTimeProvider drive the delay deterministically, and
+            // Task.Delay honours ct.
+            var minInterval = _retryOptions.MinRequestInterval;
+            if (minInterval > TimeSpan.Zero && _lastRequestAtUtc is { } last)
+            {
+                var remaining = minInterval - (_timeProvider.GetUtcNow() - last);
+                if (remaining > TimeSpan.Zero)
+                {
+                    await Task.Delay(remaining, _timeProvider, ct).ConfigureAwait(false);
+                }
+            }
+
+            _lastRequestAtUtc = _timeProvider.GetUtcNow();
 
             var (failure, body) = await SecHttpFetch.GetAsync<SecEarningsReleaseReadResult, string>(
                 _httpClient,

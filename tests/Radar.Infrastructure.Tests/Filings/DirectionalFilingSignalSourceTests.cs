@@ -16,12 +16,14 @@ public sealed class DirectionalFilingSignalSourceTests
     private static readonly DateTimeOffset AsOf = new(2026, 6, 30, 12, 0, 0, TimeSpan.Zero);
 
     private static DirectionalFilingSignalSource CreateSource(
-        FakeSecEarningsReleaseReader reader,
-        FakeFilingAnalyzer analyzer,
-        DirectionalFilingSignalOptions? options = null) =>
+        ISecEarningsReleaseReader reader,
+        IFilingAnalyzer analyzer,
+        DirectionalFilingSignalOptions? options = null,
+        IAnalyzedFilingCache? cache = null) =>
         new(
             reader,
             analyzer,
+            cache ?? new FakeAnalyzedFilingCache(),
             options ?? new DirectionalFilingSignalOptions(),
             NullLogger<DirectionalFilingSignalSource>.Instance);
 
@@ -318,9 +320,208 @@ public sealed class DirectionalFilingSignalSourceTests
         Assert.Equal(1, reader.ReadCount);
     }
 
-    private sealed class FakeSecEarningsReleaseReader(SecEarningsReleaseReadResult result)
-        : ISecEarningsReleaseReader
+    [Fact]
+    public async Task CacheHit_ReplaysFieldIdenticalSignal_WithNoSecondFetchOrAi()
     {
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success("Revenue rose 40% and the company raised guidance.", "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose 40%; guidance raised."));
+        var cache = new FakeAnalyzedFilingCache();
+        var source = CreateSource(reader, analyzer, cache: cache);
+
+        // First run: fetch + analyze, produce, and populate the cache.
+        var first = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        var firstProduced = Assert.Single(first);
+        Assert.Equal(1, reader.ReadCount);
+        Assert.Equal(1, analyzer.AnalyzeCount);
+        Assert.Single(cache.Entries);
+
+        // Second run on the SAME source + cache: a cache hit replays a field-identical signal with no further
+        // fetch or AI call.
+        var second = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        var secondProduced = Assert.Single(second);
+
+        Assert.Equal(1, reader.ReadCount);
+        Assert.Equal(1, analyzer.AnalyzeCount);
+
+        Assert.Same(evidence, secondProduced.Evidence);
+        Assert.Equal(firstProduced.Signal.SignalType, secondProduced.Signal.SignalType);
+        Assert.Equal(firstProduced.Signal.Direction, secondProduced.Signal.Direction);
+        Assert.Equal(firstProduced.Signal.Strength, secondProduced.Signal.Strength);
+        Assert.Equal(firstProduced.Signal.Novelty, secondProduced.Signal.Novelty);
+        Assert.Equal(firstProduced.Signal.Confidence, secondProduced.Signal.Confidence);
+        Assert.Equal(firstProduced.Signal.SupportingExcerpt, secondProduced.Signal.SupportingExcerpt);
+        Assert.Equal(firstProduced.Signal.Reason, secondProduced.Signal.Reason);
+        Assert.Equal(firstProduced.Signal.CompanyMention, secondProduced.Signal.CompanyMention);
+    }
+
+    [Fact]
+    public async Task SuccessfulReadWithNoSignal_IsCachedAsNoSignal_AndNotRefetched()
+    {
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success("Some earnings text.", "EX-99.1", "ex991.htm"));
+        // Mixed -> a successful read but no directional signal; must be cached as NoDirectionalSignal.
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Mixed, 0.95m, "Both up and down."));
+        var cache = new FakeAnalyzedFilingCache();
+        var source = CreateSource(reader, analyzer, cache: cache);
+
+        var first = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        Assert.Empty(first);
+        Assert.Equal(1, reader.ReadCount);
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(AnalyzedFilingOutcome.NoDirectionalSignal, entry.Outcome);
+        Assert.Null(entry.Signal);
+
+        // Second run: the no-signal cache hit means the reader is NOT called again and nothing is emitted.
+        var second = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        Assert.Empty(second);
+        Assert.Equal(1, reader.ReadCount);
+    }
+
+    [Theory]
+    [InlineData("RateLimited")]
+    [InlineData("Unreachable")]
+    public async Task FailedRead_IsNotCached_AndIsRetriedNextRun(string outcomeName)
+    {
+        var outcome = Enum.Parse<SecEarningsReleaseReadOutcome>(outcomeName);
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Failure(outcome, "reader failed"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Would be improving."));
+        // Disable the breaker so RateLimited alone does not stop the (single-candidate) run.
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 0 };
+        var cache = new FakeAnalyzedFilingCache();
+        var source = CreateSource(reader, analyzer, options, cache);
+
+        var first = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        Assert.Empty(first);
+        Assert.Equal(1, reader.ReadCount);
+        Assert.Empty(cache.Entries); // a failed read is never cached.
+
+        // Second run retries the same filing (cache still empty).
+        var second = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        Assert.Empty(second);
+        Assert.Equal(2, reader.ReadCount);
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_StopsAfterConsecutiveRateLimits()
+    {
+        var candidates = Enumerable.Range(1, 5)
+            .Select(n => EarningsFiling(
+                accession: $"0001049521-26-00000{n}",
+                publishedAt: new DateTimeOffset(2026, 6, 10 - n, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "n/a"));
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 2 };
+
+        var result = await CreateSource(reader, analyzer, options)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        Assert.Equal(2, reader.ReadCount); // stopped after 2 consecutive 429s.
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_SuccessResetsConsecutiveCount()
+    {
+        var candidates = Enumerable.Range(1, 3)
+            .Select(n => EarningsFiling(
+                accession: $"0001049521-26-00000{n}",
+                publishedAt: new DateTimeOffset(2026, 6, 10 - n, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+
+        // First filing succeeds (resets the counter), then the next two 429 -> with breaker 2 they still trip.
+        var reader = new FakeSecEarningsReleaseReader(
+        [
+            SecEarningsReleaseReadResult.Success("Revenue up, guidance raised.", "EX-99.1", "ex991.htm"),
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
+        ]);
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 2 };
+
+        var result = await CreateSource(reader, analyzer, options)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Single(result); // the first (successful) filing produced a signal.
+        Assert.Equal(3, reader.ReadCount); // success + two 429s (which then trip the breaker).
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_NonRateLimitedFailure_ResetsConsecutiveCount()
+    {
+        var candidates = Enumerable.Range(1, 4)
+            .Select(n => EarningsFiling(
+                accession: $"0001049521-26-00000{n}",
+                publishedAt: new DateTimeOffset(2026, 6, 10 - n, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+
+        // 429, then a NON-429 failure, then 429, then a success. With breaker 2 the two 429s are NOT consecutive
+        // (the Unreachable read between them resets the counter), so the breaker must not trip and every
+        // candidate is attempted — the final success still produces its signal.
+        var reader = new FakeSecEarningsReleaseReader(
+        [
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.Unreachable, "boom"),
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
+            SecEarningsReleaseReadResult.Success("Revenue up, guidance raised.", "EX-99.1", "ex991.htm"),
+        ]);
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 2 };
+
+        var result = await CreateSource(reader, analyzer, options)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Single(result); // the final successful filing produced a signal.
+        Assert.Equal(4, reader.ReadCount); // breaker never tripped: all four candidates attempted.
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_Disabled_AttemptsAllCandidates()
+    {
+        var candidates = Enumerable.Range(1, 5)
+            .Select(n => EarningsFiling(
+                accession: $"0001049521-26-00000{n}",
+                publishedAt: new DateTimeOffset(2026, 6, 10 - n, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "n/a"));
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 0 };
+
+        var result = await CreateSource(reader, analyzer, options)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        Assert.Equal(5, reader.ReadCount); // breaker disabled -> every candidate attempted.
+    }
+
+    private sealed class FakeSecEarningsReleaseReader : ISecEarningsReleaseReader
+    {
+        private readonly Queue<SecEarningsReleaseReadResult> _scripted;
+        private readonly SecEarningsReleaseReadResult? _constant;
+
+        public FakeSecEarningsReleaseReader(SecEarningsReleaseReadResult result)
+        {
+            _constant = result;
+            _scripted = new Queue<SecEarningsReleaseReadResult>();
+        }
+
+        public FakeSecEarningsReleaseReader(IEnumerable<SecEarningsReleaseReadResult> scripted)
+        {
+            _constant = null;
+            _scripted = new Queue<SecEarningsReleaseReadResult>(scripted);
+        }
+
         public int ReadCount { get; private set; }
 
         public List<(string Cik, string Accession)> Calls { get; } = [];
@@ -330,7 +531,27 @@ public sealed class DirectionalFilingSignalSourceTests
             ct.ThrowIfCancellationRequested();
             ReadCount++;
             Calls.Add((cik, accession));
+            var result = _constant ?? _scripted.Dequeue();
             return Task.FromResult(result);
+        }
+    }
+
+    /// <summary>In-memory <see cref="IAnalyzedFilingCache"/> keyed by accession for the cache-behaviour tests.</summary>
+    private sealed class FakeAnalyzedFilingCache : IAnalyzedFilingCache
+    {
+        public Dictionary<string, AnalyzedFilingRecord> Entries { get; } = new(StringComparer.Ordinal);
+
+        public Task<AnalyzedFilingRecord?> TryGetAsync(string accession, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Entries.TryGetValue(accession, out var record) ? record : null);
+        }
+
+        public Task PutAsync(AnalyzedFilingRecord record, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Entries[record.Accession] = record;
+            return Task.CompletedTask;
         }
     }
 

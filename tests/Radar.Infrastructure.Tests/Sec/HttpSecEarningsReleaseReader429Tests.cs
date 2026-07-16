@@ -43,7 +43,14 @@ public sealed class HttpSecEarningsReleaseReader429Tests
         new(
             new HttpClient(handler),
             new EvidenceNormalizer(),
-            options,
+            // Force MinRequestInterval = Zero so these offline 429-retry tests never wait on the spec-107 pacing.
+            new SecEarningsReleaseReaderOptions
+            {
+                MaxRetriesOn429 = options.MaxRetriesOn429,
+                RetryBackoff = options.RetryBackoff,
+                MinRequestInterval = TimeSpan.Zero,
+            },
+            TimeProvider.System,
             NullLogger<HttpSecEarningsReleaseReader>.Instance);
 
     [Fact]

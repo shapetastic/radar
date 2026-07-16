@@ -214,12 +214,19 @@ internal static class RadarWorkerServices
                 {
                     MaxRetriesOn429 = options.Sec.MaxRetriesOn429,
                     RetryBackoff = TimeSpan.FromSeconds(options.Sec.RetryBackoffSeconds),
+                    MinRequestInterval = TimeSpan.FromMilliseconds(options.Sec.MinRequestIntervalMs),
                 });
             services.AddDirectionalFilingSignals(new DirectionalFilingSignalOptions
             {
                 MinConfidence = options.Ai.MinConfidence,
                 MaxFilingsPerRun = options.Ai.MaxFilingsPerRun,
+                MaxConsecutiveRateLimited = options.Ai.MaxConsecutiveRateLimited,
             });
+
+            // Per-accession earnings-analysis-result cache (spec 107, AD-14 analogue): lets the directional
+            // source replay a previously-analyzed filing instead of re-fetching the same www.sec.gov exhibit
+            // every run. Rides the same opt-in AI gate (the source needs it at resolve time).
+            services.AddFileAnalyzedFilingCache(options.AnalyzedFilingCacheDirectory);
         }
 
         // Wire the price-history reference seam ONLY when Radar:Prices:Enabled is true (opt-in gate, mirroring the

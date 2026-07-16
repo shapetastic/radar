@@ -23,6 +23,17 @@ namespace Radar.Infrastructure.Filings;
 /// batch; only genuine caller cancellation propagates. Analysis is strictly sequential and capped at
 /// <see cref="DirectionalFilingSignalOptions.MaxFilingsPerRun"/> per run.
 /// </para>
+/// <para>
+/// To cut the www.sec.gov footprint (spec 107) it is CACHE-FIRST: each eligible filing's analysis result is
+/// looked up in the <see cref="IAnalyzedFilingCache"/> by accession, and a hit replays a field-identical
+/// <see cref="DirectionalFilingSignal"/> (or emits nothing for a confirmed no-signal) WITHOUT any www.sec.gov
+/// fetch or AI call. A miss fetches + analyzes, then caches ONLY a successful read (a signal or a confirmed
+/// no-signal) — a failed read is NEVER cached, so a transient block cannot permanently suppress a filing. A
+/// per-run 429 circuit breaker (<see cref="DirectionalFilingSignalOptions.MaxConsecutiveRateLimited"/>) stops
+/// attempting the remaining filings once the host appears blocked; a success, a cache hit, or any non-429 failure
+/// resets the count, so only an unbroken run of 429s trips it. The cache only changes WHETHER a fetch happens — the
+/// scored signal set is unchanged.
+/// </para>
 /// </summary>
 internal sealed partial class DirectionalFilingSignalSource : IDirectionalFilingSignalSource
 {
@@ -30,22 +41,26 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
     private readonly ISecEarningsReleaseReader _reader;
     private readonly IFilingAnalyzer _analyzer;
+    private readonly IAnalyzedFilingCache _cache;
     private readonly DirectionalFilingSignalOptions _options;
     private readonly ILogger<DirectionalFilingSignalSource> _logger;
 
     public DirectionalFilingSignalSource(
         ISecEarningsReleaseReader reader,
         IFilingAnalyzer analyzer,
+        IAnalyzedFilingCache cache,
         DirectionalFilingSignalOptions options,
         ILogger<DirectionalFilingSignalSource> logger)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(analyzer);
+        ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _reader = reader;
         _analyzer = analyzer;
+        _cache = cache;
         _options = options;
         _logger = logger;
     }
@@ -69,17 +84,83 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
             .ToList();
 
         var produced = new List<DirectionalFilingSignal>();
-        foreach (var (evidence, read) in eligible)
+
+        // Per-run 429 circuit breaker (spec 107): stop after this many CONSECUTIVE rate-limited reads (the host
+        // appears blocked). 0 disables it (unbounded — the pre-spec-107 behaviour). A success, a cache hit, or any
+        // non-429 failure resets the count, so only an unbroken run of 429s trips the breaker.
+        var breaker = Math.Max(0, _options.MaxConsecutiveRateLimited);
+        var consecutiveRateLimited = 0;
+
+        for (var i = 0; i < eligible.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
 
+            var (evidence, read) = eligible[i];
+            var accession = read!.Value.Accession;
+
             try
             {
-                var signal = await AnalyzeFilingAsync(evidence, read!.Value.Cik, read.Value.Accession, ct)
-                    .ConfigureAwait(false);
-                if (signal is not null)
+                // Cache-first (spec 107): a hit replays the previously-analyzed result with NO www.sec.gov fetch
+                // or AI call, and does not interact with the breaker (resets the consecutive-429 counter).
+                var cached = await _cache.TryGetAsync(accession, ct).ConfigureAwait(false);
+                if (cached is not null)
                 {
-                    produced.Add(new DirectionalFilingSignal(signal, evidence));
+                    consecutiveRateLimited = 0;
+                    if (cached.Outcome == AnalyzedFilingOutcome.DirectionalSignalProduced && cached.Signal is not null)
+                    {
+                        produced.Add(new DirectionalFilingSignal(cached.Signal, evidence));
+                    }
+
+                    continue;
+                }
+
+                // Cache miss: fetch + analyze.
+                var (outcome, signal) = await AnalyzeFilingAsync(evidence, read.Value.Cik, accession, ct)
+                    .ConfigureAwait(false);
+
+                if (outcome == SecEarningsReleaseReadOutcome.Success)
+                {
+                    consecutiveRateLimited = 0;
+                    if (signal is not null)
+                    {
+                        produced.Add(new DirectionalFilingSignal(signal, evidence));
+                        await _cache.PutAsync(
+                            new AnalyzedFilingRecord(
+                                accession,
+                                AnalyzedFilingOutcome.DirectionalSignalProduced,
+                                signal,
+                                evidence.PublishedAtUtc ?? evidence.CollectedAtUtc),
+                            ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Read OK but no directional signal (Mixed/Unknown/below-confidence) — cache it so we
+                        // never re-fetch this filing.
+                        await _cache.PutAsync(
+                            new AnalyzedFilingRecord(accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null),
+                            ct).ConfigureAwait(false);
+                    }
+                }
+                else if (outcome == SecEarningsReleaseReadOutcome.RateLimited)
+                {
+                    // A failed read is NEVER cached (leave it for a later run). Only 429s feed the breaker.
+                    consecutiveRateLimited++;
+                    if (breaker > 0 && consecutiveRateLimited >= breaker)
+                    {
+                        _logger.LogWarning(
+                            "SEC www.sec.gov returned {N} consecutive HTTP 429s; skipping remaining {M} earnings "
+                                + "reads this run (host appears blocked).",
+                            consecutiveRateLimited,
+                            eligible.Count - (i + 1));
+                        break;
+                    }
+                }
+                else
+                {
+                    // A non-429 read failure is not cached and BREAKS the consecutive-429 run (it is a per-filing
+                    // problem, not a host block): reset the counter so two 429s separated by a different failure
+                    // (e.g. a timeout) are not counted as consecutive and cannot trip the breaker.
+                    consecutiveRateLimited = 0;
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -89,7 +170,10 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
             catch (Exception ex)
             {
                 // Graceful degradation: one bad filing must never abort the batch (mirrors the reader /
-                // analyzer discipline). No directional signal for this filing; the run continues.
+                // analyzer discipline). No directional signal for this filing; the run continues. A thrown
+                // failure (e.g. an HttpClient timeout) is also a non-429 outcome that breaks the consecutive-429
+                // run — reset the counter so it cannot make separated 429s trip the breaker.
+                consecutiveRateLimited = 0;
                 _logger.LogWarning(
                     ex,
                     "Directional filing read failed for evidence {EvidenceId}; skipping (no directional signal).",
@@ -101,11 +185,14 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
     }
 
     /// <summary>
-    /// Reads the EX-99.1 body, analyzes it, applies the confidence gate + direction mapping, and returns a
-    /// single directional <c>GuidanceChange</c> <see cref="ExtractedSignal"/> or <c>null</c> (below the
-    /// gate, Mixed/Unknown, or a non-success read). Never calls the analyzer on a non-success read.
+    /// Reads the EX-99.1 body, analyzes it, applies the confidence gate + direction mapping, and returns the
+    /// read <see cref="SecEarningsReleaseReadOutcome"/> paired with a single directional <c>GuidanceChange</c>
+    /// <see cref="ExtractedSignal"/> or <c>null</c>. The outcome lets the caller distinguish a fetch FAILURE
+    /// (non-<see cref="SecEarningsReleaseReadOutcome.Success"/>, never cached) from a SUCCESS with no directional
+    /// signal (below the gate, Mixed/Unknown — cached as no-signal). Never calls the analyzer on a non-success
+    /// read.
     /// </summary>
-    private async Task<ExtractedSignal?> AnalyzeFilingAsync(
+    private async Task<(SecEarningsReleaseReadOutcome Outcome, ExtractedSignal? Signal)> AnalyzeFilingAsync(
         EvidenceItem evidence, string cik, string accession, CancellationToken ct)
     {
         var read = await _reader.ReadAsync(cik, accession, ct).ConfigureAwait(false);
@@ -117,7 +204,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 cik,
                 accession,
                 read.Outcome);
-            return null;
+            return (read.Outcome, null);
         }
 
         var sentiment = await _analyzer.AnalyzeAsync(read.PlainText, ct).ConfigureAwait(false);
@@ -131,7 +218,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 evidence.Id,
                 sentiment.Confidence,
                 _options.MinConfidence);
-            return null;
+            return (SecEarningsReleaseReadOutcome.Success, null);
         }
 
         var direction = sentiment.Direction switch
@@ -146,14 +233,14 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 "Directional read for evidence {EvidenceId} was {Direction}; no directional signal.",
                 evidence.Id,
                 sentiment.Direction);
-            return null;
+            return (SecEarningsReleaseReadOutcome.Success, null);
         }
 
         // The SupportingExcerpt must be a verbatim slice of the evidence (the mapper enforces
         // excerpt-in-evidence). The evidence Title is wholly contained in the composed searchable text, so
         // it is a stable, guaranteed-present excerpt. The advice-scrubbed AI rationale (spec 74) rides the
         // Reason field (not provenance-checked) to surface the AI basis for audit/report.
-        return new ExtractedSignal(
+        return (SecEarningsReleaseReadOutcome.Success, new ExtractedSignal(
             CompanyMention: evidence.SourceName,
             SignalType: "GuidanceChange",
             Direction: direction,
@@ -161,7 +248,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
             Novelty: _options.Novelty,
             Confidence: sentiment.Confidence,
             SupportingExcerpt: evidence.Title,
-            Reason: sentiment.Rationale);
+            Reason: sentiment.Rationale));
     }
 
     /// <summary>

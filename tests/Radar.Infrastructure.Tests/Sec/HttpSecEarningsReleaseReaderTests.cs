@@ -72,7 +72,9 @@ public sealed class HttpSecEarningsReleaseReaderTests
         new(
             new HttpClient(handler),
             new EvidenceNormalizer(),
-            new SecEarningsReleaseReaderOptions(),
+            // MinRequestInterval = Zero so these offline tests never wait on the spec-107 pacing.
+            new SecEarningsReleaseReaderOptions { MinRequestInterval = TimeSpan.Zero },
+            TimeProvider.System,
             NullLogger<HttpSecEarningsReleaseReader>.Instance);
 
     [Fact]

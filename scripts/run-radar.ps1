@@ -82,6 +82,7 @@ $dirArgs = [ordered]@{
     "Radar:ScoringConfigsDirectory"  = (Join-Path $outRoot  "scoring-configs")
     "Radar:PricesDirectory"          = (Join-Path $outRoot  "prices")   # AD-14 price-history reference store (only written when Radar:Prices:Enabled)
     "Radar:EfficacyDirectory"        = (Join-Path $outRoot  "efficacy") # AD-14 read side: per-company score-vs-price SVG/CSV (only written when Radar:Efficacy:Enabled)
+    "Radar:AnalyzedFilingCacheDirectory" = (Join-Path $outRoot "filings-cache")   # spec 107 per-accession earnings analysis-result cache (AD-14 analogue)
     "Radar:Sec:UserAgent"            = $SecUserAgent
 }
 foreach ($k in $dirArgs.Keys) { $merged[$k] = $dirArgs[$k] }

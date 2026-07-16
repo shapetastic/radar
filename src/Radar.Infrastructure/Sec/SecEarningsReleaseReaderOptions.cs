@@ -21,4 +21,12 @@ public sealed class SecEarningsReleaseReaderOptions
     /// fails fast when negative; tests use <see cref="TimeSpan.Zero"/> to stay instant.
     /// </summary>
     public TimeSpan RetryBackoff { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Minimum wall-clock interval between the reader's successive www.sec.gov requests (index + exhibit, across
+    /// filings), paced via the injected TimeProvider. Keeps the reader well under SEC's ~10 req/s fair-access
+    /// limit and reduces the sustained footprint that gets the IP flagged (spec 107). Default 250 ms. Registration
+    /// fails fast when negative; offline tests pass TimeSpan.Zero so the reader never waits.
+    /// </summary>
+    public TimeSpan MinRequestInterval { get; init; } = TimeSpan.FromMilliseconds(250);
 }
