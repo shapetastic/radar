@@ -501,6 +501,13 @@ public static class InfrastructureServiceCollectionExtensions
                     + "to a non-negative base delay (default 2s) — the reader doubles it per 429 retry.");
         }
 
+        if (readerOptions.MinRequestInterval < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                "SEC earnings-release MinRequestInterval must not be negative; configure Radar:Sec:MinRequestIntervalMs "
+                    + "to a non-negative pace in milliseconds (default 250 ms) — a negative value is nonsensical configuration.");
+        }
+
         services.AddHttpClient<ISecEarningsReleaseReader, HttpSecEarningsReleaseReader>(client =>
             {
                 // Use TryAddWithoutValidation: the SEC-recommended UA form ("Radar Research <email>") is not a
@@ -515,6 +522,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(options);
         services.TryAddSingleton(readerOptions);
+        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
         return services;
     }
@@ -885,8 +893,33 @@ public static class InfrastructureServiceCollectionExtensions
                     + "Radar:Ai:MaxFilingsPerRun (default 5) — a zero/negative value analyzes nothing while still running.");
         }
 
+        if (options.MaxConsecutiveRateLimited < 0)
+        {
+            throw new InvalidOperationException(
+                "Radar directional filing signals require a non-negative 429 circuit-breaker threshold; configure "
+                    + "Radar:Ai:MaxConsecutiveRateLimited (default 2, 0 disables) — a negative value is nonsensical configuration.");
+        }
+
         services.AddSingleton(options);
         services.AddSingleton<IDirectionalFilingSignalSource, DirectionalFilingSignalSource>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the file-backed per-accession earnings-analysis-result cache (spec 107,
+    /// <see cref="FileAnalyzedFilingCache"/>) behind the Application <see cref="IAnalyzedFilingCache"/> seam,
+    /// writing one <c>{accession}.json</c> under <paramref name="rootDirectory"/> via the shared
+    /// <c>GracefulFileWriter</c> + <c>RadarFileStoreJson.Options</c> scaffolding (fail-safe reads → cache miss).
+    /// <see cref="DirectionalFilingSignalSource"/> consumes it to replay a previously-analyzed filing instead of
+    /// re-fetching the same <c>www.sec.gov</c> exhibit every run. This is an AD-14 analogue: operational/reference
+    /// data, NOT an <see cref="IEvidenceCollector"/>, not evidence, not a signal source, and not a
+    /// scoring/fingerprint input — it only changes WHETHER a fetch happens, never the signal that is scored.
+    /// </summary>
+    public static IServiceCollection AddFileAnalyzedFilingCache(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FileAnalyzedFilingCacheOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IAnalyzedFilingCache, FileAnalyzedFilingCache>();
         return services;
     }
 

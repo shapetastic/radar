@@ -106,6 +106,13 @@ public sealed class RadarWorkerOptions
     /// <summary>Root directory for the per-company price-efficacy artifacts (AD-14 read side). Only used when "Radar:Efficacy:Enabled" is true.</summary>
     public string EfficacyDirectory { get; init; } = "data/efficacy";
 
+    /// <summary>
+    /// Root directory for the per-accession earnings-analysis-result cache (spec 107, AD-14 analogue). Only used
+    /// when AI directional filing signals are enabled (a provider is configured); lets the directional source
+    /// replay a previously-analyzed filing instead of re-fetching the same www.sec.gov exhibit every run.
+    /// </summary>
+    public string AnalyzedFilingCacheDirectory { get; init; } = "data/filings-cache";
+
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
 
@@ -168,6 +175,13 @@ public sealed class SecWorkerOptions
     /// Defaults to 2 (SEC recovers quickly, so a short base — unlike GDELT's 60s — suffices).
     /// </summary>
     public int RetryBackoffSeconds { get; init; } = 2;
+
+    /// <summary>
+    /// Minimum milliseconds between the earnings reader's successive www.sec.gov requests, paced via the injected
+    /// TimeProvider (spec 107). Keeps the reader well under SEC's ~10 req/s fair-access limit and reduces the
+    /// sustained footprint that gets the IP flagged. Defaults to 250; set to 0 to disable pacing.
+    /// </summary>
+    public int MinRequestIntervalMs { get; init; } = 250;
 }
 
 /// <summary>
@@ -324,6 +338,14 @@ public sealed class AiWorkerOptions
     /// earnings-8-K filings per run. Must be positive. Only read when a provider is configured. Defaults to 5.
     /// </summary>
     public int MaxFilingsPerRun { get; init; } = 5;
+
+    /// <summary>
+    /// Per-run 429 circuit breaker for the directional filing source (spec 107): after this many CONSECUTIVE
+    /// rate-limited (HTTP 429) earnings reads, the source stops attempting the remaining filings this run (the
+    /// www.sec.gov host appears blocked). A success or a cache hit resets the count. Only read when a provider is
+    /// configured. Defaults to 2; set to 0 to disable the breaker.
+    /// </summary>
+    public int MaxConsecutiveRateLimited { get; init; } = 2;
 }
 
 /// <summary>Anthropic (hosted) provider config (bound from "Radar:Ai:Anthropic").</summary>

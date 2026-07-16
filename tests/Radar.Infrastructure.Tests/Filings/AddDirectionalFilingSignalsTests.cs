@@ -26,9 +26,34 @@ public sealed class AddDirectionalFilingSignalsTests
             .AddRadarFilingAnalyzer(new FilingAnalyzerOptions { MaxInputLength = 12000 })
             .AddSecEarningsReleaseReader(new SecCollectorOptions { UserAgent = "Radar Research test@example.com" })
             .AddDirectionalFilingSignals(new DirectionalFilingSignalOptions())
+            // The source now depends on IAnalyzedFilingCache (spec 107) — register it so the provider resolves.
+            .AddFileAnalyzedFilingCache(Path.GetTempPath())
             .BuildServiceProvider();
 
         Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(-5)]
+    public void AddDirectionalFilingSignals_NegativeMaxConsecutiveRateLimited_FailsFast(int breaker)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddDirectionalFilingSignals(
+                new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = breaker }));
+
+        Assert.Contains("Radar:Ai:MaxConsecutiveRateLimited", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddSecEarningsReleaseReader_NegativeMinRequestInterval_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddSecEarningsReleaseReader(
+                new SecCollectorOptions { UserAgent = "Radar Research test@example.com" },
+                new SecEarningsReleaseReaderOptions { MinRequestInterval = TimeSpan.FromMilliseconds(-1) }));
+
+        Assert.Contains("Radar:Sec:MinRequestIntervalMs", ex.Message, StringComparison.Ordinal);
     }
 
     [Theory]
