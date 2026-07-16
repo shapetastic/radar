@@ -70,11 +70,12 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         // emitted signal's Strength/Novelty/confidence-gate are hashed. MaxFilingsPerRun and
         // MaxConsecutiveRateLimited are cost/operational caps (a per-run fetch limit and a 429 circuit breaker,
         // like ScoringWindowDays which spec 105 confirmed is deliberately NOT a fingerprint input) — they are
-        // EXCLUDED so tuning them does not falsely re-stamp otherwise-comparable runs. InvariantCulture / round-trip
-        // "R" number formatting keeps the string culture-independent and injective.
+        // EXCLUDED so tuning them does not falsely re-stamp otherwise-comparable runs. InvariantCulture keeps the
+        // string culture-independent; "G29" is the decimal round-trip format ("R" is documented only for the
+        // floating-point types, not decimal), so the MinConfidence contribution is injective across [0,1].
         _scoringDescriptor = string.Create(
             CultureInfo.InvariantCulture,
-            $"directional-filing:str={_options.Strength};nov={_options.Novelty};minconf={_options.MinConfidence.ToString("R", CultureInfo.InvariantCulture)}");
+            $"directional-filing:str={_options.Strength};nov={_options.Novelty};minconf={_options.MinConfidence.ToString("G29", CultureInfo.InvariantCulture)}");
     }
 
     /// <inheritdoc />
