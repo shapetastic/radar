@@ -155,6 +155,19 @@ public sealed class SecWorkerOptions
 
     /// <summary>Maximum most-recent matching filings to collect per company per run.</summary>
     public int MaxFilingsPerCompany { get; init; } = 25;
+
+    /// <summary>
+    /// How many times the earnings-release reader re-issues an Archives request after an HTTP 429 before
+    /// giving up (default 2). SEC 429s the burst of exhibit fetches this reader fires; a bounded retry stops a
+    /// transient throttle starving the AI directional path (spec 105). Set to 0 to restore single-attempt.
+    /// </summary>
+    public int MaxRetriesOn429 { get; init; } = 2;
+
+    /// <summary>
+    /// Base cool-down before the first earnings-release 429 retry, in seconds; the reader doubles it per retry.
+    /// Defaults to 2 (SEC recovers quickly, so a short base — unlike GDELT's 60s — suffices).
+    /// </summary>
+    public int RetryBackoffSeconds { get; init; } = 2;
 }
 
 /// <summary>

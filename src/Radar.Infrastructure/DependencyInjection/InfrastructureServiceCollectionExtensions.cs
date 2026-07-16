@@ -462,9 +462,19 @@ public static class InfrastructureServiceCollectionExtensions
     /// <see cref="AddRadarApplicationServices"/> without a double-registration conflict, and resolves the
     /// reader's stripper dependency even when wired standalone.
     /// </para>
+    /// <para>
+    /// The optional <paramref name="readerOptions"/> tunes the reader's bounded HTTP 429 backoff-retry
+    /// (spec 105) — SEC 429s the Archives burst this reader fires, starving the AI directional path. It
+    /// defaults to <see cref="SecEarningsReleaseReaderOptions"/>'s defaults (2 retries, 2s base backoff) and is
+    /// registered with <c>TryAdd</c> so the reader resolves it. Registration fails fast when
+    /// <see cref="SecEarningsReleaseReaderOptions.MaxRetriesOn429"/> is negative or
+    /// <see cref="SecEarningsReleaseReaderOptions.RetryBackoff"/> is negative.
+    /// </para>
     /// </summary>
     public static IServiceCollection AddSecEarningsReleaseReader(
-        this IServiceCollection services, SecCollectorOptions options)
+        this IServiceCollection services,
+        SecCollectorOptions options,
+        SecEarningsReleaseReaderOptions? readerOptions = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -473,6 +483,22 @@ public static class InfrastructureServiceCollectionExtensions
             throw new InvalidOperationException(
                 "SEC EDGAR requires a compliant User-Agent (e.g. \"Radar Research <email>\"); configure "
                     + "Radar:Sec:UserAgent before enabling the SEC earnings-release reader — every request 403s without it.");
+        }
+
+        readerOptions ??= new SecEarningsReleaseReaderOptions();
+
+        if (readerOptions.MaxRetriesOn429 < 0)
+        {
+            throw new InvalidOperationException(
+                "SEC earnings-release MaxRetriesOn429 must not be negative; configure Radar:Sec:MaxRetriesOn429 "
+                    + "to a non-negative retry count (default 2) — a negative value is nonsensical configuration.");
+        }
+
+        if (readerOptions.RetryBackoff < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                "SEC earnings-release RetryBackoff must not be negative; configure Radar:Sec:RetryBackoffSeconds "
+                    + "to a non-negative base delay (default 2s) — the reader doubles it per 429 retry.");
         }
 
         services.AddHttpClient<ISecEarningsReleaseReader, HttpSecEarningsReleaseReader>(client =>
@@ -488,6 +514,7 @@ public static class InfrastructureServiceCollectionExtensions
             });
 
         services.TryAddSingleton(options);
+        services.TryAddSingleton(readerOptions);
         services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
         return services;
     }
