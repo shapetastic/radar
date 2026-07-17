@@ -14,8 +14,16 @@ public sealed class DirectionalFilingSignalOptions
     /// <summary>Cost cap: analyze at most this many filings per run. Must be &gt; 0. Default 5.</summary>
     public int MaxFilingsPerRun { get; init; } = 5;
 
-    /// <summary>Signal strength constant (in-range; clears the reviewer MinMaterialStrength floor). Default 6.</summary>
-    public int Strength { get; init; } = 6;
+    /// <summary>
+    /// Signal strength constant (in-range [1,10]; clears the reviewer MinMaterialStrength floor). Default 8
+    /// (spec 112): a confident, full-text directional earnings read is materially stronger than a generic
+    /// keyword match, so it deliberately EXCEEDS the keyword extractor maximum of 6 and can lift Opportunity
+    /// over the Investigate gate on a corroborated trajectory. A per-signal magnitude folded into the scoring
+    /// fingerprint (spec 106), so tuning it re-stamps <c>ScoringConfigVersion</c> automatically. It applies
+    /// symmetrically to Improving→Positive and Deteriorating→Negative reads (same field), so a confident
+    /// guidance cut bites as hard as a raise lifts.
+    /// </summary>
+    public int Strength { get; init; } = 8;
 
     /// <summary>Signal novelty constant (in-range; clears the reviewer MinNovelty floor). Default 6.</summary>
     public int Novelty { get; init; } = 6;
