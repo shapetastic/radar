@@ -182,6 +182,27 @@ public sealed class SecWorkerOptions
     /// sustained footprint that gets the IP flagged. Defaults to 250; set to 0 to disable pacing.
     /// </summary>
     public int MinRequestIntervalMs { get; init; } = 250;
+
+    /// <summary>
+    /// Minimum milliseconds between ANY two SEC (*.sec.gov) requests across the WHOLE process. Every SEC client —
+    /// the sec/secform4/sec13dg collectors AND the earnings-release reader — shares one global pacer
+    /// (<c>SecRequestPacer</c>), so the AGGREGATE request rate of a run, not each client in isolation, stays under
+    /// SEC's ~10 req/s per-IP fair-access ceiling. Without it an unpaced collector burst trips SEC's mitigation and
+    /// blocks www.sec.gov, starving the AI earnings path. Defaults to 150 (~6.7 req/s); set to 0 to disable global
+    /// pacing. Must not be negative. This is orthogonal to <see cref="MinRequestIntervalMs"/> (the earnings reader's
+    /// own per-reader self-pacing) — the global pacer bounds the whole run's SEC traffic.
+    /// </summary>
+    public int GlobalMinIntervalMs { get; init; } = 150;
+
+    /// <summary>
+    /// Per-fetch timeout, in seconds, for each SEC request — measured from AFTER the global pacer grants the
+    /// request its turn (the <c>SecRateLimitingHandler</c> owns it; the SEC clients' ambient HttpClient timeout is
+    /// disabled). Because the clock starts post-pacing, pacing wait can never consume the fetch budget however deep
+    /// the shared pacer queue grows as the watch universe scales up. Defaults to 100 (the historical HttpClient
+    /// timeout default); set to 0 to disable the per-fetch timeout (fetch then bounded only by run cancellation).
+    /// Must not be negative.
+    /// </summary>
+    public int GlobalFetchTimeoutSeconds { get; init; } = 100;
 }
 
 /// <summary>

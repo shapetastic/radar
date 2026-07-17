@@ -326,12 +326,20 @@ public static class InfrastructureServiceCollectionExtensions
                 // strict RFC product/comment token, so the strongly-typed UserAgent collection rejects it.
                 client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
                 client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+                // Disable the ambient pipeline timeout: SecRateLimitingHandler owns the per-fetch timeout and
+                // starts it AFTER pacing, so a deep shared-pacer queue can never time a request out before it is
+                // sent (see SecRateLimitOptions.FetchTimeout).
+                client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            });
+            })
+            // Route through the shared global SEC pacer so this collector's requests count against the same
+            // aggregate *.sec.gov rate budget as every other SEC client (see AddSecRequestPacing).
+            .AddHttpMessageHandler<SecRateLimitingHandler>();
 
+        services.AddSecRequestPacing();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, SecEdgarFilingCollector>();
         return services;
@@ -382,12 +390,20 @@ public static class InfrastructureServiceCollectionExtensions
                 // strict RFC product/comment token, so the strongly-typed UserAgent collection rejects it.
                 client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
                 client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+                // Disable the ambient pipeline timeout: SecRateLimitingHandler owns the per-fetch timeout and
+                // starts it AFTER pacing, so a deep shared-pacer queue can never time a request out before it is
+                // sent (see SecRateLimitOptions.FetchTimeout).
+                client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            });
+            })
+            // Route through the shared global SEC pacer so this collector's requests count against the same
+            // aggregate *.sec.gov rate budget as every other SEC client (see AddSecRequestPacing).
+            .AddHttpMessageHandler<SecRateLimitingHandler>();
 
+        services.AddSecRequestPacing();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, SecForm4Collector>();
         return services;
@@ -439,12 +455,20 @@ public static class InfrastructureServiceCollectionExtensions
                 // strict RFC product/comment token, so the strongly-typed UserAgent collection rejects it.
                 client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
                 client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+                // Disable the ambient pipeline timeout: SecRateLimitingHandler owns the per-fetch timeout and
+                // starts it AFTER pacing, so a deep shared-pacer queue can never time a request out before it is
+                // sent (see SecRateLimitOptions.FetchTimeout).
+                client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            });
+            })
+            // Route through the shared global SEC pacer so this collector's requests count against the same
+            // aggregate *.sec.gov rate budget as every other SEC client (see AddSecRequestPacing).
+            .AddHttpMessageHandler<SecRateLimitingHandler>();
 
+        services.AddSecRequestPacing();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, Sec13DGCollector>();
         return services;
@@ -520,16 +544,50 @@ public static class InfrastructureServiceCollectionExtensions
                 // strict RFC product/comment token, so the strongly-typed UserAgent collection rejects it.
                 client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
                 client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+                // Disable the ambient pipeline timeout: SecRateLimitingHandler owns the per-fetch timeout and
+                // starts it AFTER pacing, so a deep shared-pacer queue can never time a request out before it is
+                // sent (see SecRateLimitOptions.FetchTimeout).
+                client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            });
+            })
+            // Route through the shared global SEC pacer so the earnings reader's www.sec.gov requests count
+            // against the same aggregate *.sec.gov rate budget as the collectors (the burst that starves it).
+            // This is layered ON TOP of the reader's own per-reader MinRequestInterval self-pacing (spec 107);
+            // the global pacer bounds the whole run's SEC traffic, the reader's still bounds its own footprint.
+            .AddHttpMessageHandler<SecRateLimitingHandler>();
 
+        services.AddSecRequestPacing();
         services.TryAddSingleton(options);
         services.TryAddSingleton(readerOptions);
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
+        return services;
+    }
+
+    /// <summary>
+    /// Idempotently registers the shared, process-wide SEC request pacer (<see cref="SecRequestPacer"/>) and
+    /// its <see cref="SecRateLimitingHandler"/> so every SEC <c>HttpClient</c> that adds the handler routes
+    /// through ONE pacer instance — the AGGREGATE <c>*.sec.gov</c> request rate of a run (all collectors + the
+    /// earnings-release reader), not each client in isolation, is what stays under SEC's per-IP fair-access
+    /// ceiling. This is the fix for the observed failure mode where an unpaced collector burst trips SEC's
+    /// mitigation and blocks <c>www.sec.gov</c>, starving the AI earnings-release path.
+    /// <para>
+    /// Every registration is <c>TryAdd</c>, so it is safe for each SEC <c>Add*</c> helper to call this
+    /// unconditionally: the first call wins and the rest are no-ops, and a composition root that registered its
+    /// own concrete <see cref="SecRateLimitOptions"/> (e.g. the Worker binding <c>Radar:Sec:GlobalMinIntervalMs</c>)
+    /// keeps that value. The pacer is a singleton (shared pacing state); the handler is transient
+    /// (<c>HttpClientFactory</c> owns handler lifetime) but its pacing state lives in the injected singleton.
+    /// </para>
+    /// </summary>
+    private static IServiceCollection AddSecRequestPacing(this IServiceCollection services)
+    {
+        services.TryAddSingleton(new SecRateLimitOptions());
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<SecRequestPacer>();
+        services.TryAddTransient<SecRateLimitingHandler>();
         return services;
     }
 
