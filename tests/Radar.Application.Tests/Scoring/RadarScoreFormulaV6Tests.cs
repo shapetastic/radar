@@ -6,7 +6,7 @@ using Radar.TestSupport;
 
 namespace Radar.Application.Tests.Scoring;
 
-public sealed class RadarScoreFormulaV5Tests
+public sealed class RadarScoreFormulaV6Tests
 {
     private static readonly DateTimeOffset WindowStart = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset WindowEnd = new(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
@@ -37,8 +37,8 @@ public sealed class RadarScoreFormulaV5Tests
             return unknown;
         });
 
-    // Convenience: construct the default-weights formula (byte-identical to v4) over the given source weights.
-    private static RadarScoreFormulaV5 Formula(IAttentionSourceWeights sourceWeights) =>
+    // Convenience: construct the default-weights formula over the given source weights.
+    private static RadarScoreFormulaV6 Formula(IAttentionSourceWeights sourceWeights) =>
         new(new ScoringWeights(), sourceWeights);
 
     private static ScoringSignal BuildSignal(
@@ -77,33 +77,33 @@ public sealed class RadarScoreFormulaV5Tests
         PreviousSignals: previous ?? Array.Empty<Signal>());
 
     [Fact]
-    public void Version_IsRadarFormulaV5_AndAppearsInExplanation()
+    public void Version_IsRadarFormulaV6_AndAppearsInExplanation()
     {
         var formula = Formula(AllGenuine);
 
-        Assert.Equal("radar-formula-v5", formula.Version);
+        Assert.Equal("radar-formula-v6", formula.Version);
 
         var result = formula.Compute(InputFrom(new[] { BuildSignal() }));
-        Assert.Contains("radar-formula-v5", result.Explanation);
+        Assert.Contains("radar-formula-v6", result.Explanation);
     }
 
     [Fact]
     public void Constructor_NullWeights_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV5(null!, AllGenuine));
+        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV6(null!, AllGenuine));
     }
 
     [Fact]
     public void Constructor_NullSourceWeights_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV5(new ScoringWeights(), null!));
+        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV6(new ScoringWeights(), null!));
     }
 
     [Fact]
     public void Constructor_InvalidWeight_Throws()
     {
         Assert.Throws<InvalidOperationException>(
-            () => new RadarScoreFormulaV5(new ScoringWeights { OpportunityAttentionDivisor = 0 }, AllGenuine));
+            () => new RadarScoreFormulaV6(new ScoringWeights { OpportunityAttentionDivisor = 0 }, AllGenuine));
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public sealed class RadarScoreFormulaV5Tests
             BuildSignal(strength: 9, direction: SignalDirection.Neutral, sourceName: "src-c"),
         }));
 
-        // Neutral signals are excluded from trajectory entirely, so the score is unchanged.
+        // Neutral signals are excluded from both masses entirely, so the score is unchanged.
         Assert.Equal(
             positiveOnly.Components.TrajectoryScore,
             positiveWithNeutrals.Components.TrajectoryScore);
@@ -428,7 +428,7 @@ public sealed class RadarScoreFormulaV5Tests
     }
 
     [Fact]
-    public void HeliosScenario_Corroboration_ReachesWatchTerritory()
+    public void HeliosScenario_LoneDirectionalSignal_IsDampedUnderV6()
     {
         var formula = Formula(AllGenuine);
 
@@ -448,8 +448,11 @@ public sealed class RadarScoreFormulaV5Tests
 
         var c = formula.Compute(input).Components;
 
-        // Trajectory: single directional signal (Positive strength 6) → 50 + 5·6 = 80.
-        Assert.Equal(80, c.TrajectoryScore);
+        // Trajectory: a SINGLE directional signal (Positive strength 6, conf 0.65, recency 0.7333 →
+        // w = 0.47667, Mpos = 2.86). T_raw = 10·2.86/(2.86 + 10) = 2.224 → 50 + 5·2.224 = 61.12 → 61.
+        // Under v5 this lone signal reached 80 (50 + 5·6); v6 deliberately DAMPS an uncorroborated single
+        // signal toward the neutral 50 — a strong read must be earned by corroboration, not asserted by one.
+        Assert.Equal(61, c.TrajectoryScore);
 
         // Attention: all first-party (press release + filings) → 0 (independent of tier weights).
         Assert.Equal(0, c.AttentionScore);
@@ -458,9 +461,11 @@ public sealed class RadarScoreFormulaV5Tests
         // 100·0.65·(0.6+0.4·0.85)·(0.7+0.3·(2/3)) ≈ 55.
         Assert.InRange(c.EvidenceConfidenceScore, 53, 57);
 
-        // Opportunity: Trajectory 80 · (EC/100) · (1 − 0/250) ≈ 44 — comfortably in Watch territory.
-        // Attention is 0 so the discount divisor (250) leaves this scenario unchanged from v4.
-        Assert.True(c.OpportunityScore >= 40);
+        // Opportunity: Trajectory 61 · (EC 55/100) · (1 − 0/250) = 33.55 → 34. Because the lone directional
+        // signal is damped under v6 this no longer reaches the ~40 Watch band it did under the v5 mean — the
+        // honest v6 value for an uncorroborated single positive (see the corroboration tests below for the
+        // rewarded-majority case).
+        Assert.Equal(34, c.OpportunityScore);
     }
 
     [Fact]
@@ -512,20 +517,22 @@ public sealed class RadarScoreFormulaV5Tests
     {
         var formula = Formula(AllGenuine);
 
-        // Low attention: single third-party source.
-        var lowAttention = formula.Compute(InputFrom(new[]
-        {
-            BuildSignal(strength: 10, confidence: 1.0m, direction: SignalDirection.Positive,
-                quality: EvidenceQuality.PrimarySource,
-                sourceType: EvidenceSourceType.NewsArticle, sourceName: "only"),
-        }));
+        // Low attention: a single strong Positive third-party source (the sole trajectory driver).
+        var driver = BuildSignal(strength: 10, confidence: 1.0m, direction: SignalDirection.Positive,
+            quality: EvidenceQuality.PrimarySource,
+            sourceType: EvidenceSourceType.NewsArticle, sourceName: "only");
+        var lowAttention = formula.Compute(InputFrom(new[] { driver }));
 
-        // High attention: many distinct third-party sources + media attention, same trajectory drivers.
-        var highSignals = new List<ScoringSignal>();
+        // High attention: the SAME single Positive trajectory driver, plus many distinct-publisher Neutral
+        // MediaAttention signals. Under v6 the number of DIRECTIONAL signals drives Trajectory (corroboration),
+        // so to isolate the attention→opportunity discount the directional set must be held fixed — the extra
+        // attention comes from Neutral MediaAttention signals, which are excluded from both trajectory masses
+        // (leaving Trajectory unchanged) while raising distinct-publisher breadth + mediaCount.
+        var highSignals = new List<ScoringSignal> { driver };
         for (var i = 0; i < 8; i++)
         {
-            highSignals.Add(BuildSignal(strength: 10, confidence: 1.0m, direction: SignalDirection.Positive,
-                quality: EvidenceQuality.PrimarySource, type: SignalType.MediaAttention,
+            highSignals.Add(BuildSignal(direction: SignalDirection.Neutral, type: SignalType.MediaAttention,
+                quality: EvidenceQuality.PrimarySource,
                 sourceType: EvidenceSourceType.NewsArticle, sourceName: $"src-{i}"));
         }
         var highAttention = formula.Compute(InputFrom(highSignals));
@@ -626,17 +633,20 @@ public sealed class RadarScoreFormulaV5Tests
     [Fact]
     public void Trajectory_LoneRoutineInsiderSale_AtSpec110SellStrength_NoLongerDropsBy5()
     {
-        // Spec 110 (AEHR regression): a strong positive-directional majority (record-results week) plus ONE lone
-        // routine open-market insider sale. Under the recalibrated default SellTiers a ~$1.6M discretionary sale
-        // maps to Strength 4 (was 7 when SellTiers == BuyTiers). The weaker Negative contribution shrinks the
-        // trajectory drop below the WeeklyReportActionPolicyV1 deterioration threshold (week-over-week delta
-        // <= -5), so a routine trim after record results no longer *by itself* flips the label to "Thesis
-        // deteriorating". The pre-110 Strength-7 sale DID cross that threshold. (Spec 111 hardens the non-flip at
-        // the formula level; this slice is the honest-magnitude fix. The action policy is NOT edited here.)
+        // Spec 110 (AEHR regression), carried onto radar-formula-v6: a strong positive-directional majority
+        // (record-results week) plus ONE lone routine open-market insider sale. Under the recalibrated default
+        // SellTiers a ~$1.6M discretionary sale maps to Strength 4 (was 7 when SellTiers == BuyTiers). The
+        // weaker Negative mass shrinks the trajectory drop below the WeeklyReportActionPolicyV1 deterioration
+        // threshold (week-over-week delta <= -5), so a routine trim after record results no longer *by itself*
+        // flips the label to "Thesis deteriorating". The pre-110 Strength-7 sale DID cross that threshold.
+        // (Spec 111 hardens the non-flip at the FORMULA level: the v6 corroboration term damps a lone dissenter
+        // against a corroborated majority, so the drops are even smaller than under the v5 mean — but the
+        // spec-110 property, a lighter recalibrated sale drops Trajectory less than the old heavier sale, still
+        // holds and stays demonstrable. The action policy is NOT edited here.)
         var formula = Formula(AllGenuine);
 
         // The corroborated positive majority (identical in both scenarios; equal confidence + observedAt so the
-        // trajectory mean is unweighted and the sale's effect is isolated).
+        // corroboration masses are directly comparable and the sale's effect is isolated).
         ScoringSignal[] Majority() => Enumerable.Range(0, 11)
             .Select(i => BuildSignal(strength: 6, direction: SignalDirection.Positive, sourceName: $"pos-{i}"))
             .ToArray();
@@ -651,9 +661,10 @@ public sealed class RadarScoreFormulaV5Tests
         var spec110Drop = baseTrajectory - withSpec110Sale;
         var pre110Drop = baseTrajectory - withPre110Sale;
 
-        // The recalibrated (Strength-4) sale stays under the -5 deterioration trigger...
+        // The recalibrated (Strength-4) sale stays under the -5 deterioration trigger (v6 drop is 4)...
         Assert.True(spec110Drop < 5, $"spec-110 sell drop must be < 5; was {spec110Drop}");
-        // ...whereas the old (Strength-7) sale crossed it, and the recalibration strictly shrinks the drop.
+        // ...whereas the old (Strength-7) sale crossed it (v6 drop is 7), and the recalibration strictly
+        // shrinks the drop.
         Assert.True(pre110Drop >= 5, $"pre-110 sell drop must be >= 5; was {pre110Drop}");
         Assert.True(spec110Drop < pre110Drop);
     }
@@ -678,15 +689,150 @@ public sealed class RadarScoreFormulaV5Tests
         Assert.True(newer.Components.TrajectoryScore >= older.Components.TrajectoryScore);
     }
 
-    // ---- source-quality tiering + saturation pins (spec 88, carried forward to v5) ----
+    // ---- radar-formula-v6 corroboration-aware Trajectory (spec 111) ----
+    //
+    // The v6 Trajectory splits the current-window directional signals into a positive mass and a negative mass
+    // (each Σ strength·confidence·recency over that direction) and combines them as
+    // T_raw = 10·(Mpos − Mneg)/(Mpos + Mneg + k), k = TrajectoryCorroborationK (default 10). Neutral/Mixed
+    // still contribute 0. The tests below use observedAt = WindowEnd so recency = 1 and the masses are the
+    // clean strength·confidence sums.
+
+    // Build N distinct-source Positive signals at a fixed strength/confidence with recency 1 (observedAt at the
+    // window end), non-media type so they never touch Attention's mediaCount.
+    private static IReadOnlyList<ScoringSignal> Directional(
+        int count, SignalDirection direction, int strength = 6, decimal confidence = 0.8m, string prefix = "d") =>
+        Enumerable.Range(0, count)
+            .Select(i => BuildSignal(strength: strength, direction: direction, confidence: confidence,
+                sourceName: $"{prefix}-{i}", observedAt: WindowEnd))
+            .ToArray();
+
+    [Fact]
+    public void Trajectory_CorroboratedPositiveMajority_ScoresHigherThanLoneSignal()
+    {
+        // Corroboration rewarded: five agreeing Positive signals move Trajectory strictly HIGHER than ONE
+        // Positive signal of the same strength/confidence. Under the v5 mean these were identical (a mean of
+        // five equal terms == one term); v6's preponderance ratio rewards the accrued mass.
+        var formula = Formula(AllGenuine);
+
+        var one = formula.Compute(InputFrom(Directional(1, SignalDirection.Positive))).Components.TrajectoryScore;
+        var five = formula.Compute(InputFrom(Directional(5, SignalDirection.Positive))).Components.TrajectoryScore;
+
+        Assert.True(five > one, $"a corroborated majority must beat a lone signal; five={five}, one={one}");
+    }
+
+    [Fact]
+    public void Trajectory_StrongMajorityWithLoneDissenter_IsRobust_ButRecordsTheDissent()
+    {
+        // The AEHR robustness fix. A strong Positive majority (5 signals, strength 6) + ONE lone Negative.
+        var formula = Formula(AllGenuine);
+
+        var majority = Directional(5, SignalDirection.Positive, strength: 6, confidence: 0.8m, prefix: "pos");
+        var loneNegative = BuildSignal(strength: 6, direction: SignalDirection.Negative, confidence: 0.8m,
+            sourceName: "lone-neg", observedAt: WindowEnd);
+
+        var withLoneNegative = formula
+            .Compute(InputFrom([.. majority, loneNegative])).Components.TrajectoryScore;
+
+        // (a) Strictly higher than the v5 MEAN would give for the SAME inputs. The v5 mean is
+        // 50 + 5·(Σ sign·strength·w / Σ w) over the directional signals (recency 1, w = 0.8). With 5 positives
+        // and 1 negative all at strength 6 the moderate strength (10 − 6 per signal of slack) makes the
+        // corroboration ratio beat the count-mean: v6 damps the lone dissenter's pull more than the mean does.
+        var w = 0.8; // confidence 0.8 · recency 1
+        var sumSignStrengthW = (5 * 6 - 1 * 6) * w; // Σ sign·strength·w
+        var sumW = 6 * w;                            // Σ w over the 6 directional signals
+        var v5Mean = (int)Math.Round(50 + 5 * (sumSignStrengthW / sumW), MidpointRounding.AwayFromZero);
+        Assert.True(withLoneNegative > v5Mean,
+            $"v6 must beat the v5 mean for a majority + lone dissenter; v6={withLoneNegative}, v5Mean={v5Mean}");
+
+        // (b) Strictly higher than the same majority against a CORROBORATED negative cluster (3 negatives) —
+        // an isolated dissenter is damped, a corroborated dissenting cluster is not.
+        var negativeCluster = Directional(3, SignalDirection.Negative, strength: 6, confidence: 0.8m, prefix: "neg");
+        var withNegativeCluster = formula
+            .Compute(InputFrom([.. majority, .. negativeCluster])).Components.TrajectoryScore;
+        Assert.True(withLoneNegative > withNegativeCluster,
+            $"a lone dissenter must damp less than a corroborated cluster; lone={withLoneNegative}, "
+                + $"cluster={withNegativeCluster}");
+
+        // (c) The lone dissent is NOT zeroed: it still moves Trajectory strictly below the no-negative
+        // majority (the dissent is recorded, never ignored).
+        var majorityOnly = formula.Compute(InputFrom(majority)).Components.TrajectoryScore;
+        Assert.True(withLoneNegative < majorityOnly,
+            $"the dissent must still be recorded; withLone={withLoneNegative}, majorityOnly={majorityOnly}");
+    }
+
+    [Fact]
+    public void Trajectory_IsDirectionSymmetric_NoPositiveBias()
+    {
+        // The exact negative mirror of a corroborated case moves Trajectory DOWN from 50 by the same magnitude
+        // it moved UP: swapping every Positive↔Negative negates (Mpos − Mneg) and hence T_raw.
+        var formula = Formula(AllGenuine);
+
+        var up = formula.Compute(InputFrom(Directional(5, SignalDirection.Positive))).Components.TrajectoryScore;
+        var down = formula.Compute(InputFrom(Directional(5, SignalDirection.Negative))).Components.TrajectoryScore;
+
+        Assert.True(up > 50);
+        Assert.True(down < 50);
+        Assert.Equal(up - 50, 50 - down);
+    }
+
+    [Fact]
+    public void Trajectory_IsMonotone_InAddedSignals()
+    {
+        // Adding one more Positive never lowers Trajectory; adding one Negative never raises it.
+        var formula = Formula(AllGenuine);
+
+        var baseSet = Directional(3, SignalDirection.Positive, prefix: "base");
+        var baseTraj = formula.Compute(InputFrom(baseSet)).Components.TrajectoryScore;
+
+        var withExtraPositive = formula
+            .Compute(InputFrom([.. baseSet, BuildSignal(strength: 6, direction: SignalDirection.Positive,
+                sourceName: "extra-pos", observedAt: WindowEnd)])).Components.TrajectoryScore;
+        var withExtraNegative = formula
+            .Compute(InputFrom([.. baseSet, BuildSignal(strength: 6, direction: SignalDirection.Negative,
+                sourceName: "extra-neg", observedAt: WindowEnd)])).Components.TrajectoryScore;
+
+        Assert.True(withExtraPositive >= baseTraj,
+            $"adding a positive must not lower Trajectory; base={baseTraj}, withPos={withExtraPositive}");
+        Assert.True(withExtraNegative <= baseTraj,
+            $"adding a negative must not raise Trajectory; base={baseTraj}, withNeg={withExtraNegative}");
+    }
+
+    [Fact]
+    public void Trajectory_LargerCorroborationK_DampsSingleSignalTowardNeutral()
+    {
+        // The new TrajectoryCorroborationK is read from config: a larger k damps a single-signal Trajectory
+        // toward the neutral 50 versus the default k, proving the constant flows through ScoringWeights.
+        var single = InputFrom(Directional(1, SignalDirection.Positive, strength: 6, confidence: 0.8m));
+
+        var defaultK = new RadarScoreFormulaV6(new ScoringWeights(), AllGenuine)
+            .Compute(single).Components.TrajectoryScore;
+        var largeK = new RadarScoreFormulaV6(new ScoringWeights { TrajectoryCorroborationK = 50.0 }, AllGenuine)
+            .Compute(single).Components.TrajectoryScore;
+
+        Assert.True(defaultK > 50);
+        Assert.True(largeK > 50);
+        Assert.True(largeK < defaultK,
+            $"a larger k must damp toward 50; defaultK={defaultK}, largeK={largeK}");
+    }
+
+    [Fact]
+    public void TrajectoryCorroborationK_MustBePositive()
+    {
+        // It is a denominator smoother, so a zero/negative k fails fast (Validate() + the formula ctor).
+        Assert.Throws<InvalidOperationException>(() => new ScoringWeights { TrajectoryCorroborationK = 0 }.Validate());
+        Assert.Throws<InvalidOperationException>(
+            () => new RadarScoreFormulaV6(new ScoringWeights { TrajectoryCorroborationK = -1 }, AllGenuine));
+    }
+
+    // ---- source-quality tiering + saturation pins (spec 88, carried forward to v6) ----
     //
     // The Attention breadth term is a tier-weighted distinct-publisher SUM (mill 0.1 / unknown 0.5 /
     // genuine 1.0) instead of a flat distinct count, and the half-saturation is 3. All expected Attention
     // values below are the direct closed form 100·reach/(reach+3), rounded away-from-zero.
 
     // Build N distinct-publisher Positive third-party NewsArticle signals under the given name prefix
-    // (non-media type so mediaCount = 0; strength 10 / confidence 1.0 / PrimarySource quality → Trajectory
-    // 100, EC 80). Reach = Σ tier weight over the N distinct publishers.
+    // (non-media type so mediaCount = 0; strength 10 / confidence 1.0 / PrimarySource quality). Reach = Σ tier
+    // weight over the N distinct publishers.
     private static IReadOnlyList<ScoringSignal> News(int count, string prefix) =>
         Enumerable.Range(0, count)
             .Select(i => BuildSignal(strength: 10, confidence: 1.0m, direction: SignalDirection.Positive,
@@ -820,14 +966,14 @@ public sealed class RadarScoreFormulaV5Tests
     // ---- spec 89 config-driven weights pins ----
 
     [Fact]
-    public void DefaultConfig_MatchesRecalibratedV5Baseline_ForARepresentativeInput()
+    public void DefaultConfig_MatchesV6Baseline_ForARepresentativeInput()
     {
-        // Headline baseline pin for the RECALIBRATED radar-formula-v5 default. As of spec 94 the default
-        // MediaReachWeight is 0.10 (was 0.25, the v4 value), which de-saturates Attention — so the default is
-        // DELIBERATELY no longer byte-identical to radar-formula-v4. This is the sanctioned spec-94 recalibration,
-        // NOT drift: the only divergence from the old v4-identical pin is the lower reach → Attention (44 → 42)
-        // and its dependent Opportunity/ComponentJson/Explanation. The formula SHAPE is unchanged (still
-        // radar-formula-v5). These pinned integers ARE the recalibrated v5 default output for this input.
+        // Headline baseline pin for radar-formula-v6. Only the Trajectory component changed from the recalibrated
+        // v5 baseline: the two Positive signals now form a corroborated positive mass combined through the
+        // corroboration-smoothing constant k (default 10), so Trajectory is 72 (was 86 under the v5 mean) and the
+        // Opportunity that consumes it is 36 (was 43). Attention (42), EvidenceConfidence (60) and Velocity (100)
+        // are byte-identical to v5 — the spec-94 MediaReachWeight 0.10 still drives Attention. These pinned
+        // integers ARE the radar-formula-v6 default output for this input.
         var formula = Formula(Tiered());
 
         var input = InputFrom(new[]
@@ -846,12 +992,15 @@ public sealed class RadarScoreFormulaV5Tests
         var result = formula.Compute(input);
         var c = result.Components;
 
-        // reach = genuine(1.0) + genuine(1.0) + mill(0.1) + 0.10·mediaCount(1) = 2.20 → Att 100·2.20/5.20 = 42
-        // (was 44 at the pre-spec-94 MediaReachWeight 0.25). Opportunity = 86·(60/100)·(1 − 42/250) = 42.93 → 43
-        // (unchanged). Velocity has no previous window → 50·(18+10)/(0+10) = 140 → clamped 100.
+        // Trajectory: recency 0.7333 for both positives. Mpos = 6·(0.65·0.7333) + 8·(0.8·0.7333)
+        // = 2.86 + 4.6933 = 7.5533, Mneg = 0. T_raw = 10·7.5533/(7.5533 + 10) = 4.303 →
+        // 50 + 5·4.303 = 71.52 → 72.
+        // reach = genuine(1.0) + genuine(1.0) + mill(0.1) + 0.10·mediaCount(1) = 2.20 → Att 100·2.20/5.20 = 42.
+        // Opportunity = 72·(60/100)·(1 − 42/250) = 35.94 → 36. Velocity has no previous window →
+        // 50·(18+10)/(0+10) = 140 → clamped 100.
         Assert.Equal(new ScoreComponents(
-            TrajectoryScore: 86,
-            OpportunityScore: 43,
+            TrajectoryScore: 72,
+            OpportunityScore: 36,
             AttentionScore: 42,
             EvidenceConfidenceScore: 60,
             SignalVelocityScore: 100),
@@ -859,7 +1008,7 @@ public sealed class RadarScoreFormulaV5Tests
 
         Assert.Equal(JsonSerializer.Serialize(c), result.ComponentJson);
         Assert.Equal(
-            "radar-formula-v5: 3 signal(s) over 30d → Trajectory 86, Opportunity 43 (Attention 42, "
+            "radar-formula-v6: 3 signal(s) over 30d → Trajectory 72, Opportunity 36 (Attention 42, "
                 + "Confidence 60, Velocity 100).",
             result.Explanation);
     }
@@ -875,13 +1024,13 @@ public sealed class RadarScoreFormulaV5Tests
     [Fact]
     public void ChangedWeight_MovesTheScore_ProvingConfigIsRead()
     {
-        // Constructing V5 with a changed AttentionHalfSaturation (old v3 value 12.0) must move Attention (and
+        // Constructing V6 with a changed AttentionHalfSaturation (old v3 value 12.0) must move Attention (and
         // the Opportunity that consumes it) versus the default weights on the same input — proving the formula
         // reads the injected config, not const fields.
         var input = InputFrom(News(5, "genuine"));
 
-        var defaultResult = new RadarScoreFormulaV5(new ScoringWeights(), Tiered()).Compute(input).Components;
-        var retunedResult = new RadarScoreFormulaV5(
+        var defaultResult = new RadarScoreFormulaV6(new ScoringWeights(), Tiered()).Compute(input).Components;
+        var retunedResult = new RadarScoreFormulaV6(
             new ScoringWeights { AttentionHalfSaturation = 12.0 }, Tiered()).Compute(input).Components;
 
         Assert.NotEqual(defaultResult.AttentionScore, retunedResult.AttentionScore);

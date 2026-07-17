@@ -5,18 +5,31 @@ using Radar.Domain.Signals;
 namespace Radar.Application.Scoring;
 
 /// <summary>
-/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v5</c>: an AD-6 refinement of
-/// <c>radar-formula-v4</c> that moves the ~20 tunable magnitude constants OUT of <c>const</c> fields and into
-/// an injected, immutable <see cref="ScoringWeights"/> config object. The formula reads every magnitude from
-/// <see cref="_weights"/> instead of hardcoded consts, so a tunable-number change is now a <b>config edit</b>
-/// (a new/edited <c>Radar:Scoring</c> profile), not a new formula-version class. Only the formula's
-/// <b>structure</b> — the component shape, the fixed field ordering, and the direction-sign semantics — stays
-/// versioned code; <see cref="ScoringWeights"/> defaults EQUAL the v4 constants, so a blank/absent config
-/// yields <b>byte-identical</b> output to v4 (the identity advances v4 → v5 only to mark the structural
-/// change: a new injected dependency plus a content-fingerprint stamp). Because runtime-configurable weights
-/// mean a hand-typed generation string no longer uniquely determines the score, the engine now stamps a
-/// deterministic content fingerprint of the effective resolved config (structure + all weights + tier map)
-/// as <c>ScoringConfigVersion</c> (AD-10 amended). Supersedes <c>radar-formula-v4</c>.
+/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v6</c>: an AD-6 refinement of
+/// <c>radar-formula-v5</c> that changes <b>only</b> the Trajectory component to be
+/// corroboration/consensus-aware. Every other component (Attention incl. the spec-109 collapsed media set,
+/// EvidenceConfidence, SignalVelocity, Opportunity, recency, the empty-window behaviour, the
+/// <see cref="ScoringInput.PreviousSignals"/> handling, the direction SIGNS, and the per-signal provenance
+/// <see cref="ScoreContribution"/> weights) is <b>byte-for-byte</b> identical to v5.
+/// <para>
+/// The v5 Trajectory was a confidence/recency-weighted <b>mean</b> of <c>sign·strength</c> over directional
+/// signals, so a lone dissenting signal carried weight comparable to each of many corroborating signals: five
+/// agreeing customer wins moved Trajectory no more decisively than one, and a single countervailing signal
+/// could overturn the read (the live AEHR case, Trajectory 79→68). v6 instead splits the current-window
+/// directional signals into a <b>positive mass</b> <c>Mpos = Σ strengthᵢ·wᵢ</c> and a <b>negative mass</b>
+/// <c>Mneg = Σ strengthᵢ·wᵢ</c> (each per-signal weight <c>wᵢ = confidenceᵢ·recencyᵢ</c>, exactly as v5;
+/// Neutral/Mixed contribute 0 to both, as v5) and combines them as
+/// <c>T_raw = TrajectoryBand·(Mpos − Mneg)/(Mpos + Mneg + k)</c>, where <see cref="TrajectoryBand"/> (=10) is
+/// the structural strength ceiling / band half-width (the same implicit [-10,10] band v5 used) and <c>k</c> is
+/// the config-tunable corroboration-smoothing constant <see cref="ScoringWeights.TrajectoryCorroborationK"/>.
+/// The smoothing constant means a small directional set (a lone signal) cannot swing <c>T_raw</c> to an
+/// extreme, but a corroborated majority (large mass) can — and an equally-corroborated negative majority
+/// swings it down symmetrically. So a corroborated direction is rewarded, an isolated dissenter is
+/// damped-but-not-zeroed (the dissent is still recorded), and a corroborated dissenting cluster still bites.
+/// The transform is monotone (adding a positive never lowers Trajectory; adding a negative never raises it),
+/// direction-symmetric (no positive bias), and an empty directional set still yields the neutral 50 (the
+/// <c>0/(0+k)=0</c> fall-through). Supersedes <c>radar-formula-v5</c>.
+/// </para>
 /// <para>
 /// Pure and deterministic (no clock, no randomness, no I/O; both <see cref="_weights"/> and
 /// <see cref="_sourceWeights"/> are immutable lookups); every component clamps to [0,100]. Trajectory
@@ -27,13 +40,20 @@ namespace Radar.Application.Scoring;
 /// and never from <see cref="ScoringInput.PreviousSignals"/>.
 /// </para>
 /// </summary>
-public sealed class RadarScoreFormulaV5 : IScoreFormula
+public sealed class RadarScoreFormulaV6 : IScoreFormula
 {
     // Direction → sign used in trajectory. These are structural direction SIGNS, not tunable magnitudes
     // (flipping a sign is a structural change, not a weight experiment), so they stay const in the formula.
     private const int DirPositive = +1;
     private const int DirNegative = -1;
     // Neutral and Mixed contribute 0 to direction (see DirectionSign()).
+
+    // The strength ceiling / band half-width that scales the directional preponderance ratio
+    // (Mpos−Mneg)/(Mpos+Mneg+k) ∈ [-1,1] into the same implicit [-10,10] band radar-formula-v5 used (v5's
+    // trajectory mean of sign·strength was itself bounded by the [0,10] strength ceiling). This is a
+    // STRUCTURAL constant — the band's shape, not a tunable magnitude — so it stays const in the formula
+    // (like the direction-sign consts). The tunable corroboration-smoothing constant k lives in config.
+    private const double TrajectoryBand = 10.0;
 
     private readonly ScoringWeights _weights;
     private readonly IAttentionSourceWeights _sourceWeights;
@@ -47,7 +67,7 @@ public sealed class RadarScoreFormulaV5 : IScoreFormula
     /// on a nonsensical weight that would break the math or the [0,100] clamp contract — see
     /// <see cref="ScoringWeights.Validate"/>.
     /// </summary>
-    public RadarScoreFormulaV5(ScoringWeights weights, IAttentionSourceWeights sourceWeights)
+    public RadarScoreFormulaV6(ScoringWeights weights, IAttentionSourceWeights sourceWeights)
     {
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
@@ -57,7 +77,7 @@ public sealed class RadarScoreFormulaV5 : IScoreFormula
     }
 
     /// <inheritdoc />
-    public string Version => "radar-formula-v5";
+    public string Version => "radar-formula-v6";
 
     private static int DirectionSign(SignalDirection d) => d switch
     {
@@ -89,7 +109,7 @@ public sealed class RadarScoreFormulaV5 : IScoreFormula
             var emptyComponents = new ScoreComponents(0, 0, 0, 0, 0);
             return new ScoreComputation(
                 emptyComponents,
-                "radar-formula-v5: no signals in window.",
+                "radar-formula-v6: no signals in window.",
                 JsonSerializer.Serialize(emptyComponents),
                 new List<ScoreContribution>());
         }
@@ -117,25 +137,41 @@ public sealed class RadarScoreFormulaV5 : IScoreFormula
         }
 
         // ---- 1. TrajectoryScore (50 = neutral, >50 improving) ----
-        // v2: only Positive/Negative signals contribute to numerator AND denominator. Neutral/Mixed are
-        // excluded entirely so they no longer dilute the directional read toward 50.
-        var sumW = 0.0;
-        var sumTerm = 0.0;
+        // v6: corroboration/consensus-aware. Split the directional signals into a positive mass and a negative
+        // mass (each the confidence·recency·strength sum over that direction; Neutral/Mixed still contribute 0
+        // to both, as v5), then combine via the corroboration-smoothing constant k so a corroborated majority
+        // is rewarded and a lone dissenter is damped-but-not-zeroed. The per-signal weight w = confidence·recency
+        // is byte-identical to v5 (only the AGGREGATION over the signals changed — a preponderance ratio, not a
+        // mean of sign·strength).
+        var mPos = 0.0;
+        var mNeg = 0.0;
         for (var i = 0; i < signals.Count; i++)
         {
             var signal = signals[i].Signal;
             var sign = DirectionSign(signal.Direction);
             if (sign == 0)
             {
-                continue; // Neutral/Mixed excluded from both numerator and denominator.
+                continue; // Neutral/Mixed excluded from both masses.
             }
 
             var w = (double)signal.Confidence * recency[i];
-            sumW += w;
-            sumTerm += sign * signal.Strength * w;
+            var mass = signal.Strength * w;
+            if (sign > 0)
+            {
+                mPos += mass;
+            }
+            else
+            {
+                mNeg += mass;
+            }
         }
 
-        var tRaw = sumW <= 0 ? 0 : sumTerm / sumW; // ∈ [-10, 10]; no directional signals → 0 → 50
+        // T_raw = TrajectoryBand·(Mpos − Mneg)/(Mpos + Mneg + k) ∈ [-10, 10]. No directional signals →
+        // Mpos == Mneg == 0 → 0 → 50 (the guard keeps v5's sumMass<=0 shape; k>0 makes 0/(0+k)=0 too).
+        var sumMass = mPos + mNeg;
+        var tRaw = sumMass <= 0
+            ? 0
+            : TrajectoryBand * (mPos - mNeg) / (sumMass + _weights.TrajectoryCorroborationK);
         var trajectoryScore = Score(_weights.TrajectoryNeutral + _weights.TrajectoryScale * tRaw);
 
         // ---- 2. AttentionScore (saturating on breadth) ----
@@ -188,7 +224,8 @@ public sealed class RadarScoreFormulaV5 : IScoreFormula
 
         // ---- Contributions (provenance — current window only) ----
         // Still one contribution per current-window signal in input order, including Neutral/Mixed
-        // (which naturally get weight 0 from DirectionSign). Provenance is unchanged from v1.
+        // (which naturally get weight 0 from DirectionSign). The per-signal contribution weight is unchanged
+        // from v5 — provenance is per-signal; the v6 consensus shaping is an AGGREGATE over these signals.
         var contributions = new List<ScoreContribution>(signals.Count);
         for (var i = 0; i < signals.Count; i++)
         {
@@ -208,7 +245,7 @@ public sealed class RadarScoreFormulaV5 : IScoreFormula
 
         var windowDays = (int)Math.Round(windowLength.TotalDays, MidpointRounding.AwayFromZero);
         var explanation =
-            $"radar-formula-v5: {input.Signals.Count} signal(s) over {windowDays}d → " +
+            $"radar-formula-v6: {input.Signals.Count} signal(s) over {windowDays}d → " +
             $"Trajectory {trajectoryScore}, Opportunity {opportunityScore} (Attention {attentionScore}, " +
             $"Confidence {evidenceConfidenceScore}, Velocity {signalVelocityScore}).";
 

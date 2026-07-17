@@ -2,7 +2,7 @@ namespace Radar.Application.Scoring;
 
 /// <summary>
 /// Per-publisher attention-breadth weighting for the scoring formula's reach term. Injected into
-/// <see cref="RadarScoreFormulaV5"/> so the curated "what counts as genuine market notice" policy lives as
+/// <see cref="RadarScoreFormulaV6"/> so the curated "what counts as genuine market notice" policy lives as
 /// Infrastructure config data (AD-5) while the formula stays a pure function of its input plus this immutable
 /// lookup (AD-3).
 /// </summary>
