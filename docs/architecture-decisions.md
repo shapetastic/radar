@@ -313,6 +313,57 @@ spec-89 "blank config == v4 byte-identical" property is **deliberately supersede
 tier-weighted-article-count `v6` (weighting the media term by publisher tier) was considered and **skipped as
 marginal** for this mostly-aggregator-covered universe. *Accepted · 2026-07-04.*
 
+### Refinement — `radar-formula-v6` (spec 111): corroboration-aware Trajectory
+
+**Problem.** The v5 `TrajectoryScore` was a confidence/recency-weighted **mean** of `sign·strength` over the
+current-window directional signals. A mean gives a lone dissenting signal weight comparable to *each* of many
+corroborating signals, so **corroboration was not rewarded**: five agreeing customer wins moved Trajectory no
+more decisively than one, and a single countervailing signal could overturn the read. On the live 2026-07-17
+run AEHR had a strong, corroborated positive thesis (~4 `CustomerWin` + a `StrategicPartnership`) yet a single
+uncorroborated insider-sale Negative dragged its Trajectory **79 → 68**. Radar's philosophy is
+"evidence before opinions, corroboration matters" — a direction backed by many independent high-strength
+signals should be more robust than one asserted by a single signal.
+
+**Shape (the ONLY component that changed vs v5).** `RadarScoreFormulaV6` (`Version = "radar-formula-v6"`,
+**maintainer-approved**) splits the current-window directional signals into a **positive mass** and a
+**negative mass**, each the per-signal `strengthᵢ·wᵢ` sum over that direction where the per-signal weight
+`wᵢ = confidenceᵢ·recencyᵢ` is **byte-identical to v5** (Neutral/Mixed still contribute 0 to both masses), and
+combines them as
+
+```
+T_raw = TrajectoryBand · (Mpos − Mneg) / (Mpos + Mneg + k)          ∈ [-10, 10]
+trajectoryScore = Score(TrajectoryNeutral + TrajectoryScale · T_raw)   (50 + 5·T_raw, clamped)
+```
+
+`TrajectoryBand` (= `10.0`) is a **structural** `const` in the formula — the strength ceiling / band
+half-width (the same implicit `[-10,10]` band the v5 mean of `sign·strength` occupied), a shape decision, not a
+tunable magnitude (it sits beside the direction-sign consts). `k` is the new config **magnitude**
+`ScoringWeights.TrajectoryCorroborationK` (default `10.0`) — the corroboration-smoothing constant: the
+directional mass (≈ one full-strength·full-confidence·full-recency signal) that must accrue before Trajectory
+swings halfway; larger `k` damps small directional sets more. It is a denominator smoother, so
+`ScoringWeights.Validate()` requires it strictly positive.
+
+**Invariants (checked by tests).** Monotone (adding a Positive never lowers Trajectory; adding a Negative never
+raises it); direction-**symmetric** (a corroborated negative cluster moves Trajectory down as decisively as a
+corroborated positive cluster moves it up — no positive bias); empty directional set → neutral `50`
+(`0/(0+k)=0`, the same `sumMass<=0` guard shape v5 used); an **isolated** dissenter against a strong agreeing
+majority is **damped** relative to the v5 mean but **not zeroed** (the dissent is recorded — its Trajectory is
+strictly below the no-dissenter majority); a **corroborated** dissenting cluster still **bites** decisively.
+**Only** Trajectory changed — Attention (incl. the spec-109 collapsed media set), EvidenceConfidence,
+SignalVelocity, Opportunity, recency, the empty-window behaviour, the `PreviousSignals` handling, the direction
+SIGNS, and the per-signal provenance `ScoreContribution` weights (`sign·strength·conf·recency`, provenance is
+per-signal; the consensus shaping is an aggregate) are **byte-for-byte** as v5 (proven by the ported tests).
+
+**Version obligation.** This is a formula **STRUCTURE** change → `_formula.Version` advanced
+`radar-formula-v5 → v6`; `ScoringVersion` advances automatically and `ScoringConfigVersion` **re-stamps via the
+derived fingerprint** (the `FormulaVersion` input changed) — default
+`radar-scoring-fp-abbdf9fab44f → radar-scoring-fp-c45fb79092ea`. Every new magnitude lives in `ScoringWeights`
+(config), so future tuning of `k` is a config edit, not another formula class. Per the spec-implementation
+checklist `RadarScoreFormulaV5` was **deleted** (not left dormant) and its tests ported to
+`RadarScoreFormulaV6Tests` with the trajectory-dependent pins recomputed (representative headline input
+Trajectory `86 → 72`, Opportunity `43 → 36`; the lone-directional Helios input Trajectory `80 → 61`). *Accepted
+· 2026-07-17 — maintainer-gated structure; the PR carries the sign-off.*
+
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
 `radar-formula-v3` — maintainer-approved). Refined · 2026-07-04 (spec 88, `radar-formula-v4` — Accepted,
@@ -321,7 +372,10 @@ structure stays versioned). Refined · 2026-07-04 (spec 90 — attention tier re
 normalization; **not** a formula-version bump, fingerprint auto-re-stamps; Accepted · 2026-07-04). Refined ·
 2026-07-04 (spec 94 — default `MediaReachWeight 0.25 → 0.10` de-saturating recalibration; a `ScoringWeights`
 magnitude change, **not** a formula-version bump; fingerprint auto-re-stamps and the v4-byte-identical property is
-deliberately superseded; Accepted · 2026-07-04).
+deliberately superseded; Accepted · 2026-07-04). Refined · 2026-07-17 (spec 111, `radar-formula-v6` —
+maintainer-gated structure: corroboration-aware Trajectory splitting the directional signals into positive vs
+negative mass combined through the config constant `k` = `TrajectoryCorroborationK`; only Trajectory changed,
+every other component byte-identical to v5; fingerprint re-stamped `abbdf9fab44f → c45fb79092ea`; Accepted).
 
 ---
 

@@ -15,6 +15,11 @@ public sealed record ScoringWeights
     public double RecencyFloor { get; init; } = 0.5;
     public double TrajectoryNeutral { get; init; } = 50.0;
     public double TrajectoryScale { get; init; } = 5.0;
+    // radar-formula-v6 corroboration-smoothing constant: the directional mass (≈ one full-strength·full-
+    // confidence·full-recency signal) that must accrue before Trajectory swings halfway; larger k damps small
+    // directional sets more (a lone dissenter is damped-but-not-zeroed). It is the denominator smoother in
+    // T_raw = 10·(Mpos−Mneg)/(Mpos+Mneg+k), so it must be strictly positive (Validate()).
+    public double TrajectoryCorroborationK { get; init; } = 10.0;
     public double AttentionHalfSaturation { get; init; } = 3.0;   // v4 value (post spec 88)
     public double MediaReachWeight { get; init; } = 0.10;         // spec 94 recalibration (was 0.25, the v4 value)
     public double QualityPrimarySource { get; init; } = 1.00;
@@ -33,8 +38,9 @@ public sealed record ScoringWeights
 
     /// <summary>
     /// Fail-fast validation of nonsensical values that would break the math or the [0,100] clamp contract.
-    /// The three denominators (<see cref="DiversityTarget"/>, <see cref="OpportunityAttentionDivisor"/>,
-    /// <see cref="AttentionHalfSaturation"/>) MUST be strictly positive; the five quality weights and the
+    /// The four denominators (<see cref="DiversityTarget"/>, <see cref="OpportunityAttentionDivisor"/>,
+    /// <see cref="AttentionHalfSaturation"/>, <see cref="TrajectoryCorroborationK"/>) MUST be strictly
+    /// positive; the five quality weights and the
     /// four EC base/span values MUST be non-negative. Deliberately tight (weights are meant to be
     /// experimented with) — it throws only on values that would silently distort scoring. Called from the
     /// formula constructor AND from the DI binder so a misconfiguration fails fast at startup.
@@ -44,6 +50,7 @@ public sealed record ScoringWeights
         RequirePositive(DiversityTarget, nameof(DiversityTarget));
         RequirePositive(OpportunityAttentionDivisor, nameof(OpportunityAttentionDivisor));
         RequirePositive(AttentionHalfSaturation, nameof(AttentionHalfSaturation));
+        RequirePositive(TrajectoryCorroborationK, nameof(TrajectoryCorroborationK));
 
         RequireNonNegative(QualityPrimarySource, nameof(QualityPrimarySource));
         RequireNonNegative(QualityHigh, nameof(QualityHigh));
