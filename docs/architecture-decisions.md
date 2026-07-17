@@ -325,7 +325,8 @@ uncorroborated insider-sale Negative dragged its Trajectory **79 → 68**. Radar
 signals should be more robust than one asserted by a single signal.
 
 **Shape (the ONLY component that changed vs v5).** `RadarScoreFormulaV6` (`Version = "radar-formula-v6"`,
-**maintainer-gated — sign-off requested in PR #114, not yet granted**) splits the current-window directional signals into a **positive mass** and a
+**maintainer-approved · 2026-07-17** — shape signed off in-session; `k=10` default, retunable via config)
+splits the current-window directional signals into a **positive mass** and a
 **negative mass**, each the per-signal `strengthᵢ·wᵢ` sum over that direction where the per-signal weight
 `wᵢ = confidenceᵢ·recencyᵢ` is **byte-identical to v5** (Neutral/Mixed still contribute 0 to both masses), and
 combines them as
@@ -361,8 +362,8 @@ derived fingerprint** (the `FormulaVersion` input changed) — default
 (config), so future tuning of `k` is a config edit, not another formula class. Per the spec-implementation
 checklist `RadarScoreFormulaV5` was **deleted** (not left dormant) and its tests ported to
 `RadarScoreFormulaV6Tests` with the trajectory-dependent pins recomputed (representative headline input
-Trajectory `86 → 72`, Opportunity `43 → 36`; the lone-directional Helios input Trajectory `80 → 61`). *Proposed
-· 2026-07-17 — maintainer-gated structure; sign-off requested in PR #114, not yet granted.*
+Trajectory `86 → 72`, Opportunity `43 → 36`; the lone-directional Helios input Trajectory `80 → 61`). *Accepted
+· 2026-07-17 — maintainer-approved structure (shape signed off in-session; `k=10` default retunable via config).*
 
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
@@ -375,8 +376,8 @@ magnitude change, **not** a formula-version bump; fingerprint auto-re-stamps and
 deliberately superseded; Accepted · 2026-07-04). Refined · 2026-07-17 (spec 111, `radar-formula-v6` —
 maintainer-gated structure: corroboration-aware Trajectory splitting the directional signals into positive vs
 negative mass combined through the config constant `k` = `TrajectoryCorroborationK`; only Trajectory changed,
-every other component byte-identical to v5; fingerprint re-stamped `abbdf9fab44f → c45fb79092ea`; **Proposed —
-sign-off requested in PR #114, not yet granted**).
+every other component byte-identical to v5; fingerprint re-stamped `abbdf9fab44f → c45fb79092ea`; **Accepted ·
+2026-07-17 — maintainer-approved** (shape signed off in-session; `k=10` default retunable via config)).
 
 ---
 
