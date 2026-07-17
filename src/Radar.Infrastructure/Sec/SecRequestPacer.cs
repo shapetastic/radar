@@ -56,7 +56,17 @@ internal sealed class SecRequestPacer
             if (_nextEarliestUtc > now)
             {
                 await Task.Delay(_nextEarliestUtc - now, _timeProvider, ct).ConfigureAwait(false);
+
+                // Re-read the clock after the delay, but keep the pacer MONOTONIC. Task.Delay is driven by a
+                // monotonic timer, yet GetUtcNow() is wall-clock and can jump backwards (e.g. an NTP correction).
+                // A backward jump would pull `now` — and thus the next reserved slot below — earlier than the slot
+                // we just waited out, letting the following request proceed sooner than MinInterval in real time.
+                // The request has by construction waited at least until _nextEarliestUtc, so clamp to it.
                 now = _timeProvider.GetUtcNow();
+                if (now < _nextEarliestUtc)
+                {
+                    now = _nextEarliestUtc;
+                }
             }
 
             _nextEarliestUtc = now + _minInterval;
