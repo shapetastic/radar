@@ -954,11 +954,17 @@ public class KeywordSignalExtractorTests
     }
 
     [Theory]
-    [InlineData("5000000", 8)]
-    [InlineData("250000", 6)]
-    [InlineData("10000", 2)]
+    [InlineData("50000000", 8)] // a genuinely large (>= $50M) sale still reaches the top strength 8
+    [InlineData("25000000", 7)]
+    [InlineData("10000000", 6)] // a large sale still reaches a mid-high strength
+    [InlineData("1600000", 4)] // the AEHR case: a ~$1.6M lone discretionary sale is a modest low-mid negative (was 7 pre-110)
+    [InlineData("1000000", 4)]
+    [InlineData("250000", 3)]
+    [InlineData("10000", 2)] // routine tiny sales stay at the low floor (noise)
     public async Task InsiderSale_StrengthScalesByNetValueTiers(string netValue, int expectedStrength)
     {
+        // Spec 110: the default SellTiers are the materiality-scaled, mild buy>>sell curve — a sale must be much
+        // larger than a buy to score high, because sells are noisier in aggregate.
         var evidence = MakeInsiderEvidence("insider open-market sale", InsiderMetadataJson(netValue));
 
         var output = await ExtractAsync(evidence);
@@ -966,6 +972,26 @@ public class KeywordSignalExtractorTests
         var signal = Assert.Single(output.Signals);
         Assert.Equal("Negative", signal.Direction);
         Assert.Equal(expectedStrength, signal.Strength);
+    }
+
+    [Fact]
+    public async Task InsiderSaleVsBuy_BuyOutScoresSell_WithDefaultWeights()
+    {
+        // Spec 110: with the default (asymmetric) weights, a $1,000,000 open-market BUY (strength 7) out-scores a
+        // sale of identical size (strength 4) — the mild buy>>sell prior baked into the code defaults, not custom
+        // weights.
+        var buy = await ExtractAsync(
+            MakeInsiderEvidence("insider open-market purchase", InsiderMetadataJson("1000000")));
+        var sell = await ExtractAsync(
+            MakeInsiderEvidence("insider open-market sale", InsiderMetadataJson("1000000")));
+
+        var buySignal = Assert.Single(buy.Signals);
+        var sellSignal = Assert.Single(sell.Signals);
+        Assert.Equal("Positive", buySignal.Direction);
+        Assert.Equal("Negative", sellSignal.Direction);
+        Assert.Equal(7, buySignal.Strength);
+        Assert.Equal(4, sellSignal.Strength);
+        Assert.True(buySignal.Strength > sellSignal.Strength);
     }
 
     [Fact]
@@ -1012,18 +1038,19 @@ public class KeywordSignalExtractorTests
         """;
 
     [Theory]
-    [InlineData("insider open-market purchase", "Positive")]
-    [InlineData("insider open-market sale", "Negative")]
-    public async Task InsiderCluster_AddsOneToTierStrength(string phrase, string expectedDirection)
+    // Spec 110: buy and sell tiers are asymmetric, so the cluster boost lands on different base strengths.
+    // $1,000,000 -> BUY base Strength 7 (+1 -> 8); $1,000,000 -> SELL base Strength 4 (+1 -> 5).
+    [InlineData("insider open-market purchase", "Positive", 8)]
+    [InlineData("insider open-market sale", "Negative", 5)]
+    public async Task InsiderCluster_AddsOneToTierStrength(string phrase, string expectedDirection, int expectedStrength)
     {
-        // $1,000,000 -> base tier Strength 7; the cluster flag adds +1 -> 8.
         var evidence = MakeInsiderEvidence(phrase, InsiderClusterMetadataJson("1000000"));
 
         var output = await ExtractAsync(evidence);
 
         var signal = Assert.Single(output.Signals);
         Assert.Equal(expectedDirection, signal.Direction);
-        Assert.Equal(8, signal.Strength);
+        Assert.Equal(expectedStrength, signal.Strength);
     }
 
     [Fact]

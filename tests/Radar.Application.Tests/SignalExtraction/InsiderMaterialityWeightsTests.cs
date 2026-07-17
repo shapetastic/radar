@@ -7,11 +7,12 @@ namespace Radar.Application.Tests.SignalExtraction;
 public sealed class InsiderMaterialityWeightsTests
 {
     [Fact]
-    public void Defaults_ReproduceSpec93Table()
+    public void Defaults_BuyReproducesSpec93Table_SellIsSpec110AsymmetricCurve()
     {
         var weights = new InsiderMaterialityWeights();
 
-        var expected = new (decimal MinInclusive, int Strength)[]
+        // BuyTiers stay at the spec-93 defaults (insider buys remain a strong signal).
+        var expectedBuy = new (decimal MinInclusive, int Strength)[]
         {
             (5_000_000m, 8),
             (1_000_000m, 7),
@@ -20,8 +21,20 @@ public sealed class InsiderMaterialityWeightsTests
             (decimal.MinValue, 2),
         };
 
-        AssertTable(expected, weights.BuyTiers);
-        AssertTable(expected, weights.SellTiers);
+        // SellTiers default to the spec-110 materiality-scaled, mild buy>>sell curve (no longer == BuyTiers).
+        var expectedSell = new (decimal MinInclusive, int Strength)[]
+        {
+            (50_000_000m, 8),
+            (25_000_000m, 7),
+            (10_000_000m, 6),
+            (2_500_000m, 5),
+            (1_000_000m, 4),
+            (250_000m, 3),
+            (decimal.MinValue, 2),
+        };
+
+        AssertTable(expectedBuy, weights.BuyTiers);
+        AssertTable(expectedSell, weights.SellTiers);
         Assert.Equal(1, weights.ClusterBoost);
     }
 
@@ -141,7 +154,7 @@ public sealed class InsiderMaterialityWeightsTests
         var floor = decimal.MinValue.ToString(CultureInfo.InvariantCulture);
         Assert.Equal(
             $"buy=5000000:8,1000000:7,250000:6,50000:4,{floor}:2;"
-                + $"sell=5000000:8,1000000:7,250000:6,50000:4,{floor}:2;cluster=1;",
+                + $"sell=50000000:8,25000000:7,10000000:6,2500000:5,1000000:4,250000:3,{floor}:2;cluster=1;",
             descriptor);
     }
 

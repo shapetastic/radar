@@ -53,11 +53,37 @@ public sealed record InsiderMaterialityWeights
         new(decimal.MinValue, 2),
     ];
 
-    /// <summary>Materiality tiers for a Positive (open-market purchase) InsiderBuying signal (spec 93 default).</summary>
+    /// <summary>
+    /// The spec-110 default SELL materiality table: a materiality-scaled, mild buy≫sell curve. A sale must be
+    /// much larger than a buy to score high, because insider sells are noisier in aggregate (liquidity,
+    /// diversification, tax) than buys. A ~$1.6M lone discretionary sale now maps to strength 4 (modest low-mid,
+    /// at/above the reviewer's <c>MinMaterialStrength</c> floor of 3, well below the top tier) instead of the old
+    /// 7; a genuinely large (≥$50M) sale still reaches 8; the floor stays low (2) so routine tiny sales are noise.
+    /// This is a config-magnitude default (hashed into the fingerprint by value, spec 96) — no RuleSetVersion bump.
+    /// Descending by MinInclusive with a decimal.MinValue floor and non-increasing strengths walking descending,
+    /// so <see cref="Validate"/> passes.
+    /// </summary>
+    private static readonly IReadOnlyList<InsiderMaterialityTier> DefaultSellTiers =
+    [
+        new(50_000_000m, 8),
+        new(25_000_000m, 7),
+        new(10_000_000m, 6),
+        new(2_500_000m, 5),
+        new(1_000_000m, 4),
+        new(250_000m, 3),
+        new(decimal.MinValue, 2),
+    ];
+
+    /// <summary>Materiality tiers for a Positive (open-market purchase) InsiderBuying signal (spec 93 default; insider buys remain a strong signal).</summary>
     public IReadOnlyList<InsiderMaterialityTier> BuyTiers { get; init; } = DefaultTiers;
 
-    /// <summary>Materiality tiers for a Negative (open-market sale) InsiderBuying signal (spec 93 default).</summary>
-    public IReadOnlyList<InsiderMaterialityTier> SellTiers { get; init; } = DefaultTiers;
+    /// <summary>
+    /// Materiality tiers for a Negative (open-market sale) InsiderBuying signal. Defaults to the spec-110
+    /// asymmetric materiality curve (no longer == the spec-93 <see cref="BuyTiers"/> table): a sale must be much
+    /// larger than a buy to reach the same strength (sells are noisier in aggregate), so a modest lone
+    /// discretionary sale stays a small-but-real negative while large/clustered sales still register materially.
+    /// </summary>
+    public IReadOnlyList<InsiderMaterialityTier> SellTiers { get; init; } = DefaultSellTiers;
 
     /// <summary>The additive multi-insider (>= 2 insiders same direction) boost, capped at the domain max 10 by the extractor (spec 93's +1).</summary>
     public int ClusterBoost { get; init; } = 1;
