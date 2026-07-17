@@ -38,7 +38,7 @@ public sealed class InsiderMaterialityBindingTests
     [Fact]
     public void NamedProfile_AppliesDeltaOntoDefaults()
     {
-        // Override only the cluster boost and the buy tiers; the sell tiers keep the code default (== spec 93).
+        // Override only the cluster boost and the buy tiers; the sell tiers keep the code default (spec-110 curve).
         var weights = Resolve(new Dictionary<string, string?>
         {
             ["Radar:Insider:Profile"] = "buy-tilt",
@@ -57,7 +57,7 @@ public sealed class InsiderMaterialityBindingTests
         Assert.Equal(decimal.MinValue, weights.BuyTiers[1].MinInclusive);
         Assert.Equal(3, weights.BuyTiers[1].Strength);
 
-        // Unspecified sell tiers keep the code default (spec 93).
+        // Unspecified sell tiers keep the code default (spec-110 asymmetric curve; top tier strength 8).
         Assert.Equal(new InsiderMaterialityWeights().SellTiers.Count, weights.SellTiers.Count);
         Assert.Equal(8, weights.SellTiers[0].Strength);
     }

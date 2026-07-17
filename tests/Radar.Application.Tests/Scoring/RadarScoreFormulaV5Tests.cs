@@ -624,6 +624,41 @@ public sealed class RadarScoreFormulaV5Tests
     }
 
     [Fact]
+    public void Trajectory_LoneRoutineInsiderSale_AtSpec110SellStrength_NoLongerDropsBy5()
+    {
+        // Spec 110 (AEHR regression): a strong positive-directional majority (record-results week) plus ONE lone
+        // routine open-market insider sale. Under the recalibrated default SellTiers a ~$1.6M discretionary sale
+        // maps to Strength 4 (was 7 when SellTiers == BuyTiers). The weaker Negative contribution shrinks the
+        // trajectory drop below the WeeklyReportActionPolicyV1 deterioration threshold (week-over-week delta
+        // <= -5), so a routine trim after record results no longer *by itself* flips the label to "Thesis
+        // deteriorating". The pre-110 Strength-7 sale DID cross that threshold. (Spec 111 hardens the non-flip at
+        // the formula level; this slice is the honest-magnitude fix. The action policy is NOT edited here.)
+        var formula = Formula(AllGenuine);
+
+        // The corroborated positive majority (identical in both scenarios; equal confidence + observedAt so the
+        // trajectory mean is unweighted and the sale's effect is isolated).
+        ScoringSignal[] Majority() => Enumerable.Range(0, 11)
+            .Select(i => BuildSignal(strength: 6, direction: SignalDirection.Positive, sourceName: $"pos-{i}"))
+            .ToArray();
+
+        ScoringSignal Sale(int strength) =>
+            BuildSignal(strength: strength, direction: SignalDirection.Negative, sourceName: "insider-sale");
+
+        var baseTrajectory = formula.Compute(InputFrom(Majority())).Components.TrajectoryScore;
+        var withSpec110Sale = formula.Compute(InputFrom([.. Majority(), Sale(4)])).Components.TrajectoryScore;
+        var withPre110Sale = formula.Compute(InputFrom([.. Majority(), Sale(7)])).Components.TrajectoryScore;
+
+        var spec110Drop = baseTrajectory - withSpec110Sale;
+        var pre110Drop = baseTrajectory - withPre110Sale;
+
+        // The recalibrated (Strength-4) sale stays under the -5 deterioration trigger...
+        Assert.True(spec110Drop < 5, $"spec-110 sell drop must be < 5; was {spec110Drop}");
+        // ...whereas the old (Strength-7) sale crossed it, and the recalibration strictly shrinks the drop.
+        Assert.True(pre110Drop >= 5, $"pre-110 sell drop must be >= 5; was {pre110Drop}");
+        Assert.True(spec110Drop < pre110Drop);
+    }
+
+    [Fact]
     public void Recency_NewerPositiveSignal_WeighsAtLeastAsMuch()
     {
         var formula = Formula(AllGenuine);

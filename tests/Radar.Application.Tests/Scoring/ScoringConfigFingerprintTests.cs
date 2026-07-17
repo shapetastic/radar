@@ -94,17 +94,17 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
         // default-tier, signal-source, insider-materiality, or media-collapse drift is caught (the automatic
-        // AD-10 replacement for the hand-bumped constant). This value is the spec-109 re-stamp: the new
-        // media-collapse descriptor (media-collapse-v1;window=3) is folded into the fingerprint after the
-        // insider descriptor, so the default fingerprint re-stamped automatically — scoring math on a
-        // non-media signal set is byte-identical (only the media input set is de-noised) and no
-        // _formula.Version / RuleSetVersion bump occurred. It supersedes the spec-103 stamp
-        // (radar-scoring-fp-c9e609ed53e9) and matches default.json's recorded live default.
+        // AD-10 replacement for the hand-bumped constant). This value is the spec-110 re-stamp: the default
+        // insider SellTiers were recalibrated to the materiality-scaled asymmetric curve (buy>>sell), which is
+        // hashed into the fingerprint by value via the insider descriptor (spec 96), so the default fingerprint
+        // re-stamped automatically — scoring math on non-insider-sell signals is unchanged and no
+        // _formula.Version / RuleSetVersion bump occurred. It supersedes the spec-109 stamp
+        // (radar-scoring-fp-525e552874eb) and matches default.json's recorded live default.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-525e552874eb", fp);
+        Assert.Equal("radar-scoring-fp-abbdf9fab44f", fp);
     }
 
     [Fact]
