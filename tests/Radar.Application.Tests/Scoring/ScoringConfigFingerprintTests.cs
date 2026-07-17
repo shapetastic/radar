@@ -171,9 +171,10 @@ public sealed class ScoringConfigFingerprintTests
 
     // The AI-ON signal-source descriptor (spec 106): the same AI-OFF SourceDescriptor with the directional-filing
     // source's per-signal magnitudes appended as an escaped ai=… segment (the default Strength/Novelty/MinConfidence
-    // == 6/6/0.6). This is what SignalSourceDescriptor produces when the opt-in AI path is registered.
+    // == 8/6/0.6 after the spec-112 Strength 6→8 recalibration). This is what SignalSourceDescriptor produces when
+    // the opt-in AI path is registered.
     private const string AiOnSourceDescriptor =
-        SourceDescriptor + "ai=directional-filing:str=6;nov=6;minconf=0.6;";
+        SourceDescriptor + "ai=directional-filing:str=8;nov=6;minconf=0.6;";
 
     [Fact]
     public void Compute_AiOnSourceDescriptor_DiffersFromAiOff()
@@ -190,6 +191,24 @@ public sealed class ScoringConfigFingerprintTests
             InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(aiOff, aiOn);
+    }
+
+    [Fact]
+    public void Compute_AiOnDefault_MatchesPinnedFingerprint()
+    {
+        // The live AI-ON default fingerprint the scripts/run-profiles/default.json run produces: with Ollama
+        // registered, the AI directional-filing descriptor is folded in (AiOnSourceDescriptor above), so the
+        // effective config differs from the AI-OFF pin. Pinned so an accidental drift in the AI directional
+        // magnitudes (or any other folded input) is caught for the AI-ON run too. This value was re-stamped
+        // from the pre-112 AI-ON default by the spec-112 directional Strength 6→8 recalibration (a config
+        // magnitude change; no _formula.Version / RuleSetVersion bump). The AI-OFF pin
+        // (radar-scoring-fp-c45fb79092ea) is unmoved — a Strength change is folded only when the AI path is
+        // registered.
+        var fp = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v6", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
+            InsiderDescriptor, MediaCollapseDescriptor);
+
+        Assert.Equal("radar-scoring-fp-454984785732", fp);
     }
 
     [Fact]

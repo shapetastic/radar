@@ -1,6 +1,9 @@
 using System.Text.Json;
+using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Domain.Evidence;
+using Radar.Domain.Reports;
+using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
 using Radar.TestSupport;
 
@@ -823,6 +826,93 @@ public sealed class RadarScoreFormulaV6Tests
         Assert.Throws<InvalidOperationException>(
             () => new RadarScoreFormulaV6(new ScoringWeights { TrajectoryCorroborationK = -1 }, AllGenuine));
     }
+
+    // ---- spec 112: AI directional earnings-read materiality ----
+
+    [Fact]
+    public void DeterministicNeutralGuidanceChange_IsTrajectoryInert_NotHarmful()
+    {
+        // Spec 112 acceptance (item 3): the deterministic "results of operations" 8-K keyword rule emits a
+        // Neutral GuidanceChange (the AI directional read SUPERSEDES it when it fires, spec 78). A Neutral
+        // direction is trajectory-EXCLUDED — DirectionSign(Neutral) == 0 — so it contributes 0 to BOTH the
+        // positive and the negative mass and Trajectory stays at the neutral 50. It is inert, never harmful
+        // (a record-guidance filing the extractor cannot read is not scored DOWN). Verify-and-document only:
+        // no rule/formula change.
+        var formula = Formula(AllGenuine);
+
+        var result = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(strength: 3, direction: SignalDirection.Neutral, confidence: 0.5m,
+                type: SignalType.GuidanceChange, quality: EvidenceQuality.High,
+                sourceType: EvidenceSourceType.Filing, sourceName: "SEC EDGAR"),
+        }));
+
+        Assert.Equal(50, result.Components.TrajectoryScore);
+
+        // Its provenance is still recorded (one contribution), but with weight 0 — excluded from both masses.
+        var contribution = Assert.Single(result.Contributions);
+        Assert.Equal(0, contribution.ContributionWeight);
+    }
+
+    [Fact]
+    public void Materiality_ConfidentRaisedGuidanceAtStrength8_ClearsInvestigateGate_Strength6DoesNot()
+    {
+        // Spec 112 acceptance (item 2 / the materiality gap the slice closes): on a corroborated positive
+        // trajectory, a confident raised-guidance directional GuidanceChange at the recalibrated default
+        // Strength 8 lifts OpportunityScore over the Investigate gate
+        // (WeeklyReportActionPolicyV1.InvestigateOpportunity == 60), whereas the SAME setup at the pre-112
+        // Strength 6 (== the keyword max) does not. Uses a SYNTHETIC directional signal (NOT a live AI call) —
+        // the AI provider boundary stays behind Infrastructure.
+        var formula = Formula(AllGenuine);
+
+        // The guidance read + one corroborating positive customer win (v6 rewards accrued directional mass, so
+        // "corroborated"). Both first-party (Filing + PressRelease) so Attention is 0 and Opportunity tracks
+        // Trajectory·EvidenceConfidence; recency = 1 (observed at the window end). EvidenceConfidence is 81
+        // here (bestConf 0.9, PrimarySource quality, 2 distinct source types), so the only mover between the
+        // two scenarios is the directional-mass shift from the guidance Strength.
+        ScoringInput SetWithGuidanceStrength(int guidanceStrength) => InputFrom(new[]
+        {
+            BuildSignal(strength: guidanceStrength, direction: SignalDirection.Positive, confidence: 0.9m,
+                type: SignalType.GuidanceChange, quality: EvidenceQuality.PrimarySource,
+                sourceType: EvidenceSourceType.Filing, sourceName: "SEC EDGAR", observedAt: WindowEnd),
+            BuildSignal(strength: 5, direction: SignalDirection.Positive, confidence: 0.66m,
+                type: SignalType.CustomerWin, quality: EvidenceQuality.PrimarySource,
+                sourceType: EvidenceSourceType.PressRelease, sourceName: "Acme Newsroom", observedAt: WindowEnd),
+        });
+
+        var atStrength6 = formula.Compute(SetWithGuidanceStrength(6)).Components;
+        var atStrength8 = formula.Compute(SetWithGuidanceStrength(8)).Components;
+
+        // Attention is 0 for both (first-party only) — isolating the directional-mass effect on Opportunity.
+        Assert.Equal(0, atStrength6.AttentionScore);
+        Assert.Equal(0, atStrength8.AttentionScore);
+
+        // Monotonic materiality: Strength 8 yields a strictly higher Opportunity than Strength 6 on the
+        // identical corroborated-positive set (Opp 59 → 62 for these inputs).
+        Assert.True(atStrength8.OpportunityScore > atStrength6.OpportunityScore,
+            $"Strength 8 must be materially stronger; s8={atStrength8.OpportunityScore}, s6={atStrength6.OpportunityScore}");
+
+        // The gate crossing: Strength 6 stays below the Investigate gate (60); Strength 8 clears it.
+        Assert.True(atStrength6.OpportunityScore < 60,
+            $"Strength 6 must stay below the Investigate gate; was {atStrength6.OpportunityScore}");
+        Assert.True(atStrength8.OpportunityScore >= 60,
+            $"Strength 8 must clear the Investigate gate; was {atStrength8.OpportunityScore}");
+
+        // The deterministic action policy flips Watch → Investigate on the SAME evidence, purely on the
+        // recalibrated directional Strength — the human-facing materiality of the fix.
+        var policy = new WeeklyReportActionPolicyV1();
+        var at6Action = policy.Decide(new ReportActionContext(SnapshotFrom(atStrength6), null)).Action;
+        var at8Action = policy.Decide(new ReportActionContext(SnapshotFrom(atStrength8), null)).Action;
+        Assert.Equal(RadarReportAction.Watch, at6Action);
+        Assert.Equal(RadarReportAction.Investigate, at8Action);
+    }
+
+    private static CompanyScoreSnapshot SnapshotFrom(ScoreComponents c) =>
+        new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(c.TrajectoryScore)
+            .WithOpportunityScore(c.OpportunityScore)
+            .WithEvidenceConfidenceScore(c.EvidenceConfidenceScore)
+            .Build();
 
     // ---- source-quality tiering + saturation pins (spec 88, carried forward to v6) ----
     //

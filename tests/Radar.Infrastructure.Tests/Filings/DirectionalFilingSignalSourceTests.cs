@@ -97,7 +97,7 @@ public sealed class DirectionalFilingSignalSourceTests
     public void ScoringDescriptor_EncodesPerSignalMagnitudes_InCanonicalForm()
     {
         Assert.Equal(
-            "directional-filing:str=6;nov=6;minconf=0.6",
+            "directional-filing:str=8;nov=6;minconf=0.6",
             ScoringDescriptorFor(new DirectionalFilingSignalOptions()));
 
         Assert.Equal(
@@ -153,6 +153,9 @@ public sealed class DirectionalFilingSignalSourceTests
         Assert.Same(evidence, produced.Evidence);
         Assert.Equal("GuidanceChange", produced.Signal.SignalType);
         Assert.Equal("Positive", produced.Signal.Direction);
+        // Spec 112: the confident directional read carries the recalibrated default Strength 8 (exceeds the
+        // keyword max of 6) so it can materially move the thesis.
+        Assert.Equal(8, produced.Signal.Strength);
         Assert.Equal(0.9m, produced.Signal.Confidence);
         Assert.Equal("Revenue rose 40%; guidance raised.", produced.Signal.Reason);
 
@@ -178,6 +181,9 @@ public sealed class DirectionalFilingSignalSourceTests
         var produced = Assert.Single(result);
         Assert.Equal("GuidanceChange", produced.Signal.SignalType);
         Assert.Equal("Negative", produced.Signal.Direction);
+        // Symmetry proof (spec 112): a confident deteriorating read carries the SAME recalibrated Strength 8
+        // as the improving read above — a confident guidance cut bites as hard as a raise lifts.
+        Assert.Equal(8, produced.Signal.Strength);
         Assert.Equal(0.85m, produced.Signal.Confidence);
 
         var mapping = ExtractedSignalMapper.ToSignal(produced.Signal, evidence, AsOf);

@@ -372,9 +372,11 @@ public sealed class AiWorkerOptions
     /// Strength stamped on each emitted directional <c>GuidanceChange</c> signal. In-range [1,10] (fails fast at
     /// registration otherwise). It is a per-signal magnitude folded into the scoring fingerprint (spec 106), so
     /// tuning it re-stamps <c>ScoringConfigVersion</c> automatically. Only read when a provider is configured.
-    /// Defaults to 6.
+    /// Defaults to 8 (spec 112): a confident, full-text directional earnings read deliberately EXCEEDS the
+    /// keyword extractor maximum of 6 so it can materially move the thesis; applied symmetrically to
+    /// Improving→Positive and Deteriorating→Negative reads.
     /// </summary>
-    public int Strength { get; init; } = 6;
+    public int Strength { get; init; } = 8;
 
     /// <summary>
     /// Novelty stamped on each emitted directional <c>GuidanceChange</c> signal. In-range [1,10] (fails fast at
