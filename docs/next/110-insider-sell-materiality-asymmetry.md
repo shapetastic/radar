@@ -20,23 +20,42 @@ signal dragged Trajectory `79→68` and tripped the action policy's deterioratio
 (`delta <= -5`, evaluated *before* opportunity — `WeeklyReportActionPolicyV1`), setting "Thesis
 deteriorating" on a company that just posted record results.
 
-Root cause: insider **buys** and **sells** are treated with **symmetric** materiality. By default
-`InsiderMaterialityWeights.BuyTiers == SellTiers` (spec 96 split the tables but defaulted both to the
-same spec-93 values), so a `$1.6M` sell maps to the `$1,000,000 → 7` tier — the same conviction weight
-a `$1.6M` open-market *buy* gets. This is wrong on the evidence: an insider **purchase** is a strong,
-rare conviction signal (executives buy for essentially one reason); an insider **sale** is a weak signal
-(taxes, diversification, 10b5-1 plans, lifestyle) — and a ~$1.6M exec trim after a ~260% YTD run is
-routine, not thesis-deteriorating. The fix is a **buy-vs-sell asymmetry** in the *default* sell tiers so
-a routine, uncorroborated sale contributes low strength and cannot by itself flip the thesis label.
+By default `InsiderMaterialityWeights.BuyTiers == SellTiers` (spec 96 split the tables but defaulted both
+to the same spec-93 values), so a `$1.6M` sell maps to the `$1,000,000 → 7` tier — the top "very material"
+weight. There are actually **two** failures tangled here, and they need different fixes:
+
+1. **Strength is overstated relative to materiality.** A ~$1.6M sale maps to strength `7` purely on dollar
+   amount. For a company of AEHR's size, $1.6M is a modest sale; strength `7` overstates it. Sell strength
+   should scale to **materiality** (dollar size relative to the company / the insider's holdings) so a
+   small sale is a small signal and a large one is a large one. This is the fix this slice makes.
+2. **One signal dominated a corroborated majority and flipped the *label*.** Even a *correctly* modest
+   negative shouldn't, on its own, override five corroborating positives and set "Thesis deteriorating."
+   That domination is a **formula** problem — it is **spec 111's** job (directional preponderance), **not**
+   something to fix by muting the sale into non-existence.
+
+So this slice recalibrates sell **materiality** (a mild buy≫sell prior — sells are noisier in aggregate —
+*plus* size-scaling) while **deliberately preserving the signal in a discretionary sale.** The AEHR sale
+is already classified `open-market` (discretionary), *not* `10b5-1`/RSU — that is precisely the
+*informative* kind of insider sale, and it was recent. A recent discretionary sell is a **modest-but-real
+negative, not noise.** The goal is "proportionate," not "muted": don't let a lone trim flip the thesis
+(111 secures that), but don't blind Radar to genuine insider selling either.
+
+> **Radar must NOT use the price reaction to judge the sale.** (AEHR fell ~84→81 the same day — which is
+> also just profit-taking on a 260%-YTD runner, and 20k shares is tiny vs AEHR's daily volume, so the
+> sale did not move the price.) Price is validation-only, never a scoring input (AD-14); wiring "price
+> dropped ⇒ the sale was bad" would make Radar a momentum-chaser and break the core invariant. The sale
+> is judged on its own attributes (type, size, cluster) — never on what the price did.
 
 This is exactly the experiment spec 96's separate `SellTiers` seam was built to express. It is a
 **config-magnitude change to the code defaults** (the baseline `default.json` omits `Radar:Scoring`, so
 the new defaults ARE the baseline), **not** a rule-structure change — no `RuleSetVersion` bump.
 
 > **Do not overfit to AEHR.** Recalibrate the general sell-materiality curve on the principled
-> buy≫sell-conviction asymmetry, not to hit a specific AEHR number. Keep BUY tiers unchanged (insider
-> buys remain a strong signal). Keep the multi-insider cluster boost — a *cluster* of sales IS more
-> informative than a lone trim.
+> buy≫sell prior *and* materiality-scaling, not to hit a specific AEHR number. Keep BUY tiers unchanged
+> (insider buys remain a strong signal). Keep the multi-insider cluster boost — a *cluster* of sales IS
+> more informative than a lone trim. **Do NOT mute discretionary sells into noise:** scale to materiality
+> so a small lone sale is a *small* negative (not zero, not dominant), while a large or clustered
+> discretionary sale still registers strongly.
 
 ---
 
@@ -69,11 +88,13 @@ config seam.
 
 ## Implementation details
 
-- **New default `SellTiers` (asymmetric).** Propose a materially weaker sell curve than the buy curve so
-  a lone sub-cluster sale is low-strength — e.g. shift the sell thresholds up and the strengths down so a
-  `$1.6M` sale lands around strength `2–3` (reviewer `MinMaterialStrength = 3` territory) rather than
-  `7`, while a genuinely large sale (e.g. `≥ $25–50M`) can still reach a mid strength. **The exact tier
-  table is maintainer-approvable** — present a concrete proposal in the PR (respecting
+- **New default `SellTiers` (materiality-scaled, mild buy≫sell prior).** Propose a sell curve that scales
+  with materiality rather than a blanket mute: a `$1.6M` lone discretionary sale should land at a
+  **modest** strength — clearly below the top `7` "very material" tier, but **not** muted to noise (keep
+  it a real, small negative, roughly low-mid range, at/above the reviewer's `MinMaterialStrength = 3`
+  floor) — while a genuinely large sale (e.g. `≥ $25–50M`) still reaches a high strength and a cluster
+  still gets the boost. The point is *proportionality*, not silence: discretionary sells retain signal.
+  **The exact tier table is maintainer-approvable** — present a concrete proposal in the PR (respecting
   `InsiderMaterialityWeights.Validate`: descending by `MinInclusive`, `decimal.MinValue` floor,
   strengths `1..10`, non-increasing walking descending). Keep the floor tier low (routine sales are
   noise). BuyTiers and ClusterBoost stay at their spec-93 defaults.
@@ -119,13 +140,17 @@ config seam.
 
 ## Acceptance criteria
 
-- [ ] Default `SellTiers` is asymmetric to (weaker than) `BuyTiers`; a routine ~$1.6M lone insider sale
-      maps to a low strength (~2–3), while insider buys and large/cluster sales retain material weight.
+- [ ] Default `SellTiers` scales to materiality with a mild buy≫sell prior; a routine ~$1.6M lone
+      discretionary sale maps to a *modest* strength (well below the top `7` tier but not muted to noise —
+      it stays a real, small negative), while large/clustered discretionary sales still register
+      materially and BUY tiers are unchanged. Discretionary sells are **not** muted into noise.
 - [ ] Change is config-magnitude only: `ScoringConfigVersion` re-stamps automatically via the hashed
       insider descriptor; **no** `RuleSetVersion` / `_formula.Version` bump. Pinned fingerprint test +
       `default.json` updated.
 - [ ] `InsiderMaterialityWeights.Validate` passes for the new default table.
-- [ ] AEHR acceptance fixture: a lone routine insider trim after record results no longer drags
-      Trajectory `≥5` and no longer sets "Thesis deteriorating."
+- [ ] AEHR acceptance fixture: a lone routine insider trim after record results no longer *by itself*
+      sets "Thesis deteriorating" — but it remains a real, modest negative in the signal set (not muted to
+      noise). (Spec 111 secures the non-flip durably at the formula level; this slice ensures the sell
+      strength is *proportionate to materiality*, and that discretionary sells keep signal.)
 - [ ] The `InsiderBuying`→(better name) rename is recorded as a deferred follow-up, not done here.
 - [ ] `dotnet build Radar.sln -c Release` and `dotnet test Radar.sln -c Release --no-build` pass.
