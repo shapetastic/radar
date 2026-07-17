@@ -33,7 +33,7 @@ public sealed record MediaCollapseOptions
         if (EventWindowDays <= 0)
         {
             throw new InvalidOperationException(
-                $"Radar:Scoring:MediaCollapse EventWindowDays must be greater than zero; was {EventWindowDays}. "
+                $"Radar:Scoring:MediaCollapse:EventWindowDays must be greater than zero; was {EventWindowDays}. "
                     + "A zero/negative window is meaningless for same-event media collapse.");
         }
     }

@@ -48,7 +48,7 @@ public sealed class MediaAttentionCollapseTests
         // Earliest-observed is the representative.
         Assert.Equal(Base.AddHours(2), representative.Signal.ObservedAtUtc);
         // The representative names the collapsed count (N-1 duplicates).
-        var count = Assert.Contains(representative.Signal.Id, (IDictionary<Guid, int>)result.CollapsedCounts);
+        Assert.True(result.CollapsedCounts.TryGetValue(representative.Signal.Id, out var count));
         Assert.Equal(4, count);
     }
 
