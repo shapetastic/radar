@@ -28,9 +28,12 @@ namespace Radar.Application.Scoring;
 /// (<see cref="ISignalSourceDescriptor.CanonicalDescriptor"/> — the enabled collector set + extractor
 /// rule-set identity, spec 95) plus the insider-materiality descriptor
 /// (<see cref="InsiderMaterialityWeights.CanonicalDescriptor"/> — the config-tunable buy/sell tiers +
-/// cluster boost, spec 96), computed once via
+/// cluster boost, spec 96) plus the media-collapse descriptor
+/// (<see cref="MediaAttentionCollapse.CanonicalDescriptor"/> — the same-event media-attention collapse
+/// structure + window, spec 109), computed once via
 /// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape,
-/// any weight, the tier map, enabling/disabling a collector, an insider materiality tier) re-stamps
+/// any weight, the tier map, enabling/disabling a collector, an insider materiality tier, the media-collapse
+/// window) re-stamps
 /// automatically, so the spec-69
 /// comparability gate keeps working when weights are runtime-configurable. <c>ScoringVersion</c> (structure
 /// identity, <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
@@ -45,6 +48,7 @@ public sealed class ScoringEngine : IScoringEngine
     private readonly IEvidenceRepository _evidenceRepository;
     private readonly IScoreRepository _scoreRepository;
     private readonly IScoreFormula _formula;
+    private readonly MediaAttentionCollapse _mediaCollapse;
     private readonly ScoringOptions _options;
     private readonly ILogger<ScoringEngine> _logger;
 
@@ -69,6 +73,7 @@ public sealed class ScoringEngine : IScoringEngine
         IAttentionSourceWeights sourceWeights,
         ISignalSourceDescriptor sourceDescriptor,
         InsiderMaterialityWeights insiderMaterialityWeights,
+        MediaAttentionCollapse mediaCollapse,
         ScoringOptions options,
         ILogger<ScoringEngine> logger)
     {
@@ -81,6 +86,7 @@ public sealed class ScoringEngine : IScoringEngine
         ArgumentNullException.ThrowIfNull(sourceWeights);
         ArgumentNullException.ThrowIfNull(sourceDescriptor);
         ArgumentNullException.ThrowIfNull(insiderMaterialityWeights);
+        ArgumentNullException.ThrowIfNull(mediaCollapse);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -89,15 +95,17 @@ public sealed class ScoringEngine : IScoringEngine
         _evidenceRepository = evidenceRepository;
         _scoreRepository = scoreRepository;
         _formula = formula;
+        _mediaCollapse = mediaCollapse;
         _options = options;
         _logger = logger;
 
         var attentionDescriptor = sourceWeights.CanonicalDescriptor();
         var signalSourceDescriptor = sourceDescriptor.CanonicalDescriptor();
         var insiderMaterialityDescriptor = insiderMaterialityWeights.CanonicalDescriptor();
+        var mediaCollapseDescriptor = mediaCollapse.CanonicalDescriptor();
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
             EngineVersion, formula.Version, weights, attentionDescriptor, signalSourceDescriptor,
-            insiderMaterialityDescriptor);
+            insiderMaterialityDescriptor, mediaCollapseDescriptor);
 
         // Build the effective-config projection from the SAME tuple the fingerprint hashes, so
         // EffectiveConfig.Fingerprint always equals the stamp on every snapshot this engine produces.
@@ -108,7 +116,8 @@ public sealed class ScoringEngine : IScoringEngine
             Weights: weights,
             AttentionDescriptor: attentionDescriptor,
             SignalSourceDescriptor: signalSourceDescriptor,
-            InsiderMaterialityDescriptor: insiderMaterialityDescriptor);
+            InsiderMaterialityDescriptor: insiderMaterialityDescriptor,
+            MediaCollapseDescriptor: mediaCollapseDescriptor);
     }
 
     public EffectiveScoringConfig EffectiveConfig => _effectiveConfig;
@@ -153,6 +162,15 @@ public sealed class ScoringEngine : IScoringEngine
             return byObserved != 0 ? byObserved : a.Signal.Id.CompareTo(b.Signal.Id);
         });
 
+        // Same-event media collapse (spec 109): many near-simultaneous outlets covering ONE event each emit a
+        // MediaAttention signal, inflating the media contribution and the signal count with duplication (not
+        // breadth). Collapse those to one representative per event window BEFORE the formula sees them (a
+        // signal-count de-noising transform, not a formula change). Provenance is preserved: the representative
+        // is a real signal keeping its evidence link, and the collapsed count is surfaced on its contribution
+        // reason below. Non-MediaAttention signals and the activity-only previousSignals are untouched.
+        var collapse = _mediaCollapse.Collapse(pairs);
+        var scoredSignals = collapse.Signals.ToList();
+
         // The immediately-preceding window of the same length, now sourced from the ON-DISK signal store
         // (cross-run) rather than the in-memory repo — the in-memory repo starts empty every process and
         // holds only THIS run's signals, so slicing the previous window from it left previous-window
@@ -173,7 +191,7 @@ public sealed class ScoringEngine : IScoringEngine
             .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, ct)
             .ConfigureAwait(false);
 
-        var input = new ScoringInput(companyId, windowStartUtc, windowEndUtc, pairs, previousSignals);
+        var input = new ScoringInput(companyId, windowStartUtc, windowEndUtc, scoredSignals, previousSignals);
         var computation = _formula.Compute(input);
 
         // Record both identities so snapshots remain reproducible and auditable.
@@ -203,12 +221,22 @@ public sealed class ScoringEngine : IScoringEngine
         var links = new List<ScoreEvidenceLink>(computation.Contributions.Count);
         foreach (var contribution in computation.Contributions)
         {
+            // If this contribution's signal was the representative of a collapsed same-event media bucket,
+            // surface the collapsed count on its reason so the report shows ONE line naming the coverage
+            // breadth rather than N duplicate lines (provenance for the dropped duplicates; spec 109). The
+            // formula itself is untouched — only the persisted ScoreEvidenceLink text is enriched.
+            var reason = contribution.ContributionReason;
+            if (collapse.CollapsedCounts.TryGetValue(contribution.SignalId, out var collapsedN) && collapsedN > 0)
+            {
+                reason = $"{reason} (collapsed {collapsedN} same-event media items)";
+            }
+
             links.Add(new ScoreEvidenceLink(
                 Id: Guid.NewGuid(),
                 ScoreSnapshotId: snapshot.Id,
                 SignalId: contribution.SignalId,
                 EvidenceId: contribution.EvidenceId,
-                ContributionReason: contribution.ContributionReason,
+                ContributionReason: reason,
                 ContributionWeight: contribution.ContributionWeight));
         }
 
@@ -220,7 +248,7 @@ public sealed class ScoringEngine : IScoringEngine
 
         _logger.LogInformation(
             "Scored company {CompanyId} from {SignalCount} signal(s) using {ScoringVersion}.",
-            companyId, pairs.Count, scoringVersion);
+            companyId, scoredSignals.Count, scoringVersion);
 
         return new CompanyScoreResult(snapshot, links);
     }

@@ -6,7 +6,6 @@ using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
 using Radar.Domain.Evidence;
-using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.FileSystem;
@@ -170,6 +169,7 @@ public sealed class ScoringEngineTests
                 Weights,
                 SourceDesc,
                 new InsiderMaterialityWeights(),
+                new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions { Window = Window },
                 NullLogger<ScoringEngine>.Instance);
         }
@@ -318,6 +318,82 @@ public sealed class ScoringEngineTests
     }
 
     [Fact]
+    public async Task MediaCollapse_ManySameEventMediaSignals_CollapseToOne_PositivesUnaffected_ProvenanceIntact()
+    {
+        // Spec 109: 23 same-event MediaAttention signals (all within the default 3-day window) collapse to ONE
+        // representative link (carrying the "collapsed 22 same-event media items" note), while 5 positive
+        // directional signals are unaffected — and every scored signal still has a provenance link.
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+
+        // 23 MediaAttention signals bunched within a 2-day span (< 3-day EventWindow) → one event.
+        var mediaSignalIds = new List<Guid>();
+        for (var i = 0; i < 23; i++)
+        {
+            var (signal, _) = await SeedTypedPairAsync(
+                harness, companyId, WindowEnd.AddDays(-10).AddHours(i * 2), SignalType.MediaAttention);
+            mediaSignalIds.Add(signal.Id);
+        }
+
+        // 5 positive directional signals elsewhere in the window (distinct type, untouched by the collapse).
+        var positiveSignalIds = new List<Guid>();
+        for (var i = 0; i < 5; i++)
+        {
+            var (signal, _) = await SeedTypedPairAsync(
+                harness, companyId, WindowEnd.AddDays(-3).AddHours(i), SignalType.CustomerWin);
+            positiveSignalIds.Add(signal.Id);
+        }
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // 1 media representative + 5 positives = 6 links.
+        Assert.Equal(6, result.Links.Count);
+
+        // Exactly one link traces to a media signal, and it names the collapsed count.
+        var mediaLinks = result.Links.Where(l => mediaSignalIds.Contains(l.SignalId)).ToList();
+        var mediaLink = Assert.Single(mediaLinks);
+        Assert.Contains("collapsed 22 same-event media items", mediaLink.ContributionReason);
+
+        // All 5 positives are present and unaffected (no collapse note).
+        foreach (var positiveId in positiveSignalIds)
+        {
+            var link = Assert.Single(result.Links, l => l.SignalId == positiveId);
+            Assert.DoesNotContain("collapsed", link.ContributionReason);
+        }
+
+        // Every scored signal still has full provenance (a non-empty SignalId + EvidenceId).
+        Assert.All(result.Links, l =>
+        {
+            Assert.NotEqual(Guid.Empty, l.SignalId);
+            Assert.NotEqual(Guid.Empty, l.EvidenceId);
+        });
+    }
+
+    /// <summary>Seeds an Approved signal (with evidence) of a given type + observation time into the repo.</summary>
+    private static async Task<(Signal signal, EvidenceItem evidence)> SeedTypedPairAsync(
+        Harness harness, Guid companyId, DateTimeOffset observedAt, SignalType type)
+    {
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash(Guid.NewGuid().ToString("N"))
+            .Build();
+
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithType(type)
+            .WithDirection(type == SignalType.MediaAttention ? SignalDirection.Neutral : SignalDirection.Positive)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(observedAt)
+            .Build();
+
+        await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+        await harness.Signals.AddAsync(signal, CancellationToken.None);
+        return (signal, evidence);
+    }
+
+    [Fact]
     public async Task ComponentScores_AreWithinInclusiveRange()
     {
         var harness = new Harness();
@@ -366,7 +442,8 @@ public sealed class ScoringEngineTests
         // the formula's Version, default weights, the source-weights descriptor) and assert equality.
         var expected = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", formula.Version, new ScoringWeights(), Weights.CanonicalDescriptor(),
-            SourceDescriptor, new InsiderMaterialityWeights().CanonicalDescriptor());
+            SourceDescriptor, new InsiderMaterialityWeights().CanonicalDescriptor(),
+            new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor());
         Assert.Equal(expected, result.Snapshot.ScoringConfigVersion);
     }
 
@@ -415,6 +492,9 @@ public sealed class ScoringEngineTests
         Assert.Equal(Weights.CanonicalDescriptor(), defaultConfig.AttentionDescriptor);
         Assert.Equal(SourceDescriptor, defaultConfig.SignalSourceDescriptor);
         Assert.Equal(new InsiderMaterialityWeights().CanonicalDescriptor(), defaultConfig.InsiderMaterialityDescriptor);
+        Assert.Equal(
+            new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor(),
+            defaultConfig.MediaCollapseDescriptor);
 
         // Under a changed weight a second engine's EffectiveConfig differs and still matches its own stamp.
         var changedWeights = new ScoringWeights { AttentionHalfSaturation = 12.0 };
@@ -884,6 +964,7 @@ public sealed class ScoringEngineTests
             var engine = new ScoringEngine(
                 signals, fileStore, evidence, scores, new RadarScoreFormulaV5(new ScoringWeights(), Weights),
                 new ScoringWeights(), Weights, SourceDesc, new InsiderMaterialityWeights(),
+                new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions { Window = Window }, NullLogger<ScoringEngine>.Instance);
 
             var companyId = Guid.NewGuid();

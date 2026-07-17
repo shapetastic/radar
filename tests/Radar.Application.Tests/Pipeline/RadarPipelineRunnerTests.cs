@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
@@ -360,6 +359,7 @@ public sealed class RadarPipelineRunnerTests
                 sourceWeights,
                 new StubSourceDescriptor(),
                 new InsiderMaterialityWeights(),
+                new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions(),
                 NullLogger<ScoringEngine>.Instance);
             var reportBuilder = new WeeklyReportBuilder(

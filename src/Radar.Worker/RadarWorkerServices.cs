@@ -74,6 +74,12 @@ internal static class RadarWorkerServices
         // on a named-but-missing profile or an invalid tier table.
         services.AddRadarInsiderMateriality(configuration);
 
+        // Same-event media-attention collapse window (spec 109): resolve Radar:Scoring:MediaCollapse and
+        // register the concrete MediaCollapseOptions BEFORE AddRadarApplicationServices so configuration wins
+        // over the library default (its TryAddSingleton is a no-op once this concrete instance is registered).
+        // A blank/absent section binds the code default (3-day window). Fails fast on a non-positive window.
+        services.AddRadarMediaCollapse(configuration);
+
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
 
