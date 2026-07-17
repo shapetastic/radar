@@ -77,6 +77,32 @@ internal static class RadarWorkerServices
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
 
+        // Global SEC request throttle: bind Radar:Sec:GlobalMinIntervalMs and register the concrete
+        // SecRateLimitOptions so it wins over the Infrastructure TryAddSingleton default. One shared
+        // SecRequestPacer (registered by each SEC Add* helper) then spaces EVERY *.sec.gov request — across all
+        // collectors and the earnings reader — so the aggregate run rate stays under SEC's per-IP fair-access
+        // ceiling (the unpaced collector burst is what blocks www.sec.gov). Fail fast on a negative interval even
+        // for a run with no SEC client enabled, so a misconfig surfaces at startup rather than at first fetch.
+        if (options.Sec.GlobalMinIntervalMs < 0)
+        {
+            throw new InvalidOperationException(
+                "Radar:Sec:GlobalMinIntervalMs must not be negative; configure a non-negative pace in milliseconds "
+                    + "(default 150, ~6.7 req/s) — set 0 to disable global SEC pacing. A negative value is nonsensical configuration.");
+        }
+
+        if (options.Sec.GlobalFetchTimeoutSeconds < 0)
+        {
+            throw new InvalidOperationException(
+                "Radar:Sec:GlobalFetchTimeoutSeconds must not be negative; configure a non-negative per-fetch budget "
+                    + "in seconds (default 100) — set 0 to disable the per-fetch timeout. A negative value is nonsensical configuration.");
+        }
+
+        services.AddSingleton(new SecRateLimitOptions
+        {
+            MinInterval = TimeSpan.FromMilliseconds(options.Sec.GlobalMinIntervalMs),
+            FetchTimeout = TimeSpan.FromSeconds(options.Sec.GlobalFetchTimeoutSeconds),
+        });
+
         // Enable the configured evidence collectors additively (case-insensitive). Each kind registers
         // its collector as IEvidenceCollector, composing into the IEnumerable the runner now consumes.
         // Fail fast with a clear message on an empty list or an unknown kind, mirroring the interval
