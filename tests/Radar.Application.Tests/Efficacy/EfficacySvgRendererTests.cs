@@ -183,6 +183,15 @@ public sealed class EfficacySvgRendererTests
         // Provenance preserved: the dashed config-change tick + fingerprint label is STILL drawn at the boundary.
         Assert.Equal(1, BoundaryTickCount(svg));
         Assert.Contains("bbbb2222", svg, StringComparison.Ordinal);
+
+        // Paint order (SVG paints in document order): the dashed tick markup must appear AFTER the spanning
+        // score polyline so the provenance marker paints on top of the bridged line, not under it. The bridged
+        // tick is buffered and flushed only when the spanning run closes — pin that layering here.
+        var polylineIndex = svg.IndexOf(
+            "<polyline fill=\"none\" stroke=\"#3366cc\" stroke-width=\"1.5\"", StringComparison.Ordinal);
+        var tickIndex = svg.IndexOf("stroke-dasharray", StringComparison.Ordinal);
+        Assert.True(polylineIndex >= 0 && tickIndex > polylineIndex,
+            "Bridged-boundary tick must be emitted after the spanning score polyline (tick paints on top).");
     }
 
     [Fact]

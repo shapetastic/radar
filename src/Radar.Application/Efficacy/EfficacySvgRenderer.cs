@@ -184,17 +184,25 @@ public sealed class EfficacySvgRenderer
         //   2. Config-change ticks — emitted at EVERY fingerprint boundary (Ordinal-different key), decoupled
         //      from where the line breaks, so provenance (a config change happened here) is always visible even
         //      when the connecting line bridges the boundary (cosmetic re-stamp, value unchanged).
-        // Ordering: at each index the run-closing polyline is emitted BEFORE the config tick, matching the
-        // historical polyline-then-marker element order — so for any input where no bridge occurs (every
-        // fingerprint boundary is also a value change, or the fingerprint never changes) the output is
-        // byte-identical to the pre-continuity renderer. Correctness (AD-10): a line is never drawn across a
-        // real score change. Determinism (AD-3): the run/tick decisions are pure functions of the already-
-        // deterministic point values (integer equality + Ordinal string equality), no wall-clock/culture.
+        // Ordering (paint order = element order in SVG): a config tick must always paint ON TOP of the score
+        // line, so the dashed provenance marker is never obscured. A NON-bridged boundary coincides with a line
+        // break, so its run-closing polyline is already emitted at the same index i, immediately before the
+        // tick — emit that tick inline. A BRIDGED boundary (cosmetic re-stamp, value unchanged) sits INSIDE a
+        // still-open run whose spanning polyline is emitted only later when the run closes; emitting the tick
+        // inline would let that polyline paint over it. So buffer bridged ticks and flush them right AFTER the
+        // spanning run's polyline. When no bridge occurs (every fingerprint boundary is also a value change, or
+        // the fingerprint never changes) the buffer stays empty and every tick is emitted inline exactly as
+        // before — byte-identical to the pre-continuity renderer. Correctness (AD-10): a line is never drawn
+        // across a real score change. Determinism (AD-3): the run/tick decisions are pure functions of the
+        // already-deterministic point values (integer equality + Ordinal string equality), no wall-clock/culture.
+        var pendingBridgeTicks = new List<string>();
         var runStart = 0;
         for (var i = 1; i <= points.Count; i++)
         {
+            var lineBreaks = i == points.Count || !Connected(points[i - 1], points[i]);
+
             // 1. Close the current line run if the line breaks here (or the series ends).
-            if (i == points.Count || !Connected(points[i - 1], points[i]))
+            if (lineBreaks)
             {
                 var runLength = i - runStart;
                 if (runLength >= 2)
@@ -213,6 +221,14 @@ public sealed class EfficacySvgRenderer
                     sb.Append("\"/>\n");
                 }
 
+                // Flush the bridged-boundary ticks accumulated within the run just closed, AFTER its polyline,
+                // so each dashed marker paints on top of the score line that spans it.
+                foreach (var tick in pendingBridgeTicks)
+                {
+                    sb.Append(tick);
+                }
+
+                pendingBridgeTicks.Clear();
                 runStart = i;
             }
 
@@ -220,9 +236,19 @@ public sealed class EfficacySvgRenderer
             // dashed vertical rule + fingerprint label at the FIRST point of the new fingerprint.
             if (i < points.Count && !SameSegment(points[i - 1].ScoringConfigVersion, points[i].ScoringConfigVersion))
             {
-                var bx = x(points[i].ScoreDate.DayNumber);
-                sb.Append(CultureInfo.InvariantCulture, $"<line x1=\"{Num(bx)}\" y1=\"{Num(PlotTop)}\" x2=\"{Num(bx)}\" y2=\"{Num(PlotBottom)}\" stroke=\"#aaaaaa\" stroke-width=\"1\" stroke-dasharray=\"4 3\"/>\n");
-                sb.Append(CultureInfo.InvariantCulture, $"<text x=\"{Num(bx + 2)}\" y=\"{Num(PlotTop + 10)}\" font-size=\"9\" fill=\"#999999\">{Escape(ShortFingerprint(points[i].ScoringConfigVersion))}</text>\n");
+                var tick = BuildBoundaryTick(x(points[i].ScoreDate.DayNumber), points[i].ScoringConfigVersion);
+                if (lineBreaks)
+                {
+                    // Non-bridged: the line also breaks here, so the run's polyline is already emitted above.
+                    // Emit inline (historical polyline-then-tick order; byte-identical when no bridge occurs).
+                    sb.Append(tick);
+                }
+                else
+                {
+                    // Bridged: the spanning polyline is emitted only when this still-open run closes; defer the
+                    // tick so it is flushed AFTER that polyline and paints on top of the bridged line.
+                    pendingBridgeTicks.Add(tick);
+                }
             }
         }
 
@@ -231,6 +257,17 @@ public sealed class EfficacySvgRenderer
         {
             sb.Append(CultureInfo.InvariantCulture, $"<circle cx=\"{Num(x(p.ScoreDate.DayNumber))}\" cy=\"{Num(yScore(SelectScore(p)))}\" r=\"2.5\" fill=\"#3366cc\"/>\n");
         }
+    }
+
+    // Build the fingerprint-boundary marker (dashed vertical rule + short fingerprint label) as a standalone
+    // string so it can be emitted inline (non-bridged boundary) or buffered and flushed after the spanning
+    // polyline (bridged boundary) without duplicating the markup. Pure/deterministic: same inputs, same bytes.
+    private static string BuildBoundaryTick(double bx, string? version)
+    {
+        var tick = new StringBuilder();
+        tick.Append(CultureInfo.InvariantCulture, $"<line x1=\"{Num(bx)}\" y1=\"{Num(PlotTop)}\" x2=\"{Num(bx)}\" y2=\"{Num(PlotBottom)}\" stroke=\"#aaaaaa\" stroke-width=\"1\" stroke-dasharray=\"4 3\"/>\n");
+        tick.Append(CultureInfo.InvariantCulture, $"<text x=\"{Num(bx + 2)}\" y=\"{Num(PlotTop + 10)}\" font-size=\"9\" fill=\"#999999\">{Escape(ShortFingerprint(version))}</text>\n");
+        return tick.ToString();
     }
 
     private int SelectScore(EfficacyPoint p) => Component switch
