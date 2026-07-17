@@ -9,7 +9,8 @@ namespace Radar.Application.Scoring;
 /// identity (engine + formula version) plus every <see cref="ScoringWeights"/> value plus the attention
 /// tier-map descriptor plus the signal-source descriptor (the enabled collector set + extractor rule-set
 /// identity) plus the insider-materiality descriptor (the config-tunable buy/sell tiers + cluster boost,
-/// spec 96) — so a snapshot's <c>ScoringConfigVersion</c> uniquely identifies the generation
+/// spec 96) plus the media-collapse descriptor (the same-event media-attention collapse structure + window,
+/// spec 109) — so a snapshot's <c>ScoringConfigVersion</c> uniquely identifies the generation
 /// that produced it (AD-10 as amended). The canonical string uses a FIXED, explicit field ordering (never
 /// reflection order, which is unstable across runtimes) and culture-invariant round-trip number formatting
 /// (AD-3), then hashes with the shared EvidenceNormalizer idiom
@@ -29,7 +30,8 @@ public static class ScoringConfigFingerprint
         ScoringWeights weights,
         string attentionDescriptor,
         string signalSourceDescriptor,
-        string insiderMaterialityDescriptor)
+        string insiderMaterialityDescriptor,
+        string mediaCollapseDescriptor)
     {
         ArgumentNullException.ThrowIfNull(engineVersion);
         ArgumentNullException.ThrowIfNull(formulaVersion);
@@ -37,6 +39,7 @@ public static class ScoringConfigFingerprint
         ArgumentNullException.ThrowIfNull(attentionDescriptor);
         ArgumentNullException.ThrowIfNull(signalSourceDescriptor);
         ArgumentNullException.ThrowIfNull(insiderMaterialityDescriptor);
+        ArgumentNullException.ThrowIfNull(mediaCollapseDescriptor);
 
         var builder = new StringBuilder();
         Append(builder, "engine", engineVersion);
@@ -62,6 +65,7 @@ public static class ScoringConfigFingerprint
         Append(builder, "attnDesc", attentionDescriptor);
         Append(builder, "srcDesc", signalSourceDescriptor);
         Append(builder, "insiderDesc", insiderMaterialityDescriptor);
+        Append(builder, "mediaCollapse", mediaCollapseDescriptor);
 
         var canonical = builder.ToString();
         var hex = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));

@@ -88,6 +88,13 @@ public static class InfrastructureServiceCollectionExtensions
         // winning over this default (mirrors ScoringWeights). Injected into KeywordSignalExtractor and folded
         // into the ScoringConfigVersion fingerprint (via ScoringEngine).
         services.TryAddSingleton(new InsiderMaterialityWeights());
+        // Same-event media-attention collapse (spec 109): the default window (3 days) collapses many
+        // near-simultaneous outlets covering ONE event to a single representative MediaAttention signal before
+        // scoring. TryAdd keeps a composition-root-registered concrete MediaCollapseOptions (bound via
+        // AddRadarMediaCollapse) winning over this default (mirrors ScoringWeights). Folded into the
+        // ScoringConfigVersion fingerprint (via ScoringEngine) so the window is re-stamped by value.
+        services.TryAddSingleton(new MediaCollapseOptions());
+        services.TryAddSingleton<MediaAttentionCollapse>();
         // Signal-source descriptor (spec 95): folds the enabled collector NAMES + the extractor rule-set
         // identity into the ScoringConfigVersion fingerprint. The optional AI directional-filing source (spec
         // 106) is also folded in when registered — its per-signal magnitudes contribute an ai=… segment, so
@@ -240,6 +247,35 @@ public static class InfrastructureServiceCollectionExtensions
         section.Exists()
             ? section.Get<List<InsiderMaterialityTier>>() ?? fallback
             : fallback;
+
+    /// <summary>
+    /// Resolves the effective same-event media-collapse window (spec 109) and registers the concrete
+    /// <see cref="MediaCollapseOptions"/> as a singleton so it wins over the library's <c>TryAddSingleton</c>
+    /// default (call this BEFORE <see cref="AddRadarApplicationServices"/>, mirroring
+    /// <see cref="AddRadarScoringWeights"/>). A straight bind of the <c>Radar:Scoring:MediaCollapse</c> section
+    /// (no named-profile surface — the window is a single tunable magnitude): when the section exists its
+    /// present fields bind ONTO a fresh <see cref="MediaCollapseOptions"/> (unspecified fields keep the code
+    /// default == 3-day window); when absent, all code defaults (⇒ byte-identical default de-noising and the
+    /// pinned default fingerprint). The resolved options are validated
+    /// (<see cref="MediaCollapseOptions.Validate"/>) so a non-positive window fails fast at registration,
+    /// never silently disabling the collapse.
+    /// </summary>
+    public static IServiceCollection AddRadarMediaCollapse(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var section = configuration.GetSection("Radar:Scoring:MediaCollapse");
+        var options = section.Exists()
+            ? section.Get<MediaCollapseOptions>() ?? new MediaCollapseOptions()
+            : new MediaCollapseOptions();
+
+        // Fail fast at registration on a non-positive window (also enforced in the collapse ctor).
+        options.Validate();
+
+        services.AddSingleton(options);
+        return services;
+    }
 
     /// <summary>
     /// Registers the deterministic local-file evidence collector along with the evidence

@@ -31,15 +31,21 @@ public sealed class ScoringConfigFingerprintTests
     // so it can't drift from the code default (== spec 93).
     private static readonly string InsiderDescriptor = new InsiderMaterialityWeights().CanonicalDescriptor();
 
+    // The media-collapse descriptor of the default config (spec 109): the same-event media-attention collapse
+    // structure (media-collapse-v1) + the tunable window (default 3 days), folded into the fingerprint after
+    // the insider-materiality descriptor. Computed from the default so it can't drift from the code default.
+    private static readonly string MediaCollapseDescriptor =
+        new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor();
+
     [Fact]
     public void Compute_SameInputs_ProduceSameFingerprint()
     {
         var a = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
         var b = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.Equal(a, b);
     }
@@ -49,7 +55,7 @@ public sealed class ScoringConfigFingerprintTests
     {
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         const string prefix = "radar-scoring-fp-";
         Assert.StartsWith(prefix, fp, StringComparison.Ordinal);
@@ -64,7 +70,7 @@ public sealed class ScoringConfigFingerprintTests
     {
         var invariant = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         var original = CultureInfo.CurrentCulture;
         try
@@ -73,7 +79,7 @@ public sealed class ScoringConfigFingerprintTests
             CultureInfo.CurrentCulture = new CultureInfo("de-DE");
             var underDeDe = ScoringConfigFingerprint.Compute(
                 "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-                InsiderDescriptor);
+                InsiderDescriptor, MediaCollapseDescriptor);
 
             Assert.Equal(invariant, underDeDe);
         }
@@ -87,17 +93,18 @@ public sealed class ScoringConfigFingerprintTests
     public void Compute_DefaultConfig_MatchesPinnedFingerprint()
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
-        // default-tier, signal-source, or insider-materiality drift is caught (the automatic AD-10 replacement
-        // for the hand-bumped constant). This value is the spec-103 re-stamp: the RuleSetVersion bump
-        // radar-keyword-rules-v2 → v3 (the new HiringActivity rule group) moves the signal-source descriptor,
-        // so the default fingerprint re-stamped automatically — the enabled 6-collector set is UNCHANGED
-        // (hiringats is opt-in OFF) and scoring math is byte-identical. It supersedes the spec-100
-        // 6-collector stamp (radar-scoring-fp-8d638b90d4aa) and matches default.json's recorded live default.
+        // default-tier, signal-source, insider-materiality, or media-collapse drift is caught (the automatic
+        // AD-10 replacement for the hand-bumped constant). This value is the spec-109 re-stamp: the new
+        // media-collapse descriptor (media-collapse-v1;window=3) is folded into the fingerprint after the
+        // insider descriptor, so the default fingerprint re-stamped automatically — scoring math on a
+        // non-media signal set is byte-identical (only the media input set is de-noised) and no
+        // _formula.Version / RuleSetVersion bump occurred. It supersedes the spec-103 stamp
+        // (radar-scoring-fp-c9e609ed53e9) and matches default.json's recorded live default.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-c9e609ed53e9", fp);
+        Assert.Equal("radar-scoring-fp-525e552874eb", fp);
     }
 
     [Fact]
@@ -105,12 +112,12 @@ public sealed class ScoringConfigFingerprintTests
     {
         var baseline = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5",
             new ScoringWeights { AttentionHalfSaturation = 12.0 }, DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(baseline, changed);
     }
@@ -120,11 +127,11 @@ public sealed class ScoringConfigFingerprintTests
     {
         var baseline = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), "unknown=0.9;", SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(baseline, changed);
     }
@@ -134,14 +141,14 @@ public sealed class ScoringConfigFingerprintTests
     {
         var baseline = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         // Dropping a collector from the enabled set changes the signal-production surface, so the fingerprint
         // must re-stamp (spec 95 — restores the spec-69 comparability guarantee across a collector transition).
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(),
             "rules=radar-keyword-rules-v3;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(baseline, changed);
     }
@@ -151,14 +158,14 @@ public sealed class ScoringConfigFingerprintTests
     {
         var baseline = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         // Changing an insider tier (or the cluster boost) changes the effective scoring config, so the
         // fingerprint must re-stamp automatically (spec 96 — magnitudes hashed by value, no RuleSetVersion bump).
         var changedInsider = new InsiderMaterialityWeights { ClusterBoost = 2 }.CanonicalDescriptor();
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            changedInsider);
+            changedInsider, MediaCollapseDescriptor);
 
         Assert.NotEqual(baseline, changed);
     }
@@ -177,11 +184,11 @@ public sealed class ScoringConfigFingerprintTests
         // an AI-on and an AI-off run (the AI analogue of spec 95's secform4 fix). The AI-OFF pin above is unmoved.
         var aiOff = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         var aiOn = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(aiOff, aiOn);
     }
@@ -193,12 +200,12 @@ public sealed class ScoringConfigFingerprintTests
         // recalibration cannot silently produce falsely-comparable snapshots.
         var baseline = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(),
             SourceDescriptor + "ai=directional-filing:str=9;nov=6;minconf=0.6;",
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(baseline, changed);
     }
@@ -208,12 +215,31 @@ public sealed class ScoringConfigFingerprintTests
     {
         var v5 = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         var v4 = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v4", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
-            InsiderDescriptor);
+            InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(v5, v4);
+    }
+
+    [Fact]
+    public void Compute_ChangedMediaCollapseWindow_ChangesFingerprint()
+    {
+        // Changing the same-event media-collapse window changes how many MediaAttention signals feed the
+        // formula, so the fingerprint must re-stamp automatically by value (spec 109 — no _formula.Version /
+        // RuleSetVersion bump; the window magnitude is hashed via the media-collapse descriptor).
+        var baseline = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor, MediaCollapseDescriptor);
+
+        var changedWindow =
+            new MediaAttentionCollapse(new MediaCollapseOptions { EventWindowDays = 7.0 }).CanonicalDescriptor();
+        var changed = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v5", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
+            InsiderDescriptor, changedWindow);
+
+        Assert.NotEqual(baseline, changed);
     }
 }
