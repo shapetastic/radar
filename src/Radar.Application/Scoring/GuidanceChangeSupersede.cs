@@ -50,10 +50,26 @@ public static class GuidanceChangeSupersede
     {
         ArgumentNullException.ThrowIfNull(items);
 
+        // Fast path: zero or one GuidanceChange in the whole set can never conflict — return the input
+        // instance so the untouched (healthy spec-78) path is allocation-free and byte-identical. Counted
+        // with an indexed loop (an interface foreach would box the enumerator) and no winner map yet.
+        var guidanceCount = 0;
+        for (var i = 0; i < items.Count && guidanceCount <= 1; i++)
+        {
+            if (signalOf(items[i]).Type == SignalType.GuidanceChange)
+            {
+                guidanceCount++;
+            }
+        }
+
+        if (guidanceCount <= 1)
+        {
+            return items;
+        }
+
         // One winner per EvidenceId among the GuidanceChange signals. Winner selection is
         // order-independent (Beats is a strict comparison), so the survivor never depends on input order.
         var winners = new Dictionary<Guid, Signal>();
-        var guidanceCount = 0;
         foreach (var item in items)
         {
             var signal = signalOf(item);
@@ -62,18 +78,10 @@ public static class GuidanceChangeSupersede
                 continue;
             }
 
-            guidanceCount++;
             if (!winners.TryGetValue(signal.EvidenceId, out var incumbent) || Beats(signal, incumbent))
             {
                 winners[signal.EvidenceId] = signal;
             }
-        }
-
-        // Fast path: zero or one GuidanceChange in the whole set can never conflict — return the input
-        // instance so the untouched (healthy spec-78) path is allocation-free and byte-identical.
-        if (guidanceCount <= 1)
-        {
-            return items;
         }
 
         // Filter, preserving the input's relative ordering of survivors. The emitted-set guard keeps AT
