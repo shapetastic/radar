@@ -28,6 +28,14 @@ public sealed class DirectionalFilingSignalSourceTests
             NullLogger<DirectionalFilingSignalSource>.Instance);
 
     /// <summary>
+    /// Pads <paramref name="lead"/> past the source's minimum-plausible-body guard (spec 114) so tests that
+    /// exercise the analyzer/cache path are not diverted into the short-body non-authoritative path.
+    /// </summary>
+    private static string PlausibleBody(string lead) =>
+        lead + " " + string.Concat(Enumerable.Repeat(
+            "Full results of operations, margin detail and cash-flow discussion follow in the release body. ", 4));
+
+    /// <summary>
     /// Builds an earnings-8-K <see cref="EvidenceItem"/> with a real index SourceUrl (carrying CIK +
     /// dashed accession), an item list containing 2.02, and MetadataJson shaped like the collector's.
     /// </summary>
@@ -143,7 +151,7 @@ public sealed class DirectionalFilingSignalSourceTests
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Revenue rose 40% and the company raised guidance.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue rose 40% and the company raised guidance."), "EX-99.1", "ex991.htm"));
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose 40%; guidance raised."));
 
@@ -172,7 +180,7 @@ public sealed class DirectionalFilingSignalSourceTests
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Revenue declined and guidance was cut.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue declined and guidance was cut."), "EX-99.1", "ex991.htm"));
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Deteriorating, 0.85m, "Revenue declined; guidance cut."));
 
@@ -195,7 +203,7 @@ public sealed class DirectionalFilingSignalSourceTests
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Some earnings text.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
         // Improving but confidence below the default 0.6 gate.
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Improving, 0.5m, "Weakly improving."));
@@ -215,7 +223,7 @@ public sealed class DirectionalFilingSignalSourceTests
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Some earnings text.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
         // High confidence, but a non-directional read must never emit a signal.
         var analyzer = new FakeFilingAnalyzer(new FilingSentiment(direction, 0.95m, "Both up and down."));
 
@@ -249,7 +257,7 @@ public sealed class DirectionalFilingSignalSourceTests
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Some earnings text.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
         // Spec 74 degrades a malformed/failed AI response to FilingSentiment.Unknown (never throws).
         var analyzer = new FakeFilingAnalyzer(FilingSentiment.Unknown);
 
@@ -270,7 +278,7 @@ public sealed class DirectionalFilingSignalSourceTests
         var earnings = EarningsFiling();
 
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Revenue up, guidance raised.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"));
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
 
@@ -297,7 +305,7 @@ public sealed class DirectionalFilingSignalSourceTests
         };
 
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Revenue up.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up."), "EX-99.1", "ex991.htm"));
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
         var options = new DirectionalFilingSignalOptions { MaxFilingsPerRun = 2 };
@@ -337,7 +345,7 @@ public sealed class DirectionalFilingSignalSourceTests
         // CIK carries leading zeros in the URL; the parse strips them. Accession stays dashed.
         var evidence = EarningsFiling(cikInUrl: "0001049521", accession: "0001049521-26-000011");
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Revenue up.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up."), "EX-99.1", "ex991.htm"));
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
 
@@ -353,7 +361,7 @@ public sealed class DirectionalFilingSignalSourceTests
     {
         var evidence = EarningsFiling() with { SourceUrl = "https://example.com/not-an-index" };
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Revenue up.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up."), "EX-99.1", "ex991.htm"));
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
 
@@ -369,7 +377,7 @@ public sealed class DirectionalFilingSignalSourceTests
         // No discrete items metadata key, but the Title carries "[items: 2.02,...]" — still gated in.
         var evidence = EarningsFiling(includeItemsMetadata: false, titleItems: "2.02,9.01");
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Revenue up, guidance raised.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"));
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
 
@@ -384,7 +392,7 @@ public sealed class DirectionalFilingSignalSourceTests
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Revenue rose 40% and the company raised guidance.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue rose 40% and the company raised guidance."), "EX-99.1", "ex991.htm"));
         var analyzer = new FakeFilingAnalyzer(
             new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose 40%; guidance raised."));
         var cache = new FakeAnalyzedFilingCache();
@@ -421,7 +429,7 @@ public sealed class DirectionalFilingSignalSourceTests
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
-            SecEarningsReleaseReadResult.Success("Some earnings text.", "EX-99.1", "ex991.htm"));
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
         // Mixed -> a successful read but no directional signal; must be cached as NoDirectionalSignal.
         var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Mixed, 0.95m, "Both up and down."));
         var cache = new FakeAnalyzedFilingCache();
@@ -433,6 +441,7 @@ public sealed class DirectionalFilingSignalSourceTests
         var entry = Assert.Single(cache.Entries.Values);
         Assert.Equal(AnalyzedFilingOutcome.NoDirectionalSignal, entry.Outcome);
         Assert.Null(entry.Signal);
+        Assert.Equal(AnalyzedFilingRecord.CurrentCacheVersion, entry.CacheVersion);
 
         // Second run: the no-signal cache hit means the reader is NOT called again and nothing is emitted.
         var second = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
@@ -465,6 +474,70 @@ public sealed class DirectionalFilingSignalSourceTests
         var second = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
         Assert.Empty(second);
         Assert.Equal(2, reader.ReadCount);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \n\t  ")]
+    [InlineData("Too short to be a real earnings release.")]
+    public async Task SuccessWithEmptyOrShortBody_IsNotAnalyzedOrCached_AndRetriedNextRun(string body)
+    {
+        // Spec 114: a structurally-successful read whose fetched EX-99.1 body is empty/implausibly short is a
+        // NON-authoritative read — never analyzed, never cached (caching it would freeze in a false no-signal
+        // forever, the 2026-07-18 block-era poison), so a later healthy run re-attempts the filing.
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Would be improving."));
+        var cache = new FakeAnalyzedFilingCache();
+        var source = CreateSource(reader, analyzer, cache: cache);
+
+        var first = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(first);
+        Assert.Equal(1, reader.ReadCount);
+        Assert.Equal(0, analyzer.AnalyzeCount); // the degenerate body never reaches the AI.
+        Assert.Empty(cache.Entries);            // and nothing is cached.
+
+        // A later run re-attempts the same filing (nothing was frozen in).
+        var second = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        Assert.Empty(second);
+        Assert.Equal(2, reader.ReadCount);
+    }
+
+    [Fact]
+    public async Task ShortBodyRead_DoesNotFeedBreaker_AndResetsConsecutiveCount()
+    {
+        var candidates = Enumerable.Range(1, 4)
+            .Select(n => EarningsFiling(
+                accession: $"0001049521-26-00000{n}",
+                publishedAt: new DateTimeOffset(2026, 6, 10 - n, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+
+        // 429, then a short-body SUCCESS, then 429, then a real success. A short-body read is a non-429 outcome:
+        // it must reset the consecutive-429 counter (it is not a rate limit), so with breaker 2 the two 429s are
+        // NOT consecutive, the breaker must not trip, and the final filing still produces its signal. Only the
+        // final (authoritative) read is cached.
+        var reader = new FakeSecEarningsReleaseReader(
+        [
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
+            SecEarningsReleaseReadResult.Success("Tiny.", "EX-99.1", "ex991.htm"),
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"),
+        ]);
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 2 };
+        var cache = new FakeAnalyzedFilingCache();
+
+        var result = await CreateSource(reader, analyzer, options, cache)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Single(result); // the final successful filing produced its signal.
+        Assert.Equal(4, reader.ReadCount); // breaker never tripped: all four candidates attempted.
+        var entry = Assert.Single(cache.Entries.Values); // only the authoritative read was cached.
+        Assert.Equal("0001049521-26-000004", entry.Accession);
+        Assert.Equal(AnalyzedFilingOutcome.DirectionalSignalProduced, entry.Outcome);
     }
 
     [Fact]
@@ -500,7 +573,7 @@ public sealed class DirectionalFilingSignalSourceTests
         // First filing succeeds (resets the counter), then the next two 429 -> with breaker 2 they still trip.
         var reader = new FakeSecEarningsReleaseReader(
         [
-            SecEarningsReleaseReadResult.Success("Revenue up, guidance raised.", "EX-99.1", "ex991.htm"),
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"),
             SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
             SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
         ]);
@@ -531,7 +604,7 @@ public sealed class DirectionalFilingSignalSourceTests
             SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
             SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.Unreachable, "boom"),
             SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"),
-            SecEarningsReleaseReadResult.Success("Revenue up, guidance raised.", "EX-99.1", "ex991.htm"),
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"),
         ]);
         var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
         var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 2 };

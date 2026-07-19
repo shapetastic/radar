@@ -23,6 +23,12 @@ namespace Radar.Infrastructure.Filings;
 /// <see cref="PutAsync"/> on a successful read), so a transient <c>www.sec.gov</c> block cannot poison the cache
 /// into skipping a filing forever.
 /// </para>
+/// <para>
+/// Invalidation (spec 114): every write is stamped with <see cref="AnalyzedFilingRecord.CurrentCacheVersion"/>,
+/// and a read whose stored <see cref="AnalyzedFilingRecord.CacheVersion"/> differs is a MISS (the filing is
+/// re-analyzed). Legacy files with no <c>cacheVersion</c> property deserialize to 0 and so auto-invalidate —
+/// this is how the 2026-07-18 block-era poison self-heals with no manual file deletion.
+/// </para>
 /// </summary>
 public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
 {
@@ -51,6 +57,20 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
         {
             var text = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
             var record = JsonSerializer.Deserialize<AnalyzedFilingRecord>(text, RadarFileStoreJson.Options);
+            if (record is not null && record.CacheVersion != AnalyzedFilingRecord.CurrentCacheVersion)
+            {
+                // A stale-version entry is not corrupt — it is the deliberate invalidation path (spec 114): the
+                // entry predates the current cache schema (legacy files with no cacheVersion property deserialize
+                // to 0), so it must be re-analyzed rather than replayed. Debug, not warning: this is expected
+                // self-healing, not a fault.
+                _logger.LogDebug(
+                    "Analyzed-filing cache file '{Path}' has stale CacheVersion {Stale} (current {Current}); treating as a cache miss.",
+                    path,
+                    record.CacheVersion,
+                    AnalyzedFilingRecord.CurrentCacheVersion);
+                return null;
+            }
+
             if (record is null || !IsConsistent(record, accession))
             {
                 // A malformed-but-parseable record (wrong accession, or an outcome/signal that disagree) is just as
@@ -81,6 +101,13 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
         if (path is null)
         {
             return;
+        }
+
+        // Stamp the current cache-schema version on every write (spec 114) so a hit can be trusted to have been
+        // produced under the current regime, regardless of what version the caller's record carried.
+        if (record.CacheVersion != AnalyzedFilingRecord.CurrentCacheVersion)
+        {
+            record = record with { CacheVersion = AnalyzedFilingRecord.CurrentCacheVersion };
         }
 
         var json = JsonSerializer.Serialize(record, RadarFileStoreJson.Options);
