@@ -255,7 +255,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         // Empty/short-body guard (spec 114): a structurally-successful fetch whose stripped body is implausibly
         // short is a degenerate read (an earnings release is never a few bytes) — do NOT analyze and do NOT let
         // the caller cache it; a later healthy run re-attempts the filing.
-        if (read.PlainText.AsSpan().Trim().Length < MinPlausibleBodyLength)
+        var trimmedBodyLength = read.PlainText.AsSpan().Trim().Length;
+        if (trimmedBodyLength < MinPlausibleBodyLength)
         {
             _logger.LogDebug(
                 "EX-99.1 read for evidence {EvidenceId} (CIK {Cik}, accession {Accession}) succeeded but the body "
@@ -263,7 +264,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 evidence.Id,
                 cik,
                 accession,
-                read.PlainText.Length,
+                trimmedBodyLength,
                 MinPlausibleBodyLength);
             return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: false);
         }
