@@ -162,13 +162,23 @@ public sealed class ScoringEngine : IScoringEngine
             return byObserved != 0 ? byObserved : a.Signal.Id.CompareTo(b.Signal.Id);
         });
 
+        // GuidanceChange supersede (spec 113): a filing first collected while the directional earnings read
+        // failed has its deterministic Neutral GuidanceChange already persisted; the signal stores are
+        // append-only (AD-8), so we supersede at read/assembly time instead of deleting — when the set
+        // carries both a directional and a Neutral GuidanceChange over the SAME filing evidence, only the
+        // directional one is scored (at most one GuidanceChange per filing; no double-count, ever). The
+        // Neutral stays on disk for provenance but gets no contribution/ScoreEvidenceLink. Pure and
+        // deterministic (AD-3), and deliberately NOT a fingerprint input (a correctness fix, not a
+        // scoring-config change — the stamp must not move).
+        var superseded = GuidanceChangeSupersede.Apply(pairs);
+
         // Same-event media collapse (spec 109): many near-simultaneous outlets covering ONE event each emit a
         // MediaAttention signal, inflating the media contribution and the signal count with duplication (not
         // breadth). Collapse those to one representative per event window BEFORE the formula sees them (a
         // signal-count de-noising transform, not a formula change). Provenance is preserved: the representative
         // is a real signal keeping its evidence link, and the collapsed count is surfaced on its contribution
         // reason below. Non-MediaAttention signals and the activity-only previousSignals are untouched.
-        var collapse = _mediaCollapse.Collapse(pairs);
+        var collapse = _mediaCollapse.Collapse(superseded);
         var scoredSignals = collapse.Signals.ToList();
 
         // The immediately-preceding window of the same length, now sourced from the ON-DISK signal store
@@ -190,6 +200,13 @@ public sealed class ScoringEngine : IScoringEngine
         var previousSignals = await _signalFileStore
             .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, ct)
             .ConfigureAwait(false);
+
+        // Spec 113, previous window too (no double-count, ever): the read's cross-run dedupe key includes
+        // Direction (spec 85), so a filing whose stale Neutral AND directional GuidanceChange both persist
+        // on disk comes back as TWO signals — the same filing must not count twice as activity for
+        // velocity. On the healthy spec-78 path only one GuidanceChange per filing ever persists, so this
+        // is behaviour-identical there.
+        previousSignals = GuidanceChangeSupersede.Apply(previousSignals);
 
         var input = new ScoringInput(companyId, windowStartUtc, windowEndUtc, scoredSignals, previousSignals);
         var computation = _formula.Compute(input);

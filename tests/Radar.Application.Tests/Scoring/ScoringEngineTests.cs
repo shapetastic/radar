@@ -1039,6 +1039,223 @@ public sealed class ScoringEngineTests
         await fileStore.WriteAsync(signal, review, CancellationToken.None);
     }
 
+    // ---- Spec 113: assembly-time GuidanceChange supersede (persisted Neutral vs directional read) ----
+
+    /// <summary>
+    /// Seeds an Approved GuidanceChange signal over an EXISTING evidence item — the spec-113 shape where a
+    /// stale deterministic Neutral and a directional read coexist over the SAME filing EvidenceId.
+    /// </summary>
+    private static async Task<Signal> SeedGuidanceChangeAsync(
+        Harness harness,
+        Guid companyId,
+        EvidenceItem evidence,
+        SignalDirection direction,
+        int strength,
+        int novelty,
+        decimal confidence,
+        DateTimeOffset observedAt)
+    {
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithType(SignalType.GuidanceChange)
+            .WithDirection(direction)
+            .WithStrength(strength)
+            .WithNovelty(novelty)
+            .WithConfidence(confidence)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(observedAt)
+            .Build();
+
+        await harness.Signals.AddAsync(signal, CancellationToken.None);
+        return signal;
+    }
+
+    private static EvidenceItem FilingEvidence() =>
+        new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash(Guid.NewGuid().ToString("N"))
+            .WithSourceType(EvidenceSourceType.Filing)
+            .WithQuality(EvidenceQuality.High)
+            .Build();
+
+    [Theory]
+    [InlineData(SignalDirection.Positive, true)]
+    [InlineData(SignalDirection.Negative, false)]
+    public async Task Supersede_PersistedNeutralAndDirectionalOverSameFiling_ScoresDirectionalOnly(
+        SignalDirection direction, bool aboveBaseline)
+    {
+        // Spec 113: a stale deterministic Neutral GuidanceChange (persisted when the directional read
+        // failed on first collection) AND the strength-8 directional read coexist over the SAME filing
+        // EvidenceId. The company must be scored on the directional only — Trajectory moves, and the
+        // Neutral gets NO contribution/ScoreEvidenceLink (at most one GuidanceChange per filing).
+        var harness = new Harness(new RadarScoreFormulaV6(new ScoringWeights(), Weights));
+        var companyId = Guid.NewGuid();
+        var evidence = FilingEvidence();
+        await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+
+        var neutral = await SeedGuidanceChangeAsync(
+            harness, companyId, evidence, SignalDirection.Neutral,
+            strength: 3, novelty: 4, confidence: 0.45m, WindowEnd.AddDays(-1));
+        var directional = await SeedGuidanceChangeAsync(
+            harness, companyId, evidence, direction,
+            strength: 8, novelty: 6, confidence: 0.90m, WindowEnd.AddDays(-1));
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        if (aboveBaseline)
+        {
+            Assert.True(result.Snapshot.TrajectoryScore > 50);
+        }
+        else
+        {
+            Assert.True(result.Snapshot.TrajectoryScore < 50);
+        }
+
+        // Exactly one link — the directional signal's; the superseded Neutral has none.
+        var link = Assert.Single(result.Links);
+        Assert.Equal(directional.Id, link.SignalId);
+        Assert.Equal(evidence.Id, link.EvidenceId);
+        Assert.DoesNotContain(result.Links, l => l.SignalId == neutral.Id);
+    }
+
+    [Fact]
+    public async Task Supersede_NeutralOnly_NoDirectionalRead_IsUnchanged()
+    {
+        // A filing with ONLY the deterministic Neutral (no directional read available) is scored exactly
+        // as before: baseline Trajectory and the Neutral keeps its provenance link.
+        var harness = new Harness(new RadarScoreFormulaV6(new ScoringWeights(), Weights));
+        var companyId = Guid.NewGuid();
+        var evidence = FilingEvidence();
+        await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+
+        var neutral = await SeedGuidanceChangeAsync(
+            harness, companyId, evidence, SignalDirection.Neutral,
+            strength: 3, novelty: 4, confidence: 0.45m, WindowEnd.AddDays(-1));
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.Equal(50, result.Snapshot.TrajectoryScore);
+        var link = Assert.Single(result.Links);
+        Assert.Equal(neutral.Id, link.SignalId);
+    }
+
+    [Fact]
+    public async Task Supersede_RepeatedAssembly_YieldsIdenticalScoredSetsAndLinks()
+    {
+        // Determinism (AD-3): repeated scoring assembly over the same Neutral+directional inputs yields
+        // identical component scores and identical contribution tuples.
+        var harness = new Harness(new RadarScoreFormulaV6(new ScoringWeights(), Weights));
+        var companyId = Guid.NewGuid();
+        var evidence = FilingEvidence();
+        await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+
+        await SeedGuidanceChangeAsync(
+            harness, companyId, evidence, SignalDirection.Neutral,
+            strength: 3, novelty: 4, confidence: 0.45m, WindowEnd.AddDays(-1));
+        await SeedGuidanceChangeAsync(
+            harness, companyId, evidence, SignalDirection.Positive,
+            strength: 8, novelty: 6, confidence: 0.90m, WindowEnd.AddDays(-1));
+
+        var first = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+        var second = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.Equal(first.Snapshot.TrajectoryScore, second.Snapshot.TrajectoryScore);
+        Assert.Equal(first.Snapshot.OpportunityScore, second.Snapshot.OpportunityScore);
+        Assert.Equal(first.Snapshot.ComponentJson, second.Snapshot.ComponentJson);
+
+        static HashSet<(Guid, Guid, int, string)> Tuples(CompanyScoreResult r) =>
+            r.Links.Select(l => (l.SignalId, l.EvidenceId, l.ContributionWeight, l.ContributionReason)).ToHashSet();
+
+        Assert.True(Tuples(first).SetEquals(Tuples(second)));
+    }
+
+    [Fact]
+    public async Task Supersede_PreviousWindow_StaleNeutralAndDirectionalOnDisk_CountedOnceForVelocity()
+    {
+        // Spec 113, previous window (no double-count, ever): the on-disk read's dedupe key includes
+        // Direction (spec 85), so a filing whose stale Neutral AND directional GuidanceChange both persist
+        // comes back as TWO signals — the engine must hand the formula only the directional one, so the
+        // filing counts once as activity.
+        var formula = new CapturingScoreFormula();
+        var harness = new Harness(formula);
+        var companyId = Guid.NewGuid();
+        var windowStart = WindowEnd - Window;
+        var evidenceId = Guid.NewGuid();
+        var observedAt = windowStart.AddDays(-3);
+
+        Signal OnDiskGuidance(SignalDirection direction, int strength, decimal confidence)
+        {
+            var signal = new SignalBuilder()
+                .WithId(Guid.NewGuid())
+                .WithEvidenceId(evidenceId)
+                .WithCompanyId(companyId)
+                .WithType(SignalType.GuidanceChange)
+                .WithDirection(direction)
+                .WithStrength(strength)
+                .WithConfidence(confidence)
+                .WithReviewStatus(SignalReviewStatus.Approved)
+                .WithObservedAtUtc(observedAt)
+                .Build();
+            harness.SignalStore.Seed(signal);
+            return signal;
+        }
+
+        var staleNeutral = OnDiskGuidance(SignalDirection.Neutral, strength: 3, confidence: 0.45m);
+        var directional = OnDiskGuidance(SignalDirection.Positive, strength: 8, confidence: 0.90m);
+
+        await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var input = Assert.IsType<ScoringInput>(formula.LastInput);
+        var previous = Assert.Single(input.PreviousSignals);
+        Assert.Equal(directional.Id, previous.Id);
+        Assert.DoesNotContain(input.PreviousSignals, s => s.Id == staleNeutral.Id);
+    }
+
+    [Fact]
+    public async Task Supersede_AcceptanceFixture_DirectionalReadLiftsOpportunityOverTheInvestigateGate()
+    {
+        // AEHR-shaped acceptance (generic company — NO ticker-specific logic): a filing whose only scored
+        // GuidanceChange is the stale deterministic Neutral sits under the Investigate 40 gate; once the
+        // strength-8/novelty-6/confidence-0.90 directional read supersedes that Neutral, OpportunityScore
+        // clears 40. Same evidence, same window — only which already-available signal is scored changes.
+        var companyId = Guid.NewGuid();
+
+        // Case A: the stale Neutral alone (the stuck pre-113 read).
+        var neutralHarness = new Harness(new RadarScoreFormulaV6(new ScoringWeights(), Weights));
+        var neutralEvidence = FilingEvidence();
+        await neutralHarness.Evidence.AddIfNewAsync(neutralEvidence, CancellationToken.None);
+        await SeedGuidanceChangeAsync(
+            neutralHarness, companyId, neutralEvidence, SignalDirection.Neutral,
+            strength: 3, novelty: 4, confidence: 0.45m, WindowEnd.AddDays(-1));
+
+        var neutralResult =
+            await neutralHarness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // Case B: the SAME stale Neutral persisted alongside the directional Positive read (spec 113).
+        var supersededHarness = new Harness(new RadarScoreFormulaV6(new ScoringWeights(), Weights));
+        var evidence = FilingEvidence();
+        await supersededHarness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+        var neutral = await SeedGuidanceChangeAsync(
+            supersededHarness, companyId, evidence, SignalDirection.Neutral,
+            strength: 3, novelty: 4, confidence: 0.45m, WindowEnd.AddDays(-1));
+        await SeedGuidanceChangeAsync(
+            supersededHarness, companyId, evidence, SignalDirection.Positive,
+            strength: 8, novelty: 6, confidence: 0.90m, WindowEnd.AddDays(-1));
+
+        var supersededResult =
+            await supersededHarness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.True(
+            neutralResult.Snapshot.OpportunityScore < 40,
+            $"Neutral-only fixture must sit under the Investigate 40 gate; got {neutralResult.Snapshot.OpportunityScore}.");
+        Assert.True(
+            supersededResult.Snapshot.OpportunityScore >= 40,
+            $"Superseding directional read must clear the Investigate 40 gate; got {supersededResult.Snapshot.OpportunityScore}.");
+        Assert.DoesNotContain(supersededResult.Links, l => l.SignalId == neutral.Id);
+    }
+
     /// <summary>
     /// Seeds a current-window Approved signal (with evidence) of a given Strength into the in-memory repo,
     /// so the real formula's velocity numerator (Strength sum) is controllable.
