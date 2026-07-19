@@ -394,6 +394,37 @@ public sealed class FileSignalStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadApprovedInWindow_StaleNeutralAndDirectionalGuidanceChange_SameEvidence_BothSurvive()
+    {
+        // Spec 113 regression: a filing whose deterministic Neutral GuidanceChange was persisted while the
+        // directional read failed later gets its directional Positive persisted too. The cross-run dedupe
+        // key (CompanyId, EvidenceId, Type, Direction) keeps Direction, so the directional copy must NOT be
+        // dropped against the stale Neutral — both come back and the assembly-time supersede picks the
+        // directional one. This pins the dedupe key's Direction component (do not weaken it).
+        var companyId = Guid.NewGuid();
+        var evidenceId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+        var inWindow = new DateTimeOffset(2026, 2, 5, 0, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+
+        var staleNeutral = DuplicateSignalFor(
+            companyId, evidenceId, inWindow, SignalType.GuidanceChange, SignalDirection.Neutral, strength: 3);
+        var directional = DuplicateSignalFor(
+            companyId, evidenceId, inWindow, SignalType.GuidanceChange, SignalDirection.Positive, strength: 8);
+
+        await store.WriteAsync(staleNeutral, ReviewFor(staleNeutral), CancellationToken.None);
+        await store.WriteAsync(directional, ReviewFor(directional), CancellationToken.None);
+
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, s => s.Id == staleNeutral.Id && s.Direction == SignalDirection.Neutral);
+        Assert.Contains(result, s => s.Id == directional.Id && s.Direction == SignalDirection.Positive);
+    }
+
+    [Fact]
     public async Task ReadApprovedInWindow_DeterministicTieBreak_KeepsLowestSignalIdAcrossReads()
     {
         // Several duplicate copies of one identity, with KNOWN SignalIds. The survivor must be the lowest
