@@ -28,8 +28,11 @@ namespace Radar.Infrastructure.Filings;
 /// To cut the www.sec.gov footprint (spec 107) it is CACHE-FIRST: each eligible filing's analysis result is
 /// looked up in the <see cref="IAnalyzedFilingCache"/> by accession, and a hit replays a field-identical
 /// <see cref="DirectionalFilingSignal"/> (or emits nothing for a confirmed no-signal) WITHOUT any www.sec.gov
-/// fetch or AI call. A miss fetches + analyzes, then caches ONLY a successful read (a signal or a confirmed
-/// no-signal) — a failed read is NEVER cached, so a transient block cannot permanently suppress a filing. A
+/// fetch or AI call. A miss fetches + analyzes, then caches ONLY an authoritative successful read (a signal or a
+/// confirmed no-signal seen on REAL content) — a failed read is NEVER cached, and neither is a structurally
+/// successful read whose fetched body was empty/implausibly short (spec 114: a degenerate fetch is not a real
+/// no-signal; it is left uncached so a later healthy run re-attempts it), so a transient block cannot permanently
+/// suppress a filing. A
 /// per-run 429 circuit breaker (<see cref="DirectionalFilingSignalOptions.MaxConsecutiveRateLimited"/>) stops
 /// attempting the remaining filings once the host appears blocked; a success, a cache hit, or any non-429 failure
 /// resets the count, so only an unbroken run of 429s trips it. The cache only changes WHETHER a fetch happens — the
@@ -39,6 +42,15 @@ namespace Radar.Infrastructure.Filings;
 internal sealed partial class DirectionalFilingSignalSource : IDirectionalFilingSignalSource
 {
     private const string EarningsItemCode = "2.02";
+
+    /// <summary>
+    /// Minimum plausible EX-99.1 body length (chars, after trimming) for a read to count as authoritative
+    /// (spec 114). A real earnings release is never a few bytes — a shorter body means the fetch was degenerate
+    /// (e.g. an error/interstitial page during a www.sec.gov block stripped to almost nothing), so the read is
+    /// neither analyzed nor cached and a later run re-attempts it. An operational threshold like
+    /// MaxFilingsPerRun — deliberately NOT a scoring-fingerprint input.
+    /// </summary>
+    private const int MinPlausibleBodyLength = 200;
 
     private readonly ISecEarningsReleaseReader _reader;
     private readonly IFilingAnalyzer _analyzer;
@@ -131,13 +143,21 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 }
 
                 // Cache miss: fetch + analyze.
-                var (outcome, signal) = await AnalyzeFilingAsync(evidence, read.Value.Cik, accession, ct)
+                var (outcome, signal, cacheable) = await AnalyzeFilingAsync(evidence, read.Value.Cik, accession, ct)
                     .ConfigureAwait(false);
 
                 if (outcome == SecEarningsReleaseReadOutcome.Success)
                 {
+                    // Any structurally successful read is a non-429 outcome: it resets the consecutive-429
+                    // counter whether or not it was authoritative enough to cache.
                     consecutiveRateLimited = 0;
-                    if (signal is not null)
+                    if (!cacheable)
+                    {
+                        // Non-authoritative read (empty/implausibly-short body, spec 114): NOT cached — leave the
+                        // filing for a later healthy run to re-attempt. Caching it would freeze a degenerate
+                        // fetch in as a false no-signal forever (the 2026-07-18 block-era poison).
+                    }
+                    else if (signal is not null)
                     {
                         produced.Add(new DirectionalFilingSignal(signal, evidence));
                         await _cache.PutAsync(
@@ -145,15 +165,21 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                                 accession,
                                 AnalyzedFilingOutcome.DirectionalSignalProduced,
                                 signal,
-                                evidence.PublishedAtUtc ?? evidence.CollectedAtUtc),
+                                evidence.PublishedAtUtc ?? evidence.CollectedAtUtc,
+                                AnalyzedFilingRecord.CurrentCacheVersion),
                             ct).ConfigureAwait(false);
                     }
                     else
                     {
-                        // Read OK but no directional signal (Mixed/Unknown/below-confidence) — cache it so we
-                        // never re-fetch this filing.
+                        // Read OK on real content but no directional signal (Mixed/Unknown/below-confidence) —
+                        // cache it so we never re-fetch this filing.
                         await _cache.PutAsync(
-                            new AnalyzedFilingRecord(accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null),
+                            new AnalyzedFilingRecord(
+                                accession,
+                                AnalyzedFilingOutcome.NoDirectionalSignal,
+                                null,
+                                null,
+                                AnalyzedFilingRecord.CurrentCacheVersion),
                             ct).ConfigureAwait(false);
                     }
                 }
@@ -203,12 +229,15 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
     /// <summary>
     /// Reads the EX-99.1 body, analyzes it, applies the confidence gate + direction mapping, and returns the
     /// read <see cref="SecEarningsReleaseReadOutcome"/> paired with a single directional <c>GuidanceChange</c>
-    /// <see cref="ExtractedSignal"/> or <c>null</c>. The outcome lets the caller distinguish a fetch FAILURE
-    /// (non-<see cref="SecEarningsReleaseReadOutcome.Success"/>, never cached) from a SUCCESS with no directional
-    /// signal (below the gate, Mixed/Unknown — cached as no-signal). Never calls the analyzer on a non-success
-    /// read.
+    /// <see cref="ExtractedSignal"/> or <c>null</c>, plus a <c>Cacheable</c> flag. The outcome lets the caller
+    /// distinguish a fetch FAILURE (non-<see cref="SecEarningsReleaseReadOutcome.Success"/>, never cached) from a
+    /// SUCCESS; <c>Cacheable</c> is false for a structurally successful read whose body was empty/implausibly
+    /// short (below <see cref="MinPlausibleBodyLength"/>, spec 114) — a non-authoritative read the caller must
+    /// NOT cache (and never sees the analyzer), so a later run re-attempts it. Only a SUCCESS on real content
+    /// with no directional signal (below the gate, Mixed/Unknown) is cached as no-signal. Never calls the
+    /// analyzer on a non-success read.
     /// </summary>
-    private async Task<(SecEarningsReleaseReadOutcome Outcome, ExtractedSignal? Signal)> AnalyzeFilingAsync(
+    private async Task<(SecEarningsReleaseReadOutcome Outcome, ExtractedSignal? Signal, bool Cacheable)> AnalyzeFilingAsync(
         EvidenceItem evidence, string cik, string accession, CancellationToken ct)
     {
         var read = await _reader.ReadAsync(cik, accession, ct).ConfigureAwait(false);
@@ -220,7 +249,23 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 cik,
                 accession,
                 read.Outcome);
-            return (read.Outcome, null);
+            return (read.Outcome, null, Cacheable: false);
+        }
+
+        // Empty/short-body guard (spec 114): a structurally-successful fetch whose stripped body is implausibly
+        // short is a degenerate read (an earnings release is never a few bytes) — do NOT analyze and do NOT let
+        // the caller cache it; a later healthy run re-attempts the filing.
+        if (read.PlainText.AsSpan().Trim().Length < MinPlausibleBodyLength)
+        {
+            _logger.LogDebug(
+                "EX-99.1 read for evidence {EvidenceId} (CIK {Cik}, accession {Accession}) succeeded but the body "
+                    + "was implausibly short ({Length} chars < {Min}); treating as non-authoritative (not cached).",
+                evidence.Id,
+                cik,
+                accession,
+                read.PlainText.Length,
+                MinPlausibleBodyLength);
+            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: false);
         }
 
         var sentiment = await _analyzer.AnalyzeAsync(read.PlainText, ct).ConfigureAwait(false);
@@ -234,7 +279,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 evidence.Id,
                 sentiment.Confidence,
                 _options.MinConfidence);
-            return (SecEarningsReleaseReadOutcome.Success, null);
+            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true);
         }
 
         var direction = sentiment.Direction switch
@@ -249,22 +294,25 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 "Directional read for evidence {EvidenceId} was {Direction}; no directional signal.",
                 evidence.Id,
                 sentiment.Direction);
-            return (SecEarningsReleaseReadOutcome.Success, null);
+            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true);
         }
 
         // The SupportingExcerpt must be a verbatim slice of the evidence (the mapper enforces
         // excerpt-in-evidence). The evidence Title is wholly contained in the composed searchable text, so
         // it is a stable, guaranteed-present excerpt. The advice-scrubbed AI rationale (spec 74) rides the
         // Reason field (not provenance-checked) to surface the AI basis for audit/report.
-        return (SecEarningsReleaseReadOutcome.Success, new ExtractedSignal(
-            CompanyMention: evidence.SourceName,
-            SignalType: "GuidanceChange",
-            Direction: direction,
-            Strength: _options.Strength,
-            Novelty: _options.Novelty,
-            Confidence: sentiment.Confidence,
-            SupportingExcerpt: evidence.Title,
-            Reason: sentiment.Rationale));
+        return (
+            SecEarningsReleaseReadOutcome.Success,
+            new ExtractedSignal(
+                CompanyMention: evidence.SourceName,
+                SignalType: "GuidanceChange",
+                Direction: direction,
+                Strength: _options.Strength,
+                Novelty: _options.Novelty,
+                Confidence: sentiment.Confidence,
+                SupportingExcerpt: evidence.Title,
+                Reason: sentiment.Rationale),
+            Cacheable: true);
     }
 
     /// <summary>

@@ -36,7 +36,11 @@ public sealed class FileAnalyzedFilingCacheTests
                 Reason: "Revenue rose 40%.");
             var observedAt = new DateTimeOffset(2026, 6, 2, 16, 30, 0, TimeSpan.Zero);
             var record = new AnalyzedFilingRecord(
-                Accession, AnalyzedFilingOutcome.DirectionalSignalProduced, signal, observedAt);
+                Accession,
+                AnalyzedFilingOutcome.DirectionalSignalProduced,
+                signal,
+                observedAt,
+                AnalyzedFilingRecord.CurrentCacheVersion);
 
             await cache.PutAsync(record, CancellationToken.None);
             var read = await cache.TryGetAsync(Accession, CancellationToken.None);
@@ -45,6 +49,7 @@ public sealed class FileAnalyzedFilingCacheTests
             Assert.Equal(Accession, read!.Accession);
             Assert.Equal(AnalyzedFilingOutcome.DirectionalSignalProduced, read.Outcome);
             Assert.Equal(observedAt, read.ObservedAtUtc);
+            Assert.Equal(AnalyzedFilingRecord.CurrentCacheVersion, read.CacheVersion);
             Assert.NotNull(read.Signal);
             Assert.Equal(signal, read.Signal);
         }
@@ -62,7 +67,7 @@ public sealed class FileAnalyzedFilingCacheTests
         {
             var cache = CreateCache(dir);
             var record = new AnalyzedFilingRecord(
-                Accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null);
+                Accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null, AnalyzedFilingRecord.CurrentCacheVersion);
 
             await cache.PutAsync(record, CancellationToken.None);
             var read = await cache.TryGetAsync(Accession, CancellationToken.None);
@@ -71,6 +76,7 @@ public sealed class FileAnalyzedFilingCacheTests
             Assert.Equal(AnalyzedFilingOutcome.NoDirectionalSignal, read!.Outcome);
             Assert.Null(read.Signal);
             Assert.Null(read.ObservedAtUtc);
+            Assert.Equal(AnalyzedFilingRecord.CurrentCacheVersion, read.CacheVersion);
         }
         finally
         {
@@ -124,7 +130,11 @@ public sealed class FileAnalyzedFilingCacheTests
             // A parseable record whose stored accession disagrees with the file it lives in is untrustworthy —
             // returning it as a hit would replay a signal against the wrong filing, so it must degrade to a miss.
             var wrongAccession = new AnalyzedFilingRecord(
-                "9999999999-99-999999", AnalyzedFilingOutcome.NoDirectionalSignal, null, null);
+                "9999999999-99-999999",
+                AnalyzedFilingOutcome.NoDirectionalSignal,
+                null,
+                null,
+                AnalyzedFilingRecord.CurrentCacheVersion);
             await WriteRecordForAsync(dir, Accession, wrongAccession);
 
             var read = await cache.TryGetAsync(Accession, CancellationToken.None);
@@ -146,11 +156,91 @@ public sealed class FileAnalyzedFilingCacheTests
             // DirectionalSignalProduced but no signal to replay is a self-contradictory record; treating it as a
             // hit would silently suppress the filing forever, so it must degrade to a miss and be re-fetched.
             var inconsistent = new AnalyzedFilingRecord(
-                Accession, AnalyzedFilingOutcome.DirectionalSignalProduced, null, null);
+                Accession,
+                AnalyzedFilingOutcome.DirectionalSignalProduced,
+                null,
+                null,
+                AnalyzedFilingRecord.CurrentCacheVersion);
             await WriteRecordForAsync(dir, Accession, inconsistent);
 
             var read = await cache.TryGetAsync(Accession, CancellationToken.None);
             Assert.Null(read);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TryGet_LegacyRecordWithoutCacheVersion_DegradesToMiss()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var cache = CreateCache(dir);
+            // A block-era (pre-spec-114) file has no cacheVersion property, so it deserializes to 0 — a mismatch
+            // with CurrentCacheVersion. It must be a MISS so the filing is re-analyzed (the poison self-heals
+            // with no manual file deletion).
+            var legacyJson = """
+                {
+                  "accession": "0001049521-26-000011",
+                  "outcome": "NoDirectionalSignal",
+                  "signal": null,
+                  "observedAtUtc": null
+                }
+                """;
+            var path = Path.Combine(dir, Accession.ToLowerInvariant() + ".json");
+            await File.WriteAllTextAsync(path, legacyJson, CancellationToken.None);
+
+            var read = await cache.TryGetAsync(Accession, CancellationToken.None);
+            Assert.Null(read);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TryGet_StaleExplicitCacheVersion_DegradesToMiss()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var cache = CreateCache(dir);
+            // An otherwise-consistent record stamped with a non-current version must be a miss (re-analyzed),
+            // never replayed. Planted directly on disk so PutAsync's re-stamping cannot mask the stale value.
+            var stale = new AnalyzedFilingRecord(
+                Accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null, CacheVersion: 0);
+            await WriteRecordForAsync(dir, Accession, stale);
+
+            var read = await cache.TryGetAsync(Accession, CancellationToken.None);
+            Assert.Null(read);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Put_StampsCurrentCacheVersion_EvenWhenRecordCarriesStaleVersion()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var cache = CreateCache(dir);
+            // PutAsync stamps CurrentCacheVersion on every write, so a caller cannot accidentally persist an
+            // entry that would immediately be treated as a miss.
+            var stale = new AnalyzedFilingRecord(
+                Accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null, CacheVersion: 0);
+
+            await cache.PutAsync(stale, CancellationToken.None);
+            var read = await cache.TryGetAsync(Accession, CancellationToken.None);
+
+            Assert.NotNull(read);
+            Assert.Equal(AnalyzedFilingRecord.CurrentCacheVersion, read!.CacheVersion);
         }
         finally
         {
