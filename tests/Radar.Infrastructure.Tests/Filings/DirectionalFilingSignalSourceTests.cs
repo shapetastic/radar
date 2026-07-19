@@ -19,13 +19,15 @@ public sealed class DirectionalFilingSignalSourceTests
         ISecEarningsReleaseReader reader,
         IFilingAnalyzer analyzer,
         DirectionalFilingSignalOptions? options = null,
-        IAnalyzedFilingCache? cache = null) =>
+        IAnalyzedFilingCache? cache = null,
+        IFilingReadDebugSink? debugSink = null) =>
         new(
             reader,
             analyzer,
             cache ?? new FakeAnalyzedFilingCache(),
             options ?? new DirectionalFilingSignalOptions(),
-            NullLogger<DirectionalFilingSignalSource>.Instance);
+            NullLogger<DirectionalFilingSignalSource>.Instance,
+            debugSink);
 
     /// <summary>
     /// Pads <paramref name="lead"/> past the source's minimum-plausible-body guard (spec 114) so tests that
@@ -635,6 +637,234 @@ public sealed class DirectionalFilingSignalSourceTests
 
         Assert.Empty(result);
         Assert.Equal(5, reader.ReadCount); // breaker disabled -> every candidate attempted.
+    }
+
+    // ---- spec 115: opt-in filing-read debug sink ----------------------------------------------------------
+
+    [Fact]
+    public async Task DebugSink_SignalProduced_WritesOneDirectionalSignalProducedRecord()
+    {
+        var evidence = EarningsFiling();
+        var body = PlausibleBody("Revenue rose 40% and the company raised guidance.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose 40%; guidance raised."));
+        var sink = new SpyFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, debugSink: sink)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Single(result); // the signal itself is unchanged by the sink.
+        var record = Assert.Single(sink.Records);
+        Assert.Equal(FilingReadOutcome.DirectionalSignalProduced, record.Outcome);
+        Assert.Equal("0001049521-26-000011", record.Accession);
+        Assert.Equal(evidence.Id, record.EvidenceId);
+        Assert.Equal("Improving", record.Direction); // the FilingDirection name, not the signal's Positive.
+        Assert.Equal(0.9m, record.Confidence);
+        Assert.Equal("Revenue rose 40%; guidance raised.", record.Rationale);
+        Assert.Equal(body.Trim().Length, record.InputLength);
+        Assert.StartsWith("Revenue rose 40%", record.InputHead, StringComparison.Ordinal);
+        Assert.Equal(AsOf, record.AsOfUtc); // the pipeline's asOfUtc, never wall clock.
+    }
+
+    [Fact]
+    public async Task DebugSink_BelowConfidence_WritesOneBelowConfidenceRecord()
+    {
+        var evidence = EarningsFiling();
+        var body = PlausibleBody("Some earnings text.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.5m, "Weakly improving."));
+        var sink = new SpyFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, debugSink: sink)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        var record = Assert.Single(sink.Records);
+        Assert.Equal(FilingReadOutcome.BelowConfidence, record.Outcome);
+        Assert.Equal(evidence.Id, record.EvidenceId);
+        Assert.Equal("Improving", record.Direction);
+        Assert.Equal(0.5m, record.Confidence);
+        Assert.Equal("Weakly improving.", record.Rationale);
+        Assert.Equal(body.Trim().Length, record.InputLength);
+        Assert.Equal(AsOf, record.AsOfUtc);
+    }
+
+    [Theory]
+    [InlineData(FilingDirection.Mixed)]
+    [InlineData(FilingDirection.Unknown)]
+    public async Task DebugSink_MixedOrUnknown_WritesOneNoDirectionalReadRecord(FilingDirection direction)
+    {
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(direction, 0.95m, "Both up and down."));
+        var sink = new SpyFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, debugSink: sink)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        var record = Assert.Single(sink.Records);
+        Assert.Equal(FilingReadOutcome.NoDirectionalRead, record.Outcome);
+        Assert.Equal(direction.ToString(), record.Direction);
+        Assert.Equal(0.95m, record.Confidence);
+        Assert.Equal("Both up and down.", record.Rationale);
+        Assert.Equal(AsOf, record.AsOfUtc);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("Too short to be a real earnings release.")]
+    public async Task DebugSink_EmptyOrShortBody_WritesOneEmptyBodySkippedRecord_WithNullVerdictFields(string body)
+    {
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Would be improving."));
+        var sink = new SpyFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, debugSink: sink)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        Assert.Equal(0, analyzer.AnalyzeCount); // no model call happened...
+        var record = Assert.Single(sink.Records); // ...but the ATTEMPT is still recorded.
+        Assert.Equal(FilingReadOutcome.EmptyBodySkipped, record.Outcome);
+        Assert.Equal(evidence.Id, record.EvidenceId);
+        Assert.Null(record.Direction);
+        Assert.Null(record.Confidence);
+        Assert.Null(record.Rationale);
+        Assert.Equal(body.Trim().Length, record.InputLength);
+        Assert.Equal(AsOf, record.AsOfUtc);
+    }
+
+    [Fact]
+    public async Task DebugSink_InputHead_IsBoundedTo2000Chars()
+    {
+        // A 5000-char body: the record carries the FULL trimmed length but only a 2000-char head (a diagnostic
+        // bound — deliberately not a scoring input).
+        var body = new string('x', 5000);
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Mixed, 0.95m, "Mixed."));
+        var sink = new SpyFilingReadDebugSink();
+
+        await CreateSource(reader, analyzer, debugSink: sink).ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var record = Assert.Single(sink.Records);
+        Assert.Equal(5000, record.InputLength);
+        Assert.Equal(2000, record.InputHead.Length);
+    }
+
+    [Fact]
+    public async Task DebugSink_CacheHit_EmitsNoRecord()
+    {
+        // A cache hit is a replay, not an analysis attempt — only the first (analyzing) run records.
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue rose 40%."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose 40%."));
+        var cache = new FakeAnalyzedFilingCache();
+        var sink = new SpyFilingReadDebugSink();
+        var source = CreateSource(reader, analyzer, cache: cache, debugSink: sink);
+
+        await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        Assert.Single(sink.Records);
+
+        var second = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
+        Assert.Single(second);        // the cache-hit replay still produces the signal...
+        Assert.Single(sink.Records);  // ...but emits no second record.
+    }
+
+    [Theory]
+    [InlineData("NoEarningsExhibit")]
+    [InlineData("Unreachable")]
+    [InlineData("RateLimited")]
+    public async Task DebugSink_FetchFailure_EmitsNoRecord(string outcomeName)
+    {
+        // A fetch failure never reached analysis — no record (the filing is re-attempted next run anyway).
+        var outcome = Enum.Parse<SecEarningsReleaseReadOutcome>(outcomeName);
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Failure(outcome, "reader failed"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Would be improving."));
+        var sink = new SpyFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, debugSink: sink)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        Assert.Empty(sink.Records);
+    }
+
+    [Fact]
+    public async Task DebugSink_ThrowingSink_DoesNotAbortBatch_OrChangeProducedSignals()
+    {
+        // Even a sink that throws on EVERY call must not abort the batch or change the signal set: both
+        // filings still produce their signals and both are cached (the diagnostic is strictly best-effort).
+        var candidates = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000001", publishedAt: new DateTimeOffset(2026, 6, 5, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000002", publishedAt: new DateTimeOffset(2026, 6, 4, 0, 0, 0, TimeSpan.Zero)),
+        };
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var cache = new FakeAnalyzedFilingCache();
+        var sink = new ThrowingFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, cache: cache, debugSink: sink)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal(2, sink.Calls); // the sink WAS attempted for each analysis...
+        Assert.Equal(2, cache.Entries.Count); // ...and neither the signals nor the caching changed.
+    }
+
+    [Fact]
+    public async Task NullDebugSink_Default_BehaviourUnchanged()
+    {
+        // The default (feature off) is a null sink: the entire pre-spec-115 suite runs this way; this pins the
+        // default explicitly — signal produced, no throw, nothing extra.
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+
+        var result = await CreateSource(reader, analyzer).ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Single(result);
+    }
+
+    private sealed class SpyFilingReadDebugSink : IFilingReadDebugSink
+    {
+        public List<FilingReadDebugRecord> Records { get; } = [];
+
+        public Task RecordAsync(FilingReadDebugRecord record, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Records.Add(record);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingFilingReadDebugSink : IFilingReadDebugSink
+    {
+        public int Calls { get; private set; }
+
+        public Task RecordAsync(FilingReadDebugRecord record, CancellationToken ct)
+        {
+            Calls++;
+            throw new IOException("debug sink disk full");
+        }
     }
 
     private sealed class FakeSecEarningsReleaseReader : ISecEarningsReleaseReader

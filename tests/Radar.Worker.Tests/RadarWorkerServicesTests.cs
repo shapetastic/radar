@@ -341,6 +341,46 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void AiEnabled_DefaultConfig_RegistersNoFilingReadDebugSink()
+    {
+        // Radar:Ai:Filings:PersistReadDebug defaults to false (spec 115): even with AI enabled, no debug sink
+        // is registered — the directional source's optional IFilingReadDebugSink? stays null, nothing is
+        // written, and the graph is byte-for-byte unchanged.
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+        Assert.Null(provider.GetService<IFilingReadDebugSink>());
+        Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+    }
+
+    [Fact]
+    public void AiEnabled_PersistReadDebugTrue_RegistersFilingReadDebugSink()
+    {
+        // The opt-in flag flips the spec-115 diagnostic sink on; the source (which consumes it optionally)
+        // still resolves.
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"),
+            ("Radar:Ai:Filings:PersistReadDebug", "true"));
+
+        Assert.NotNull(provider.GetService<IFilingReadDebugSink>());
+        Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+    }
+
+    [Fact]
+    public void AiDisabled_PersistReadDebugTrue_RegistersNoFilingReadDebugSink()
+    {
+        // The debug sink rides the Radar:Ai gate (it only ever records AI filing reads): with no provider
+        // configured the flag alone registers nothing.
+        using var provider = BuildProvider(("Radar:Ai:Filings:PersistReadDebug", "true"));
+
+        Assert.Null(provider.GetService<IFilingReadDebugSink>());
+    }
+
+    [Fact]
     public void DefaultConfig_RegistersNoPriceSeam_PricesDisabled()
     {
         // Radar:Prices:Enabled defaults to false: nothing price-related is registered, the collector list and

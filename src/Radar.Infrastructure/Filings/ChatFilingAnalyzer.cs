@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -20,17 +18,11 @@ namespace Radar.Infrastructure.Filings;
 /// </summary>
 internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
 {
-    /// <summary>Upper bound on the surfaced rationale length (transparency-only text is never unbounded).</summary>
-    private const int MaxRationaleLength = 500;
-
     /// <summary>
-    /// Advice language Radar must never surface (CLAUDE.md hard rule). The system prompt already forbids it,
-    /// but a model can ignore instructions, so the returned rationale is scrubbed defensively. Whole-word match
-    /// (word boundaries) so legitimate release terms like "share buyback" or "seller" are not false-positives.
+    /// Upper bound on the surfaced rationale length (transparency-only text is never unbounded). Internal so
+    /// the spec-115 filing-read debug store enforces the SAME bound rather than pasting a second 500.
     /// </summary>
-    private static readonly Regex AdviceLanguage = new(
-        @"\b(?:buy|sell|guaranteed)\b|\bsafe bet\b",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    internal const int MaxRationaleLength = 500;
 
     /// <summary>
     /// Fixed, deterministic system instruction. States the task, forbids advice language, and instructs the
@@ -140,9 +132,11 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
             rationale = rationale[..MaxRationaleLength];
         }
 
-        // Radar must never surface advice language. If the model ignored the prompt and emitted it, drop the
-        // rationale rather than passing it through — the directional read itself is not advice and is retained.
-        if (rationale.Length > 0 && AdviceLanguage.IsMatch(rationale))
+        // Radar must never surface advice language (the shared AdviceLanguageGuard — the system prompt already
+        // forbids it, but a model can ignore instructions, so the rationale is scrubbed defensively). If the
+        // model emitted it anyway, drop the rationale rather than passing it through — the directional read
+        // itself is not advice and is retained.
+        if (rationale.Length > 0 && AdviceLanguageGuard.ContainsAdviceLanguage(rationale))
         {
             _logger.LogWarning(
                 "Filing analyzer rationale contained advice language; dropping the rationale.");

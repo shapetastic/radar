@@ -38,6 +38,14 @@ namespace Radar.Infrastructure.Filings;
 /// resets the count, so only an unbroken run of 429s trips it. The cache only changes WHETHER a fetch happens — the
 /// scored signal set is unchanged.
 /// </para>
+/// <para>
+/// Diagnostics (spec 115): when an optional <see cref="IFilingReadDebugSink"/> is registered, every ANALYSIS
+/// attempt — signal produced, below-confidence, non-directional (Mixed/Unknown), or empty-body-skipped — emits
+/// one <see cref="FilingReadDebugRecord"/> stamped with the pipeline's <c>asOfUtc</c>. Cache hits and fetch
+/// failures are NOT analysis attempts and emit nothing. The sink is best-effort: every call is guarded so even
+/// a throwing implementation cannot abort the batch or change the produced signal set, and a null sink (the
+/// default when the feature is off) is zero behaviour change. Deliberately NOT a fingerprint input.
+/// </para>
 /// </summary>
 internal sealed partial class DirectionalFilingSignalSource : IDirectionalFilingSignalSource
 {
@@ -52,11 +60,19 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
     /// </summary>
     private const int MinPlausibleBodyLength = 200;
 
+    /// <summary>
+    /// Upper bound (chars) on the input head carried by a spec-115 debug record. A diagnostic bound only — the
+    /// analyzer's own MaxInputLength governs what the model actually sees; this merely caps what the opt-in
+    /// debug record stores of it. Like MaxFilingsPerRun, deliberately NOT a scoring/fingerprint input.
+    /// </summary>
+    private const int DebugInputHeadMaxLength = 2000;
+
     private readonly ISecEarningsReleaseReader _reader;
     private readonly IFilingAnalyzer _analyzer;
     private readonly IAnalyzedFilingCache _cache;
     private readonly DirectionalFilingSignalOptions _options;
     private readonly ILogger<DirectionalFilingSignalSource> _logger;
+    private readonly IFilingReadDebugSink? _debugSink;
     private readonly string _scoringDescriptor;
 
     public DirectionalFilingSignalSource(
@@ -64,7 +80,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         IFilingAnalyzer analyzer,
         IAnalyzedFilingCache cache,
         DirectionalFilingSignalOptions options,
-        ILogger<DirectionalFilingSignalSource> logger)
+        ILogger<DirectionalFilingSignalSource> logger,
+        IFilingReadDebugSink? debugSink = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(analyzer);
@@ -77,6 +94,10 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         _cache = cache;
         _options = options;
         _logger = logger;
+        // Optional dependency (same pattern as RadarPipelineRunner's IDirectionalFilingSignalSource?): MS DI
+        // passes the default null when no IFilingReadDebugSink is registered, so the spec-115 diagnostics are
+        // strictly opt-in and the default graph is byte-for-byte unchanged.
+        _debugSink = debugSink;
 
         // Build the fingerprint contribution ONCE (AD-3 determinism): only the per-signal magnitudes that set an
         // emitted signal's Strength/Novelty/confidence-gate are hashed. MaxFilingsPerRun and
@@ -143,7 +164,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 }
 
                 // Cache miss: fetch + analyze.
-                var (outcome, signal, cacheable) = await AnalyzeFilingAsync(evidence, read.Value.Cik, accession, ct)
+                var (outcome, signal, cacheable) = await AnalyzeFilingAsync(evidence, read.Value.Cik, accession, asOfUtc, ct)
                     .ConfigureAwait(false);
 
                 if (outcome == SecEarningsReleaseReadOutcome.Success)
@@ -235,10 +256,12 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
     /// short (below <see cref="MinPlausibleBodyLength"/>, spec 114) — a non-authoritative read the caller must
     /// NOT cache (and never sees the analyzer), so a later run re-attempts it. Only a SUCCESS on real content
     /// with no directional signal (below the gate, Mixed/Unknown) is cached as no-signal. Never calls the
-    /// analyzer on a non-success read.
+    /// analyzer on a non-success read. When the spec-115 debug sink is registered, each analysis attempt
+    /// (including the empty-body skip) emits one guarded, best-effort debug record stamped with
+    /// <paramref name="asOfUtc"/>; a fetch failure emits nothing (no analysis happened).
     /// </summary>
     private async Task<(SecEarningsReleaseReadOutcome Outcome, ExtractedSignal? Signal, bool Cacheable)> AnalyzeFilingAsync(
-        EvidenceItem evidence, string cik, string accession, CancellationToken ct)
+        EvidenceItem evidence, string cik, string accession, DateTimeOffset asOfUtc, CancellationToken ct)
     {
         var read = await _reader.ReadAsync(cik, accession, ct).ConfigureAwait(false);
         if (!read.IsSuccess)
@@ -266,6 +289,9 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 accession,
                 trimmedBodyLength,
                 MinPlausibleBodyLength);
+            await TryRecordReadDebugAsync(
+                accession, evidence, read.PlainText, trimmedBodyLength,
+                sentiment: null, FilingReadOutcome.EmptyBodySkipped, asOfUtc, ct).ConfigureAwait(false);
             return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: false);
         }
 
@@ -280,6 +306,9 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 evidence.Id,
                 sentiment.Confidence,
                 _options.MinConfidence);
+            await TryRecordReadDebugAsync(
+                accession, evidence, read.PlainText, trimmedBodyLength,
+                sentiment, FilingReadOutcome.BelowConfidence, asOfUtc, ct).ConfigureAwait(false);
             return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true);
         }
 
@@ -295,8 +324,15 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 "Directional read for evidence {EvidenceId} was {Direction}; no directional signal.",
                 evidence.Id,
                 sentiment.Direction);
+            await TryRecordReadDebugAsync(
+                accession, evidence, read.PlainText, trimmedBodyLength,
+                sentiment, FilingReadOutcome.NoDirectionalRead, asOfUtc, ct).ConfigureAwait(false);
             return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true);
         }
+
+        await TryRecordReadDebugAsync(
+            accession, evidence, read.PlainText, trimmedBodyLength,
+            sentiment, FilingReadOutcome.DirectionalSignalProduced, asOfUtc, ct).ConfigureAwait(false);
 
         // The SupportingExcerpt must be a verbatim slice of the evidence (the mapper enforces
         // excerpt-in-evidence). The evidence Title is wholly contained in the composed searchable text, so
@@ -314,6 +350,68 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 SupportingExcerpt: evidence.Title,
                 Reason: sentiment.Rationale),
             Cacheable: true);
+    }
+
+    /// <summary>
+    /// Emits one spec-115 diagnostic record for an analysis attempt, best-effort: any sink failure is logged
+    /// and swallowed so even a throwing <see cref="IFilingReadDebugSink"/> cannot abort the batch or change the
+    /// produced signal set (only genuine caller cancellation propagates, as everywhere in this class). A null
+    /// sink (the default, feature off) is a no-op with no allocation. <paramref name="sentiment"/> is null only
+    /// for <see cref="FilingReadOutcome.EmptyBodySkipped"/>, where no model call happened.
+    /// </summary>
+    private async Task TryRecordReadDebugAsync(
+        string accession,
+        EvidenceItem evidence,
+        string plainText,
+        int trimmedBodyLength,
+        FilingSentiment? sentiment,
+        FilingReadOutcome outcome,
+        DateTimeOffset asOfUtc,
+        CancellationToken ct)
+    {
+        if (_debugSink is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _debugSink.RecordAsync(
+                new FilingReadDebugRecord(
+                    accession,
+                    evidence.Id,
+                    trimmedBodyLength,
+                    DebugInputHead(plainText),
+                    sentiment?.Direction.ToString(),
+                    sentiment?.Confidence,
+                    sentiment?.Rationale,
+                    outcome,
+                    asOfUtc),
+                ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to record the AI filing-read debug record for accession {Accession}; continuing (diagnostic-only).",
+                accession);
+        }
+    }
+
+    /// <summary>
+    /// The bounded leading slice of the trimmed EX-99.1 body carried by a debug record (capped at
+    /// <see cref="DebugInputHeadMaxLength"/> — a diagnostic bound, never a scoring input).
+    /// </summary>
+    private static string DebugInputHead(string plainText)
+    {
+        var trimmed = plainText.AsSpan().Trim();
+        return trimmed.Length > DebugInputHeadMaxLength
+            ? new string(trimmed[..DebugInputHeadMaxLength])
+            : trimmed.ToString();
     }
 
     /// <summary>

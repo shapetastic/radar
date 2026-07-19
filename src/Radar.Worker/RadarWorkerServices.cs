@@ -261,6 +261,15 @@ internal static class RadarWorkerServices
             // source replay a previously-analyzed filing instead of re-fetching the same www.sec.gov exhibit
             // every run. Rides the same opt-in AI gate (the source needs it at resolve time).
             services.AddFileAnalyzedFilingCache(options.AnalyzedFilingCacheDirectory);
+
+            // Opt-in AI filing-read debug store (spec 115, diagnostic-only / AD-14 read-side): persists what
+            // each AI filing-read attempt saw and concluded, including no-signal and empty-body outcomes.
+            // Default OFF — with PersistReadDebug false nothing is registered, the directional source's
+            // optional IFilingReadDebugSink? stays null, and the graph is byte-for-byte unchanged.
+            if (options.Ai.Filings.PersistReadDebug)
+            {
+                services.AddFileFilingReadDebugStore(options.FilingReadDebugDirectory);
+            }
         }
 
         // Wire the price-history reference seam ONLY when Radar:Prices:Enabled is true (opt-in gate, mirroring the
