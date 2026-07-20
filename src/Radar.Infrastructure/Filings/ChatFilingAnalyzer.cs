@@ -25,16 +25,28 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
     internal const int MaxRationaleLength = 500;
 
     /// <summary>
-    /// Fixed, deterministic system instruction. States the task, forbids advice language, and instructs the
-    /// model to return Unknown/low-confidence when the text is ambiguous, boilerplate, or lacks results.
+    /// Fixed, deterministic system instruction. States the task, forbids advice language, weighs REPORTED
+    /// profitability/margin/cash-burn against REPORTED top-line growth (spec 116 — a record top line that
+    /// coexists with a deeply negative or deteriorating gross margin, a guidance cut, or heavy cash burn is
+    /// Mixed, not Improving), and instructs the model to return Unknown/low-confidence when the text is ambiguous,
+    /// boilerplate, or lacks results. Internal so tests can guard the behavioural contract as a string.
     /// </summary>
-    private const string SystemInstruction =
+    internal const string SystemInstruction =
         "You are Radar, a research assistant. You are given the plain text of a company's earnings-release "
             + "press release. Classify the business trajectory the release DESCRIBES AS REPORTED — this is NOT a "
             + "beat-vs-consensus judgement (there is no analyst-consensus feed) — into exactly one of: "
             + "Improving (record bookings, organic growth, raised outlook), Deteriorating (revenue decline, "
-            + "guidance cut, impairment), Mixed (materially both), or Unknown. Return a confidence in [0,1] and a "
-            + "single-sentence rationale that quotes or paraphrases the release. "
+            + "guidance cut, impairment), Mixed (materially both), or Unknown. "
+            + "Weigh REPORTED profitability, gross margin, and cash burn against REPORTED top-line growth — a "
+            + "strong top line alone does not make the trajectory Improving. In particular: when record or "
+            + "growing revenue coexists with a deeply negative or deteriorating gross margin, with a guidance "
+            + "cut, or with heavy cash burn or dilution, the trajectory is Mixed (materially both), NOT "
+            + "Improving. This is not a bearish bias — a "
+            + "release reporting strong growth alongside solid or improving profitability is still Improving; "
+            + "Mixed is only for genuinely two-sided results. "
+            + "Return a confidence in [0,1] and a single-sentence rationale that quotes or paraphrases the "
+            + "release; when a profitability, margin, or cash-burn fact drives a Mixed classification, the "
+            + "rationale must name that fact. "
             + "This is NOT investment advice: the rationale must contain NO advice language whatsoever — never "
             + "\"buy\", \"sell\", \"hold\", \"guaranteed\", \"safe bet\", price targets, or any recommendation. "
             + "When the text is ambiguous, boilerplate, or lacks reported results, return Unknown with a low "
