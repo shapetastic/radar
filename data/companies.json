@@ -9,6 +9,7 @@
       "countryCode": "US",
       "sector": "Industrials",
       "industry": "Aerospace & Defense",
+      "followingTier": "mid",
       "aliases": ["Mercury Systems", "Mercury"],
       "themes": ["defense electronics", "aerospace and defense", "secure processing"],
       "sourceFeeds": [
@@ -63,6 +64,7 @@
       "countryCode": "US",
       "sector": "Technology",
       "industry": "Semiconductor Equipment & Materials",
+      "followingTier": "small",
       "aliases": ["Aehr", "Aehr Test"],
       "themes": ["semiconductor test", "silicon carbide", "wafer-level burn-in"],
       "sourceFeeds": [
@@ -107,6 +109,7 @@
       "countryCode": "US",
       "sector": "Technology",
       "industry": "Software—Application",
+      "followingTier": "mid",
       "aliases": ["Agilysys"],
       "themes": ["hospitality software", "SaaS", "point of sale"],
       "sourceFeeds": [
@@ -161,6 +164,7 @@
       "countryCode": "US",
       "sector": "Healthcare",
       "industry": "Medical Distribution / Cold Chain Logistics",
+      "followingTier": "small",
       "aliases": ["Cryoport", "CryoPort"],
       "themes": ["cold chain logistics", "cell and gene therapy", "life sciences"],
       "sourceFeeds": [
@@ -210,6 +214,7 @@
       "countryCode": "US",
       "sector": "Industrials",
       "industry": "Specialty Industrial Machinery",
+      "followingTier": "small",
       "aliases": ["Energy Recovery"],
       "themes": ["energy recovery devices", "desalination", "CO2 refrigeration"],
       "sourceFeeds": [
@@ -259,6 +264,7 @@
       "countryCode": "IL",
       "sector": "Technology",
       "industry": "Software—Application",
+      "followingTier": "small",
       "aliases": ["Sapiens", "Sapiens International"],
       "themes": ["insurance software", "SaaS"],
       "sourceFeeds": [
@@ -288,6 +294,7 @@
       "countryCode": "US",
       "sector": "Industrials",
       "industry": "Specialty Industrial Machinery",
+      "followingTier": "small",
       "aliases": ["Helios", "Helios Technologies"],
       "themes": ["motion control", "hydraulics", "industrial technology"],
       "sourceFeeds": [
@@ -332,6 +339,7 @@
       "countryCode": "US",
       "sector": "Industrials",
       "industry": "Electrical Equipment & Parts",
+      "followingTier": "small",
       "aliases": ["Eos Energy", "Eos"],
       "themes": ["long-duration energy storage", "zinc batteries", "grid-scale storage"],
       "sourceFeeds": [
@@ -376,6 +384,7 @@
       "countryCode": "US",
       "sector": "Industrials",
       "industry": "Electrical Equipment & Parts",
+      "followingTier": "mid",
       "aliases": ["Powell", "Powell Industries"],
       "themes": ["electrical equipment", "grid infrastructure", "data center power"],
       "sourceFeeds": [
@@ -410,6 +419,7 @@
       "countryCode": "US",
       "sector": "Technology",
       "industry": "Software—Infrastructure",
+      "followingTier": "mid",
       "aliases": ["Commvault"],
       "themes": ["data protection", "cyber resilience", "SaaS"],
       "sourceFeeds": [
@@ -449,6 +459,7 @@
       "countryCode": "US",
       "sector": "Technology",
       "industry": "Semiconductor Equipment & Materials",
+      "followingTier": "mid",
       "aliases": ["Kulicke & Soffa", "Kulicke and Soffa", "K&S"],
       "themes": ["semiconductor assembly", "advanced packaging", "back-end equipment"],
       "sourceFeeds": [
@@ -483,6 +494,7 @@
       "countryCode": "US",
       "sector": "Healthcare",
       "industry": "Medical Devices & Engineered Packaging",
+      "followingTier": "mid",
       "aliases": ["UFP Technologies"],
       "themes": ["medical device packaging", "engineered materials", "single-use components"],
       "sourceFeeds": [
@@ -517,6 +529,7 @@
       "countryCode": "US",
       "sector": "Industrials",
       "industry": "Security & Protection Services",
+      "followingTier": "small",
       "aliases": ["Napco", "Napco Security"],
       "themes": ["security hardware", "recurring service revenue", "alarm communications"],
       "sourceFeeds": [
@@ -551,6 +564,7 @@
       "countryCode": "US",
       "sector": "Consumer Defensive",
       "industry": "Confectioners",
+      "followingTier": "mid",
       "aliases": ["Tootsie Roll", "Tootsie"],
       "themes": ["confectionery", "consumer staples"],
       "sourceFeeds": [
@@ -590,6 +604,7 @@
       "countryCode": "US",
       "sector": "Consumer Defensive",
       "industry": "Housewares & Accessories",
+      "followingTier": "small",
       "aliases": ["National Presto", "Presto"],
       "themes": ["housewares", "defense products", "absorbent products"],
       "sourceFeeds": [
@@ -624,6 +639,7 @@
       "countryCode": "US",
       "sector": "Consumer Defensive",
       "industry": "Packaged Foods",
+      "followingTier": "mid",
       "aliases": ["Flowers Foods"],
       "themes": ["packaged bakery", "consumer staples"],
       "sourceFeeds": [
@@ -658,6 +674,7 @@
       "countryCode": "US",
       "sector": "Industrials",
       "industry": "Farm & Heavy Construction Machinery",
+      "followingTier": "mega",
       "aliases": ["Caterpillar"],
       "themes": ["heavy machinery", "construction equipment", "industrial bellwether"],
       "sourceFeeds": [
@@ -692,6 +709,7 @@
       "countryCode": "US",
       "sector": "Healthcare",
       "industry": "Drug Manufacturers—General",
+      "followingTier": "mega",
       "aliases": ["Johnson & Johnson", "J&J"],
       "themes": ["pharmaceuticals", "medical devices", "healthcare mega-cap"],
       "sourceFeeds": [
@@ -726,6 +744,7 @@
       "countryCode": "US",
       "sector": "Technology",
       "industry": "Consumer Electronics",
+      "followingTier": "mega",
       "aliases": ["Apple"],
       "themes": ["consumer electronics", "services", "mega-cap tech"],
       "sourceFeeds": [

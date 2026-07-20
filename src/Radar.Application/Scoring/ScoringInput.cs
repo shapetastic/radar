@@ -1,3 +1,4 @@
+using Radar.Domain.Companies;
 using Radar.Domain.Signals;
 
 namespace Radar.Application.Scoring;
@@ -13,10 +14,17 @@ namespace Radar.Application.Scoring;
 /// same length (start - window, start], carried as signals ONLY (no evidence): it exists so the
 /// formula can measure signal-activity acceleration (velocity). It must NOT be used to build
 /// contributions / ScoreEvidenceLinks — only the current-window signals carry provenance.</para>
+///
+/// <para><see cref="FollowingTier"/> is the company's curated "how followed already" tier from the seed
+/// (spec 117) — a NON-PRICE notedness input (AD-14: never derived from price/market cap/volume) the v7
+/// Opportunity discount folds in so already-noticed improvement is discounted harder than under-followed
+/// improvement. Defaults to <see cref="FollowingTier.Small"/> (no extra discount) — the fail-safe when the
+/// company/tier is unknown.</para>
 /// </summary>
 public sealed record ScoringInput(
     Guid CompanyId,
     DateTimeOffset WindowStartUtc,
     DateTimeOffset WindowEndUtc,
     IReadOnlyList<ScoringSignal> Signals,
-    IReadOnlyList<Signal> PreviousSignals);
+    IReadOnlyList<Signal> PreviousSignals,
+    FollowingTier FollowingTier = FollowingTier.Small);

@@ -10,7 +10,7 @@ namespace Radar.Infrastructure.Tests.FileSystem;
 public sealed class FileScoringConfigStoreTests : IDisposable
 {
     private const string EngineVersion = "mvp-engine-v1";
-    private const string FormulaVersion = "radar-formula-v6";
+    private const string FormulaVersion = "radar-formula-v7";
     private const string AttentionDescriptor = "attn:v1;unknown=0.4";
     private const string SignalSourceDescriptor = "rules=radar-keyword-rules-v3;collectors=sec-edgar;";
     private const string InsiderMaterialityDescriptor = "buy=5000000:8;sell=5000000:8;cluster=1;";

@@ -432,6 +432,66 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
             first.Aliases.Select(a => a.Id).Distinct().Count());
     }
 
+    // ---- Spec 117: curated followingTier parsing ----
+
+    private const string FollowingTierJson = """
+        {
+          "companies": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Mega Corp",
+              "ticker": "MEGA",
+              "followingTier": "mega"
+            },
+            {
+              "id": "22222222-2222-2222-2222-222222222222",
+              "name": "Untiered Corp",
+              "ticker": "UNTD"
+            },
+            {
+              "id": "33333333-3333-3333-3333-333333333333",
+              "name": "Garbage Tier Corp",
+              "ticker": "GRBG",
+              "followingTier": "gigantic"
+            },
+            {
+              "id": "44444444-4444-4444-4444-444444444444",
+              "name": "Shouty Mid Corp",
+              "ticker": "SHMD",
+              "followingTier": "MID"
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_ParsesFollowingTier_CaseInsensitive_DefaultingToSmall()
+    {
+        // Spec 117: "mega" parses (lowercase seed value), the parse is case-insensitive ("MID"), an ABSENT
+        // tier silently defaults to Small, and an unrecognized value ALSO defaults to Small without
+        // throwing (the warning path — never hallucinate a tier). AD-14: the tier is curated metadata.
+        var path = WriteSeedFile(FollowingTierJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        Assert.Equal(4, seed.Companies.Count);
+        Assert.Equal(FollowingTier.Mega, seed.Companies.Single(c => c.Ticker == "MEGA").FollowingTier);
+        Assert.Equal(FollowingTier.Small, seed.Companies.Single(c => c.Ticker == "UNTD").FollowingTier);
+        Assert.Equal(FollowingTier.Small, seed.Companies.Single(c => c.Ticker == "GRBG").FollowingTier);
+        Assert.Equal(FollowingTier.Mid, seed.Companies.Single(c => c.Ticker == "SHMD").FollowingTier);
+    }
+
+    [Fact]
+    public async Task GetSeedAsync_NoFollowingTierInFile_AllCompaniesDefaultToSmall()
+    {
+        // The pre-117 seed shape (no followingTier anywhere) keeps working: every company is Small.
+        var path = WriteSeedFile(TwoCompanyJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        Assert.All(seed.Companies, c => Assert.Equal(FollowingTier.Small, c.FollowingTier));
+    }
+
     [Fact]
     public async Task GetSeedAsync_MissingFile_ReturnsEmptyAndDoesNotThrow()
     {

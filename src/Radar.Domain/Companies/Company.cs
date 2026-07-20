@@ -12,4 +12,5 @@ public sealed record Company(
     CompanyStatus Status,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
-    IReadOnlyList<string> Themes);
+    IReadOnlyList<string> Themes,
+    FollowingTier FollowingTier = FollowingTier.Small);

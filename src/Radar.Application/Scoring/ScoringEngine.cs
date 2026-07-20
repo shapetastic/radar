@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
+using Radar.Domain.Companies;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
 
@@ -9,9 +10,12 @@ namespace Radar.Application.Scoring;
 
 /// <summary>
 /// Deterministic Stage 6 orchestration. Selects the recent-signal window, loads the evidence behind
-/// each reviewed signal, delegates the actual scoring math to <see cref="IScoreFormula"/>, maps the
-/// result onto a domain <see cref="CompanyScoreSnapshot"/>, builds one <see cref="ScoreEvidenceLink"/>
-/// per contribution, and persists everything via <see cref="IScoreRepository"/>.
+/// each reviewed signal, loads the company's curated <see cref="FollowingTier"/> (spec 117 — the
+/// non-price notedness input the v7 Opportunity discount consumes; a missing company fail-safes to
+/// <see cref="FollowingTier.Small"/>), delegates the actual scoring math to <see cref="IScoreFormula"/>,
+/// maps the result onto a domain <see cref="CompanyScoreSnapshot"/>, builds one
+/// <see cref="ScoreEvidenceLink"/> per contribution, and persists everything via
+/// <see cref="IScoreRepository"/>.
 ///
 /// <para>
 /// HUMAN-OWNED BOUNDARY: this engine contains <b>no scoring formula</b>. It never inspects, computes,
@@ -47,6 +51,7 @@ public sealed class ScoringEngine : IScoringEngine
     private readonly ISignalFileStore _signalFileStore;
     private readonly IEvidenceRepository _evidenceRepository;
     private readonly IScoreRepository _scoreRepository;
+    private readonly ICompanyRepository _companyRepository;
     private readonly IScoreFormula _formula;
     private readonly MediaAttentionCollapse _mediaCollapse;
     private readonly ScoringOptions _options;
@@ -68,6 +73,7 @@ public sealed class ScoringEngine : IScoringEngine
         ISignalFileStore signalFileStore,
         IEvidenceRepository evidenceRepository,
         IScoreRepository scoreRepository,
+        ICompanyRepository companyRepository,
         IScoreFormula formula,
         ScoringWeights weights,
         IAttentionSourceWeights sourceWeights,
@@ -81,6 +87,7 @@ public sealed class ScoringEngine : IScoringEngine
         ArgumentNullException.ThrowIfNull(signalFileStore);
         ArgumentNullException.ThrowIfNull(evidenceRepository);
         ArgumentNullException.ThrowIfNull(scoreRepository);
+        ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(formula);
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
@@ -94,6 +101,7 @@ public sealed class ScoringEngine : IScoringEngine
         _signalFileStore = signalFileStore;
         _evidenceRepository = evidenceRepository;
         _scoreRepository = scoreRepository;
+        _companyRepository = companyRepository;
         _formula = formula;
         _mediaCollapse = mediaCollapse;
         _options = options;
@@ -208,7 +216,14 @@ public sealed class ScoringEngine : IScoringEngine
         // is behaviour-identical there.
         previousSignals = GuidanceChangeSupersede.Apply(previousSignals);
 
-        var input = new ScoringInput(companyId, windowStartUtc, windowEndUtc, scoredSignals, previousSignals);
+        // The company's curated following tier (spec 117): the non-price notedness input the v7 Opportunity
+        // discount consumes (AD-14 — seed-curated, never price-derived). A missing company degrades to
+        // Small (no extra discount) — the fail-safe; never a throw.
+        var company = await _companyRepository.GetByIdAsync(companyId, ct).ConfigureAwait(false);
+        var followingTier = company?.FollowingTier ?? FollowingTier.Small;
+
+        var input = new ScoringInput(
+            companyId, windowStartUtc, windowEndUtc, scoredSignals, previousSignals, followingTier);
         var computation = _formula.Compute(input);
 
         // Record both identities so snapshots remain reproducible and auditable.

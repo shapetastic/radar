@@ -15,11 +15,13 @@ public sealed class CompanyBuilder
     private CompanyStatus _status = CompanyStatus.Active;
     private DateTimeOffset _createdAtUtc = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private DateTimeOffset _updatedAtUtc = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    private FollowingTier _followingTier = FollowingTier.Small;
 
     public CompanyBuilder WithId(Guid v) { _id = v; return this; }
     public CompanyBuilder WithName(string v) { _name = v; return this; }
     public CompanyBuilder WithTicker(string? v) { _ticker = v; return this; }
     public CompanyBuilder WithStatus(CompanyStatus v) { _status = v; return this; }
+    public CompanyBuilder WithFollowingTier(FollowingTier v) { _followingTier = v; return this; }
 
     public Company Build() => new(
         Id: _id,
@@ -33,5 +35,6 @@ public sealed class CompanyBuilder
         Status: _status,
         CreatedAtUtc: _createdAtUtc,
         UpdatedAtUtc: _updatedAtUtc,
-        Themes: []);
+        Themes: [],
+        FollowingTier: _followingTier);
 }
