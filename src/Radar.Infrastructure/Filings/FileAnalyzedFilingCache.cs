@@ -159,8 +159,35 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
             return null;
         }
 
-        return string.IsNullOrEmpty(_options.ModelSegment)
-            ? Path.Combine(_options.RootDirectory, sanitized + ".json")
-            : Path.Combine(_options.RootDirectory, _options.ModelSegment, sanitized + ".json");
+        var directory = _options.RootDirectory;
+        var segment = _options.ModelSegment;
+        if (!string.IsNullOrEmpty(segment))
+        {
+            // Defense-in-depth: the DI helper (CacheModelSegment) always yields a single filename-safe token, but
+            // if ModelSegment is ever constructed elsewhere as a rooted path ("/tmp", "C:\\..."), a nested path, or
+            // one containing "..", Path.Combine could escape RootDirectory. Only fold in a segment that is a single
+            // safe path component; otherwise ignore it and use the root layout so a cache file can never be written
+            // outside the cache root.
+            if (IsSafeSegment(segment))
+            {
+                directory = Path.Combine(directory, segment);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Analyzed-filing cache ModelSegment '{Segment}' is not a single filename-safe path component; "
+                        + "ignoring it and using the cache root to stay within RootDirectory.",
+                    segment);
+            }
+        }
+
+        return Path.Combine(directory, sanitized + ".json");
     }
+
+    // A ModelSegment is usable only if it is a single, in-root path component: not rooted, carrying no invalid
+    // filename characters (which on every platform includes the directory separators), and not "." / "..".
+    private static bool IsSafeSegment(string segment) =>
+        !Path.IsPathRooted(segment)
+        && segment.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+        && segment is not ("." or "..");
 }

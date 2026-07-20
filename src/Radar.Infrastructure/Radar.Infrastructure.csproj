@@ -4,6 +4,12 @@
     <PackageReference Include="Anthropic" Version="12.35.1" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.5.2" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.5.2" />
+    <!-- ChatClientFactory references OpenAI.Chat.ChatClient / OpenAIClientOptions and
+         System.ClientModel.ApiKeyCredential directly (the openai-compatible branch, AD-5). Pin them
+         explicitly rather than relying on Microsoft.Extensions.AI.OpenAI's transitive graph, so the
+         direct dependency is intentional and resilient to upstream version changes. -->
+    <PackageReference Include="OpenAI" Version="2.10.0" />
+    <PackageReference Include="System.ClientModel" Version="1.10.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />

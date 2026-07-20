@@ -1079,11 +1079,11 @@ public static class InfrastructureServiceCollectionExtensions
         return services;
     }
 
-    // Builds a filename-safe, INJECTIVE per-model cache-folder segment from a provider/model identity. A readable
-    // lower-cased token (letters/digits/.-_ kept, everything else → '-') plus a short stable hash of the EXACT raw
-    // identity, so two ids that sanitize to the same readable token (e.g. "a/b" vs "a-b") never collide into one
-    // folder (which would let a switch between them replay). Blank/null ⇒ empty segment (files live at the root,
-    // back-compat).
+    // Builds a filename-safe, collision-resistant per-model cache-folder segment from a provider/model identity. A
+    // readable lower-cased token (letters/digits/.-_ kept, everything else → '-') plus a stable 64-bit (16-hex) hash
+    // of the EXACT raw identity, so two ids that sanitize to the same readable token (e.g. "a/b" vs "a-b") are
+    // extremely unlikely to collide into one folder (which would let a switch between them replay). Blank/null ⇒
+    // empty segment (files live at the root, back-compat).
     private static string CacheModelSegment(string? modelIdentity)
     {
         if (string.IsNullOrWhiteSpace(modelIdentity))
@@ -1099,7 +1099,7 @@ public static class InfrastructureServiceCollectionExtensions
         }
 
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
-        var suffix = Convert.ToHexStringLower(hash)[..8];
+        var suffix = Convert.ToHexStringLower(hash)[..16];
         return sb.ToString() + "-" + suffix;
     }
 

@@ -239,6 +239,17 @@ internal static class RadarWorkerServices
                             + "(e.g. \"DEEPINFRA_API_KEY\") when Provider is \"openai\" — the key is never committed to config.");
                 }
 
+                // Guard against a mis-paste: ApiKeyEnvVar must be the NAME of an environment variable, not the key
+                // value. If it does not look like an env-var name, refuse WITHOUT echoing it — the messages below
+                // interpolate envVar, so a pasted secret must never be allowed to reach an exception or a log.
+                if (!IsLikelyEnvVarName(envVar))
+                {
+                    throw new InvalidOperationException(
+                        "Radar:Ai:OpenAi:ApiKeyEnvVar must be the NAME of an environment variable "
+                            + "(e.g. \"DEEPINFRA_API_KEY\"), not an API key value; the configured value is not a valid "
+                            + "environment-variable name. Its value is not echoed here in case it is a secret.");
+                }
+
                 openAiApiKey = Environment.GetEnvironmentVariable(envVar) ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(openAiApiKey))
                 {
@@ -365,5 +376,27 @@ internal static class RadarWorkerServices
 
         services.AddHostedService<Worker>();
         return services;
+    }
+
+    // A configured Radar:Ai:OpenAi:ApiKeyEnvVar is treated as a real environment-variable NAME only if it matches
+    // the POSIX shape: a leading letter or underscore, then letters/digits/underscores. Anything else (an API key
+    // pasted in by mistake almost always carries other characters) is rejected without echoing the value, so a
+    // secret never lands in an exception message or log line.
+    private static bool IsLikelyEnvVarName(string value)
+    {
+        if (value.Length == 0 || (!char.IsAsciiLetter(value[0]) && value[0] != '_'))
+        {
+            return false;
+        }
+
+        foreach (var ch in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(ch) && ch != '_')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
