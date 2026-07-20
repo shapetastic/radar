@@ -98,6 +98,55 @@ public sealed class ChatClientFactoryTests
     }
 
     [Fact]
+    public void Create_OpenAi_ReturnsIChatClient()
+    {
+        var factory = new ChatClientFactory(new AiClientOptions
+        {
+            Provider = "openai",
+            Model = "deepseek-ai/DeepSeek-V3",
+            OpenAiBaseUrl = "https://api.deepinfra.com/v1/openai",
+            OpenAiApiKey = "test-key",
+        });
+
+        var client = factory.Create();
+
+        // The OpenAI adapter wraps the client in an internal type — assert only the abstraction, no network I/O.
+        Assert.NotNull(client);
+        Assert.IsAssignableFrom<IChatClient>(client);
+    }
+
+    [Theory]
+    [InlineData("OpenAI")]
+    [InlineData("OPENAI")]
+    public void Create_OpenAi_IsCaseInsensitive(string provider)
+    {
+        var factory = new ChatClientFactory(new AiClientOptions
+        {
+            Provider = provider,
+            Model = "deepseek-ai/DeepSeek-V3",
+            OpenAiBaseUrl = "https://api.deepinfra.com/v1/openai",
+            OpenAiApiKey = "test-key",
+        });
+
+        Assert.IsAssignableFrom<IChatClient>(factory.Create());
+    }
+
+    [Fact]
+    public void Create_OpenAi_TrimsWhitespaceInConfig()
+    {
+        // Trailing/leading whitespace (e.g. copied from env vars) must not defeat the base-URL URI parse.
+        var factory = new ChatClientFactory(new AiClientOptions
+        {
+            Provider = "  openai  ",
+            Model = "  deepseek-ai/DeepSeek-V3  ",
+            OpenAiBaseUrl = "  https://api.deepinfra.com/v1/openai  ",
+            OpenAiApiKey = "  test-key  ",
+        });
+
+        Assert.IsAssignableFrom<IChatClient>(factory.Create());
+    }
+
+    [Fact]
     public void Create_UnknownProvider_Throws()
     {
         var factory = new ChatClientFactory(new AiClientOptions
@@ -109,5 +158,6 @@ public sealed class ChatClientFactoryTests
         var ex = Assert.Throws<InvalidOperationException>(() => factory.Create());
         Assert.Contains("anthropic", ex.Message, StringComparison.Ordinal);
         Assert.Contains("ollama", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("openai", ex.Message, StringComparison.Ordinal);
     }
 }

@@ -9,7 +9,10 @@ namespace Radar.Infrastructure.Filings;
 
 /// <summary>
 /// On-disk per-accession cache of earnings-filing analysis RESULTS (spec 107): one JSON file per accession at
-/// <c>{RootDirectory}/{sanitizedAccession}.json</c>. This is an AD-14 analogue — reference/operational data,
+/// <c>{RootDirectory}/{sanitizedAccession}.json</c>, or (spec 118) nested one level deeper under an optional
+/// model-identity segment as <c>{RootDirectory}/{ModelSegment}/{sanitizedAccession}.json</c> when
+/// <see cref="FileAnalyzedFilingCacheOptions.ModelSegment"/> is set (so a model switch is a clean cache miss).
+/// This is an AD-14 analogue — reference/operational data,
 /// consumed by nothing in the scoring/evidence/signal/report path: it only lets
 /// <see cref="DirectionalFilingSignalSource"/> replay a previously-analyzed filing's
 /// <see cref="Radar.Application.SignalExtraction.ExtractedSignal"/> instead of re-fetching the same
@@ -156,6 +159,8 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
             return null;
         }
 
-        return Path.Combine(_options.RootDirectory, sanitized + ".json");
+        return string.IsNullOrEmpty(_options.ModelSegment)
+            ? Path.Combine(_options.RootDirectory, sanitized + ".json")
+            : Path.Combine(_options.RootDirectory, _options.ModelSegment, sanitized + ".json");
     }
 }

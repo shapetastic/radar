@@ -218,12 +218,45 @@ internal static class RadarWorkerServices
         // leaves the graph byte-for-byte identical to today — no IChatClient/IChatClientFactory is registered.
         if (!string.IsNullOrWhiteSpace(options.Ai.Provider))
         {
+            // For the OpenAI-compatible provider, an optional nested model (Radar:Ai:OpenAi:Model) overrides the
+            // top-level Radar:Ai:Model; blank falls back to the top-level model so a single Ai.Model keeps working.
+            var isOpenAiProvider = string.Equals(options.Ai.Provider.Trim(), "openai", StringComparison.OrdinalIgnoreCase);
+            var effectiveModel = isOpenAiProvider && !string.IsNullOrWhiteSpace(options.Ai.OpenAi.Model)
+                ? options.Ai.OpenAi.Model
+                : options.Ai.Model;
+
+            // Resolve the OpenAI-compatible API key from the env var NAMED by config (never from committed config,
+            // mirroring the SEC-User-Agent secret precedent). Only the env-var NAME may appear in a message/log —
+            // the key VALUE is never surfaced. Resolved only for the openai provider.
+            string openAiApiKey = string.Empty;
+            if (isOpenAiProvider)
+            {
+                var envVar = options.Ai.OpenAi.ApiKeyEnvVar?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(envVar))
+                {
+                    throw new InvalidOperationException(
+                        "Radar:Ai:OpenAi:ApiKeyEnvVar must name the environment variable holding the OpenAI-compatible API key "
+                            + "(e.g. \"DEEPINFRA_API_KEY\") when Provider is \"openai\" — the key is never committed to config.");
+                }
+
+                openAiApiKey = Environment.GetEnvironmentVariable(envVar) ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(openAiApiKey))
+                {
+                    throw new InvalidOperationException(
+                        $"Environment variable '{envVar}' (named by Radar:Ai:OpenAi:ApiKeyEnvVar) is not set or is empty; "
+                            + "set it to the OpenAI-compatible host API key before selecting the \"openai\" provider. "
+                            + "The key value is never logged.");
+                }
+            }
+
             services.AddRadarAi(new AiClientOptions
             {
                 Provider = options.Ai.Provider,
-                Model = options.Ai.Model,
+                Model = effectiveModel,
                 AnthropicApiKey = options.Ai.Anthropic.ApiKey,
                 OllamaEndpoint = options.Ai.Ollama.Endpoint,
+                OpenAiBaseUrl = options.Ai.OpenAi.BaseUrl,
+                OpenAiApiKey = openAiApiKey,
             });
 
             // The filing analyzer rides the same opt-in gate: it consumes the IChatClient AddRadarAi just
@@ -259,8 +292,11 @@ internal static class RadarWorkerServices
 
             // Per-accession earnings-analysis-result cache (spec 107, AD-14 analogue): lets the directional
             // source replay a previously-analyzed filing instead of re-fetching the same www.sec.gov exhibit
-            // every run. Rides the same opt-in AI gate (the source needs it at resolve time).
-            services.AddFileAnalyzedFilingCache(options.AnalyzedFilingCacheDirectory);
+            // every run. Rides the same opt-in AI gate (the source needs it at resolve time). The cache is
+            // scoped to the analyzing provider:model identity (spec 118) so switching the earnings-read model
+            // is a clean cache MISS (re-analyze) rather than a replay of another model's cached reads.
+            services.AddFileAnalyzedFilingCache(
+                options.AnalyzedFilingCacheDirectory, $"{options.Ai.Provider.Trim()}:{effectiveModel}");
 
             // Opt-in AI filing-read debug store (spec 115, diagnostic-only / AD-14 read-side): persists what
             // each AI filing-read attempt saw and concluded, including no-signal and empty-body outcomes.

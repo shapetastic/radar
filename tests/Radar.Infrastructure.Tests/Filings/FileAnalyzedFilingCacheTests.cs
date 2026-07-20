@@ -261,9 +261,43 @@ public sealed class FileAnalyzedFilingCacheTests
         await File.WriteAllTextAsync(path, json, CancellationToken.None);
     }
 
+    [Fact]
+    public async Task TryGet_DifferentModelSegment_IsMiss_SameSegment_IsHit()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            // Cache identity is scoped to the analyzing model/provider (spec 118) via the ModelSegment: a record
+            // written under "model-a" must be a MISS when read under "model-b" over the SAME root (a model switch
+            // re-analyzes rather than replaying another model's read), and a HIT when read back under "model-a".
+            var record = new AnalyzedFilingRecord(
+                Accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null, AnalyzedFilingRecord.CurrentCacheVersion);
+
+            var cacheA = CreateCache(dir, "model-a");
+            await cacheA.PutAsync(record, CancellationToken.None);
+
+            var cacheB = CreateCache(dir, "model-b");
+            Assert.Null(await cacheB.TryGetAsync(Accession, CancellationToken.None));
+
+            var cacheASame = CreateCache(dir, "model-a");
+            var hit = await cacheASame.TryGetAsync(Accession, CancellationToken.None);
+            Assert.NotNull(hit);
+            Assert.Equal(Accession, hit!.Accession);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     private static FileAnalyzedFilingCache CreateCache(string dir) =>
         new(
             new FileAnalyzedFilingCacheOptions { RootDirectory = dir },
+            NullLogger<FileAnalyzedFilingCache>.Instance);
+
+    private static FileAnalyzedFilingCache CreateCache(string dir, string modelSegment) =>
+        new(
+            new FileAnalyzedFilingCacheOptions { RootDirectory = dir, ModelSegment = modelSegment },
             NullLogger<FileAnalyzedFilingCache>.Instance);
 
     private static string NewTempDir()

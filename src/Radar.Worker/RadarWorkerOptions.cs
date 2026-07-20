@@ -329,16 +329,16 @@ public sealed class HiringWorkerOptions
 
 /// <summary>
 /// AI chat-client seam configuration (bound from "Radar:Ai"). Surfaces the provider selection and model id plus the
-/// nested <see cref="AiAnthropicWorkerOptions"/> / <see cref="AiOllamaWorkerOptions"/> config blocks through to
-/// <c>AiClientOptions</c>. A blank <see cref="Provider"/> (the default) means AI is DISABLED — nothing is wired and
-/// no provider packages load — so the default rss-only configuration keeps working with no AI config.
+/// nested <see cref="AiAnthropicWorkerOptions"/> / <see cref="AiOllamaWorkerOptions"/> / <see cref="AiOpenAiWorkerOptions"/>
+/// config blocks through to <c>AiClientOptions</c>. A blank <see cref="Provider"/> (the default) means AI is DISABLED —
+/// nothing is wired and no provider packages load — so the default rss-only configuration keeps working with no AI config.
 /// </summary>
 public sealed class AiWorkerOptions
 {
-    /// <summary>The AI provider: "anthropic" (hosted Claude) or "ollama" (local, keyless). Blank by default = AI DISABLED.</summary>
+    /// <summary>The AI provider: "anthropic" (hosted Claude), "ollama" (local, keyless), or "openai" (OpenAI-compatible host, e.g. DeepInfra). Blank by default = AI DISABLED.</summary>
     public string Provider { get; init; } = string.Empty;
 
-    /// <summary>The model id (e.g. "claude-opus-4-8" for anthropic or an Ollama tag like "llama3.1"). Required when a provider is set.</summary>
+    /// <summary>The model id (e.g. "claude-opus-4-8" for anthropic or an Ollama tag like "llama3.1"). Required when a provider is set. For "openai" this is the fallback when <see cref="AiOpenAiWorkerOptions.Model"/> is blank.</summary>
     public string Model { get; init; } = string.Empty;
 
     /// <summary>Anthropic (hosted) provider config. Only read when Provider is "anthropic".</summary>
@@ -346,6 +346,9 @@ public sealed class AiWorkerOptions
 
     /// <summary>Ollama (local, keyless) provider config. Only read when Provider is "ollama".</summary>
     public AiOllamaWorkerOptions Ollama { get; init; } = new();
+
+    /// <summary>OpenAI-compatible (e.g. DeepInfra) provider config. Only read when Provider is "openai".</summary>
+    public AiOpenAiWorkerOptions OpenAi { get; init; } = new();
 
     /// <summary>
     /// Maximum earnings-release characters sent to the filing analyzer (token/latency control). The analyzer
@@ -422,6 +425,23 @@ public sealed class AiOllamaWorkerOptions
 {
     /// <summary>The Ollama base URL. Only used when Provider is "ollama". Defaults to http://localhost:11434.</summary>
     public string Endpoint { get; init; } = "http://localhost:11434";
+}
+
+/// <summary>
+/// OpenAI-compatible (e.g. DeepInfra/Groq/Together) provider config (bound from "Radar:Ai:OpenAi"). Only used
+/// when Provider is "openai". The API key is NEVER stored in config — <see cref="ApiKeyEnvVar"/> names the
+/// environment variable the key is read from at wiring time (mirrors the SEC-User-Agent secret precedent).
+/// </summary>
+public sealed class AiOpenAiWorkerOptions
+{
+    /// <summary>The OpenAI-compatible endpoint base URL (e.g. https://api.deepinfra.com/v1/openai). Required when Provider is "openai"; no default (a blank BaseUrl is a config error).</summary>
+    public string BaseUrl { get; init; } = string.Empty;
+
+    /// <summary>The model id at the OpenAI-compatible host (e.g. a DeepSeek/GLM/Qwen tag). Optional override; when blank, the top-level Radar:Ai:Model is used.</summary>
+    public string Model { get; init; } = string.Empty;
+
+    /// <summary>The NAME of the environment variable holding the API key (e.g. "DEEPINFRA_API_KEY"). The key VALUE is never committed and never logged — only this name. Required when Provider is "openai".</summary>
+    public string ApiKeyEnvVar { get; init; } = string.Empty;
 }
 
 /// <summary>
