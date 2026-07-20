@@ -482,6 +482,31 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSeedAsync_DigitOnlyFollowingTier_DefaultsToSmall()
+    {
+        // A digit-only value like "1" would be coerced by Enum.TryParse to the tier at that ordinal
+        // (Mid), which is garbage for this curated name field. It must be rejected like any other
+        // unrecognized value and default to Small (mirrors CollectedEvidenceMapper.ParseQuality).
+        const string json = """
+            {
+              "companies": [
+                {
+                  "id": "55555555-5555-5555-5555-555555555555",
+                  "name": "Digit Tier Corp",
+                  "ticker": "DGIT",
+                  "followingTier": "1"
+                }
+              ]
+            }
+            """;
+        var path = WriteSeedFile(json);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        Assert.Equal(FollowingTier.Small, seed.Companies.Single(c => c.Ticker == "DGIT").FollowingTier);
+    }
+
+    [Fact]
     public async Task GetSeedAsync_NoFollowingTierInFile_AllCompaniesDefaultToSmall()
     {
         // The pre-117 seed shape (no followingTier anywhere) keeps working: every company is Small.
