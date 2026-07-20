@@ -1041,6 +1041,26 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the opt-in file-backed AI filing-read debug store (spec 115,
+    /// <see cref="FileFilingReadDebugStore"/>) behind the Application <see cref="IFilingReadDebugSink"/> seam,
+    /// writing one <c>{accession}.json</c> under <paramref name="rootDirectory"/> via the shared
+    /// <c>GracefulFileWriter</c> + <c>RadarFileStoreJson.Options</c> scaffolding (best-effort: a write failure
+    /// logs and never aborts a run). This is diagnostic-only (AD-14 read-side discipline): consumed by NOTHING
+    /// in the evidence/signal/scoring/report path and never a fingerprint input — it only records what each AI
+    /// filing-read attempt saw and concluded (including no-signal and empty-body outcomes) so the model's
+    /// behaviour is inspectable without re-running the pipeline. When this is NOT called (the default),
+    /// <see cref="DirectionalFilingSignalSource"/>'s optional sink stays null and behaviour is byte-for-byte
+    /// unchanged.
+    /// </summary>
+    public static IServiceCollection AddFileFilingReadDebugStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        services.AddSingleton(new FileFilingReadDebugStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IFilingReadDebugSink, FileFilingReadDebugStore>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the local-file company watch-universe seed source and the idempotent seeder. The seed file
     /// at <paramref name="filePath"/> defines the companies/aliases that entity resolution can match
     /// against. Safe to invoke the seeder on every startup (upsert-by-Id, AD-1).

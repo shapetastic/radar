@@ -113,6 +113,13 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public string AnalyzedFilingCacheDirectory { get; init; } = "data/filings-cache";
 
+    /// <summary>
+    /// Root directory for the opt-in per-accession AI filing-read debug records (spec 115, diagnostic-only /
+    /// AD-14 read-side). Only used when AI directional filing signals are enabled (a provider is configured)
+    /// AND "Radar:Ai:Filings:PersistReadDebug" is true; never an evidence/signal/scoring/report input.
+    /// </summary>
+    public string FilingReadDebugDirectory { get; init; } = "data/ai-debug/filings";
+
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
 
@@ -385,6 +392,22 @@ public sealed class AiWorkerOptions
     /// Defaults to 6.
     /// </summary>
     public int Novelty { get; init; } = 6;
+
+    /// <summary>AI filing-read diagnostics config (bound from "Radar:Ai:Filings"). Only read when a provider is configured.</summary>
+    public AiFilingsWorkerOptions Filings { get; init; } = new();
+}
+
+/// <summary>
+/// AI filing-read diagnostics configuration (bound from "Radar:Ai:Filings"). DISABLED by default:
+/// <see cref="PersistReadDebug"/> false means no debug sink is registered, nothing is written, and the pipeline
+/// graph is byte-for-byte unchanged. When enabled, every AI filing-read attempt — including no-signal and
+/// empty-body outcomes — persists a bounded, advice-scrubbed diagnostic record (spec 115). Diagnostic-only:
+/// never an evidence/signal/scoring/report input (AD-14 read-side) and never a fingerprint input.
+/// </summary>
+public sealed class AiFilingsWorkerOptions
+{
+    /// <summary>Whether to persist a diagnostic record of every AI filing-read attempt. DISABLED by default.</summary>
+    public bool PersistReadDebug { get; init; }
 }
 
 /// <summary>Anthropic (hosted) provider config (bound from "Radar:Ai:Anthropic").</summary>

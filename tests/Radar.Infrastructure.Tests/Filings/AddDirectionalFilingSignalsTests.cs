@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 using Radar.Application.Filings;
 using Radar.Infrastructure.Ai;
@@ -30,6 +29,32 @@ public sealed class AddDirectionalFilingSignalsTests
             .AddFileAnalyzedFilingCache(Path.GetTempPath())
             .BuildServiceProvider();
 
+        Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+    }
+
+    [Fact]
+    public void AddFileFilingReadDebugStore_ResolvesSink_AndSourceComposesAgainstIt()
+    {
+        // Spec 115: with the opt-in debug store registered, the sink resolves AND the directional source still
+        // resolves (its optional IFilingReadDebugSink? ctor parameter is now satisfied instead of defaulting
+        // to null). The first test above proves the sink-absent default resolves too.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        using var provider = services
+            .AddRadarAi(new AiClientOptions
+            {
+                Provider = "ollama",
+                Model = "llama3.1",
+                OllamaEndpoint = "http://localhost:11434",
+            })
+            .AddRadarFilingAnalyzer(new FilingAnalyzerOptions { MaxInputLength = 12000 })
+            .AddSecEarningsReleaseReader(new SecCollectorOptions { UserAgent = "Radar Research test@example.com" })
+            .AddDirectionalFilingSignals(new DirectionalFilingSignalOptions())
+            .AddFileAnalyzedFilingCache(Path.GetTempPath())
+            .AddFileFilingReadDebugStore(Path.GetTempPath())
+            .BuildServiceProvider();
+
+        Assert.IsType<FileFilingReadDebugStore>(provider.GetService<IFilingReadDebugSink>());
         Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
     }
 
