@@ -9,7 +9,10 @@ namespace Radar.Infrastructure.Filings;
 
 /// <summary>
 /// On-disk per-accession cache of earnings-filing analysis RESULTS (spec 107): one JSON file per accession at
-/// <c>{RootDirectory}/{sanitizedAccession}.json</c>. This is an AD-14 analogue — reference/operational data,
+/// <c>{RootDirectory}/{sanitizedAccession}.json</c>, or (spec 118) nested one level deeper under an optional
+/// model-identity segment as <c>{RootDirectory}/{ModelSegment}/{sanitizedAccession}.json</c> when
+/// <see cref="FileAnalyzedFilingCacheOptions.ModelSegment"/> is set (so a model switch is a clean cache miss).
+/// This is an AD-14 analogue — reference/operational data,
 /// consumed by nothing in the scoring/evidence/signal/report path: it only lets
 /// <see cref="DirectionalFilingSignalSource"/> replay a previously-analyzed filing's
 /// <see cref="Radar.Application.SignalExtraction.ExtractedSignal"/> instead of re-fetching the same
@@ -156,6 +159,35 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
             return null;
         }
 
-        return Path.Combine(_options.RootDirectory, sanitized + ".json");
+        var directory = _options.RootDirectory;
+        var segment = _options.ModelSegment;
+        if (!string.IsNullOrEmpty(segment))
+        {
+            // Defense-in-depth: the DI helper (CacheModelSegment) always yields a single filename-safe token, but
+            // if ModelSegment is ever constructed elsewhere as a rooted path ("/tmp", "C:\\..."), a nested path, or
+            // one containing "..", Path.Combine could escape RootDirectory. Only fold in a segment that is a single
+            // safe path component; otherwise ignore it and use the root layout so a cache file can never be written
+            // outside the cache root.
+            if (IsSafeSegment(segment))
+            {
+                directory = Path.Combine(directory, segment);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Analyzed-filing cache ModelSegment '{Segment}' is not a single filename-safe path component; "
+                        + "ignoring it and using the cache root to stay within RootDirectory.",
+                    segment);
+            }
+        }
+
+        return Path.Combine(directory, sanitized + ".json");
     }
+
+    // A ModelSegment is usable only if it is a single, in-root path component: not rooted, carrying no invalid
+    // filename characters (which on every platform includes the directory separators), and not "." / "..".
+    private static bool IsSafeSegment(string segment) =>
+        !Path.IsPathRooted(segment)
+        && segment.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+        && segment is not ("." or "..");
 }

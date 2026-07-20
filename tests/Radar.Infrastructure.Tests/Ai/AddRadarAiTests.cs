@@ -136,6 +136,70 @@ public sealed class AddRadarAiTests
     }
 
     [Fact]
+    public void AddRadarAi_OpenAi_ResolvesFactoryAndClient_NoNetwork()
+    {
+        using var provider = new ServiceCollection()
+            .AddRadarAi(new AiClientOptions
+            {
+                Provider = "openai",
+                Model = "deepseek-ai/DeepSeek-V3",
+                OpenAiBaseUrl = "https://api.deepinfra.com/v1/openai",
+                OpenAiApiKey = "test-key",
+            })
+            .BuildServiceProvider();
+
+        Assert.NotNull(provider.GetService<IChatClientFactory>());
+        Assert.NotNull(provider.GetService<IChatClient>());
+    }
+
+    [Fact]
+    public void AddRadarAi_OpenAiBlankBaseUrl_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddRadarAi(new AiClientOptions
+            {
+                Provider = "openai",
+                Model = "deepseek-ai/DeepSeek-V3",
+                OpenAiBaseUrl = "",
+                OpenAiApiKey = "test-key",
+            }));
+
+        Assert.Contains("Radar:Ai:OpenAi:BaseUrl", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddRadarAi_OpenAiNonAbsoluteBaseUrl_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddRadarAi(new AiClientOptions
+            {
+                Provider = "openai",
+                Model = "deepseek-ai/DeepSeek-V3",
+                OpenAiBaseUrl = "not a url",
+                OpenAiApiKey = "test-key",
+            }));
+
+        Assert.Contains("Radar:Ai:OpenAi:BaseUrl", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddRadarAi_OpenAiBlankApiKey_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddRadarAi(new AiClientOptions
+            {
+                Provider = "openai",
+                Model = "deepseek-ai/DeepSeek-V3",
+                OpenAiBaseUrl = "https://api.deepinfra.com/v1/openai",
+                OpenAiApiKey = "",
+            }));
+
+        // The message must name the env-var config key, never surface a key value.
+        Assert.Contains("Radar:Ai:OpenAi:ApiKeyEnvVar", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("test-key", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AddRadarAi_NullOptions_Throws()
     {
         Assert.Throws<ArgumentNullException>(

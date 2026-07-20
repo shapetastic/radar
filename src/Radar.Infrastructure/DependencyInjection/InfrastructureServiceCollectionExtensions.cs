@@ -860,15 +860,18 @@ public static class InfrastructureServiceCollectionExtensions
     /// Registers Radar's config-driven AI chat-client seam: the <see cref="IChatClientFactory"/> (singleton) and a
     /// factory-produced singleton provider-neutral <see cref="IChatClient"/>, so future consumers can inject either.
     /// The provider is fixed at startup by <see cref="AiClientOptions.Provider"/> (case-insensitive) — <c>"anthropic"</c>
-    /// (hosted) or <c>"ollama"</c> (local, keyless). All concrete provider SDK types stay in Infrastructure (AD-5).
+    /// (hosted), <c>"ollama"</c> (local, keyless), or <c>"openai"</c> (OpenAI-compatible host, e.g. DeepInfra). All
+    /// concrete provider SDK types stay in Infrastructure (AD-5).
     /// Uses plain <c>AddSingleton</c> — the provider SDKs manage their own HTTP transport, so no named <c>HttpClient</c>
     /// is wired. There is no consumer of the client yet; this only proves a config-selected client can be obtained.
     /// <para>
     /// Fails fast when <see cref="AiClientOptions.Provider"/> is blank or unknown, when <see cref="AiClientOptions.Model"/>
-    /// is blank, when the <c>anthropic</c> provider has a blank <see cref="AiClientOptions.AnthropicApiKey"/>, or when the
-    /// <c>ollama</c> provider has a blank or non-absolute-URI <see cref="AiClientOptions.OllamaEndpoint"/>: each of those is
-    /// a configuration error that would otherwise surface as an opaque failure at first use. The provider is validated
-    /// first so a blank provider yields the provider message, not a spurious key/endpoint message.
+    /// is blank, when the <c>anthropic</c> provider has a blank <see cref="AiClientOptions.AnthropicApiKey"/>, when the
+    /// <c>ollama</c> provider has a blank or non-absolute-URI <see cref="AiClientOptions.OllamaEndpoint"/>, or when the
+    /// <c>openai</c> provider has a blank or non-absolute-URI <see cref="AiClientOptions.OpenAiBaseUrl"/> or a blank
+    /// <see cref="AiClientOptions.OpenAiApiKey"/>: each of those is a configuration error that would otherwise surface as
+    /// an opaque failure at first use. The provider is validated first so a blank provider yields the provider message,
+    /// not a spurious key/endpoint message. The openai key value is never logged — only the config keys are named.
     /// </para>
     /// </summary>
     public static IServiceCollection AddRadarAi(
@@ -884,17 +887,21 @@ public static class InfrastructureServiceCollectionExtensions
             Model = options.Model?.Trim() ?? string.Empty,
             AnthropicApiKey = options.AnthropicApiKey?.Trim() ?? string.Empty,
             OllamaEndpoint = options.OllamaEndpoint?.Trim() ?? string.Empty,
+            OpenAiBaseUrl = options.OpenAiBaseUrl?.Trim() ?? string.Empty,
+            OpenAiApiKey = options.OpenAiApiKey?.Trim() ?? string.Empty,
         };
 
         var provider = options.Provider;
         var isAnthropic = string.Equals(provider, "anthropic", StringComparison.OrdinalIgnoreCase);
         var isOllama = string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase);
+        var isOpenAi = string.Equals(provider, "openai", StringComparison.OrdinalIgnoreCase);
 
-        if (!isAnthropic && !isOllama)
+        if (!isAnthropic && !isOllama && !isOpenAi)
         {
             throw new InvalidOperationException(
-                "Radar AI requires a supported provider; configure Radar:Ai:Provider to \"anthropic\" (hosted) or "
-                    + "\"ollama\" (local, keyless) — a blank/unknown value has no client to build.");
+                "Radar AI requires a supported provider; configure Radar:Ai:Provider to \"anthropic\" (hosted), "
+                    + "\"ollama\" (local, keyless), or \"openai\" (OpenAI-compatible host, e.g. DeepInfra) — a "
+                    + "blank/unknown value has no client to build.");
         }
 
         if (string.IsNullOrWhiteSpace(options.Model))
@@ -916,6 +923,28 @@ public static class InfrastructureServiceCollectionExtensions
             throw new InvalidOperationException(
                 "Radar AI \"ollama\" requires an absolute endpoint URI; configure Radar:Ai:Ollama:Endpoint "
                     + "(default http://localhost:11434) — a blank or relative value cannot address the local Ollama server.");
+        }
+
+        if (isOpenAi && string.IsNullOrWhiteSpace(options.OpenAiBaseUrl))
+        {
+            throw new InvalidOperationException(
+                "Radar AI \"openai\" requires a base URL; configure Radar:Ai:OpenAi:BaseUrl (e.g. DeepInfra "
+                    + "https://api.deepinfra.com/v1/openai) — a blank BaseUrl has no host to address.");
+        }
+
+        if (isOpenAi && !Uri.TryCreate(options.OpenAiBaseUrl, UriKind.Absolute, out _))
+        {
+            throw new InvalidOperationException(
+                "Radar AI \"openai\" requires an absolute base URL; configure Radar:Ai:OpenAi:BaseUrl (e.g. DeepInfra "
+                    + "https://api.deepinfra.com/v1/openai) — a relative or malformed URL cannot address the host.");
+        }
+
+        if (isOpenAi && string.IsNullOrWhiteSpace(options.OpenAiApiKey))
+        {
+            throw new InvalidOperationException(
+                "Radar AI \"openai\" is a hosted provider and requires an API key; point Radar:Ai:OpenAi:ApiKeyEnvVar "
+                    + "at a SET environment variable holding the key before selecting the openai provider — the key is "
+                    + "never committed to config and its value is never logged.");
         }
 
         services.AddSingleton(options);
@@ -1031,13 +1060,47 @@ public static class InfrastructureServiceCollectionExtensions
     /// re-fetching the same <c>www.sec.gov</c> exhibit every run. This is an AD-14 analogue: operational/reference
     /// data, NOT an <see cref="IEvidenceCollector"/>, not evidence, not a signal source, and not a
     /// scoring/fingerprint input — it only changes WHETHER a fetch happens, never the signal that is scored.
+    /// <para>
+    /// The optional <paramref name="modelIdentity"/> (spec 118) scopes the cache files to a filename-safe
+    /// per-model sub-directory segment, so switching the earnings-read provider/model re-analyzes filings (a clean
+    /// cache MISS) instead of replaying another model's cached reads. Blank/null ⇒ files live directly under
+    /// <paramref name="rootDirectory"/> (byte-identical to the pre-spec-118 layout).
+    /// </para>
     /// </summary>
     public static IServiceCollection AddFileAnalyzedFilingCache(
-        this IServiceCollection services, string rootDirectory)
+        this IServiceCollection services, string rootDirectory, string? modelIdentity = null)
     {
-        services.AddSingleton(new FileAnalyzedFilingCacheOptions { RootDirectory = rootDirectory });
+        services.AddSingleton(new FileAnalyzedFilingCacheOptions
+        {
+            RootDirectory = rootDirectory,
+            ModelSegment = CacheModelSegment(modelIdentity),
+        });
         services.AddSingleton<IAnalyzedFilingCache, FileAnalyzedFilingCache>();
         return services;
+    }
+
+    // Builds a filename-safe, collision-resistant per-model cache-folder segment from a provider/model identity. A
+    // readable lower-cased token (letters/digits/.-_ kept, everything else → '-') plus a stable 64-bit (16-hex) hash
+    // of the EXACT raw identity, so two ids that sanitize to the same readable token (e.g. "a/b" vs "a-b") are
+    // extremely unlikely to collide into one folder (which would let a switch between them replay). Blank/null ⇒
+    // empty segment (files live at the root, back-compat).
+    private static string CacheModelSegment(string? modelIdentity)
+    {
+        if (string.IsNullOrWhiteSpace(modelIdentity))
+        {
+            return string.Empty;
+        }
+
+        var raw = modelIdentity.Trim();
+        var sb = new System.Text.StringBuilder(raw.Length);
+        foreach (var ch in raw.ToLowerInvariant())
+        {
+            sb.Append(char.IsLetterOrDigit(ch) || ch is '.' or '-' or '_' ? ch : '-');
+        }
+
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
+        var suffix = Convert.ToHexStringLower(hash)[..16];
+        return sb.ToString() + "-" + suffix;
     }
 
     /// <summary>
