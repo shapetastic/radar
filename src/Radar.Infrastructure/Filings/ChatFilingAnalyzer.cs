@@ -26,9 +26,9 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
 
     /// <summary>
     /// Fixed, deterministic system instruction. States the task, forbids advice language, weighs REPORTED
-    /// profitability/margin/cash-burn against REPORTED top-line growth (spec 116 — a record top line with a
-    /// deeply negative or deteriorating gross margin, a guidance cut, or heavy cash burn is Mixed, not
-    /// Improving), and instructs the model to return Unknown/low-confidence when the text is ambiguous,
+    /// profitability/margin/cash-burn against REPORTED top-line growth (spec 116 — a record top line that
+    /// coexists with a deeply negative or deteriorating gross margin, a guidance cut, or heavy cash burn is
+    /// Mixed, not Improving), and instructs the model to return Unknown/low-confidence when the text is ambiguous,
     /// boilerplate, or lacks results. Internal so tests can guard the behavioural contract as a string.
     /// </summary>
     internal const string SystemInstruction =
@@ -38,9 +38,10 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
             + "Improving (record bookings, organic growth, raised outlook), Deteriorating (revenue decline, "
             + "guidance cut, impairment), Mixed (materially both), or Unknown. "
             + "Weigh REPORTED profitability, gross margin, and cash burn against REPORTED top-line growth — a "
-            + "strong top line alone does not make the trajectory Improving. In particular: record or growing "
-            + "revenue paired with a deeply negative or deteriorating gross margin, or a guidance cut, or heavy "
-            + "cash burn or dilution, is Mixed (materially both), NOT Improving. This is not a bearish bias — a "
+            + "strong top line alone does not make the trajectory Improving. In particular: when record or "
+            + "growing revenue coexists with a deeply negative or deteriorating gross margin, with a guidance "
+            + "cut, or with heavy cash burn or dilution, the trajectory is Mixed (materially both), NOT "
+            + "Improving. This is not a bearish bias — a "
             + "release reporting strong growth alongside solid or improving profitability is still Improving; "
             + "Mixed is only for genuinely two-sided results. "
             + "Return a confidence in [0,1] and a single-sentence rationale that quotes or paraphrases the "
