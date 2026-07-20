@@ -202,8 +202,10 @@ public sealed class FileAnalyzedFilingCacheTests
         }
     }
 
-    [Fact]
-    public async Task TryGet_StaleExplicitCacheVersion_DegradesToMiss()
+    [Theory]
+    [InlineData(0)] // never a valid stamp (legacy-JSON sentinel).
+    [InlineData(1)] // the pre-spec-116 version: entries cached under the old analyzer prompt must re-analyze.
+    public async Task TryGet_StaleExplicitCacheVersion_DegradesToMiss(int staleVersion)
     {
         var dir = NewTempDir();
         try
@@ -211,8 +213,9 @@ public sealed class FileAnalyzedFilingCacheTests
             var cache = CreateCache(dir);
             // An otherwise-consistent record stamped with a non-current version must be a miss (re-analyzed),
             // never replayed. Planted directly on disk so PutAsync's re-stamping cannot mask the stale value.
+            Assert.NotEqual(AnalyzedFilingRecord.CurrentCacheVersion, staleVersion);
             var stale = new AnalyzedFilingRecord(
-                Accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null, CacheVersion: 0);
+                Accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null, CacheVersion: staleVersion);
             await WriteRecordForAsync(dir, Accession, stale);
 
             var read = await cache.TryGetAsync(Accession, CancellationToken.None);

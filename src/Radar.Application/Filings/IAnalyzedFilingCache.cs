@@ -44,8 +44,10 @@ public sealed record AnalyzedFilingRecord(
     /// <summary>
     /// The current cache-schema version stamped on every write. Deliberately non-zero so a legacy file with no
     /// <c>cacheVersion</c> property (deserializes to 0) is always a mismatch. See the record docs for when to bump.
+    /// Bumped 1 → 2 by spec 116: the analyzer system prompt changed materially (profitability/margin-aware
+    /// earnings read), so every read cached under the old prompt must be retired and re-analyzed.
     /// </summary>
-    public const int CurrentCacheVersion = 1;
+    public const int CurrentCacheVersion = 2;
 }
 
 /// <summary>

@@ -226,6 +226,48 @@ public sealed class ChatFilingAnalyzerTests
         }
     }
 
+    [Fact]
+    public void SystemInstruction_ContainsProfitabilityVersusGrowthRule()
+    {
+        // Spec 116: the prompt is the behavioural contract — the earnings read must weigh REPORTED
+        // profitability/margin/cash-burn against REPORTED top-line growth, and a record top line paired with a
+        // deeply negative/deteriorating gross margin (or guidance cut, or heavy cash burn) is Mixed, NOT Improving.
+        var prompt = ChatFilingAnalyzer.SystemInstruction;
+
+        Assert.Contains("profitability", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("gross margin", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cash burn", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Mixed (materially both), NOT Improving", prompt, StringComparison.Ordinal);
+        // The rule must not be a blanket downgrade — genuinely one-sided strong releases stay Improving.
+        Assert.Contains("not a bearish bias", prompt, StringComparison.OrdinalIgnoreCase);
+        // A profitability-driven Mixed call must name the fact in the rationale.
+        Assert.Contains("must name that fact", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SystemInstruction_KeepsAsReportedNotConsensusClause()
+    {
+        var prompt = ChatFilingAnalyzer.SystemInstruction;
+
+        Assert.Contains("AS REPORTED", prompt, StringComparison.Ordinal);
+        Assert.Contains("NOT a beat-vs-consensus judgement", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SystemInstruction_KeepsNoAdviceLanguageClause()
+    {
+        var prompt = ChatFilingAnalyzer.SystemInstruction;
+
+        Assert.Contains("NOT investment advice", prompt, StringComparison.Ordinal);
+        Assert.Contains("NO advice language", prompt, StringComparison.Ordinal);
+        Assert.Contains("\"buy\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("\"sell\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("\"guaranteed\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("\"safe bet\"", prompt, StringComparison.Ordinal);
+        // The Unknown-on-ambiguity guardrail must also survive the spec-116 rewrite.
+        Assert.Contains("return Unknown with a low", prompt, StringComparison.Ordinal);
+    }
+
     private static void AssertUnknown(FilingSentiment result)
     {
         Assert.Equal(FilingDirection.Unknown, result.Direction);
