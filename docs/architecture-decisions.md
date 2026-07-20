@@ -377,8 +377,8 @@ the missing ingredient is a "how-followed-already" input. Market cap is the obvi
 **curated following tier in the company seed**.
 
 **Shape (the ONLY component that changed vs v6).** `RadarScoreFormulaV7` (`Version = "radar-formula-v7"`;
-**maintainer approval requested in the PR** — AD-6 gates the shape + constants) keeps the measured-attention
-discount as one term and adds a curated-following term:
+**maintainer-approved · 2026-07-20** — shape + constants signed off in-session, AD-6 structure gate) keeps the
+measured-attention discount as one term and adds a curated-following term:
 
 ```
 followingDiscount = 1 − (Attention / OpportunityAttentionDivisor) · OpportunityAttentionDiscountWeight
@@ -415,8 +415,8 @@ Future tuning of any tier magnitude/weight/floor is a **config edit** (re-stamps
 Per the spec-implementation checklist `RadarScoreFormulaV6` was **deleted** (not left dormant) and its tests
 ported to `RadarScoreFormulaV7Tests`. Alternatives recorded for the decision: (A) config-only divisor tighten —
 rejected, cannot separate JNJ 21 from AEHR 19; (C) benchmark bucketing in the report — complementary, not done
-here. *Proposed · 2026-07-20 — **maintainer approval requested in the PR** (AD-6 structure gate: shape +
-constants).*
+here. *Accepted · 2026-07-20 — **maintainer-approved** (AD-6 structure gate: shape + constants signed off
+in-session).*
 
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
@@ -435,7 +435,7 @@ every other component byte-identical to v5; fingerprint re-stamped `abbdf9fab44f
 folding the curated, non-price seed `FollowingTier` (AD-14) alongside measured Attention, floored/clamped as a
 graded lean; only the Opportunity discount changed, every other component byte-identical to v6; Small tier at
 default weights byte-identical to v6; AI-OFF fingerprint re-stamped `c45fb79092ea → 8f4b59efd288`, AI-ON
-`454984785732 → 4c06fd2d2d8c`; **maintainer approval requested in the PR**).
+`454984785732 → 4c06fd2d2d8c`; **maintainer-approved · 2026-07-20**, shape signed off in-session).
 
 ---
 
