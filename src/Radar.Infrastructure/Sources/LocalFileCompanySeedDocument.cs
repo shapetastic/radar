@@ -21,6 +21,7 @@ internal sealed record LocalFileCompanySeedEntry(
     string? CountryCode,
     string? Sector,
     string? Industry,
+    string? FollowingTier,
     IReadOnlyList<string?>? Aliases,
     IReadOnlyList<LocalFileSourceFeed?>? SourceFeeds,
     IReadOnlyList<string?>? Themes);

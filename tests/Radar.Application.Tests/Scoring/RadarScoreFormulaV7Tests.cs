@@ -9,7 +9,7 @@ using Radar.TestSupport;
 
 namespace Radar.Application.Tests.Scoring;
 
-public sealed class RadarScoreFormulaV6Tests
+public sealed class RadarScoreFormulaV7Tests
 {
     private static readonly DateTimeOffset WindowStart = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset WindowEnd = new(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
@@ -41,7 +41,7 @@ public sealed class RadarScoreFormulaV6Tests
         });
 
     // Convenience: construct the default-weights formula over the given source weights.
-    private static RadarScoreFormulaV6 Formula(IAttentionSourceWeights sourceWeights) =>
+    private static RadarScoreFormulaV7 Formula(IAttentionSourceWeights sourceWeights) =>
         new(new ScoringWeights(), sourceWeights);
 
     private static ScoringSignal BuildSignal(
@@ -80,33 +80,33 @@ public sealed class RadarScoreFormulaV6Tests
         PreviousSignals: previous ?? Array.Empty<Signal>());
 
     [Fact]
-    public void Version_IsRadarFormulaV6_AndAppearsInExplanation()
+    public void Version_IsRadarFormulaV7_AndAppearsInExplanation()
     {
         var formula = Formula(AllGenuine);
 
-        Assert.Equal("radar-formula-v6", formula.Version);
+        Assert.Equal("radar-formula-v7", formula.Version);
 
         var result = formula.Compute(InputFrom(new[] { BuildSignal() }));
-        Assert.Contains("radar-formula-v6", result.Explanation);
+        Assert.Contains("radar-formula-v7", result.Explanation);
     }
 
     [Fact]
     public void Constructor_NullWeights_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV6(null!, AllGenuine));
+        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV7(null!, AllGenuine));
     }
 
     [Fact]
     public void Constructor_NullSourceWeights_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV6(new ScoringWeights(), null!));
+        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV7(new ScoringWeights(), null!));
     }
 
     [Fact]
     public void Constructor_InvalidWeight_Throws()
     {
         Assert.Throws<InvalidOperationException>(
-            () => new RadarScoreFormulaV6(new ScoringWeights { OpportunityAttentionDivisor = 0 }, AllGenuine));
+            () => new RadarScoreFormulaV7(new ScoringWeights { OpportunityAttentionDivisor = 0 }, AllGenuine));
     }
 
     [Fact]
@@ -636,7 +636,7 @@ public sealed class RadarScoreFormulaV6Tests
     [Fact]
     public void Trajectory_LoneRoutineInsiderSale_AtSpec110SellStrength_NoLongerDropsBy5()
     {
-        // Spec 110 (AEHR regression), carried onto radar-formula-v6: a strong positive-directional majority
+        // Spec 110 (AEHR regression), carried onto radar-formula-v7: a strong positive-directional majority
         // (record-results week) plus ONE lone routine open-market insider sale. Under the recalibrated default
         // SellTiers a ~$1.6M discretionary sale maps to Strength 4 (was 7 when SellTiers == BuyTiers). The
         // weaker Negative mass shrinks the trajectory drop below the WeeklyReportActionPolicyV1 deterioration
@@ -692,7 +692,7 @@ public sealed class RadarScoreFormulaV6Tests
         Assert.True(newer.Components.TrajectoryScore >= older.Components.TrajectoryScore);
     }
 
-    // ---- radar-formula-v6 corroboration-aware Trajectory (spec 111) ----
+    // ---- radar-formula-v7 corroboration-aware Trajectory (spec 111) ----
     //
     // The v6 Trajectory splits the current-window directional signals into a positive mass and a negative mass
     // (each Σ strength·confidence·recency over that direction) and combines them as
@@ -807,9 +807,9 @@ public sealed class RadarScoreFormulaV6Tests
         // toward the neutral 50 versus the default k, proving the constant flows through ScoringWeights.
         var single = InputFrom(Directional(1, SignalDirection.Positive, strength: 6, confidence: 0.8m));
 
-        var defaultK = new RadarScoreFormulaV6(new ScoringWeights(), AllGenuine)
+        var defaultK = new RadarScoreFormulaV7(new ScoringWeights(), AllGenuine)
             .Compute(single).Components.TrajectoryScore;
-        var largeK = new RadarScoreFormulaV6(new ScoringWeights { TrajectoryCorroborationK = 50.0 }, AllGenuine)
+        var largeK = new RadarScoreFormulaV7(new ScoringWeights { TrajectoryCorroborationK = 50.0 }, AllGenuine)
             .Compute(single).Components.TrajectoryScore;
 
         Assert.True(defaultK > 50);
@@ -824,7 +824,7 @@ public sealed class RadarScoreFormulaV6Tests
         // It is a denominator smoother, so a zero/negative k fails fast (Validate() + the formula ctor).
         Assert.Throws<InvalidOperationException>(() => new ScoringWeights { TrajectoryCorroborationK = 0 }.Validate());
         Assert.Throws<InvalidOperationException>(
-            () => new RadarScoreFormulaV6(new ScoringWeights { TrajectoryCorroborationK = -1 }, AllGenuine));
+            () => new RadarScoreFormulaV7(new ScoringWeights { TrajectoryCorroborationK = -1 }, AllGenuine));
     }
 
     // ---- spec 112: AI directional earnings-read materiality ----
@@ -1058,12 +1058,13 @@ public sealed class RadarScoreFormulaV6Tests
     [Fact]
     public void DefaultConfig_MatchesV6Baseline_ForARepresentativeInput()
     {
-        // Headline baseline pin for radar-formula-v6. Only the Trajectory component changed from the recalibrated
-        // v5 baseline: the two Positive signals now form a corroborated positive mass combined through the
-        // corroboration-smoothing constant k (default 10), so Trajectory is 72 (was 86 under the v5 mean) and the
-        // Opportunity that consumes it is 36 (was 43). Attention (42), EvidenceConfidence (60) and Velocity (100)
-        // are byte-identical to v5 — the spec-94 MediaReachWeight 0.10 still drives Attention. These pinned
-        // integers ARE the radar-formula-v6 default output for this input.
+        // Headline baseline pin for radar-formula-v7 at the DEFAULT Small tier: every pinned integer is
+        // byte-identical to the radar-formula-v6 baseline for this input — v7 changed ONLY the Opportunity
+        // discount term, and at the default weights a Small tier adds no extra discount (attention weight 1.0,
+        // Small discount 0.0, the clamp inert). Trajectory 72 is the v6 corroboration value (the two Positive
+        // signals form a corroborated positive mass through k = 10), Opportunity 36 = 72·0.60·(1 − 42/250),
+        // Attention (42), EvidenceConfidence (60) and Velocity (100) as v5/v6. These pinned integers ARE the
+        // radar-formula-v7 default output for this input.
         var formula = Formula(Tiered());
 
         var input = InputFrom(new[]
@@ -1098,7 +1099,7 @@ public sealed class RadarScoreFormulaV6Tests
 
         Assert.Equal(JsonSerializer.Serialize(c), result.ComponentJson);
         Assert.Equal(
-            "radar-formula-v6: 3 signal(s) over 30d → Trajectory 72, Opportunity 36 (Attention 42, "
+            "radar-formula-v7: 3 signal(s) over 30d → Trajectory 72, Opportunity 36 (Attention 42, "
                 + "Confidence 60, Velocity 100).",
             result.Explanation);
     }
@@ -1119,13 +1120,261 @@ public sealed class RadarScoreFormulaV6Tests
         // reads the injected config, not const fields.
         var input = InputFrom(News(5, "genuine"));
 
-        var defaultResult = new RadarScoreFormulaV6(new ScoringWeights(), Tiered()).Compute(input).Components;
-        var retunedResult = new RadarScoreFormulaV6(
+        var defaultResult = new RadarScoreFormulaV7(new ScoringWeights(), Tiered()).Compute(input).Components;
+        var retunedResult = new RadarScoreFormulaV7(
             new ScoringWeights { AttentionHalfSaturation = 12.0 }, Tiered()).Compute(input).Components;
 
         Assert.NotEqual(defaultResult.AttentionScore, retunedResult.AttentionScore);
         Assert.NotEqual(defaultResult.OpportunityScore, retunedResult.OpportunityScore);
         // Larger half-saturation lowers Attention for the same reach.
         Assert.True(retunedResult.AttentionScore < defaultResult.AttentionScore);
+    }
+
+    // ---- radar-formula-v7 following-tier Opportunity discount (spec 117) ----
+    //
+    // v7 changes ONLY the Opportunity discount term:
+    //   followingDiscount = 1 − (attention/OpportunityAttentionDivisor)·OpportunityAttentionDiscountWeight
+    //                         − TierDiscount(tier)·FollowingTierDiscountWeight
+    //   Opportunity = Score(Trajectory · (EC/100) · clamp(followingDiscount, OpportunityDiscountFloor, 1))
+    // The tier is curated seed metadata (AD-14, never price-derived). At default weights a Small-tier input
+    // is byte-identical to v6. The representative input below is the DefaultConfig baseline (Trajectory 72,
+    // Attention 42, EC 60), so all expected Opportunity values are the direct closed form.
+
+    // The DefaultConfig representative input (Trajectory 72, Attention 42, EC 60, Velocity 100) with a
+    // caller-chosen following tier.
+    private static ScoringInput RepresentativeInput(Radar.Domain.Companies.FollowingTier tier) => new(
+        CompanyId: Guid.NewGuid(),
+        WindowStartUtc: WindowStart,
+        WindowEndUtc: WindowEnd,
+        Signals: new[]
+        {
+            BuildSignal(strength: 6, direction: SignalDirection.Positive, confidence: 0.65m,
+                type: SignalType.GuidanceChange, quality: EvidenceQuality.Medium,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "genuine-a"),
+            BuildSignal(strength: 8, direction: SignalDirection.Positive, confidence: 0.8m,
+                type: SignalType.CustomerWin, quality: EvidenceQuality.High,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "genuine-b"),
+            BuildSignal(strength: 4, direction: SignalDirection.Neutral, confidence: 0.40m,
+                type: SignalType.MediaAttention, quality: EvidenceQuality.High,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: "mill-c"),
+        },
+        PreviousSignals: Array.Empty<Signal>(),
+        FollowingTier: tier);
+
+    [Fact]
+    public void Opportunity_MoreFollowedTier_IsDiscountedHarder_Graded()
+    {
+        // Same Trajectory/Evidence/Attention, only the curated tier differs: mega < mid < small. With the
+        // baseline components (Trajectory 72, Attention 42, EC 60) the closed forms are
+        //   small: 72·0.60·(1 − 42/250 − 0.00) = 43.2·0.832 = 35.94 → 36 (the v6 value — no extra discount)
+        //   mid:   43.2·(0.832 − 0.15) = 43.2·0.682          = 29.46 → 29
+        //   mega:  43.2·(0.832 − 0.45) = 43.2·0.382          = 16.50 → 17
+        var formula = Formula(Tiered());
+
+        var small = formula.Compute(RepresentativeInput(Radar.Domain.Companies.FollowingTier.Small)).Components;
+        var mid = formula.Compute(RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mid)).Components;
+        var mega = formula.Compute(RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mega)).Components;
+
+        Assert.Equal(36, small.OpportunityScore);
+        Assert.Equal(29, mid.OpportunityScore);
+        Assert.Equal(17, mega.OpportunityScore);
+        Assert.True(mega.OpportunityScore < mid.OpportunityScore);
+        Assert.True(mid.OpportunityScore < small.OpportunityScore);
+    }
+
+    [Fact]
+    public void Opportunity_TierIsAnAggregateDiscount_AllOtherComponentsIdenticalAcrossTiers()
+    {
+        // The tier feeds ONLY the Opportunity discount: Trajectory, Attention, EvidenceConfidence, and
+        // Velocity are identical for the same signals regardless of tier (following is never a scoring
+        // input elsewhere).
+        var formula = Formula(Tiered());
+
+        var small = formula.Compute(RepresentativeInput(Radar.Domain.Companies.FollowingTier.Small)).Components;
+        var mega = formula.Compute(RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mega)).Components;
+
+        Assert.Equal(small.TrajectoryScore, mega.TrajectoryScore);
+        Assert.Equal(small.AttentionScore, mega.AttentionScore);
+        Assert.Equal(small.EvidenceConfidenceScore, mega.EvidenceConfidenceScore);
+        Assert.Equal(small.SignalVelocityScore, mega.SignalVelocityScore);
+    }
+
+    [Fact]
+    public void Opportunity_RaisingTheTier_NeverRaisesOpportunity()
+    {
+        // Monotone: Small → Mid → Large → Mega is non-increasing in Opportunity (a higher following tier
+        // can never make a company look MORE under-followed). Validate() enforces the tier-discount
+        // ordering, so this holds for any valid weights; asserted here at the defaults.
+        var formula = Formula(Tiered());
+
+        var ordered = new[]
+        {
+            Radar.Domain.Companies.FollowingTier.Small,
+            Radar.Domain.Companies.FollowingTier.Mid,
+            Radar.Domain.Companies.FollowingTier.Large,
+            Radar.Domain.Companies.FollowingTier.Mega,
+        };
+        var opportunities = ordered
+            .Select(tier => formula.Compute(RepresentativeInput(tier)).Components.OpportunityScore)
+            .ToArray();
+
+        for (var i = 1; i < opportunities.Length; i++)
+        {
+            Assert.True(
+                opportunities[i] <= opportunities[i - 1],
+                $"raising the tier must never raise Opportunity; {ordered[i - 1]}={opportunities[i - 1]}, "
+                    + $"{ordered[i]}={opportunities[i]}");
+        }
+    }
+
+    [Fact]
+    public void Opportunity_FloorRespected_GradedLeanNotAHardExclusion()
+    {
+        // A huge combined discount (Mega tier discount raised to 1.0) drives the raw followingDiscount
+        // negative (1 − 42/250 − 1.0 = −0.168), which clamps at the floor 0.05 — so Opportunity is exactly
+        // Trajectory·(EC/100)·floor = 72·0.60·0.05 = 2.16 → 2, still ABOVE zero: a strong trajectory on a
+        // maximally-followed name is leaned on hard, never hard-excluded.
+        var formula = new RadarScoreFormulaV7(
+            new ScoringWeights { FollowingTierDiscountMega = 1.0 }, Tiered());
+
+        var mega = formula.Compute(RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mega)).Components;
+
+        Assert.Equal(2, mega.OpportunityScore);
+        Assert.True(mega.OpportunityScore > 0, "the floor keeps the discount graded, never a filter");
+        Assert.InRange(mega.OpportunityScore, 0, 100);
+    }
+
+    [Fact]
+    public void Opportunity_ClampKeepsAllComponentsInRange_ForMegaTier()
+    {
+        var formula = Formula(Tiered());
+
+        var c = formula.Compute(RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mega)).Components;
+
+        Assert.InRange(c.TrajectoryScore, 0, 100);
+        Assert.InRange(c.OpportunityScore, 0, 100);
+        Assert.InRange(c.AttentionScore, 0, 100);
+        Assert.InRange(c.EvidenceConfidenceScore, 0, 100);
+        Assert.InRange(c.SignalVelocityScore, 0, 100);
+    }
+
+    [Fact]
+    public void EmptyWindow_IsAllZero_RegardlessOfTier()
+    {
+        // The empty-signal window is unchanged by v7: all-zero components even for a Mega-tier company.
+        var formula = Formula(AllGenuine);
+        var input = new ScoringInput(
+            CompanyId: Guid.NewGuid(),
+            WindowStartUtc: WindowStart,
+            WindowEndUtc: WindowEnd,
+            Signals: Array.Empty<ScoringSignal>(),
+            PreviousSignals: Array.Empty<Signal>(),
+            FollowingTier: Radar.Domain.Companies.FollowingTier.Mega);
+
+        var result = formula.Compute(input);
+
+        Assert.Equal(new ScoreComponents(0, 0, 0, 0, 0), result.Components);
+        Assert.Empty(result.Contributions);
+    }
+
+    [Fact]
+    public void SmallTier_AtDefaultWeights_IsByteIdenticalToTheDefaultInput()
+    {
+        // ScoringInput defaults FollowingTier to Small, and at the default weights the Small discount is
+        // 0.0 with attention weight 1.0 — so an explicit Small computes byte-identically to the tier-less
+        // default (and both equal the v6 numbers pinned in DefaultConfig_MatchesV6Baseline...).
+        var formula = Formula(Tiered());
+
+        var defaulted = formula.Compute(InputFrom(new[]
+        {
+            BuildSignal(strength: 6, direction: SignalDirection.Positive, sourceName: "src-a"),
+        }));
+        var explicitSmall = formula.Compute(new ScoringInput(
+            CompanyId: Guid.NewGuid(),
+            WindowStartUtc: WindowStart,
+            WindowEndUtc: WindowEnd,
+            Signals: new[] { BuildSignal(strength: 6, direction: SignalDirection.Positive, sourceName: "src-a") },
+            PreviousSignals: Array.Empty<Signal>(),
+            FollowingTier: Radar.Domain.Companies.FollowingTier.Small));
+
+        Assert.Equal(defaulted.Components, explicitSmall.Components);
+    }
+
+    [Fact]
+    public void Determinism_SameTieredInput_ProducesEqualOutputs()
+    {
+        var formula = Formula(Tiered());
+        var input = RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mega);
+
+        var first = formula.Compute(input);
+        var second = formula.Compute(input);
+
+        Assert.Equal(first.Components, second.Components);
+        Assert.Equal(first.ComponentJson, second.ComponentJson);
+        Assert.Equal(first.Explanation, second.Explanation);
+        Assert.Equal(first.Contributions, second.Contributions);
+    }
+
+    [Fact]
+    public void ChangedTierDiscountWeight_MovesTheScore_ProvingConfigIsRead()
+    {
+        // Halving the whole tier-discount term (FollowingTierDiscountWeight 1.0 → 0.5) softens the Mega
+        // discount: 43.2·(0.832 − 0.225) = 26.22 → 26 (vs 17 at the default) — the magnitudes flow from
+        // config, not const fields.
+        var input = RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mega);
+
+        var defaults = new RadarScoreFormulaV7(new ScoringWeights(), Tiered())
+            .Compute(input).Components.OpportunityScore;
+        var halved = new RadarScoreFormulaV7(
+            new ScoringWeights { FollowingTierDiscountWeight = 0.5 }, Tiered())
+            .Compute(input).Components.OpportunityScore;
+
+        Assert.Equal(17, defaults);
+        Assert.Equal(26, halved);
+    }
+
+    // ---- ScoringWeights.Validate() coverage for the spec-117 following-discount fields ----
+
+    [Fact]
+    public void Validate_FloorMustBeStrictlyPositive_AndAtMostOne()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { OpportunityDiscountFloor = 0 }.Validate());
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { OpportunityDiscountFloor = -0.1 }.Validate());
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { OpportunityDiscountFloor = 1.5 }.Validate());
+        // The formula ctor enforces the same (fails fast on construction, like the other weights).
+        Assert.Throws<InvalidOperationException>(
+            () => new RadarScoreFormulaV7(new ScoringWeights { OpportunityDiscountFloor = 0 }, AllGenuine));
+    }
+
+    [Fact]
+    public void Validate_TierDiscounts_MustBeInUnitRange()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { FollowingTierDiscountSmall = -0.1 }.Validate());
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { FollowingTierDiscountMega = 1.5 }.Validate());
+    }
+
+    [Fact]
+    public void Validate_TierDiscounts_MustBeMonotone_MegaGeLargeGeMidGeSmall()
+    {
+        // Mid (0.35) > Large (0.30 default) — a non-monotone ordering would discount a LESS-followed
+        // company harder.
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { FollowingTierDiscountMid = 0.35 }.Validate());
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { FollowingTierDiscountLarge = 0.5 }.Validate());
+    }
+
+    [Fact]
+    public void Validate_DiscountTermWeights_MustBeNonNegative()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { OpportunityAttentionDiscountWeight = -0.1 }.Validate());
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { FollowingTierDiscountWeight = -1.0 }.Validate());
     }
 }

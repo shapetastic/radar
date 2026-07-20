@@ -101,6 +101,33 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                 .ToList()
                 .AsReadOnly() ?? [];
 
+            // Curated following tier (spec 117): case-insensitive parse; absent/blank silently defaults to
+            // Small (no extra discount, the fail-safe), present-but-unrecognized ALSO defaults to Small but
+            // warns naming the entry and the bad value (never throws, never hallucinates a tier). Digit-only
+            // input (e.g. "1") is rejected the same way — Enum.TryParse would otherwise coerce it to a tier by
+            // ordinal value, which is garbage for this curated name field (matches CollectedEvidenceMapper.
+            // ParseQuality). AD-14: this is curated seed metadata, never derived from price/market cap.
+            var followingTier = FollowingTier.Small;
+            if (!string.IsNullOrWhiteSpace(entry.FollowingTier))
+            {
+                var tierText = entry.FollowingTier.Trim();
+                if (!tierText.All(char.IsDigit)
+                    && Enum.TryParse<FollowingTier>(tierText, ignoreCase: true, out var parsed)
+                    && Enum.IsDefined(parsed))
+                {
+                    followingTier = parsed;
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Company seed entry '{Name}' ({Id}) has an unrecognized followingTier '{FollowingTier}'; "
+                            + "defaulting to Small.",
+                        entry.Name,
+                        entry.Id,
+                        entry.FollowingTier);
+                }
+            }
+
             companies.Add(new Company(
                 Id: companyId,
                 Name: entry.Name,
@@ -113,7 +140,8 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                 Status: CompanyStatus.Active,
                 CreatedAtUtc: now,
                 UpdatedAtUtc: now,
-                Themes: themes));
+                Themes: themes,
+                FollowingTier: followingTier));
 
             if (entry.Aliases is not null)
             {

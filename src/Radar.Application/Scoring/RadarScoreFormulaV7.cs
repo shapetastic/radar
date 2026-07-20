@@ -1,34 +1,34 @@
 using System.Text.Json;
+using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
 namespace Radar.Application.Scoring;
 
 /// <summary>
-/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v6</c>: an AD-6 refinement of
-/// <c>radar-formula-v5</c> that changes <b>only</b> the Trajectory component to be
-/// corroboration/consensus-aware. Every other component (Attention incl. the spec-109 collapsed media set,
-/// EvidenceConfidence, SignalVelocity, Opportunity, recency, the empty-window behaviour, the
-/// <see cref="ScoringInput.PreviousSignals"/> handling, the direction SIGNS, and the per-signal provenance
-/// <see cref="ScoreContribution"/> weights) is <b>byte-for-byte</b> identical to v5.
+/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v7</c>: an AD-6 refinement of
+/// <c>radar-formula-v6</c> that changes <b>only</b> the Opportunity attention-discount term to fold in the
+/// curated <see cref="ScoringInput.FollowingTier"/>. Every other component (the v6 corroboration-aware
+/// Trajectory, Attention incl. the spec-109 collapsed media set, EvidenceConfidence, SignalVelocity,
+/// recency, the empty-window behaviour, the <see cref="ScoringInput.PreviousSignals"/> handling, the
+/// direction SIGNS, and the per-signal provenance <see cref="ScoreContribution"/> weights) is
+/// <b>byte-for-byte</b> identical to v6.
 /// <para>
-/// The v5 Trajectory was a confidence/recency-weighted <b>mean</b> of <c>sign·strength</c> over directional
-/// signals, so a lone dissenting signal carried weight comparable to each of many corroborating signals: five
-/// agreeing customer wins moved Trajectory no more decisively than one, and a single countervailing signal
-/// could overturn the read (the live AEHR case, Trajectory 79→68). v6 instead splits the current-window
-/// directional signals into a <b>positive mass</b> <c>Mpos = Σ strengthᵢ·wᵢ</c> and a <b>negative mass</b>
-/// <c>Mneg = Σ strengthᵢ·wᵢ</c> (each per-signal weight <c>wᵢ = confidenceᵢ·recencyᵢ</c>, exactly as v5;
-/// Neutral/Mixed contribute 0 to both, as v5) and combines them as
-/// <c>T_raw = TrajectoryBand·(Mpos − Mneg)/(Mpos + Mneg + k)</c>, where <see cref="TrajectoryBand"/> (=10) is
-/// the structural strength ceiling / band half-width (the same implicit [-10,10] band v5 used) and <c>k</c> is
-/// the config-tunable corroboration-smoothing constant <see cref="ScoringWeights.TrajectoryCorroborationK"/>.
-/// The smoothing constant means a small directional set (a lone signal) cannot swing <c>T_raw</c> to an
-/// extreme, but a corroborated majority (large mass) can — and an equally-corroborated negative majority
-/// swings it down symmetrically. So a corroborated direction is rewarded, an isolated dissenter is
-/// damped-but-not-zeroed (the dissent is still recorded), and a corroborated dissenting cluster still bites.
-/// The transform is monotone (adding a positive never lowers Trajectory; adding a negative never raises it),
-/// direction-symmetric (no positive bias), and an empty directional set still yields the neutral 50 (the
-/// <c>0/(0+k)=0</c> fall-through). Supersedes <c>radar-formula-v5</c>.
+/// The v6 Opportunity discount <c>1 − Attention/OpportunityAttentionDivisor</c> was blind to true
+/// notedness: Radar's Attention measures third-party publisher breadth in its OWN feeds, so a maximally
+/// followed mega-cap and an under-covered small-cap could carry near-identical Attention (the live JNJ 21
+/// vs AEHR 19 case) and be discounted near-equally. v7 keeps that measured-attention term and adds a
+/// second, curated-following term:
+/// <c>followingDiscount = 1 − (attention/OpportunityAttentionDivisor)·OpportunityAttentionDiscountWeight
+/// − TierDiscount(tier)·FollowingTierDiscountWeight</c>, and
+/// <c>Opportunity = Trajectory · (EvidenceConfidence/100) ·
+/// clamp(followingDiscount, OpportunityDiscountFloor, 1)</c>. The tier is CURATED seed metadata
+/// (AD-14 — never price/market-cap/volume-derived), and the discount is a graded LEAN, never a filter: the
+/// strictly-positive floor means a strong-enough trajectory can still surface a mega-cap. It is monotone —
+/// <see cref="ScoringWeights.Validate"/> enforces tier discounts Mega ≥ Large ≥ Mid ≥ Small, so a higher
+/// tier never RAISES Opportunity. At the default weights (attention weight 1.0, Small discount 0.0) a
+/// Small-tier company's output is byte-identical to v6, so the under-followed names Radar exists to surface
+/// are untouched. Supersedes <c>radar-formula-v6</c>.
 /// </para>
 /// <para>
 /// Pure and deterministic (no clock, no randomness, no I/O; both <see cref="_weights"/> and
@@ -40,7 +40,7 @@ namespace Radar.Application.Scoring;
 /// and never from <see cref="ScoringInput.PreviousSignals"/>.
 /// </para>
 /// </summary>
-public sealed class RadarScoreFormulaV6 : IScoreFormula
+public sealed class RadarScoreFormulaV7 : IScoreFormula
 {
     // Direction → sign used in trajectory. These are structural direction SIGNS, not tunable magnitudes
     // (flipping a sign is a structural change, not a weight experiment), so they stay const in the formula.
@@ -67,7 +67,7 @@ public sealed class RadarScoreFormulaV6 : IScoreFormula
     /// on a nonsensical weight that would break the math or the [0,100] clamp contract — see
     /// <see cref="ScoringWeights.Validate"/>.
     /// </summary>
-    public RadarScoreFormulaV6(ScoringWeights weights, IAttentionSourceWeights sourceWeights)
+    public RadarScoreFormulaV7(ScoringWeights weights, IAttentionSourceWeights sourceWeights)
     {
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
@@ -77,7 +77,7 @@ public sealed class RadarScoreFormulaV6 : IScoreFormula
     }
 
     /// <inheritdoc />
-    public string Version => "radar-formula-v6";
+    public string Version => "radar-formula-v7";
 
     private static int DirectionSign(SignalDirection d) => d switch
     {
@@ -95,6 +95,17 @@ public sealed class RadarScoreFormulaV6 : IScoreFormula
         _ => _weights.QualityUnknown, // Unknown (and any unmapped) → QualityUnknown
     };
 
+    // The curated-following discount magnitude for a tier (spec 117). Reads the four config-tunable
+    // ScoringWeights magnitudes; Small (and any unmapped value) falls through to the Small discount —
+    // the fail-safe "no extra discount" default.
+    private double TierDiscount(FollowingTier tier) => tier switch
+    {
+        FollowingTier.Mega  => _weights.FollowingTierDiscountMega,
+        FollowingTier.Large => _weights.FollowingTierDiscountLarge,
+        FollowingTier.Mid   => _weights.FollowingTierDiscountMid,
+        _ => _weights.FollowingTierDiscountSmall,
+    };
+
     // Clamp+round any double component to an int in [0,100], deterministic midpoint handling.
     private static int Score(double v) =>
         Math.Clamp((int)Math.Round(v, MidpointRounding.AwayFromZero), 0, 100);
@@ -109,7 +120,7 @@ public sealed class RadarScoreFormulaV6 : IScoreFormula
             var emptyComponents = new ScoreComponents(0, 0, 0, 0, 0);
             return new ScoreComputation(
                 emptyComponents,
-                "radar-formula-v6: no signals in window.",
+                "radar-formula-v7: no signals in window.",
                 JsonSerializer.Serialize(emptyComponents),
                 new List<ScoreContribution>());
         }
@@ -209,11 +220,18 @@ public sealed class RadarScoreFormulaV6 : IScoreFormula
         var ratio = (actNow + _weights.VelocitySmoothing) / (actPrev + _weights.VelocitySmoothing);
         var signalVelocityScore = Score(_weights.VelocitySteady * ratio);
 
-        // ---- 5. OpportunityScore (multiplicative; uses clamped int components above) ---- (v3 divisor 250)
+        // ---- 5. OpportunityScore (multiplicative; uses clamped int components above) ----
+        // v7: the discount folds the curated following tier alongside the measured attention (spec 117).
+        // The clamp's strictly-positive floor keeps this a graded lean, never a hard exclusion, and the
+        // ceiling 1 means the discount can never become a bonus. At default weights a Small tier reduces
+        // this to the v6 term 1 − attention/250 exactly (the clamp is inert there: 0.6 ≤ term ≤ 1).
+        var followingDiscount =
+            1 - attentionScore / _weights.OpportunityAttentionDivisor * _weights.OpportunityAttentionDiscountWeight
+              - TierDiscount(input.FollowingTier) * _weights.FollowingTierDiscountWeight;
         var opportunityScore = Score(
             trajectoryScore
             * (evidenceConfidenceScore / 100.0)
-            * (1 - attentionScore / _weights.OpportunityAttentionDivisor));
+            * Math.Clamp(followingDiscount, _weights.OpportunityDiscountFloor, 1.0));
 
         var components = new ScoreComponents(
             TrajectoryScore: trajectoryScore,
@@ -225,7 +243,8 @@ public sealed class RadarScoreFormulaV6 : IScoreFormula
         // ---- Contributions (provenance — current window only) ----
         // Still one contribution per current-window signal in input order, including Neutral/Mixed
         // (which naturally get weight 0 from DirectionSign). The per-signal contribution weight is unchanged
-        // from v5 — provenance is per-signal; the v6 consensus shaping is an AGGREGATE over these signals.
+        // from v6 — provenance is per-signal; the consensus shaping and the following discount are AGGREGATE
+        // transforms over these signals.
         var contributions = new List<ScoreContribution>(signals.Count);
         for (var i = 0; i < signals.Count; i++)
         {
@@ -245,7 +264,7 @@ public sealed class RadarScoreFormulaV6 : IScoreFormula
 
         var windowDays = (int)Math.Round(windowLength.TotalDays, MidpointRounding.AwayFromZero);
         var explanation =
-            $"radar-formula-v6: {input.Signals.Count} signal(s) over {windowDays}d → " +
+            $"radar-formula-v7: {input.Signals.Count} signal(s) over {windowDays}d → " +
             $"Trajectory {trajectoryScore}, Opportunity {opportunityScore} (Attention {attentionScore}, " +
             $"Confidence {evidenceConfidenceScore}, Velocity {signalVelocityScore}).";
 

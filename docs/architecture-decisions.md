@@ -365,6 +365,59 @@ checklist `RadarScoreFormulaV5` was **deleted** (not left dormant) and its tests
 Trajectory `86 → 72`, Opportunity `43 → 36`; the lone-directional Helios input Trajectory `80 → 61`). *Accepted
 · 2026-07-17 — maintainer-approved structure (shape signed off in-session; `k=10` default retunable via config).*
 
+### Refinement — `radar-formula-v7` (spec 117): notedness-aware Opportunity discount
+
+**Problem.** Radar's mission is to surface improvement **before the market notices**, and Opportunity already
+discounts by Attention — but Attention measures third-party publisher breadth *in Radar's own feeds*, which is
+blind to **true notedness**. On the live 2026-07-20 baseline JNJ (a $400B mega-cap on a real but fully-priced
+quarter) surfaced at #2 "Thesis improving," Opp 45, right beside AEHR — because JNJ's Attention is **21** and
+AEHR's is **19**, nearly identical. No divisor tightening can separate them (it would discount both equally);
+the missing ingredient is a "how-followed-already" input. Market cap is the obvious proxy but is
+**price-derived → forbidden as a scoring input (AD-14)**; the clean, deterministic, non-price proxy is a
+**curated following tier in the company seed**.
+
+**Shape (the ONLY component that changed vs v6).** `RadarScoreFormulaV7` (`Version = "radar-formula-v7"`;
+**maintainer approval requested in the PR** — AD-6 gates the shape + constants) keeps the measured-attention
+discount as one term and adds a curated-following term:
+
+```
+followingDiscount = 1 − (Attention / OpportunityAttentionDivisor) · OpportunityAttentionDiscountWeight
+                      − TierDiscount(tier) · FollowingTierDiscountWeight
+Opportunity       = Trajectory · (EvidenceConfidence/100) · clamp(followingDiscount, OpportunityDiscountFloor, 1)
+```
+
+`tier` is the company's `FollowingTier` (`Small`/`Mid`/`Large`/`Mega`, a new Domain enum) — **curated seed
+metadata** in `data/companies.json` (`followingTier`, case-insensitive; absent/unrecognized fail-safes to
+`Small`), **never price/market-cap/volume-derived (AD-14)**; the engine loads it via `ICompanyRepository`
+(missing company ⇒ `Small`, no throw). All seven magnitudes are `ScoringWeights` config, folded into the
+fingerprint **by value**: `OpportunityAttentionDiscountWeight = 1.0`, `FollowingTierDiscountMega = 0.45`,
+`FollowingTierDiscountLarge = 0.30`, `FollowingTierDiscountMid = 0.15`, `FollowingTierDiscountSmall = 0.0`,
+`FollowingTierDiscountWeight = 1.0`, `OpportunityDiscountFloor = 0.05`. `Validate()` requires the floor in
+(0, 1], the two term weights non-negative, and the tier discounts in [0, 1] **and monotone
+Mega ≥ Large ≥ Mid ≥ Small**.
+
+**Invariants (checked by tests).** A **graded lean, never a filter**: the strictly-positive floor means a
+strong-enough trajectory still surfaces a mega-cap (Opportunity clamps at `Trajectory·EC/100·floor > 0`, never
+hard-excluded). **Monotone**: a higher tier never raises Opportunity. **Small-tier output at default weights is
+byte-identical to v6** (attention weight 1.0, Small discount 0.0, clamp inert on `[0.6, 1]`), so the
+under-followed names Radar exists for are untouched. The tier feeds ONLY the Opportunity discount — Trajectory
+(v6 corroboration math), Attention, EvidenceConfidence, SignalVelocity, recency, empty-window, direction SIGNS,
+and the per-signal provenance contributions are **byte-for-byte** as v6 (ported tests prove it). Worked
+before/after at the defaults: JNJ (mega, Attention 21) discount multiplier `1 − 21/250 = 0.916 → 0.466`, so its
+v6 Opp 45 lands ≈ **23** — below the actionable surface; AEHR (small) is **unchanged**. No ticker-specific
+logic — entirely seed-tier-driven.
+
+**Version obligation.** Formula **STRUCTURE** change → `_formula.Version` advanced `radar-formula-v6 → v7`;
+`ScoringConfigVersion` re-stamps via the derived fingerprint (the `FormulaVersion` input changed AND the seven
+new weights joined the canonical string): AI-OFF default `radar-scoring-fp-c45fb79092ea →
+radar-scoring-fp-8f4b59efd288`, live AI-ON default `radar-scoring-fp-454984785732 → radar-scoring-fp-4c06fd2d2d8c`.
+Future tuning of any tier magnitude/weight/floor is a **config edit** (re-stamps by value, no formula class).
+Per the spec-implementation checklist `RadarScoreFormulaV6` was **deleted** (not left dormant) and its tests
+ported to `RadarScoreFormulaV7Tests`. Alternatives recorded for the decision: (A) config-only divisor tighten —
+rejected, cannot separate JNJ 21 from AEHR 19; (C) benchmark bucketing in the report — complementary, not done
+here. *Proposed · 2026-07-20 — **maintainer approval requested in the PR** (AD-6 structure gate: shape +
+constants).*
+
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
 `radar-formula-v3` — maintainer-approved). Refined · 2026-07-04 (spec 88, `radar-formula-v4` — Accepted,
@@ -377,7 +430,12 @@ deliberately superseded; Accepted · 2026-07-04). Refined · 2026-07-17 (spec 11
 maintainer-gated structure: corroboration-aware Trajectory splitting the directional signals into positive vs
 negative mass combined through the config constant `k` = `TrajectoryCorroborationK`; only Trajectory changed,
 every other component byte-identical to v5; fingerprint re-stamped `abbdf9fab44f → c45fb79092ea`; **Accepted ·
-2026-07-17 — maintainer-approved** (shape signed off in-session; `k=10` default retunable via config)).
+2026-07-17 — maintainer-approved** (shape signed off in-session; `k=10` default retunable via config)). Refined ·
+2026-07-20 (spec 117, `radar-formula-v7` — maintainer-gated structure: notedness-aware Opportunity discount
+folding the curated, non-price seed `FollowingTier` (AD-14) alongside measured Attention, floored/clamped as a
+graded lean; only the Opportunity discount changed, every other component byte-identical to v6; Small tier at
+default weights byte-identical to v6; AI-OFF fingerprint re-stamped `c45fb79092ea → 8f4b59efd288`, AI-ON
+`454984785732 → 4c06fd2d2d8c`; **maintainer approval requested in the PR**).
 
 ---
 

@@ -62,6 +62,15 @@ public static class ScoringConfigFingerprint
         Append(builder, nameof(weights.VelocitySmoothing), weights.VelocitySmoothing);
         Append(builder, nameof(weights.VelocitySteady), weights.VelocitySteady);
         Append(builder, nameof(weights.OpportunityAttentionDivisor), weights.OpportunityAttentionDivisor);
+        // radar-formula-v7 following-discount magnitudes (spec 117), appended AFTER the divisor in this
+        // fixed order — changing any of them (e.g. a tier discount) re-stamps the fingerprint by value.
+        Append(builder, nameof(weights.OpportunityAttentionDiscountWeight), weights.OpportunityAttentionDiscountWeight);
+        Append(builder, nameof(weights.FollowingTierDiscountMega), weights.FollowingTierDiscountMega);
+        Append(builder, nameof(weights.FollowingTierDiscountLarge), weights.FollowingTierDiscountLarge);
+        Append(builder, nameof(weights.FollowingTierDiscountMid), weights.FollowingTierDiscountMid);
+        Append(builder, nameof(weights.FollowingTierDiscountSmall), weights.FollowingTierDiscountSmall);
+        Append(builder, nameof(weights.FollowingTierDiscountWeight), weights.FollowingTierDiscountWeight);
+        Append(builder, nameof(weights.OpportunityDiscountFloor), weights.OpportunityDiscountFloor);
         Append(builder, "attnDesc", attentionDescriptor);
         Append(builder, "srcDesc", signalSourceDescriptor);
         Append(builder, "insiderDesc", insiderMaterialityDescriptor);
