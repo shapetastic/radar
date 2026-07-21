@@ -33,7 +33,7 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
             .Select(c => c.CollectorName)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(n => n, StringComparer.Ordinal)
-            .Select(Escape);
+            .Select(DescriptorEscaping.Escape);
 
         var csv = string.Join(',', names);
 
@@ -42,13 +42,13 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // token. Treat it as opaque: it is delimiter-free today, but escaping keeps the serialization injective
         // (AD-3) so a name that ever contained a reserved delimiter cannot collide with a different collector set.
         // The AI directional-filing source (when registered) contributes an escaped ai=… segment AFTER the
-        // collectors segment (fixed field ordering, AD-3), reusing the same Escape so the whole descriptor stays
+        // collectors segment (fixed field ordering, AD-3), reusing the shared DescriptorEscaping so the whole descriptor stays
         // injective. When it is null (AI off) NOTHING is appended, so the AI-off descriptor is byte-identical to
         // the pre-spec-106 form (the pinned AI-off default fingerprint is unchanged).
         var descriptor = $"rules={KeywordSignalExtractor.RuleSetVersion};collectors={csv};";
         if (aiFilingSource is not null)
         {
-            descriptor += $"ai={Escape(aiFilingSource.ScoringDescriptor())};";
+            descriptor += $"ai={DescriptorEscaping.Escape(aiFilingSource.ScoringDescriptor())};";
         }
 
         _descriptor = descriptor;
@@ -56,13 +56,4 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
 
     /// <inheritdoc />
     public string CanonicalDescriptor() => _descriptor;
-
-    // Percent-escape the reserved descriptor delimiters so the collectors=csv serialization stays injective,
-    // mirroring ConfiguredAttentionSourceWeights.Escape. The % (escape marker) MUST be replaced first, before
-    // the delimiters it encodes; ',' is added because it separates collector names here.
-    private static string Escape(string name) =>
-        name.Replace("%", "%25", StringComparison.Ordinal)
-            .Replace("=", "%3D", StringComparison.Ordinal)
-            .Replace(";", "%3B", StringComparison.Ordinal)
-            .Replace(",", "%2C", StringComparison.Ordinal);
 }

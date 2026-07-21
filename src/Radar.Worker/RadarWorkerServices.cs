@@ -221,9 +221,11 @@ internal static class RadarWorkerServices
             // For the OpenAI-compatible provider, an optional nested model (Radar:Ai:OpenAi:Model) overrides the
             // top-level Radar:Ai:Model; blank falls back to the top-level model so a single Ai.Model keeps working.
             var isOpenAiProvider = string.Equals(options.Ai.Provider.Trim(), "openai", StringComparison.OrdinalIgnoreCase);
-            var effectiveModel = isOpenAiProvider && !string.IsNullOrWhiteSpace(options.Ai.OpenAi.Model)
+            // Trimmed here (not just inside ChatClientFactory) so the model used for the SDK call, the
+            // fingerprint descriptor and the analyzed-filing cache scope are all the same string.
+            var effectiveModel = (isOpenAiProvider && !string.IsNullOrWhiteSpace(options.Ai.OpenAi.Model)
                 ? options.Ai.OpenAi.Model
-                : options.Ai.Model;
+                : options.Ai.Model)?.Trim() ?? string.Empty;
 
             // Resolve the OpenAI-compatible API key from the env var NAMED by config (never from committed config,
             // mirroring the SEC-User-Agent secret precedent). Only the env-var NAME may appear in a message/log —
@@ -292,6 +294,11 @@ internal static class RadarWorkerServices
                     RetryBackoff = TimeSpan.FromSeconds(options.Sec.RetryBackoffSeconds),
                     MinRequestInterval = TimeSpan.FromMilliseconds(options.Sec.MinRequestIntervalMs),
                 });
+            // The single provider:model identity of the earnings reader, computed ONCE and used by BOTH
+            // consumers below (the fingerprint descriptor and the analyzed-filing cache scope) so they can
+            // never disagree about which model produced a run's directional reads.
+            var aiModelIdentity = $"{options.Ai.Provider.Trim()}:{effectiveModel}";
+
             services.AddDirectionalFilingSignals(new DirectionalFilingSignalOptions
             {
                 MinConfidence = options.Ai.MinConfidence,
@@ -299,6 +306,9 @@ internal static class RadarWorkerServices
                 MaxConsecutiveRateLimited = options.Ai.MaxConsecutiveRateLimited,
                 Strength = options.Ai.Strength,
                 Novelty = options.Ai.Novelty,
+                // Spec 119: folded into the scoring fingerprint by value — the reading model changes signal
+                // DIRECTION, so two runs on different models must never share a ScoringConfigVersion.
+                ModelIdentity = aiModelIdentity,
             });
 
             // Per-accession earnings-analysis-result cache (spec 107, AD-14 analogue): lets the directional
@@ -306,8 +316,7 @@ internal static class RadarWorkerServices
             // every run. Rides the same opt-in AI gate (the source needs it at resolve time). The cache is
             // scoped to the analyzing provider:model identity (spec 118) so switching the earnings-read model
             // is a clean cache MISS (re-analyze) rather than a replay of another model's cached reads.
-            services.AddFileAnalyzedFilingCache(
-                options.AnalyzedFilingCacheDirectory, $"{options.Ai.Provider.Trim()}:{effectiveModel}");
+            services.AddFileAnalyzedFilingCache(options.AnalyzedFilingCacheDirectory, aiModelIdentity);
 
             // Opt-in AI filing-read debug store (spec 115, diagnostic-only / AD-14 read-side): persists what
             // each AI filing-read attempt saw and concluded, including no-signal and empty-body outcomes.

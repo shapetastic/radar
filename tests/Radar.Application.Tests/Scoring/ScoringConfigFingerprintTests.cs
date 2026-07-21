@@ -169,12 +169,22 @@ public sealed class ScoringConfigFingerprintTests
         Assert.NotEqual(baseline, changed);
     }
 
-    // The AI-ON signal-source descriptor (spec 106): the same AI-OFF SourceDescriptor with the directional-filing
-    // source's per-signal magnitudes appended as an escaped ai=… segment (the default Strength/Novelty/MinConfidence
-    // == 8/6/0.6 after the spec-112 Strength 6→8 recalibration). This is what SignalSourceDescriptor produces when
-    // the opt-in AI path is registered.
-    private const string AiOnSourceDescriptor =
-        SourceDescriptor + "ai=directional-filing:str=8;nov=6;minconf=0.6;";
+    // The directional-filing source's own descriptor for the default live run (pinned field-for-field by
+    // DirectionalFilingSignalSourceTests.ScoringDescriptor_EncodesPerSignalMagnitudes_InCanonicalForm): the default
+    // Strength/Novelty/MinConfidence == 8/6/0.6 (spec-112 Strength 6→8 recalibration) plus the spec-119
+    // earnings-read model identity — scripts/run-profiles/default.json now configures the DeepInfra
+    // OpenAI-compatible provider with deepseek-ai/DeepSeek-V4-Flash, and the Worker composes the identity as
+    // "{provider}:{effective model}".
+    private const string AiDirectionalDescriptor =
+        "directional-filing:str=8;nov=6;minconf=0.6;model=openai:deepseek-ai/DeepSeek-V4-Flash";
+
+    // The AI-ON signal-source descriptor (spec 106): the AI-OFF SourceDescriptor with the directional-filing
+    // descriptor appended as an ESCAPED ai=… segment. Built through the real DescriptorEscaping (not a hand-written
+    // literal) so this is byte-identical to what SignalSourceDescriptor actually produces when the opt-in AI path is
+    // registered — the pre-spec-119 literal omitted that escaping, so the old AI-ON pin was not the value a live
+    // AI-ON run stamped; spec 119 corrects that at the same time as folding the model in.
+    private static readonly string AiOnSourceDescriptor =
+        SourceDescriptor + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptor)};";
 
     [Fact]
     public void Compute_AiOnSourceDescriptor_DiffersFromAiOff()
@@ -196,17 +206,22 @@ public sealed class ScoringConfigFingerprintTests
     [Fact]
     public void Compute_AiOnDefault_MatchesPinnedFingerprint()
     {
-        // The live AI-ON default fingerprint the scripts/run-profiles/default.json run produces: with Ollama
-        // registered, the AI directional-filing descriptor is folded in (AiOnSourceDescriptor above), so the
-        // effective config differs from the AI-OFF pin. Pinned so an accidental drift in the AI directional
-        // magnitudes (or any other folded input) is caught for the AI-ON run too. This value was re-stamped
-        // from the spec-112 AI-ON default (radar-scoring-fp-454984785732) by the spec-117 radar-formula-v7
-        // structure bump + the seven new following-discount weight inputs, exactly like the AI-OFF pin.
+        // The live AI-ON default fingerprint the scripts/run-profiles/default.json run produces: with an AI
+        // provider registered, the AI directional-filing descriptor is folded in (AiOnSourceDescriptor above), so
+        // the effective config differs from the AI-OFF pin. Pinned so an accidental drift in the AI directional
+        // magnitudes, the earnings-read model, or any other folded input is caught for the AI-ON run too.
+        // Lineage: spec 112 (radar-scoring-fp-454984785732) → spec 117 radar-formula-v7 structure bump +
+        // following-discount weights (radar-scoring-fp-4c06fd2d2d8c) → spec 119, which (a) folds the earnings-read
+        // model identity into the directional descriptor by value (the default switches from ollama/llama3.1 to
+        // the DeepInfra openai provider on deepseek-ai/DeepSeek-V4-Flash — a DIRECTION-changing input, so runs
+        // must not be falsely comparable) and (b) builds the ai= segment through the real escaping so the pin is
+        // what a live run actually stamps. No _formula.Version / RuleSetVersion bump; the AI-OFF pin above is
+        // deliberately UNMOVED (an AI-OFF run has no directional path, so nothing is appended).
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v7", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-4c06fd2d2d8c", fp);
+        Assert.Equal("radar-scoring-fp-2ef5ef96cce2", fp);
     }
 
     [Fact]
@@ -220,7 +235,29 @@ public sealed class ScoringConfigFingerprintTests
 
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v7", new ScoringWeights(), DefaultTierDescriptor(),
-            SourceDescriptor + "ai=directional-filing:str=9;nov=6;minconf=0.6;",
+            SourceDescriptor
+                + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptor.Replace("str=8", "str=9", StringComparison.Ordinal))};",
+            InsiderDescriptor, MediaCollapseDescriptor);
+
+        Assert.NotEqual(baseline, changed);
+    }
+
+    [Fact]
+    public void Compute_ChangedAiModel_ChangesFingerprint()
+    {
+        // Spec 119: the earnings-read MODEL is folded in by value because it changes signal DIRECTION (the
+        // 2026-07-21 A/B: llama3.1 read EOSE Improving 0.90 where DeepSeek-V4-Flash read the same release
+        // Mixed 0.85). Two runs on different models must therefore never share a ScoringConfigVersion —
+        // otherwise the efficacy line would be drawn as continuous across a real change.
+        var baseline = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v7", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
+            InsiderDescriptor, MediaCollapseDescriptor);
+
+        var previousModel =
+            "directional-filing:str=8;nov=6;minconf=0.6;model=ollama:llama3.1";
+        var changed = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "radar-formula-v7", new ScoringWeights(), DefaultTierDescriptor(),
+            SourceDescriptor + $"ai={DescriptorEscaping.Escape(previousModel)};",
             InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(baseline, changed);

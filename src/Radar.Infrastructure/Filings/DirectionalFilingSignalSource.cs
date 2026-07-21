@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 
 using Radar.Application.Collectors;
 using Radar.Application.Filings;
+using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Domain.Evidence;
 using Radar.Domain.Filings;
@@ -100,15 +101,19 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         _debugSink = debugSink;
 
         // Build the fingerprint contribution ONCE (AD-3 determinism): only the per-signal magnitudes that set an
-        // emitted signal's Strength/Novelty/confidence-gate are hashed. MaxFilingsPerRun and
-        // MaxConsecutiveRateLimited are cost/operational caps (a per-run fetch limit and a 429 circuit breaker,
-        // like ScoringWindowDays which spec 105 confirmed is deliberately NOT a fingerprint input) — they are
-        // EXCLUDED so tuning them does not falsely re-stamp otherwise-comparable runs. InvariantCulture keeps the
-        // string culture-independent; "G29" is the decimal round-trip format ("R" is documented only for the
-        // floating-point types, not decimal), so the MinConfidence contribution is injective across [0,1].
+        // emitted signal's Strength/Novelty/confidence-gate are hashed, plus (spec 119) the READING MODEL
+        // identity, because a different model produces a different DIRECTION for the same filing.
+        // MaxFilingsPerRun and MaxConsecutiveRateLimited are cost/operational caps (a per-run fetch limit and a
+        // 429 circuit breaker, like ScoringWindowDays which spec 105 confirmed is deliberately NOT a fingerprint
+        // input) — they are EXCLUDED so tuning them does not falsely re-stamp otherwise-comparable runs.
+        // InvariantCulture keeps the string culture-independent; "G29" is the decimal round-trip format ("R" is
+        // documented only for the floating-point types, not decimal), so the MinConfidence contribution is
+        // injective across [0,1]. Field order is FIXED (str, nov, minconf, model — model appended LAST so the
+        // pre-spec-119 prefix is unchanged) and the model value is escaped with the shared DescriptorEscaping so
+        // a model id containing a reserved delimiter cannot collide with a different descriptor (AD-3).
         _scoringDescriptor = string.Create(
             CultureInfo.InvariantCulture,
-            $"directional-filing:str={_options.Strength};nov={_options.Novelty};minconf={_options.MinConfidence.ToString("G29", CultureInfo.InvariantCulture)}");
+            $"directional-filing:str={_options.Strength};nov={_options.Novelty};minconf={_options.MinConfidence.ToString("G29", CultureInfo.InvariantCulture)};model={DescriptorEscaping.Escape(_options.ModelIdentity?.Trim() ?? string.Empty)}");
     }
 
     /// <inheritdoc />
