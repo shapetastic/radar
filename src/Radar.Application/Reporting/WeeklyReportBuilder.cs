@@ -207,9 +207,18 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 && string.Equals(
                     c.Current.ScoringConfigVersion, previous.ScoringConfigVersion, StringComparison.Ordinal);
 
-            var action = _policy.Decide(new ReportActionContext(c.Current, previous, PreviousComparable: comparable));
-            var evidence = await BuildEvidenceRefsAsync(c.Current, links, ct).ConfigureAwait(false);
+            // The contributing signal set is built BEFORE Decide because the policy's corroboration
+            // floor measures agreement across it (and the report's "why noticed" block reuses the very
+            // same list — built once, never fetched twice).
             var signals = await BuildSignalRefsAsync(c.Current, links, ct).ConfigureAwait(false);
+
+            var action = _policy.Decide(new ReportActionContext(
+                c.Current,
+                previous,
+                PreviousComparable: comparable,
+                ContributingSignals: signals,
+                FollowingTier: c.Company.FollowingTier));
+            var evidence = await BuildEvidenceRefsAsync(c.Current, links, ct).ConfigureAwait(false);
             entries.Add(new WeeklyReportEntry(
                 CompanyId: c.Current.CompanyId,
                 CompanyName: c.Company.Name,

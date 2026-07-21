@@ -1,6 +1,8 @@
 namespace Radar.Application.Reporting;
 
+using Radar.Domain.Companies;
 using Radar.Domain.Reports;
+using Radar.Domain.Signals;
 
 /// <summary>
 /// Deterministic first implementation of <see cref="IReportActionPolicy"/>. Maps a company's current
@@ -8,6 +10,20 @@ using Radar.Domain.Reports;
 /// AD-9 ALLOWED weekly-report labels plus a plain-English, advice-free rationale. Pure: no clock, no
 /// randomness, no I/O. May return <see cref="RadarReportAction.Ignore"/> for adequate-evidence,
 /// low-opportunity companies, and never emits financial-advice language.
+/// <para>
+/// <b>Corroboration floor (v2).</b> A company that would otherwise fall to
+/// <see cref="RadarReportAction.Ignore"/> is floored to <see cref="RadarReportAction.Watch"/> when it is
+/// under-followed (<see cref="FollowingTier.Small"/>/<see cref="FollowingTier.Mid"/>), its trajectory is
+/// not below neutral, and at least <see cref="MinCorroboratingSignalTypes"/> DISTINCT
+/// <see cref="SignalType"/>s among its contributing signals point
+/// <see cref="SignalDirection.Positive"/>. Several independent axes agreeing is exactly the pattern
+/// Radar exists to surface, and a mixed quarter can pull opportunity below the Watch line while that
+/// corroboration is intact. The floor is deliberately <b>tier-gated</b>: it never fires for
+/// <see cref="FollowingTier.Large"/>/<see cref="FollowingTier.Mega"/> names, so the spec-117 notedness
+/// posture (already-noticed mega-caps stay low) is preserved. It is a <b>floor only</b> — it can lift
+/// <c>Ignore → Watch</c> and nothing else: it never reaches <see cref="RadarReportAction.Investigate"/>
+/// and never overrides thin evidence or an improving/deteriorating thesis.
+/// </para>
 /// </summary>
 public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
 {
@@ -23,8 +39,13 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
     // Opportunity thresholds for the steady-state labels.
     private const int InvestigateOpportunity = 60;
     private const int WatchOpportunity = 40;
+    // Minimum number of DISTINCT positive-direction signal types among the contributing signals for a
+    // sub-Watch, under-followed company to be floored to Watch instead of Ignore. Distinct TYPES (not
+    // rows): two independent axes agreeing (e.g. CustomerWin + StrategicPartnership), not the same
+    // phrase matched twice. Tunable — a follow-up may raise it after a live re-measure.
+    private const int MinCorroboratingSignalTypes = 2;
 
-    public string Version => "weekly-report-action-v1";
+    public string Version => "weekly-report-action-v2";
 
     public ReportActionResult Decide(ReportActionContext context)
     {
@@ -88,6 +109,27 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
             return new ReportActionResult(
                 RadarReportAction.Watch,
                 $"Opportunity {current.OpportunityScore} (>= {WatchOpportunity}); watch for further signals.");
+        }
+
+        // 4b. Corroboration floor (v2): opportunity is below the Watch line, but an under-followed name
+        // whose trajectory is not below neutral and whose contributing signals agree across several
+        // independent axes is a research lead, not noise. Floor it to Watch — never higher, and never
+        // for already-noticed (Large/Mega) names.
+        if (context.FollowingTier is FollowingTier.Small or FollowingTier.Mid
+            && current.TrajectoryScore >= NeutralTrajectory)
+        {
+            var positiveTypeCount = context.ContributingSignals
+                .Where(s => s.Direction == SignalDirection.Positive)
+                .Select(s => s.Type)
+                .Distinct()
+                .Count();
+
+            if (positiveTypeCount >= MinCorroboratingSignalTypes)
+            {
+                return new ReportActionResult(
+                    RadarReportAction.Watch,
+                    $"Opportunity {current.OpportunityScore} below {WatchOpportunity} but {positiveTypeCount} corroborating positive signal types across an under-followed name; floored to Watch (not Ignore).");
+            }
         }
 
         // Evidence is adequate (rule 1 did not fire) but opportunity is below the Watch floor:

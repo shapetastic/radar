@@ -1,9 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
@@ -69,6 +71,43 @@ public sealed class WeeklyReportBuilderTests
                 .ToList());
     }
 
+    // Counts GetByIdAsync calls so a test can prove the builder resolves each contributing signal once
+    // (the "why noticed" refs and the policy's corroboration input are the SAME list, not two fetches).
+    private sealed class CountingSignalRepository(InMemorySignalRepository inner) : ISignalRepository
+    {
+        public int GetByIdCallCount { get; private set; }
+
+        public Task AddAsync(Signal signal, CancellationToken ct) => inner.AddAsync(signal, ct);
+
+        public Task<Signal?> GetByIdAsync(Guid id, CancellationToken ct)
+        {
+            GetByIdCallCount++;
+            return inner.GetByIdAsync(id, ct);
+        }
+
+        public Task<IReadOnlyList<Signal>> GetByCompanyAsync(Guid companyId, CancellationToken ct) =>
+            inner.GetByCompanyAsync(companyId, ct);
+
+        public Task<IReadOnlyList<Signal>> GetObservedBetweenAsync(
+            DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken ct) =>
+            inner.GetObservedBetweenAsync(startUtc, endUtc, ct);
+    }
+
+    // Records the contexts handed to the policy so a test can assert what the builder populated, while
+    // still delegating the actual decision to the production policy.
+    private sealed class RecordingActionPolicy(IReportActionPolicy inner) : IReportActionPolicy
+    {
+        public List<ReportActionContext> Contexts { get; } = [];
+
+        public string Version => inner.Version;
+
+        public ReportActionResult Decide(ReportActionContext context)
+        {
+            Contexts.Add(context);
+            return inner.Decide(context);
+        }
+    }
+
     private sealed class Harness
     {
         public InMemoryCompanyRepository Companies { get; } = new();
@@ -77,6 +116,8 @@ public sealed class WeeklyReportBuilderTests
         public InMemorySignalRepository Signals { get; } = new();
         public InMemorySignalReviewRepository SignalReviews { get; } = new();
         public InMemoryReportRepository Reports { get; } = new();
+        public CountingSignalRepository CountingSignals { get; }
+        public RecordingActionPolicy Policy { get; }
         public WeeklyReportBuilder Builder { get; }
 
         public Harness(
@@ -84,13 +125,15 @@ public sealed class WeeklyReportBuilderTests
             IReadOnlyList<PipelineRunRecord>? runs = null,
             IScoreSnapshotFileStore? scoreFiles = null)
         {
+            CountingSignals = new CountingSignalRepository(Signals);
+            Policy = new RecordingActionPolicy(new WeeklyReportActionPolicyV1());
             Builder = new WeeklyReportBuilder(
                 Companies,
                 Scores,
                 Evidence,
-                Signals,
+                CountingSignals,
                 SignalReviews,
-                new WeeklyReportActionPolicyV1(),
+                Policy,
                 new MarkdownWeeklyReportRenderer(),
                 Reports,
                 new FakeRunStore(runs ?? []),
@@ -130,12 +173,14 @@ public sealed class WeeklyReportBuilderTests
         DateTimeOffset? createdAt = null,
         int trajectory = 50,
         int evidenceConfidence = 50,
-        bool withLink = true)
+        bool withLink = true,
+        FollowingTier followingTier = FollowingTier.Small)
     {
         var company = new CompanyBuilder()
             .WithId(companyId)
             .WithName(name)
             .WithTicker(ticker)
+            .WithFollowingTier(followingTier)
             .Build();
         await h.Companies.AddAsync(company, default);
 
@@ -1302,6 +1347,111 @@ public sealed class WeeklyReportBuilderTests
         Assert.Contains("collectors: bravo", markdown, StringComparison.Ordinal);
         // The third (oldest) run is dropped by the cap.
         Assert.DoesNotContain("collectors: charlie", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PassesContributingSignalsAndFollowingTierIntoActionContext()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedCompanyAsync(
+            h, companyId, snapshotId, opportunity: 70, followingTier: FollowingTier.Mid);
+
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Multi-year supply agreement announced.");
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.StrategicPartnership, SignalDirection.Positive,
+            "Joint development partnership signed.");
+
+        await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        var context = Assert.Single(h.Policy.Contexts);
+        Assert.Equal(FollowingTier.Mid, context.FollowingTier);
+        Assert.Equal(
+            [SignalType.CustomerWin, SignalType.StrategicPartnership],
+            context.ContributingSignals.Select(s => s.Type).ToArray());
+        Assert.All(
+            context.ContributingSignals, s => Assert.Equal(SignalDirection.Positive, s.Direction));
+    }
+
+    [Fact]
+    public async Task CorroboratedUnderFollowedLowOpportunityCompanySurfacesAsWatchNotIgnore()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        // Opportunity below the Watch line (40) with adequate evidence: Ignore under the old policy.
+        await SeedCompanyAsync(
+            h, companyId, snapshotId, opportunity: 30, trajectory: 55, evidenceConfidence: 70,
+            followingTier: FollowingTier.Small);
+
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Production order booked.");
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.StrategicPartnership, SignalDirection.Positive,
+            "Joint development partnership signed.");
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(RadarReportAction.Watch, item.SuggestedAction);
+        Assert.Contains("corroborating positive signal types", item.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WellFollowedLowOpportunityCompanyStillSurfacesAsIgnore()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedCompanyAsync(
+            h, companyId, snapshotId, opportunity: 30, trajectory: 55, evidenceConfidence: 70,
+            followingTier: FollowingTier.Mega);
+
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Production order booked.");
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.StrategicPartnership, SignalDirection.Positive,
+            "Joint development partnership signed.");
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(RadarReportAction.Ignore, item.SuggestedAction);
+    }
+
+    [Fact]
+    public async Task ResolvesEachContributingSignalOnceForBothPolicyAndWhyNoticed()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70);
+
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Production order booked.");
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.StrategicPartnership, SignalDirection.Positive,
+            "Joint development partnership signed.");
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        // 3 distinct link signal ids (the default seeded link plus the two above) → 3 lookups. The
+        // policy reuses the SAME built list, so moving BuildSignalRefsAsync before Decide must not
+        // double the fetches.
+        Assert.Equal(3, h.CountingSignals.GetByIdCallCount);
+
+        // The rendered "why noticed" block is unchanged (same refs, same order).
+        var markdown = result.Report.MarkdownContent;
+        var customerIndex = markdown.IndexOf("CustomerWin (Positive)", StringComparison.Ordinal);
+        var partnershipIndex = markdown.IndexOf("StrategicPartnership (Positive)", StringComparison.Ordinal);
+        Assert.True(customerIndex >= 0 && partnershipIndex >= 0);
+        Assert.True(customerIndex < partnershipIndex, "Signals should be ordered by type.");
     }
 
     [Fact]
