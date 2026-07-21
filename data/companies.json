@@ -256,36 +256,6 @@
       ]
     },
     {
-      "id": "4cab0e8e-0e72-4f69-a7da-978f04470110",
-      "name": "Sapiens International Corporation",
-      "legalName": "Sapiens International Corporation N.V.",
-      "ticker": "SPNS",
-      "exchange": "NASDAQ",
-      "countryCode": "IL",
-      "sector": "Technology",
-      "industry": "Software—Application",
-      "followingTier": "small",
-      "aliases": ["Sapiens", "Sapiens International"],
-      "themes": ["insurance software", "SaaS"],
-      "sourceFeeds": [
-        {
-          "type": "rss",
-          "name": "Sapiens — Newsroom",
-          "url": "https://sapiens.com/newsroom/feed/"
-        },
-        {
-          "type": "news",
-          "name": "Sapiens — News coverage (GDELT)",
-          "url": "query=Sapiens International&ticker=SPNS"
-        },
-        {
-          "type": "newssearch",
-          "name": "Sapiens International — News attention (Google News)",
-          "url": "query=Sapiens International&ticker=SPNS"
-        }
-      ]
-    },
-    {
       "id": "8a6f696d-130c-4e2d-9b04-ea57b60a0858",
       "name": "Helios Technologies, Inc.",
       "legalName": "Helios Technologies, Inc.",
@@ -772,6 +742,431 @@
           "type": "newssearch",
           "name": "Apple Inc. — News attention (Google News)",
           "url": "query=Apple Inc&ticker=AAPL"
+        }
+      ]
+    },
+    {
+      "id": "f59ea273-1f23-4dba-bf5e-f9e5ecf574fd",
+      "name": "TransMedics Group, Inc.",
+      "legalName": "TransMedics Group, Inc.",
+      "ticker": "TMDX",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Devices",
+      "followingTier": "mid",
+      "aliases": ["TransMedics", "TransMedics Group"],
+      "themes": ["organ perfusion", "transplant logistics", "medical devices"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "TransMedics Group, Inc. — News Releases (IR)",
+          "url": "https://investors.transmedics.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "TransMedics Group, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001756262.json"
+        },
+        {
+          "type": "secform4",
+          "name": "TransMedics Group, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001756262.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "TransMedics Group, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001756262.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "TransMedics Group, Inc. — News attention (Google News)",
+          "url": "query=TransMedics Group&ticker=TMDX"
+        }
+      ]
+    },
+    {
+      "id": "04678338-ddeb-4505-b8e8-7241a22dfc20",
+      "name": "Axogen, Inc.",
+      "legalName": "Axogen, Inc.",
+      "ticker": "AXGN",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Devices",
+      "followingTier": "small",
+      "aliases": ["Axogen"],
+      "themes": ["nerve repair", "surgical implants", "medical devices"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Axogen, Inc. — Press Releases (IR)",
+          "url": "https://ir.axogeninc.com/news-events/press-releases/rss"
+        },
+        {
+          "type": "sec",
+          "name": "Axogen, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000805928.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Axogen, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000805928.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Axogen, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000805928.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Axogen, Inc. — News attention (Google News)",
+          "url": "query=Axogen&ticker=AXGN"
+        }
+      ]
+    },
+    {
+      "id": "c4aecc47-7fb2-43e1-aa16-fddef27e97e8",
+      "name": "Sterling Infrastructure, Inc.",
+      "legalName": "Sterling Infrastructure, Inc.",
+      "ticker": "STRL",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Engineering & Construction",
+      "followingTier": "mid",
+      "aliases": ["Sterling Infrastructure", "Sterling"],
+      "themes": ["infrastructure construction", "data center sitework", "transportation solutions"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Sterling Infrastructure, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000874238.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Sterling Infrastructure, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000874238.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Sterling Infrastructure, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000874238.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Sterling Infrastructure, Inc. — News attention (Google News)",
+          "url": "query=Sterling Infrastructure&ticker=STRL"
+        }
+      ]
+    },
+    {
+      "id": "7477ce65-efa8-4f0d-a4da-7364ab2310d2",
+      "name": "MYR Group Inc.",
+      "legalName": "MYR Group Inc.",
+      "ticker": "MYRG",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Engineering & Construction",
+      "followingTier": "mid",
+      "aliases": ["MYR Group", "MYR"],
+      "themes": ["electrical construction", "grid transmission and distribution", "electrification"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "MYR Group Inc. — News Releases (IR)",
+          "url": "https://investor.myrgroup.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "MYR Group Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000700923.json"
+        },
+        {
+          "type": "secform4",
+          "name": "MYR Group Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000700923.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "MYR Group Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000700923.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "MYR Group Inc. — News attention (Google News)",
+          "url": "query=MYR Group&ticker=MYRG"
+        }
+      ]
+    },
+    {
+      "id": "e8cffb0c-29b9-4db4-9eb3-c5e68fe72ba2",
+      "name": "Bel Fuse Inc.",
+      "legalName": "Bel Fuse Inc.",
+      "ticker": "BELFB",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Electronic Components",
+      "followingTier": "small",
+      "aliases": ["Bel Fuse", "Bel"],
+      "themes": ["electronic components", "power conversion", "connectivity"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Bel Fuse Inc. — News Releases (IR)",
+          "url": "https://ir.belfuse.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Bel Fuse Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000729580.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Bel Fuse Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000729580.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Bel Fuse Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000729580.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Bel Fuse Inc. — News attention (Google News)",
+          "url": "query=Bel Fuse&ticker=BELFB"
+        }
+      ]
+    },
+    {
+      "id": "5cf9dce6-4874-45ec-a7e7-1db8b1db1b58",
+      "name": "Argan, Inc.",
+      "legalName": "Argan, Inc.",
+      "ticker": "AGX",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Engineering & Construction",
+      "followingTier": "small",
+      "aliases": ["Argan", "Gemma Power Systems"],
+      "themes": ["power plant construction", "energy EPC", "gas and renewable generation"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Argan, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000100591.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Argan, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000100591.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Argan, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000100591.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Argan, Inc. — News attention (Google News)",
+          "url": "query=Argan Inc&ticker=AGX"
+        }
+      ]
+    },
+    {
+      "id": "5d144898-73eb-44d8-a2cd-5ee638010019",
+      "name": "Essential Utilities, Inc.",
+      "legalName": "Essential Utilities, Inc.",
+      "ticker": "WTRG",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Utilities",
+      "industry": "Utilities—Regulated Water",
+      "followingTier": "large",
+      "aliases": ["Essential Utilities", "Aqua America"],
+      "themes": ["regulated water", "natural gas distribution", "utility infrastructure"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Essential Utilities, Inc. — News Releases (IR)",
+          "url": "https://ir.aquaamerica.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Essential Utilities, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000078128.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Essential Utilities, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000078128.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Essential Utilities, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000078128.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Essential Utilities, Inc. — News attention (Google News)",
+          "url": "query=Essential Utilities&ticker=WTRG"
+        }
+      ]
+    },
+    {
+      "id": "e97734ba-490b-460d-8539-dcac2c8b552d",
+      "name": "WD-40 Company",
+      "legalName": "WD-40 Company",
+      "ticker": "WDFC",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Basic Materials",
+      "industry": "Specialty Chemicals",
+      "followingTier": "mid",
+      "aliases": ["WD-40", "WD-40 Company"],
+      "themes": ["specialty chemicals", "maintenance products", "consumer brands"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "WD-40 Company — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000105132.json"
+        },
+        {
+          "type": "secform4",
+          "name": "WD-40 Company — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000105132.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "WD-40 Company — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000105132.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "WD-40 Company — News attention (Google News)",
+          "url": "query=WD-40 Company&ticker=WDFC"
+        }
+      ]
+    },
+    {
+      "id": "5d774e8c-9009-46cc-9545-36506966d448",
+      "name": "Hormel Foods Corp.",
+      "legalName": "Hormel Foods Corp.",
+      "ticker": "HRL",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Consumer Defensive",
+      "industry": "Packaged Foods",
+      "followingTier": "large",
+      "aliases": ["Hormel Foods", "Hormel"],
+      "themes": ["packaged foods", "protein brands", "consumer staples"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Hormel Foods Corp. — Newsroom",
+          "url": "https://www.hormelfoods.com/feed/"
+        },
+        {
+          "type": "sec",
+          "name": "Hormel Foods Corp. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000048465.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Hormel Foods Corp. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000048465.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Hormel Foods Corp. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000048465.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Hormel Foods Corp. — News attention (Google News)",
+          "url": "query=Hormel Foods&ticker=HRL"
+        }
+      ]
+    },
+    {
+      "id": "ced4da3b-9e96-4887-84d8-37f667f7056b",
+      "name": "Visa Inc.",
+      "legalName": "Visa Inc.",
+      "ticker": "V",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Credit Services",
+      "followingTier": "mega",
+      "aliases": ["Visa"],
+      "themes": ["payments network", "digital payments", "mega-cap financials"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Visa Inc. — News Releases (IR)",
+          "url": "https://visa.gcs-web.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Visa Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001403161.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Visa Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001403161.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Visa Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001403161.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Visa Inc. — News attention (Google News)",
+          "url": "query=Visa Inc&ticker=V"
+        }
+      ]
+    },
+    {
+      "id": "075523c8-e572-4cc1-9cd8-b02de85f4f44",
+      "name": "Chevron Corp.",
+      "legalName": "Chevron Corp.",
+      "ticker": "CVX",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Energy",
+      "industry": "Oil & Gas Integrated",
+      "followingTier": "mega",
+      "aliases": ["Chevron"],
+      "themes": ["integrated oil and gas", "upstream production", "energy mega-cap"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Chevron Corp. — News Releases (IR)",
+          "url": "https://chevroncorp.gcs-web.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Chevron Corp. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000093410.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Chevron Corp. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000093410.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Chevron Corp. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000093410.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Chevron Corp. — News attention (Google News)",
+          "url": "query=Chevron&ticker=CVX"
         }
       ]
     }
