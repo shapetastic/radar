@@ -189,9 +189,11 @@ public sealed class AttentionBreadthCharacterizationTests
         // SignalVelocity, never Attention.
         services.AddFileSignalStore(signalStoreDir);
 
-        await using var provider = services.BuildServiceProvider();
         try
         {
+            // Dispose the provider (owner of the FileSignalStore singleton) BEFORE deleting the temp directory,
+            // otherwise the still-alive file resources can cause intermittent IO failures on Windows.
+            await using var provider = services.BuildServiceProvider();
             var evidenceRepository = provider.GetRequiredService<IEvidenceRepository>();
             var signalRepository = provider.GetRequiredService<ISignalRepository>();
             var engine = provider.GetRequiredService<IScoringEngine>();
