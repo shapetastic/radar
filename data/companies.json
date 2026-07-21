@@ -1126,7 +1126,7 @@
         {
           "type": "newssearch",
           "name": "Visa Inc. — News attention (Google News)",
-          "url": "query=Visa Inc&ticker=V"
+          "url": "query=Visa Inc"
         }
       ]
     },
