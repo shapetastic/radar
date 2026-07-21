@@ -70,7 +70,9 @@ the top of the file). Required/known fields:
     (`"<Name> — SEC filings (EDGAR)"`, `"… — SEC Form 4 insider filings (EDGAR)"`, `"… — SEC 13D/13G ownership
     filings (EDGAR)"`).
   - `newssearch` — **required**, `url: "query=<Registrant Name>&ticker=<TICKER>"`, name `"<Name> — News attention
-    (Google News)"`.
+    (Google News)"`. **Exception (as shipped): omit the `ticker=` token for V (Visa).** The collector's title
+    relevance filter is a plain case-insensitive substring match, so a single-letter ticker matches almost any
+    headline; relevance for Visa is driven by the `query=` phrase alone.
   - `rss` — **include only if verified live.** Locate the company's investor-relations press-release RSS feed and
     **curl it with the collector User-Agent** (the same UA the RSS collector sends). Include the `rss` feed **only
     if it returns HTTP 200 with valid RSS**; if it 403s (the known FLO/IR-platform gotcha), 404s, or no IR RSS
