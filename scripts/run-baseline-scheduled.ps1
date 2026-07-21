@@ -62,10 +62,13 @@ Write-Host "Profile: $Profile"
 Write-Host "API key: loaded into `$env:$KeyEnvVar from the configured key file (value never logged)."
 
 # --- run the measurement ---
+# Splat a HASHTABLE, not an array: array splatting does not reliably bind named parameters of an advanced
+# (`[CmdletBinding()]`) script like run-radar.ps1 - the -SecUserAgent value gets orphaned as a positional
+# ("A positional parameter cannot be found ..."). Hashtable splatting binds by name and is the correct form.
 $runRadar = Join-Path $scriptDir "run-radar.ps1"
-$runArgs = @('-Profile', $Profile, '-SecUserAgent', $SecUserAgent)
-if ($SkipBuild) { $runArgs += '-SkipBuild' }
-if ($WhatIf)    { $runArgs += '-WhatIf' }
+$runArgs = @{ Profile = $Profile; SecUserAgent = $SecUserAgent }
+if ($SkipBuild) { $runArgs['SkipBuild'] = $true }
+if ($WhatIf)    { $runArgs['WhatIf']    = $true }
 
 & $runRadar @runArgs
 exit $LASTEXITCODE
