@@ -1005,6 +1005,12 @@ public static class InfrastructureServiceCollectionExtensions
     /// is outside the signal's valid [1,10] range: each is a configuration error that would otherwise gate every
     /// read to nothing, emit a signal that fails <c>SignalValidation</c>, or surface as an opaque failure.
     /// </para>
+    /// <para>
+    /// <see cref="DirectionalFilingSignalOptions.ModelIdentity"/> (spec 119) is deliberately NOT validated: it is
+    /// a provenance/comparability label folded into the scoring fingerprint, not a behaviour switch, so a blank
+    /// value hashes as "model not declared" rather than failing registration for a caller that has no model
+    /// identity to declare.
+    /// </para>
     /// </summary>
     public static IServiceCollection AddDirectionalFilingSignals(
         this IServiceCollection services, DirectionalFilingSignalOptions options)

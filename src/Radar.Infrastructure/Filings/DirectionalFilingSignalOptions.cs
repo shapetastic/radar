@@ -35,4 +35,27 @@ public sealed class DirectionalFilingSignalOptions
     /// (unbounded — the pre-spec-107 behaviour), used for parity testing. Must not be negative.
     /// </summary>
     public int MaxConsecutiveRateLimited { get; init; } = 2;
+
+    /// <summary>
+    /// The earnings-read model identity in <c>provider:model</c> form (e.g.
+    /// <c>openai:deepseek-ai/DeepSeek-V4-Flash</c>) — the SAME string the spec-118 analyzed-filing cache is
+    /// scoped by, supplied by the Worker's composition root.
+    /// <para>
+    /// A <b>scoring-fingerprint input</b> (spec 119): the reading model changes signal <b>DIRECTION</b>, not just
+    /// throughput — the 2026-07-21 A/B had llama3.1 read EOSE as <c>Improving 0.90</c> where DeepSeek-V4-Flash
+    /// read the same release as <c>Mixed 0.85</c>. Leaving it out would let two runs with materially different
+    /// directional signal sets share one <c>ScoringConfigVersion</c>, breaking the spec-69/95 comparability
+    /// invariant and drawing the efficacy line as continuous across a real change. It is therefore folded into
+    /// the descriptor <b>by value</b> (like the spec-95 collector set and the spec-96 insider tiers) — swapping
+    /// the model re-stamps the fingerprint automatically, with no <c>_formula.Version</c> / <c>RuleSetVersion</c>
+    /// bump.
+    /// </para>
+    /// <para>
+    /// Default blank: the pre-spec-119 callers that do not supply it hash as "model not declared" rather than
+    /// failing registration (it is a provenance/comparability label, never a behaviour switch — a blank identity
+    /// changes nothing the source DOES). Only the AI-ON fingerprint is affected at all, because the descriptor is
+    /// only folded in when this source is registered.
+    /// </para>
+    /// </summary>
+    public string ModelIdentity { get; init; } = string.Empty;
 }

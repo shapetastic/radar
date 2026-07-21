@@ -228,7 +228,9 @@ Two rules keep it from misbehaving:
 | `.github/workflows/ci.yml` | CI build/test gate. |
 | `.github/copilot-instructions.md` | Repository rules that guide Copilot’s reviews. |
 | `scripts/run-next.ps1` | The driver (implement / plan / Copilot stage). |
-| `scripts/run-radar.ps1` | Runs the **Worker** for a live measurement from a named JSON profile (`scripts/run-profiles/`, `default` = baseline; experiments overlay a delta and write to `data/experiments/<profile>/`). Not the dev driver — this runs the app. |
+| `scripts/run-radar.ps1` | Runs the **Worker** for a live measurement from a named JSON profile (`scripts/run-profiles/`, `default` = baseline; experiments overlay a delta and write to `data/experiments/<profile>/`). Not the dev driver — this runs the app. The baseline earnings read is **DeepSeek-V4-Flash on DeepInfra**, so it needs **`$env:DEEPINFRA_API_KEY`** set (the profile only names the variable — the key value is never committed or logged) plus a real `-SecUserAgent`. |
+| `scripts/run-baseline-scheduled.ps1` | Unattended wrapper for the scheduled baseline run: loads the API key from `-KeyFile` into `$env:DEEPINFRA_API_KEY` (process-scoped, never echoed), takes `-SecUserAgent`/`$env:RADAR_SEC_UA`, then calls `run-radar.ps1`. Fails loud on a missing/empty key. |
+| `scripts/setup-baseline-task.ps1` | **Maintainer-run-once, elevated:** registers the daily `RadarBaselineDaily` scheduled task pointing at the wrapper (passing `-KeyFile`/`-SecUserAgent` through). The only machine-mutating step; never run by the pipeline. |
 | `scripts/setup-claude-worktrees.ps1` | One-time worktree creation. |
 | `src/` , `tests/` | The .NET 10 solution. |
 

@@ -96,7 +96,7 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
 
         foreach (var key in _weightByPublisher.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
-            builder.Append(Escape(key))
+            builder.Append(DescriptorEscaping.Escape(key))
                 .Append('=')
                 .Append(_weightByPublisher[key].ToString("R", CultureInfo.InvariantCulture))
                 .Append(';');
@@ -105,12 +105,10 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
         return builder.ToString();
     }
 
-    // Percent-escape the reserved descriptor delimiters so the key→value;key→value serialization stays
-    // injective. The % (escape marker) MUST be replaced first, before the delimiters it encodes.
-    private static string Escape(string key) =>
-        key.Replace("%", "%25", StringComparison.Ordinal)
-            .Replace("=", "%3D", StringComparison.Ordinal)
-            .Replace(";", "%3B", StringComparison.Ordinal);
+    // Reserved-delimiter escaping is the shared DescriptorEscaping.Escape (CLAUDE.md reuse rule): one primitive
+    // for every fingerprint descriptor, so the escaping cannot drift between call sites. Byte-identical here —
+    // Normalize() has already stripped every non-alphanumeric character from these keys, so no delimiter can
+    // survive to be escaped; the call is retained as a defence-in-depth injectivity guarantee (AD-3).
 
     // The small, closed set of common web-domain suffixes stripped from a trailing (dot-prefixed) token so a
     // domain-form publisher name ("marketscreener.com") collapses onto its bare-outlet key ("MarketScreener").

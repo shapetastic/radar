@@ -645,6 +645,30 @@ stays). Note for the efficacy visual (spec 101 / AD-14 read side): the current r
 scores are fully continuous — an input-hash artifact, not a measurement break; the real fix is the deferred
 efficacy slice-2 score-continuity-aware segmentation.
 
+### Amendment — spec 119: the AI earnings-read model identity is a fingerprint input (folded by value)
+
+Spec 106 folded the AI directional-filing source's per-signal magnitudes (`str`/`nov`/`minconf`) into the
+fingerprint, but **not the model doing the reading**. Spec 119 makes the DeepInfra `deepseek-ai/DeepSeek-V4-Flash`
+read the default baseline (replacing local `ollama`/`llama3.1`) and, at the same time, appends the effective
+`provider:model` identity to that descriptor —
+`directional-filing:str=8;nov=6;minconf=0.6;model=openai:deepseek-ai/DeepSeek-V4-Flash` (fixed field order, model
+LAST and escaped, so the pre-119 prefix is unchanged). Rationale: the reading model changes signal **DIRECTION**,
+not just throughput — in the 2026-07-21 A/B `llama3.1` read EOSE's reported −70% gross margin as
+`Improving 0.90` where DeepSeek-V4-Flash read the same release as `Mixed 0.85`, and DeepSeek additionally caught
+AEHR's deteriorating *reported* quarter. Leaving the model out would let two runs with materially different
+directional signal sets (and different scores) share one `ScoringConfigVersion`, breaking the spec-69/95
+comparability invariant and drawing the spec-101/108 efficacy line as continuous across a real change. It is
+therefore hashed **by value**, exactly like the spec-95 collector set and the spec-96 insider tiers: swapping the
+model re-stamps automatically and is a **config edit** — **no `_formula.Version` and no `RuleSetVersion` bump**
+(`radar-formula-v7` / `radar-keyword-rules-v3` both stand). Only the **AI-ON** fingerprint moves,
+**`radar-scoring-fp-4c06fd2d2d8c → radar-scoring-fp-2ef5ef96cce2`** (that re-stamp also absorbs a pin correction:
+the old AI-ON pin was computed from an *unescaped* `ai=` segment, so it was not the value a live run stamped; the
+test now builds it through the real `DescriptorEscaping`). The **AI-OFF** pin `radar-scoring-fp-8f4b59efd288` is
+**unmoved** — with no AI provider configured nothing is appended, byte-for-byte as before. The key itself stays
+out of config entirely (`Radar:Ai:OpenAi:ApiKeyEnvVar` names `DEEPINFRA_API_KEY`, read at runtime; a missing key
+fails the run loudly) — the SEC-User-Agent secret precedent. *Accepted · 2026-07-21 — comparability-input
+widening; property preserved and strengthened, no scoring-math change.*
+
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
 by spec 70). Amended · 2026-07-04 (spec 89 — stamp becomes a derived content fingerprint; property preserved
 and made automatic; Accepted). Amended · 2026-07-04 (spec 91 — the effective config is persisted
@@ -658,7 +682,10 @@ magnitude change is now a config edit needing no `RuleSetVersion` bump; default 
 radar-scoring-fp-55270b9d8fad → radar-scoring-fp-7e56a8007342; Accepted). Lineage · 2026-07-07 (spec 103 —
 `RuleSetVersion` radar-keyword-rules-v2 → v3 for the new `HiringActivity` rule group; default re-stamps
 radar-scoring-fp-8d638b90d4aa → radar-scoring-fp-c9e609ed53e9; scoring math byte-identical, `hiringats`
-collector opt-in-off).
+collector opt-in-off). Amended · 2026-07-21 (spec 119 — the AI earnings-read `provider:model` identity is folded
+into the directional-filing descriptor by value; the default baseline read moves to DeepInfra
+`deepseek-ai/DeepSeek-V4-Flash` and the AI-ON stamp re-stamps radar-scoring-fp-4c06fd2d2d8c →
+radar-scoring-fp-2ef5ef96cce2, AI-OFF unmoved, no formula/`RuleSetVersion` bump; Accepted).
 
 ---
 

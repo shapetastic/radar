@@ -106,18 +106,50 @@ public sealed class DirectionalFilingSignalSourceTests
     [Fact]
     public void ScoringDescriptor_EncodesPerSignalMagnitudes_InCanonicalForm()
     {
+        // Fixed field order (AD-3): str, nov, minconf, then the spec-119 model identity LAST. An unsupplied
+        // model identity hashes as an empty model= field rather than omitting the field, so the grammar is
+        // constant.
         Assert.Equal(
-            "directional-filing:str=8;nov=6;minconf=0.6",
+            "directional-filing:str=8;nov=6;minconf=0.6;model=",
             ScoringDescriptorFor(new DirectionalFilingSignalOptions()));
 
         Assert.Equal(
-            "directional-filing:str=9;nov=4;minconf=0.75",
+            "directional-filing:str=9;nov=4;minconf=0.75;model=openai:deepseek-ai/DeepSeek-V4-Flash",
             ScoringDescriptorFor(new DirectionalFilingSignalOptions
             {
                 Strength = 9,
                 Novelty = 4,
                 MinConfidence = 0.75m,
+                ModelIdentity = "openai:deepseek-ai/DeepSeek-V4-Flash",
             }));
+    }
+
+    [Fact]
+    public void ScoringDescriptor_ChangesWhenModelIdentityChanges()
+    {
+        // Spec 119: the earnings-read model is a scoring-fingerprint input BY VALUE — it changes signal
+        // DIRECTION, so swapping the model must re-stamp the descriptor (and hence ScoringConfigVersion).
+        Assert.NotEqual(
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { ModelIdentity = "ollama:llama3.1" }),
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions
+            {
+                ModelIdentity = "openai:deepseek-ai/DeepSeek-V4-Flash",
+            }));
+    }
+
+    [Fact]
+    public void ScoringDescriptor_TrimsModelIdentity_AndEscapesReservedDelimiters()
+    {
+        // Surrounding whitespace is not an identity difference, so it is trimmed before hashing.
+        Assert.Equal(
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { ModelIdentity = "ollama:llama3.1" }),
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { ModelIdentity = "  ollama:llama3.1  " }));
+
+        // A reserved delimiter inside the identity is percent-escaped so it cannot forge an extra descriptor
+        // field (injectivity, AD-3).
+        Assert.Equal(
+            "directional-filing:str=8;nov=6;minconf=0.6;model=a%3Db%3Bc%2Cd%25e",
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { ModelIdentity = "a=b;c,d%e" }));
     }
 
     [Fact]

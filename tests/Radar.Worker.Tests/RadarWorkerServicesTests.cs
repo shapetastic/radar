@@ -11,6 +11,7 @@ using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Infrastructure.Filings;
 
 namespace Radar.Worker.Tests;
 
@@ -479,6 +480,122 @@ public sealed class RadarWorkerServicesTests
         // The efficacy seam is NOT an evidence collector — enabling it does not change the collector list.
         Assert.Single(provider.GetServices<IEvidenceCollector>());
         Assert.NotNull(provider.GetService<IRadarPipeline>());
+    }
+
+    [Fact]
+    public void AiProviderOllama_FoldsProviderAndModelIntoDirectionalDescriptor()
+    {
+        // Regression (spec 119): the Ollama path is untouched — it still resolves, and its earnings-read model
+        // identity is folded into the directional descriptor exactly like any other provider, so a maintainer who
+        // overlays a profile back onto local Ollama gets a DIFFERENT (correctly non-comparable) fingerprint.
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+        var directionalOptions = provider.GetRequiredService<DirectionalFilingSignalOptions>();
+
+        Assert.Equal("ollama:llama3.1", directionalOptions.ModelIdentity);
+        Assert.Contains(
+            "model=ollama:llama3.1",
+            provider.GetRequiredService<IDirectionalFilingSignalSource>().ScoringDescriptor(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AiProviderAnthropic_StillResolves_WithConfiguredKey()
+    {
+        // Regression (spec 119): the Anthropic path is unaffected by the OpenAI-compatible key resolution — it
+        // takes its key from config as before and folds its own provider:model identity in.
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "anthropic"),
+            ("Radar:Ai:Model", "claude-test"),
+            ("Radar:Ai:Anthropic:ApiKey", "test-key-not-a-real-secret"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+        Assert.NotNull(provider.GetService<IChatClientFactory>());
+        Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+        Assert.Equal(
+            "anthropic:claude-test",
+            provider.GetRequiredService<DirectionalFilingSignalOptions>().ModelIdentity);
+    }
+
+    [Fact]
+    public void AiProviderOpenAi_WithKeyInNamedEnvVar_Resolves_AndFoldsModelIntoDirectionalDescriptor()
+    {
+        // Spec 119 (the new baseline shape): the DeepInfra OpenAI-compatible provider resolves its key from the
+        // env var NAMED by config, and the effective nested model (Radar:Ai:OpenAi:Model) — not the top-level
+        // one — is what rides into both the fingerprint descriptor and the analyzed-filing cache scope.
+        var envVar = "RADAR_TEST_OPENAI_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(envVar, "not-a-real-key");
+        try
+        {
+            using var provider = BuildProvider(
+                ("Radar:Ai:Provider", "openai"),
+                ("Radar:Ai:Model", "ignored-top-level-model"),
+                ("Radar:Ai:OpenAi:BaseUrl", "https://api.deepinfra.com/v1/openai"),
+                ("Radar:Ai:OpenAi:Model", "deepseek-ai/DeepSeek-V4-Flash"),
+                ("Radar:Ai:OpenAi:ApiKeyEnvVar", envVar),
+                ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+            Assert.NotNull(provider.GetService<IChatClientFactory>());
+            Assert.NotNull(provider.GetService<IChatClient>());
+            Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+
+            var directionalOptions = provider.GetRequiredService<DirectionalFilingSignalOptions>();
+            Assert.Equal("openai:deepseek-ai/DeepSeek-V4-Flash", directionalOptions.ModelIdentity);
+            Assert.Contains(
+                "model=openai:deepseek-ai/DeepSeek-V4-Flash",
+                provider.GetRequiredService<IDirectionalFilingSignalSource>().ScoringDescriptor(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, null);
+        }
+    }
+
+    [Fact]
+    public void AiProviderOpenAi_WithoutKeyInEnvironment_FailsFast_NamingEnvVarNeverValue()
+    {
+        // Spec 119 acceptance: a keyless baseline run must fail LOUDLY at composition rather than silently
+        // degrading to no earnings read. The message names the env VAR and never carries a key value (there is
+        // none to carry — the variable is unset).
+        var envVar = "RADAR_TEST_MISSING_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(envVar, null);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+            ("Radar:Ai:Provider", "openai"),
+            ("Radar:Ai:OpenAi:BaseUrl", "https://api.deepinfra.com/v1/openai"),
+            ("Radar:Ai:OpenAi:Model", "deepseek-ai/DeepSeek-V4-Flash"),
+            ("Radar:Ai:OpenAi:ApiKeyEnvVar", envVar),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com")));
+
+        Assert.Contains(envVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Radar:Ai:OpenAi:ApiKeyEnvVar", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AiProviderOpenAi_WithEmptyKeyInEnvironment_FailsFast()
+    {
+        // An empty/whitespace value is as unusable as an unset one — treat it the same way (fail loud).
+        var envVar = "RADAR_TEST_EMPTY_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(envVar, "   ");
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+                ("Radar:Ai:Provider", "openai"),
+                ("Radar:Ai:OpenAi:BaseUrl", "https://api.deepinfra.com/v1/openai"),
+                ("Radar:Ai:OpenAi:Model", "deepseek-ai/DeepSeek-V4-Flash"),
+                ("Radar:Ai:OpenAi:ApiKeyEnvVar", envVar),
+                ("Radar:Sec:UserAgent", "Radar Research test@example.com")));
+
+            Assert.Contains(envVar, ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, null);
+        }
     }
 
     [Fact]
