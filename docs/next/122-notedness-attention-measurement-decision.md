@@ -89,6 +89,31 @@ gap is genuinely a metric-shape issue. Option C ships anyway via spec 123.
 
 ---
 
+## Diagnosis findings (spec 124)
+
+*2026-07-21.* The Option-A diagnosis (deterministic characterization test
+`tests/Radar.Application.Tests/Scoring/AttentionBreadthCharacterizationTests.cs`, through the real
+engine + spec-109 collapse + `RadarScoreFormulaV7` + `ConfiguredAttentionSourceWeights` over the default
+tier map) attributes the understatement **primarily to the spec-109 same-event collapse discarding
+distinct-publisher breadth**, secondarily amplified by tiering. Fifteen distinct third-party publishers (7
+on the default "Genuine" tier at 1.0, 8 absent from the map at `UnknownWeight` 0.25) covering **one event**
+score `Attention` **10** — because `MediaAttentionCollapse` keeps a single representative, so the formula's
+post-collapse breadth count sees ONE `SourceName` and `mediaSignalCount` 1 (reach 0.25 + 0.10·1 = 0.35). The
+**same 15 publishers spread across distinct events** score `Attention` **78** (reach 9.0 + 0.10·15 = 10.5),
+and the single-event set handed **directly to the formula, bypassing only the collapse**, also scores **78** —
+which pins the entire 10→78 gap on the collapse, not the tier map (the map only sets the 78 ceiling vs. the 85
+that 15 fully-genuine outlets would reach; the surviving representative resolving to `UnknownWeight` 0.25 vs.
+1.0 shifts the burst number by less than a point). **No relevance-filter or tier-map bug was demonstrable from
+this repo** — there is no live evidence corpus here, so no grounded basis for a `NewsAttentionCollector`
+`IsRelevant` correction or a specific outlet re-tiering, and none was applied (steps 1–2 only; production code,
+tier map, collapse, formula, and both fingerprints unchanged). **Recommended spec-122 direction:** this is the
+*structural* question, not a measurement bug — counting **pre-collapse** distinct publishers for the breadth
+term, and/or a bounded recency-gated **velocity** term (Option B) — which is **AD-6-gated** and is the
+maintainer's spec-122 decision; it is deliberately **not** fixed in spec 124. Changing the three pinned numbers
+above is exactly that decision.
+
+---
+
 ## Constraints (whichever option is chosen)
 
 - **AD-14 absolute:** no price / market-cap / trading-volume / intraday-move term, ever.
