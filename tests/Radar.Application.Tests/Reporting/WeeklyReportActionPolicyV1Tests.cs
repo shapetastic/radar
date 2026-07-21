@@ -1,5 +1,7 @@
 using Radar.Application.Reporting;
+using Radar.Domain.Companies;
 using Radar.Domain.Reports;
+using Radar.Domain.Signals;
 using Radar.TestSupport;
 
 namespace Radar.Application.Tests.Reporting;
@@ -23,7 +25,7 @@ public sealed class WeeklyReportActionPolicyV1Tests
     [Fact]
     public void Version_Is_Stable_Identifier()
     {
-        Assert.Equal("weekly-report-action-v1", CreatePolicy().Version);
+        Assert.Equal("weekly-report-action-v2", CreatePolicy().Version);
     }
 
     public static IEnumerable<object?[]> RepresentativeMatrix()
@@ -305,6 +307,242 @@ public sealed class WeeklyReportActionPolicyV1Tests
         var second = policy.Decide(context);
 
         Assert.Equal(first, second);
+    }
+
+    // ---- Corroboration floor (v2) -------------------------------------------------------------
+
+    private static ReportSignalRef SignalRef(SignalType type, SignalDirection direction) =>
+        new(Guid.NewGuid(), type, direction, $"{type} ({direction}).");
+
+    // Two independent positive axes agreeing — the corroborated set the floor is meant to catch.
+    private static IReadOnlyList<ReportSignalRef> CorroboratedSignals() =>
+    [
+        SignalRef(SignalType.CustomerWin, SignalDirection.Positive),
+        SignalRef(SignalType.StrategicPartnership, SignalDirection.Positive),
+    ];
+
+    [Theory]
+    [InlineData(FollowingTier.Small)]
+    [InlineData(FollowingTier.Mid)]
+    public void UnderFollowed_Corroborated_SubWatch_Opportunity_Is_Floored_To_Watch(FollowingTier tier)
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(50)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, null, ContributingSignals: CorroboratedSignals(), FollowingTier: tier));
+
+        Assert.Equal(RadarReportAction.Watch, result.Action);
+        Assert.Contains("corroborating positive signal types", result.Rationale, StringComparison.Ordinal);
+        Assert.Contains("2", result.Rationale, StringComparison.Ordinal);
+        Assert.Contains("30", result.Rationale, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(FollowingTier.Large)]
+    [InlineData(FollowingTier.Mega)]
+    public void Already_Followed_Company_Is_Not_Floored(FollowingTier tier)
+    {
+        // Tier gate: a well-followed name with the same corroborated set still falls to Ignore, so the
+        // spec-117 notedness posture (noticed mega-caps stay low) is preserved.
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(50)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, null, ContributingSignals: CorroboratedSignals(), FollowingTier: tier));
+
+        Assert.Equal(RadarReportAction.Ignore, result.Action);
+    }
+
+    [Fact]
+    public void Single_Positive_Signal_Type_Does_Not_Floor()
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(60)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current,
+            null,
+            ContributingSignals: [SignalRef(SignalType.CustomerWin, SignalDirection.Positive)],
+            FollowingTier: FollowingTier.Small));
+
+        Assert.Equal(RadarReportAction.Ignore, result.Action);
+    }
+
+    [Fact]
+    public void Two_Rows_Of_Same_Positive_Type_Do_Not_Floor()
+    {
+        // Corroboration is measured in DISTINCT types: the same phrase matched twice is one axis.
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(60)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current,
+            null,
+            ContributingSignals:
+            [
+                SignalRef(SignalType.CustomerWin, SignalDirection.Positive),
+                SignalRef(SignalType.CustomerWin, SignalDirection.Positive),
+            ],
+            FollowingTier: FollowingTier.Small));
+
+        Assert.Equal(RadarReportAction.Ignore, result.Action);
+    }
+
+    [Theory]
+    [InlineData(SignalDirection.Neutral)]
+    [InlineData(SignalDirection.Negative)]
+    public void NonPositive_Signal_Directions_Do_Not_Corroborate(SignalDirection direction)
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(60)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current,
+            null,
+            ContributingSignals:
+            [
+                SignalRef(SignalType.CustomerWin, direction),
+                SignalRef(SignalType.StrategicPartnership, direction),
+            ],
+            FollowingTier: FollowingTier.Small));
+
+        Assert.Equal(RadarReportAction.Ignore, result.Action);
+    }
+
+    [Fact]
+    public void Below_Neutral_Trajectory_Is_Not_Floored()
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(49)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, null, ContributingSignals: CorroboratedSignals(), FollowingTier: FollowingTier.Small));
+
+        Assert.Equal(RadarReportAction.Ignore, result.Action);
+    }
+
+    [Fact]
+    public void Empty_Contributing_Signal_Set_Is_Not_Floored()
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(60)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(current, null));
+
+        Assert.Equal(RadarReportAction.Ignore, result.Action);
+        Assert.Empty(new ReportActionContext(current, null).ContributingSignals);
+    }
+
+    [Theory]
+    [InlineData(40, RadarReportAction.Watch)]
+    [InlineData(60, RadarReportAction.Investigate)]
+    public void Floor_Does_Not_Fire_At_Or_Above_The_Normal_Thresholds(
+        int opportunity, RadarReportAction expected)
+    {
+        // At/above the Watch line the normal branch already decides; the floor must not restate it and
+        // must never lift an Investigate-grade company anywhere.
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(60)
+            .WithOpportunityScore(opportunity)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, null, ContributingSignals: CorroboratedSignals(), FollowingTier: FollowingTier.Small));
+
+        Assert.Equal(expected, result.Action);
+        Assert.DoesNotContain("corroborating", result.Rationale, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Floor_Never_Overrides_Thin_Evidence()
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(60)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(34)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, null, ContributingSignals: CorroboratedSignals(), FollowingTier: FollowingTier.Small));
+
+        Assert.Equal(RadarReportAction.NeedsMoreEvidence, result.Action);
+    }
+
+    [Fact]
+    public void Floor_Never_Overrides_Deteriorating_Thesis()
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(55)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+        var previous = new ScoreSnapshotBuilder().WithTrajectoryScore(70).Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, previous, ContributingSignals: CorroboratedSignals(),
+            FollowingTier: FollowingTier.Small));
+
+        Assert.Equal(RadarReportAction.ThesisDeteriorating, result.Action);
+    }
+
+    [Fact]
+    public void Floor_Never_Overrides_Improving_Thesis()
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(60)
+            .WithOpportunityScore(30)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+        var previous = new ScoreSnapshotBuilder().WithTrajectoryScore(50).Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, previous, ContributingSignals: CorroboratedSignals(),
+            FollowingTier: FollowingTier.Small));
+
+        Assert.Equal(RadarReportAction.ThesisImproving, result.Action);
+    }
+
+    [Fact]
+    public void Floored_Rationale_Is_Free_Of_Advice_Language()
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(50)
+            .WithOpportunityScore(12)
+            .WithEvidenceConfidenceScore(70)
+            .Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, null, ContributingSignals: CorroboratedSignals(), FollowingTier: FollowingTier.Small));
+
+        Assert.Contains(result.Action, AllowedActions);
+        Assert.False(string.IsNullOrWhiteSpace(result.Rationale));
+        foreach (var forbidden in ForbiddenWords)
+        {
+            Assert.DoesNotContain(forbidden, result.Rationale, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
