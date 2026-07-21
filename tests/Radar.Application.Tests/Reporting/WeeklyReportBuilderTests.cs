@@ -1377,6 +1377,29 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
+    public async Task EntryCarriesCompanyFollowingTierIntoRenderedNotednessLine()
+    {
+        var h = new Harness();
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedCompanyAsync(
+            h, companyId, snapshotId, opportunity: 70, followingTier: FollowingTier.Mega);
+
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Multi-year supply agreement announced.");
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        Assert.Contains(
+            "- **Notedness:** Attention ", result.Report.MarkdownContent, StringComparison.Ordinal);
+        Assert.Contains(
+            "· Following: Mega (already broadly followed)",
+            result.Report.MarkdownContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CorroboratedUnderFollowedLowOpportunityCompanySurfacesAsWatchNotIgnore()
     {
         var h = new Harness();

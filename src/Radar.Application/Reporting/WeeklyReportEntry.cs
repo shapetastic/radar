@@ -1,5 +1,6 @@
 namespace Radar.Application.Reporting;
 
+using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
 
@@ -17,4 +18,9 @@ public sealed record WeeklyReportEntry(
     IReadOnlyList<ReportSignalRef> Signals,
     int? PreviousOpportunityScore = null,
     int? PreviousTrajectoryScore = null,
-    bool PreviousScoringChanged = false);
+    bool PreviousScoringChanged = false,
+    // Curated "how followed already" tier of the company (seed metadata, never price-derived — AD-14).
+    // Carried purely so the report can SHOW the notedness inputs behind the Opportunity discount; the
+    // renderer never recomputes the formula's discount from it. Defaults to the enum's own fail-safe
+    // Small so existing construction sites keep compiling.
+    FollowingTier FollowingTier = FollowingTier.Small);

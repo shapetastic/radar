@@ -2,6 +2,7 @@ namespace Radar.Application.Reporting;
 
 using System.Globalization;
 using System.Text;
+using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 
 /// <summary>
@@ -36,6 +37,17 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             [RadarReportAction.NeedsMoreEvidence] = "Needs more evidence",
             [RadarReportAction.ThesisImproving] = "Thesis improving",
             [RadarReportAction.ThesisDeteriorating] = "Thesis deteriorating",
+        };
+
+    // Short, purely descriptive gloss of the curated following tier (AD-9: a research statistic — how
+    // covered the name already is — never a valuation or an advice word).
+    private static readonly IReadOnlyDictionary<FollowingTier, string> FollowingTierNotes =
+        new Dictionary<FollowingTier, string>
+        {
+            [FollowingTier.Small] = "under-followed",
+            [FollowingTier.Mid] = "moderately followed",
+            [FollowingTier.Large] = "widely followed",
+            [FollowingTier.Mega] = "already broadly followed",
         };
 
     public string Render(WeeklyReportModel model)
@@ -109,6 +121,9 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append("> Not financial advice.").Append(Lf);
         sb.Append("> For research only.").Append(Lf);
         sb.Append("> Human review required.").Append(Lf);
+        sb.Append("> Notedness (measured Attention + curated following tier) discounts a company's ")
+            .Append("Opportunity so already-followed names surface lower — a research signal, not a valuation.")
+            .Append(Lf);
         sb.Append(Lf);
     }
 
@@ -150,6 +165,20 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             .Append(snap.SignalVelocityScore.ToString(CultureInfo.InvariantCulture))
             .Append(FormatMovement(entry, snap))
             .Append(Lf);
+
+        // Notedness = the two INPUTS behind the Opportunity notedness discount, surfaced verbatim:
+        // the measured AttentionScore from the snapshot and the curated FollowingTier from the seed.
+        // The discount multiplier itself is deliberately NOT recomputed here — that lives in the
+        // versioned scoring formula; duplicating it in the renderer would let the two drift apart.
+        sb.Append("- **Notedness:** Attention ")
+            .Append(snap.AttentionScore.ToString(CultureInfo.InvariantCulture))
+            .Append(" · Following: ")
+            .Append(entry.FollowingTier.ToString());
+        if (FollowingTierNotes.TryGetValue(entry.FollowingTier, out var tierNote))
+        {
+            sb.Append(" (").Append(tierNote).Append(')');
+        }
+        sb.Append(Lf);
 
         sb.Append("- Why: ").Append(entry.Rationale).Append(Lf);
         sb.Append("- Score snapshot: ")
