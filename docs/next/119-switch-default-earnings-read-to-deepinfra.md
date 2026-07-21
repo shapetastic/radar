@@ -55,6 +55,12 @@ Modify:
 - `docs/next → docs` promotion aside, update the `radar-live-run` guidance (the live-run how-to) to note the
   baseline now requires `DEEPINFRA_API_KEY` in the environment and uses DeepSeek-V4-Flash.
 
+Add (see Implementation details for the hard "write-don't-execute" constraint):
+- `scripts/run-baseline-scheduled.ps1` — scheduled-run wrapper (loads the key from a `-KeyFile` path into
+  `$env:DEEPINFRA_API_KEY`, sets the SEC UA, runs `run-radar.ps1` default; fails loud on a missing key).
+- `scripts/setup-baseline-task.ps1` — parameterized `Register-ScheduledTask` helper for `RadarBaselineDaily`
+  (written, never executed by the coder; the maintainer runs it once with elevation).
+
 ## Implementation details
 
 - **No formula / RuleSetVersion change.** This is a config/profile switch plus a fingerprint-descriptor widening
@@ -65,9 +71,18 @@ Modify:
   never logged as a value (only the env-var name). Same precedent as the SEC User-Agent.
 - **Analyzed-filing cache.** Already keyed by model (spec 118), so the switch re-reads every earnings filing on
   DeepSeek rather than replaying llama3.1 verdicts — no manual cache bust needed.
-- **Operational (machine-state, NOT repo) — call out in the PR:** the scheduled `RadarBaselineDaily` task must have
-  `DEEPINFRA_API_KEY` set in its environment or its AI path will fail-loud. The maintainer configures that outside
-  the repo; the spec only makes the requirement explicit and detectable.
+- **Scheduled baseline task — codify the setup in repo scripts (the coder WRITES them, does NOT run them).** The
+  scheduled `RadarBaselineDaily` task needs `DEEPINFRA_API_KEY` in its environment or its AI path fails-loud. Add:
+  - `scripts/run-baseline-scheduled.ps1` — the wrapper the task invokes: takes a **`-KeyFile` path parameter** (so
+    no machine-specific path and no key VALUE is committed), reads it into `$env:DEEPINFRA_API_KEY`, takes/sets the
+    SEC User-Agent (`-SecUserAgent`/`$env:RADAR_SEC_UA`), then calls `run-radar.ps1` (default profile). Fails loud
+    if the key file is missing/empty (never echo the value).
+  - `scripts/setup-baseline-task.ps1` — a parameterized `Register-ScheduledTask` helper that (re)points
+    `RadarBaselineDaily` at the wrapper (daily 09:00, passing `-KeyFile`/`-SecUserAgent` through). **The maintainer
+    runs this once, with elevation** — it is the single machine-mutating step, kept out of the pipeline.
+  **HARD CONSTRAINT (unattended coder):** WRITE these scripts only — do **NOT** execute them, do **NOT**
+  register/modify any Windows scheduled task, and do **NOT** write the API key value anywhere (no `setx`, no
+  committed key, no key in logs). They are inert repo artifacts; the maintainer performs the one-time registration.
 - Ollama remains a supported provider (the `ollama` branch is untouched) — this only changes the *default profile's*
   choice, so a maintainer can still run `-Profile`-override back to local Ollama.
 
@@ -94,8 +109,10 @@ Modify:
 - [ ] Earnings-read model+provider folded into the directional-filing fingerprint descriptor; AI-ON default
       fingerprint re-stamped and re-pinned (AI-OFF unchanged); no formula/RuleSetVersion bump.
 - [ ] Keyless `openai` run fails loud (env-var name surfaced, value never); Ollama/Anthropic unchanged.
-- [ ] `radar-live-run` guidance updated (baseline needs `DEEPINFRA_API_KEY`, uses DeepSeek-V4-Flash); scheduled-task
-      key requirement called out in the PR.
+- [ ] `radar-live-run` guidance updated (baseline needs `DEEPINFRA_API_KEY`, uses DeepSeek-V4-Flash).
+- [ ] `scripts/run-baseline-scheduled.ps1` + `scripts/setup-baseline-task.ps1` added (key via `-KeyFile`, no
+      machine-specific path or key value committed); the coder did NOT execute them, registered NO scheduled task,
+      and wrote the key value nowhere. Maintainer runs `setup-baseline-task.ps1` once (elevation) to finish setup.
 - [ ] LIVE re-measure (maintainer, key set): the baseline reproduces the A/B — EOSE `Mixed`/no-signal, AEHR `Mixed`,
       JNJ `Improving` (v7-discounted); board matches `data/experiments/deepinfra/`.
 - [ ] `dotnet build Radar.sln -c Release` and `dotnet test Radar.sln -c Release --no-build` pass.
