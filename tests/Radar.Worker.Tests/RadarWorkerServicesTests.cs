@@ -556,6 +556,32 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void AiProviderOpenAi_ModelWithSurroundingWhitespace_IsTrimmedInModelIdentity()
+    {
+        // ChatClientFactory trims the model before the SDK call, so an untrimmed identity would fingerprint and
+        // cache-scope a run under a model string that is not the one actually queried. Trim at the single source.
+        var envVar = "RADAR_TEST_OPENAI_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(envVar, "not-a-real-key");
+        try
+        {
+            using var provider = BuildProvider(
+                ("Radar:Ai:Provider", "openai"),
+                ("Radar:Ai:OpenAi:BaseUrl", "https://api.deepinfra.com/v1/openai"),
+                ("Radar:Ai:OpenAi:Model", "  deepseek-ai/DeepSeek-V4-Flash  "),
+                ("Radar:Ai:OpenAi:ApiKeyEnvVar", envVar),
+                ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+            Assert.Equal(
+                "openai:deepseek-ai/DeepSeek-V4-Flash",
+                provider.GetRequiredService<DirectionalFilingSignalOptions>().ModelIdentity);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, null);
+        }
+    }
+
+    [Fact]
     public void AiProviderOpenAi_WithoutKeyInEnvironment_FailsFast_NamingEnvVarNeverValue()
     {
         // Spec 119 acceptance: a keyless baseline run must fail LOUDLY at composition rather than silently

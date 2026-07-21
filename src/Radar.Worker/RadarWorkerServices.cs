@@ -221,9 +221,11 @@ internal static class RadarWorkerServices
             // For the OpenAI-compatible provider, an optional nested model (Radar:Ai:OpenAi:Model) overrides the
             // top-level Radar:Ai:Model; blank falls back to the top-level model so a single Ai.Model keeps working.
             var isOpenAiProvider = string.Equals(options.Ai.Provider.Trim(), "openai", StringComparison.OrdinalIgnoreCase);
-            var effectiveModel = isOpenAiProvider && !string.IsNullOrWhiteSpace(options.Ai.OpenAi.Model)
+            // Trimmed here (not just inside ChatClientFactory) so the model used for the SDK call, the
+            // fingerprint descriptor and the analyzed-filing cache scope are all the same string.
+            var effectiveModel = (isOpenAiProvider && !string.IsNullOrWhiteSpace(options.Ai.OpenAi.Model)
                 ? options.Ai.OpenAi.Model
-                : options.Ai.Model;
+                : options.Ai.Model)?.Trim() ?? string.Empty;
 
             // Resolve the OpenAI-compatible API key from the env var NAMED by config (never from committed config,
             // mirroring the SEC-User-Agent secret precedent). Only the env-var NAME may appear in a message/log —
