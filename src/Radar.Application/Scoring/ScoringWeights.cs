@@ -54,6 +54,17 @@ public sealed record ScoringWeights
     // can still surface a maximally-followed name (a lean, NEVER a hard exclusion). Must be in (0, 1].
     public double OpportunityDiscountFloor { get; init; } = 0.05;
 
+    // radar-formula-v8 breadth-preserving-collapse credit (spec 122). The spec-109 same-event media collapse
+    // keeps ONE representative per event, which correctly kills duplicate VOLUME but also discards the
+    // distinct-publisher BREADTH of the outlets it collapsed away. v8 credits those collapsed-away publishers
+    // back into the Attention BREADTH term (tier-weighted, so mills stay ≈0.1 — the anti-mill guard is intact)
+    // at this magnitude:
+    //   reach = breadthSurvivors + CollapsedBreadthCredit·breadthCollapsedExtra + MediaReachWeight·mediaCount
+    // mediaCount stays POST-collapse, so no loudness/velocity is re-admitted (AD-14 clean). Must be in [0, 1]:
+    // at 0.0 v8 reproduces radar-formula-v7 byte-for-byte (the safety anchor), at the default 1.0 a distinct
+    // genuine outlet counts as breadth regardless of whether its coverage clustered on one event.
+    public double CollapsedBreadthCredit { get; init; } = 1.0;
+
     /// <summary>
     /// Fail-fast validation of nonsensical values that would break the math or the [0,100] clamp contract.
     /// The four denominators (<see cref="DiversityTarget"/>, <see cref="OpportunityAttentionDivisor"/>,
@@ -102,6 +113,11 @@ public sealed record ScoringWeights
         RequireUnitRange(FollowingTierDiscountMid, nameof(FollowingTierDiscountMid));
         RequireUnitRange(FollowingTierDiscountSmall, nameof(FollowingTierDiscountSmall));
 
+        // radar-formula-v8 (spec 122): the collapsed-away breadth credit is a fraction of the tier weight a
+        // publisher would have earned had its coverage not been collapsed — below 0 it would SUBTRACT breadth,
+        // above 1 a collapsed-away outlet would count for MORE than one that survived.
+        RequireUnitRange(CollapsedBreadthCredit, nameof(CollapsedBreadthCredit));
+
         if (FollowingTierDiscountMega < FollowingTierDiscountLarge
             || FollowingTierDiscountLarge < FollowingTierDiscountMid
             || FollowingTierDiscountMid < FollowingTierDiscountSmall)
@@ -119,8 +135,9 @@ public sealed record ScoringWeights
         if (value < 0 || value > 1)
         {
             throw new InvalidOperationException(
-                $"Radar:Scoring weight {field} must be in [0, 1]; was {value}. A negative tier discount would "
-                    + "act as a bonus and a value above 1 exceeds the whole multiplicative discount range.");
+                $"Radar:Scoring weight {field} must be in [0, 1]; was {value}. Outside the unit range the term "
+                    + "inverts its meaning (a negative tier discount would act as a bonus; a credit above 1 "
+                    + "would exceed the full weight it is a fraction of).");
         }
     }
 

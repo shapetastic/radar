@@ -222,8 +222,17 @@ public sealed class ScoringEngine : IScoringEngine
         var company = await _companyRepository.GetByIdAsync(companyId, ct).ConfigureAwait(false);
         var followingTier = company?.FollowingTier ?? FollowingTier.Small;
 
+        // Spec 122 (radar-formula-v8): the collapse above discards the distinct-publisher BREADTH of the
+        // outlets it dropped alongside the duplicate volume it is meant to remove. Hand the formula the
+        // PRE-collapse set as well so it can credit those collapsed-away publishers back into the Attention
+        // breadth term (tier-weighted, scaled by ScoringWeights.CollapsedBreadthCredit) while the media COUNT
+        // it consumes stays post-collapse. The collapse transform itself is untouched (media-collapse-v1) —
+        // this only reads the set the engine already had in hand.
         var input = new ScoringInput(
-            companyId, windowStartUtc, windowEndUtc, scoredSignals, previousSignals, followingTier);
+            companyId, windowStartUtc, windowEndUtc, scoredSignals, previousSignals, followingTier)
+        {
+            PreCollapseSignals = superseded,
+        };
         var computation = _formula.Compute(input);
 
         // Record both identities so snapshots remain reproducible and auditable.
