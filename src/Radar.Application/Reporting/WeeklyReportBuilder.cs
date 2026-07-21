@@ -232,7 +232,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 Signals: signals,
                 PreviousOpportunityScore: comparable ? previous!.OpportunityScore : (int?)null,
                 PreviousTrajectoryScore: comparable ? previous!.TrajectoryScore : (int?)null,
-                PreviousScoringChanged: previous is not null && !comparable));
+                PreviousScoringChanged: previous is not null && !comparable,
+                FollowingTier: c.Company.FollowingTier));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.

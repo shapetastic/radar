@@ -1,6 +1,7 @@
 using Radar.Application.Collectors;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
+using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
@@ -28,7 +29,8 @@ public sealed class MarkdownWeeklyReportRendererTests
         IReadOnlyList<ReportSignalRef>? signals = null,
         int? previousOpportunity = null,
         int? previousTrajectory = null,
-        bool previousScoringChanged = false)
+        bool previousScoringChanged = false,
+        FollowingTier followingTier = FollowingTier.Small)
     {
         var snap = snapshot ?? new ScoreSnapshotBuilder().Build();
         return new WeeklyReportEntry(
@@ -44,7 +46,8 @@ public sealed class MarkdownWeeklyReportRendererTests
             Signals: signals ?? [],
             PreviousOpportunityScore: previousOpportunity,
             PreviousTrajectoryScore: previousTrajectory,
-            PreviousScoringChanged: previousScoringChanged);
+            PreviousScoringChanged: previousScoringChanged,
+            FollowingTier: followingTier);
     }
 
     private static WeeklyReportModel CreateModel(
@@ -104,6 +107,51 @@ public sealed class MarkdownWeeklyReportRendererTests
         var output = CreateRenderer().Render(model);
 
         Assert.Contains($"- Label: {display}", output);
+    }
+
+    [Theory]
+    [InlineData(FollowingTier.Small, "Small", "under-followed")]
+    [InlineData(FollowingTier.Mid, "Mid", "moderately followed")]
+    [InlineData(FollowingTier.Large, "Large", "widely followed")]
+    [InlineData(FollowingTier.Mega, "Mega", "already broadly followed")]
+    public void Render_Entry_Renders_Notedness_Inputs(FollowingTier tier, string token, string note)
+    {
+        var snap = new ScoreSnapshotBuilder().WithAttentionScore(21).Build();
+        var model = CreateModel([CreateEntry(RadarReportAction.Investigate, snapshot: snap, followingTier: tier)]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains($"- **Notedness:** Attention 21 · Following: {token} ({note})\n", output);
+    }
+
+    [Fact]
+    public void Render_Notedness_Line_Contains_No_Advice_Language()
+    {
+        var snap = new ScoreSnapshotBuilder().WithAttentionScore(19).Build();
+        var model = CreateModel(
+        [
+            CreateEntry(
+                RadarReportAction.Investigate,
+                snapshot: snap,
+                followingTier: FollowingTier.Small),
+        ]);
+
+        var output = CreateRenderer().Render(model);
+
+        Assert.Contains("- **Notedness:** Attention 19 · Following: Small (under-followed)\n", output);
+        foreach (var forbidden in ForbiddenWords)
+        {
+            Assert.DoesNotContain(forbidden, output, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void Render_Notedness_Methodology_Note_Present()
+    {
+        var output = CreateRenderer().Render(CreateModel());
+
+        Assert.Contains("> Notedness (measured Attention + curated following tier) discounts", output);
+        Assert.Contains("a research signal, not a valuation.", output);
     }
 
     [Fact]
