@@ -188,7 +188,7 @@ powershell -File scripts/run-radar.ps1 -Profile low-media  # an experiment: over
 powershell -File scripts/run-radar.ps1 -Profile low-media -WhatIf   # print the resolved --Radar args, don't run
 ```
 
-- **`default.json` captures how we run** (the 5 collectors — rss/sec/usaspending/newssearch/secform4 — + Ollama AI). Every other profile is loaded
+- **`default.json` captures how we run** (the 6 collectors — rss/sec/usaspending/newssearch/secform4/sec13dg — + DeepInfra DeepSeek-V4-Flash for the AI earnings-read, spec 119; `-Profile` can route back to local Ollama. The baseline therefore requires `DEEPINFRA_API_KEY` in the environment — see the key-handling note under "Running the app live"). Every other profile is loaded
   **on top of** it and carries only its delta (e.g. `low-media.json` overrides `MediaReachWeight`) — so the
   baseline is never lost and experiments are minimal diffs. This pairs with the config-driven `ScoringWeights`
   (a profile can set `Radar:Scoring:Profiles:{name}:*`), which the snapshot fingerprint (AD-10) then stamps.
