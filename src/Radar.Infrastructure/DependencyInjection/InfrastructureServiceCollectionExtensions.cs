@@ -80,7 +80,7 @@ public static class InfrastructureServiceCollectionExtensions
         // ScoringWeights (bound via AddRadarScoringWeights) winning over this default (mirrors ScoringOptions /
         // AttentionSourceTierOptions).
         services.TryAddSingleton(new ScoringWeights());
-        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV7>();
+        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV8>();
         services.TryAddSingleton(new ScoringOptions());
         // Insider materiality magnitudes (spec 96): the default == the spec-93 buy/sell tiers + cluster boost,
         // so a blank/absent config yields byte-identical insider Strengths. TryAdd keeps a

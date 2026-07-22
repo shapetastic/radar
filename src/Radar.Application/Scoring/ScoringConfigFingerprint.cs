@@ -71,6 +71,10 @@ public static class ScoringConfigFingerprint
         Append(builder, nameof(weights.FollowingTierDiscountSmall), weights.FollowingTierDiscountSmall);
         Append(builder, nameof(weights.FollowingTierDiscountWeight), weights.FollowingTierDiscountWeight);
         Append(builder, nameof(weights.OpportunityDiscountFloor), weights.OpportunityDiscountFloor);
+        // radar-formula-v8 breadth-preserving-collapse credit (spec 122), appended AFTER the last v7
+        // discount weight in this fixed order — tuning it changes the Attention reach, so it re-stamps the
+        // fingerprint by value.
+        Append(builder, nameof(weights.CollapsedBreadthCredit), weights.CollapsedBreadthCredit);
         Append(builder, "attnDesc", attentionDescriptor);
         Append(builder, "srcDesc", signalSourceDescriptor);
         Append(builder, "insiderDesc", insiderMaterialityDescriptor);

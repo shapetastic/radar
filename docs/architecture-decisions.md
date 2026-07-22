@@ -418,6 +418,63 @@ rejected, cannot separate JNJ 21 from AEHR 19; (C) benchmark bucketing in the re
 here. *Accepted · 2026-07-20 — **maintainer-approved** (AD-6 structure gate: shape + constants signed off
 in-session).*
 
+### Refinement — `radar-formula-v8` (spec 122): breadth-preserving collapse in the Attention reach
+
+**Problem.** The spec-109 `MediaAttentionCollapse` (`media-collapse-v1`) keeps ONE representative per
+same-event bucket before the formula ever sees the signals. That correctly kills duplicate media **volume**,
+but v7 then counted distinct third-party publishers over the *post-collapse* set, so it also threw away the
+distinct-publisher **breadth** of everything the collapse dropped. The spec-124 characterization proved the
+whole gap is structural, not a bug: 15 distinct outlets (7 curated-genuine at 1.0, 8 unknown at 0.25) covering
+ONE event scored Attention **10**, the *same* 15 spread across distinct events scored **78**, and that same
+burst handed straight to the formula — bypassing only the collapse — also scored **78**. Fifteen *different*
+genuine outlets choosing to cover one story is genuine notedness, and Radar was reading it as one outlet. This
+is OPEN DECISION (b) — "the Attention metric understates notedness" (AEHR popped 60% intraday at Attention 21).
+
+**Decision (shape).** Separate the two concerns: keep the volume collapse exactly as it is, and let the
+**breadth** term count the distinct publishers of a collapsed event.
+
+```
+breadthSurvivors      = Σ tierWeight(p) over distinct third-party publishers in the POST-collapse set
+breadthCollapsedExtra = Σ tierWeight(p) over distinct third-party publishers present ONLY in the
+                        PRE-collapse set (i.e. not already survivors)
+reach     = breadthSurvivors + CollapsedBreadthCredit · breadthCollapsedExtra
+                             + MediaReachWeight · mediaSignalCount     // mediaSignalCount stays POST-collapse
+Attention = 100 · reach / (reach + AttentionHalfSaturation)
+```
+
+The engine already held the pre-collapse list where it calls `Collapse(...)`; it now passes it as the
+breadth-only `ScoringInput.PreCollapseSignals`. The formula remains the single owner of the breadth math —
+Attention is not split across engine + formula — and `MediaAttentionCollapse`'s transform and its
+`media-collapse-v1` descriptor are **unchanged**.
+
+**Constant (AD-6).** New `ScoringWeights.CollapsedBreadthCredit`, default **1.0**, `Validate()`-ranged to
+`[0, 1]`, bound under `Radar:Scoring` and hashed into the fingerprint by value. Rationale for 1.0: a distinct
+genuine outlet is breadth regardless of whether the coverage clustered on one event — that *is* the complaint.
+Retunable as a pure config edit (like spec 94's `MediaReachWeight`) with no formula bump.
+
+**Invariants (checked by tests).** At `CollapsedBreadthCredit = 0.0`, `breadthCollapsedExtra` drops out and v8
+reproduces `radar-formula-v7` **byte-for-byte** — v8 is a pure superset, pinned by test (the spec-124 burst
+still reads **10** there). Attention is **monotone** in the credit. `mediaSignalCount` stays post-collapse, so
+no loudness/velocity term is re-admitted — the transient-burst shape spec 109 closed stays closed, and spec
+94's anti-raw-volume posture holds. The **anti-mill guard is intact** because the extra is tier-weighted: 15
+mill re-posts of one event add ≈1.5, 15 genuine outlets add 15. First-party sources are still excluded from the
+new term. **AD-14 clean**: no price / market-cap / trading-volume / intraday-move input — only Radar's own
+publisher-breadth evidence. Every other component (v6 Trajectory, the v7 following discount, EvidenceConfidence,
+SignalVelocity, recency, empty-window, direction SIGNS, per-signal provenance contributions) is byte-for-byte as
+v7. Measured effect on the spec-124 fixture: the burst rises **10 → 75**, against the spread control's unmoved
+**78** (the 3-point residual is the legitimately-different volume term: 1 surviving media event vs 15).
+
+**Version obligation.** Formula **STRUCTURE** change → `_formula.Version` advanced `radar-formula-v7 → v8`;
+`ScoringConfigVersion` re-stamps via the derived fingerprint (the `FormulaVersion` input changed AND
+`CollapsedBreadthCredit` joined the canonical string): AI-OFF default `radar-scoring-fp-8f4b59efd288 →
+radar-scoring-fp-cb80a5809882`, live AI-ON default `radar-scoring-fp-2ef5ef96cce2 →
+radar-scoring-fp-c908f03a554a` (both re-pinned by RUNNING the tests, never hand-computed). Per the
+spec-implementation checklist `RadarScoreFormulaV7` was **deleted** (not left dormant) and its tests ported to
+`RadarScoreFormulaV8Tests`. Alternatives recorded: (A) audit for a measurement bug — done as spec 124, no bug
+found; (B) a bounded recency-gated velocity term — rejected, re-admits loudness/velocity, kept as a fallback if
+D under-delivers on live data; (C) a report-only caveat — already shipped as spec 123's Notedness line,
+complementary but does not fix ranking.
+
 **Status.** Accepted · 2026-06-28 (specs 16–17; formula co-designed with maintainer). Refined ·
 2026-07-01 (spec 58, `radar-formula-v2` — maintainer-approved). Refined · 2026-07-04 (spec 87,
 `radar-formula-v3` — maintainer-approved). Refined · 2026-07-04 (spec 88, `radar-formula-v4` — Accepted,
@@ -435,7 +492,15 @@ every other component byte-identical to v5; fingerprint re-stamped `abbdf9fab44f
 folding the curated, non-price seed `FollowingTier` (AD-14) alongside measured Attention, floored/clamped as a
 graded lean; only the Opportunity discount changed, every other component byte-identical to v6; Small tier at
 default weights byte-identical to v6; AI-OFF fingerprint re-stamped `c45fb79092ea → 8f4b59efd288`, AI-ON
-`454984785732 → 4c06fd2d2d8c`; **maintainer-approved · 2026-07-20**, shape signed off in-session).
+`454984785732 → 4c06fd2d2d8c`; **maintainer-approved · 2026-07-20**, shape signed off in-session). Refined ·
+2026-07-21 (spec 122, `radar-formula-v8` — maintainer-gated structure: breadth-preserving collapse, crediting
+the tier-weighted distinct publishers the spec-109 same-event collapse dropped back into the Attention
+**breadth** term via the new `CollapsedBreadthCredit` (default 1.0, `[0,1]`) while `mediaSignalCount` stays
+post-collapse so no volume/velocity is re-admitted (AD-14 clean); only the Attention reach changed, every other
+component byte-identical to v7, and at credit 0.0 v8 is v7 byte-for-byte; the spec-124 burst rises 10 → 75
+against the unmoved 78 spread control; AI-OFF fingerprint re-stamped `8f4b59efd288 → cb80a5809882`, AI-ON
+`2ef5ef96cce2 → c908f03a554a`; **shape + default `CollapsedBreadthCredit` awaiting maintainer sign-off at PR
+review** — the AD-6 structure gate is NOT self-approved).
 
 ---
 

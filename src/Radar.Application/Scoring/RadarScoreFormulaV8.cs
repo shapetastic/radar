@@ -6,19 +6,33 @@ using Radar.Domain.Signals;
 namespace Radar.Application.Scoring;
 
 /// <summary>
-/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v7</c>: an AD-6 refinement of
-/// <c>radar-formula-v6</c> that changes <b>only</b> the Opportunity attention-discount term to fold in the
-/// curated <see cref="ScoringInput.FollowingTier"/>. Every other component (the v6 corroboration-aware
-/// Trajectory, Attention incl. the spec-109 collapsed media set, EvidenceConfidence, SignalVelocity,
-/// recency, the empty-window behaviour, the <see cref="ScoringInput.PreviousSignals"/> handling, the
-/// direction SIGNS, and the per-signal provenance <see cref="ScoreContribution"/> weights) is
-/// <b>byte-for-byte</b> identical to v6.
+/// The maintainer-owned <see cref="IScoreFormula"/> <c>radar-formula-v8</c>: an AD-6 refinement of
+/// <c>radar-formula-v7</c> that changes <b>only</b> the Attention <i>reach</i> term so the breadth of a
+/// spec-109-collapsed media event is preserved. Every other component (the v6 corroboration-aware
+/// Trajectory, the v7 following-tier Opportunity discount, EvidenceConfidence, SignalVelocity, recency,
+/// the empty-window behaviour, the <see cref="ScoringInput.PreviousSignals"/> handling, the direction
+/// SIGNS, and the per-signal provenance <see cref="ScoreContribution"/> weights) is <b>byte-for-byte</b>
+/// identical to v7.
 /// <para>
-/// The v6 Opportunity discount <c>1 − Attention/OpportunityAttentionDivisor</c> was blind to true
-/// notedness: Radar's Attention measures third-party publisher breadth in its OWN feeds, so a maximally
-/// followed mega-cap and an under-covered small-cap could carry near-identical Attention (the live JNJ 21
-/// vs AEHR 19 case) and be discounted near-equally. v7 keeps that measured-attention term and adds a
-/// second, curated-following term:
+/// v7's Attention counted tier-weighted distinct third-party publishers over the signal set it was handed —
+/// i.e. AFTER <c>MediaAttentionCollapse</c> (spec 109) had kept ONE representative per same-event bucket.
+/// That collapse legitimately removes duplicate media VOLUME, but it also discarded genuine
+/// distinct-publisher BREADTH: fifteen different real outlets covering one event expressed the attention of
+/// exactly one (spec 124's characterization pinned Attention 10 for a burst versus 78 for the same fifteen
+/// outlets spread across distinct events). v8 separates the two concerns:
+/// <c>reach = breadthSurvivors + CollapsedBreadthCredit·breadthCollapsedExtra + MediaReachWeight·mediaCount</c>,
+/// where <c>breadthCollapsedExtra</c> is the tier-weighted sum over publishers present ONLY in the
+/// pre-collapse set (<see cref="ScoringInput.PreCollapseSignals"/>) and <c>mediaCount</c> stays
+/// POST-collapse — so loudness/velocity is still collapsed and no raw-volume or time-derivative term is
+/// admitted (AD-14 clean; the spec-94 anti-volume posture holds). The credit is tier-weighted, so the
+/// anti-mill guard is intact: fifteen mill re-posts of one event add ≈1.5, fifteen genuine outlets add 15.
+/// At <see cref="ScoringWeights.CollapsedBreadthCredit"/> = 0.0 the extra term drops out and v8 reproduces
+/// <c>radar-formula-v7</c> byte-for-byte; an empty <see cref="ScoringInput.PreCollapseSignals"/> does the
+/// same. Supersedes <c>radar-formula-v7</c>.
+/// </para>
+/// <para>
+/// v7's own refinement is carried forward unchanged: the Opportunity discount folds the curated
+/// <see cref="ScoringInput.FollowingTier"/> alongside measured attention,
 /// <c>followingDiscount = 1 − (attention/OpportunityAttentionDivisor)·OpportunityAttentionDiscountWeight
 /// − TierDiscount(tier)·FollowingTierDiscountWeight</c>, and
 /// <c>Opportunity = Trajectory · (EvidenceConfidence/100) ·
@@ -26,9 +40,7 @@ namespace Radar.Application.Scoring;
 /// (AD-14 — never price/market-cap/volume-derived), and the discount is a graded LEAN, never a filter: the
 /// strictly-positive floor means a strong-enough trajectory can still surface a mega-cap. It is monotone —
 /// <see cref="ScoringWeights.Validate"/> enforces tier discounts Mega ≥ Large ≥ Mid ≥ Small, so a higher
-/// tier never RAISES Opportunity. At the default weights (attention weight 1.0, Small discount 0.0) a
-/// Small-tier company's output is byte-identical to v6, so the under-followed names Radar exists to surface
-/// are untouched. Supersedes <c>radar-formula-v6</c>.
+/// tier never RAISES Opportunity.
 /// </para>
 /// <para>
 /// Pure and deterministic (no clock, no randomness, no I/O; both <see cref="_weights"/> and
@@ -40,7 +52,7 @@ namespace Radar.Application.Scoring;
 /// and never from <see cref="ScoringInput.PreviousSignals"/>.
 /// </para>
 /// </summary>
-public sealed class RadarScoreFormulaV7 : IScoreFormula
+public sealed class RadarScoreFormulaV8 : IScoreFormula
 {
     // Direction → sign used in trajectory. These are structural direction SIGNS, not tunable magnitudes
     // (flipping a sign is a structural change, not a weight experiment), so they stay const in the formula.
@@ -67,7 +79,7 @@ public sealed class RadarScoreFormulaV7 : IScoreFormula
     /// on a nonsensical weight that would break the math or the [0,100] clamp contract — see
     /// <see cref="ScoringWeights.Validate"/>.
     /// </summary>
-    public RadarScoreFormulaV7(ScoringWeights weights, IAttentionSourceWeights sourceWeights)
+    public RadarScoreFormulaV8(ScoringWeights weights, IAttentionSourceWeights sourceWeights)
     {
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
@@ -77,7 +89,7 @@ public sealed class RadarScoreFormulaV7 : IScoreFormula
     }
 
     /// <inheritdoc />
-    public string Version => "radar-formula-v7";
+    public string Version => "radar-formula-v8";
 
     private static int DirectionSign(SignalDirection d) => d switch
     {
@@ -120,7 +132,7 @@ public sealed class RadarScoreFormulaV7 : IScoreFormula
             var emptyComponents = new ScoreComponents(0, 0, 0, 0, 0);
             return new ScoreComputation(
                 emptyComponents,
-                "radar-formula-v7: no signals in window.",
+                "radar-formula-v8: no signals in window.",
                 JsonSerializer.Serialize(emptyComponents),
                 new List<ScoreContribution>());
         }
@@ -191,14 +203,36 @@ public sealed class RadarScoreFormulaV7 : IScoreFormula
         // third-party publisher by its source-quality tier (mills ≈0.1, unknown 0.5, genuine 1.0) instead of
         // counting every distinct publisher as 1, so breadth reflects genuine notice, not mill volume; the
         // half-saturation constant was re-tuned (12→3) for the resulting smaller reach — see field comments.
-        var weightedBreadth = signals
+        //
+        // v8 (spec 122) is the ONLY change from v7 and it is confined to this reach block: the survivor
+        // breadth below is v7's term unchanged, and it is now joined by breadthCollapsedExtra — the
+        // tier-weighted sum over third-party publishers that appear ONLY in the PRE-collapse set, i.e. the
+        // distinct outlets the spec-109 same-event collapse dropped. Fifteen genuine outlets covering ONE
+        // event are genuine notedness (breadth), which v7 discarded as collateral damage while removing
+        // duplicate volume. mediaCount below deliberately stays POST-collapse, so volume/loudness is still
+        // collapsed and no velocity term is admitted (AD-14). The extra is tier-weighted exactly like the
+        // survivor breadth, so mill re-posts of one event add ≈0.1 each, never 1.0.
+        var survivorPublishers = signals
+            .Where(s => EvidenceSourceTypes.IsThirdPartyAttentionSource(s.Evidence.SourceType))
+            .Select(s => s.Evidence.SourceName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var breadthSurvivors = survivorPublishers.Sum(name => _sourceWeights.WeightFor(name));
+
+        // Publishers present only in the pre-collapse set. An empty PreCollapseSignals (the ScoringInput
+        // default, and every caller that does not collapse) yields 0 here — reach is then exactly v7's.
+        var breadthCollapsedExtra = input.PreCollapseSignals
             .Where(s => EvidenceSourceTypes.IsThirdPartyAttentionSource(s.Evidence.SourceType))
             .Select(s => s.Evidence.SourceName)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(name => !survivorPublishers.Contains(name))
             .Sum(name => _sourceWeights.WeightFor(name));
+
         var mediaCount = signals.Count(s => s.Signal.Type == SignalType.MediaAttention);
-        var reach = weightedBreadth + _weights.MediaReachWeight * mediaCount;
+        var reach = breadthSurvivors
+            + _weights.CollapsedBreadthCredit * breadthCollapsedExtra
+            + _weights.MediaReachWeight * mediaCount;
         var attentionScore = Score(100 * reach / (reach + _weights.AttentionHalfSaturation));
 
         // ---- 3. EvidenceConfidenceScore ----
@@ -264,7 +298,7 @@ public sealed class RadarScoreFormulaV7 : IScoreFormula
 
         var windowDays = (int)Math.Round(windowLength.TotalDays, MidpointRounding.AwayFromZero);
         var explanation =
-            $"radar-formula-v7: {input.Signals.Count} signal(s) over {windowDays}d → " +
+            $"radar-formula-v8: {input.Signals.Count} signal(s) over {windowDays}d → " +
             $"Trajectory {trajectoryScore}, Opportunity {opportunityScore} (Attention {attentionScore}, " +
             $"Confidence {evidenceConfidenceScore}, Velocity {signalVelocityScore}).";
 

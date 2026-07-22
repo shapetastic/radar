@@ -24,7 +24,7 @@ public sealed class ScoringEngineTests
     /// In-test <see cref="IAttentionSourceWeights"/> for the real formula: every publisher counts as a full
     /// genuine outlet (weight 1.0). These orchestration tests exercise Trajectory/Velocity over first-party
     /// (Filing/PressRelease) evidence, so Attention is 0 regardless — the weights only need to satisfy the
-    /// RadarScoreFormulaV7 constructor.
+    /// RadarScoreFormulaV8 constructor.
     /// </summary>
     private static readonly IAttentionSourceWeights Weights = new AllGenuineWeights();
 
@@ -520,8 +520,8 @@ public sealed class ScoringEngineTests
         SignalDirection direction, bool aboveBaseline)
     {
         // Spec 75: a directional GuidanceChange (the AI earnings read) over Filing evidence moves
-        // Trajectory the right way under the real radar-formula-v7 — a beat up, a miss down.
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        // Trajectory the right way under the real radar-formula-v8 — a beat up, a miss down.
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
 
         var evidence = new EvidenceBuilder()
@@ -564,7 +564,7 @@ public sealed class ScoringEngineTests
     {
         // The deterministic Neutral GuidanceChange (spec 57) contributes 0 to Trajectory, so a window whose
         // only signal is Neutral still scores the 50 baseline (coexistence with the directional read).
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
 
         var evidence = new EvidenceBuilder()
@@ -868,7 +868,7 @@ public sealed class ScoringEngineTests
         // Real formula: velocity = 50·(actNow+10)/(actPrev+10) over Strength sums. Current-window strength
         // (in the in-memory repo) sums to 16; prior-window strength (only on disk) sums to 6 → ratio > 1 →
         // velocity > 50. This proves the previous window now comes from disk (cross-run).
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
         var windowStart = WindowEnd - Window;
 
@@ -890,7 +890,7 @@ public sealed class ScoringEngineTests
     {
         // Mirror case: current-window strength (6) < prior-window strength (on disk: 12 + 12 = 24) → ratio
         // < 1 → velocity < 50.
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
         var windowStart = WindowEnd - Window;
 
@@ -912,7 +912,7 @@ public sealed class ScoringEngineTests
         // no-previous value 50·(actNow+10)/(0+10). With actNow == 0 (a Neutral has 0? no — pick actNow to
         // land exactly on steady) we assert against the same value a run with an empty previous window
         // computes, proving no fabricated movement without a prior on disk.
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
 
         // One current-window Approved signal, Strength 6; nothing on disk.
@@ -929,7 +929,7 @@ public sealed class ScoringEngineTests
     {
         // Spec Test 7: the disk-sourced previous signals are activity-only and contribute NO links. Only
         // the current-window signal's evidence produces a ScoreEvidenceLink.
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
         var windowStart = WindowEnd - Window;
 
@@ -966,7 +966,7 @@ public sealed class ScoringEngineTests
             var scores = new InMemoryScoreRepository();
             var engine = new ScoringEngine(
                 signals, fileStore, evidence, scores, new InMemoryCompanyRepository(),
-                new RadarScoreFormulaV7(new ScoringWeights(), Weights),
+                new RadarScoreFormulaV8(new ScoringWeights(), Weights),
                 new ScoringWeights(), Weights, SourceDesc, new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions { Window = Window }, NullLogger<ScoringEngine>.Instance);
@@ -1094,7 +1094,7 @@ public sealed class ScoringEngineTests
         // failed on first collection) AND the strength-8 directional read coexist over the SAME filing
         // EvidenceId. The company must be scored on the directional only — Trajectory moves, and the
         // Neutral gets NO contribution/ScoreEvidenceLink (at most one GuidanceChange per filing).
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
         var evidence = FilingEvidence();
         await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
@@ -1129,7 +1129,7 @@ public sealed class ScoringEngineTests
     {
         // A filing with ONLY the deterministic Neutral (no directional read available) is scored exactly
         // as before: baseline Trajectory and the Neutral keeps its provenance link.
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
         var evidence = FilingEvidence();
         await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
@@ -1150,7 +1150,7 @@ public sealed class ScoringEngineTests
     {
         // Determinism (AD-3): repeated scoring assembly over the same Neutral+directional inputs yields
         // identical component scores and identical contribution tuples.
-        var harness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var harness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var companyId = Guid.NewGuid();
         var evidence = FilingEvidence();
         await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
@@ -1227,7 +1227,7 @@ public sealed class ScoringEngineTests
         var companyId = Guid.NewGuid();
 
         // Case A: the stale Neutral alone (the stuck pre-113 read).
-        var neutralHarness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var neutralHarness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var neutralEvidence = FilingEvidence();
         await neutralHarness.Evidence.AddIfNewAsync(neutralEvidence, CancellationToken.None);
         await SeedGuidanceChangeAsync(
@@ -1238,7 +1238,7 @@ public sealed class ScoringEngineTests
             await neutralHarness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
 
         // Case B: the SAME stale Neutral persisted alongside the directional Positive read (spec 113).
-        var supersededHarness = new Harness(new RadarScoreFormulaV7(new ScoringWeights(), Weights));
+        var supersededHarness = new Harness(new RadarScoreFormulaV8(new ScoringWeights(), Weights));
         var evidence = FilingEvidence();
         await supersededHarness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
         var neutral = await SeedGuidanceChangeAsync(

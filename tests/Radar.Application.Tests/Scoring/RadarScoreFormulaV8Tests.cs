@@ -9,7 +9,7 @@ using Radar.TestSupport;
 
 namespace Radar.Application.Tests.Scoring;
 
-public sealed class RadarScoreFormulaV7Tests
+public sealed class RadarScoreFormulaV8Tests
 {
     private static readonly DateTimeOffset WindowStart = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset WindowEnd = new(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
@@ -41,7 +41,7 @@ public sealed class RadarScoreFormulaV7Tests
         });
 
     // Convenience: construct the default-weights formula over the given source weights.
-    private static RadarScoreFormulaV7 Formula(IAttentionSourceWeights sourceWeights) =>
+    private static RadarScoreFormulaV8 Formula(IAttentionSourceWeights sourceWeights) =>
         new(new ScoringWeights(), sourceWeights);
 
     private static ScoringSignal BuildSignal(
@@ -80,33 +80,33 @@ public sealed class RadarScoreFormulaV7Tests
         PreviousSignals: previous ?? Array.Empty<Signal>());
 
     [Fact]
-    public void Version_IsRadarFormulaV7_AndAppearsInExplanation()
+    public void Version_IsRadarFormulaV8_AndAppearsInExplanation()
     {
         var formula = Formula(AllGenuine);
 
-        Assert.Equal("radar-formula-v7", formula.Version);
+        Assert.Equal("radar-formula-v8", formula.Version);
 
         var result = formula.Compute(InputFrom(new[] { BuildSignal() }));
-        Assert.Contains("radar-formula-v7", result.Explanation);
+        Assert.Contains("radar-formula-v8", result.Explanation);
     }
 
     [Fact]
     public void Constructor_NullWeights_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV7(null!, AllGenuine));
+        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV8(null!, AllGenuine));
     }
 
     [Fact]
     public void Constructor_NullSourceWeights_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV7(new ScoringWeights(), null!));
+        Assert.Throws<ArgumentNullException>(() => new RadarScoreFormulaV8(new ScoringWeights(), null!));
     }
 
     [Fact]
     public void Constructor_InvalidWeight_Throws()
     {
         Assert.Throws<InvalidOperationException>(
-            () => new RadarScoreFormulaV7(new ScoringWeights { OpportunityAttentionDivisor = 0 }, AllGenuine));
+            () => new RadarScoreFormulaV8(new ScoringWeights { OpportunityAttentionDivisor = 0 }, AllGenuine));
     }
 
     [Fact]
@@ -636,7 +636,7 @@ public sealed class RadarScoreFormulaV7Tests
     [Fact]
     public void Trajectory_LoneRoutineInsiderSale_AtSpec110SellStrength_NoLongerDropsBy5()
     {
-        // Spec 110 (AEHR regression), carried onto radar-formula-v7: a strong positive-directional majority
+        // Spec 110 (AEHR regression), carried onto radar-formula-v8: a strong positive-directional majority
         // (record-results week) plus ONE lone routine open-market insider sale. Under the recalibrated default
         // SellTiers a ~$1.6M discretionary sale maps to Strength 4 (was 7 when SellTiers == BuyTiers). The
         // weaker Negative mass shrinks the trajectory drop below the WeeklyReportActionPolicyV1 deterioration
@@ -692,7 +692,7 @@ public sealed class RadarScoreFormulaV7Tests
         Assert.True(newer.Components.TrajectoryScore >= older.Components.TrajectoryScore);
     }
 
-    // ---- radar-formula-v7 corroboration-aware Trajectory (spec 111) ----
+    // ---- radar-formula-v7 corroboration-aware (carried into v8) Trajectory (spec 111) ----
     //
     // The v6 Trajectory splits the current-window directional signals into a positive mass and a negative mass
     // (each Σ strength·confidence·recency over that direction) and combines them as
@@ -807,9 +807,9 @@ public sealed class RadarScoreFormulaV7Tests
         // toward the neutral 50 versus the default k, proving the constant flows through ScoringWeights.
         var single = InputFrom(Directional(1, SignalDirection.Positive, strength: 6, confidence: 0.8m));
 
-        var defaultK = new RadarScoreFormulaV7(new ScoringWeights(), AllGenuine)
+        var defaultK = new RadarScoreFormulaV8(new ScoringWeights(), AllGenuine)
             .Compute(single).Components.TrajectoryScore;
-        var largeK = new RadarScoreFormulaV7(new ScoringWeights { TrajectoryCorroborationK = 50.0 }, AllGenuine)
+        var largeK = new RadarScoreFormulaV8(new ScoringWeights { TrajectoryCorroborationK = 50.0 }, AllGenuine)
             .Compute(single).Components.TrajectoryScore;
 
         Assert.True(defaultK > 50);
@@ -824,7 +824,7 @@ public sealed class RadarScoreFormulaV7Tests
         // It is a denominator smoother, so a zero/negative k fails fast (Validate() + the formula ctor).
         Assert.Throws<InvalidOperationException>(() => new ScoringWeights { TrajectoryCorroborationK = 0 }.Validate());
         Assert.Throws<InvalidOperationException>(
-            () => new RadarScoreFormulaV7(new ScoringWeights { TrajectoryCorroborationK = -1 }, AllGenuine));
+            () => new RadarScoreFormulaV8(new ScoringWeights { TrajectoryCorroborationK = -1 }, AllGenuine));
     }
 
     // ---- spec 112: AI directional earnings-read materiality ----
@@ -1058,13 +1058,15 @@ public sealed class RadarScoreFormulaV7Tests
     [Fact]
     public void DefaultConfig_MatchesV6Baseline_ForARepresentativeInput()
     {
-        // Headline baseline pin for radar-formula-v7 at the DEFAULT Small tier: every pinned integer is
-        // byte-identical to the radar-formula-v6 baseline for this input — v7 changed ONLY the Opportunity
-        // discount term, and at the default weights a Small tier adds no extra discount (attention weight 1.0,
-        // Small discount 0.0, the clamp inert). Trajectory 72 is the v6 corroboration value (the two Positive
-        // signals form a corroborated positive mass through k = 10), Opportunity 36 = 72·0.60·(1 − 42/250),
-        // Attention (42), EvidenceConfidence (60) and Velocity (100) as v5/v6. These pinned integers ARE the
-        // radar-formula-v7 default output for this input.
+        // Headline baseline pin for radar-formula-v8 at the DEFAULT Small tier: every pinned integer is
+        // byte-identical to the radar-formula-v6/v7 baseline for this input. v7 changed ONLY the Opportunity
+        // discount term (at the default weights a Small tier adds no extra discount — attention weight 1.0,
+        // Small discount 0.0, the clamp inert), and v8 changes ONLY the Attention reach term, which is inert
+        // here because this input carries NO pre-collapse set (PreCollapseSignals is empty ⇒
+        // breadthCollapsedExtra 0 ⇒ reach is exactly v7's). Trajectory 72 is the v6 corroboration value (the
+        // two Positive signals form a corroborated positive mass through k = 10), Opportunity 36 =
+        // 72·0.60·(1 − 42/250), Attention (42), EvidenceConfidence (60) and Velocity (100) as v5/v6. These
+        // pinned integers ARE the radar-formula-v8 default output for this input.
         var formula = Formula(Tiered());
 
         var input = InputFrom(new[]
@@ -1099,7 +1101,7 @@ public sealed class RadarScoreFormulaV7Tests
 
         Assert.Equal(JsonSerializer.Serialize(c), result.ComponentJson);
         Assert.Equal(
-            "radar-formula-v7: 3 signal(s) over 30d → Trajectory 72, Opportunity 36 (Attention 42, "
+            "radar-formula-v8: 3 signal(s) over 30d → Trajectory 72, Opportunity 36 (Attention 42, "
                 + "Confidence 60, Velocity 100).",
             result.Explanation);
     }
@@ -1120,8 +1122,8 @@ public sealed class RadarScoreFormulaV7Tests
         // reads the injected config, not const fields.
         var input = InputFrom(News(5, "genuine"));
 
-        var defaultResult = new RadarScoreFormulaV7(new ScoringWeights(), Tiered()).Compute(input).Components;
-        var retunedResult = new RadarScoreFormulaV7(
+        var defaultResult = new RadarScoreFormulaV8(new ScoringWeights(), Tiered()).Compute(input).Components;
+        var retunedResult = new RadarScoreFormulaV8(
             new ScoringWeights { AttentionHalfSaturation = 12.0 }, Tiered()).Compute(input).Components;
 
         Assert.NotEqual(defaultResult.AttentionScore, retunedResult.AttentionScore);
@@ -1234,7 +1236,7 @@ public sealed class RadarScoreFormulaV7Tests
         // negative (1 − 42/250 − 1.0 = −0.168), which clamps at the floor 0.05 — so Opportunity is exactly
         // Trajectory·(EC/100)·floor = 72·0.60·0.05 = 2.16 → 2, still ABOVE zero: a strong trajectory on a
         // maximally-followed name is leaned on hard, never hard-excluded.
-        var formula = new RadarScoreFormulaV7(
+        var formula = new RadarScoreFormulaV8(
             new ScoringWeights { FollowingTierDiscountMega = 1.0 }, Tiered());
 
         var mega = formula.Compute(RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mega)).Components;
@@ -1323,14 +1325,242 @@ public sealed class RadarScoreFormulaV7Tests
         // config, not const fields.
         var input = RepresentativeInput(Radar.Domain.Companies.FollowingTier.Mega);
 
-        var defaults = new RadarScoreFormulaV7(new ScoringWeights(), Tiered())
+        var defaults = new RadarScoreFormulaV8(new ScoringWeights(), Tiered())
             .Compute(input).Components.OpportunityScore;
-        var halved = new RadarScoreFormulaV7(
+        var halved = new RadarScoreFormulaV8(
             new ScoringWeights { FollowingTierDiscountWeight = 0.5 }, Tiered())
             .Compute(input).Components.OpportunityScore;
 
         Assert.Equal(17, defaults);
         Assert.Equal(26, halved);
+    }
+
+    // ---- radar-formula-v8 breadth-preserving collapse (spec 122) ----
+    //
+    // v8 changes ONLY the Attention reach term:
+    //   reach = breadthSurvivors + CollapsedBreadthCredit·breadthCollapsedExtra + MediaReachWeight·mediaCount
+    // where breadthCollapsedExtra is the tier-weighted sum over third-party publishers present ONLY in the
+    // PRE-collapse set (ScoringInput.PreCollapseSignals) — the outlets the spec-109 same-event collapse
+    // dropped. mediaCount stays POST-collapse (no loudness/velocity re-admitted, AD-14 clean).
+    //
+    // The fixture below mirrors AttentionBreadthCharacterizationTests (spec 124) under the Tiered fake at the
+    // spec-90 unknown posture (0.25): 15 distinct publishers covering ONE event — the earliest/surviving
+    // representative is an unknown-tier outlet (0.25), and the 14 collapsed away are 7 genuine (1.0) + 7
+    // unknown (0.25), so breadthCollapsedExtra = 7·1.0 + 7·0.25 = 8.75.
+
+    private static IAttentionSourceWeights BurstTiers() => Tiered(unknown: 0.25);
+
+    /// <summary>The 15 same-event publishers; index 0 is the surviving collapse representative.</summary>
+    private static IReadOnlyList<ScoringSignal> BurstPublishers()
+    {
+        var names = new List<string> { "unknown-representative" };
+        names.AddRange(Enumerable.Range(0, 7).Select(i => $"genuine-{i}"));
+        names.AddRange(Enumerable.Range(0, 7).Select(i => $"unknown-{i}"));
+
+        return names
+            .Select(name => BuildSignal(
+                direction: SignalDirection.Neutral, type: SignalType.MediaAttention,
+                sourceType: EvidenceSourceType.NewsArticle, sourceName: name))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The post-collapse input for the burst: ONE surviving representative, with the full pre-collapse set of
+    /// 15 carried alongside as the breadth-only v8 input.
+    /// </summary>
+    private static ScoringInput BurstInput(IReadOnlyList<ScoringSignal> preCollapse) => new(
+        CompanyId: Guid.NewGuid(),
+        WindowStartUtc: WindowStart,
+        WindowEndUtc: WindowEnd,
+        Signals: new[] { preCollapse[0] },
+        PreviousSignals: Array.Empty<Signal>())
+    {
+        PreCollapseSignals = preCollapse,
+    };
+
+    [Fact]
+    public void CollapsedBreadthCredit_Zero_ReproducesV7_ByteForByte()
+    {
+        // (a) The safety anchor: at credit 0.0 the collapsed-away breadth drops out entirely, so v8's output on
+        // a collapsed burst is byte-identical to radar-formula-v7's — v8 is a pure superset. Attention is the
+        // spec-124 pinned 10 (reach = 0.25 + 0.10·1 = 0.35 → 100·0.35/3.35 = 10.4).
+        var preCollapse = BurstPublishers();
+        var formula = new RadarScoreFormulaV8(
+            new ScoringWeights { CollapsedBreadthCredit = 0.0 }, BurstTiers());
+
+        var withPreCollapse = formula.Compute(BurstInput(preCollapse)).Components;
+
+        Assert.Equal(10, withPreCollapse.AttentionScore);
+
+        // The v7 computation IS "the same input with no pre-collapse information at all": every component
+        // must match, not just Attention.
+        var v7Equivalent = formula.Compute(new ScoringInput(
+            CompanyId: Guid.NewGuid(),
+            WindowStartUtc: WindowStart,
+            WindowEndUtc: WindowEnd,
+            Signals: new[] { preCollapse[0] },
+            PreviousSignals: Array.Empty<Signal>())).Components;
+
+        Assert.Equal(v7Equivalent, withPreCollapse);
+    }
+
+    [Fact]
+    public void DefaultCredit_SingleEventManyPublishers_RisesToNearTheSpreadValue()
+    {
+        // (b) The headline fix: the SAME 15 publishers score nearly the same whether their coverage clustered
+        // on one event (burst, collapsed to one representative) or landed on 15 distinct events (spread).
+        //   burst  reach = 0.25 + 1.0·8.75 + 0.10·1  = 9.10 → 100·9.10/12.10 = 75.2 → 75
+        //   spread reach = (7·1.0 + 8·0.25) + 0.10·15 = 10.5 → 100·10.5/13.5  = 77.8 → 78
+        // The small residual is the legitimately-different volume term (1 surviving media event vs 15) — v8
+        // credits BREADTH back, never volume.
+        var preCollapse = BurstPublishers();
+        var formula = new RadarScoreFormulaV8(new ScoringWeights(), BurstTiers());
+
+        var burst = formula.Compute(BurstInput(preCollapse)).Components.AttentionScore;
+
+        // Spread: nothing collapses, so all 15 are survivors and there is no pre-collapse delta.
+        var spread = formula.Compute(InputFrom(preCollapse)).Components.AttentionScore;
+
+        Assert.Equal(75, burst);
+        Assert.Equal(78, spread);
+        Assert.True(burst > 10, $"the collapsed burst must no longer read as a single outlet; was {burst}");
+        Assert.True(spread - burst <= 5,
+            $"a collapsed burst must land close to the spread value; burst={burst}, spread={spread}");
+    }
+
+    [Fact]
+    public void CollapsedAwayMills_AddOnlyTheirTierWeight_AntiHypeGuardHolds()
+    {
+        // (c) The anti-mill guard survives the credit: breadthCollapsedExtra is tier-weighted, so ten mill
+        // outlets re-posting ONE event add 10·0.1 = 1.0, while ten genuine outlets covering it add 10·1.0 = 10.
+        //   mills   reach = 1.0 (genuine survivor) + 1.0  + 0.10·1 = 2.1  → 100·2.1/5.1  = 41
+        //   genuine reach = 1.0                    + 10.0 + 0.10·1 = 11.1 → 100·11.1/14.1 = 79
+        var formula = new RadarScoreFormulaV8(new ScoringWeights(), BurstTiers());
+
+        ScoringSignal Outlet(string name) => BuildSignal(
+            direction: SignalDirection.Neutral, type: SignalType.MediaAttention,
+            sourceType: EvidenceSourceType.NewsArticle, sourceName: name);
+
+        var representative = Outlet("genuine-representative");
+
+        ScoringInput WithCollapsedAway(string prefix)
+        {
+            var preCollapse = new List<ScoringSignal> { representative };
+            preCollapse.AddRange(Enumerable.Range(0, 10).Select(i => Outlet($"{prefix}-{i}")));
+            return new ScoringInput(
+                CompanyId: Guid.NewGuid(),
+                WindowStartUtc: WindowStart,
+                WindowEndUtc: WindowEnd,
+                Signals: new[] { representative },
+                PreviousSignals: Array.Empty<Signal>())
+            {
+                PreCollapseSignals = preCollapse,
+            };
+        }
+
+        var mills = formula.Compute(WithCollapsedAway("mill")).Components.AttentionScore;
+        var genuine = formula.Compute(WithCollapsedAway("genuine")).Components.AttentionScore;
+
+        Assert.Equal(41, mills);
+        Assert.Equal(79, genuine);
+        Assert.True(genuine - mills > 25,
+            $"collapsed-away mills must not buy genuine breadth; genuine={genuine}, mills={mills}");
+    }
+
+    [Fact]
+    public void Attention_IsMonotone_InCollapsedBreadthCredit()
+    {
+        // (d) The credit is a monotone dial from "v7 exactly" (0.0) to "full breadth" (1.0): raising it never
+        // lowers Attention, and the two ends are strictly different on a fixture with collapsed-away breadth.
+        var preCollapse = BurstPublishers();
+        var credits = new[] { 0.0, 0.25, 0.5, 0.75, 1.0 };
+
+        var attentions = credits
+            .Select(credit => new RadarScoreFormulaV8(
+                    new ScoringWeights { CollapsedBreadthCredit = credit }, BurstTiers())
+                .Compute(BurstInput(preCollapse)).Components.AttentionScore)
+            .ToArray();
+
+        for (var i = 1; i < attentions.Length; i++)
+        {
+            Assert.True(attentions[i] >= attentions[i - 1],
+                $"raising CollapsedBreadthCredit must never lower Attention; credit {credits[i - 1]}="
+                    + $"{attentions[i - 1]}, credit {credits[i]}={attentions[i]}");
+        }
+
+        Assert.True(attentions[^1] > attentions[0],
+            $"full credit must exceed zero credit; 1.0={attentions[^1]}, 0.0={attentions[0]}");
+    }
+
+    [Fact]
+    public void DefaultCollapsedBreadthCredit_IsOne_AndMustBeInUnitRange()
+    {
+        // The AD-6 constant this slice asks the maintainer to sign off, pinned at the source so a silent
+        // default drift is caught independently of any derived fingerprint pin.
+        Assert.Equal(1.0, new ScoringWeights().CollapsedBreadthCredit);
+
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { CollapsedBreadthCredit = -0.1 }.Validate());
+        Assert.Throws<InvalidOperationException>(
+            () => new ScoringWeights { CollapsedBreadthCredit = 1.5 }.Validate());
+        // The formula ctor enforces the same (fails fast on construction, like the other weights).
+        Assert.Throws<InvalidOperationException>(
+            () => new RadarScoreFormulaV8(new ScoringWeights { CollapsedBreadthCredit = 2.0 }, AllGenuine));
+    }
+
+    [Fact]
+    public void PreCollapsePublishersAlreadySurviving_AddNoExtraBreadth()
+    {
+        // Double-count guard: the pre-collapse set CONTAINS the survivors, so a publisher that survived the
+        // collapse must not be credited twice. Handing the full survivor set as its own pre-collapse set is
+        // therefore inert — the delta is empty.
+        var formula = new RadarScoreFormulaV8(new ScoringWeights(), BurstTiers());
+        var publishers = BurstPublishers();
+
+        var withoutPreCollapse = formula.Compute(InputFrom(publishers)).Components;
+        var withRedundantPreCollapse = formula.Compute(new ScoringInput(
+            CompanyId: Guid.NewGuid(),
+            WindowStartUtc: WindowStart,
+            WindowEndUtc: WindowEnd,
+            Signals: publishers,
+            PreviousSignals: Array.Empty<Signal>())
+        {
+            PreCollapseSignals = publishers,
+        }).Components;
+
+        Assert.Equal(withoutPreCollapse, withRedundantPreCollapse);
+    }
+
+    [Fact]
+    public void CollapsedAwayFirstPartySources_AreNotCreditedAsMarketAttention()
+    {
+        // The v2 first-party exclusion still governs the new term: a collapsed-away company press release or
+        // filing is not market attention, so it adds nothing to breadth.
+        var formula = new RadarScoreFormulaV8(new ScoringWeights(), BurstTiers());
+
+        var representative = BuildSignal(
+            direction: SignalDirection.Neutral, type: SignalType.MediaAttention,
+            sourceType: EvidenceSourceType.NewsArticle, sourceName: "genuine-representative");
+
+        var withFirstPartyExtras = formula.Compute(new ScoringInput(
+            CompanyId: Guid.NewGuid(),
+            WindowStartUtc: WindowStart,
+            WindowEndUtc: WindowEnd,
+            Signals: new[] { representative },
+            PreviousSignals: Array.Empty<Signal>())
+        {
+            PreCollapseSignals = new[]
+            {
+                representative,
+                BuildSignal(sourceType: EvidenceSourceType.PressRelease, sourceName: "genuine-newsroom"),
+                BuildSignal(sourceType: EvidenceSourceType.Filing, sourceName: "genuine-edgar"),
+            },
+        }).Components.AttentionScore;
+
+        var withoutExtras = formula
+            .Compute(InputFrom(new[] { representative })).Components.AttentionScore;
+
+        Assert.Equal(withoutExtras, withFirstPartyExtras);
     }
 
     // ---- ScoringWeights.Validate() coverage for the spec-117 following-discount fields ----
@@ -1346,7 +1576,7 @@ public sealed class RadarScoreFormulaV7Tests
             () => new ScoringWeights { OpportunityDiscountFloor = 1.5 }.Validate());
         // The formula ctor enforces the same (fails fast on construction, like the other weights).
         Assert.Throws<InvalidOperationException>(
-            () => new RadarScoreFormulaV7(new ScoringWeights { OpportunityDiscountFloor = 0 }, AllGenuine));
+            () => new RadarScoreFormulaV8(new ScoringWeights { OpportunityDiscountFloor = 0 }, AllGenuine));
     }
 
     [Fact]
