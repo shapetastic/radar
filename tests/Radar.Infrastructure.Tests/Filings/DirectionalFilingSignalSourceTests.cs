@@ -671,6 +671,221 @@ public sealed class DirectionalFilingSignalSourceTests
         Assert.Equal(5, reader.ReadCount); // breaker disabled -> every candidate attempted.
     }
 
+    // ---- spec 126: cap applies to NEW analyses (pass 2) only; all in-window cached signals replay (pass 1) ----
+
+    /// <summary>
+    /// Builds a cached <see cref="AnalyzedFilingRecord"/> for <paramref name="accession"/> carrying a
+    /// directional (Positive GuidanceChange) signal, so a pass-1 cache hit replays a real signal.
+    /// </summary>
+    private static AnalyzedFilingRecord CachedSignalRecord(string accession) =>
+        new(
+            accession,
+            AnalyzedFilingOutcome.DirectionalSignalProduced,
+            new ExtractedSignal(
+                CompanyMention: "Cached Co",
+                SignalType: "GuidanceChange",
+                Direction: "Positive",
+                Strength: 8,
+                Novelty: 6,
+                Confidence: 0.9m,
+                SupportingExcerpt: "cached excerpt",
+                Reason: "cached rationale"),
+            new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero),
+            AnalyzedFilingRecord.CurrentCacheVersion);
+
+    [Fact]
+    public async Task CacheHits_DoNotConsumeTheCap_AllReplay_AndOnlyMissesCountAgainstCap()
+    {
+        // Three already-analyzed (cached) filings + two uncached, with the cap (1) set BELOW the cached count.
+        // Pass 1 replays all three cached signals unbounded; pass 2 attempts only min(K=2, cap=1)=1 NEW read.
+        // If cache hits consumed cap slots (the pre-spec-126 defect), zero new reads would happen.
+        var cachedAccessions = new[]
+        {
+            "0001049521-26-000101",
+            "0001049521-26-000102",
+            "0001049521-26-000103",
+        };
+        var cached = cachedAccessions
+            .Select((a, idx) => EarningsFiling(
+                accession: a,
+                publishedAt: new DateTimeOffset(2026, 6, 20 - idx, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+        var uncached = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000201", publishedAt: new DateTimeOffset(2026, 6, 9, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000202", publishedAt: new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero)),
+        };
+
+        var cache = new FakeAnalyzedFilingCache();
+        foreach (var a in cachedAccessions)
+        {
+            cache.Entries[a] = CachedSignalRecord(a);
+        }
+
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxFilingsPerRun = 1 };
+
+        var result = await CreateSource(reader, analyzer, options, cache)
+            .ProduceAsync([.. cached, .. uncached], AsOf, CancellationToken.None);
+
+        // min(K, cap) = 1 new read only — cache hits did not consume the cap.
+        Assert.Equal(1, reader.ReadCount);
+        // Three replayed cached signals + one newly-analyzed = four.
+        Assert.Equal(4, result.Count);
+        foreach (var ev in cached)
+        {
+            Assert.Contains(result, r => ReferenceEquals(r.Evidence, ev));
+        }
+    }
+
+    [Fact]
+    public async Task AllInWindowCachedSignals_Replay_NoNewestNTruncation()
+    {
+        // More cached DirectionalSignalProduced filings than MaxFilingsPerRun, and zero uncached: every cached
+        // signal replays and the reader is never touched (no newest-N truncation of scoring contribution).
+        var cachedAccessions = new[]
+        {
+            "0001049521-26-000101",
+            "0001049521-26-000102",
+            "0001049521-26-000103",
+            "0001049521-26-000104",
+        };
+        var cached = cachedAccessions
+            .Select((a, idx) => EarningsFiling(
+                accession: a,
+                publishedAt: new DateTimeOffset(2026, 6, 20 - idx, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+
+        var cache = new FakeAnalyzedFilingCache();
+        foreach (var a in cachedAccessions)
+        {
+            cache.Entries[a] = CachedSignalRecord(a);
+        }
+
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxFilingsPerRun = 2 };
+
+        var result = await CreateSource(reader, analyzer, options, cache)
+            .ProduceAsync(cached, AsOf, CancellationToken.None);
+
+        Assert.Equal(4, result.Count);
+        Assert.Equal(0, reader.ReadCount);
+        Assert.Equal(0, analyzer.AnalyzeCount);
+        foreach (var ev in cached)
+        {
+            Assert.Contains(result, r => ReferenceEquals(r.Evidence, ev));
+        }
+    }
+
+    [Fact]
+    public async Task NewAnalysisCap_Enforced_NewestFirst_RemainderNotOutputOrCached()
+    {
+        // Empty cache, four uncached earnings filings, cap 2: exactly the two NEWEST are analyzed newest-first;
+        // the un-analyzed remainder is neither emitted nor written to the cache (left for a later run).
+        var candidates = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000001", publishedAt: new DateTimeOffset(2026, 6, 5, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000002", publishedAt: new DateTimeOffset(2026, 6, 4, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000003", publishedAt: new DateTimeOffset(2026, 6, 3, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000004", publishedAt: new DateTimeOffset(2026, 6, 2, 0, 0, 0, TimeSpan.Zero)),
+        };
+
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxFilingsPerRun = 2 };
+        var cache = new FakeAnalyzedFilingCache();
+
+        var result = await CreateSource(reader, analyzer, options, cache)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Equal(2, reader.ReadCount);
+        Assert.Equal(2, analyzer.AnalyzeCount);
+        Assert.Equal(2, result.Count);
+        Assert.Equal(
+            new[] { "0001049521-26-000001", "0001049521-26-000002" },
+            reader.Calls.Select(c => c.Accession).ToArray());
+
+        // Only the two analyzed filings are cached; the remainder was never fetched, analyzed, or cached.
+        Assert.Equal(2, cache.Entries.Count);
+        Assert.Contains("0001049521-26-000001", cache.Entries.Keys);
+        Assert.Contains("0001049521-26-000002", cache.Entries.Keys);
+        Assert.DoesNotContain("0001049521-26-000003", cache.Entries.Keys);
+        Assert.DoesNotContain("0001049521-26-000004", cache.Entries.Keys);
+    }
+
+    [Fact]
+    public async Task Breaker_TripsInPass2_ButPass1CacheHitsStillReplay()
+    {
+        // Two cached directional signals + three uncached filings whose reads all return consecutive 429s, with
+        // the breaker set to 2. Pass 1 replays both cached signals; pass 2 stops after two consecutive 429s.
+        // The tripped breaker no longer drops the cached replays (the pre-spec-126 single loop would have).
+        var cachedAccessions = new[] { "0001049521-26-000101", "0001049521-26-000102" };
+        var cached = cachedAccessions
+            .Select((a, idx) => EarningsFiling(
+                accession: a,
+                publishedAt: new DateTimeOffset(2026, 6, 20 - idx, 0, 0, 0, TimeSpan.Zero)))
+            .ToArray();
+        var uncached = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000201", publishedAt: new DateTimeOffset(2026, 6, 9, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000202", publishedAt: new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000203", publishedAt: new DateTimeOffset(2026, 6, 7, 0, 0, 0, TimeSpan.Zero)),
+        };
+
+        var cache = new FakeAnalyzedFilingCache();
+        foreach (var a in cachedAccessions)
+        {
+            cache.Entries[a] = CachedSignalRecord(a);
+        }
+
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 2, MaxFilingsPerRun = 50 };
+
+        var result = await CreateSource(reader, analyzer, options, cache)
+            .ProduceAsync([.. cached, .. uncached], AsOf, CancellationToken.None);
+
+        // Breaker tripped after two consecutive 429s in pass 2.
+        Assert.Equal(2, reader.ReadCount);
+        // Both pass-1 cache hits still replay despite the tripped breaker.
+        Assert.Equal(2, result.Count);
+        foreach (var ev in cached)
+        {
+            Assert.Contains(result, r => ReferenceEquals(r.Evidence, ev));
+        }
+    }
+
+    [Fact]
+    public async Task RegressionParity_EmptyCache_CapAtLeastEligible_AnalyzesEachOnce()
+    {
+        // With an empty cache and MaxFilingsPerRun >= eligible count, the two-pass structure reproduces the
+        // pre-spec-126 behaviour exactly: every eligible filing is analyzed once and produces its signal.
+        var candidates = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000001", publishedAt: new DateTimeOffset(2026, 6, 5, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000002", publishedAt: new DateTimeOffset(2026, 6, 4, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000003", publishedAt: new DateTimeOffset(2026, 6, 3, 0, 0, 0, TimeSpan.Zero)),
+        };
+
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxFilingsPerRun = 5 };
+
+        var result = await CreateSource(reader, analyzer, options)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Equal(3, reader.ReadCount);
+        Assert.Equal(3, analyzer.AnalyzeCount);
+        Assert.Equal(3, result.Count);
+    }
+
     // ---- spec 115: opt-in filing-read debug sink ----------------------------------------------------------
 
     [Fact]

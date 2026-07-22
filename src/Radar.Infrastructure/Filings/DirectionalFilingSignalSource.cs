@@ -26,18 +26,35 @@ namespace Radar.Infrastructure.Filings;
 /// <see cref="DirectionalFilingSignalOptions.MaxFilingsPerRun"/> per run.
 /// </para>
 /// <para>
-/// To cut the www.sec.gov footprint (spec 107) it is CACHE-FIRST: each eligible filing's analysis result is
-/// looked up in the <see cref="IAnalyzedFilingCache"/> by accession, and a hit replays a field-identical
+/// To cut the www.sec.gov footprint (spec 107) it is CACHE-FIRST, structured as TWO passes (spec 126) so the
+/// per-run cap (<see cref="DirectionalFilingSignalOptions.MaxFilingsPerRun"/>) bounds only NEW AI analyses, never
+/// total scoring contribution:
+/// <list type="number">
+/// <item>
+/// <b>Pass 1 — replay (unbounded, SEC-independent, breaker-independent).</b> Every eligible in-window earnings
+/// filing is looked up in the <see cref="IAnalyzedFilingCache"/> by accession. A hit replays a field-identical
 /// <see cref="DirectionalFilingSignal"/> (or emits nothing for a confirmed no-signal) WITHOUT any www.sec.gov
-/// fetch or AI call. A miss fetches + analyzes, then caches ONLY an authoritative successful read (a signal or a
-/// confirmed no-signal seen on REAL content) — a failed read is NEVER cached, and neither is a structurally
-/// successful read whose fetched body was empty/implausibly short (spec 114: a degenerate fetch is not a real
-/// no-signal; it is left uncached so a later healthy run re-attempts it), so a transient block cannot permanently
-/// suppress a filing. A
-/// per-run 429 circuit breaker (<see cref="DirectionalFilingSignalOptions.MaxConsecutiveRateLimited"/>) stops
-/// attempting the remaining filings once the host appears blocked; a success, a cache hit, or any non-429 failure
-/// resets the count, so only an unbroken run of 429s trips it. The cache only changes WHETHER a fetch happens — the
-/// scored signal set is unchanged.
+/// fetch or AI call — so a cached directional read keeps contributing for as long as its evidence is in the
+/// scoring window, regardless of how many newer filings exist elsewhere in the universe, and regardless of a
+/// tripped 429 breaker. Cache MISSES are collected newest-first for pass 2. Cache hits never touch the cap and
+/// never touch the breaker.
+/// </item>
+/// <item>
+/// <b>Pass 2 — analyze (capped + breaker-guarded).</b> The misses are walked newest-first and at most
+/// <see cref="DirectionalFilingSignalOptions.MaxFilingsPerRun"/> of them are fetched + analyzed (each a genuine
+/// NEW analysis attempt); the remainder is left uncached for a later run (an uncached backlog therefore drains
+/// over successive runs instead of starving under the newest-N window). A miss that is analyzed caches ONLY an
+/// authoritative successful read (a signal or a confirmed no-signal seen on REAL content) — a failed read is
+/// NEVER cached, and neither is a structurally successful read whose fetched body was empty/implausibly short
+/// (spec 114: a degenerate fetch is not a real no-signal; it is left uncached so a later healthy run re-attempts
+/// it), so a transient block cannot permanently suppress a filing. The per-run 429 circuit breaker
+/// (<see cref="DirectionalFilingSignalOptions.MaxConsecutiveRateLimited"/>) lives in THIS pass: it stops
+/// attempting the remaining misses once the host appears blocked; a success or any non-429 failure resets the
+/// count, so only an unbroken run of 429s trips it (cache hits are already handled in pass 1 and cannot be
+/// dropped by a tripped breaker). The cache only changes WHETHER a fetch happens — the scored signal set for a
+/// given evidence window is unchanged.
+/// </item>
+/// </list>
 /// </para>
 /// <para>
 /// Diagnostics (spec 115): when an optional <see cref="IFilingReadDebugSink"/> is registered, every ANALYSIS
@@ -128,48 +145,91 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         ct.ThrowIfCancellationRequested();
 
         // Keep only earnings 8-Ks (form 8-K + item 2.02) whose CIK + dashed accession parse from the index
-        // SourceUrl, order deterministically (newest observed first, Id tiebreak), and cap the batch.
+        // SourceUrl and order them deterministically (newest observed first, Id tiebreak). Spec 126: NO .Take
+        // here — the whole in-window eligible set is retained; the MaxFilingsPerRun cap now gates pass 2 (new AI
+        // analyses) only, so every cached directional read replays and the cap no longer caps scoring coverage.
         var eligible = candidateEvidence
             .Select(ev => (Evidence: ev, Read: TryResolveFiling(ev)))
             .Where(x => x.Read is not null)
             .OrderByDescending(x => x.Evidence.PublishedAtUtc ?? x.Evidence.CollectedAtUtc)
             .ThenBy(x => x.Evidence.Id)
-            .Take(_options.MaxFilingsPerRun)
             .ToList();
 
         var produced = new List<DirectionalFilingSignal>();
 
-        // Per-run 429 circuit breaker (spec 107): stop after this many CONSECUTIVE rate-limited reads (the host
-        // appears blocked). 0 disables it (unbounded — the pre-spec-107 behaviour). A success, a cache hit, or any
-        // non-429 failure resets the count, so only an unbroken run of 429s trips the breaker.
-        var breaker = Math.Max(0, _options.MaxConsecutiveRateLimited);
-        var consecutiveRateLimited = 0;
-
-        for (var i = 0; i < eligible.Count; i++)
+        // Pass 1 — replay (unbounded, SEC-independent, breaker-independent): consult the cache for every eligible
+        // filing. A hit replays its result with NO www.sec.gov fetch or AI call (a DirectionalSignalProduced hit
+        // re-emits its signal; a confirmed no-signal hit contributes nothing). Cache MISSES are collected in the
+        // same newest-first order for pass 2. Cache hits never touch the cap and never touch the 429 breaker.
+        var misses = new List<(EvidenceItem Evidence, string Cik, string Accession)>();
+        foreach (var (evidence, read) in eligible)
         {
             ct.ThrowIfCancellationRequested();
 
-            var (evidence, read) = eligible[i];
             var accession = read!.Value.Accession;
-
             try
             {
-                // Cache-first (spec 107): a hit replays the previously-analyzed result with NO www.sec.gov fetch
-                // or AI call, and does not interact with the breaker (resets the consecutive-429 counter).
                 var cached = await _cache.TryGetAsync(accession, ct).ConfigureAwait(false);
-                if (cached is not null)
+                if (cached is null)
                 {
-                    consecutiveRateLimited = 0;
-                    if (cached.Outcome == AnalyzedFilingOutcome.DirectionalSignalProduced && cached.Signal is not null)
-                    {
-                        produced.Add(new DirectionalFilingSignal(cached.Signal, evidence));
-                    }
-
+                    misses.Add((evidence, read.Value.Cik, accession));
                     continue;
                 }
 
-                // Cache miss: fetch + analyze.
-                var (outcome, signal, cacheable) = await AnalyzeFilingAsync(evidence, read.Value.Cik, accession, asOfUtc, ct)
+                if (cached.Outcome == AnalyzedFilingOutcome.DirectionalSignalProduced && cached.Signal is not null)
+                {
+                    produced.Add(new DirectionalFilingSignal(cached.Signal, evidence));
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // A cache-lookup failure degrades to "no replay for this filing" and never aborts the batch
+                // (mirrors the analyze discipline). It is NOT queued as a miss — a broken cache read must not
+                // trigger a fresh www.sec.gov fetch this run; a later run re-consults the cache.
+                _logger.LogWarning(
+                    ex,
+                    "Directional filing cache lookup failed for evidence {EvidenceId}; skipping (no directional signal).",
+                    evidence.Id);
+            }
+        }
+
+        // Pass 2 — analyze (capped + breaker-guarded): walk the misses newest-first and analyze at most
+        // MaxFilingsPerRun of them (each a genuine NEW fetch + AI read); the remainder is left uncached for a
+        // later run so an uncached backlog drains over successive runs instead of starving under the newest-N cut.
+        var cap = Math.Max(0, _options.MaxFilingsPerRun);
+
+        // Per-run 429 circuit breaker (spec 107): stop after this many CONSECUTIVE rate-limited reads (the host
+        // appears blocked). 0 disables it (unbounded — the pre-spec-107 behaviour). A success or any non-429
+        // failure resets the count, so only an unbroken run of 429s trips the breaker. It guards pass 2 only:
+        // pass-1 cache hits have already contributed, so a tripped breaker can no longer drop cached replays.
+        var breaker = Math.Max(0, _options.MaxConsecutiveRateLimited);
+        var consecutiveRateLimited = 0;
+        var newAnalyses = 0;
+
+        for (var i = 0; i < misses.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (newAnalyses >= cap)
+            {
+                // Cap reached: leave the remaining misses uncached for a later run (same discipline as a
+                // failed/unattempted read — never cached).
+                break;
+            }
+
+            var (evidence, cik, accession) = misses[i];
+
+            // A genuine new analysis attempt consumes one cap slot regardless of its outcome (fetch failure,
+            // 429, non-authoritative body, or a produced/no signal all count) — this bounds cost, not results.
+            newAnalyses++;
+
+            try
+            {
+                var (outcome, signal, cacheable) = await AnalyzeFilingAsync(evidence, cik, accession, asOfUtc, ct)
                     .ConfigureAwait(false);
 
                 if (outcome == SecEarningsReleaseReadOutcome.Success)
@@ -219,7 +279,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                             "SEC www.sec.gov returned {N} consecutive HTTP 429s; skipping remaining {M} earnings "
                                 + "reads this run (host appears blocked).",
                             consecutiveRateLimited,
-                            eligible.Count - (i + 1));
+                            misses.Count - (i + 1));
                         break;
                     }
                 }
