@@ -1169,6 +1169,541 @@
           "url": "query=Chevron&ticker=CVX"
         }
       ]
+    },
+    {
+      "id": "54aff8a1-e329-479b-a81c-ca0b446bbdc6",
+      "name": "ServisFirst Bancshares, Inc.",
+      "legalName": "ServisFirst Bancshares, Inc.",
+      "ticker": "SFBS",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Banks—Regional",
+      "followingTier": "mid",
+      "aliases": ["ServisFirst", "ServisFirst Bancshares"],
+      "themes": ["regional banking", "commercial lending", "deposit growth"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "ServisFirst Bancshares, Inc. — News Releases (IR)",
+          "url": "https://www.servisfirstbancshares.com/news-events/press-releases/rss"
+        },
+        {
+          "type": "sec",
+          "name": "ServisFirst Bancshares, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001430723.json"
+        },
+        {
+          "type": "secform4",
+          "name": "ServisFirst Bancshares, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001430723.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "ServisFirst Bancshares, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001430723.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "ServisFirst Bancshares, Inc. — News attention (Google News)",
+          "url": "query=ServisFirst Bancshares&ticker=SFBS"
+        }
+      ]
+    },
+    {
+      "id": "1d30f620-ad56-4298-be89-a4f68b36be7b",
+      "name": "OFG Bancorp",
+      "legalName": "OFG Bancorp",
+      "ticker": "OFG",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Banks—Regional",
+      "followingTier": "mid",
+      "aliases": ["OFG Bancorp", "Oriental Bank"],
+      "themes": ["regional banking", "Puerto Rico banking", "consumer lending"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "OFG Bancorp — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001030469.json"
+        },
+        {
+          "type": "secform4",
+          "name": "OFG Bancorp — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001030469.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "OFG Bancorp — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001030469.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "OFG Bancorp — News attention (Google News)",
+          "url": "query=OFG Bancorp&ticker=OFG"
+        }
+      ]
+    },
+    {
+      "id": "bf94eab2-c734-4c3f-b53c-94e9c1eca61a",
+      "name": "Skyward Specialty Insurance Group, Inc.",
+      "legalName": "Skyward Specialty Insurance Group, Inc.",
+      "ticker": "SKWD",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Insurance—Property & Casualty",
+      "followingTier": "mid",
+      "aliases": ["Skyward Specialty", "Skyward"],
+      "themes": ["specialty insurance", "excess and surplus lines", "underwriting discipline"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Skyward Specialty Insurance Group, Inc. — News Releases (IR)",
+          "url": "https://investors.skywardinsurance.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Skyward Specialty Insurance Group, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001519449.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Skyward Specialty Insurance Group, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001519449.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Skyward Specialty Insurance Group, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001519449.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Skyward Specialty Insurance Group, Inc. — News attention (Google News)",
+          "url": "query=Skyward Specialty&ticker=SKWD"
+        }
+      ]
+    },
+    {
+      "id": "bb593e45-775b-4d99-b02f-a75b5cbf8988",
+      "name": "Getty Realty Corp.",
+      "legalName": "Getty Realty Corp.",
+      "ticker": "GTY",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Real Estate",
+      "industry": "REIT—Retail",
+      "followingTier": "small",
+      "aliases": ["Getty Realty", "Getty"],
+      "themes": ["net lease REIT", "convenience and automotive retail", "single-tenant real estate"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Getty Realty Corp. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001052752.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Getty Realty Corp. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001052752.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Getty Realty Corp. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001052752.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Getty Realty Corp. — News attention (Google News)",
+          "url": "query=Getty Realty&ticker=GTY"
+        }
+      ]
+    },
+    {
+      "id": "25284ebd-2e1d-45ad-90be-df590b9cc5c6",
+      "name": "UMH Properties, Inc.",
+      "legalName": "UMH Properties, Inc.",
+      "ticker": "UMH",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Real Estate",
+      "industry": "REIT—Residential",
+      "followingTier": "small",
+      "aliases": ["UMH Properties", "UMH"],
+      "themes": ["manufactured housing", "residential REIT", "rental communities"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "UMH Properties, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000752642.json"
+        },
+        {
+          "type": "secform4",
+          "name": "UMH Properties, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000752642.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "UMH Properties, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000752642.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "UMH Properties, Inc. — News attention (Google News)",
+          "url": "query=UMH Properties&ticker=UMH"
+        }
+      ]
+    },
+    {
+      "id": "e020e7cc-533b-47a8-8fc9-250ec2b6f246",
+      "name": "Easterly Government Properties, Inc.",
+      "legalName": "Easterly Government Properties, Inc.",
+      "ticker": "DEA",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Real Estate",
+      "industry": "REIT—Office",
+      "followingTier": "small",
+      "aliases": ["Easterly Government Properties", "Easterly"],
+      "themes": ["government-leased real estate", "office REIT", "federal agency tenants"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Easterly Government Properties, Inc. — News Releases (IR)",
+          "url": "https://ir.easterlyreit.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Easterly Government Properties, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001622194.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Easterly Government Properties, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001622194.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Easterly Government Properties, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001622194.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Easterly Government Properties, Inc. — News attention (Google News)",
+          "url": "query=Easterly Government Properties"
+        }
+      ]
+    },
+    {
+      "id": "1a2ac7ad-80e4-4a2b-bc32-28de6ea94541",
+      "name": "La-Z-Boy Incorporated",
+      "legalName": "La-Z-Boy Incorporated",
+      "ticker": "LZB",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Furnishings, Fixtures & Appliances",
+      "followingTier": "small",
+      "aliases": ["La-Z-Boy", "La-Z-Boy Incorporated"],
+      "themes": ["residential furniture", "consumer discretionary retail", "manufacturing and retail vertical"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "La-Z-Boy Incorporated — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000057131.json"
+        },
+        {
+          "type": "secform4",
+          "name": "La-Z-Boy Incorporated — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000057131.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "La-Z-Boy Incorporated — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000057131.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "La-Z-Boy Incorporated — News attention (Google News)",
+          "url": "query=La-Z-Boy&ticker=LZB"
+        }
+      ]
+    },
+    {
+      "id": "4992fcce-00e0-4c6a-a6ea-866ee9333565",
+      "name": "MarineMax, Inc.",
+      "legalName": "MarineMax, Inc.",
+      "ticker": "HZO",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Specialty Retail",
+      "followingTier": "small",
+      "aliases": ["MarineMax", "MarineMax Inc"],
+      "themes": ["recreational boating retail", "marina services", "discretionary consumer demand"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "MarineMax, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001057060.json"
+        },
+        {
+          "type": "secform4",
+          "name": "MarineMax, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001057060.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "MarineMax, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001057060.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "MarineMax, Inc. — News attention (Google News)",
+          "url": "query=MarineMax&ticker=HZO"
+        }
+      ]
+    },
+    {
+      "id": "95074627-0dac-4fc3-b5ed-518fd8f994f2",
+      "name": "Steven Madden, Ltd.",
+      "legalName": "Steven Madden, Ltd.",
+      "ticker": "SHOO",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Footwear & Accessories",
+      "followingTier": "mid",
+      "aliases": ["Steve Madden", "Steven Madden"],
+      "themes": ["footwear and accessories", "branded consumer", "wholesale and direct-to-consumer"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Steven Madden, Ltd. — News Releases (IR)",
+          "url": "https://investor.stevemadden.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Steven Madden, Ltd. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000913241.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Steven Madden, Ltd. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000913241.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Steven Madden, Ltd. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000913241.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Steven Madden, Ltd. — News attention (Google News)",
+          "url": "query=Steven Madden"
+        }
+      ]
+    },
+    {
+      "id": "7c0087fb-d79f-418f-96f2-bd5200ed3471",
+      "name": "Shenandoah Telecommunications Company",
+      "legalName": "Shenandoah Telecommunications Company",
+      "ticker": "SHEN",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Telecom Services",
+      "followingTier": "small",
+      "aliases": ["Shentel", "Shenandoah Telecommunications"],
+      "themes": ["fiber broadband", "Glo Fiber", "rural telecom"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Shenandoah Telecommunications Company — News Releases (IR)",
+          "url": "https://investor.shentel.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Shenandoah Telecommunications Company — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000354963.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Shenandoah Telecommunications Company — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000354963.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Shenandoah Telecommunications Company — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000354963.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Shenandoah Telecommunications Company — News attention (Google News)",
+          "url": "query=Shentel"
+        }
+      ]
+    },
+    {
+      "id": "bd0a5902-f6c0-4d05-aed9-d0a65d6db734",
+      "name": "Anterix Inc.",
+      "legalName": "Anterix Inc.",
+      "ticker": "ATEX",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Telecom Services",
+      "followingTier": "small",
+      "aliases": ["Anterix", "Anterix Inc"],
+      "themes": ["private wireless networks", "900 MHz spectrum", "utility communications"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Anterix Inc. — News Releases (IR)",
+          "url": "https://investors.anterix.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Anterix Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001304492.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Anterix Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001304492.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Anterix Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001304492.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Anterix Inc. — News attention (Google News)",
+          "url": "query=Anterix"
+        }
+      ]
+    },
+    {
+      "id": "60ec1db4-465c-448b-9e27-46bc9ebc5106",
+      "name": "IMAX Corporation",
+      "legalName": "IMAX Corporation",
+      "ticker": "IMAX",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Entertainment",
+      "followingTier": "mid",
+      "aliases": ["IMAX", "IMAX Corporation"],
+      "themes": ["premium cinema", "entertainment technology", "box office exhibition"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "IMAX Corporation — News Releases (IR)",
+          "url": "https://investors.imax.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "IMAX Corporation — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000921582.json"
+        },
+        {
+          "type": "secform4",
+          "name": "IMAX Corporation — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000921582.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "IMAX Corporation — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000921582.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "IMAX Corporation — News attention (Google News)",
+          "url": "query=IMAX&ticker=IMAX"
+        }
+      ]
+    },
+    {
+      "id": "aa8c9c40-3556-4aec-9242-9745866b1f39",
+      "name": "Hawkins, Inc.",
+      "legalName": "Hawkins, Inc.",
+      "ticker": "HWKN",
+      "exchange": "NASDAQ",
+      "countryCode": "US",
+      "sector": "Basic Materials",
+      "industry": "Specialty Chemicals",
+      "followingTier": "mid",
+      "aliases": ["Hawkins", "Hawkins Inc"],
+      "themes": ["specialty chemicals", "water treatment", "industrial distribution"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Hawkins, Inc. — News Releases (IR)",
+          "url": "https://hawkinsinc.gcs-web.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Hawkins, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000046250.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Hawkins, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000046250.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Hawkins, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000046250.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Hawkins, Inc. — News attention (Google News)",
+          "url": "query=Hawkins Inc&ticker=HWKN"
+        }
+      ]
+    },
+    {
+      "id": "cebbf05a-ecea-4e6f-971e-d86ae9428371",
+      "name": "Select Water Solutions, Inc.",
+      "legalName": "Select Water Solutions, Inc.",
+      "ticker": "WTTR",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Energy",
+      "industry": "Oil & Gas Equipment & Services",
+      "followingTier": "small",
+      "aliases": ["Select Water Solutions", "Select Water"],
+      "themes": ["water infrastructure", "produced water recycling", "oilfield services"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Select Water Solutions, Inc. — News Releases (IR)",
+          "url": "https://investors.selectwater.com/news-events/press-releases/rss"
+        },
+        {
+          "type": "sec",
+          "name": "Select Water Solutions, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001693256.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Select Water Solutions, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001693256.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Select Water Solutions, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001693256.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Select Water Solutions, Inc. — News attention (Google News)",
+          "url": "query=Select Water Solutions&ticker=WTTR"
+        }
+      ]
     }
   ]
 }
