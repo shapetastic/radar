@@ -749,6 +749,48 @@ Build collectors incrementally.
 
 Only add a collector when the current pipeline can turn its evidence into useful report output.
 
+### Additional Candidate Collectors (evaluated 2026-07-22)
+
+Beyond the original ten, the following official / structured / free-feed sources fit Radar's
+"signals before stories, evidence before opinions" thesis — they are **leading**, machine-readable,
+and resolvable to a US registrant. Listed strongest-fit first for the current US-registrant,
+EDGAR-resolvable, hardware- and health-skewed watch universe. Each would follow the proven
+collector template (specs 103/127): an Infrastructure reader seam, a feed-token parser, one
+deterministic extractor rule, a new `SignalType`/`EvidenceSourceType`, opt-in OFF by default, and a
+`RuleSetVersion` + fingerprint re-pin.
+
+- **FCC Equipment Authorization** — a company must obtain FCC certification *before* it may sell a
+  wireless/electronic device in the US, so the authorization record leads product shipment by weeks
+  to months. The sharpest "before the market notices" signal for the hardware names (Rocket Lab,
+  Mercury Systems, Bel Fuse, Energy Recovery). Free public grantee database, resolvable by grantee
+  name. Positive, count/new-grant based (same anti-misfire shape as the patent collector).
+- **FDA / openFDA** — drug & device approvals, 510(k) clearances, PMA, and recalls. Free structured
+  API, clear valence (approval = Positive, recall = Negative). High leading value for medtech in the
+  universe (AxoGen, TransMedics) and future health names.
+- **USPTO Trademark filings** — new brand/product names filed *before* launch; sits closer to
+  go-to-market than patents and reuses almost all of the patent collector's plumbing. Free TSDR/bulk
+  API, Neutral count-based rule.
+- **WARN Act layoff notices** — the downside counterpart Radar mostly lacks: a leading *contraction*
+  signal feeding "Thesis deteriorating," adding symmetry to a positive-signal-heavy pipeline. Lower
+  feasibility — state-fragmented (~50 sources, uneven formats).
+- **DOL H-1B / LCA disclosure data** — hiring intent + role + wage as structured bulk data (unlike
+  careers-page scraping); a stronger cousin of the careers/hiring collector.
+- **ClinicalTrials.gov** — trial phase-transitions/results; leading for health names, free API. Worth
+  building once the universe carries more biotech.
+- **GitHub / open-source activity** — developer-adoption velocity for software names; free API. Low
+  fit while the universe is hardware/industrial-skewed, high fit if it adds SaaS.
+- **SEC 13F institutional holdings** — smart-money accumulation, free from EDGAR, but 45-day lagged
+  and closer to following the story than leading it.
+
+**Deliberately excluded** (they cut against the philosophy and AD-14 — market opinion, not business
+evidence): short interest, options flow, social/Reddit sentiment, price/volume momentum. Import
+bill-of-lading demand data is conceptually strong but effectively paywalled (Panjiva/ImportGenius),
+so feasibility rules it out.
+
+Suggested expansion arc: **Patent (spec 127, queued) → FCC Equipment Authorization → FDA → USPTO
+Trademark**, sequenced (not parallelized) because each bumps `RuleSetVersion` and re-pins the same
+fingerprint.
+
 ---
 
 ## Work Planner Guidance
