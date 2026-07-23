@@ -64,7 +64,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // v5 (spec 129): adds the RegulatoryApproval rule group (the openFDA 510(k)/PMA collector's fixed
     // "fda clearance or approval (recent)" phrase, POSITIVE at routine strength) — a rule-STRUCTURE change,
     // hence the bump.
-    public const string RuleSetVersion = "radar-keyword-rules-v5";
+    // v6 (spec 130): adds the TrademarkActivity rule group (the USPTO trademark collector's fixed
+    // "trademark activity (recent filings)" phrase, NEUTRAL at routine strength) — a rule-STRUCTURE change,
+    // hence the bump. (Spec 128 (FCC) never merged, so this bump is v5 → v6, not v6 → v7.)
+    public const string RuleSetVersion = "radar-keyword-rules-v6";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
@@ -241,6 +244,15 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // names in metadata ONLY (never in Title/RawText), so a device name cannot trip another rule; the extractor
         // does not scan metadata. Recalls (Negative) are a separate future slice.
         new("fda clearance or approval (recent)", SignalType.RegulatoryApproval, SignalDirection.Positive, 4, 5, 0.5m),
+
+        // TrademarkActivity (USPTO trademark API; spec 130). The TrademarkActivityCollector synthesizes exactly
+        // this fixed phrase into the Trademark evidence Title/RawText; the extractor only maps phrase -> fixed
+        // type+direction+strength (never re-derives valence — the PatentActivity precedent, of which this is the
+        // near-twin). v1 is NEUTRAL by design: a single-window filing COUNT cannot tell genuine brand-activity
+        // acceleration from an always-prolific filer, so it never misfires bullish (Neutral contributes 0 to
+        // Trajectory). Directional SURGE detection vs accrued history is deferred to slice B (changes DIRECTION,
+        // not this type name). NO raw mark texts in searchable text (metadata only).
+        new("trademark activity (recent filings)", SignalType.TrademarkActivity, SignalDirection.Neutral, 3, 5, 0.45m),
     ];
 
     // Metadata-aware materiality tiers (spec 66 + spec 93): scale an already-fired signal's Strength by a $

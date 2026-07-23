@@ -1072,6 +1072,11 @@
           "type": "newssearch",
           "name": "WD-40 Company — News attention (Google News)",
           "url": "query=WD-40 Company&ticker=WDFC"
+        },
+        {
+          "type": "trademarks",
+          "name": "WD-40 — Recent trademark filings (USPTO)",
+          "url": "owner=WD-40 Company"
         }
       ]
     },
@@ -1112,6 +1117,11 @@
           "type": "newssearch",
           "name": "Hormel Foods Corp. — News attention (Google News)",
           "url": "query=Hormel Foods&ticker=HRL"
+        },
+        {
+          "type": "trademarks",
+          "name": "Hormel Foods — Recent trademark filings (USPTO)",
+          "url": "owner=Hormel Foods Corporation"
         }
       ]
     },
@@ -1527,6 +1537,11 @@
           "type": "newssearch",
           "name": "Steven Madden, Ltd. — News attention (Google News)",
           "url": "query=Steven Madden"
+        },
+        {
+          "type": "trademarks",
+          "name": "Steven Madden — Recent trademark filings (USPTO)",
+          "url": "owner=Steven Madden, Ltd."
         }
       ]
     },

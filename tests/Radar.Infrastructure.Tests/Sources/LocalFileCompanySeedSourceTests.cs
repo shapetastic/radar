@@ -516,6 +516,74 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
             seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
     }
 
+    // The three spec-130 trademarks seed rows exactly as data/companies.json declares them (real company ids +
+    // verified owner organization names), each alongside another feed so the spec-97 type|url feed-Id composite
+    // is exercised per company. Only WDFC + HRL + SHOO are seeded (partial coverage is normal, like patents/fda).
+    private const string TrademarksSeedJson = """
+        {
+          "companies": [
+            {
+              "id": "e97734ba-490b-460d-8539-dcac2c8b552d",
+              "name": "WD-40 Company",
+              "ticker": "WDFC",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "WD-40 Company — News attention (Google News)", "url": "query=WD-40 Company&ticker=WDFC" },
+                { "type": "trademarks", "name": "WD-40 — Recent trademark filings (USPTO)", "url": "owner=WD-40 Company" }
+              ]
+            },
+            {
+              "id": "5d774e8c-9009-46cc-9545-36506966d448",
+              "name": "Hormel Foods Corp.",
+              "ticker": "HRL",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "Hormel Foods Corp. — News attention (Google News)", "url": "query=Hormel Foods&ticker=HRL" },
+                { "type": "trademarks", "name": "Hormel Foods — Recent trademark filings (USPTO)", "url": "owner=Hormel Foods Corporation" }
+              ]
+            },
+            {
+              "id": "95074627-0dac-4fc3-b5ed-518fd8f994f2",
+              "name": "Steven Madden, Ltd.",
+              "ticker": "SHOO",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "Steven Madden, Ltd. — News attention (Google News)", "url": "query=Steven Madden" },
+                { "type": "trademarks", "name": "Steven Madden — Recent trademark filings (USPTO)", "url": "owner=Steven Madden, Ltd." }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_TrademarksFeeds_ParseWithExactTokensAndDistinctIds()
+    {
+        // Spec 130: the three verified companies each carry one trademarks feed with the exact owner=… token;
+        // every feed Id is distinct (spec 97 folds the feed TYPE into the Id, so a trademarks feed can never
+        // collide with the same company's other feeds).
+        var path = WriteSeedFile(TrademarksSeedJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        var context = new CollectionContext(seed.Companies, seed.SourceFeeds);
+        var trademarkFeeds = context.FeedsOfType("trademarks");
+        Assert.Equal(3, trademarkFeeds.Count);
+
+        var byCompany = trademarkFeeds.ToDictionary(f => f.CompanyId, f => f.Url);
+        Assert.Equal(
+            "owner=WD-40 Company",
+            byCompany[Guid.Parse("e97734ba-490b-460d-8539-dcac2c8b552d")]);
+        Assert.Equal(
+            "owner=Hormel Foods Corporation",
+            byCompany[Guid.Parse("5d774e8c-9009-46cc-9545-36506966d448")]);
+        Assert.Equal(
+            "owner=Steven Madden, Ltd.",
+            byCompany[Guid.Parse("95074627-0dac-4fc3-b5ed-518fd8f994f2")]);
+
+        // Every feed Id in the whole seed (trademarks + the sibling newssearch feeds) is distinct.
+        Assert.Equal(
+            seed.SourceFeeds.Count,
+            seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
+    }
+
     [Fact]
     public async Task GetSeedAsync_SameUrlDifferentType_FeedIdsStableAcrossCalls()
     {

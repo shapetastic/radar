@@ -12,6 +12,7 @@ using Radar.Infrastructure.Hiring;
 using Radar.Infrastructure.News;
 using Radar.Infrastructure.Patents;
 using Radar.Infrastructure.Sec;
+using Radar.Infrastructure.Trademarks;
 using Radar.Infrastructure.UsaSpending;
 
 namespace Radar.Worker;
@@ -118,7 +119,7 @@ internal static class RadarWorkerServices
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
-                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", and \"fda\".");
+                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", \"fda\", and \"trademarks\".");
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -129,7 +130,7 @@ internal static class RadarWorkerServices
             if (string.IsNullOrWhiteSpace(rawKind))
             {
                 throw new InvalidOperationException(
-                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", and \"fda\".");
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", \"fda\", and \"trademarks\".");
             }
 
             var kind = rawKind.Trim();
@@ -227,10 +228,20 @@ internal static class RadarWorkerServices
                     MaxPageSize = options.Fda.MaxPageSize,
                 });
             }
+            else if (string.Equals(kind, "trademarks", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddTrademarkActivityCollector(new TrademarkCollectorOptions
+                {
+                    LookbackDays = options.Trademarks.LookbackDays,
+                    MaxSampleMarks = options.Trademarks.MaxSampleMarks,
+                    MaxPageSize = options.Trademarks.MaxPageSize,
+                    ApiKeyEnvVar = options.Trademarks.ApiKeyEnvVar,
+                });
+            }
             else
             {
                 throw new InvalidOperationException(
-                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", and \"fda\".");
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", \"fda\", and \"trademarks\".");
             }
         }
 

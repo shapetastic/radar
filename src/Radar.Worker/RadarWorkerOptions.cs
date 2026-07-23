@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents", "fda".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents", "fda", "trademarks".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -69,6 +69,14 @@ public sealed class RadarWorkerOptions
     /// defaults let the rss-only configuration keep working with no Fda config. openFDA needs no API key.
     /// </summary>
     public FdaWorkerOptions Fda { get; init; } = new();
+
+    /// <summary>
+    /// USPTO trademark-activity collector configuration (bound from "Radar:Trademarks"; spec 130). Only read
+    /// when the "trademarks" collector is enabled (opt-in, OFF by default — it is not in the default Collectors);
+    /// the defaults let the rss-only configuration keep working with no Trademarks config. The API key VALUE is
+    /// never here — it is read at runtime from the env var NAMED by <see cref="TrademarkWorkerOptions.ApiKeyEnvVar"/>.
+    /// </summary>
+    public TrademarkWorkerOptions Trademarks { get; init; } = new();
 
     /// <summary>
     /// AI chat-client seam configuration (bound from "Radar:Ai"). A blank <see cref="AiWorkerOptions.Provider"/>
@@ -381,6 +389,29 @@ public sealed class FdaWorkerOptions
 
     /// <summary>Maximum clearances requested on the single bounded page per endpoint (the count is what matters, not full enumeration). Defaults to 100.</summary>
     public int MaxPageSize { get; init; } = 100;
+}
+
+/// <summary>
+/// USPTO trademark-activity collector configuration (bound from "Radar:Trademarks"; spec 130). Surfaces the
+/// lookback window, the metadata mark-sample bound, the request page size, and the API-key env-var NAME through
+/// to <c>TrademarkCollectorOptions</c>. The reachable USPTO trademark search route requires a free API key, read
+/// at RUNTIME from the env var named by <see cref="ApiKeyEnvVar"/> — the key VALUE is never committed here. The
+/// collector is opt-in OFF (not in the default Collectors); the defaults let the rss-only configuration keep
+/// working with no Trademarks config.
+/// </summary>
+public sealed class TrademarkWorkerOptions
+{
+    /// <summary>Recent-activity window length, in days (the query's filing-date floor is now minus this). Defaults to 365 (trademark filings are lower-frequency).</summary>
+    public int LookbackDays { get; init; } = 365;
+
+    /// <summary>Maximum marks carried in the evidence <c>sampleMarks</c> metadata (provenance/debug only — never in Title/RawText). Defaults to 5.</summary>
+    public int MaxSampleMarks { get; init; } = 5;
+
+    /// <summary>Maximum trademark applications requested on the single bounded page (the count is what matters, not full enumeration). Defaults to 100.</summary>
+    public int MaxPageSize { get; init; } = 100;
+
+    /// <summary>The NAME of the environment variable holding the USPTO API key (read at runtime; the key value is never committed). Defaults to "USPTO_API_KEY".</summary>
+    public string ApiKeyEnvVar { get; init; } = "USPTO_API_KEY";
 }
 
 /// <summary>

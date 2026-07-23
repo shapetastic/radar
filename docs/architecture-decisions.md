@@ -746,6 +746,25 @@ continuity-aware segmentation connects the score line across it because the scor
 input-hash artifact, not a measurement break). (Note: spec 128 (FCC) never merged, so this v4 → v5 bump is
 spec 129's, not spec 128's.)
 
+### Lineage — spec 130: `RuleSetVersion` v5 → v6 (new `TrademarkActivity` rule group); default re-stamps automatically
+
+Spec 130 adds the USPTO trademark-activity collector (`trademarks`, opt-in **OFF** by default) and one new
+`KeywordSignalExtractor` rule group mapping its fixed phrase `trademark activity (recent filings)` to a
+**Neutral** (routine-strength) `SignalType.TrademarkActivity` — a rule-**STRUCTURE** change, so `RuleSetVersion`
+bumps `radar-keyword-rules-v5 → radar-keyword-rules-v6` and the spec-95 signal-source descriptor re-stamps
+**both** default fingerprints **automatically**: AI-OFF
+**`radar-scoring-fp-1251d4e0373e → radar-scoring-fp-c1e126884b7c`** and AI-ON
+**`radar-scoring-fp-2be98e738684 → radar-scoring-fp-74c5e077f728`**. The enabled default collector set is
+**unchanged** (still the 6-collector baseline — `trademarks` is not in `default.json`); the fingerprint moves
+solely on the rules identity. **Scoring math is byte-identical** — the new rule matches only the trademark
+phrase, which no existing evidence contains, and the collector is opt-in-off, so every company scores exactly as
+before; there is no fingerprint-safe way to add a scoring-affecting signal type (spec 95 working as intended). No
+`_formula.Version` / weight / attention-tier / insider-tier change (`radar-formula-v8` stays). For the efficacy
+visual (spec 101 / AD-14 read side), this re-stamp is a **score-neutral cosmetic boundary** — spec 108's
+continuity-aware segmentation connects the score line across it because the scores are fully continuous (an
+input-hash artifact, not a measurement break). (Note: spec 128 (FCC) never merged, so this is a v5 → v6 bump,
+not v6 → v7.)
+
 ### Amendment — spec 119: the AI earnings-read model identity is a fingerprint input (folded by value)
 
 Spec 106 folded the AI directional-filing source's per-signal magnitudes (`str`/`nov`/`minconf`) into the
@@ -794,7 +813,11 @@ opt-in-off). Lineage · 2026-07-23 (spec 129 — `RuleSetVersion` radar-keyword-
 `RegulatoryApproval` rule group; BOTH defaults re-stamp AI-OFF radar-scoring-fp-b4a040144f66 →
 radar-scoring-fp-1251d4e0373e and AI-ON radar-scoring-fp-63c096e531ec → radar-scoring-fp-2be98e738684; scoring
 math byte-identical, opt-in-off openFDA `fda` collector; spec 128 (FCC) never merged so this is spec 129's v4 →
-v5 bump).
+v5 bump). Lineage · 2026-07-23 (spec 130 — `RuleSetVersion` radar-keyword-rules-v5 → v6 for the new
+`TrademarkActivity` rule group; BOTH defaults re-stamp AI-OFF radar-scoring-fp-1251d4e0373e →
+radar-scoring-fp-c1e126884b7c and AI-ON radar-scoring-fp-2be98e738684 → radar-scoring-fp-74c5e077f728; scoring
+math byte-identical, opt-in-off USPTO `trademarks` collector; spec 128 (FCC) never merged so this is a v5 → v6
+bump).
 
 ---
 
