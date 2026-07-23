@@ -154,3 +154,4 @@ secrets.json
 /data/experiments/
 /data/filings-cache/
 /data/ai-debug/
+/data/fcc-cache/
