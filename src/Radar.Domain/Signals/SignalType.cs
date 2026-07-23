@@ -18,6 +18,11 @@ public enum SignalType
     InsiderBuying,
     InstitutionalOwnership,
     PatentActivity,
+    // EquipmentAuthorization (spec 128): the FCC Equipment Authorization (EAS) collector's hardware-clearance
+    // axis. Deliberately a NEW, honest name — it records authorization ACTIVITY (a recent-grants count), not a
+    // proven product-cadence acceleration. SignalType is persisted by name, so placement here (adjacent to the
+    // sibling PatentActivity collector axis) is readability-only; append-only, never reordered/removed.
+    EquipmentAuthorization,
     DeveloperAdoption,
     MediaAttention,
     Other

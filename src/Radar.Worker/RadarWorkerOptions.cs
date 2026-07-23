@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents", "fccauth".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -62,6 +62,14 @@ public sealed class RadarWorkerOptions
     /// never here — it is read at runtime from the env var NAMED by <see cref="PatentWorkerOptions.ApiKeyEnvVar"/>.
     /// </summary>
     public PatentWorkerOptions Patents { get; init; } = new();
+
+    /// <summary>
+    /// FCC Equipment Authorization (EAS) collector configuration (bound from "Radar:Fcc"; spec 128). Only read
+    /// when the "fccauth" collector is enabled (opt-in, OFF by default — it is not in the default Collectors);
+    /// the defaults let the rss-only configuration keep working with no Fcc config. The EAS export needs no API
+    /// key.
+    /// </summary>
+    public FccWorkerOptions Fcc { get; init; } = new();
 
     /// <summary>
     /// AI chat-client seam configuration (bound from "Radar:Ai"). A blank <see cref="AiWorkerOptions.Provider"/>
@@ -355,6 +363,25 @@ public sealed class PatentWorkerOptions
     public string ApiKeyEnvVar { get; init; } = "PATENTSVIEW_API_KEY";
 
     /// <summary>Maximum patents requested on the single bounded page (the count is what matters, not full enumeration). Defaults to 100.</summary>
+    public int MaxPageSize { get; init; } = 100;
+}
+
+/// <summary>
+/// FCC Equipment Authorization (EAS) collector configuration (bound from "Radar:Fcc"; spec 128). Surfaces the
+/// lookback window, the metadata authorization-sample bound, and the request page size through to
+/// <c>FccCollectorOptions</c>. The FCC OET EAS GenericSearch export needs no API key. The collector is opt-in
+/// OFF (not in the default Collectors); the defaults let the rss-only configuration keep working with no Fcc
+/// config.
+/// </summary>
+public sealed class FccWorkerOptions
+{
+    /// <summary>Recent-activity window length, in days (the query's grant-date floor is now minus this). Defaults to 180.</summary>
+    public int LookbackDays { get; init; } = 180;
+
+    /// <summary>Maximum authorizations carried in the evidence <c>sampleAuthorizations</c> metadata (provenance/debug only — never in Title/RawText). Defaults to 5.</summary>
+    public int MaxSampleAuthorizations { get; init; } = 5;
+
+    /// <summary>Maximum authorization rows read from the single bounded page (the count is what matters, not full enumeration). Defaults to 100.</summary>
     public int MaxPageSize { get; init; } = 100;
 }
 

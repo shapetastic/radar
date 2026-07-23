@@ -1,3 +1,5 @@
+using Radar.Infrastructure.Sources;
+
 namespace Radar.Infrastructure.Patents;
 
 /// <summary>
@@ -10,11 +12,11 @@ namespace Radar.Infrastructure.Patents;
 /// <c>assignee=</c> key — yields <see langword="null"/> so the collector can degrade it to a source failure
 /// rather than throwing.
 /// <para>
-/// This is a SINGLE-key token, so it does not use the shared two-key splitter
-/// (<see cref="Radar.Infrastructure.Sources.TwoKeyFeedToken"/>, which handles two keys). It mirrors the
-/// established single-key trimming/blank-null discipline of
-/// <see cref="Radar.Infrastructure.Sources.QueryFeedTarget"/>. FOLLOW-UP: extract a shared single-key token
-/// splitter once a second single-key parser exists (there is none yet).
+/// This is a SINGLE-key token, so it routes through the shared single-key splitter
+/// (<see cref="Radar.Infrastructure.Sources.SingleKeyFeedToken"/>, extracted by spec 128 once the FCC
+/// <c>grantee=…</c> parser became the second single-key caller — reuse-over-copy). The reject-blank-value
+/// policy stays an explicit per-caller hook here, mirroring
+/// <see cref="Radar.Infrastructure.Sources.QueryFeedTarget"/>.
 /// </para>
 /// </summary>
 internal sealed record PatentFeedTarget(string AssigneeName)
@@ -33,16 +35,8 @@ internal sealed record PatentFeedTarget(string AssigneeName)
             return null;
         }
 
-        var trimmed = token.Trim();
-
-        var keyIndex = trimmed.IndexOf(AssigneeKey, StringComparison.Ordinal);
-        if (keyIndex < 0)
-        {
-            return null;
-        }
-
-        var name = trimmed[(keyIndex + AssigneeKey.Length)..].Trim();
-        if (string.IsNullOrEmpty(name))
+        if (!SingleKeyFeedToken.TrySplit(token.Trim(), AssigneeKey, out var name)
+            || string.IsNullOrEmpty(name))
         {
             return null;
         }

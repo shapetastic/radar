@@ -22,5 +22,6 @@ public enum EvidenceSourceType
     SocialMedia,
     RegulatoryAnnouncement,   // UK RNS / regulatory news service announcements
     InsiderTransaction,       // director / insider buy-sell filings
-    ConferenceMention         // conference / event agenda appearances
+    ConferenceMention,        // conference / event agenda appearances
+    EquipmentAuthorization    // FCC equipment authorization (EAS) grants — first-party regulatory clearance (spec 128)
 }

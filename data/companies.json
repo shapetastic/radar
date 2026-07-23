@@ -57,6 +57,11 @@
           "type": "patents",
           "name": "Mercury Systems — Recent granted patents (PatentsView)",
           "url": "assignee=Mercury Systems, Inc."
+        },
+        {
+          "type": "fccauth",
+          "name": "Mercury Systems — Recent FCC equipment authorizations (EAS)",
+          "url": "grantee=Mercury Systems, Inc."
         }
       ]
     },
@@ -262,6 +267,11 @@
           "type": "patents",
           "name": "Energy Recovery — Recent granted patents (PatentsView)",
           "url": "assignee=Energy Recovery, Inc."
+        },
+        {
+          "type": "fccauth",
+          "name": "Energy Recovery — Recent FCC equipment authorizations (EAS)",
+          "url": "grantee=Energy Recovery, Inc."
         }
       ]
     },
@@ -952,6 +962,11 @@
           "type": "newssearch",
           "name": "Bel Fuse Inc. — News attention (Google News)",
           "url": "query=Bel Fuse&ticker=BELFB"
+        },
+        {
+          "type": "fccauth",
+          "name": "Bel Fuse Inc. — Recent FCC equipment authorizations (EAS)",
+          "url": "grantee=Bel Fuse Inc."
         }
       ]
     },

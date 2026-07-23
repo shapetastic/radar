@@ -18,6 +18,7 @@ using Radar.Application.SignalReview;
 using Radar.Application.Signals;
 using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.Attention;
+using Radar.Infrastructure.Fcc;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
@@ -751,6 +752,66 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, PatentActivityCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the FCC Equipment Authorization (EAS) collector (spec 128) and the typed <c>HttpClient</c> its
+    /// <see cref="IFccAuthReader"/> uses. The collector reads the per-company <c>fccauth</c> feeds supplied on
+    /// the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's <c>Url</c> is a
+    /// <c>grantee=...</c> token), counts recently-granted equipment authorizations via the FCC OET EAS
+    /// GenericSearch CSV export, and produces one raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> per company; it does not persist them. All
+    /// HTTP/CSV/FCC code stays in Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="FccCollectorOptions.LookbackDays"/>,
+    /// <see cref="FccCollectorOptions.MaxSampleAuthorizations"/>, or
+    /// <see cref="FccCollectorOptions.MaxPageSize"/> is zero/negative: each would let the collector run yet
+    /// silently collect nothing, so they are treated as configuration errors. The EAS export needs NO API key;
+    /// the named client sets a generic User-Agent and enables automatic gzip/deflate decompression (polite).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddFccEquipmentAuthorizationCollector(
+        this IServiceCollection services, FccCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.LookbackDays <= 0)
+        {
+            throw new InvalidOperationException(
+                "Fcc LookbackDays must be greater than zero; configure Radar:Fcc:LookbackDays to a positive "
+                    + "window (default 180) — a zero/negative value collects nothing while still running.");
+        }
+
+        if (options.MaxSampleAuthorizations <= 0)
+        {
+            throw new InvalidOperationException(
+                "Fcc MaxSampleAuthorizations must be greater than zero; configure Radar:Fcc:MaxSampleAuthorizations "
+                    + "to a positive sample bound (default 5) — a zero/negative value is nonsensical configuration.");
+        }
+
+        if (options.MaxPageSize <= 0)
+        {
+            throw new InvalidOperationException(
+                "Fcc MaxPageSize must be greater than zero; configure Radar:Fcc:MaxPageSize to a positive page "
+                    + "cap (default 100) — a zero/negative value collects nothing while still running.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<IFccAuthReader, HttpFccAuthReader>(client =>
+            {
+                // A generic, polite User-Agent. Set at the single client-config site so the header is consistent
+                // for every FCC request.
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/shapetastic/radar)");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, FccEquipmentAuthorizationCollector>();
         return services;
     }
 

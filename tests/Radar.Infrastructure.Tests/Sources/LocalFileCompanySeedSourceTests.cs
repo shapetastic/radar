@@ -460,6 +460,75 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
             seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
     }
 
+    // The three spec-128 fccauth seed rows exactly as data/companies.json declares them (real company ids +
+    // verified grantee organization names), each alongside another feed so the spec-97 type|url feed-Id
+    // composite is exercised per company. RKLB is absent from the universe, so only 3 are seeded (partial
+    // coverage is normal, like usaspending 3/43 and patents 3/43).
+    private const string FccSeedJson = """
+        {
+          "companies": [
+            {
+              "id": "885ea986-041f-4fc2-8163-b815ae930a78",
+              "name": "Mercury Systems, Inc.",
+              "ticker": "MRCY",
+              "sourceFeeds": [
+                { "type": "patents", "name": "Mercury Systems — Recent granted patents (PatentsView)", "url": "assignee=Mercury Systems, Inc." },
+                { "type": "fccauth", "name": "Mercury Systems — Recent FCC equipment authorizations (EAS)", "url": "grantee=Mercury Systems, Inc." }
+              ]
+            },
+            {
+              "id": "a825bf45-a23f-431c-b392-a04a029f2400",
+              "name": "Energy Recovery, Inc.",
+              "ticker": "ERII",
+              "sourceFeeds": [
+                { "type": "patents", "name": "Energy Recovery — Recent granted patents (PatentsView)", "url": "assignee=Energy Recovery, Inc." },
+                { "type": "fccauth", "name": "Energy Recovery — Recent FCC equipment authorizations (EAS)", "url": "grantee=Energy Recovery, Inc." }
+              ]
+            },
+            {
+              "id": "e8cffb0c-29b9-4db4-9eb3-c5e68fe72ba2",
+              "name": "Bel Fuse Inc.",
+              "ticker": "BELFB",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "Bel Fuse Inc. — News attention (Google News)", "url": "query=Bel Fuse&ticker=BELFB" },
+                { "type": "fccauth", "name": "Bel Fuse Inc. — Recent FCC equipment authorizations (EAS)", "url": "grantee=Bel Fuse Inc." }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_FccFeeds_ParseWithExactTokensAndDistinctIds()
+    {
+        // Spec 128: the three verified companies each carry one fccauth feed with the exact grantee=… token;
+        // every feed Id is distinct (spec 97 folds the feed TYPE into the Id, so an fccauth feed can never
+        // collide with the same company's other feeds — incl. the same company's patents feed).
+        var path = WriteSeedFile(FccSeedJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        var context = new CollectionContext(seed.Companies, seed.SourceFeeds);
+        var fccFeeds = context.FeedsOfType("fccauth");
+        Assert.Equal(3, fccFeeds.Count);
+
+        var byCompany = fccFeeds.ToDictionary(f => f.CompanyId, f => f.Url);
+        Assert.Equal(
+            "grantee=Mercury Systems, Inc.",
+            byCompany[Guid.Parse("885ea986-041f-4fc2-8163-b815ae930a78")]);
+        Assert.Equal(
+            "grantee=Energy Recovery, Inc.",
+            byCompany[Guid.Parse("a825bf45-a23f-431c-b392-a04a029f2400")]);
+        Assert.Equal(
+            "grantee=Bel Fuse Inc.",
+            byCompany[Guid.Parse("e8cffb0c-29b9-4db4-9eb3-c5e68fe72ba2")]);
+
+        // Every feed Id in the whole seed (fccauth + the sibling patents/newssearch feeds) is distinct.
+        Assert.Equal(
+            seed.SourceFeeds.Count,
+            seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
+    }
+
     [Fact]
     public async Task GetSeedAsync_SameUrlDifferentType_FeedIdsStableAcrossCalls()
     {

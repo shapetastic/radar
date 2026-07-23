@@ -1409,6 +1409,90 @@ public class KeywordSignalExtractorTests
         Assert.True(result.IsValid, string.Join("; ", result.Errors));
     }
 
+    // --- EquipmentAuthorization (FCC EAS collector; spec 128) ---
+
+    // Builds EquipmentAuthorization evidence in the exact shape the FccEquipmentAuthorizationCollector
+    // synthesizes: the fixed "fcc equipment authorization (recent grants)" phrase + numeric count +
+    // grantee/window — and NEVER raw product descriptions or FCC IDs (those live in metadata only, which the
+    // extractor does not scan). There is NO materiality metadata read for EquipmentAuthorization.
+    private static EvidenceItem MakeFccEvidence(
+        string title =
+            "FCC equipment authorization (recent grants) — 7 authorizations granted to 'Mercury Systems, Inc.' in the last 180 days",
+        string rawText =
+            "Grantee 'Mercury Systems, Inc.': 7 FCC equipment authorizations granted since 2026-01-24, as of "
+                + "2026-07-23T12:00:00.0000000+00:00. Signal: fcc equipment authorization (recent grants).",
+        string? metadataJson = null) =>
+        new EvidenceBuilder()
+            .WithSourceType(EvidenceSourceType.EquipmentAuthorization)
+            .WithTitle(title)
+            .WithRawText(rawText)
+            .WithMetadataJson(metadataJson)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+    [Fact]
+    public async Task FccPhrase_YieldsNeutralEquipmentAuthorization_Strength3()
+    {
+        // v1 is Neutral by design: a single-window authorization count cannot tell genuine product-cadence
+        // acceleration from an always-prolific filer (directional surge detection is the deferred slice B).
+        var evidence = MakeFccEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.EquipmentAuthorization.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+        Assert.Equal(5, signal.Novelty);
+        Assert.Equal(0.45m, signal.Confidence);
+        Assert.Contains(
+            "fcc equipment authorization (recent grants)", signal.SupportingExcerpt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task FccEvidence_CollectorShapedText_FiresNoUnrelatedRule()
+    {
+        // The collector's full synthesized Title/RawText must map to EXACTLY one EquipmentAuthorization signal —
+        // no other keyword rule may fire on the fixed phrase + count + grantee/window framing.
+        var evidence = MakeFccEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.EquipmentAuthorization.ToString(), signal.SignalType);
+    }
+
+    [Fact]
+    public async Task FccEvidence_SampleDescriptionInMetadataOnly_DoesNotLeakIntoMatching()
+    {
+        // A raw product description like "Wireless launch controller" placed ONLY in metadata must NOT trip the
+        // 'launches' rule — the extractor never scans metadata for phrases.
+        var evidence = MakeFccEvidence(
+            metadataJson: """
+                { "metadata": { "sampleAuthorizations": "ABC111: Wireless launch controller and new platform module" } }
+                """);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.EquipmentAuthorization.ToString(), signal.SignalType);
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.ProductLaunch.ToString());
+    }
+
+    [Fact]
+    public async Task EquipmentAuthorizationSignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeFccEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
     // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
     // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
     // publication masthead — and RawText is synthesized from real article metadata

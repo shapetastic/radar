@@ -61,7 +61,9 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // "hiring activity (open roles)" phrase, Neutral) — a rule-STRUCTURE change, hence the bump.
     // v4 (spec 127): adds the PatentActivity rule group (the PatentsView collector's fixed
     // "patent activity (recent grants)" phrase, Neutral) — a rule-STRUCTURE change, hence the bump.
-    public const string RuleSetVersion = "radar-keyword-rules-v4";
+    // v5 (spec 128): adds the EquipmentAuthorization rule group (the FCC EAS collector's fixed
+    // "fcc equipment authorization (recent grants)" phrase, Neutral) — a rule-STRUCTURE change, hence the bump.
+    public const string RuleSetVersion = "radar-keyword-rules-v5";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
@@ -227,6 +229,15 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // the fixed rule Strength. The collector keeps raw patent titles in metadata ONLY (never in Title/RawText), so a
         // patent title cannot trip another rule; the extractor does not scan metadata.
         new("patent activity (recent grants)", SignalType.PatentActivity, SignalDirection.Neutral, 3, 5, 0.45m),
+
+        // EquipmentAuthorization (FCC EAS; spec 128). The FccEquipmentAuthorizationCollector synthesizes exactly
+        // this fixed phrase into the EquipmentAuthorization evidence Title/RawText; the extractor only maps phrase
+        // -> fixed type+direction+strength (never re-derives valence — the PatentActivity/HiringActivity precedent).
+        // v1 is NEUTRAL by design: a single-window authorization COUNT cannot tell genuine product-cadence
+        // acceleration from an always-prolific filer, so it never misfires bullish (Neutral contributes 0 to
+        // Trajectory). Directional NEW-authorization/surge detection vs accrued history is deferred to slice B
+        // (changes DIRECTION, not this type name). NO raw product descriptions in searchable text (metadata only).
+        new("fcc equipment authorization (recent grants)", SignalType.EquipmentAuthorization, SignalDirection.Neutral, 3, 5, 0.45m),
     ];
 
     // Metadata-aware materiality tiers (spec 66 + spec 93): scale an already-fired signal's Strength by a $
