@@ -22,5 +22,6 @@ public enum EvidenceSourceType
     SocialMedia,
     RegulatoryAnnouncement,   // UK RNS / regulatory news service announcements
     InsiderTransaction,       // director / insider buy-sell filings
-    ConferenceMention         // conference / event agenda appearances
+    ConferenceMention,        // conference / event agenda appearances
+    RegulatoryApproval        // FDA 510(k)/PMA device clearance/approval (first-party regulatory gate; spec 129)
 }

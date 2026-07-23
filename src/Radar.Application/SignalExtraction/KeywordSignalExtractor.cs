@@ -61,7 +61,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // "hiring activity (open roles)" phrase, Neutral) — a rule-STRUCTURE change, hence the bump.
     // v4 (spec 127): adds the PatentActivity rule group (the PatentsView collector's fixed
     // "patent activity (recent grants)" phrase, Neutral) — a rule-STRUCTURE change, hence the bump.
-    public const string RuleSetVersion = "radar-keyword-rules-v4";
+    // v5 (spec 129): adds the RegulatoryApproval rule group (the openFDA 510(k)/PMA collector's fixed
+    // "fda clearance or approval (recent)" phrase, POSITIVE at routine strength) — a rule-STRUCTURE change,
+    // hence the bump.
+    public const string RuleSetVersion = "radar-keyword-rules-v5";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
@@ -227,6 +230,17 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // the fixed rule Strength. The collector keeps raw patent titles in metadata ONLY (never in Title/RawText), so a
         // patent title cannot trip another rule; the extractor does not scan metadata.
         new("patent activity (recent grants)", SignalType.PatentActivity, SignalDirection.Neutral, 3, 5, 0.45m),
+
+        // RegulatoryApproval (openFDA 510(k)/PMA; spec 129). The FdaClearanceCollector synthesizes exactly this
+        // fixed phrase into the RegulatoryApproval evidence Title/RawText; the extractor only maps phrase -> fixed
+        // type+direction+strength (never re-derives valence — the PatentActivity/HiringActivity precedent).
+        // v1 is POSITIVE (an FDA clearance/approval is a discrete, clear-valence, market-relevant gate) but at
+        // ROUTINE strength and ONE signal per run (NOT count-proportional) so an always-prolific medtech incumbent
+        // cannot dominate — it corroborates, it does not flip a label alone (specs 111/121 discipline). NO
+        // materiality metadata read here — Strength is the fixed rule Strength. The collector keeps raw device
+        // names in metadata ONLY (never in Title/RawText), so a device name cannot trip another rule; the extractor
+        // does not scan metadata. Recalls (Negative) are a separate future slice.
+        new("fda clearance or approval (recent)", SignalType.RegulatoryApproval, SignalDirection.Positive, 4, 5, 0.5m),
     ];
 
     // Metadata-aware materiality tiers (spec 66 + spec 93): scale an already-fired signal's Strength by a $

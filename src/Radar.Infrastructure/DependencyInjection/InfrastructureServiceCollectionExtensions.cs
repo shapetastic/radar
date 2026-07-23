@@ -18,6 +18,7 @@ using Radar.Application.SignalReview;
 using Radar.Application.Signals;
 using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.Attention;
+using Radar.Infrastructure.Fda;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
@@ -751,6 +752,65 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, PatentActivityCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the openFDA device clearance/approval activity collector (spec 129) and the typed
+    /// <c>HttpClient</c> its <see cref="IFdaClearanceReader"/> uses. The collector reads the per-company
+    /// <c>fda</c> feeds supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each
+    /// feed's <c>Url</c> is an <c>applicant=...</c> token), counts recently-cleared 510(k)/PMA devices, and
+    /// produces one raw <see cref="Radar.Application.Collectors.CollectedEvidence"/> per company; it does not
+    /// persist them. All HTTP/JSON/openFDA code stays in Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="FdaCollectorOptions.LookbackDays"/>,
+    /// <see cref="FdaCollectorOptions.MaxSampleClearances"/>, or <see cref="FdaCollectorOptions.MaxPageSize"/>
+    /// is zero/negative: each of those would let the collector run yet silently collect nothing, so they are
+    /// treated as configuration errors. openFDA needs NO API key (opt-in OFF ⇒ baseline untouched). The named
+    /// client sets a generic User-Agent and enables automatic gzip/deflate decompression (polite).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddFdaClearanceCollector(
+        this IServiceCollection services, FdaCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.LookbackDays <= 0)
+        {
+            throw new InvalidOperationException(
+                "FDA LookbackDays must be greater than zero; configure Radar:Fda:LookbackDays to a positive "
+                    + "window (default 365) — a zero/negative value collects nothing while still running.");
+        }
+
+        if (options.MaxSampleClearances <= 0)
+        {
+            throw new InvalidOperationException(
+                "FDA MaxSampleClearances must be greater than zero; configure Radar:Fda:MaxSampleClearances to a "
+                    + "positive sample bound (default 5) — a zero/negative value is nonsensical configuration.");
+        }
+
+        if (options.MaxPageSize <= 0)
+        {
+            throw new InvalidOperationException(
+                "FDA MaxPageSize must be greater than zero; configure Radar:Fda:MaxPageSize to a positive page "
+                    + "cap (default 100) — a zero/negative value collects nothing while still running.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<IFdaClearanceReader, HttpFdaClearanceReader>(client =>
+            {
+                // A generic, polite User-Agent (openFDA needs no key or specific UA). Set at the single
+                // client-config site so the header is consistent for every FDA request.
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/shapetastic/radar)");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, FdaClearanceCollector>();
         return services;
     }
 
