@@ -269,7 +269,10 @@ internal sealed class HttpFdaClearanceReader : IFdaClearanceReader
             && total.ValueKind == JsonValueKind.Number
             && total.TryGetInt32(out var number))
         {
-            return number;
+            // Cross-check ONLY when larger: the meta total is the endpoint's grand total, so it should meet or
+            // exceed the bounded page count. If openFDA ever reports a partial/incorrect total smaller than the
+            // rows we actually parsed, prefer the parsed count so the metadata is never misleadingly low.
+            return Math.Max(number, fallback);
         }
 
         return fallback;

@@ -90,9 +90,12 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
                 continue;
             }
 
-            // The decision-date floor: today minus the lookback window, from the injected TimeProvider (UTC).
+            // One instant per feed, from the injected TimeProvider (UTC): both the decision-date floor and the
+            // snapshot's retrievedAt are derived from this single 'now' so they can never disagree by a day if a
+            // run happens to cross a UTC date boundary between two GetUtcNow() calls.
+            var now = _timeProvider.GetUtcNow();
             var decisionFloor = DateOnly.FromDateTime(
-                (_timeProvider.GetUtcNow() - TimeSpan.FromDays(_options.LookbackDays)).UtcDateTime);
+                (now - TimeSpan.FromDays(_options.LookbackDays)).UtcDateTime);
 
             var result = await _reader.ReadAsync(target.ApplicantName, decisionFloor, ct).ConfigureAwait(false);
 
@@ -112,7 +115,7 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
             var hints = CollectorCompanyHints.For(feed.CompanyId, companiesById);
 
             // Exactly ONE snapshot evidence per feed per run — the clearance count is already the aggregate.
-            results.Add(MapToEvidence(feed, target, decisionFloor, result.Result!, hints));
+            results.Add(MapToEvidence(feed, target, decisionFloor, now, result.Result!, hints));
         }
 
         _logger.LogInformation(
@@ -131,12 +134,13 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
         CompanySourceFeed feed,
         FdaFeedTarget target,
         DateOnly decisionFloor,
+        DateTimeOffset retrievedAtUtc,
         FdaClearanceResult clearances,
         IReadOnlyList<string> hints)
     {
-        // One instant for the whole window snapshot: a bounded clearance window has no single publish date, so
-        // PublishedAt = CollectedAt = now (UTC, injected TimeProvider).
-        var retrievedAtUtc = _timeProvider.GetUtcNow();
+        // The whole window snapshot shares the caller's single per-feed instant: a bounded clearance window has
+        // no single publish date, so PublishedAt = CollectedAt = retrievedAtUtc (the same 'now' the decisionFloor
+        // was derived from, UTC, injected TimeProvider).
         var retrievedAtToken = retrievedAtUtc.ToString("o", CultureInfo.InvariantCulture);
         var decisionFloorToken = decisionFloor.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
