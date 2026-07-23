@@ -20,5 +20,9 @@ public enum SignalType
     PatentActivity,
     DeveloperAdoption,
     MediaAttention,
+    // RegulatoryApproval (spec 129): the openFDA 510(k)/PMA device-clearance collector's axis — a Positive,
+    // routine-strength corroborating signal (a discrete, market-relevant regulatory gate). Appended before the
+    // Other sentinel; SignalType is persisted by name, so placement is readability-only.
+    RegulatoryApproval,
     Other
 }

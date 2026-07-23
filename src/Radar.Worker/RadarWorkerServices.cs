@@ -5,6 +5,7 @@ using Radar.Application.Scoring;
 using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.Fda;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Hiring;
@@ -117,7 +118,7 @@ internal static class RadarWorkerServices
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
-                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", and \"patents\".");
+                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", and \"fda\".");
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -128,7 +129,7 @@ internal static class RadarWorkerServices
             if (string.IsNullOrWhiteSpace(rawKind))
             {
                 throw new InvalidOperationException(
-                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", and \"patents\".");
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", and \"fda\".");
             }
 
             var kind = rawKind.Trim();
@@ -217,10 +218,19 @@ internal static class RadarWorkerServices
                     MaxPageSize = options.Patents.MaxPageSize,
                 });
             }
+            else if (string.Equals(kind, "fda", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddFdaClearanceCollector(new FdaCollectorOptions
+                {
+                    LookbackDays = options.Fda.LookbackDays,
+                    MaxSampleClearances = options.Fda.MaxSampleClearances,
+                    MaxPageSize = options.Fda.MaxPageSize,
+                });
+            }
             else
             {
                 throw new InvalidOperationException(
-                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", and \"patents\".");
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", and \"fda\".");
             }
         }
 

@@ -286,6 +286,36 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_WithFdaCollector()
+    {
+        // The fda collector enables opt-in with just the kind and the RadarWorkerOptions defaults. openFDA
+        // needs no key/User-Agent, so the graph resolves with nothing extra configured.
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "fda"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+
+        var collectors = provider.GetServices<IEvidenceCollector>().ToArray();
+        Assert.Equal(2, collectors.Length);
+        Assert.Contains(collectors, c => c.CollectorName == "fda");
+    }
+
+    [Fact]
+    public void DefaultCollectors_DoNotRegisterFda_AndSeededFdaFeedsCauseNoFailure()
+    {
+        // Spec-129 default composition: fda is opt-in OFF — a default (no-fda) config registers the collector
+        // set WITHOUT fda even though data/companies.json now declares fda feeds (the seed is
+        // collector-agnostic; the spec-98 validator sees declared == reached because
+        // CollectionContext.SourceFeeds is populated from the seed regardless of enabled collectors).
+        using var provider = BuildProvider(("Radar:Collectors:0", "rss"));
+
+        var collectors = provider.GetServices<IEvidenceCollector>().ToArray();
+        Assert.Single(collectors);
+        Assert.DoesNotContain(collectors, c => c.CollectorName == "fda");
+    }
+
+    [Fact]
     public void DuplicateCollectorKind_RegistersOnce()
     {
         using var provider = BuildProvider(

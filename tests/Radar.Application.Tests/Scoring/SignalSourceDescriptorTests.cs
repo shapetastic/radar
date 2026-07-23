@@ -105,14 +105,14 @@ public sealed class SignalSourceDescriptorTests
         var descriptor = DescriptorFor("rss");
 
         Assert.Contains(KeywordSignalExtractor.RuleSetVersion, descriptor, StringComparison.Ordinal);
-        Assert.Contains("radar-keyword-rules-v4", descriptor, StringComparison.Ordinal);
+        Assert.Contains("radar-keyword-rules-v5", descriptor, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Descriptor_OrdersCollectorsOrdinal()
     {
         Assert.Equal(
-            "rules=radar-keyword-rules-v4;collectors=newssearch,rss,sec,sec-form4,usaspending;",
+            "rules=radar-keyword-rules-v5;collectors=newssearch,rss,sec,sec-form4,usaspending;",
             DescriptorFor("usaspending", "sec-form4", "rss", "newssearch", "sec"));
     }
 
@@ -120,7 +120,7 @@ public sealed class SignalSourceDescriptorTests
     public void EmptyCollectorSet_YieldsStableDescriptor()
     {
         Assert.Equal(
-            "rules=radar-keyword-rules-v4;collectors=;",
+            "rules=radar-keyword-rules-v5;collectors=;",
             new SignalSourceDescriptor(Array.Empty<IEvidenceCollector>()).CanonicalDescriptor());
     }
 
@@ -138,7 +138,7 @@ public sealed class SignalSourceDescriptorTests
         var descriptor = DescriptorFor("rss", "sec", "usaspending");
 
         Assert.Equal(
-            "rules=radar-keyword-rules-v4;collectors=rss,sec,usaspending;",
+            "rules=radar-keyword-rules-v5;collectors=rss,sec,usaspending;",
             descriptor);
         Assert.DoesNotContain("ai=", descriptor, StringComparison.Ordinal);
     }
@@ -150,7 +150,7 @@ public sealed class SignalSourceDescriptorTests
         // real descriptor's internal '=' and ';' delimiters are percent-escaped so the outer serialization stays
         // injective (the ai segment cannot spill into a fake extra field).
         Assert.Equal(
-            "rules=radar-keyword-rules-v4;collectors=rss,sec,usaspending;"
+            "rules=radar-keyword-rules-v5;collectors=rss,sec,usaspending;"
                 + "ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;",
             DescriptorWithAi("directional-filing:str=6;nov=6;minconf=0.6", "rss", "sec", "usaspending"));
     }
@@ -163,7 +163,7 @@ public sealed class SignalSourceDescriptorTests
         var descriptor = DescriptorWithAi("a=b;c,d%e", "rss");
 
         Assert.Equal(
-            "rules=radar-keyword-rules-v4;collectors=rss;ai=a%3Db%3Bc%2Cd%25e;",
+            "rules=radar-keyword-rules-v5;collectors=rss;ai=a%3Db%3Bc%2Cd%25e;",
             descriptor);
     }
 

@@ -460,6 +460,62 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
             seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
     }
 
+    // The two spec-129 fda seed rows exactly as data/companies.json declares them (real company ids + verified
+    // applicant organization names), each alongside another feed so the spec-97 type|url feed-Id composite is
+    // exercised per company. Only AXGN + TMDX are seeded (partial coverage is normal, like patents 3/43).
+    private const string FdaSeedJson = """
+        {
+          "companies": [
+            {
+              "id": "04678338-ddeb-4505-b8e8-7241a22dfc20",
+              "name": "Axogen, Inc.",
+              "ticker": "AXGN",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "Axogen — News attention (Google News)", "url": "query=Axogen&ticker=AXGN" },
+                { "type": "fda", "name": "Axogen — Recent FDA device clearances (openFDA)", "url": "applicant=Axogen" }
+              ]
+            },
+            {
+              "id": "f59ea273-1f23-4dba-bf5e-f9e5ecf574fd",
+              "name": "TransMedics Group, Inc.",
+              "ticker": "TMDX",
+              "sourceFeeds": [
+                { "type": "newssearch", "name": "TransMedics — News attention (Google News)", "url": "query=TransMedics Group&ticker=TMDX" },
+                { "type": "fda", "name": "TransMedics — Recent FDA device clearances (openFDA)", "url": "applicant=TransMedics" }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetSeedAsync_FdaFeeds_ParseWithExactTokensAndDistinctIds()
+    {
+        // Spec 129: the two verified companies each carry one fda feed with the exact applicant=… token; every
+        // feed Id is distinct (spec 97 folds the feed TYPE into the Id, so an fda feed can never collide with
+        // the same company's other feeds).
+        var path = WriteSeedFile(FdaSeedJson);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        var context = new CollectionContext(seed.Companies, seed.SourceFeeds);
+        var fdaFeeds = context.FeedsOfType("fda");
+        Assert.Equal(2, fdaFeeds.Count);
+
+        var byCompany = fdaFeeds.ToDictionary(f => f.CompanyId, f => f.Url);
+        Assert.Equal(
+            "applicant=Axogen",
+            byCompany[Guid.Parse("04678338-ddeb-4505-b8e8-7241a22dfc20")]);
+        Assert.Equal(
+            "applicant=TransMedics",
+            byCompany[Guid.Parse("f59ea273-1f23-4dba-bf5e-f9e5ecf574fd")]);
+
+        // Every feed Id in the whole seed (fda + the sibling newssearch feeds) is distinct.
+        Assert.Equal(
+            seed.SourceFeeds.Count,
+            seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
+    }
+
     [Fact]
     public async Task GetSeedAsync_SameUrlDifferentType_FeedIdsStableAcrossCalls()
     {

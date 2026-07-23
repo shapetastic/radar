@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents", "fda".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -62,6 +62,13 @@ public sealed class RadarWorkerOptions
     /// never here — it is read at runtime from the env var NAMED by <see cref="PatentWorkerOptions.ApiKeyEnvVar"/>.
     /// </summary>
     public PatentWorkerOptions Patents { get; init; } = new();
+
+    /// <summary>
+    /// openFDA device clearance/approval collector configuration (bound from "Radar:Fda"; spec 129). Only read
+    /// when the "fda" collector is enabled (opt-in, OFF by default — it is not in the default Collectors); the
+    /// defaults let the rss-only configuration keep working with no Fda config. openFDA needs no API key.
+    /// </summary>
+    public FdaWorkerOptions Fda { get; init; } = new();
 
     /// <summary>
     /// AI chat-client seam configuration (bound from "Radar:Ai"). A blank <see cref="AiWorkerOptions.Provider"/>
@@ -355,6 +362,24 @@ public sealed class PatentWorkerOptions
     public string ApiKeyEnvVar { get; init; } = "PATENTSVIEW_API_KEY";
 
     /// <summary>Maximum patents requested on the single bounded page (the count is what matters, not full enumeration). Defaults to 100.</summary>
+    public int MaxPageSize { get; init; } = 100;
+}
+
+/// <summary>
+/// openFDA device clearance/approval collector configuration (bound from "Radar:Fda"; spec 129). Surfaces the
+/// lookback window, the metadata clearance-sample bound, and the request page size through to
+/// <c>FdaCollectorOptions</c>. The openFDA 510(k)/PMA endpoints need no API key. The collector is opt-in OFF
+/// (not in the default Collectors); the defaults let the rss-only configuration keep working with no Fda config.
+/// </summary>
+public sealed class FdaWorkerOptions
+{
+    /// <summary>Recent-activity window length, in days (the query's decision-date floor is now minus this). Defaults to 365 (device clearances are lower-frequency).</summary>
+    public int LookbackDays { get; init; } = 365;
+
+    /// <summary>Maximum clearances carried in the evidence <c>sampleClearances</c> metadata (provenance/debug only — never in Title/RawText). Defaults to 5.</summary>
+    public int MaxSampleClearances { get; init; } = 5;
+
+    /// <summary>Maximum clearances requested on the single bounded page per endpoint (the count is what matters, not full enumeration). Defaults to 100.</summary>
     public int MaxPageSize { get; init; } = 100;
 }
 

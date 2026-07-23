@@ -1409,6 +1409,92 @@ public class KeywordSignalExtractorTests
         Assert.True(result.IsValid, string.Join("; ", result.Errors));
     }
 
+    // --- RegulatoryApproval (openFDA 510(k)/PMA device-clearance collector; spec 129) ---
+
+    // Builds RegulatoryApproval evidence in the exact shape the FdaClearanceCollector synthesizes: the fixed
+    // "fda clearance or approval (recent)" phrase + numeric count + applicant/window — and NEVER raw device
+    // names (those live in metadata only, which the extractor does not scan). There is NO materiality metadata
+    // read for RegulatoryApproval.
+    private static EvidenceItem MakeFdaEvidence(
+        string title =
+            "FDA clearance or approval (recent) — 4 device clearances/approvals for 'Axogen' in the last 365 days",
+        string rawText =
+            "Applicant 'Axogen': 4 FDA device clearances/approvals since 2026-07-23, as of "
+                + "2026-07-23T12:00:00.0000000+00:00. Signal: fda clearance or approval (recent).",
+        string? metadataJson = null) =>
+        new EvidenceBuilder()
+            .WithSourceType(EvidenceSourceType.RegulatoryApproval)
+            .WithTitle(title)
+            .WithRawText(rawText)
+            .WithMetadataJson(metadataJson)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+    [Fact]
+    public async Task FdaPhrase_YieldsPositiveRegulatoryApproval_Strength4()
+    {
+        // v1 is Positive at ROUTINE strength: an FDA clearance/approval is a discrete, clear-valence gate, but
+        // one fixed-strength signal per run corroborates rather than flips a label (specs 111/121).
+        var evidence = MakeFdaEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.RegulatoryApproval.ToString(), signal.SignalType);
+        Assert.Equal("Positive", signal.Direction);
+        Assert.Equal(4, signal.Strength);
+        Assert.Equal(5, signal.Novelty);
+        Assert.Equal(0.5m, signal.Confidence);
+        Assert.Contains("fda clearance or approval (recent)", signal.SupportingExcerpt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task FdaEvidence_CollectorShapedText_FiresNoUnrelatedRule()
+    {
+        // The collector's full synthesized Title/RawText must map to EXACTLY one RegulatoryApproval signal — no
+        // other keyword rule may fire on the fixed phrase + count + applicant/window framing.
+        var evidence = MakeFdaEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.RegulatoryApproval.ToString(), signal.SignalType);
+    }
+
+    [Fact]
+    public async Task FdaEvidence_SampleDeviceNameInMetadataOnly_DoesNotLeakIntoMatching()
+    {
+        // A raw device name like "cardiac partnership system" placed ONLY in metadata must NOT trip the
+        // 'partnership' rule — the extractor never scans metadata for phrases.
+        var evidence = MakeFdaEvidence(
+            metadataJson: """
+                { "metadata": { "sampleClearances": "K250001 [510(k)]: Cardiac partnership system and new platform" } }
+                """);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.RegulatoryApproval.ToString(), signal.SignalType);
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.StrategicPartnership.ToString());
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.ProductLaunch.ToString());
+    }
+
+    [Fact]
+    public async Task RegulatoryApprovalSignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeFdaEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
     // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
     // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
     // publication masthead — and RawText is synthesized from real article metadata

@@ -797,6 +797,11 @@
           "type": "newssearch",
           "name": "TransMedics Group, Inc. — News attention (Google News)",
           "url": "query=TransMedics Group&ticker=TMDX"
+        },
+        {
+          "type": "fda",
+          "name": "TransMedics — Recent FDA device clearances (openFDA)",
+          "url": "applicant=TransMedics"
         }
       ]
     },
@@ -837,6 +842,11 @@
           "type": "newssearch",
           "name": "Axogen, Inc. — News attention (Google News)",
           "url": "query=Axogen&ticker=AXGN"
+        },
+        {
+          "type": "fda",
+          "name": "Axogen — Recent FDA device clearances (openFDA)",
+          "url": "applicant=Axogen"
         }
       ]
     },
