@@ -9,6 +9,7 @@ using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Hiring;
 using Radar.Infrastructure.News;
+using Radar.Infrastructure.Patents;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.UsaSpending;
 
@@ -116,7 +117,7 @@ internal static class RadarWorkerServices
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
-                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", and \"hiringats\".");
+                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", and \"patents\".");
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -127,7 +128,7 @@ internal static class RadarWorkerServices
             if (string.IsNullOrWhiteSpace(rawKind))
             {
                 throw new InvalidOperationException(
-                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", and \"hiringats\".");
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", and \"patents\".");
             }
 
             var kind = rawKind.Trim();
@@ -206,10 +207,20 @@ internal static class RadarWorkerServices
                     MaxSampleTitles = options.Hiring.MaxSampleTitles,
                 });
             }
+            else if (string.Equals(kind, "patents", StringComparison.OrdinalIgnoreCase))
+            {
+                services.AddPatentActivityCollector(new PatentCollectorOptions
+                {
+                    LookbackDays = options.Patents.LookbackDays,
+                    MaxSampleTitles = options.Patents.MaxSampleTitles,
+                    ApiKeyEnvVar = options.Patents.ApiKeyEnvVar,
+                    MaxPageSize = options.Patents.MaxPageSize,
+                });
+            }
             else
             {
                 throw new InvalidOperationException(
-                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", and \"hiringats\".");
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", and \"patents\".");
             }
         }
 

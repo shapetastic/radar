@@ -3,7 +3,7 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats".</summary>
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents".</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -54,6 +54,14 @@ public sealed class RadarWorkerOptions
     /// defaults let the rss-only configuration keep working with no Hiring config.
     /// </summary>
     public HiringWorkerOptions Hiring { get; init; } = new();
+
+    /// <summary>
+    /// PatentsView granted-patent activity collector configuration (bound from "Radar:Patents"). Only read
+    /// when the "patents" collector is enabled (opt-in, OFF by default — it is not in the default Collectors);
+    /// the defaults let the rss-only configuration keep working with no Patents config. The API key VALUE is
+    /// never here — it is read at runtime from the env var NAMED by <see cref="PatentWorkerOptions.ApiKeyEnvVar"/>.
+    /// </summary>
+    public PatentWorkerOptions Patents { get; init; } = new();
 
     /// <summary>
     /// AI chat-client seam configuration (bound from "Radar:Ai"). A blank <see cref="AiWorkerOptions.Provider"/>
@@ -325,6 +333,29 @@ public sealed class HiringWorkerOptions
 {
     /// <summary>Maximum job titles carried in the evidence <c>sampleTitles</c> metadata (provenance/debug only — never in Title/RawText). Defaults to 5.</summary>
     public int MaxSampleTitles { get; init; } = 5;
+}
+
+/// <summary>
+/// PatentsView granted-patent activity collector configuration (bound from "Radar:Patents"; spec 127). Surfaces
+/// the lookback window, the metadata title-sample bound, the API-key env-var NAME, and the request page size
+/// through to <c>PatentCollectorOptions</c>. The PatentsView Search API requires a free API key, read at
+/// RUNTIME from the env var named by <see cref="ApiKeyEnvVar"/> — the key VALUE is never committed here. The
+/// collector is opt-in OFF (not in the default Collectors); the defaults let the rss-only configuration keep
+/// working with no Patents config.
+/// </summary>
+public sealed class PatentWorkerOptions
+{
+    /// <summary>Recent-activity window length, in days (the query's grant-date floor is now minus this). Defaults to 180.</summary>
+    public int LookbackDays { get; init; } = 180;
+
+    /// <summary>Maximum patent titles carried in the evidence <c>sampleTitles</c> metadata (provenance/debug only — never in Title/RawText). Defaults to 5.</summary>
+    public int MaxSampleTitles { get; init; } = 5;
+
+    /// <summary>The NAME of the environment variable holding the PatentsView API key (read at runtime; the key value is never committed). Defaults to "PATENTSVIEW_API_KEY".</summary>
+    public string ApiKeyEnvVar { get; init; } = "PATENTSVIEW_API_KEY";
+
+    /// <summary>Maximum patents requested on the single bounded page (the count is what matters, not full enumeration). Defaults to 100.</summary>
+    public int MaxPageSize { get; init; } = 100;
 }
 
 /// <summary>
