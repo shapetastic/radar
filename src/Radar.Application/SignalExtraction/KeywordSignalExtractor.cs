@@ -59,7 +59,9 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // so a tier MAGNITUDE change no longer needs a RuleSetVersion bump — only a rule STRUCTURE change does.
     // v3 (spec 103): adds the HiringActivity rule group (the ATS job-board collector's fixed
     // "hiring activity (open roles)" phrase, Neutral) — a rule-STRUCTURE change, hence the bump.
-    public const string RuleSetVersion = "radar-keyword-rules-v3";
+    // v4 (spec 127): adds the PatentActivity rule group (the PatentsView collector's fixed
+    // "patent activity (recent grants)" phrase, Neutral) — a rule-STRUCTURE change, hence the bump.
+    public const string RuleSetVersion = "radar-keyword-rules-v4";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
@@ -215,6 +217,16 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // history is deferred to slice B (changes DIRECTION, not this type name). NO materiality metadata read here
         // (unlike InsiderBuying) — Strength is the fixed rule Strength.
         new("hiring activity (open roles)", SignalType.HiringActivity, SignalDirection.Neutral, 3, 4, 0.45m),
+
+        // PatentActivity (public patents API; spec 127). The PatentActivityCollector synthesizes exactly this fixed
+        // phrase into the Patent evidence Title/RawText; the extractor only maps phrase -> fixed type+direction+strength
+        // (never re-derives valence — the InstitutionalOwnership/HiringActivity precedent). v1 is NEUTRAL by design: a
+        // single-window granted-patent COUNT cannot tell genuine acceleration from an always-prolific filer, so it never
+        // misfires bullish (Neutral contributes 0 to Trajectory). Directional SURGE detection vs accrued patent history
+        // is deferred to slice B (changes DIRECTION, not this type name). NO materiality metadata read here — Strength is
+        // the fixed rule Strength. The collector keeps raw patent titles in metadata ONLY (never in Title/RawText), so a
+        // patent title cannot trip another rule; the extractor does not scan metadata.
+        new("patent activity (recent grants)", SignalType.PatentActivity, SignalDirection.Neutral, 3, 5, 0.45m),
     ];
 
     // Metadata-aware materiality tiers (spec 66 + spec 93): scale an already-fired signal's Strength by a $

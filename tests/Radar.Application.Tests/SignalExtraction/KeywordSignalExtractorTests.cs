@@ -1326,6 +1326,89 @@ public class KeywordSignalExtractorTests
             s => s.SignalType == SignalType.HiringActivity.ToString());
     }
 
+    // --- PatentActivity (PatentsView granted-patent collector; spec 127) ---
+
+    // Builds Patent evidence in the exact shape the PatentActivityCollector synthesizes: the fixed
+    // "patent activity (recent grants)" phrase + numeric count + assignee/window — and NEVER raw patent
+    // titles (those live in metadata only, which the extractor does not scan). There is NO materiality
+    // metadata read for PatentActivity.
+    private static EvidenceItem MakePatentEvidence(
+        string title =
+            "Patent activity (recent grants) — 12 patents granted to 'Mercury Systems, Inc.' in the last 180 days",
+        string rawText =
+            "Assignee 'Mercury Systems, Inc.': 12 patents granted since 2026-01-24, as of "
+                + "2026-07-23T12:00:00.0000000+00:00. Signal: patent activity (recent grants).",
+        string? metadataJson = null) =>
+        new EvidenceBuilder()
+            .WithSourceType(EvidenceSourceType.Patent)
+            .WithTitle(title)
+            .WithRawText(rawText)
+            .WithMetadataJson(metadataJson)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+    [Fact]
+    public async Task PatentPhrase_YieldsNeutralPatentActivity_Strength3()
+    {
+        // v1 is Neutral by design: a single-window granted-patent count cannot tell genuine acceleration from
+        // an always-prolific filer (directional surge detection is the deferred slice B).
+        var evidence = MakePatentEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.PatentActivity.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+        Assert.Equal(5, signal.Novelty);
+        Assert.Equal(0.45m, signal.Confidence);
+        Assert.Contains("patent activity (recent grants)", signal.SupportingExcerpt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PatentEvidence_CollectorShapedText_FiresNoUnrelatedRule()
+    {
+        // The collector's full synthesized Title/RawText must map to EXACTLY one PatentActivity signal — no
+        // other keyword rule may fire on the fixed phrase + count + assignee/window framing.
+        var evidence = MakePatentEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.PatentActivity.ToString(), signal.SignalType);
+    }
+
+    [Fact]
+    public async Task PatentEvidence_SampleTitleInMetadataOnly_DoesNotLeakIntoMatching()
+    {
+        // A raw patent title like "System for autonomous launch integration" placed ONLY in metadata must
+        // NOT trip the 'launches'/'new platform' rules — the extractor never scans metadata for phrases.
+        var evidence = MakePatentEvidence(
+            metadataJson: """
+                { "metadata": { "sampleTitles": "1: System for autonomous launch integration and new platform rollout" } }
+                """);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.PatentActivity.ToString(), signal.SignalType);
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.ProductLaunch.ToString());
+    }
+
+    [Fact]
+    public async Task PatentActivitySignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakePatentEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
     // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
     // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
     // publication masthead — and RawText is synthesized from real article metadata

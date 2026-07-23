@@ -20,11 +20,11 @@ public sealed class ScoringConfigFingerprintTests
     // newssearch→"newssearch"), Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it matches what
     // the Worker actually produces. This is the 6-collector default after spec 100 promoted sec13dg into
     // scripts/run-profiles/default.json (commit 58c55f5); spec 103 bumps the rule-set identity to
-    // radar-keyword-rules-v3 (the new HiringActivity group) while the enabled collector CSV stays this same
-    // 6-collector set (hiringats is opt-in OFF). Ordinal sort places "sec-13dg" before "sec-edgar"
-    // (the char after "sec-" is '1' 0x31 < 'e' 0x65).
+    // radar-keyword-rules-v4 (spec 127 adds the PatentActivity group; spec 103 added HiringActivity) while the
+    // enabled collector CSV stays this same 6-collector set (hiringats and patents are both opt-in OFF).
+    // Ordinal sort places "sec-13dg" before "sec-edgar" (the char after "sec-" is '1' 0x31 < 'e' 0x65).
     private const string SourceDescriptor =
-        "rules=radar-keyword-rules-v3;collectors=RssPressReleaseCollector,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;";
+        "rules=radar-keyword-rules-v4;collectors=RssPressReleaseCollector,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;";
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -94,16 +94,17 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
         // default-tier, signal-source, insider-materiality, or media-collapse drift is caught (the automatic
-        // AD-10 replacement for the hand-bumped constant). This value is the spec-122 re-stamp: the Attention
-        // reach became breadth-preserving across the spec-109 collapse (radar-formula-v8 — a STRUCTURE
-        // change), so _formula.Version advanced v7→v8 AND the new CollapsedBreadthCredit magnitude was folded
-        // into the canonical string, re-stamping the fingerprint automatically. It supersedes the spec-117
-        // stamp (radar-scoring-fp-8f4b59efd288) and matches default.json's recorded default.
+        // AD-10 replacement for the hand-bumped constant). This value is the spec-127 re-stamp: the
+        // RuleSetVersion bumped radar-keyword-rules-v3 → v4 for the new PatentActivity rule group (an opt-in-OFF
+        // collector), which the signal-source descriptor folds into the fingerprint automatically. Scoring math
+        // is byte-identical (no existing evidence contains the patent phrase; patents is not in default.json) —
+        // only the input hash changes. It supersedes the spec-122 stamp (radar-scoring-fp-cb80a5809882) and
+        // matches default.json's recorded default.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-cb80a5809882", fp);
+        Assert.Equal("radar-scoring-fp-b4a040144f66", fp);
     }
 
     [Fact]
@@ -146,7 +147,7 @@ public sealed class ScoringConfigFingerprintTests
         // must re-stamp (spec 95 — restores the spec-69 comparability guarantee across a collector transition).
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(),
-            "rules=radar-keyword-rules-v3;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
+            "rules=radar-keyword-rules-v4;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
             InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(baseline, changed);
@@ -214,13 +215,14 @@ public sealed class ScoringConfigFingerprintTests
         // following-discount weights (radar-scoring-fp-4c06fd2d2d8c) → spec 119, which folded the earnings-read
         // model identity into the directional descriptor by value and built the ai= segment through the real
         // escaping (radar-scoring-fp-2ef5ef96cce2) → spec 122, the radar-formula-v8 structure bump + the new
-        // CollapsedBreadthCredit magnitude, which re-stamps BOTH the AI-OFF and the AI-ON default (unlike spec
-        // 119, whose input existed only on the AI-ON path).
+        // CollapsedBreadthCredit magnitude, which re-stamps BOTH the AI-OFF and the AI-ON default
+        // (radar-scoring-fp-c908f03a554a) → spec 127, the RuleSetVersion v3→v4 bump for the new PatentActivity
+        // rule group (opt-in OFF), which folds into BOTH defaults automatically with scoring math byte-identical.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-c908f03a554a", fp);
+        Assert.Equal("radar-scoring-fp-63c096e531ec", fp);
     }
 
     [Fact]

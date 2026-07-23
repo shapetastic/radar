@@ -710,6 +710,23 @@ stays). Note for the efficacy visual (spec 101 / AD-14 read side): the current r
 scores are fully continuous — an input-hash artifact, not a measurement break; the real fix is the deferred
 efficacy slice-2 score-continuity-aware segmentation.
 
+### Lineage — spec 127: `RuleSetVersion` v3 → v4 (new `PatentActivity` rule group); default re-stamps automatically
+
+Spec 127 adds the PatentsView granted-patent activity collector (`patents`, opt-in **OFF** by default) and one
+new `KeywordSignalExtractor` rule group mapping its fixed phrase `patent activity (recent grants)` to a
+**Neutral** `SignalType.PatentActivity` — a rule-**STRUCTURE** change, so `RuleSetVersion` bumps
+`radar-keyword-rules-v3 → radar-keyword-rules-v4` and the spec-95 signal-source descriptor re-stamps **both**
+default fingerprints **automatically**: AI-OFF **`radar-scoring-fp-cb80a5809882 → radar-scoring-fp-b4a040144f66`**
+and AI-ON **`radar-scoring-fp-c908f03a554a → radar-scoring-fp-63c096e531ec`**. The enabled default collector set
+is **unchanged** (still the 6-collector baseline — `patents` is not in `default.json`); the fingerprint moves
+solely on the rules identity. **Scoring math is byte-identical** — the new rule matches only the patent phrase,
+which no existing evidence contains, and the collector is opt-in-off, so every company scores exactly as before;
+there is no fingerprint-safe way to add a scoring-affecting signal type (spec 95 working as intended). No
+`_formula.Version` / weight / attention-tier / insider-tier change (`radar-formula-v8` stays). For the efficacy
+visual (spec 101 / AD-14 read side), this re-stamp is a **score-neutral cosmetic boundary** — spec 108's
+continuity-aware segmentation connects the score line across it because the scores are fully continuous (an
+input-hash artifact, not a measurement break).
+
 ### Amendment — spec 119: the AI earnings-read model identity is a fingerprint input (folded by value)
 
 Spec 106 folded the AI directional-filing source's per-signal magnitudes (`str`/`nov`/`minconf`) into the
@@ -750,7 +767,11 @@ radar-scoring-fp-8d638b90d4aa → radar-scoring-fp-c9e609ed53e9; scoring math by
 collector opt-in-off). Amended · 2026-07-21 (spec 119 — the AI earnings-read `provider:model` identity is folded
 into the directional-filing descriptor by value; the default baseline read moves to DeepInfra
 `deepseek-ai/DeepSeek-V4-Flash` and the AI-ON stamp re-stamps radar-scoring-fp-4c06fd2d2d8c →
-radar-scoring-fp-2ef5ef96cce2, AI-OFF unmoved, no formula/`RuleSetVersion` bump; Accepted).
+radar-scoring-fp-2ef5ef96cce2, AI-OFF unmoved, no formula/`RuleSetVersion` bump; Accepted). Lineage · 2026-07-23
+(spec 127 — `RuleSetVersion` radar-keyword-rules-v3 → v4 for the new `PatentActivity` rule group; BOTH defaults
+re-stamp AI-OFF radar-scoring-fp-cb80a5809882 → radar-scoring-fp-b4a040144f66 and AI-ON
+radar-scoring-fp-c908f03a554a → radar-scoring-fp-63c096e531ec; scoring math byte-identical, `patents` collector
+opt-in-off).
 
 ---
 

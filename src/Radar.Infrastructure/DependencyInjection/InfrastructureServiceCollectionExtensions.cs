@@ -23,6 +23,7 @@ using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Hiring;
 using Radar.Infrastructure.News;
+using Radar.Infrastructure.Patents;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Prices;
 using Radar.Infrastructure.Rss;
@@ -680,6 +681,76 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, UsaSpendingContractCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the PatentsView granted-patent activity collector (spec 127) and the typed <c>HttpClient</c>
+    /// its <see cref="IPatentSearchReader"/> uses. The collector reads the per-company <c>patents</c> feeds
+    /// supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's <c>Url</c> is
+    /// an <c>assignee=...</c> token), counts recently-granted patents, and produces one raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> per company; it does not persist them. All
+    /// HTTP/JSON/PatentsView code stays in Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="PatentCollectorOptions.LookbackDays"/>,
+    /// <see cref="PatentCollectorOptions.MaxSampleTitles"/>, or <see cref="PatentCollectorOptions.MaxPageSize"/>
+    /// is zero/negative, or when <see cref="PatentCollectorOptions.ApiKeyEnvVar"/> is blank: each of those
+    /// would let the collector run yet silently collect nothing (or have nowhere to read the key from), so
+    /// they are treated as configuration errors. The API key VALUE is never in config — it is read at runtime
+    /// from the env var NAMED by <see cref="PatentCollectorOptions.ApiKeyEnvVar"/>; a missing key degrades
+    /// every patents feed to a source failure (opt-in OFF ⇒ baseline untouched). The named client sets a
+    /// generic User-Agent and enables automatic gzip/deflate decompression (polite).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddPatentActivityCollector(
+        this IServiceCollection services, PatentCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.LookbackDays <= 0)
+        {
+            throw new InvalidOperationException(
+                "Patents LookbackDays must be greater than zero; configure Radar:Patents:LookbackDays to a "
+                    + "positive window (default 180) — a zero/negative value collects nothing while still running.");
+        }
+
+        if (options.MaxSampleTitles <= 0)
+        {
+            throw new InvalidOperationException(
+                "Patents MaxSampleTitles must be greater than zero; configure Radar:Patents:MaxSampleTitles to a "
+                    + "positive sample bound (default 5) — a zero/negative value is nonsensical configuration.");
+        }
+
+        if (options.MaxPageSize <= 0)
+        {
+            throw new InvalidOperationException(
+                "Patents MaxPageSize must be greater than zero; configure Radar:Patents:MaxPageSize to a positive "
+                    + "page cap (default 100) — a zero/negative value collects nothing while still running.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.ApiKeyEnvVar))
+        {
+            throw new InvalidOperationException(
+                "Patents ApiKeyEnvVar must name the environment variable holding the PatentsView API key "
+                    + "(default \"PATENTSVIEW_API_KEY\") — the key is never committed to config, so a blank env-var "
+                    + "name leaves the collector no way to read it.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<IPatentSearchReader, HttpPatentSearchReader>(client =>
+            {
+                // A generic, polite User-Agent (the API needs a key, not a specific UA). Set at the single
+                // client-config site so the header is consistent for every patents request.
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/radar)");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, PatentActivityCollector>();
         return services;
     }
 

@@ -52,6 +52,11 @@
           "type": "hiringats",
           "name": "Mercury Systems — Open roles (Greenhouse ATS)",
           "url": "platform=greenhouse&board=mercury"
+        },
+        {
+          "type": "patents",
+          "name": "Mercury Systems — Recent granted patents (PatentsView)",
+          "url": "assignee=Mercury Systems, Inc."
         }
       ]
     },
@@ -252,6 +257,11 @@
           "type": "hiringats",
           "name": "Energy Recovery — Open roles (Lever ATS)",
           "url": "platform=lever&board=energyrecovery"
+        },
+        {
+          "type": "patents",
+          "name": "Energy Recovery — Recent granted patents (PatentsView)",
+          "url": "assignee=Energy Recovery, Inc."
         }
       ]
     },
@@ -342,6 +352,11 @@
           "type": "newssearch",
           "name": "Eos Energy Enterprises — News attention (Google News)",
           "url": "query=Eos Energy Enterprises&ticker=EOSE"
+        },
+        {
+          "type": "patents",
+          "name": "Eos Energy Enterprises — Recent granted patents (PatentsView)",
+          "url": "assignee=Eos Energy Enterprises, Inc."
         }
       ]
     },
