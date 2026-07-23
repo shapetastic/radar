@@ -167,17 +167,31 @@ only if the verified names differ. Still additive; no feed-Id churn beyond corre
 - **Renaming the env var / config key beyond the optional cosmetic alias** — keep `PATENTSVIEW_API_KEY`
   working; a hard rename is a separate, lower-value cleanup.
 
+## ⚠️ NO-KEY FALLBACK (the likely implementation case — read first)
+
+**No ODP API key is available at implementation time** (the maintainer's ID.me verification is pending). Do
+**not** block on it. Follow **spec 130's precedent exactly**: pin the ODP request/response **field names from
+the published ODP docs / OpenAPI** (not from a live call), commit a **docs-derived fixture** for the tests,
+and **DEFER** the live authenticated smoke query + live seed re-verification to a follow-up once the key
+arrives. The load-bearing value of this slice ships **without** the key: the reader is **repointed off the
+dead `search.patentsview.org` (NXDOMAIN) host onto the live `api.uspto.gov` ODP endpoint**, key handling
+(`X-Api-Key` from `PATENTSVIEW_API_KEY`, blank ⇒ `MissingApiKey` no-HTTP-call) is wired, and the whole thing
+is offline-fixture-tested — so it is **ready-to-verify the moment the key exists**. This is a legitimate,
+mergeable outcome; acceptance criteria #2/#3 below are marked **(defer if no key)** accordingly.
+
 ## Acceptance criteria
 
 - [ ] `HttpPatentSearchReader` targets **`POST {Radar:Patents:BaseUrl}/api/v1/patent/applications/search`**
       (default host `https://api.uspto.gov`), sends `X-Api-Key`, and builds an ODP `rangeFilters`
       grant-date-floor + assignee-organization query with a bounded `fields`/page size. The old
       `search.patentsview.org` target is **fully removed** (no dead reference).
-- [ ] The exact ODP field names for grant date, assignee/applicant org, patent number, and title are
-      **pinned as named constants from one real authenticated response**, and a sanitized fixture of that
-      response is committed for the tests. (This is the step that consumes the ODP key.)
-- [ ] At least **one** seed company returns non-empty recent-grant results from `api.uspto.gov`;
-      `data/companies.json` patents tokens corrected to only verified names.
+- [ ] **(defer if no key)** The exact ODP field names for grant date, assignee/applicant org, patent number,
+      and title are pinned as named constants — **from a real authenticated response if a key is available,
+      else from the published ODP docs/OpenAPI (deferred live-verification, spec 130 precedent)** — and a
+      fixture is committed for the tests.
+- [ ] **(defer if no key)** With a key: at least **one** seed company returns non-empty recent-grant results
+      from `api.uspto.gov` and `data/companies.json` tokens are corrected to verified names. **Without a
+      key:** keep spec 127's seed tokens as-is and record that live seed-verification is deferred.
 - [ ] Reader outcome contract preserved (empty ⇒ `Success` 0; blank key ⇒ `MissingApiKey`, no HTTP call;
       unparseable grant date row **skipped**, not coerced; malformed ⇒ `Malformed`; non-2xx ⇒ `HttpError`;
       timeout ⇒ `Timeout`; `HttpRequestException` ⇒ `Unreachable`; cancellation re-throws).
