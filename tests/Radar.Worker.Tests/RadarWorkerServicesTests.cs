@@ -316,6 +316,37 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_WithTrademarksCollector()
+    {
+        // The trademarks collector enables opt-in with just the kind and the RadarWorkerOptions defaults. The
+        // USPTO API key is read at runtime from the env var (missing key degrades at fetch time, not at
+        // composition), so the graph resolves without a key present.
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Collectors:1", "trademarks"));
+
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+
+        var collectors = provider.GetServices<IEvidenceCollector>().ToArray();
+        Assert.Equal(2, collectors.Length);
+        Assert.Contains(collectors, c => c.CollectorName == "trademarks");
+    }
+
+    [Fact]
+    public void DefaultCollectors_DoNotRegisterTrademarks_AndSeededTrademarksFeedsCauseNoFailure()
+    {
+        // Spec-130 default composition: trademarks is opt-in OFF — a default (no-trademarks) config registers
+        // the collector set WITHOUT trademarks even though data/companies.json now declares trademarks feeds
+        // (the seed is collector-agnostic; the spec-98 validator sees declared == reached because
+        // CollectionContext.SourceFeeds is populated from the seed regardless of enabled collectors).
+        using var provider = BuildProvider(("Radar:Collectors:0", "rss"));
+
+        var collectors = provider.GetServices<IEvidenceCollector>().ToArray();
+        Assert.Single(collectors);
+        Assert.DoesNotContain(collectors, c => c.CollectorName == "trademarks");
+    }
+
+    [Fact]
     public void DuplicateCollectorKind_RegistersOnce()
     {
         using var provider = BuildProvider(

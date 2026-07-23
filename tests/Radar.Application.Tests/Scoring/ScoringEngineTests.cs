@@ -753,7 +753,7 @@ public sealed class ScoringEngineTests
 
         // All late-registered collectors appear, sorted Ordinal, alongside the extractor rule-set identity.
         Assert.Equal(
-            "rules=radar-keyword-rules-v5;collectors=newssearch,rss,sec-form4,usaspending;",
+            "rules=radar-keyword-rules-v6;collectors=newssearch,rss,sec-form4,usaspending;",
             descriptor);
     }
 

@@ -30,6 +30,7 @@ using Radar.Infrastructure.Prices;
 using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.Sources;
+using Radar.Infrastructure.Trademarks;
 using Radar.Infrastructure.UsaSpending;
 
 using System.Net;
@@ -811,6 +812,76 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, FdaClearanceCollector>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the USPTO trademark-activity collector (spec 130) and the typed <c>HttpClient</c> its
+    /// <see cref="ITrademarkSearchReader"/> uses. The collector reads the per-company <c>trademarks</c> feeds
+    /// supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's <c>Url</c> is
+    /// an <c>owner=...</c> token), counts recently-filed trademark applications, and produces one raw
+    /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> per company; it does not persist them. All
+    /// HTTP/JSON code stays in Infrastructure (AD-5).
+    /// <para>
+    /// Fails fast when <see cref="TrademarkCollectorOptions.LookbackDays"/>,
+    /// <see cref="TrademarkCollectorOptions.MaxSampleMarks"/>, or <see cref="TrademarkCollectorOptions.MaxPageSize"/>
+    /// is zero/negative, or when <see cref="TrademarkCollectorOptions.ApiKeyEnvVar"/> is blank: each of those
+    /// would let the collector run yet silently collect nothing (or have nowhere to read the key from), so they
+    /// are treated as configuration errors. The API key VALUE is never in config — it is read at runtime from
+    /// the env var NAMED by <see cref="TrademarkCollectorOptions.ApiKeyEnvVar"/>; a missing key degrades every
+    /// trademark feed to a source failure (opt-in OFF ⇒ baseline untouched). The named client sets a generic
+    /// User-Agent and enables automatic gzip/deflate decompression (polite).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddTrademarkActivityCollector(
+        this IServiceCollection services, TrademarkCollectorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.LookbackDays <= 0)
+        {
+            throw new InvalidOperationException(
+                "Trademarks LookbackDays must be greater than zero; configure Radar:Trademarks:LookbackDays to a "
+                    + "positive window (default 365) — a zero/negative value collects nothing while still running.");
+        }
+
+        if (options.MaxSampleMarks <= 0)
+        {
+            throw new InvalidOperationException(
+                "Trademarks MaxSampleMarks must be greater than zero; configure Radar:Trademarks:MaxSampleMarks to a "
+                    + "positive sample bound (default 5) — a zero/negative value is nonsensical configuration.");
+        }
+
+        if (options.MaxPageSize <= 0)
+        {
+            throw new InvalidOperationException(
+                "Trademarks MaxPageSize must be greater than zero; configure Radar:Trademarks:MaxPageSize to a "
+                    + "positive page cap (default 100) — a zero/negative value collects nothing while still running.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.ApiKeyEnvVar))
+        {
+            throw new InvalidOperationException(
+                "Trademarks ApiKeyEnvVar must name the environment variable holding the USPTO API key "
+                    + "(default \"USPTO_API_KEY\") — the key is never committed to config, so a blank env-var "
+                    + "name leaves the collector no way to read it.");
+        }
+
+        services.AddSingleton(options);
+
+        services.AddHttpClient<ITrademarkSearchReader, HttpTrademarkSearchReader>(client =>
+            {
+                // A generic, polite User-Agent (the API needs a key, not a specific UA). Set at the single
+                // client-config site so the header is consistent for every trademark request.
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/shapetastic/radar)");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IEvidenceCollector, TrademarkActivityCollector>();
         return services;
     }
 

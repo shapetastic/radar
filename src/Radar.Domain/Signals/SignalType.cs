@@ -24,5 +24,12 @@ public enum SignalType
     // routine-strength corroborating signal (a discrete, market-relevant regulatory gate). Appended before the
     // Other sentinel; SignalType is persisted by name, so placement is readability-only.
     RegulatoryApproval,
+    // TrademarkActivity (spec 130): the USPTO trademark-activity collector's axis — a Neutral count-based signal
+    // (a newly-filed trademark registers a brand/product name before launch). Deliberately Neutral by design: a
+    // single-window filing COUNT cannot tell genuine brand-activity acceleration from an always-prolific filer,
+    // so it never misfires bullish (directional surge detection is a deferred slice B — changes DIRECTION, not
+    // this type name). Appended before the Other sentinel; SignalType is persisted by name, so placement is
+    // readability-only.
+    TrademarkActivity,
     Other
 }

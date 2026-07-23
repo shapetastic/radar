@@ -1495,6 +1495,89 @@ public class KeywordSignalExtractorTests
         Assert.True(result.IsValid, string.Join("; ", result.Errors));
     }
 
+    // --- TrademarkActivity (USPTO trademark-activity collector; spec 130) ---
+
+    // Builds Trademark evidence in the exact shape the TrademarkActivityCollector synthesizes: the fixed
+    // "trademark activity (recent filings)" phrase + numeric count + owner/window — and NEVER raw mark texts
+    // (those live in metadata only, which the extractor does not scan). There is NO materiality metadata read
+    // for TrademarkActivity.
+    private static EvidenceItem MakeTrademarkEvidence(
+        string title =
+            "Trademark activity (recent filings) — 6 trademark applications filed by 'WD-40 Company' in the last 365 days",
+        string rawText =
+            "Owner 'WD-40 Company': 6 trademark applications filed since 2025-07-23, as of "
+                + "2026-07-23T12:00:00.0000000+00:00. Signal: trademark activity (recent filings).",
+        string? metadataJson = null) =>
+        new EvidenceBuilder()
+            .WithSourceType(EvidenceSourceType.Trademark)
+            .WithTitle(title)
+            .WithRawText(rawText)
+            .WithMetadataJson(metadataJson)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+    [Fact]
+    public async Task TrademarkPhrase_YieldsNeutralTrademarkActivity_Strength3()
+    {
+        // v1 is Neutral by design: a single-window filing count cannot tell genuine brand-activity acceleration
+        // from an always-prolific filer, so it never misfires bullish (Neutral contributes 0 to Trajectory).
+        var evidence = MakeTrademarkEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.TrademarkActivity.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Equal(3, signal.Strength);
+        Assert.Equal(5, signal.Novelty);
+        Assert.Equal(0.45m, signal.Confidence);
+        Assert.Contains("trademark activity (recent filings)", signal.SupportingExcerpt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TrademarkEvidence_CollectorShapedText_FiresNoUnrelatedRule()
+    {
+        // The collector's full synthesized Title/RawText must map to EXACTLY one TrademarkActivity signal — no
+        // other keyword rule may fire on the fixed phrase + count + owner/window framing.
+        var evidence = MakeTrademarkEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.TrademarkActivity.ToString(), signal.SignalType);
+    }
+
+    [Fact]
+    public async Task TrademarkEvidence_SampleMarkTextInMetadataOnly_DoesNotLeakIntoMatching()
+    {
+        // A raw wordmark like "ROLLS OUT PRO" / "NEW PLATFORM" placed ONLY in metadata must NOT trip the
+        // rolls-out/new-platform rules — the extractor never scans metadata for phrases.
+        var evidence = MakeTrademarkEvidence(
+            metadataJson: """
+                { "metadata": { "sampleMarks": "97000001: ROLLS OUT PRO and NEW PLATFORM" } }
+                """);
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.TrademarkActivity.ToString(), signal.SignalType);
+        Assert.DoesNotContain(
+            output.Signals,
+            s => s.SignalType == SignalType.ProductLaunch.ToString());
+    }
+
+    [Fact]
+    public async Task TrademarkActivitySignal_RoundTripsToValidSignal()
+    {
+        var evidence = MakeTrademarkEvidence();
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        var result = ExtractedSignalMapper.ToSignal(signal, evidence, CreatedAt);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
     // Builds NewsArticle-typed (third-party) evidence, mirroring GDELT news collector output (spec 67).
     // In GdeltNewsCollector the SourceName is the configured per-company feed name (feed.Name) — not a
     // publication masthead — and RawText is synthesized from real article metadata
