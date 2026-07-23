@@ -15,9 +15,13 @@ internal sealed record EquipmentAuthorization(string FccId, string Description, 
 /// deterministic count of authorization rows parsed from the returned CSV (the count the evidence reports);
 /// <see cref="Grants"/> are the parsed authorizations (used for the bounded sample metadata). A source-reported
 /// grand total is not exposed by the CSV export, so it is intentionally omitted (unlike the patents reader's
-/// <c>total_hits</c>).
+/// <c>total_hits</c>). <see cref="Truncated"/> is set when the page cap (<c>MaxPageSize</c>) was hit while at
+/// least one further valid authorization remained — so <see cref="GrantCount"/> is a floor ("at least N"),
+/// not an exact count. Downstream (and the deferred slice-B surge detection) must treat a truncated snapshot
+/// as a lower bound rather than a real total.
 /// </summary>
-internal sealed record FccAuthResult(int GrantCount, IReadOnlyList<EquipmentAuthorization> Grants);
+internal sealed record FccAuthResult(
+    int GrantCount, IReadOnlyList<EquipmentAuthorization> Grants, bool Truncated = false);
 
 /// <summary>
 /// Why an FCC EAS equipment-authorization read ended: a grantee that genuinely has no recent authorizations is

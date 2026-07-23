@@ -61,6 +61,8 @@ public sealed class HttpFccAuthReaderTests
         Assert.Equal(FccAuthOutcome.Success, result.Outcome);
         Assert.True(result.IsSuccess);
         Assert.Equal(2, result.Result!.GrantCount);
+        // Both rows fit under the default page cap, so the count is exact, not a floor.
+        Assert.False(result.Result.Truncated);
 
         var first = result.Result.Grants[0];
         // FCC ID = Grantee Code + Product Code concatenated.
@@ -124,6 +126,36 @@ public sealed class HttpFccAuthReaderTests
 
         Assert.Equal(FccAuthOutcome.Success, result.Outcome);
         Assert.Equal(1, result.Result!.GrantCount);
+        // ValidCsv has a SECOND valid grant beyond the cap of 1, so the count is a floor, not an exact total.
+        Assert.True(result.Result.Truncated);
+    }
+
+    [Fact]
+    public async Task ReadAsync_ExactlyMaxPageSize_IsNotTruncated()
+    {
+        // Cap of 2 with exactly 2 valid grants: the cap is reached but nothing valid remains, so NOT truncated.
+        var reader = CreateReader(
+            new StubHandler(HttpStatusCode.OK, ValidCsv), new FccCollectorOptions { MaxPageSize = 2 });
+
+        var result = await reader.ReadAsync("Mercury Systems, Inc.", GrantFloor, CancellationToken.None);
+
+        Assert.Equal(2, result.Result!.GrantCount);
+        Assert.False(result.Result.Truncated);
+    }
+
+    [Fact]
+    public async Task ReadAsync_CapReachedButRemainingRowsInvalid_IsNotTruncated()
+    {
+        // One valid grant then only unparseable/absent-date rows: at a cap of 1 the leftover rows are NOT
+        // valid grants, so truncation detection (valid-grants only) must report NOT truncated.
+        var reader = CreateReader(
+            new StubHandler(HttpStatusCode.OK, UnparseableGrantDatesCsv),
+            new FccCollectorOptions { MaxPageSize = 1 });
+
+        var result = await reader.ReadAsync("Mercury Systems, Inc.", GrantFloor, CancellationToken.None);
+
+        Assert.Equal(1, result.Result!.GrantCount);
+        Assert.False(result.Result.Truncated);
     }
 
     [Fact]

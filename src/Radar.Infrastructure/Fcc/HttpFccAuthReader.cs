@@ -149,7 +149,8 @@ internal sealed class HttpFccAuthReader : IFccAuthReader
         }
 
         var grants = new List<EquipmentAuthorization>();
-        for (var i = 1; i < lines.Length && grants.Count < _options.MaxPageSize; i++)
+        var truncated = false;
+        for (var i = 1; i < lines.Length; i++)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -177,10 +178,19 @@ internal sealed class HttpFccAuthReader : IFccAuthReader
                 continue;
             }
 
+            // The page cap is measured against VALID grants only (invalid/short/undated rows never counted),
+            // so a further valid grant beyond the cap means the count is a floor, not a real total. Record that
+            // and stop, rather than silently reporting exactly MaxPageSize as if it were complete.
+            if (grants.Count >= _options.MaxPageSize)
+            {
+                truncated = true;
+                break;
+            }
+
             grants.Add(new EquipmentAuthorization(fccId, fields[equipmentClassIndex], grantDate.Value));
         }
 
-        return FccAuthReadResult.Success(new FccAuthResult(grants.Count, grants));
+        return FccAuthReadResult.Success(new FccAuthResult(grants.Count, grants, truncated));
     }
 
     private string BuildRequestUrl(string granteeName, DateOnly grantFloor)

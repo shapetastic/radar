@@ -102,6 +102,7 @@ public sealed class FccEquipmentAuthorizationCollectorTests
         Assert.Equal(MrcyToken, item.Metadata["fccFeedUrl"]);
         Assert.Equal("Mercury Systems, Inc.", item.Metadata["grantee"]);
         Assert.Equal("3", item.Metadata["grantCount"]);
+        Assert.Equal("false", item.Metadata["grantCountTruncated"]);
         Assert.Equal("180", item.Metadata["lookbackDays"]);
         Assert.Equal("2026-01-24", item.Metadata["grantFloor"]);
         Assert.Equal(
@@ -158,6 +159,35 @@ public sealed class FccEquipmentAuthorizationCollectorTests
         Assert.Equal("A1: Alpha | B2: Beta", item.Metadata["sampleAuthorizations"]);
         // The count still reflects the whole page, not the bounded sample.
         Assert.Equal("3", item.Metadata["grantCount"]);
+    }
+
+    [Fact]
+    public async Task CollectAsync_TruncatedRead_RendersCountAsFloorAndFlagsMetadata()
+    {
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000b"), MrcyId, "Mercury — FCC", MrcyToken);
+        var reader = new FakeFccAuthReader
+        {
+            // The reader hit its page cap with more valid grants remaining: count is a floor, not an exact total.
+            ["Mercury Systems, Inc."] = new FccAuthResult(
+                GrantCount: 2,
+                Grants:
+                [
+                    new EquipmentAuthorization("A1", "Alpha", new DateOnly(2026, 6, 1)),
+                    new EquipmentAuthorization("B2", "Beta", new DateOnly(2026, 5, 1)),
+                ],
+                Truncated: true),
+        };
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        // "2+" in Title/RawText signals a floor, and the metadata flag lets slice-B treat it as a lower bound.
+        Assert.Contains("2+ authorizations granted", item.Title, StringComparison.Ordinal);
+        Assert.Contains("2+ FCC equipment authorizations granted", item.RawText, StringComparison.Ordinal);
+        Assert.Equal("true", item.Metadata["grantCountTruncated"]);
+        // The numeric grantCount metadata still holds the parsed floor value (no "+").
+        Assert.Equal("2", item.Metadata["grantCount"]);
     }
 
     [Fact]

@@ -143,20 +143,27 @@ internal sealed class FccEquipmentAuthorizationCollector : IEvidenceCollector
         var count = read.GrantCount;
         var grantee = target.GranteeName;
 
+        // When the reader hit its page cap with more valid grants remaining, the count is a FLOOR, not an exact
+        // total — render it as "{count}+" so Title/RawText don't imply a full count the parse never established.
+        var countToken = read.Truncated
+            ? $"{count.ToString(CultureInfo.InvariantCulture)}+"
+            : count.ToString(CultureInfo.InvariantCulture);
+
         // NO-CONTAMINATION RULE (spec 128): Title/RawText carry ONLY the fixed phrase + numeric count +
         // grantee/window — NEVER raw product descriptions or FCC-ID free text. A description like "wireless
         // launch controller" would otherwise trip the extractor's 'launches' rule. Sample authorizations go in
         // metadata ONLY (the extractor never scans metadata for phrases).
         var title =
-            $"FCC equipment authorization (recent grants) — {count} authorizations granted to '{grantee}' "
+            $"FCC equipment authorization (recent grants) — {countToken} authorizations granted to '{grantee}' "
                 + $"in the last {_options.LookbackDays} days";
 
         // The RawText timestamp makes each run's Title+RawText ContentHash distinct, so every run persists a
         // distinct timestamped snapshot evidence — this accrued, timestamped authorization-count history IS the
-        // record the deferred slice-B surge detection will read (no separate history store is built).
+        // record the deferred slice-B surge detection will read (no separate history store is built). The grant
+        // floor uses the same grantFloorToken as the metadata so the two can never disagree.
         var rawText =
-            $"Grantee '{grantee}': {count} FCC equipment authorizations granted since {grantFloor:o}, as of "
-                + $"{retrievedAtToken}. Signal: fcc equipment authorization (recent grants).";
+            $"Grantee '{grantee}': {countToken} FCC equipment authorizations granted since {grantFloorToken}, as "
+                + $"of {retrievedAtToken}. Signal: fcc equipment authorization (recent grants).";
 
         // Bounded provenance/debug sample — metadata only, NOT scanned by the extractor.
         var sampleAuthorizations = string.Join(
@@ -172,6 +179,9 @@ internal sealed class FccEquipmentAuthorizationCollector : IEvidenceCollector
             ["grantee"] = grantee,
             // The grant count is the accrued authorization history slice B will read.
             ["grantCount"] = count.ToString(CultureInfo.InvariantCulture),
+            // "true" when the reader hit its page cap with more valid grants left: grantCount is then a FLOOR,
+            // not an exact total, so slice-B surge detection must treat it as a lower bound.
+            ["grantCountTruncated"] = read.Truncated ? "true" : "false",
             ["lookbackDays"] = _options.LookbackDays.ToString(CultureInfo.InvariantCulture),
             ["grantFloor"] = grantFloorToken,
             ["sampleAuthorizations"] = sampleAuthorizations,
