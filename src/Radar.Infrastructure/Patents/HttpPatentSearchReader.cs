@@ -189,8 +189,9 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
 
     /// <summary>
     /// Maps each <c>patents[]</c> row to a <see cref="PatentGrant"/>. Rows missing the <c>patent_id</c>
-    /// needed for provenance/dedupe are skipped rather than throwing. An empty <c>patents</c> array yields no
-    /// grants (an assignee with no recent grants).
+    /// needed for provenance/dedupe, or carrying an unparseable/absent <c>patent_date</c>, are skipped rather
+    /// than throwing or coercing to a min-value date (which would inflate the grant count and hide field drift).
+    /// An empty <c>patents</c> array yields no grants (an assignee with no recent grants).
     /// </summary>
     private static IReadOnlyList<PatentGrant> ParseGrants(JsonElement patents, CancellationToken ct)
     {
@@ -211,19 +212,27 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
                 continue;
             }
 
-            var title = GetString(row, "patent_title");
+            // An unparseable/absent grant date is skipped (like a missing patent_id) rather than coerced to
+            // DateOnly.MinValue: a min-value date would inflate the grant count and silently mask response-shape
+            // drift in the patent_date field.
             var grantDate = ParseGrantDate(GetString(row, "patent_date"));
+            if (grantDate is null)
+            {
+                continue;
+            }
 
-            grants.Add(new PatentGrant(patentId, title, grantDate));
+            var title = GetString(row, "patent_title");
+
+            grants.Add(new PatentGrant(patentId, title, grantDate.Value));
         }
 
         return grants;
     }
 
-    private static DateOnly ParseGrantDate(string value) =>
+    private static DateOnly? ParseGrantDate(string value) =>
         DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
             ? parsed
-            : DateOnly.MinValue;
+            : null;
 
     private static string GetString(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

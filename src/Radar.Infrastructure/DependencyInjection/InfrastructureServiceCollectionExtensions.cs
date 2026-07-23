@@ -742,7 +742,7 @@ public static class InfrastructureServiceCollectionExtensions
             {
                 // A generic, polite User-Agent (the API needs a key, not a specific UA). Set at the single
                 // client-config site so the header is consistent for every patents request.
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/radar)");
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/shapetastic/radar)");
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {

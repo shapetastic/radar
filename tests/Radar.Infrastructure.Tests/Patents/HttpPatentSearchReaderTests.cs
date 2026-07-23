@@ -28,6 +28,21 @@ public sealed class HttpPatentSearchReaderTests
         { "error": false, "count": 0, "total_hits": 0, "patents": [] }
         """;
 
+    // Rows carrying an unparseable/absent patent_date must be skipped, not coerced to a min-value date. Only the
+    // one row with a valid grant date counts.
+    private const string UnparseableGrantDates = """
+        {
+          "error": false,
+          "count": 3,
+          "total_hits": 3,
+          "patents": [
+            { "patent_id": "11111111", "patent_title": "Valid row", "patent_date": "2026-05-12" },
+            { "patent_id": "22222222", "patent_title": "Bad date", "patent_date": "not-a-date" },
+            { "patent_id": "33333333", "patent_title": "Absent date" }
+          ]
+        }
+        """;
+
     private const string NoPatentsArray = """
         { "error": false, "count": 0, "total_hits": 0 }
         """;
@@ -76,6 +91,22 @@ public sealed class HttpPatentSearchReaderTests
         Assert.Equal(PatentSearchOutcome.Success, result.Outcome);
         Assert.Equal(0, result.Result!.GrantCount);
         Assert.Empty(result.Result.Grants);
+    }
+
+    [Fact]
+    public async Task ReadAsync_RowsWithUnparseableGrantDate_AreSkipped()
+    {
+        using var _ = WithApiKey("test-key");
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, UnparseableGrantDates));
+
+        var result = await reader.ReadAsync("Mercury Systems, Inc.", GrantFloor, CancellationToken.None);
+
+        Assert.Equal(PatentSearchOutcome.Success, result.Outcome);
+        // Only the single row with a valid patent_date survives; the bad/absent dates are dropped, not coerced.
+        var grant = Assert.Single(result.Result!.Grants);
+        Assert.Equal(1, result.Result.GrantCount);
+        Assert.Equal("11111111", grant.PatentId);
+        Assert.Equal(new DateOnly(2026, 5, 12), grant.GrantDate);
     }
 
     [Fact]
