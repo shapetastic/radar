@@ -77,4 +77,19 @@ public sealed class PatentActivityCollectorDiTests
 
         Assert.Contains("Patents ApiKeyEnvVar", ex.Message, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-url")]
+    [InlineData("/api/v1/patent")]
+    public void AddPatentActivityCollector_BlankOrInvalidBaseUrl_FailsFast(string baseUrl)
+    {
+        var services = new ServiceCollection();
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => services.AddPatentActivityCollector(new PatentCollectorOptions { BaseUrl = baseUrl }));
+
+        Assert.Contains("Patents BaseUrl", ex.Message, StringComparison.Ordinal);
+    }
 }

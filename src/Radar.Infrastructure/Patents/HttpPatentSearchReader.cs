@@ -110,7 +110,7 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
             {
                 // The X-Api-Key header is set per request (not on the shared client) so the key never persists
                 // on the DI-registered HttpClient's default headers.
-                var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
                 {
                     Content = JsonContent.Create(body),
                 };
@@ -195,16 +195,23 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
     // The search request is a POST with the query in the body, so there is no per-assignee GET URL: the stable
     // machine-provenance link is the constant search endpoint (the assignee + grant window are recorded in the
     // evidence metadata). One builder produces both the fetched target and this link so they cannot disagree.
-    private string SearchEndpoint() => $"{_options.BaseUrl}{SearchPath}";
+    // Trim any trailing '/' from the configured host before joining the fixed path so a BaseUrl with (or
+    // without) a trailing slash both yield a single-slash endpoint (no "https://api.uspto.gov//api/..." double
+    // slash). SearchPath already begins with '/', so it supplies the sole separator.
+    private string SearchEndpoint() => $"{_options.BaseUrl.TrimEnd('/')}{SearchPath}";
 
     private object BuildRequestBody(string assigneeName, DateOnly grantFloor)
     {
         var floor = grantFloor.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
+        // Escape any embedded double-quote in the assignee name so it cannot break out of the quoted OpenSearch
+        // phrase and silently malform the query (which would degrade the read to HttpError/Unreachable).
+        var quotedAssignee = assigneeName.Replace("\"", "\\\"", StringComparison.Ordinal);
+
         // One-sided grant-date range (valueFrom only — the reader receives a floor, so no valueTo is invented).
         return new
         {
-            q = $"{FirstApplicantNameField}:\"{assigneeName}\"",
+            q = $"{FirstApplicantNameField}:\"{quotedAssignee}\"",
             rangeFilters = new[]
             {
                 new { field = GrantDateField, valueFrom = floor },

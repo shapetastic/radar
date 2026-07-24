@@ -273,6 +273,41 @@ public sealed class HttpPatentSearchReaderTests
             handler.CapturedUri!.ToString());
     }
 
+    [Fact]
+    public async Task ReadAsync_BaseUrlWithTrailingSlash_YieldsSingleSlashEndpoint()
+    {
+        using var _ = WithApiKey("test-key");
+        var handler = new RequestCapturingHandler(HttpStatusCode.OK, ValidResults);
+        var reader = CreateReader(
+            handler,
+            new PatentCollectorOptions { ApiKeyEnvVar = ApiKeyEnvVar, BaseUrl = "https://odp.example.test/" });
+
+        await reader.ReadAsync("Mercury Systems, Inc.", GrantFloor, CancellationToken.None);
+
+        // A trailing slash on BaseUrl must NOT produce a double-slash endpoint.
+        Assert.Equal(
+            "https://odp.example.test/api/v1/patent/applications/search",
+            handler.CapturedUri!.ToString());
+    }
+
+    [Fact]
+    public async Task ReadAsync_AssigneeNameWithQuote_ProducesWellFormedQuery()
+    {
+        using var _ = WithApiKey("test-key");
+        var handler = new BodyCapturingHandler(HttpStatusCode.OK, ValidResults);
+        var reader = CreateReader(handler);
+
+        // An assignee name containing a double-quote must be escaped so the quoted OpenSearch phrase stays
+        // well-formed (a bare embedded quote would break out of the phrase and malform the query).
+        await reader.ReadAsync("Acme \"Rocket\" Corp.", GrantFloor, CancellationToken.None);
+
+        using var document = System.Text.Json.JsonDocument.Parse(handler.CapturedBody!);
+        var q = document.RootElement.GetProperty("q").GetString();
+        Assert.Equal(
+            "applicationMetaData.firstApplicantName:\"Acme \\\"Rocket\\\" Corp.\"",
+            q);
+    }
+
     private sealed class StubHandler(HttpStatusCode status, string body) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -331,6 +366,23 @@ public sealed class HttpPatentSearchReaderTests
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             });
+        }
+    }
+
+    private sealed class BodyCapturingHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        public string? CapturedBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            CapturedBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
         }
     }
 

@@ -739,6 +739,15 @@ public static class InfrastructureServiceCollectionExtensions
                     + "name leaves the collector no way to read it.");
         }
 
+        if (string.IsNullOrWhiteSpace(options.BaseUrl)
+            || !Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _))
+        {
+            throw new InvalidOperationException(
+                "Patents BaseUrl must be a valid absolute URL; configure Radar:Patents:BaseUrl to the USPTO ODP "
+                    + "host (default \"https://api.uspto.gov\") — a blank/invalid value only surfaces later as a "
+                    + "confusing \"unreachable\" failure.");
+        }
+
         services.AddSingleton(options);
 
         services.AddHttpClient<IPatentSearchReader, HttpPatentSearchReader>(client =>
