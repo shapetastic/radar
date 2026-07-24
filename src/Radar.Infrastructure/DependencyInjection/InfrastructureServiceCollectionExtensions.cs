@@ -687,12 +687,13 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the PatentsView granted-patent activity collector (spec 127) and the typed <c>HttpClient</c>
+    /// Registers the USPTO ODP granted-patent activity collector (spec 127, repointed to the USPTO Open Data
+    /// Portal PFW Search API in spec 131) and the typed <c>HttpClient</c>
     /// its <see cref="IPatentSearchReader"/> uses. The collector reads the per-company <c>patents</c> feeds
     /// supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's <c>Url</c> is
     /// an <c>assignee=...</c> token), counts recently-granted patents, and produces one raw
     /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> per company; it does not persist them. All
-    /// HTTP/JSON/PatentsView code stays in Infrastructure (AD-5).
+    /// HTTP/JSON/ODP code stays in Infrastructure (AD-5).
     /// <para>
     /// Fails fast when <see cref="PatentCollectorOptions.LookbackDays"/>,
     /// <see cref="PatentCollectorOptions.MaxSampleTitles"/>, or <see cref="PatentCollectorOptions.MaxPageSize"/>
@@ -733,7 +734,7 @@ public static class InfrastructureServiceCollectionExtensions
         if (string.IsNullOrWhiteSpace(options.ApiKeyEnvVar))
         {
             throw new InvalidOperationException(
-                "Patents ApiKeyEnvVar must name the environment variable holding the PatentsView API key "
+                "Patents ApiKeyEnvVar must name the environment variable holding the USPTO ODP API key "
                     + "(default \"PATENTSVIEW_API_KEY\") — the key is never committed to config, so a blank env-var "
                     + "name leaves the collector no way to read it.");
         }

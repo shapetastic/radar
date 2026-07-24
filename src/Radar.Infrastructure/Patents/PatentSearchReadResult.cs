@@ -1,7 +1,7 @@
 namespace Radar.Infrastructure.Patents;
 
 /// <summary>
-/// A single granted patent normalized from the PatentsView Search API: its public grant number
+/// A single granted patent normalized from the USPTO ODP PFW Search API: its public grant number
 /// (<see cref="PatentId"/>), the granted-invention title (<see cref="Title"/>), and the grant date
 /// (<see cref="GrantDate"/>). Titles are carried for the bounded metadata provenance sample ONLY and are
 /// NEVER placed in the evidence Title/RawText (a raw patent title could trip unrelated keyword rules — the
@@ -10,17 +10,17 @@ namespace Radar.Infrastructure.Patents;
 internal sealed record PatentGrant(string PatentId, string Title, DateOnly GrantDate);
 
 /// <summary>
-/// The parsed result of one bounded PatentsView page: <see cref="GrantCount"/> is the authoritative,
+/// The parsed result of one bounded ODP PFW Search page: <see cref="GrantCount"/> is the authoritative,
 /// deterministic count of grants parsed from the returned page (the count the evidence reports);
-/// <see cref="ApiReportedTotal"/> is the API's own grand total (<c>total_hits</c>) kept only as a metadata
-/// cross-check when the API reports more grants than fit the bounded page; <see cref="Grants"/> are the
-/// parsed grants (used for the bounded sample-titles metadata).
+/// <see cref="ApiReportedTotal"/> is the API's own grand total (<c>count</c>/<c>totalNumFound</c>) kept only as
+/// a metadata cross-check when the API reports more grants than fit the bounded page; <see cref="Grants"/> are
+/// the parsed grants (used for the bounded sample-titles metadata).
 /// </summary>
 internal sealed record PatentSearchResult(
     int GrantCount, int ApiReportedTotal, IReadOnlyList<PatentGrant> Grants);
 
 /// <summary>
-/// Why a PatentsView granted-patent read ended: an assignee that genuinely has no recent grants is
+/// Why a USPTO ODP granted-patent read ended: an assignee that genuinely has no recent grants is
 /// <see cref="Success"/> (Grants may be empty); every distinct failure mode is its own value so the
 /// collector can tell "no recent grants" from "dead endpoint" from the <see cref="MissingApiKey"/> case.
 /// <see cref="MissingApiKey"/> is returned WITHOUT an HTTP call when the configured env var is blank — a
@@ -37,7 +37,7 @@ internal enum PatentSearchOutcome
 }
 
 /// <summary>
-/// Outcome of a single PatentsView read: a success carrying the parsed grants, or a failure carrying a
+/// Outcome of a single USPTO ODP read: a success carrying the parsed grants, or a failure carrying a
 /// short advice-free <see cref="Detail"/> reason used only for logging.
 /// </summary>
 internal sealed record PatentSearchReadResult(

@@ -213,6 +213,7 @@ internal static class RadarWorkerServices
             {
                 services.AddPatentActivityCollector(new PatentCollectorOptions
                 {
+                    BaseUrl = options.Patents.BaseUrl,
                     LookbackDays = options.Patents.LookbackDays,
                     MaxSampleTitles = options.Patents.MaxSampleTitles,
                     ApiKeyEnvVar = options.Patents.ApiKeyEnvVar,

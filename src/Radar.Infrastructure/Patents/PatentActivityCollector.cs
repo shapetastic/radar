@@ -174,7 +174,7 @@ internal sealed class PatentActivityCollector : IEvidenceCollector
             ["lookbackDays"] = _options.LookbackDays.ToString(CultureInfo.InvariantCulture),
             ["grantFloor"] = grantFloorToken,
             ["sampleTitles"] = sampleTitles,
-            // The API's own grand total (total_hits) — a cross-check when it exceeds the bounded page count.
+            // The API's own grand total (count/totalNumFound) — a cross-check when it exceeds the bounded page count.
             ["apiReportedTotal"] = search.ApiReportedTotal.ToString(CultureInfo.InvariantCulture),
             ["retrievedAtUtc"] = retrievedAtToken,
         };
@@ -182,7 +182,7 @@ internal sealed class PatentActivityCollector : IEvidenceCollector
         return new CollectedEvidence(
             SourceType: SourceType,
             SourceName: feed.Name,
-            // Provenance: the PatentsView query URL (one builder produces both the fetched URL and this link).
+            // Provenance: the USPTO ODP PFW Search endpoint (one builder produces both the fetched URL and this link).
             SourceUrl: _reader.QueryUrl(assignee, grantFloor),
             Title: title,
             RawText: rawText,

@@ -7,7 +7,7 @@ namespace Radar.Infrastructure.Patents;
 /// documented token <c>assignee=&lt;assignee organization name&gt;</c>
 /// (e.g. <c>assignee=Mercury Systems, Inc.</c>). This keeps the shared
 /// <see cref="Radar.Domain.Companies.CompanySourceFeed"/> record unchanged. <see cref="AssigneeName"/> is
-/// the exact legal-entity name sent to the PatentsView assignee-organization filter (the value may contain
+/// the exact legal-entity name sent to the USPTO ODP first-applicant-name filter (the value may contain
 /// spaces and commas; the token is NOT URL-decoded). An unparsable/blank token — or one missing the
 /// <c>assignee=</c> key — yields <see langword="null"/> so the collector can degrade it to a source failure
 /// rather than throwing.
