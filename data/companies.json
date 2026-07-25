@@ -52,11 +52,6 @@
           "type": "hiringats",
           "name": "Mercury Systems — Open roles (Greenhouse ATS)",
           "url": "platform=greenhouse&board=mercury"
-        },
-        {
-          "type": "patents",
-          "name": "Mercury Systems — Recent granted patents (PatentsView)",
-          "url": "assignee=Mercury Systems, Inc."
         }
       ]
     },
@@ -260,7 +255,7 @@
         },
         {
           "type": "patents",
-          "name": "Energy Recovery — Recent granted patents (PatentsView)",
+          "name": "Energy Recovery — Recent granted patents (USPTO ODP)",
           "url": "assignee=Energy Recovery, Inc."
         }
       ]
@@ -355,8 +350,8 @@
         },
         {
           "type": "patents",
-          "name": "Eos Energy Enterprises — Recent granted patents (PatentsView)",
-          "url": "assignee=Eos Energy Enterprises, Inc."
+          "name": "Eos Energy Enterprises — Recent granted patents (USPTO ODP)",
+          "url": "assignee=Eos Energy"
         }
       ]
     },

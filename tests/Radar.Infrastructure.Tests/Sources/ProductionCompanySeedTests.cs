@@ -91,6 +91,35 @@ public sealed class ProductionCompanySeedTests
         }
     }
 
+    /// <summary>
+    /// The <c>patents</c> feeds the shipped seed carries, pinned by ticker. Spec 134's live ODP verification
+    /// dropped MRCY (zero grants, filings AND publications in two years; last grant 2021-07-06 — a permanently
+    /// empty feed producing only log noise), so a later edit cannot silently re-add a dead assignee token.
+    /// <para>
+    /// EOSE's token is the SHORT form "Eos Energy", not its listed name. ODP keys on the FILING entity, and
+    /// Eos files as "EOS Energy Storage, LLC" (x50) and "EOS ENERGY TECHNOLOGY HOLDINGS, LLC" (x21) — the
+    /// listed "Eos Energy Enterprises, Inc." matches ZERO rows at any date, so the original token was a
+    /// silently-dead feed that read as "no recent grants" rather than "wrong token" (live-verified
+    /// 2026-07-25). The normalized prefix EOSENERGY captures both filing entities and admits no unrelated
+    /// company in the 78 rows returned. Do not "restore" this to the listed name.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_PatentsFeeds_AreTheTwoLiveVerifiedAssignees()
+    {
+        var seed = await LoadProductionSeedAsync();
+
+        var patentsByTicker = seed.SourceFeeds
+            .Where(f => string.Equals(f.FeedType, "patents", StringComparison.OrdinalIgnoreCase))
+            .Join(seed.Companies, f => f.CompanyId, c => c.Id, (f, c) => (Ticker: c.Ticker ?? string.Empty, f.Url))
+            .ToDictionary(x => x.Ticker, x => x.Url, StringComparer.OrdinalIgnoreCase);
+
+        Assert.Equal(2, patentsByTicker.Count);
+        Assert.Equal("assignee=Energy Recovery, Inc.", patentsByTicker["ERII"]);
+        Assert.Equal("assignee=Eos Energy", patentsByTicker["EOSE"]);
+        Assert.False(patentsByTicker.ContainsKey("MRCY"), "MRCY's patents feed was dropped by spec 134.");
+    }
+
     private static async Task<string> GetNewsSearchUrlAsync(string ticker)
     {
         var seed = await LoadProductionSeedAsync();

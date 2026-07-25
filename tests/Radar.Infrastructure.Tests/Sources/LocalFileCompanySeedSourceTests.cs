@@ -391,22 +391,14 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
             seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
     }
 
-    // The three spec-127 patents seed rows exactly as data/companies.json declares them (real company ids +
-    // verified assignee organization names), each alongside another feed so the spec-97 type|url feed-Id
-    // composite is exercised per company. RKLB is absent from the 43-company universe, so only 3 are seeded
+    // The spec-127 patents seed rows exactly as data/companies.json declares them (real company ids + verified
+    // assignee organization names), each alongside another feed so the spec-97 type|url feed-Id composite is
+    // exercised per company. RKLB is absent from the 43-company universe and MRCY's token was dropped in spec
+    // 134 (zero grants/filings/publications in two years — a permanently empty feed), so only 2 are seeded
     // (partial coverage is normal, like usaspending 3/43 and hiringats 4/43).
     private const string PatentsSeedJson = """
         {
           "companies": [
-            {
-              "id": "885ea986-041f-4fc2-8163-b815ae930a78",
-              "name": "Mercury Systems, Inc.",
-              "ticker": "MRCY",
-              "sourceFeeds": [
-                { "type": "newssearch", "name": "Mercury Systems — News attention (Google News)", "url": "query=Mercury Systems&ticker=MRCY" },
-                { "type": "patents", "name": "Mercury Systems — Recent granted patents (PatentsView)", "url": "assignee=Mercury Systems, Inc." }
-              ]
-            },
             {
               "id": "a825bf45-a23f-431c-b392-a04a029f2400",
               "name": "Energy Recovery, Inc.",
@@ -432,21 +424,18 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
     [Fact]
     public async Task GetSeedAsync_PatentsFeeds_ParseWithExactTokensAndDistinctIds()
     {
-        // Spec 127: the three verified companies each carry one patents feed with the exact assignee=… token;
-        // every feed Id is distinct (spec 97 folds the feed TYPE into the Id, so a patents feed can never
-        // collide with the same company's other feeds).
+        // Spec 127 (MRCY dropped by spec 134): the verified companies each carry one patents feed with the
+        // exact assignee=… token; every feed Id is distinct (spec 97 folds the feed TYPE into the Id, so a
+        // patents feed can never collide with the same company's other feeds).
         var path = WriteSeedFile(PatentsSeedJson);
 
         var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
 
         var context = new CollectionContext(seed.Companies, seed.SourceFeeds);
         var patentFeeds = context.FeedsOfType("patents");
-        Assert.Equal(3, patentFeeds.Count);
+        Assert.Equal(2, patentFeeds.Count);
 
         var byCompany = patentFeeds.ToDictionary(f => f.CompanyId, f => f.Url);
-        Assert.Equal(
-            "assignee=Mercury Systems, Inc.",
-            byCompany[Guid.Parse("885ea986-041f-4fc2-8163-b815ae930a78")]);
         Assert.Equal(
             "assignee=Energy Recovery, Inc.",
             byCompany[Guid.Parse("a825bf45-a23f-431c-b392-a04a029f2400")]);
