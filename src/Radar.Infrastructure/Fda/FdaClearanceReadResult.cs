@@ -13,17 +13,23 @@ internal sealed record FdaClearance(string SubmissionNumber, string DeviceName, 
 
 /// <summary>
 /// The parsed result of one bounded openFDA read across BOTH device endpoints (510(k) + PMA):
-/// <see cref="ClearanceCount"/> is the authoritative, deterministic count of clearances parsed from the
-/// returned pages (the count the evidence reports); <see cref="Clearances"/> are the parsed clearances (used
-/// for the bounded sample-clearances metadata). <see cref="ReportedTotal510k"/> / <see cref="ReportedTotalPma"/>
-/// are each endpoint's own <c>meta.results.total</c> kept only as a metadata cross-check when an endpoint
-/// reports more clearances than fit the bounded page.
+/// <see cref="ClearanceCount"/> is the authoritative, deterministic <b>POST-FILTER</b> count of
+/// <i>materially meaningful</i> regulatory events parsed from the returned pages (the count the evidence
+/// reports) — every 510(k) plus only original/`Panel Track` PMA approvals, per the spec-135 materiality filter;
+/// <see cref="Clearances"/> are those same material clearances (used for the bounded sample-clearances
+/// metadata). <see cref="ExcludedSupplementCount"/> is how many well-formed PMA rows that filter dropped as
+/// routine post-market supplements, kept as provenance so a reader can see what was filtered.
+/// <see cref="ReportedTotal510k"/> / <see cref="ReportedTotalPma"/> are each endpoint's own
+/// <b>PRE-FILTER</b> raw API total (<c>meta.results.total</c>, falling back to the pre-filter parsed row
+/// count), kept only as a metadata cross-check when an endpoint reports more rows than fit the bounded page —
+/// they are deliberately NOT reduced by the materiality filter.
 /// </summary>
 internal sealed record FdaClearanceResult(
     int ClearanceCount,
     IReadOnlyList<FdaClearance> Clearances,
     int ReportedTotal510k,
-    int ReportedTotalPma);
+    int ReportedTotalPma,
+    int ExcludedSupplementCount = 0);
 
 /// <summary>
 /// Why an openFDA device-clearance read ended: an applicant that genuinely has no recent clearances is

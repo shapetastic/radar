@@ -12,7 +12,8 @@ namespace Radar.Infrastructure.Fda;
 /// <summary>
 /// Reads the per-company <c>fda</c> source feeds configured on the <see cref="CollectionContext"/> (each
 /// feed's <c>Url</c> is an <c>applicant=&lt;organization name&gt;</c> token) and turns each applicant's recent
-/// FDA device clearance/approval activity (510(k) + PMA) into exactly ONE raw <see cref="CollectedEvidence"/>
+/// <b>materially meaningful</b> FDA device clearance/approval activity (510(k) + original/<c>Panel Track</c>
+/// PMA, per the reader's spec-135 filter) into AT MOST ONE raw <see cref="CollectedEvidence"/>
 /// of type <see cref="EvidenceSourceType.RegulatoryApproval"/> carrying the fixed spec-129 clearance phrase
 /// (<c>fda clearance or approval (recent)</c>) plus the deterministic clearance count + applicant/window
 /// provenance metadata (NO AI). The extractor (spec 129) maps that phrase to a POSITIVE
@@ -21,8 +22,12 @@ namespace Radar.Infrastructure.Fda;
 /// single-signal routine strength means an always-prolific medtech incumbent cannot dominate — it
 /// corroborates, it does not flip a label alone (specs 111/121). Directional SURGE detection vs the accrued
 /// history is deferred to slice B. Does not score, resolve, or persist. A feed whose token is malformed or
-/// whose read fails contributes no evidence and is logged as a Warning; an applicant with zero recent
-/// clearances (including openFDA's empty-search 404) is a valid zero-clearance snapshot, not an error. Company
+/// whose read fails contributes no evidence and is logged as a Warning; an applicant with <b>zero material
+/// events</b> in the window (including openFDA's empty-search 404, and including an applicant whose every
+/// in-window PMA row was routine post-market paperwork) is a valid <b>success</b> that emits <b>NO evidence
+/// at all</b> — the emitted phrase is unconditionally positive, so a zero-count snapshot would otherwise fire
+/// a standing false-positive <c>RegulatoryApproval</c> signal for a company that cleared no gate (spec 135).
+/// An honest silence beats a standing false positive. Company
 /// hints come only from the configured feed→company binding — tickers are never invented (provenance is
 /// sacred). Evidence Title/RawText are synthesized from the fixed phrase + real count + applicant/window +
 /// retrieved timestamp only — <b>never raw device names</b>: a device name like "cardiac partnership system"
@@ -112,10 +117,27 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
                 continue;
             }
 
+            // A window with no MATERIAL event emits nothing (spec 135). The evidence phrase is unconditionally
+            // positive, so emitting a zero-count snapshot would hand the extractor a standing Positive
+            // RegulatoryApproval signal for a company that cleared no regulatory gate. This is still a SUCCESS
+            // for the feed — it simply contributes no evidence.
+            if (result.Result!.ClearanceCount == 0)
+            {
+                _logger.LogInformation(
+                    "FDA feed '{FeedName}' (applicant '{Applicant}') has no material clearances or approvals "
+                        + "since {DecisionFloor} ({ExcludedSupplements} routine PMA supplement(s) excluded); "
+                        + "emitting no evidence.",
+                    feed.Name,
+                    target.ApplicantName,
+                    decisionFloor.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    result.Result.ExcludedSupplementCount);
+                continue;
+            }
+
             var hints = CollectorCompanyHints.For(feed.CompanyId, companiesById);
 
-            // Exactly ONE snapshot evidence per feed per run — the clearance count is already the aggregate.
-            results.Add(MapToEvidence(feed, target, decisionFloor, now, result.Result!, hints));
+            // Exactly ONE snapshot evidence per feed per run — the material-event count is already the aggregate.
+            results.Add(MapToEvidence(feed, target, decisionFloor, now, result.Result, hints));
         }
 
         _logger.LogInformation(
@@ -176,13 +198,19 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
             ["quality"] = "High",
             ["fdaFeedUrl"] = feed.Url,
             ["applicant"] = applicant,
+            // POST-FILTER: material events only (every 510(k) + original/'Panel Track' PMA approvals). Routine
+            // post-market PMA supplements are NOT counted here (spec 135).
             ["clearanceCount"] = count.ToString(CultureInfo.InvariantCulture),
             ["lookbackDays"] = _options.LookbackDays.ToString(CultureInfo.InvariantCulture),
             ["decisionFloor"] = decisionFloorToken,
             ["sampleClearances"] = sampleClearances,
-            // Each endpoint's own reported total — a cross-check when it exceeds the bounded page count.
-            ["reportedTotal510k"] = clearances.ReportedTotal510k.ToString(CultureInfo.InvariantCulture),
-            ["reportedTotalPma"] = clearances.ReportedTotalPma.ToString(CultureInfo.InvariantCulture),
+            // Each endpoint's own reported total — a PRE-FILTER raw-API cross-check when it exceeds the bounded
+            // page count. Deliberately NOT reduced by the materiality filter, so the key names say so.
+            ["reportedTotal510kPreFilter"] = clearances.ReportedTotal510k.ToString(CultureInfo.InvariantCulture),
+            ["reportedTotalPmaPreFilter"] = clearances.ReportedTotalPma.ToString(CultureInfo.InvariantCulture),
+            // How many well-formed PMA rows the materiality filter dropped as routine post-market supplements.
+            ["excludedSupplementCount"] =
+                clearances.ExcludedSupplementCount.ToString(CultureInfo.InvariantCulture),
             ["retrievedAtUtc"] = retrievedAtToken,
         };
 

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Infrastructure.Fda;
@@ -51,13 +52,64 @@ public sealed class HttpFdaClearanceReaderTests
         { "meta": { "results": { "total": 0 } } }
         """;
 
+    // Spec 135 materiality filter: an ORIGINAL PMA (supplement_number is an EMPTY STRING — present, not absent)
+    // and a 'Panel Track' supplement are material; 30-Day Notice / Real-Time Process / Special (Immediate Track)
+    // are routine post-market paperwork and are excluded.
+    private const string MixedSupplementsPma = """
+        {
+          "meta": { "results": { "total": 5 } },
+          "results": [
+            { "pma_number": "P180001", "supplement_number": "", "supplement_type": "", "trade_name": "Original approval", "decision_date": "2026-06-01" },
+            { "pma_number": "P180001", "supplement_number": "S002", "supplement_type": "Panel Track", "trade_name": "New indication", "decision_date": "2026-05-01" },
+            { "pma_number": "P180001", "supplement_number": "S031", "supplement_type": "30-Day Notice", "trade_name": "Sterilizer change", "decision_date": "2026-04-01" },
+            { "pma_number": "P180001", "supplement_number": "S032", "supplement_type": "Real-Time Process", "trade_name": "Component change", "decision_date": "2026-03-01" },
+            { "pma_number": "P180001", "supplement_number": "S033", "supplement_type": "Special (Immediate Track)", "trade_name": "Labeling change", "decision_date": "2026-02-01" }
+          ]
+        }
+        """;
+
+    // An FDA supplement category the reader has never seen: excluded FAIL-CLOSED (a new category must not
+    // silently become bullish) and logged at Debug.
+    private const string UnrecognisedSupplementPma = """
+        {
+          "meta": { "results": { "total": 1 } },
+          "results": [
+            { "pma_number": "P180001", "supplement_number": "S040", "supplement_type": "Brand New Track", "trade_name": "Unknown category", "decision_date": "2026-06-10" }
+          ]
+        }
+        """;
+
+    // supplement_type is compared Ordinal, CASE-INSENSITIVE, TRIMMED.
+    private const string CasedPanelTrackPma = """
+        {
+          "meta": { "results": { "total": 1 } },
+          "results": [
+            { "pma_number": "P180001", "supplement_number": "S002", "supplement_type": " panel track ", "trade_name": "New indication", "decision_date": "2026-06-10" }
+          ]
+        }
+        """;
+
+    // 510(k) rows are the marketing authorisation itself — ALL count, even if a supplement-ish field is present.
+    private const string SupplementIsh510k = """
+        {
+          "meta": { "results": { "total": 3 } },
+          "results": [
+            { "k_number": "K250001", "device_name": "Alpha", "decision_date": "2026-05-12", "supplement_number": "S001", "supplement_type": "30-Day Notice" },
+            { "k_number": "K250002", "device_name": "Beta", "decision_date": "2026-04-12", "supplement_number": "S002", "supplement_type": "Brand New Track" },
+            { "k_number": "K250003", "device_name": "Gamma", "decision_date": "2026-03-12" }
+          ]
+        }
+        """;
+
     private static readonly DateOnly DecisionFloor = new(2026, 1, 1);
 
     private static HttpFdaClearanceReader CreateReader(
-        HttpMessageHandler handler, FdaCollectorOptions? options = null) =>
+        HttpMessageHandler handler,
+        FdaCollectorOptions? options = null,
+        ILogger<HttpFdaClearanceReader>? logger = null) =>
         new(
             new HttpClient(handler),
-            NullLogger<HttpFdaClearanceReader>.Instance,
+            logger ?? NullLogger<HttpFdaClearanceReader>.Instance,
             options ?? new FdaCollectorOptions());
 
     [Fact]
@@ -140,6 +192,125 @@ public sealed class HttpFdaClearanceReaderTests
         Assert.Equal(1, result.Result.ClearanceCount);
         Assert.Equal("K250001", clearance.SubmissionNumber);
         Assert.Equal(new DateOnly(2026, 5, 12), clearance.DecisionDate);
+    }
+
+    [Fact]
+    public async Task ReadAsync_PmaSupplements_CountsOnlyOriginalsAndPanelTrack()
+    {
+        // Spec 135: of the five PMA rows only the original and the Panel Track are material regulatory events;
+        // the 30-Day Notice / Real-Time Process / Special (Immediate Track) rows are routine post-market
+        // paperwork on an already-approved device.
+        var reader = CreateReader(new RoutingHandler(
+            k510: (HttpStatusCode.NotFound, EmptySearch404),
+            pma: (HttpStatusCode.OK, MixedSupplementsPma)));
+
+        var result = await reader.ReadAsync("TransMedics", DecisionFloor, CancellationToken.None);
+
+        Assert.Equal(FdaReadOutcome.Success, result.Outcome);
+        Assert.Equal(2, result.Result!.ClearanceCount);
+        Assert.Equal(3, result.Result.ExcludedSupplementCount);
+        Assert.Equal(
+            ["Original approval", "New indication"],
+            result.Result.Clearances.Select(c => c.DeviceName));
+        // The raw API total stays PRE-filter provenance — the materiality filter must never shrink it.
+        Assert.Equal(5, result.Result.ReportedTotalPma);
+    }
+
+    [Fact]
+    public async Task ReadAsync_UnrecognisedSupplementType_IsExcludedFailClosedAndLoggedAtDebug()
+    {
+        var logger = new CapturingLogger<HttpFdaClearanceReader>();
+        var reader = CreateReader(
+            new RoutingHandler(
+                k510: (HttpStatusCode.NotFound, EmptySearch404),
+                pma: (HttpStatusCode.OK, UnrecognisedSupplementPma)),
+            logger: logger);
+
+        var result = await reader.ReadAsync("TransMedics", DecisionFloor, CancellationToken.None);
+
+        // FAIL CLOSED: a supplement category the reader has never seen must not silently become bullish.
+        Assert.Equal(FdaReadOutcome.Success, result.Outcome);
+        Assert.Equal(0, result.Result!.ClearanceCount);
+        Assert.Empty(result.Result.Clearances);
+        Assert.Equal(1, result.Result.ExcludedSupplementCount);
+
+        // ...but it IS surfaced at Debug so a genuinely material new type can be spotted and added.
+        var debug = Assert.Single(logger.Entries, e => e.Level == LogLevel.Debug);
+        Assert.Contains("Brand New Track", debug.Message, StringComparison.Ordinal);
+        Assert.Contains("TransMedics", debug.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadAsync_RecognisedRoutineSupplementType_IsExcludedWithoutADebugLog()
+    {
+        var logger = new CapturingLogger<HttpFdaClearanceReader>();
+        var reader = CreateReader(
+            new RoutingHandler(
+                k510: (HttpStatusCode.NotFound, EmptySearch404),
+                pma: (HttpStatusCode.OK, MixedSupplementsPma)),
+            logger: logger);
+
+        var result = await reader.ReadAsync("TransMedics", DecisionFloor, CancellationToken.None);
+
+        Assert.Equal(3, result.Result!.ExcludedSupplementCount);
+        // The five pinned routine types are known — excluding them is expected, not noteworthy.
+        Assert.DoesNotContain(logger.Entries, e => e.Level == LogLevel.Debug);
+    }
+
+    [Fact]
+    public async Task ReadAsync_PanelTrackSupplementType_IsMatchedCaseInsensitivelyAndTrimmed()
+    {
+        var reader = CreateReader(new RoutingHandler(
+            k510: (HttpStatusCode.NotFound, EmptySearch404),
+            pma: (HttpStatusCode.OK, CasedPanelTrackPma)));
+
+        var result = await reader.ReadAsync("TransMedics", DecisionFloor, CancellationToken.None);
+
+        Assert.Equal(1, result.Result!.ClearanceCount);
+        Assert.Equal(0, result.Result.ExcludedSupplementCount);
+        Assert.Equal("New indication", Assert.Single(result.Result.Clearances).DeviceName);
+    }
+
+    [Fact]
+    public async Task ReadAsync_510kRows_AllCountRegardlessOfSupplementFields()
+    {
+        // A 510(k) IS the marketing authorisation — there is no sub-classification, so no row is filtered even
+        // when it carries a supplement-ish field.
+        var reader = CreateReader(new RoutingHandler(
+            k510: (HttpStatusCode.OK, SupplementIsh510k),
+            pma: (HttpStatusCode.NotFound, EmptySearch404)));
+
+        var result = await reader.ReadAsync("Axogen", DecisionFloor, CancellationToken.None);
+
+        Assert.Equal(3, result.Result!.ClearanceCount);
+        Assert.Equal(0, result.Result.ExcludedSupplementCount);
+        Assert.Equal(["K250001", "K250002", "K250003"], result.Result.Clearances.Select(c => c.SubmissionNumber));
+    }
+
+    [Fact]
+    public async Task ReadAsync_ReportedTotalFallback_IsThePreFilterParsedRowCount()
+    {
+        // No meta envelope: the fallback is the PRE-filter parsed row count (raw API provenance), NOT the
+        // post-filter material count.
+        const string NoMetaMixedPma = """
+            {
+              "results": [
+                { "pma_number": "P180001", "supplement_number": "", "supplement_type": "", "trade_name": "Original approval", "decision_date": "2026-06-01" },
+                { "pma_number": "P180001", "supplement_number": "S031", "supplement_type": "30-Day Notice", "trade_name": "Sterilizer change", "decision_date": "2026-04-01" },
+                { "pma_number": "P180001", "supplement_number": "S032", "supplement_type": "Real-Time Process", "trade_name": "Component change", "decision_date": "2026-03-01" }
+              ]
+            }
+            """;
+
+        var reader = CreateReader(new RoutingHandler(
+            k510: (HttpStatusCode.NotFound, EmptySearch404),
+            pma: (HttpStatusCode.OK, NoMetaMixedPma)));
+
+        var result = await reader.ReadAsync("TransMedics", DecisionFloor, CancellationToken.None);
+
+        Assert.Equal(1, result.Result!.ClearanceCount);
+        Assert.Equal(2, result.Result.ExcludedSupplementCount);
+        Assert.Equal(3, result.Result.ReportedTotalPma);
     }
 
     [Fact]
@@ -270,5 +441,22 @@ public sealed class HttpFdaClearanceReaderTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken) =>
             throw exception;
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 }
