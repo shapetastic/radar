@@ -116,8 +116,9 @@ public sealed class ScoringEngineTests
     /// An in-test <see cref="ISignalFileStore"/> standing in for the on-disk signal store. Records written
     /// signals and any test-seeded prior-run signals in a list, and implements
     /// <see cref="ReadApprovedInWindowAsync"/> by filtering that list exactly as the real store's contract
-    /// (companyId + Approved + <c>(start, end]</c>, ordered by ObservedAtUtc then Id). Lets tests place
-    /// prior-run signals "on disk" without touching the in-memory signal repository.
+    /// (companyId + Approved + <c>(start, end]</c> + <c>CreatedAtUtc &lt;= knownAsOfUtc</c> — the spec-136
+    /// point-in-time predicate — ordered by ObservedAtUtc then Id). Lets tests place prior-run signals
+    /// "on disk" without touching the in-memory signal repository.
     /// </summary>
     private sealed class FakeSignalFileStore : ISignalFileStore
     {
@@ -137,6 +138,7 @@ public sealed class ScoringEngineTests
             Guid companyId,
             DateTimeOffset startExclusiveUtc,
             DateTimeOffset endInclusiveUtc,
+            DateTimeOffset knownAsOfUtc,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -144,6 +146,7 @@ public sealed class ScoringEngineTests
                 .Where(s => s.CompanyId == companyId)
                 .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)
                 .Where(s => s.ObservedAtUtc > startExclusiveUtc && s.ObservedAtUtc <= endInclusiveUtc)
+                .Where(s => s.CreatedAtUtc <= knownAsOfUtc)
                 .OrderBy(s => s.ObservedAtUtc).ThenBy(s => s.Id)
                 .ToList();
             return Task.FromResult(result);
@@ -181,20 +184,26 @@ public sealed class ScoringEngineTests
             Guid companyId,
             DateTimeOffset observedAt,
             SignalReviewStatus status = SignalReviewStatus.Approved,
-            bool storeEvidence = true)
+            bool storeEvidence = true,
+            DateTimeOffset? createdAt = null)
         {
             var evidence = new EvidenceBuilder()
                 .WithId(Guid.NewGuid())
                 .WithContentHash(Guid.NewGuid().ToString("N"))
                 .Build();
 
-            var signal = new SignalBuilder()
+            var builder = new SignalBuilder()
                 .WithId(Guid.NewGuid())
                 .WithEvidenceId(evidence.Id)
                 .WithCompanyId(companyId)
                 .WithReviewStatus(status)
-                .WithObservedAtUtc(observedAt)
-                .Build();
+                .WithObservedAtUtc(observedAt);
+            if (createdAt is not null)
+            {
+                builder = builder.WithCreatedAtUtc(createdAt.Value);
+            }
+
+            var signal = builder.Build();
 
             if (storeEvidence)
             {
@@ -214,17 +223,22 @@ public sealed class ScoringEngineTests
             Guid companyId,
             DateTimeOffset observedAt,
             SignalReviewStatus status = SignalReviewStatus.Approved,
-            int strength = 6)
+            int strength = 6,
+            DateTimeOffset? createdAt = null)
         {
-            var signal = new SignalBuilder()
+            var builder = new SignalBuilder()
                 .WithId(Guid.NewGuid())
                 .WithEvidenceId(Guid.NewGuid())
                 .WithCompanyId(companyId)
                 .WithReviewStatus(status)
                 .WithStrength(strength)
-                .WithObservedAtUtc(observedAt)
-                .Build();
+                .WithObservedAtUtc(observedAt);
+            if (createdAt is not null)
+            {
+                builder = builder.WithCreatedAtUtc(createdAt.Value);
+            }
 
+            var signal = builder.Build();
             SignalStore.Seed(signal);
             return signal;
         }
@@ -1297,6 +1311,98 @@ public sealed class ScoringEngineTests
 
         var input = Assert.IsType<ScoringInput>(formula.LastInput);
         Assert.Equal(FollowingTier.Small, input.FollowingTier);
+    }
+
+    // ---- Spec 136: point-in-time honesty (CreatedAtUtc <= windowEndUtc on both read paths) ----
+
+    [Fact]
+    public async Task PointInTime_SignalCreatedExactlyAtWindowEnd_IsIncluded()
+    {
+        // THE forward-run no-op regression lock: AD-7 gives one run one instant, so this run's own signals
+        // carry CreatedAtUtc == asOfUtc == windowEndUtc EXACTLY. The known-at predicate must include the
+        // equality boundary — otherwise every forward run would drop its fresh signals and score from zero.
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+
+        var fresh = await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-2), createdAt: WindowEnd);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.Single(result.Links);
+        Assert.Equal(fresh.signal.Id, result.Links[0].SignalId);
+    }
+
+    [Fact]
+    public async Task PointInTime_ObservedInWindowButCreatedAfterWindowEnd_IsExcluded()
+    {
+        // The replay-leak shape: the event happened inside the window (ObservedAtUtc), but Radar only
+        // learned it AFTER the scoring instant (CreatedAtUtc > windowEndUtc) — e.g. a later collector
+        // backfill. Scoring at asOf must not see it.
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+
+        await harness.SeedPairAsync(
+            companyId, WindowEnd.AddDays(-2), createdAt: WindowEnd.AddTicks(1));
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.Empty(result.Links);
+    }
+
+    [Fact]
+    public async Task PointInTime_PreviousWindow_ThresholdIsWindowEnd_NotWindowStart()
+    {
+        // The knowledge threshold for the PREVIOUS window is the scoring instant (windowEndUtc), NOT the
+        // current window's start: a prior-period signal Radar learned mid-current-window (windowStartUtc <
+        // CreatedAtUtc <= windowEndUtc) still counts as previous-window activity. This test FAILS if the
+        // engine ever passes windowStartUtc instead (the fake applies CreatedAtUtc <= knownAsOfUtc).
+        var formula = new CapturingScoreFormula();
+        var harness = new Harness(formula);
+        var companyId = Guid.NewGuid();
+        var windowStart = WindowEnd - Window;
+
+        // Observed in the previous window, but only KNOWN five days before asOf (after windowStart).
+        var knownMidWindow = harness.SeedPriorRunSignalOnDisk(
+            companyId, windowStart.AddDays(-3), createdAt: WindowEnd.AddDays(-5));
+        // Observed in the previous window but only known AFTER asOf — must not count at all.
+        var knownAfterAsOf = harness.SeedPriorRunSignalOnDisk(
+            companyId, windowStart.AddDays(-5), createdAt: WindowEnd.AddDays(1));
+
+        await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var input = Assert.IsType<ScoringInput>(formula.LastInput);
+        Assert.Contains(input.PreviousSignals, s => s.Id == knownMidWindow.Id);
+        Assert.DoesNotContain(input.PreviousSignals, s => s.Id == knownAfterAsOf.Id);
+    }
+
+    [Fact]
+    public async Task PointInTime_ReplayAtEarlierAsOf_SeesStrictlyFewerSignals()
+    {
+        // Replay-shaped: ONE fixed signal set, scored at two asOf instants. Signal B was observed before
+        // the earlier asOf but only entered the store after it, so the earlier asOf must see strictly
+        // fewer signals — exactly what makes a historical backtest honest instead of silently inflated.
+        var formula = new CapturingScoreFormula();
+        var harness = new Harness(formula);
+        var companyId = Guid.NewGuid();
+        var earlierAsOf = WindowEnd;
+        var laterAsOf = WindowEnd.AddDays(5);
+
+        // A: observed and known before the earlier asOf.
+        await harness.SeedPairAsync(
+            companyId, earlierAsOf.AddDays(-3), createdAt: earlierAsOf.AddDays(-3));
+        // B: observed before the earlier asOf, but created (known) only after it.
+        await harness.SeedPairAsync(
+            companyId, earlierAsOf.AddDays(-2), createdAt: earlierAsOf.AddDays(2));
+
+        await harness.Engine.ScoreCompanyAsync(companyId, earlierAsOf, CancellationToken.None);
+        var earlierSeen = Assert.IsType<ScoringInput>(formula.LastInput).Signals.Count;
+
+        await harness.Engine.ScoreCompanyAsync(companyId, laterAsOf, CancellationToken.None);
+        var laterSeen = Assert.IsType<ScoringInput>(formula.LastInput).Signals.Count;
+
+        Assert.Equal(1, earlierSeen);
+        Assert.Equal(2, laterSeen);
+        Assert.True(earlierSeen < laterSeen, "The earlier asOf must see strictly fewer signals.");
     }
 
     /// <summary>

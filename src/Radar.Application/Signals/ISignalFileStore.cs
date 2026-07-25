@@ -38,7 +38,17 @@ public interface ISignalFileStore
     /// <c>(CompanyId, EvidenceId, Type, Direction)</c>, collapsing cross-run duplicate persisted copies (the
     /// same signal re-minted with a fresh id each run) so this activity-only previous window is deterministic
     /// and not inflated by how many times the pipeline has run.
+    /// <para>
+    /// POINT-IN-TIME HONESTY (spec 136): <paramref name="knownAsOfUtc"/> is the knowledge threshold — only
+    /// signals with <c>CreatedAtUtc &lt;= knownAsOfUtc</c> (what Radar knew by the scoring instant) are
+    /// returned, so a historical replay at <c>asOf = T</c> never sees a signal that entered the store after
+    /// <c>T</c>. Forward runs are unaffected: the caller passes the run instant, and every signal's
+    /// CreatedAtUtc is at or before it. A persisted record whose CreatedAt is missing/null (written before
+    /// this predicate existed) is treated as unknown → INCLUDED, preserving pre-136 behaviour for that
+    /// history — which is therefore NOT replay-honest; the fact was never recorded and must not be faked.
+    /// </para>
     /// </summary>
     Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
-        Guid companyId, DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc, CancellationToken ct);
+        Guid companyId, DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc,
+        DateTimeOffset knownAsOfUtc, CancellationToken ct);
 }

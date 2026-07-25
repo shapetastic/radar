@@ -222,7 +222,7 @@ public sealed class FileSignalStoreTests : IDisposable
             await store.WriteAsync(s, ReviewFor(s), CancellationToken.None);
         }
 
-        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None);
 
         // In-window (start, end]: earlier, later, atEnd — ordered by ObservedAtUtc.
         Assert.Equal(
@@ -252,7 +252,7 @@ public sealed class FileSignalStoreTests : IDisposable
             await store.WriteAsync(s, ReviewFor(s), CancellationToken.None);
         }
 
-        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None);
 
         var only = Assert.Single(result);
         Assert.Equal(approved.Id, only.Id);
@@ -272,16 +272,16 @@ public sealed class FileSignalStoreTests : IDisposable
         await store.WriteAsync(outside, ReviewFor(outside), CancellationToken.None);
 
         // Window with no matching signals.
-        Assert.Empty(await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None));
+        Assert.Empty(await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None));
 
         // Unknown company (no matching files).
         Assert.Empty(await store.ReadApprovedInWindowAsync(
-            Guid.NewGuid(), start, end, CancellationToken.None));
+            Guid.NewGuid(), start, end, end, CancellationToken.None));
 
         // Root directory that does not exist.
         var missingRootStore = CreateStore(Path.Combine(_tempDir, "does-not-exist"));
         Assert.Empty(await missingRootStore.ReadApprovedInWindowAsync(
-            companyId, start, end, CancellationToken.None));
+            companyId, start, end, end, CancellationToken.None));
     }
 
     [Fact]
@@ -301,7 +301,7 @@ public sealed class FileSignalStoreTests : IDisposable
         var garbagePath = Path.Combine(_tempDir, "2026", "02", "garbage.json");
         await File.WriteAllTextAsync(garbagePath, "{ this is not valid json ]");
 
-        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None);
 
         var only = Assert.Single(result);
         Assert.Equal(valid.Id, only.Id);
@@ -349,7 +349,7 @@ public sealed class FileSignalStoreTests : IDisposable
             await store.WriteAsync(copy, ReviewFor(copy), CancellationToken.None);
         }
 
-        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None);
 
         var only = Assert.Single(result);
         Assert.Equal(evidenceId, only.EvidenceId);
@@ -383,7 +383,7 @@ public sealed class FileSignalStoreTests : IDisposable
             await store.WriteAsync(s, ReviewFor(s), CancellationToken.None);
         }
 
-        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None);
 
         var ids = result.Select(s => s.Id).ToHashSet();
         Assert.Equal(4, ids.Count);
@@ -417,7 +417,7 @@ public sealed class FileSignalStoreTests : IDisposable
         await store.WriteAsync(staleNeutral, ReviewFor(staleNeutral), CancellationToken.None);
         await store.WriteAsync(directional, ReviewFor(directional), CancellationToken.None);
 
-        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+        var result = await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None);
 
         Assert.Equal(2, result.Count);
         Assert.Contains(result, s => s.Id == staleNeutral.Id && s.Direction == SignalDirection.Neutral);
@@ -453,11 +453,94 @@ public sealed class FileSignalStoreTests : IDisposable
             await store.WriteAsync(copy, ReviewFor(copy), CancellationToken.None);
         }
 
-        var first = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
-        var second = await store.ReadApprovedInWindowAsync(companyId, start, end, CancellationToken.None);
+        var first = await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None);
+        var second = await store.ReadApprovedInWindowAsync(companyId, start, end, end, CancellationToken.None);
 
         Assert.Equal(expectedSurvivor, Assert.Single(first).Id);
         Assert.Equal(expectedSurvivor, Assert.Single(second).Id);
+    }
+
+    [Fact]
+    public async Task ReadApprovedInWindow_KnownAsOfBoundary_EqualIncluded_AfterExcluded()
+    {
+        // Spec 136 point-in-time honesty: CreatedAt <= knownAsOfUtc, equality INCLUDED (a forward run's
+        // own signals carry CreatedAtUtc == the run instant exactly), strictly-after EXCLUDED (a signal
+        // that entered the store after the scoring instant must be invisible to a replay at it).
+        var companyId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+        var inWindow = new DateTimeOffset(2026, 2, 5, 0, 0, 0, TimeSpan.Zero);
+        var knownAsOf = new DateTimeOffset(2026, 2, 10, 12, 0, 0, TimeSpan.Zero);
+
+        var store = CreateStore();
+
+        // Distinct evidence ids so the cross-run dedup cannot collapse the two.
+        var atThreshold = DuplicateSignalFor(companyId, Guid.NewGuid(), inWindow, createdAt: knownAsOf);
+        var afterThreshold = DuplicateSignalFor(
+            companyId, Guid.NewGuid(), inWindow, createdAt: knownAsOf.AddTicks(1));
+
+        await store.WriteAsync(atThreshold, ReviewFor(atThreshold), CancellationToken.None);
+        await store.WriteAsync(afterThreshold, ReviewFor(afterThreshold), CancellationToken.None);
+
+        var result = await store.ReadApprovedInWindowAsync(
+            companyId, start, end, knownAsOf, CancellationToken.None);
+
+        var only = Assert.Single(result);
+        Assert.Equal(atThreshold.Id, only.Id);
+    }
+
+    [Fact]
+    public async Task ReadApprovedInWindow_LegacyFileWithoutCreatedAt_IsIncluded()
+    {
+        // Back-compat (spec 136): a pre-136 on-disk record has no createdAt property. Its knowledge date is
+        // UNKNOWN → include (preserve pre-136 behaviour) rather than silently vanish from the previous
+        // window; such history is not replay-honest and cannot be — the fact was never recorded. The JSON is
+        // written BY HAND so this cannot silently regress into round-tripping the current serializer shape.
+        var companyId = Guid.NewGuid();
+        var signalId = Guid.NewGuid();
+        var evidenceId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+
+        var dir = Path.Combine(_tempDir, "2026", "02");
+        Directory.CreateDirectory(dir);
+        var legacyJson = $$"""
+            {
+              "signalId": "{{signalId}}",
+              "evidenceId": "{{evidenceId}}",
+              "companyId": "{{companyId}}",
+              "companyMention": "Acme Corp",
+              "type": "CustomerWin",
+              "direction": "Positive",
+              "strength": 6,
+              "novelty": 6,
+              "confidence": 0.8,
+              "supportingExcerpt": "signed a multi-year deal",
+              "reason": "Customer win phrase detected.",
+              "reviewStatus": "Approved",
+              "observedAt": "2026-02-05T00:00:00+00:00",
+              "review": {
+                "reviewId": "{{Guid.NewGuid()}}",
+                "signalId": "{{signalId}}",
+                "reviewerName": "DeterministicSignalReviewer",
+                "decision": "Approve",
+                "summary": "pre-136 legacy record",
+                "issuesJson": null,
+                "reviewedAt": "2026-02-06T00:00:00+00:00"
+              }
+            }
+            """;
+        await File.WriteAllTextAsync(Path.Combine(dir, signalId + ".json"), legacyJson);
+
+        var store = CreateStore();
+        var result = await store.ReadApprovedInWindowAsync(
+            companyId, start, end, end, CancellationToken.None);
+
+        var only = Assert.Single(result);
+        Assert.Equal(signalId, only.Id);
+        // The reconstructed knowledge date falls back to the event date (ObservedAt) — activity-only per
+        // AD-6, never a fabricated provenance value.
+        Assert.Equal(only.ObservedAtUtc, only.CreatedAtUtc);
     }
 
     [Fact]
@@ -477,6 +560,6 @@ public sealed class FileSignalStoreTests : IDisposable
         await cts.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => store.ReadApprovedInWindowAsync(companyId, start, end, cts.Token));
+            () => store.ReadApprovedInWindowAsync(companyId, start, end, end, cts.Token));
     }
 }
