@@ -765,6 +765,29 @@ continuity-aware segmentation connects the score line across it because the scor
 input-hash artifact, not a measurement break). (Note: spec 128 (FCC) never merged, so this is a v5 → v6 bump,
 not v6 → v7.)
 
+### Lineage — spec 133: the `fda` collector is promoted into the baseline (a COLLECTOR-SET re-stamp, not a rule/formula change)
+
+Spec 133 adds `"fda"` to `Radar:Collectors` in `scripts/run-profiles/default.json`, switching the spec-129 openFDA
+510(k)/PMA device-clearance collector **on** in the canonical live run profile (6 → **7** collectors). The cause of
+this re-stamp is therefore the **enabled-collector set**, *not* a rule or formula change: the spec-95 signal-source
+descriptor folds the enabled set into the fingerprint by concrete `IEvidenceCollector.CollectorName` (`"fda"`,
+Ordinal-sorted second after `RssPressReleaseCollector`), so **both** default fingerprints re-stamp **automatically**
+under AD-10 (as amended): AI-OFF **`radar-scoring-fp-c1e126884b7c → radar-scoring-fp-6b2f468041b9`** and AI-ON
+**`radar-scoring-fp-74c5e077f728 → radar-scoring-fp-57356123e09b`**. There is **no `KeywordSignalExtractor.RuleSetVersion`
+bump** (`radar-keyword-rules-v6` stands — the `RegulatoryApproval` rule group already shipped with spec 129 and had
+simply never fired, because no *enabled* collector produced its phrase) and **no `_formula.Version` bump**
+(`radar-formula-v8` stands); no `ScoringWeights`, attention-tier or insider-materiality value moved, and **no
+production code changed** — only the run profile, the fingerprint test's descriptor constant and its two pins.
+**Scoring math is byte-identical**: the 41 companies with no `fda` feed in `data/companies.json` keep an identical
+evidence set, identical signals and identical component scores, and only their stamped `ScoringConfigVersion`
+differs. The two seeded companies (TMDX `applicant=TransMedics`, AXGN `applicant=Axogen`) can now gain **Positive**
+routine-strength `RegulatoryApproval` signals — Radar's first *directional* non-filing collector going live.
+openFDA is **keyless**, so this introduces no secret, env var or key gate. For the efficacy visual (spec 101 /
+AD-14 read side), this boundary opens a genuinely new segment (the signal-production surface really did widen), so
+spec 108's continuity-aware segmentation will show a short score series for the next few runs — expected and
+correct. `patents`, `trademarks` and `hiringats` remain opt-in **OFF**; `appsettings.json`'s code default
+`Radar:Collectors` (`[ "rss" ]`) is **unchanged** — this slice changes *how we run*, not the code default.
+
 ### Amendment — spec 119: the AI earnings-read model identity is a fingerprint input (folded by value)
 
 Spec 106 folded the AI directional-filing source's per-signal magnitudes (`str`/`nov`/`minconf`) into the
@@ -817,7 +840,12 @@ v5 bump). Lineage · 2026-07-23 (spec 130 — `RuleSetVersion` radar-keyword-rul
 `TrademarkActivity` rule group; BOTH defaults re-stamp AI-OFF radar-scoring-fp-1251d4e0373e →
 radar-scoring-fp-c1e126884b7c and AI-ON radar-scoring-fp-2be98e738684 → radar-scoring-fp-74c5e077f728; scoring
 math byte-identical, opt-in-off USPTO `trademarks` collector; spec 128 (FCC) never merged so this is a v5 → v6
-bump).
+bump). Lineage · 2026-07-25 (spec 133 — the openFDA `fda` collector is promoted INTO
+`scripts/run-profiles/default.json`, so the **enabled-collector set** moves 6 → 7 and BOTH defaults re-stamp
+automatically: AI-OFF radar-scoring-fp-c1e126884b7c → radar-scoring-fp-6b2f468041b9 and AI-ON
+radar-scoring-fp-74c5e077f728 → radar-scoring-fp-57356123e09b; the cause is a **collector-set** change, **not** a
+rule or formula change — no `RuleSetVersion` bump (`radar-keyword-rules-v6` stands), no `_formula.Version` bump
+(`radar-formula-v8` stands), no weight/tier edit, no production code change, scoring math byte-identical).
 
 ---
 

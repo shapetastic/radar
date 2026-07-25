@@ -17,15 +17,17 @@ public sealed class ScoringConfigFingerprintTests
     // descriptor, so the default fingerprint value depends on it. The collector tokens are the concrete
     // IEvidenceCollector.CollectorName values the default DI graph registers (rss→"RssPressReleaseCollector",
     // sec→"sec-edgar", secform4→"sec-form4", sec13dg→"sec-13dg", usaspending→"usaspending",
-    // newssearch→"newssearch"), Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it matches what
-    // the Worker actually produces. This is the 6-collector default after spec 100 promoted sec13dg into
-    // scripts/run-profiles/default.json (commit 58c55f5); spec 130 bumps the rule-set identity to
-    // radar-keyword-rules-v6 (spec 130 adds the TrademarkActivity group; spec 129 added RegulatoryApproval; spec
-    // 127 added PatentActivity; spec 103 added HiringActivity) while the enabled collector CSV stays this same
-    // 6-collector set (hiringats, patents, fda, and trademarks are all opt-in OFF).
-    // Ordinal sort places "sec-13dg" before "sec-edgar" (the char after "sec-" is '1' 0x31 < 'e' 0x65).
+    // newssearch→"newssearch", fda→"fda"), Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it
+    // matches what the Worker actually produces. This is the 7-collector default after spec 133 promoted the
+    // openFDA collector `fda` into scripts/run-profiles/default.json (spec 100 had earlier promoted sec13dg,
+    // commit 58c55f5). The rule-set identity is UNCHANGED at radar-keyword-rules-v6 (spec 130 added the
+    // TrademarkActivity group; spec 129 added RegulatoryApproval; spec 127 added PatentActivity; spec 103 added
+    // HiringActivity) — spec 133 moves only the enabled-collector set, which AD-10 re-stamps automatically with
+    // no RuleSetVersion / _formula.Version bump. hiringats, patents, and trademarks remain opt-in OFF.
+    // Ordinal sort places "fda" second ('R' 0x52 < 'f' 0x66 < 'n' 0x6E) and "sec-13dg" before "sec-edgar" (the
+    // char after "sec-" is '1' 0x31 < 'e' 0x65).
     private const string SourceDescriptor =
-        "rules=radar-keyword-rules-v6;collectors=RssPressReleaseCollector,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;";
+        "rules=radar-keyword-rules-v6;collectors=RssPressReleaseCollector,fda,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;";
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -95,17 +97,17 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
         // default-tier, signal-source, insider-materiality, or media-collapse drift is caught (the automatic
-        // AD-10 replacement for the hand-bumped constant). This value is the spec-130 re-stamp: the
-        // RuleSetVersion bumped radar-keyword-rules-v5 → v6 for the new TrademarkActivity rule group (an
-        // opt-in-OFF USPTO trademark collector), which the signal-source descriptor folds into the fingerprint
-        // automatically. Scoring math is byte-identical (no existing evidence contains the trademark phrase;
-        // trademarks is not in default.json) — only the input hash changes. It supersedes the spec-129 stamp
-        // (radar-scoring-fp-1251d4e0373e) and matches default.json's recorded default.
+        // AD-10 replacement for the hand-bumped constant). This value is the spec-133 re-stamp: the openFDA
+        // collector `fda` was promoted INTO scripts/run-profiles/default.json, so the ENABLED-COLLECTOR SET
+        // moved 6 → 7 and the signal-source descriptor folds it into the fingerprint automatically. This is a
+        // collector-set re-stamp only — NO RuleSetVersion bump (radar-keyword-rules-v6 stands) and NO
+        // _formula.Version bump (radar-formula-v8 stands); the scoring math is byte-identical. It supersedes the
+        // spec-130 stamp (radar-scoring-fp-c1e126884b7c) and matches default.json's recorded default.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-c1e126884b7c", fp);
+        Assert.Equal("radar-scoring-fp-6b2f468041b9", fp);
     }
 
     [Fact]
@@ -221,12 +223,15 @@ public sealed class ScoringConfigFingerprintTests
         // rule group (opt-in OFF) (radar-scoring-fp-63c096e531ec) → spec 129, the RuleSetVersion v4→v5 bump for
         // the new RegulatoryApproval rule group (opt-in-OFF openFDA collector) (radar-scoring-fp-2be98e738684)
         // → spec 130, the RuleSetVersion v5→v6 bump for the new TrademarkActivity rule group (opt-in-OFF USPTO
-        // trademark collector), which folds into BOTH defaults automatically with scoring math byte-identical.
+        // trademark collector), which folds into BOTH defaults automatically with scoring math byte-identical
+        // (radar-scoring-fp-74c5e077f728) → spec 133, which promotes the openFDA collector `fda` into
+        // scripts/run-profiles/default.json: a COLLECTOR-SET change (6 → 7 collectors) that AD-10 re-stamps
+        // automatically with NO RuleSetVersion and NO _formula.Version bump and byte-identical scoring math.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-74c5e077f728", fp);
+        Assert.Equal("radar-scoring-fp-57356123e09b", fp);
     }
 
     [Fact]
