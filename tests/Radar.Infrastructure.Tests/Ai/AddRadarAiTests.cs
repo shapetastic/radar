@@ -99,15 +99,23 @@ public sealed class AddRadarAiTests
         Assert.Contains("Radar:Ai:Ollama:Endpoint", ex.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void AddRadarAi_OllamaNonAbsoluteUriEndpoint_FailsFast()
+    // "/v1/chat" is the platform-divergence case: UriKind.Absolute rejects a rooted path on Windows but
+    // ACCEPTS it on Unix as "file:///v1/chat", so an absoluteness-only check passes on a Windows dev box and
+    // silently admits a broken endpoint on a Linux runner. The file:// and ftp:// cases lock the http/https
+    // scheme requirement that closes it.
+    [Theory]
+    [InlineData("not a url")]
+    [InlineData("/v1/chat")]
+    [InlineData("file:///v1/chat")]
+    [InlineData("ftp://localhost:11434")]
+    public void AddRadarAi_OllamaNonAbsoluteHttpUriEndpoint_FailsFast(string endpoint)
     {
         var ex = Assert.Throws<InvalidOperationException>(
             () => new ServiceCollection().AddRadarAi(new AiClientOptions
             {
                 Provider = "ollama",
                 Model = "llama3.1",
-                OllamaEndpoint = "not a url",
+                OllamaEndpoint = endpoint,
             }));
 
         Assert.Contains("Radar:Ai:Ollama:Endpoint", ex.Message, StringComparison.Ordinal);
@@ -167,15 +175,21 @@ public sealed class AddRadarAiTests
         Assert.Contains("Radar:Ai:OpenAi:BaseUrl", ex.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void AddRadarAi_OpenAiNonAbsoluteBaseUrl_FailsFast()
+    // See the Ollama theory above for why the rooted-path case matters: it is the one that diverges between
+    // Windows and Linux under an absoluteness-only check.
+    [Theory]
+    [InlineData("not a url")]
+    [InlineData("/v1/openai")]
+    [InlineData("file:///v1/openai")]
+    [InlineData("ftp://api.deepinfra.com")]
+    public void AddRadarAi_OpenAiNonAbsoluteHttpBaseUrl_FailsFast(string baseUrl)
     {
         var ex = Assert.Throws<InvalidOperationException>(
             () => new ServiceCollection().AddRadarAi(new AiClientOptions
             {
                 Provider = "openai",
                 Model = "deepseek-ai/DeepSeek-V3",
-                OpenAiBaseUrl = "not a url",
+                OpenAiBaseUrl = baseUrl,
                 OpenAiApiKey = "test-key",
             }));
 

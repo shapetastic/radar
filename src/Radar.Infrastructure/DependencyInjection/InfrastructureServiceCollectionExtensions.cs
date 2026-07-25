@@ -739,13 +739,8 @@ public static class InfrastructureServiceCollectionExtensions
                     + "name leaves the collector no way to read it.");
         }
 
-        // The scheme check is load-bearing, not belt-and-braces: UriKind.Absolute alone is PLATFORM-DEPENDENT
-        // for a rooted path like "/api/v1/patent" — false on Windows, but true on Unix, where it parses as the
-        // absolute file URI "file:///api/v1/patent". Requiring http/https makes the validation identical on
-        // every platform and is what an HttpClient BaseAddress actually needs.
-        if (string.IsNullOrWhiteSpace(options.BaseUrl)
-            || !Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var patentsBaseUri)
-            || (patentsBaseUri.Scheme != Uri.UriSchemeHttp && patentsBaseUri.Scheme != Uri.UriSchemeHttps))
+        // Scheme-checked via the shared helper — absoluteness alone is platform-dependent (see IsAbsoluteHttpUri).
+        if (!IsAbsoluteHttpUri(options.BaseUrl))
         {
             throw new InvalidOperationException(
                 "Patents BaseUrl must be a valid absolute http/https URL; configure Radar:Patents:BaseUrl to the "
@@ -1135,10 +1130,11 @@ public static class InfrastructureServiceCollectionExtensions
                     + "before selecting the anthropic provider — every request fails without it.");
         }
 
-        if (isOllama && !Uri.TryCreate(options.OllamaEndpoint, UriKind.Absolute, out _))
+        // Scheme-checked via the shared helper — absoluteness alone is platform-dependent (see IsAbsoluteHttpUri).
+        if (isOllama && !IsAbsoluteHttpUri(options.OllamaEndpoint))
         {
             throw new InvalidOperationException(
-                "Radar AI \"ollama\" requires an absolute endpoint URI; configure Radar:Ai:Ollama:Endpoint "
+                "Radar AI \"ollama\" requires an absolute http/https endpoint URI; configure Radar:Ai:Ollama:Endpoint "
                     + "(default http://localhost:11434) — a blank or relative value cannot address the local Ollama server.");
         }
 
@@ -1149,11 +1145,12 @@ public static class InfrastructureServiceCollectionExtensions
                     + "https://api.deepinfra.com/v1/openai) — a blank BaseUrl has no host to address.");
         }
 
-        if (isOpenAi && !Uri.TryCreate(options.OpenAiBaseUrl, UriKind.Absolute, out _))
+        if (isOpenAi && !IsAbsoluteHttpUri(options.OpenAiBaseUrl))
         {
             throw new InvalidOperationException(
-                "Radar AI \"openai\" requires an absolute base URL; configure Radar:Ai:OpenAi:BaseUrl (e.g. DeepInfra "
-                    + "https://api.deepinfra.com/v1/openai) — a relative or malformed URL cannot address the host.");
+                "Radar AI \"openai\" requires an absolute http/https base URL; configure Radar:Ai:OpenAi:BaseUrl "
+                    + "(e.g. DeepInfra https://api.deepinfra.com/v1/openai) — a relative or malformed URL cannot "
+                    + "address the host.");
         }
 
         if (isOpenAi && string.IsNullOrWhiteSpace(options.OpenAiApiKey))
@@ -1553,4 +1550,23 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IRadarPipeline, RadarPipelineRunner>();
         return services;
     }
+
+    /// <summary>
+    /// True when <paramref name="value"/> is a non-blank absolute URI with an <c>http</c> or <c>https</c>
+    /// scheme — the single shared check behind every "must be an absolute URL" DI fail-fast in this class
+    /// (patents BaseUrl, Ollama endpoint, OpenAI base URL).
+    /// </summary>
+    /// <remarks>
+    /// The scheme test is load-bearing, not defensive. <see cref="UriKind.Absolute"/> on its own is
+    /// PLATFORM-DEPENDENT for a rooted path such as <c>/api/v1/patent</c>: it is rejected on Windows but
+    /// ACCEPTED on Unix, where it parses as the absolute file URI <c>file:///api/v1/patent</c>. A validation
+    /// built on absoluteness alone therefore passes on a Windows dev machine and silently admits a broken
+    /// value on a Linux runner — exactly how a rooted-path case reached CI green locally and red on ubuntu.
+    /// Constraining to http/https makes the result identical on every platform and matches what an
+    /// <see cref="System.Net.Http.HttpClient"/> base address actually requires.
+    /// </remarks>
+    private static bool IsAbsoluteHttpUri(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+            && Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 }
