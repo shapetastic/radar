@@ -65,7 +65,8 @@ public sealed class FdaClearanceCollectorTests
                     new FdaClearance("P250010", "Organ perfusion module", new DateOnly(2026, 4, 3), "PMA"),
                 ],
                 ReportedTotal510k: 8,
-                ReportedTotalPma: 2),
+                ReportedTotalPma: 2,
+                ExcludedSupplementCount: 4),
         };
 
         var context = new CollectionContext([Company(AxgnId, "Axogen", "AXGN")], [feed]);
@@ -100,11 +101,15 @@ public sealed class FdaClearanceCollectorTests
         Assert.Equal("High", item.Metadata["quality"]);
         Assert.Equal(AxgnToken, item.Metadata["fdaFeedUrl"]);
         Assert.Equal("Axogen", item.Metadata["applicant"]);
+        // POST-filter material-event count (spec 135).
         Assert.Equal("3", item.Metadata["clearanceCount"]);
         Assert.Equal("365", item.Metadata["lookbackDays"]);
         Assert.Equal("2025-07-23", item.Metadata["decisionFloor"]);
-        Assert.Equal("8", item.Metadata["reportedTotal510k"]);
-        Assert.Equal("2", item.Metadata["reportedTotalPma"]);
+        // The raw API totals are retained, explicitly labelled PRE-filter provenance, alongside how many
+        // routine post-market supplements the materiality filter dropped.
+        Assert.Equal("8", item.Metadata["reportedTotal510kPreFilter"]);
+        Assert.Equal("2", item.Metadata["reportedTotalPmaPreFilter"]);
+        Assert.Equal("4", item.Metadata["excludedSupplementCount"]);
         Assert.Equal(
             "K250001 [510(k)]: Cardiac partnership system | K250002 [510(k)]: Nerve repair conduit "
                 + "| P250010 [PMA]: Organ perfusion module",
@@ -164,7 +169,7 @@ public sealed class FdaClearanceCollectorTests
     }
 
     [Fact]
-    public async Task CollectAsync_ZeroClearances_IsAValidSuccessSnapshot()
+    public async Task CollectAsync_ZeroMaterialEvents_EmitsNoEvidenceButStillCountsAsSucceeded()
     {
         var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-000000000004"), AxgnId, "Axogen — FDA", AxgnToken);
         var reader = new FakeFdaClearanceReader
@@ -175,11 +180,41 @@ public sealed class FdaClearanceCollectorTests
 
         var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
 
-        var item = Assert.Single(result.Evidence);
-        Assert.Contains("0 device clearances/approvals", item.Title, StringComparison.Ordinal);
-        Assert.Equal("0", item.Metadata["clearanceCount"]);
-        Assert.Equal(string.Empty, item.Metadata["sampleClearances"]);
+        // Spec 135: the emitted phrase is unconditionally positive, so a zero-count snapshot would hand the
+        // extractor a standing Positive RegulatoryApproval signal for a company that cleared no gate. An honest
+        // silence beats a standing false positive.
+        Assert.Empty(result.Evidence);
+        Assert.Equal(0, result.Summary.ItemsCollected);
+
+        // ...but a quiet applicant is a SUCCESS, not a failure.
+        Assert.Equal(1, result.Summary.SourcesChecked);
         Assert.Equal(1, result.Summary.SourcesSucceeded);
+        Assert.Equal(0, result.Summary.SourcesFailed);
+        Assert.Empty(result.Summary.Failures);
+    }
+
+    [Fact]
+    public async Task CollectAsync_OnlyRoutineSupplementsInWindow_EmitsNoEvidence()
+    {
+        // The live TransMedics case (spec 135): 9 in-window PMA rows, every one routine post-market paperwork,
+        // so the reader reports zero MATERIAL events and the collector contributes nothing.
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000b"), TmdxId, "TransMedics — FDA", TmdxToken);
+        var reader = new FakeFdaClearanceReader
+        {
+            ["TransMedics"] = new FdaClearanceResult(
+                ClearanceCount: 0,
+                Clearances: [],
+                ReportedTotal510k: 0,
+                ReportedTotalPma: 41,
+                ExcludedSupplementCount: 9),
+        };
+        var context = new CollectionContext([Company(TmdxId, "TransMedics", "TMDX")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        Assert.Empty(result.Evidence);
+        Assert.Equal(1, result.Summary.SourcesSucceeded);
+        Assert.Equal(0, result.Summary.SourcesFailed);
     }
 
     [Fact]

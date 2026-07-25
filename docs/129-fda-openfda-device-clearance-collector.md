@@ -217,8 +217,11 @@ discipline as an explicit per-caller hook; malformed/blank ⇒ `null` so the col
     authoritative public-record source, on par with SEC/USASpending `High`); `fdaFeedUrl` (= `feed.Url`);
     `applicant`; `clearanceCount`; `lookbackDays`; `decisionFloor` (`o`/`yyyy-MM-dd`); `sampleClearances`
     (the first N `"{submissionNumber} [{track}]: {deviceName}"` joined with `" | "` — provenance/debug only,
-    **not** scanned by the extractor); `reportedTotal510k` / `reportedTotalPma` (optional cross-checks);
-    `retrievedAtUtc` (`o`).
+    **not** scanned by the extractor); `reportedTotal510kPreFilter` / `reportedTotalPmaPreFilter` (optional
+    raw-API cross-checks) and `excludedSupplementCount`; `retrievedAtUtc` (`o`).
+    > Superseded by spec 135 (`docs/135-fda-material-regulatory-events.md`): `clearanceCount` is now the
+    > **post-filter** material-event count, the raw API totals were renamed with the `PreFilter` suffix to say
+    > so, and `excludedSupplementCount` was added. The names above are the shipped ones.
   - `CompanyHints = CollectorCompanyHints.For(feed.CompanyId, companiesById)` — never invent a ticker.
 - Populate `CollectionSummary` exactly like `SecForm4Collector`/`UsaSpendingContractCollector`/
   `PatentActivityCollector`/`FccEquipmentAuthorizationCollector` (checked, ok, failed, count, failures); log
