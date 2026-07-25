@@ -22,11 +22,15 @@ public sealed class HttpFdaClearanceReaderTests
         """;
 
     // A well-formed openFDA PMA response: PMA uses pma_number + trade_name (its device_name is null/absent).
+    // supplement_number is present-and-EMPTY because this row represents an ORIGINAL approval — which is how
+    // openFDA really returns one. This fixture predates the spec-135 materiality filter and originally OMITTED
+    // the field; it counted as material only through the absent -> "" -> "original" fail-open path, so the
+    // realistic value is what keeps this test measuring endpoint merging rather than that defect.
     private const string ValidPma = """
         {
           "meta": { "results": { "total": 3 } },
           "results": [
-            { "pma_number": "P250010", "trade_name": "Organ perfusion module", "decision_date": "2026-04-20", "applicant": "TransMedics" }
+            { "pma_number": "P250010", "supplement_number": "", "supplement_type": "", "trade_name": "Organ perfusion module", "decision_date": "2026-04-20", "applicant": "TransMedics" }
           ]
         }
         """;
@@ -75,6 +79,30 @@ public sealed class HttpFdaClearanceReaderTests
           "meta": { "results": { "total": 1 } },
           "results": [
             { "pma_number": "P180001", "supplement_number": "S040", "supplement_type": "Brand New Track", "trade_name": "Unknown category", "decision_date": "2026-06-10" }
+          ]
+        }
+        """;
+
+    // An ORIGINAL is identified by supplement_number being PRESENT, a STRING, and blank. A row that merely
+    // OMITS the field, or carries it as null or a non-string, must NOT be read as an original: reading it
+    // through a helper that returns "" for absent/null/non-string would collapse those cases into the
+    // original marker and turn every supplement bullish if openFDA ever changed the field. Both rows below
+    // carry a routine supplement_type, so the ONLY thing that could make them count is that fail-open path.
+    private const string AbsentSupplementNumberPma = """
+        {
+          "meta": { "results": { "total": 1 } },
+          "results": [
+            { "pma_number": "P180001", "supplement_type": "30-Day Notice", "trade_name": "Sterilizer change", "decision_date": "2026-06-10" }
+          ]
+        }
+        """;
+
+    private const string NullSupplementNumberPma = """
+        {
+          "meta": { "results": { "total": 2 } },
+          "results": [
+            { "pma_number": "P180001", "supplement_number": null, "supplement_type": "Real-Time Process", "trade_name": "Component change", "decision_date": "2026-06-10" },
+            { "pma_number": "P180001", "supplement_number": 21, "supplement_type": "30-Day Notice", "trade_name": "Numeric supplement number", "decision_date": "2026-06-09" }
           ]
         }
         """;
@@ -214,6 +242,29 @@ public sealed class HttpFdaClearanceReaderTests
             result.Result.Clearances.Select(c => c.DeviceName));
         // The raw API total stays PRE-filter provenance — the materiality filter must never shrink it.
         Assert.Equal(5, result.Result.ReportedTotalPma);
+    }
+
+    [Theory]
+    [InlineData(nameof(AbsentSupplementNumberPma))]
+    [InlineData(nameof(NullSupplementNumberPma))]
+    public async Task ReadAsync_SupplementNumberAbsentOrNotAString_IsNotReadAsAnOriginal(string fixtureName)
+    {
+        var pma = fixtureName == nameof(AbsentSupplementNumberPma)
+            ? AbsentSupplementNumberPma
+            : NullSupplementNumberPma;
+
+        var reader = CreateReader(
+            new RoutingHandler(
+                k510: (HttpStatusCode.NotFound, EmptySearch404),
+                pma: (HttpStatusCode.OK, pma)));
+
+        var result = await reader.ReadAsync("TransMedics", DecisionFloor, CancellationToken.None);
+
+        // Fail CLOSED: these rows carry routine supplement types, so counting any of them could only happen
+        // via the absent/null/non-string -> "" -> "original" collapse.
+        Assert.Equal(FdaReadOutcome.Success, result.Outcome);
+        Assert.Equal(0, result.Result!.ClearanceCount);
+        Assert.Empty(result.Result.Clearances);
     }
 
     [Fact]
