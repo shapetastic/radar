@@ -338,10 +338,9 @@ internal sealed class HttpFdaClearanceReader : IFdaClearanceReader
     }
 
     /// <summary>
-    /// Whether one PMA row is a materially meaningful regulatory event (spec 135): an ORIGINAL approval — its
-    /// <c>supplement_number</c> is an EMPTY STRING, the live-verified marker, so emptiness is tested rather
-    /// than presence — or a <c>Panel Track</c> supplement, the type that carries a NEW INDICATION (compared
-    /// Ordinal, case-insensitive, trimmed). Everything else is routine post-market paperwork on an
+    /// Whether one PMA row is a materially meaningful regulatory event (spec 135): an ORIGINAL approval — see
+    /// <see cref="IsOriginalPma"/> — or a <c>Panel Track</c> supplement, the type that carries a NEW INDICATION
+    /// (compared Ordinal, case-insensitive, trimmed). Everything else is routine post-market paperwork on an
     /// already-approved device and is excluded, INCLUDING an unrecognised type (<b>fail closed</b>) — which is
     /// additionally logged at Debug (the recognised routine types in <see cref="RoutineSupplementTypes"/> are
     /// expected, so they are excluded silently) so a genuinely material new FDA category can be spotted and
@@ -349,7 +348,7 @@ internal sealed class HttpFdaClearanceReader : IFdaClearanceReader
     /// </summary>
     private bool IsMaterialPmaEvent(JsonElement row, string applicantName)
     {
-        if (GetString(row, SupplementNumberField).Trim().Length == 0)
+        if (IsOriginalPma(row))
         {
             return true;
         }
@@ -371,6 +370,26 @@ internal sealed class HttpFdaClearanceReader : IFdaClearanceReader
 
         return false;
     }
+
+    /// <summary>
+    /// Whether a PMA row is an ORIGINAL approval: <c>supplement_number</c> must be PRESENT, a JSON STRING, and
+    /// blank once trimmed — the live-verified marker of an original (2026-07-25: originals carry
+    /// <c>supplement_number</c> as <c>""</c>, present and not null, while supplements carry e.g. <c>"S021"</c>).
+    /// </summary>
+    /// <remarks>
+    /// Presence and kind are checked as well as emptiness, and this is the load-bearing part. Reading the field
+    /// through <see cref="GetString"/> collapses THREE distinct cases — absent, null, and non-string — into the
+    /// same empty string that marks an original, so a row merely MISSING the field would be counted as a new
+    /// device approval and emit a Positive signal. That is a fail-OPEN path in a filter whose entire purpose is
+    /// to stop routine paperwork reading as bullish, and it contradicts the fail-CLOSED treatment
+    /// <see cref="IsMaterialPmaEvent"/> gives an unrecognised <c>supplement_type</c> immediately below. If
+    /// openFDA ever drops or nulls the field, this keeps every supplement excluded instead of silently turning
+    /// the whole feed Positive.
+    /// </remarks>
+    private static bool IsOriginalPma(JsonElement row) =>
+        row.TryGetProperty(SupplementNumberField, out var supplementNumber)
+            && supplementNumber.ValueKind == JsonValueKind.String
+            && (supplementNumber.GetString() ?? string.Empty).Trim().Length == 0;
 
     // Reads meta.results.total (the endpoint's own grand total) as the metadata cross-check when it exceeds the
     // bounded page count; falls back to the PRE-filter parsed row count when the envelope field is absent. Both
