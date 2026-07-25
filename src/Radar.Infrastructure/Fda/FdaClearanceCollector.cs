@@ -104,16 +104,20 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
 
             var result = await _reader.ReadAsync(target.ApplicantName, decisionFloor, ct).ConfigureAwait(false);
 
-            if (!result.IsSuccess)
+            // A Success always carries a parsed payload (FdaClearanceReadResult.Success), but the null check is
+            // folded into the failure branch so every dereference below is compiler-proven and a malformed
+            // Success degrades to a feed failure rather than an NRE.
+            if (!result.IsSuccess || result.Result is null)
             {
+                var detail = result.Detail
+                    ?? (result.IsSuccess ? "Success carried no parsed result." : result.Outcome.ToString());
                 feedsFailed++;
-                failures.Add(new SourceFailure(
-                    feed.Name, feed.Url, result.Detail ?? result.Outcome.ToString()));
+                failures.Add(new SourceFailure(feed.Name, feed.Url, detail));
                 _logger.LogWarning(
                     "FDA feed '{FeedName}' (applicant '{Applicant}') could not be read: {Detail}; skipping.",
                     feed.Name,
                     target.ApplicantName,
-                    result.Detail ?? result.Outcome.ToString());
+                    detail);
                 continue;
             }
 
@@ -121,7 +125,7 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
             // positive, so emitting a zero-count snapshot would hand the extractor a standing Positive
             // RegulatoryApproval signal for a company that cleared no regulatory gate. This is still a SUCCESS
             // for the feed — it simply contributes no evidence.
-            if (result.Result!.ClearanceCount == 0)
+            if (result.Result.ClearanceCount == 0)
             {
                 _logger.LogInformation(
                     "FDA feed '{FeedName}' (applicant '{Applicant}') has no material clearances or approvals "
