@@ -11,40 +11,49 @@ public sealed class HttpPatentSearchReaderTests
 {
     private const string ApiKeyEnvVar = "RADAR_TEST_PATENTSVIEW_KEY";
 
-    // A well-formed PatentsView response: two granted patents for the assignee plus the envelope fields.
+    // A well-formed USPTO ODP PFW Search response (docs-derived fixture): two granted patents for the assignee,
+    // each nesting its bibliographic fields under applicationMetaData, plus the envelope total. The reader reads
+    // the envelope total defensively (count first, then totalNumFound) — this fixture carries both.
     private const string ValidResults = """
         {
-          "error": false,
-          "count": 2,
-          "total_hits": 37,
-          "patents": [
-            { "patent_id": "11111111", "patent_title": "Secure processing module", "patent_date": "2026-05-12" },
-            { "patent_id": "22222222", "patent_title": "Radiation-hardened memory device", "patent_date": "2026-03-01" }
+          "count": 37,
+          "totalNumFound": 37,
+          "patentFileWrapperDataBag": [
+            { "applicationNumberText": "16123456",
+              "applicationMetaData": {
+                "patentNumber": "11111111",
+                "inventionTitle": "Secure processing module",
+                "grantDate": "2026-05-12",
+                "firstApplicantName": "Mercury Systems, Inc." } },
+            { "applicationNumberText": "16123457",
+              "applicationMetaData": {
+                "patentNumber": "22222222",
+                "inventionTitle": "Radiation-hardened memory device",
+                "grantDate": "2026-03-01",
+                "firstApplicantName": "Mercury Systems, Inc." } }
           ]
         }
         """;
 
     private const string EmptyResults = """
-        { "error": false, "count": 0, "total_hits": 0, "patents": [] }
+        { "count": 0, "totalNumFound": 0, "patentFileWrapperDataBag": [] }
         """;
 
-    // Rows carrying an unparseable/absent patent_date must be skipped, not coerced to a min-value date. Only the
+    // Rows carrying an unparseable/absent grantDate must be skipped, not coerced to a min-value date. Only the
     // one row with a valid grant date counts.
     private const string UnparseableGrantDates = """
         {
-          "error": false,
           "count": 3,
-          "total_hits": 3,
-          "patents": [
-            { "patent_id": "11111111", "patent_title": "Valid row", "patent_date": "2026-05-12" },
-            { "patent_id": "22222222", "patent_title": "Bad date", "patent_date": "not-a-date" },
-            { "patent_id": "33333333", "patent_title": "Absent date" }
+          "patentFileWrapperDataBag": [
+            { "applicationMetaData": { "patentNumber": "11111111", "inventionTitle": "Valid row", "grantDate": "2026-05-12" } },
+            { "applicationMetaData": { "patentNumber": "22222222", "inventionTitle": "Bad date", "grantDate": "not-a-date" } },
+            { "applicationMetaData": { "patentNumber": "33333333", "inventionTitle": "Absent date" } }
           ]
         }
         """;
 
     private const string NoPatentsArray = """
-        { "error": false, "count": 0, "total_hits": 0 }
+        { "count": 0, "totalNumFound": 0 }
         """;
 
     private static readonly DateOnly GrantFloor = new(2026, 1, 1);
@@ -71,7 +80,7 @@ public sealed class HttpPatentSearchReaderTests
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.Result);
         Assert.Equal(2, result.Result!.GrantCount);
-        // total_hits is kept as the API-reported cross-check.
+        // The envelope total (count) is kept as the API-reported cross-check.
         Assert.Equal(37, result.Result.ApiReportedTotal);
 
         var first = result.Result.Grants[0];
@@ -102,7 +111,7 @@ public sealed class HttpPatentSearchReaderTests
         var result = await reader.ReadAsync("Mercury Systems, Inc.", GrantFloor, CancellationToken.None);
 
         Assert.Equal(PatentSearchOutcome.Success, result.Outcome);
-        // Only the single row with a valid patent_date survives; the bad/absent dates are dropped, not coerced.
+        // Only the single row with a valid grantDate survives; the bad/absent dates are dropped, not coerced.
         var grant = Assert.Single(result.Result!.Grants);
         Assert.Equal(1, result.Result.GrantCount);
         Assert.Equal("11111111", grant.PatentId);
@@ -222,18 +231,81 @@ public sealed class HttpPatentSearchReaderTests
     }
 
     [Fact]
-    public void QueryUrl_EncodesAssigneeAndGrantFloor()
+    public void QueryUrl_ReturnsOdpSearchEndpoint()
     {
         var reader = CreateReader(new StubHandler(HttpStatusCode.OK, ValidResults));
 
+        // The request is a POST with the query in the body, so the provenance link is the constant search
+        // endpoint (default host + fixed path), not a per-assignee GET URL.
         var url = reader.QueryUrl("Mercury Systems, Inc.", GrantFloor);
 
-        Assert.StartsWith("https://search.patentsview.org/api/v1/patent/?q=", url, StringComparison.Ordinal);
-        Assert.Contains("&f=", url, StringComparison.Ordinal);
-        Assert.Contains("&o=", url, StringComparison.Ordinal);
-        // The assignee name is URL-encoded, so a raw space never appears in the URL.
-        Assert.DoesNotContain(' ', url);
-        Assert.Contains("2026-01-01", Uri.UnescapeDataString(url), StringComparison.Ordinal);
+        Assert.Equal("https://api.uspto.gov/api/v1/patent/applications/search", url);
+    }
+
+    [Fact]
+    public async Task ReadAsync_PostsToDefaultBaseUrlAndPath()
+    {
+        using var _ = WithApiKey("test-key");
+        var handler = new RequestCapturingHandler(HttpStatusCode.OK, ValidResults);
+        var reader = CreateReader(handler);
+
+        await reader.ReadAsync("Mercury Systems, Inc.", GrantFloor, CancellationToken.None);
+
+        Assert.Equal(HttpMethod.Post, handler.CapturedMethod);
+        Assert.Equal(
+            "https://api.uspto.gov/api/v1/patent/applications/search",
+            handler.CapturedUri!.ToString());
+    }
+
+    [Fact]
+    public async Task ReadAsync_HonoursBaseUrlOverride()
+    {
+        using var _ = WithApiKey("test-key");
+        var handler = new RequestCapturingHandler(HttpStatusCode.OK, ValidResults);
+        var reader = CreateReader(
+            handler,
+            new PatentCollectorOptions { ApiKeyEnvVar = ApiKeyEnvVar, BaseUrl = "https://odp.example.test" });
+
+        await reader.ReadAsync("Mercury Systems, Inc.", GrantFloor, CancellationToken.None);
+
+        Assert.Equal(
+            "https://odp.example.test/api/v1/patent/applications/search",
+            handler.CapturedUri!.ToString());
+    }
+
+    [Fact]
+    public async Task ReadAsync_BaseUrlWithTrailingSlash_YieldsSingleSlashEndpoint()
+    {
+        using var _ = WithApiKey("test-key");
+        var handler = new RequestCapturingHandler(HttpStatusCode.OK, ValidResults);
+        var reader = CreateReader(
+            handler,
+            new PatentCollectorOptions { ApiKeyEnvVar = ApiKeyEnvVar, BaseUrl = "https://odp.example.test/" });
+
+        await reader.ReadAsync("Mercury Systems, Inc.", GrantFloor, CancellationToken.None);
+
+        // A trailing slash on BaseUrl must NOT produce a double-slash endpoint.
+        Assert.Equal(
+            "https://odp.example.test/api/v1/patent/applications/search",
+            handler.CapturedUri!.ToString());
+    }
+
+    [Fact]
+    public async Task ReadAsync_AssigneeNameWithQuote_ProducesWellFormedQuery()
+    {
+        using var _ = WithApiKey("test-key");
+        var handler = new BodyCapturingHandler(HttpStatusCode.OK, ValidResults);
+        var reader = CreateReader(handler);
+
+        // An assignee name containing a double-quote must be escaped so the quoted OpenSearch phrase stays
+        // well-formed (a bare embedded quote would break out of the phrase and malform the query).
+        await reader.ReadAsync("Acme \"Rocket\" Corp.", GrantFloor, CancellationToken.None);
+
+        using var document = System.Text.Json.JsonDocument.Parse(handler.CapturedBody!);
+        var q = document.RootElement.GetProperty("q").GetString();
+        Assert.Equal(
+            "applicationMetaData.firstApplicantName:\"Acme \\\"Rocket\\\" Corp.\"",
+            q);
     }
 
     private sealed class StubHandler(HttpStatusCode status, string body) : HttpMessageHandler
@@ -276,6 +348,41 @@ public sealed class HttpPatentSearchReaderTests
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             });
+        }
+    }
+
+    private sealed class RequestCapturingHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        public HttpMethod? CapturedMethod { get; private set; }
+
+        public Uri? CapturedUri { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            CapturedMethod = request.Method;
+            CapturedUri = request.RequestUri;
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
+    private sealed class BodyCapturingHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        public string? CapturedBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            CapturedBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
         }
     }
 

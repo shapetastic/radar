@@ -687,12 +687,13 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the PatentsView granted-patent activity collector (spec 127) and the typed <c>HttpClient</c>
+    /// Registers the USPTO ODP granted-patent activity collector (spec 127, repointed to the USPTO Open Data
+    /// Portal PFW Search API in spec 131) and the typed <c>HttpClient</c>
     /// its <see cref="IPatentSearchReader"/> uses. The collector reads the per-company <c>patents</c> feeds
     /// supplied on the <see cref="Radar.Application.Collectors.CollectionContext"/> (each feed's <c>Url</c> is
     /// an <c>assignee=...</c> token), counts recently-granted patents, and produces one raw
     /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> per company; it does not persist them. All
-    /// HTTP/JSON/PatentsView code stays in Infrastructure (AD-5).
+    /// HTTP/JSON/ODP code stays in Infrastructure (AD-5).
     /// <para>
     /// Fails fast when <see cref="PatentCollectorOptions.LookbackDays"/>,
     /// <see cref="PatentCollectorOptions.MaxSampleTitles"/>, or <see cref="PatentCollectorOptions.MaxPageSize"/>
@@ -733,9 +734,23 @@ public static class InfrastructureServiceCollectionExtensions
         if (string.IsNullOrWhiteSpace(options.ApiKeyEnvVar))
         {
             throw new InvalidOperationException(
-                "Patents ApiKeyEnvVar must name the environment variable holding the PatentsView API key "
+                "Patents ApiKeyEnvVar must name the environment variable holding the USPTO ODP API key "
                     + "(default \"PATENTSVIEW_API_KEY\") — the key is never committed to config, so a blank env-var "
                     + "name leaves the collector no way to read it.");
+        }
+
+        // The scheme check is load-bearing, not belt-and-braces: UriKind.Absolute alone is PLATFORM-DEPENDENT
+        // for a rooted path like "/api/v1/patent" — false on Windows, but true on Unix, where it parses as the
+        // absolute file URI "file:///api/v1/patent". Requiring http/https makes the validation identical on
+        // every platform and is what an HttpClient BaseAddress actually needs.
+        if (string.IsNullOrWhiteSpace(options.BaseUrl)
+            || !Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var patentsBaseUri)
+            || (patentsBaseUri.Scheme != Uri.UriSchemeHttp && patentsBaseUri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException(
+                "Patents BaseUrl must be a valid absolute http/https URL; configure Radar:Patents:BaseUrl to the "
+                    + "USPTO ODP host (default \"https://api.uspto.gov\") — a blank/invalid value only surfaces "
+                    + "later as a confusing \"unreachable\" failure.");
         }
 
         services.AddSingleton(options);
