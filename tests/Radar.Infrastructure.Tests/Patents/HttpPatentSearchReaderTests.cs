@@ -17,7 +17,10 @@ namespace Radar.Infrastructure.Tests.Patents;
 /// </summary>
 public sealed class HttpPatentSearchReaderTests
 {
-    private const string ApiKeyEnvVar = "RADAR_TEST_PATENTSVIEW_KEY";
+    // Test-local env-var NAME only (never the production default, and never a real key). Kept distinct from the
+    // trademark reader tests' RADAR_TEST_USPTO_KEY so the two classes cannot collide when xUnit runs them in
+    // parallel — environment variables are process-global.
+    private const string ApiKeyEnvVar = "RADAR_TEST_USPTO_ODP_PATENTS_KEY";
 
     /// <summary>The redacted stand-in for the live envelope's <c>requestIdentifier</c> guid.</summary>
     private const string RedactedRequestIdentifier = "00000000-0000-0000-0000-000000000000";
