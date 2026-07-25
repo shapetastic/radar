@@ -739,13 +739,18 @@ public static class InfrastructureServiceCollectionExtensions
                     + "name leaves the collector no way to read it.");
         }
 
+        // The scheme check is load-bearing, not belt-and-braces: UriKind.Absolute alone is PLATFORM-DEPENDENT
+        // for a rooted path like "/api/v1/patent" — false on Windows, but true on Unix, where it parses as the
+        // absolute file URI "file:///api/v1/patent". Requiring http/https makes the validation identical on
+        // every platform and is what an HttpClient BaseAddress actually needs.
         if (string.IsNullOrWhiteSpace(options.BaseUrl)
-            || !Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _))
+            || !Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var patentsBaseUri)
+            || (patentsBaseUri.Scheme != Uri.UriSchemeHttp && patentsBaseUri.Scheme != Uri.UriSchemeHttps))
         {
             throw new InvalidOperationException(
-                "Patents BaseUrl must be a valid absolute URL; configure Radar:Patents:BaseUrl to the USPTO ODP "
-                    + "host (default \"https://api.uspto.gov\") — a blank/invalid value only surfaces later as a "
-                    + "confusing \"unreachable\" failure.");
+                "Patents BaseUrl must be a valid absolute http/https URL; configure Radar:Patents:BaseUrl to the "
+                    + "USPTO ODP host (default \"https://api.uspto.gov\") — a blank/invalid value only surfaces "
+                    + "later as a confusing \"unreachable\" failure.");
         }
 
         services.AddSingleton(options);

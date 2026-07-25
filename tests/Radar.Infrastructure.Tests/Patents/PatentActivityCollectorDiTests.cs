@@ -78,11 +78,16 @@ public sealed class PatentActivityCollectorDiTests
         Assert.Contains("Patents ApiKeyEnvVar", ex.Message, StringComparison.Ordinal);
     }
 
+    // "/api/v1/patent" is the platform-divergence case: UriKind.Absolute rejects it on Windows but ACCEPTS it
+    // on Unix as "file:///api/v1/patent", so absoluteness alone made this test pass locally and fail on Linux
+    // CI. The file:// and ftp:// cases lock the http/https scheme requirement that fixed it.
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("not-a-url")]
     [InlineData("/api/v1/patent")]
+    [InlineData("file:///api/v1/patent")]
+    [InlineData("ftp://api.uspto.gov")]
     public void AddPatentActivityCollector_BlankOrInvalidBaseUrl_FailsFast(string baseUrl)
     {
         var services = new ServiceCollection();
