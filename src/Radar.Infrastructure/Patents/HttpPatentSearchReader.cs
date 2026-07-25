@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
@@ -11,24 +12,31 @@ namespace Radar.Infrastructure.Patents;
 /// <summary>
 /// POSTs an assignee-scoped granted-patent query against the USPTO Open Data Portal (ODP) Patent File
 /// Wrapper (PFW) Search API (<c>POST {BaseUrl}/api/v1/patent/applications/search</c>, default host
-/// <c>https://api.uspto.gov</c>) with a JSON body (a grant-date <c>rangeFilters</c> floor + a first-applicant
-/// name <c>q</c> match, a bounded <c>pagination</c> page, and a <c>fields</c> projection) and parses
-/// <c>patentFileWrapperDataBag[]</c> with <c>System.Text.Json</c>. The API key is read at RUNTIME from the env
-/// var NAMED by <see cref="PatentCollectorOptions.ApiKeyEnvVar"/> and sent as the <c>X-Api-Key</c> header — a
-/// blank/absent key returns <see cref="PatentSearchOutcome.MissingApiKey"/> with NO HTTP call (the key value
-/// is never committed, logged, or surfaced). An assignee with no recent grants, an unreachable endpoint, the
-/// request's own timeout, and malformed/absent JSON are each reported as a typed failure on the returned
-/// <see cref="PatentSearchReadResult"/> (with a warning) rather than swallowed; caller-requested cancellation
-/// still throws. All HTTP/JSON/ODP code stays in Infrastructure (AD-5).
+/// <c>https://api.uspto.gov</c>) with a JSON body (a two-bound grant-date <c>rangeFilters</c> window + a
+/// first-applicant name <c>q</c> match, a bounded <c>pagination</c> page, and a <c>fields</c> projection) and
+/// parses <c>patentFileWrapperDataBag[]</c> with <c>System.Text.Json</c>. The API key is read at RUNTIME from
+/// the env var NAMED by <see cref="PatentCollectorOptions.ApiKeyEnvVar"/> and sent as the <c>X-Api-Key</c>
+/// header — a blank/absent key returns <see cref="PatentSearchOutcome.MissingApiKey"/> with NO HTTP call (the
+/// key value is never committed, logged, or surfaced). An assignee with no recent grants, an unreachable
+/// endpoint, the request's own timeout, and malformed/absent JSON are each reported as a typed failure on the
+/// returned <see cref="PatentSearchReadResult"/> (with a warning) rather than swallowed; caller-requested
+/// cancellation still throws. All HTTP/JSON/ODP code stays in Infrastructure (AD-5).
 /// <para>
 /// This reader was repointed off the retired PatentsView host (<c>search.patentsview.org</c>, now NXDOMAIN
-/// after the 2026-03-20 ODP migration) onto the live ODP PFW Search API (spec 131). The request/response
-/// field names below are PINNED FROM THE PUBLISHED ODP DOCS (the data.uspto.gov PFW Search query-spec + the
-/// community <c>dlthub/uspto_odp</c> clients); LIVE field-name verification is DEFERRED to when the ID.me-gated
-/// ODP key is obtained — the same posture as the sibling <see cref="Radar.Infrastructure.Trademarks"/> reader
-/// (spec 130). If live verification finds the <c>applicationMetaData.</c> prefix differs, or that a
-/// <c>valueTo</c> range bound is required, that is a deferred fixture+const tweak; the collector / extractor /
-/// wiring do not change (per spec, so the scoring fingerprint does not move).
+/// after the 2026-03-20 ODP migration) onto the live ODP PFW Search API (spec 131), where its request/response
+/// names were pinned from the published ODP docs. Those names are now LIVE-VERIFIED against
+/// <c>api.uspto.gov</c> with a real ODP key (2026-07-25, spec 134): the endpoint, the <c>X-Api-Key</c> header,
+/// all four <c>applicationMetaData.*</c> field names, the <c>patentFileWrapperDataBag</c>/<c>count</c>
+/// envelope, the <c>fields</c> projection, <c>sort</c> order <c>Desc</c> and the 100-row <c>pagination</c>
+/// ceiling are all confirmed correct. The same verification found the three behaviours encoded below:
+/// <c>rangeFilters</c> is rejected with HTTP 400 UNCONDITIONALLY unless BOTH bounds are sent; HTTP 404 is
+/// ODP's EMPTY-RESULT response (an empty body, not an error); and <c>firstApplicantName</c> matching is
+/// TOKEN-based, so the returned rows are filtered client-side by a normalized applicant comparison.
+/// </para>
+/// <para>
+/// Dataset caveat (recorded, deliberately not acted on): ODP PFW is an APPLICATIONS dataset keyed on the
+/// APPLICANT. It carries no assignee field, so IP acquired by assignment is invisible to this reader — an
+/// accepted limitation of the Neutral v1 patent-activity signal.
 /// </para>
 /// </summary>
 internal sealed class HttpPatentSearchReader : IPatentSearchReader
@@ -38,15 +46,21 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
     private const string SearchPath = "/api/v1/patent/applications/search";
     private const string ApiKeyHeader = "X-Api-Key";
 
-    // ODP PFW Search request field/operator strings, pinned as named constants (pinned from ODP docs; live
-    // field-name verification DEFERRED to the ID.me-gated key — see the class doc). The q clause matches the
-    // first-applicant organization name; rangeFilters applies a one-sided grant-date FLOOR (valueFrom only —
-    // the reader receives a floor, so no valueTo/"today" bound is invented); sort returns newest grants first.
+    // ODP PFW Search request field/operator strings, pinned as named constants (LIVE-VERIFIED 2026-07-25 — see
+    // the class doc). The q clause matches the first-applicant organization name; rangeFilters applies the
+    // grant-date window; sort returns newest grants first.
     private const string FirstApplicantNameField = "applicationMetaData.firstApplicantName";
     private const string GrantDateField = "applicationMetaData.grantDate";
     private const string PatentNumberField = "applicationMetaData.patentNumber";
     private const string InventionTitleField = "applicationMetaData.inventionTitle";
     private const string SortDescending = "Desc";
+
+    // ODP rejects a ONE-SIDED rangeFilters (valueFrom with no valueTo) with HTTP 400 unconditionally
+    // (live-verified 2026-07-25 — it fails regardless of q/fields/sort/paging), so both bounds must be sent.
+    // The reader only ever receives a floor, so the ceiling is a constant far-future date rather than "today":
+    // that keeps the reader clock-free and is exactly the pattern HttpFdaClearanceReader.DecisionCeiling uses
+    // for openFDA (both verified to return the same totals as a today-dated ceiling).
+    private const string GrantDateCeiling = "9999-12-31";
 
     private static readonly string[] RequestedFields =
         [PatentNumberField, InventionTitleField, GrantDateField, FirstApplicantNameField];
@@ -58,11 +72,23 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
     private const string PatentNumberProperty = "patentNumber";
     private const string InventionTitleProperty = "inventionTitle";
     private const string GrantDateProperty = "grantDate";
+    private const string FirstApplicantNameProperty = "firstApplicantName";
 
-    // Envelope-total cross-check fields, read defensively: the docs show "count", the community client reports
-    // "totalNumFound"; either only feeds a metadata cross-check, so both are tried before falling back.
+    // The envelope's own total. The live root is exactly { count, patentFileWrapperDataBag, requestIdentifier }
+    // — the "totalNumFound" the community client reported does NOT exist on this API (verified 2026-07-25), so
+    // no fallback reads it. This total is PRE-normalization (it counts ODP's token-matched rows, including the
+    // false positives filtered out below), which is why it feeds provenance metadata ONLY and never the
+    // emitted grant count.
     private const string CountProperty = "count";
-    private const string TotalNumFoundProperty = "totalNumFound";
+
+    // ODP's empty result set is an HTTP 404 with an EMPTY body (live-verified 2026-07-25), NOT an error: an
+    // assignee with no grants in the window must read as an honest zero, not a source failure. Routed through
+    // the shared EmptySearch404Sentinel that the openFDA reader established for its own documented
+    // empty-search 404 (spec 129) — the Success-typed sentinel is returned from HttpOutcomeFetch's onStatus
+    // hook and recognized by reference after the fetch, so every OTHER non-2xx (400/401/5xx) still maps to
+    // HttpError.
+    private static readonly EmptySearch404Sentinel<PatentSearchReadResult> Empty404 =
+        new(PatentSearchReadResult.Success(new PatentSearchResult(0, 0, [])));
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<HttpPatentSearchReader> _logger;
@@ -119,7 +145,9 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
             },
             // Materialize the body before disposing the response so parsing can happen synchronously.
             readBody: (content, c) => content.ReadAsByteArrayAsync(c),
-            onStatus: null,
+            // ODP answers a genuinely empty search with 404 — intercept it as a zero-grant Success BEFORE the
+            // generic onHttpError maps other non-success statuses to HttpError.
+            onStatus: Empty404.OnStatus,
             onHttpError: status =>
             {
                 _logger.LogWarning(
@@ -144,6 +172,17 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
 
         if (failure is not null)
         {
+            if (Empty404.Matches(failure))
+            {
+                // The 404 sentinel IS the Success-typed zero-grant result, so it is returned as-is: this
+                // assignee simply has no grants in the window (before this was handled, every quiet assignee
+                // reported a source failure).
+                _logger.LogDebug(
+                    "USPTO ODP patent search for assignee '{Assignee}' matched no applications "
+                        + "(HTTP 404 is ODP's empty-result response); recording zero grants.",
+                    assigneeName);
+            }
+
             return failure;
         }
 
@@ -178,7 +217,7 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
                     PatentSearchOutcome.Malformed, "missing patents array");
             }
 
-            var grants = ParseGrants(patents, ct);
+            var grants = ParseGrants(patents, NormalizeApplicantName(assigneeName), ct);
             var apiReportedTotal = GetReportedTotal(document.RootElement, grants.Count);
 
             return PatentSearchReadResult.Success(
@@ -208,13 +247,14 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
         // phrase and silently malform the query (which would degrade the read to HttpError/Unreachable).
         var quotedAssignee = assigneeName.Replace("\"", "\\\"", StringComparison.Ordinal);
 
-        // One-sided grant-date range (valueFrom only — the reader receives a floor, so no valueTo is invented).
+        // The grant-date range MUST carry both bounds — a one-sided valueFrom is an unconditional HTTP 400
+        // (see GrantDateCeiling).
         return new
         {
             q = $"{FirstApplicantNameField}:\"{quotedAssignee}\"",
             rangeFilters = new[]
             {
-                new { field = GrantDateField, valueFrom = floor },
+                new { field = GrantDateField, valueFrom = floor, valueTo = GrantDateCeiling },
             },
             fields = RequestedFields,
             pagination = new { offset = 0, limit = _options.MaxPageSize },
@@ -232,8 +272,18 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
     /// unparseable/absent <c>grantDate</c>, are skipped rather than throwing or coercing to a min-value date
     /// (which would inflate the grant count and hide field drift). An empty array yields no grants (an assignee
     /// with no recent grants).
+    /// <para>
+    /// Rows are ALSO filtered against <paramref name="normalizedApplicant"/>: ODP's <c>firstApplicantName</c>
+    /// match is token-based, so a phrase query for "Energy Recovery" also returns e.g.
+    /// "General Energy Recovery Inc." (live-verified: 280 raw rows, 239 genuine). Comparing normalized names
+    /// (upper-cased, all non-alphanumerics stripped) by PREFIX drops those false positives while still keeping
+    /// the seed's own punctuation/whitespace spelling variants ("Mercury Systems, Inc." / "Mercury Systems Inc."
+    /// / "MERCURY  SYSTEMS, INC." all normalize identically). A row whose applicant name is absent is dropped:
+    /// it cannot be attributed to this company, and provenance is sacred.
+    /// </para>
     /// </summary>
-    private static IReadOnlyList<PatentGrant> ParseGrants(JsonElement patents, CancellationToken ct)
+    private static IReadOnlyList<PatentGrant> ParseGrants(
+        JsonElement patents, string normalizedApplicant, CancellationToken ct)
     {
         var grants = new List<PatentGrant>();
 
@@ -244,6 +294,11 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
             if (row.ValueKind != JsonValueKind.Object
                 || !row.TryGetProperty(MetadataProperty, out var meta)
                 || meta.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (!MatchesApplicant(GetString(meta, FirstApplicantNameProperty), normalizedApplicant))
             {
                 continue;
             }
@@ -271,12 +326,51 @@ internal sealed class HttpPatentSearchReader : IPatentSearchReader
         return grants;
     }
 
-    // Reads the endpoint's own grand total as the metadata cross-check when it exceeds the bounded page count.
-    // The docs report the total as "count"; the community client reports it as "totalNumFound" — try both, then
-    // fall back to the parsed count. Never report a total lower than the rows we actually parsed.
+    /// <summary>
+    /// Whether a row's <c>firstApplicantName</c> belongs to the seed applicant, compared on NORMALIZED names
+    /// (see <see cref="NormalizeApplicantName"/>) by prefix — so "Energy Recovery, Inc." matches the seed
+    /// "Energy Recovery" but "General Energy Recovery Inc." does not.
+    /// </summary>
+    private static bool MatchesApplicant(string rowApplicant, string normalizedApplicant)
+    {
+        // A seed that normalizes to nothing (an all-punctuation token) would prefix-match everything, so it
+        // degrades to "no client-side filter" rather than silently dropping every row.
+        if (normalizedApplicant.Length == 0)
+        {
+            return true;
+        }
+
+        return NormalizeApplicantName(rowApplicant).StartsWith(normalizedApplicant, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Normalizes an applicant name for comparison: upper-cased, with ALL non-alphanumeric characters
+    /// (punctuation AND whitespace) stripped. That collapses the spelling variants one company files under —
+    /// "Mercury Systems, Inc." / "Mercury Systems Inc." / "MERCURY  SYSTEMS, INC." (double space) /
+    /// "MERCURY SYSTEMS, INC" all become "MERCURYSYSTEMSINC".
+    /// </summary>
+    private static string NormalizeApplicantName(string value)
+    {
+        var normalized = new StringBuilder(value.Length);
+
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                normalized.Append(char.ToUpperInvariant(ch));
+            }
+        }
+
+        return normalized.ToString();
+    }
+
+    // Reads the endpoint's own grand total ("count" — the only total the live envelope carries) as the metadata
+    // cross-check, falling back to the parsed count when it is absent. Never report a total lower than the rows
+    // we actually parsed. This total is PRE-normalization, so it can legitimately exceed the emitted grant
+    // count; it is provenance-only and is never the count the evidence reports.
     private static int GetReportedTotal(JsonElement root, int fallback)
     {
-        var reported = GetInt(root, CountProperty) ?? GetInt(root, TotalNumFoundProperty);
+        var reported = GetInt(root, CountProperty);
         return reported is { } number ? Math.Max(number, fallback) : fallback;
     }
 

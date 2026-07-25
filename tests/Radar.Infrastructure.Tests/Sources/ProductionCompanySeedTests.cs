@@ -91,6 +91,28 @@ public sealed class ProductionCompanySeedTests
         }
     }
 
+    /// <summary>
+    /// The <c>patents</c> feeds the shipped seed carries, pinned by ticker. Spec 134's live ODP verification
+    /// dropped MRCY (zero grants, filings AND publications in two years; last grant 2021-07-06 — a permanently
+    /// empty feed producing only log noise) and confirmed ERII + EOSE as genuine, so a later edit cannot
+    /// silently re-add a dead assignee token.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_PatentsFeeds_AreTheTwoLiveVerifiedAssignees()
+    {
+        var seed = await LoadProductionSeedAsync();
+
+        var patentsByTicker = seed.SourceFeeds
+            .Where(f => string.Equals(f.FeedType, "patents", StringComparison.OrdinalIgnoreCase))
+            .Join(seed.Companies, f => f.CompanyId, c => c.Id, (f, c) => (Ticker: c.Ticker ?? string.Empty, f.Url))
+            .ToDictionary(x => x.Ticker, x => x.Url, StringComparer.OrdinalIgnoreCase);
+
+        Assert.Equal(2, patentsByTicker.Count);
+        Assert.Equal("assignee=Energy Recovery, Inc.", patentsByTicker["ERII"]);
+        Assert.Equal("assignee=Eos Energy Enterprises, Inc.", patentsByTicker["EOSE"]);
+        Assert.False(patentsByTicker.ContainsKey("MRCY"), "MRCY's patents feed was dropped by spec 134.");
+    }
+
     private static async Task<string> GetNewsSearchUrlAsync(string ticker)
     {
         var seed = await LoadProductionSeedAsync();

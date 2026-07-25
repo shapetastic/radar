@@ -174,7 +174,8 @@ internal sealed class PatentActivityCollector : IEvidenceCollector
             ["lookbackDays"] = _options.LookbackDays.ToString(CultureInfo.InvariantCulture),
             ["grantFloor"] = grantFloorToken,
             ["sampleTitles"] = sampleTitles,
-            // The API's own grand total (count/totalNumFound) — a cross-check when it exceeds the bounded page count.
+            // The API's own grand total ("count") — a PRE-normalization cross-check (it counts ODP's
+            // token-matched rows, including the false positives the reader's applicant filter drops).
             ["apiReportedTotal"] = search.ApiReportedTotal.ToString(CultureInfo.InvariantCulture),
             ["retrievedAtUtc"] = retrievedAtToken,
         };

@@ -43,14 +43,13 @@ internal sealed class HttpFdaClearanceReader : IFdaClearanceReader
     // NO clock and its seam signature stays identical to the patents reader.
     private const string DecisionCeiling = "9999-12-31";
 
-    private const int NotFoundStatus = 404;
-
     // The openFDA empty-search 404 ("No matches found!") is a VALID no-recent-clearances result, not an error.
-    // The shared fetch ladder's onStatus hook returns a TFailure, so this Success-typed sentinel is returned
-    // from onStatus and recognized by reference in the per-endpoint handling below (BEFORE the generic
-    // onHttpError maps other non-success statuses to HttpError).
-    private static readonly FdaClearanceReadResult EmptyEndpoint404 =
-        FdaClearanceReadResult.Success(new FdaClearanceResult(0, [], 0, 0));
+    // The sentinel pair (Success-typed instance returned from HttpOutcomeFetch's onStatus hook, recognized by
+    // reference in the per-endpoint handling below, BEFORE the generic onHttpError maps other non-success
+    // statuses to HttpError) lives in the shared EmptySearch404Sentinel — the ODP patents reader is the second
+    // caller of the same mechanism (spec 134).
+    private static readonly EmptySearch404Sentinel<FdaClearanceReadResult> Empty404 =
+        new(FdaClearanceReadResult.Success(new FdaClearanceResult(0, [], 0, 0)));
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<HttpFdaClearanceReader> _logger;
@@ -124,7 +123,7 @@ internal sealed class HttpFdaClearanceReader : IFdaClearanceReader
             readBody: (content, c) => content.ReadAsByteArrayAsync(c),
             // The documented empty-search 404 is a valid zero-clearance result — intercept it BEFORE the generic
             // onHttpError maps other non-success statuses to HttpError.
-            onStatus: status => status == NotFoundStatus ? EmptyEndpoint404 : null,
+            onStatus: Empty404.OnStatus,
             onHttpError: status =>
             {
                 _logger.LogWarning(
@@ -151,7 +150,7 @@ internal sealed class HttpFdaClearanceReader : IFdaClearanceReader
         if (failure is not null)
         {
             // The empty-search 404 sentinel is a Success-with-zero-clearances for THIS endpoint.
-            if (ReferenceEquals(failure, EmptyEndpoint404))
+            if (Empty404.Matches(failure))
             {
                 return new EndpointFetch(FdaReadOutcome.Success, [], 0, null);
             }

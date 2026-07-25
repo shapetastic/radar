@@ -52,11 +52,6 @@
           "type": "hiringats",
           "name": "Mercury Systems — Open roles (Greenhouse ATS)",
           "url": "platform=greenhouse&board=mercury"
-        },
-        {
-          "type": "patents",
-          "name": "Mercury Systems — Recent granted patents (PatentsView)",
-          "url": "assignee=Mercury Systems, Inc."
         }
       ]
     },

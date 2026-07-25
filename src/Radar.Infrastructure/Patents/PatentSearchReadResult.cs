@@ -11,10 +11,11 @@ internal sealed record PatentGrant(string PatentId, string Title, DateOnly Grant
 
 /// <summary>
 /// The parsed result of one bounded ODP PFW Search page: <see cref="GrantCount"/> is the authoritative,
-/// deterministic count of grants parsed from the returned page (the count the evidence reports);
-/// <see cref="ApiReportedTotal"/> is the API's own grand total (<c>count</c>/<c>totalNumFound</c>) kept only as
-/// a metadata cross-check when the API reports more grants than fit the bounded page; <see cref="Grants"/> are
-/// the parsed grants (used for the bounded sample-titles metadata).
+/// deterministic count of grants parsed from the returned page AND attributed to the seed applicant by the
+/// reader's normalized-name filter (the count the evidence reports); <see cref="ApiReportedTotal"/> is the
+/// API's own grand total (<c>count</c>) kept only as a metadata cross-check — it is PRE-normalization (it
+/// includes ODP's token-matched false positives) and may exceed <see cref="GrantCount"/>; <see cref="Grants"/>
+/// are the parsed grants (used for the bounded sample-titles metadata).
 /// </summary>
 internal sealed record PatentSearchResult(
     int GrantCount, int ApiReportedTotal, IReadOnlyList<PatentGrant> Grants);
