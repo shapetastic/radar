@@ -140,11 +140,16 @@ public sealed class ScoringEngine : IScoringEngine
 
         var allSignals = await _signalRepository.GetByCompanyAsync(companyId, ct).ConfigureAwait(false);
 
-        // Window + review filter — both are tunable pipeline scaffolding, NOT formula:
+        // Window + known-at + review filter — all three are tunable pipeline scaffolding, NOT formula:
         //   * window rule: ObservedAtUtc in (windowStartUtc, windowEndUtc] — exclusive start, inclusive end;
+        //   * known-at rule (spec 136, point-in-time honesty): CreatedAtUtc <= windowEndUtc — score only
+        //     what Radar KNEW by asOf, so a historical replay at asOf = T never sees a signal that entered
+        //     the store after T. A forward run is provably unaffected (AD-7, one run one instant): this
+        //     run's signals carry CreatedAtUtc == asOfUtc == windowEndUtc exactly, satisfied by equality;
         //   * review rule: scoring consumes only Approved (human/deterministically reviewed) signals.
         var windowedApproved = allSignals
             .Where(s => s.ObservedAtUtc > windowStartUtc && s.ObservedAtUtc <= windowEndUtc)
+            .Where(s => s.CreatedAtUtc <= windowEndUtc)
             .Where(s => s.ReviewStatus == SignalReviewStatus.Approved);
 
         var pairs = new List<ScoringSignal>();
@@ -197,6 +202,10 @@ public sealed class ScoringEngine : IScoringEngine
         // It is carried as activity-only input for velocity measurement:
         //   * window rule: ObservedAtUtc in (previousWindowStartUtc, windowStartUtc] — note the shared
         //     boundary with the current window means a signal exactly at windowStartUtc belongs here (AD-6);
+        //   * known-at rule (spec 136): the knowledge threshold is windowEndUtc — the scoring instant —
+        //     NOT windowStartUtc. The previous window's OBSERVATION range ends at windowStartUtc, but the
+        //     question is "what did Radar know at asOf about the preceding period"; passing windowStartUtc
+        //     would under-count previous-window activity and silently shift velocity;
         //   * review rule: same Approved-only filter as the current window.
         // The read returns Approved-only, window-filtered, deterministically-ordered signals (AD-3). No
         // evidence is loaded for it and it never builds contributions / ScoreEvidenceLinks — provenance is
@@ -206,7 +215,7 @@ public sealed class ScoringEngine : IScoringEngine
         var previousWindowStartUtc = windowStartUtc - _options.Window;
 
         var previousSignals = await _signalFileStore
-            .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, ct)
+            .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, windowEndUtc, ct)
             .ConfigureAwait(false);
 
         // Spec 113, previous window too (no double-count, ever): the read's cross-run dedupe key includes

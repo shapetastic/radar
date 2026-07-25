@@ -70,7 +70,8 @@ public sealed class FileSignalStore : ISignalFileStore
     }
 
     public async Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
-        Guid companyId, DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc, CancellationToken ct)
+        Guid companyId, DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc,
+        DateTimeOffset knownAsOfUtc, CancellationToken ct)
     {
         // WriteAsync stores each signal date-partitioned at {RootDirectory}/{yyyy}/{MM}/{signalId}.json
         // (by ObservedAtUtc), NOT grouped by company. Rather than scan the whole tree on every
@@ -122,6 +123,17 @@ public sealed class FileSignalStore : ISignalFileStore
                             continue;
                         }
 
+                        // Point-in-time honesty (spec 136): only what Radar KNEW by knownAsOfUtc — skip a
+                        // signal created after the threshold (CreatedAt <= knownAsOfUtc must hold, equality
+                        // included so a forward run keeps its own signals). A null CreatedAt (a file written
+                        // before this field's predicate existed) is unknown → INCLUDED, preserving pre-136
+                        // behaviour for that history; such history is NOT replay-honest and cannot be — the
+                        // fact was never recorded.
+                        if (parsed.CreatedAt is not null && parsed.CreatedAt > knownAsOfUtc)
+                        {
+                            continue;
+                        }
+
                         // Reconstruct the full Signal from the persisted fields. Evidence / ScoreEvidenceLinks
                         // are intentionally NOT rehydrated: this is the activity-only previous window for
                         // velocity (Strength magnitude), NOT dropped provenance — AD-6 says it carries none.
@@ -139,7 +151,10 @@ public sealed class FileSignalStore : ISignalFileStore
                             Reason: parsed.Reason,
                             ReviewStatus: parsed.ReviewStatus,
                             ObservedAtUtc: parsed.ObservedAt,
-                            CreatedAtUtc: parsed.CreatedAt));
+                            // A legacy file without createdAt maps to ObservedAt — the earliest honest
+                            // stand-in (the event date), never a fabricated knowledge date. The value is
+                            // activity-only here (AD-6, velocity input), never provenance.
+                            CreatedAtUtc: parsed.CreatedAt ?? parsed.ObservedAt));
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
                     {
@@ -255,6 +270,9 @@ public sealed class FileSignalStore : ISignalFileStore
     /// The persisted signal shape. Property names render camelCase via the serializer options
     /// (<c>signalId</c>, <c>evidenceId</c>, …); enums render as their string names. Carries the
     /// provenance fields (<c>evidenceId</c>, nullable <c>companyId</c>) and the embedded review.
+    /// <c>CreatedAt</c> is nullable ON READ only (spec 136): a legacy file lacking the property
+    /// deserializes to an explicit null (unknown knowledge date) rather than silently to MinValue;
+    /// the write side always supplies a real value, so serialized output is unchanged.
     /// </summary>
     private sealed record SignalFile(
         Guid SignalId,
@@ -270,7 +288,7 @@ public sealed class FileSignalStore : ISignalFileStore
         string Reason,
         SignalReviewStatus ReviewStatus,
         DateTimeOffset ObservedAt,
-        DateTimeOffset CreatedAt,
+        DateTimeOffset? CreatedAt,
         SignalReviewFile Review);
 
     /// <summary>

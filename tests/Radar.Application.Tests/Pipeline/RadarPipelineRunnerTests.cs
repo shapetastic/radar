@@ -192,6 +192,7 @@ public sealed class RadarPipelineRunnerTests
             Guid companyId,
             DateTimeOffset startExclusiveUtc,
             DateTimeOffset endInclusiveUtc,
+            DateTimeOffset knownAsOfUtc,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -200,6 +201,7 @@ public sealed class RadarPipelineRunnerTests
                 .Where(s => s.CompanyId == companyId)
                 .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)
                 .Where(s => s.ObservedAtUtc > startExclusiveUtc && s.ObservedAtUtc <= endInclusiveUtc)
+                .Where(s => s.CreatedAtUtc <= knownAsOfUtc)
                 .OrderBy(s => s.ObservedAtUtc).ThenBy(s => s.Id)
                 .ToList();
             return Task.FromResult(result);
