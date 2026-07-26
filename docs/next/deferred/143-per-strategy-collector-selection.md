@@ -1,3 +1,9 @@
+> ⛔ **SUPERSEDED by spec 146** (`radar-formula-v9` channel composition), 2026-07-26. Declaring collectors
+> *with weights and a sub-formula* is a strict superset of declaring which collectors a strategy consumes,
+> so this slice would be built and then immediately rewritten. Kept for its design notes — the recorded-
+> provenance gate, the SignalType-vs-collector many-to-many caveat, and the fail-open binding trap from 138 —
+> all of which 146 carries forward. Do not implement this file.
+
 # Task: A strategy selects its collectors — `{ formula + weights + collectors }` as the unit of experiment
 
 > Spec 138 let a strategy declare the `SignalType`s it consumes. That is **not** the same axis as choosing
