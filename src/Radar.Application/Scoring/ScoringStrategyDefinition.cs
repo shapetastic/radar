@@ -1,3 +1,5 @@
+using Radar.Domain.Signals;
+
 namespace Radar.Application.Scoring;
 
 /// <summary>
@@ -26,4 +28,25 @@ public sealed record ScoringStrategyDefinition(
     string Name,
     string ScoringProfile,
     ScoringWeights Weights,
-    bool IsPrimary);
+    bool IsPrimary)
+{
+    /// <summary>
+    /// The <see cref="SignalType"/>s this strategy consumes (spec 138) — the strategy's <b>hypothesis</b>
+    /// about which signals matter, as opposed to <see cref="Weights"/>, which is only about magnitudes.
+    /// Defaults to <see cref="SignalTypeFilter.All"/>, so every existing construction site and every existing
+    /// config is unchanged (an omitted, empty, or exhaustive <c>SignalTypes</c> all canonicalise onto
+    /// <see cref="SignalTypeFilter.All"/>, which hashes to the byte-identical default fingerprint).
+    /// <para>
+    /// Deliberately an init-only property rather than a positional parameter: it is an additive, defaulted
+    /// aspect of a strategy (mirroring <c>ScoringInput.PreCollapseSignals</c>), so every caller that does not
+    /// care keeps compiling and keeps the default behaviour.
+    /// </para>
+    /// <para>
+    /// Unlike <see cref="Name"/>, this IS a fingerprint input: two strategies consuming different signal sets
+    /// are genuinely different scorings and must never share a <c>ScoringConfigVersion</c>. The fold happens
+    /// inside <see cref="ScoringEngine"/> (via <see cref="SignalTypeFilter.Describe"/> over the signal-source
+    /// descriptor) so the behavioural gate and the hashed identity can never drift apart.
+    /// </para>
+    /// </summary>
+    public SignalTypeFilter SignalTypes { get; init; } = SignalTypeFilter.All;
+}

@@ -6,6 +6,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
+using Radar.Domain.Signals;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Persistence.InMemory;
 
@@ -75,7 +76,7 @@ public sealed class ScoringStrategyFactoryTests
     }
 
     [Fact]
-    public void IScoringEngine_ResolvesToThePrimaryStrategysEngine()
+    public void IScoringEngine_ResolvesToThePrimaryStrategyEngine()
     {
         using var provider = BuildDefaultGraph();
 
@@ -128,6 +129,48 @@ public sealed class ScoringStrategyFactoryTests
         Assert.Equal(
             factory.Runtimes[0].Engine.EffectiveConfig.Fingerprint,
             factory.Runtimes[1].Engine.EffectiveConfig.Fingerprint);
+    }
+
+    [Fact]
+    public void DeclaredSignalTypes_ReachTheStrategyEngine_AndReStampOnlyThatStrategy()
+    {
+        // Spec 138: the declared set travels definition → engine → fingerprint. Two strategies over identical
+        // weights that differ ONLY in the signal types they consume must stamp different ScoringConfigVersions
+        // (they are genuinely different scorings), while the unfiltered one keeps the untouched default stamp.
+        var weights = new ScoringWeights();
+        var set = new ScoringStrategySet(
+        [
+            new ScoringStrategyDefinition("everything", "default", weights, IsPrimary: true),
+            new ScoringStrategyDefinition("insider-only", "default", weights, IsPrimary: false)
+            {
+                SignalTypes = SignalTypeFilter.Create([SignalType.InsiderBuying]),
+            },
+        ]);
+
+        using var provider = BuildDefaultGraph();
+        var factory = new ScoringStrategyFactory(
+            set,
+            provider.GetRequiredService<ISignalRepository>(),
+            provider.GetRequiredService<ISignalFileStore>(),
+            provider.GetRequiredService<IEvidenceRepository>(),
+            new StrategyScopedScoreRepositoryFactory(provider.GetRequiredService<IScoreRepository>()),
+            provider.GetRequiredService<ICompanyRepository>(),
+            provider.GetRequiredService<IScoreFormulaFactory>(),
+            provider.GetRequiredService<IAttentionSourceWeights>(),
+            provider.GetRequiredService<ISignalSourceDescriptor>(),
+            provider.GetRequiredService<InsiderMaterialityWeights>(),
+            provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<ScoringOptions>(),
+            provider.GetRequiredService<ILogger<ScoringEngine>>());
+
+        var unfiltered = factory.Runtimes[0].Engine.EffectiveConfig;
+        var filtered = factory.Runtimes[1].Engine.EffectiveConfig;
+
+        Assert.NotEqual(unfiltered.Fingerprint, filtered.Fingerprint);
+        // The unfiltered strategy hashes the shared source descriptor VERBATIM (no signalTypes segment).
+        var shared = provider.GetRequiredService<ISignalSourceDescriptor>().CanonicalDescriptor();
+        Assert.Equal(shared, unfiltered.SignalSourceDescriptor);
+        Assert.Equal($"{shared}signalTypes=InsiderBuying;", filtered.SignalSourceDescriptor);
     }
 
     [Fact]

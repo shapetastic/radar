@@ -49,6 +49,13 @@ namespace Radar.Application.Scoring;
 /// <see cref="IScoringEngine"/> signature and the formula are all untouched. The engine additionally stamps
 /// the strategy's human-readable name on each snapshot; that name is NOT a fingerprint input.
 /// </para>
+/// <para>
+/// A strategy may additionally declare WHICH <see cref="SignalType"/>s it consumes (spec 138) via
+/// <see cref="SignalTypeFilter"/>. That set — unlike the name — IS folded into the fingerprint (through the
+/// signal-source descriptor), because two strategies scoring different signal sets are genuinely different
+/// scorings. The default filter consumes everything and folds in as a no-op, so the pinned default
+/// fingerprints are unmoved.
+/// </para>
 /// </summary>
 public sealed class ScoringEngine : IScoringEngine
 {
@@ -70,6 +77,12 @@ public sealed class ScoringEngine : IScoringEngine
     // strategies that resolve to the same effective config are genuinely comparable, and hashing the name
     // would move the pinned default fingerprints for no scoring-affecting reason (AD-10).
     private readonly string? _strategyName;
+
+    // The SignalTypes this strategy consumes (spec 138). Defaults to SignalTypeFilter.All (consume
+    // everything), which Describe() folds into the source descriptor as a NO-OP, so the default composition's
+    // fingerprint is byte-identical to the pre-138 value. Unlike the strategy NAME this IS a fingerprint
+    // input: two strategies scoring different signal sets are genuinely different scorings.
+    private readonly SignalTypeFilter _signalTypes;
 
     // The whole scoring-generation stamp: a content fingerprint of the effective resolved scoring config
     // (structure + all weights + tier map), computed once and stamped on every snapshot's
@@ -96,7 +109,8 @@ public sealed class ScoringEngine : IScoringEngine
         MediaAttentionCollapse mediaCollapse,
         ScoringOptions options,
         ILogger<ScoringEngine> logger,
-        string? strategyName = null)
+        string? strategyName = null,
+        SignalTypeFilter? signalTypes = null)
     {
         ArgumentNullException.ThrowIfNull(signalRepository);
         ArgumentNullException.ThrowIfNull(signalFileStore);
@@ -122,9 +136,18 @@ public sealed class ScoringEngine : IScoringEngine
         _options = options;
         _logger = logger;
         _strategyName = strategyName;
+        _signalTypes = signalTypes ?? SignalTypeFilter.All;
 
         var attentionDescriptor = sourceWeights.CanonicalDescriptor();
-        var signalSourceDescriptor = sourceDescriptor.CanonicalDescriptor();
+
+        // Spec 138: the strategy's declared signal-type set is folded into the SIGNAL-SOURCE descriptor here,
+        // inside the engine that also applies the filter behaviourally, so the gate and the hashed identity
+        // can never drift apart. ScoringConfigFingerprint and EffectiveScoringConfig are untouched — they
+        // store/hash the composed descriptor verbatim, so the scoring-config store's self-verification
+        // invariant (the persisted descriptor reproduces the persisted fingerprint) still holds. For the
+        // default "all types" filter Describe() returns its input unchanged, so the pinned default
+        // fingerprints do not move.
+        var signalSourceDescriptor = _signalTypes.Describe(sourceDescriptor.CanonicalDescriptor());
         var insiderMaterialityDescriptor = insiderMaterialityWeights.CanonicalDescriptor();
         var mediaCollapseDescriptor = mediaCollapse.CanonicalDescriptor();
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
@@ -162,11 +185,16 @@ public sealed class ScoringEngine : IScoringEngine
         //     what Radar KNEW by asOf, so a historical replay at asOf = T never sees a signal that entered
         //     the store after T. A forward run is provably unaffected (AD-7, one run one instant): this
         //     run's signals carry CreatedAtUtc == asOfUtc == windowEndUtc exactly, satisfied by equality;
-        //   * review rule: scoring consumes only Approved (human/deterministically reviewed) signals.
+        //   * review rule: scoring consumes only Approved (human/deterministically reviewed) signals;
+        //   * signal-type rule (spec 138): this strategy scores only the SignalTypes it declared. Applied
+        //     LAST, after the window / known-at / review predicates, because it is a pure "does this strategy
+        //     consume this type" gate and not a provenance change — an out-of-set signal is not deleted, its
+        //     evidence chain is untouched, and every other strategy still scores it. Default is all types.
         var windowedApproved = allSignals
             .Where(s => s.ObservedAtUtc > windowStartUtc && s.ObservedAtUtc <= windowEndUtc)
             .Where(s => s.CreatedAtUtc <= windowEndUtc)
-            .Where(s => s.ReviewStatus == SignalReviewStatus.Approved);
+            .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)
+            .Where(s => _signalTypes.Includes(s.Type));
 
         var pairs = new List<ScoringSignal>();
         foreach (var signal in windowedApproved)
@@ -241,6 +269,17 @@ public sealed class ScoringEngine : IScoringEngine
         // is behaviour-identical there.
         previousSignals = GuidanceChangeSupersede.Apply(previousSignals);
 
+        // Spec 138, previous window too: the velocity comparison must be like-for-like. If a strategy does not
+        // consume a SignalType in the CURRENT window, prior activity of that type is not this strategy's prior
+        // activity either — otherwise a filtered strategy would measure its own (narrow) current activity
+        // against the FULL previous window and read as decelerating for a reason that has nothing to do with
+        // the company. Applied AFTER the spec-85 cross-run dedupe/read predicate and the spec-113 supersede,
+        // for the same reason as the current window: a pure membership gate, applied last.
+        if (!_signalTypes.IsAll)
+        {
+            previousSignals = [.. previousSignals.Where(s => _signalTypes.Includes(s.Type))];
+        }
+
         // The company's curated following tier (spec 117): the non-price notedness input the v7 Opportunity
         // discount consumes (AD-14 — seed-curated, never price-derived). A missing company degrades to
         // Small (no extra discount) — the fail-safe; never a throw.
@@ -262,6 +301,15 @@ public sealed class ScoringEngine : IScoringEngine
 
         // Record both identities so snapshots remain reproducible and auditable.
         var scoringVersion = $"{EngineVersion}+{_formula.Version}";
+
+        // ZERO CONSUMED SIGNALS (spec 138), stated explicitly because it is a deliberate choice: a strategy
+        // whose signal-type filter excludes every one of a company's signals gets EXACTLY what a company with
+        // no signals already gets today — a neutral snapshot carrying zero ScoreEvidenceLinks. There is no
+        // early return and no special case, so the two are indistinguishable by construction. That is not a
+        // phantom: a snapshot with zero evidence links IS how Radar already represents "no evidence for this
+        // company in this window", and suppressing it instead would make a filtered strategy's series
+        // silently discontinuous (a missing company reads as "not scored", not as "nothing to score"),
+        // breaking the spec-140 strategy-vs-price comparison the filter exists to enable.
 
         var snapshot = new CompanyScoreSnapshot(
             Id: Guid.NewGuid(),
@@ -315,10 +363,13 @@ public sealed class ScoringEngine : IScoringEngine
             await _scoreRepository.AddEvidenceLinkAsync(link, ct).ConfigureAwait(false);
         }
 
+        // _signalTypes.ToString() is a precomputed-free join over at most a handful of members ("all types"
+        // for the default), so logging the strategy's declared signal set stays cheap while making a filtered
+        // strategy's narrower signal count self-explanatory in the run log.
         _logger.LogInformation(
             "Scored company {CompanyId} from {SignalCount} signal(s) using {ScoringVersion} " +
-            "(strategy {StrategyName}).",
-            companyId, scoredSignals.Count, scoringVersion, _strategyName ?? "(none)");
+            "(strategy {StrategyName}, signal types {SignalTypes}).",
+            companyId, scoredSignals.Count, scoringVersion, _strategyName ?? "(none)", _signalTypes.ToString());
 
         return new CompanyScoreResult(snapshot, links);
     }

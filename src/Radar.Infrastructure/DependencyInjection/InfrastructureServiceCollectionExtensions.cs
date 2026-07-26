@@ -16,6 +16,7 @@ using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
+using Radar.Domain.Signals;
 using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.Fda;
@@ -224,7 +225,10 @@ public static class InfrastructureServiceCollectionExtensions
     /// <code language="jsonc">
     /// "Radar": {
     ///   "Strategies": [ { "Name": "baseline",  "ScoringProfile": "default" },
-    ///                   { "Name": "low-media", "ScoringProfile": "low-media" } ],
+    ///                   { "Name": "low-media", "ScoringProfile": "low-media" },
+    ///                   // Spec 138: an optional per-strategy signal-type set. Omitted/empty ⇒ ALL types.
+    ///                   { "Name": "insider-only", "ScoringProfile": "default",
+    ///                     "SignalTypes": [ "InsiderBuying" ] } ],
     ///   "PrimaryStrategy": "baseline"
     /// }
     /// </code>
@@ -240,11 +244,17 @@ public static class InfrastructureServiceCollectionExtensions
     /// storage location and which the weekly report renders. It is <b>required</b> whenever
     /// <c>Radar:Strategies</c> is non-empty: which strategy owns the reported series is load-bearing, so it is
     /// stated explicitly rather than silently defaulted to whichever entry happens to be listed first.</item>
+    /// <item><c>SignalTypes</c> (spec 138) declares the <see cref="SignalType"/>s that strategy consumes.
+    /// <b>Omitted or empty ⇒ every type</b>, which canonicalises onto <see cref="SignalTypeFilter.All"/> and
+    /// hashes as a no-op — so the byte-identical default holds. Values are matched by EXACT enum member name
+    /// (case-insensitively); numeric and unknown values are rejected rather than quietly accepted as a
+    /// nonexistent type.</item>
     /// </list>
     /// Fails fast at startup — each message naming the offending config key — on an unknown
-    /// <c>ScoringProfile</c>, a blank or unusable <c>Name</c>, duplicate <c>Name</c>s, or a
-    /// <c>PrimaryStrategy</c> that is blank or not present in <c>Strategies</c>. Every one of those otherwise
-    /// surfaces later as a confusing empty or mislabelled score series.
+    /// <c>ScoringProfile</c>, a blank or unusable <c>Name</c>, duplicate <c>Name</c>s, a blank/unknown
+    /// <c>SignalTypes</c> entry, or a <c>PrimaryStrategy</c> that is blank or not present in
+    /// <c>Strategies</c>. Every one of those otherwise surfaces later as a confusing empty or mislabelled
+    /// score series.
     /// </summary>
     public static IServiceCollection AddRadarScoringStrategies(
         this IServiceCollection services, IConfiguration configuration)
@@ -295,7 +305,10 @@ public static class InfrastructureServiceCollectionExtensions
                 Name: name,
                 ScoringProfile: resolved.EffectiveProfile,
                 Weights: resolved.Weights,
-                IsPrimary: string.Equals(name, primaryName, StringComparison.OrdinalIgnoreCase)));
+                IsPrimary: string.Equals(name, primaryName, StringComparison.OrdinalIgnoreCase))
+            {
+                SignalTypes = ResolveSignalTypes(entry),
+            });
         }
 
         if (!definitions.Any(d => d.IsPrimary))
@@ -311,6 +324,73 @@ public static class InfrastructureServiceCollectionExtensions
         // there is a single validation implementation regardless of how a set is composed.
         services.AddSingleton(new ScoringStrategySet(definitions));
         return services;
+    }
+
+    /// <summary>
+    /// Resolves ONE strategy's <c>SignalTypes</c> array (spec 138) into a canonical
+    /// <see cref="SignalTypeFilter"/>. An absent or empty array ⇒ <see cref="SignalTypeFilter.All"/> — the
+    /// byte-identical "consume everything" default. This is the layering seam: <c>IConfiguration</c> never
+    /// reaches <c>Radar.Application</c>, so the strings are parsed into domain <see cref="SignalType"/> values
+    /// here and only resolved enum values cross the boundary. A <b>scalar</b> <c>SignalTypes</c> (the array
+    /// brackets forgotten) is rejected rather than silently read as "all types".
+    /// </summary>
+    private static SignalTypeFilter ResolveSignalTypes(IConfigurationSection entry)
+    {
+        var section = entry.GetSection("SignalTypes");
+        var children = section.GetChildren().ToList();
+        if (children.Count == 0)
+        {
+            // Shape guard: a SCALAR (e.g. "SignalTypes": "InsiderBuying" instead of [ "InsiderBuying" ]) binds
+            // as a value with no children, which would otherwise fall through to "all types" — silently
+            // stamping and scoring BROAD a strategy the operator wrote to be narrow. That is the exact failure
+            // this slice exists to prevent, so it is a startup error rather than a quiet widening.
+            //
+            // The test is BLANK, not null. An EMPTY ARRAY is indistinguishable from "SignalTypes": "" once
+            // bound: JsonConfigurationFileParser stores the empty STRING for "SignalTypes": [] (verified
+            // against Microsoft.Extensions.Configuration.Json 10.0.7 — absent ⇒ null, [] ⇒ "", scalar ⇒ its
+            // text), and the memory provider has no array shape at all. There is therefore no representation
+            // in bound config that could let the two differ, so blank MUST mean "all types" — that is the
+            // spec's "omitted OR EMPTY ⇒ all signal types", and it is also what the throw message below
+            // advises the operator to do.
+            if (!string.IsNullOrWhiteSpace(section.Value))
+            {
+                throw new InvalidOperationException(
+                    $"{section.Path} is the scalar '{section.Value}'; a strategy's SignalTypes must be a JSON "
+                        + "ARRAY of SignalType names (e.g. [ \"InsiderBuying\" ]). Omit SignalTypes, or give it "
+                        + "an empty array, to consume every signal type.");
+            }
+
+            return SignalTypeFilter.All;
+        }
+
+        // Deliberately NOT Enum.TryParse: it accepts numeric strings ("5") and, worse, any numeric value at
+        // all — including undeclared ones — as a valid SignalType, so a typo would bind to a type that does
+        // not exist and silently produce a strategy that scores nothing. Matching against the declared member
+        // NAMES makes every non-name a startup failure.
+        var declaredNames = Enum.GetNames<SignalType>();
+        var types = new List<SignalType>(children.Count);
+        foreach (var child in children)
+        {
+            var raw = child.Value?.Trim();
+            var match = string.IsNullOrEmpty(raw)
+                ? null
+                : Array.Find(declaredNames, n => string.Equals(n, raw, StringComparison.OrdinalIgnoreCase));
+
+            if (match is null)
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path} is '{child.Value}', which is not a SignalType; a strategy's SignalTypes "
+                        + "entries must each name a declared signal type (valid values: "
+                        + $"{string.Join(", ", declaredNames)}). Remove SignalTypes entirely to consume every "
+                        + "signal type.");
+            }
+
+            types.Add(Enum.Parse<SignalType>(match));
+        }
+
+        // Create() canonicalises: duplicates collapse, order is irrelevant, and a list naming EVERY declared
+        // type returns All — so "all types spelled out" is byte-identical to omitting the key.
+        return SignalTypeFilter.Create(types);
     }
 
     /// <summary>

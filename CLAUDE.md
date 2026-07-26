@@ -242,19 +242,29 @@ Do not hand back broken code.
   bound onto `ScoringWeights`); the formula *structure* (component shape, direction-sign semantics) stays
   versioned code (`radar-formula-vN`). Don't add a new formula class to change a number — edit/add a profile.
 - **Scoring is plural; collection is not.** Stage 6 runs **N strategies over ONE collection pass** (spec 137).
-  A strategy is `{ Name, ScoringProfile }` under `Radar:Strategies`, with `Radar:PrimaryStrategy` naming the
-  primary; an absent/empty list synthesises the single current-`Radar:Scoring:Profile` strategy, so every
-  existing config is unaffected. One `ScoringEngine` instance **is** one strategy (it resolves its config
-  fingerprint once in the ctor) — build them via `IScoringStrategyFactory`, never per-call weights. Rules:
-  collection, the AI directional read, extraction, resolution and review run **exactly once** — nothing above
-  the scoring stage may run per strategy; the **primary** writes to the existing scores path (and the shared
-  `IScoreRepository`) and is the series the weekly report renders, while non-primary strategies get their own
-  repository instance and a `strategies/{name}/` scoped path; and `StrategyName` (on `CompanyScoreSnapshot`,
-  trailing + nullable, `null` ⇒ primary/legacy) is **not** a fingerprint input. Known coupling, not yet fixed:
-  `SignalSourceDescriptor` still folds the enabled-collector set into every strategy's fingerprint, so
-  enabling a collector re-stamps all strategies at once. Splitting *data provenance* from *strategy identity*
-  in the fingerprint is spec 137's recommended next slice but is **not yet specced** — 138 (signal-type filter)
-  deliberately does not touch the collector set, and it gets cheaper to fix the sooner it is done.
+  A strategy is `{ Name, ScoringProfile, SignalTypes? }` under `Radar:Strategies`, with
+  `Radar:PrimaryStrategy` naming the primary; an absent/empty list synthesises the single
+  current-`Radar:Scoring:Profile` strategy, so every existing config is unaffected. One `ScoringEngine`
+  instance **is** one strategy (it resolves its config fingerprint once in the ctor) — build them via
+  `IScoringStrategyFactory`, never per-call weights. Rules: collection, the AI directional read, extraction,
+  resolution and review run **exactly once** — nothing above the scoring stage may run per strategy; the
+  **primary** writes to the existing scores path (and the shared `IScoreRepository`) and is the series the
+  weekly report renders, while non-primary strategies get their own repository instance and a
+  `strategies/{name}/` scoped path; and `StrategyName` (on `CompanyScoreSnapshot`, trailing + nullable,
+  `null` ⇒ primary/legacy) is **not** a fingerprint input. A strategy may additionally declare
+  `Radar:Strategies[i].SignalTypes` — the `SignalType`s it consumes (spec 138), its *hypothesis* as opposed
+  to its magnitudes; omitted/empty/exhaustive all canonicalise onto `SignalTypeFilter.All`, so "all types"
+  is byte-identical to the default and the pins do not move. Unlike `StrategyName` it **is** folded into
+  that strategy's fingerprint (the engine composes `filter.Describe(sourceDescriptor.CanonicalDescriptor())`,
+  so the gate and the hashed identity cannot drift), and it is applied **after** the spec-136 point-in-time
+  read predicate and the spec-85/113 dedupe — to **both** the current and the previous (velocity) window —
+  as a pure membership gate: nothing is deleted, evidence chains for consumed signals are intact, and a
+  strategy that consumes zero signals gets the same neutral zero-evidence-link snapshot a zero-signal
+  company already gets. Known coupling, not yet fixed: `SignalSourceDescriptor` still folds the
+  enabled-collector set into every strategy's fingerprint, so enabling a collector re-stamps all strategies
+  at once. Splitting *data provenance* from *strategy identity* in the fingerprint is spec 137's recommended
+  next slice but is **not yet specced** — 138 (signal-type filter) deliberately does not touch the collector
+  set, and it gets cheaper to fix the sooner it is done.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,
