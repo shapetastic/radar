@@ -89,12 +89,18 @@ fingerprint as tripwire, collection provenance recorded separately — and inclu
 measurement as the evidence. Correct the CLAUDE.md paragraph that currently records this coupling as "known,
 not yet fixed".
 
-### 5. Regenerating the fragmented history (do only if 139 has landed)
+### 5. Regenerating the fragmented history
 
-If spec 139's replay verb is merged, replay the stored signal history under the new identity to produce one
-continuous series out of the current 17 fragments. If 139 is not merged, **do not block on it** — take the
-discontinuity, note it, and leave regeneration to a follow-up. Do not rewrite existing snapshots in place:
-they are append-only history (AD-8).
+139 (replay) and 142 (durable read path) have both merged, so replay can now actually see accrued signals.
+Replay the stored history under the new identity to produce one continuous series out of the current 17
+fragments. **Do not rewrite existing snapshots in place** — they are append-only history (AD-8); the
+regenerated series is a new, labelled series alongside them.
+
+**Scope it honestly against what 142 measured.** The real knowledge history is `createdAt`
+2026-06-30 → 2026-07-26 — **27 days over 23 runs**, not the 2006–2026 `observedAt` span. A 30-day window
+scores **2,628 signals across 44 companies**. If regeneration proves awkward, it is acceptable to take the
+discontinuity, say so, and leave regeneration to a follow-up — 27 days of fragments is a small thing to lose
+compared to shipping the identity split.
 
 ## Files (verify against the tree before planning)
 
@@ -109,14 +115,25 @@ efficacy/report read side, `ScoringConfigFingerprintTests`, `docs/architecture-d
 - **Scores must not change.** This is an identity/record-keeping change only — every component, weight and gate stays
   byte-identical. Prove it: same inputs ⇒ same numeric scores, only the stamps differ.
 - **Provenance intact.** Evidence → signal → score chains unchanged; the collector set stays *recorded*.
+- ⛔ **DO NOT touch evidence identity, and do not "improve" evidence id stability as a side effect.** Spec 142
+  measured the live store: the 49,454 accrued signals collapse under the spec-85 dedupe key to 49,454 (a
+  **1.00× no-op — that key has been near-vacuous all along**) but collapse by *content* to 5,368, i.e.
+  **~9.2× real duplication**. That duplication lives in evidence identity, which the key includes, so the key
+  structurally cannot see it. Radar is currently protected from ~9× score inflation only by the accident that
+  duplicate evidence ids were never persisted, so `ScoringEngine` drops their signals. **Making evidence ids
+  stable without first fixing content-level dedupe converts today's clean 1.03× scored set into a ~9×
+  inflated one — silently, and in the direction that flatters every score.** That is spec 145; this slice
+  must leave evidence identity exactly as it finds it, and a reviewer should reject any change that moves it.
 - **Layering:** no `IConfiguration` in `Radar.Application`.
 - No new collector, no formula change, no weight change, no price read (AD-14).
 
 ## Out of scope (record, do not build)
 
-- **Per-strategy collector selection** — spec 142. This slice removes the collector set from strategy
+- **Per-strategy collector selection** — spec 143. This slice removes the collector set from strategy
   *identity*; letting a strategy *choose* collectors is the next slice.
-- **Splitting collection from scoring into separate runs** — spec 143.
+- **Evidence identity and content-level dedupe** — spec 145, a hard prerequisite for anything that stabilises
+  evidence ids (see the constraint above).
+- **Splitting collection from scoring into separate runs** — spec 144.
 - **Strategy-vs-price comparison** — spec 140, which should run *after* this slice so it keys on a stable
   series.
 
