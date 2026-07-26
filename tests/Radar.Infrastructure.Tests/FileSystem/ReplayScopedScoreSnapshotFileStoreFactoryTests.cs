@@ -170,10 +170,23 @@ public sealed class ReplayScopedScoreSnapshotFileStoreFactoryTests : IDisposable
     [InlineData("a/b")]
     [InlineData(" padded")]
     [InlineData("")]
+    [InlineData("a\0b")]
     public void UnusableLabel_Throws_BeforeAnyPathIsJoined(string label)
     {
         var factory = CreateFactory();
 
         Assert.Throws<ArgumentException>(() => factory.ForStrategy(label, Strategy("broad")));
+    }
+
+    [Fact]
+    public void NulInEitherSegment_Throws_SoTheNulJoinedCacheKeyCannotCollide()
+    {
+        // The store cache is keyed by "{label}\0{strategy}". That key is collision-free only because NUL is
+        // itself a forbidden segment character — without that rule ("a\0b", "c") and ("a", "b\0c") would map
+        // onto ONE cache entry and the second pair would silently write into the first pair's directory.
+        var factory = CreateFactory();
+
+        Assert.Throws<ArgumentException>(() => factory.ForStrategy("a\0b", Strategy("c")));
+        Assert.Throws<ArgumentException>(() => factory.ForStrategy("a", Strategy("b\0c")));
     }
 }

@@ -21,18 +21,24 @@ namespace Radar.Application.Storage;
 public static class StorageSegmentName
 {
     /// <summary>
-    /// Characters that are never valid in a storage segment name: the path separators plus the characters
-    /// Windows reserves in file names. Kept explicit (rather than <c>Path.GetInvalidFileNameChars</c>) so the
+    /// Characters that are never valid in a storage segment name: the path separators, the characters Windows
+    /// reserves in file names, and NUL. Kept explicit (rather than <c>Path.GetInvalidFileNameChars</c>) so the
     /// rule — and therefore which configurations are accepted — is identical on every platform.
+    /// <para>
+    /// NUL is forbidden for two reasons: it is illegal in a path on every platform (so it would throw deep
+    /// inside a file operation rather than at startup), and callers compose validated segments into
+    /// NUL-joined composite cache keys — e.g. <c>ReplayScopedScoreSnapshotFileStoreFactory</c>'s
+    /// <c>label\0strategy</c> key — whose collision-freedom rests on this rule rejecting the separator.
+    /// </para>
     /// </summary>
-    private static readonly char[] ForbiddenChars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+    private static readonly char[] ForbiddenChars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0'];
 
     /// <summary>
     /// The human-readable constraint, phrased to slot into a caller's message after "…so " — e.g.
     /// <c>$"'{name}' is used verbatim as a storage directory segment, so {StorageSegmentName.Rule}."</c>
     /// </summary>
     public const string Rule =
-        "it must be trimmed and must not contain any of / \\ : * ? \" < > | (nor be \".\" or \"..\")";
+        "it must be trimmed and must not contain any of / \\ : * ? \" < > | or NUL (nor be \".\" or \"..\")";
 
     /// <summary>
     /// True when <paramref name="name"/> is safe to use verbatim as a single storage directory segment:

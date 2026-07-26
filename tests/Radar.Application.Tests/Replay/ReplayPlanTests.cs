@@ -41,6 +41,7 @@ public sealed class ReplayPlanTests
     [InlineData(".")]
     [InlineData(" padded")]
     [InlineData("padded ")]
+    [InlineData("a\0b")]
     public void UnusableLabel_Throws(string label)
     {
         var ex = Assert.Throws<ArgumentException>(() => new ReplayPlan(label, Series()));
