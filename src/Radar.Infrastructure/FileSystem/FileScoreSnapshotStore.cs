@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 using Radar.Domain.Scoring;
 
 namespace Radar.Infrastructure.FileSystem;
@@ -10,7 +11,8 @@ namespace Radar.Infrastructure.FileSystem;
 /// <summary>
 /// On-disk mirror of a <see cref="CompanyScoreSnapshot"/> together with the
 /// <see cref="ScoreEvidenceLink"/>s that trace it back to the contributing signals/evidence. Writes one
-/// JSON file per snapshot to <c>{RootDirectory}/{companyId}/{snapshotId}.json</c>, grouping by company so
+/// JSON file per snapshot to <c>{RootDirectory}/{companyId}/{snapshotId}.json</c> (or to the name a
+/// <see cref="FileScoreSnapshotStoreOptions.SnapshotFileName"/> selector supplies), grouping by company so
 /// a single company's score history is trivial to browse once multiple runs accumulate. All file I/O is
 /// confined to Infrastructure; the Application sees only <see cref="IScoreSnapshotFileStore"/>. Disk
 /// failures degrade gracefully (warn + return the attempted path) and never crash the run; the in-memory
@@ -60,7 +62,7 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
         var path = Path.Combine(
             _options.RootDirectory,
             snapshot.CompanyId.ToString(),
-            snapshot.Id + ".json");
+            ResolveFileName(snapshot));
 
         var json = Serialize(snapshot, links);
 
@@ -151,10 +153,41 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
     }
 
     /// <summary>
+    /// The leaf file name for a snapshot: <c>{snapshotId}.json</c> unless the options supply a deterministic
+    /// selector (<see cref="FileScoreSnapshotStoreOptions.SnapshotFileName"/> — replay, spec 139). The guard
+    /// is a programming-error check, not graceful degradation: a selector returning a path would silently
+    /// write outside the company directory, so it throws rather than degrading.
+    /// <para>
+    /// It reuses the SHARED <see cref="StorageSegmentName"/> rule rather than a bespoke check. A
+    /// <c>Path.GetFileName(name) == name</c> test looks equivalent but accepts <c>"."</c> and <c>".."</c>,
+    /// both of which resolve to the company DIRECTORY rather than a file inside it — the shared rule already
+    /// rejects those alongside blank, untrimmed and separator-bearing names, and keeping one implementation
+    /// means a future fix to it cannot miss this call site.
+    /// </para>
+    /// </summary>
+    private string ResolveFileName(CompanyScoreSnapshot snapshot)
+    {
+        if (_options.SnapshotFileName is not { } selector)
+        {
+            return snapshot.Id + ".json";
+        }
+
+        var name = selector(snapshot);
+        if (!StorageSegmentName.IsUsable(name))
+        {
+            throw new InvalidOperationException(
+                $"FileScoreSnapshotStoreOptions.SnapshotFileName returned '{name}', which is not a usable file "
+                    + $"name; the selector names ONE file inside the company directory, so {StorageSegmentName.Rule}.");
+        }
+
+        return name;
+    }
+
+    /// <summary>
     /// Enumerates a company's snapshot files. WriteAsync stores each snapshot flat under
-    /// <c>{RootDirectory}/{companyId}/{snapshotId}.json</c>, so all of a company's snapshots live directly in
-    /// this directory. Returns <c>null</c> when the directory is missing or unenumerable (degrade to "no
-    /// snapshots"); an enumeration failure logs a warning.
+    /// <c>{RootDirectory}/{companyId}/</c> (named by <see cref="ResolveFileName"/>), so all of a company's
+    /// snapshots live directly in this directory. Returns <c>null</c> when the directory is missing or
+    /// unenumerable (degrade to "no snapshots"); an enumeration failure logs a warning.
     /// </summary>
     private List<string>? EnumerateCompanyFiles(Guid companyId)
     {

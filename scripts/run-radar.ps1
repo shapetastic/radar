@@ -19,16 +19,28 @@
 # A missing key warns here and then fails the Worker fast - it never silently degrades to no earnings read.
 # To run without a hosted model, overlay a profile that points Radar:Ai back at local Ollama.
 #
+# REPLAY (spec 139): -Replay turns the run into a read-only, OFFLINE historical as-of replay instead of a
+# pipeline run. It re-scores the ALREADY-STORED signals at each as-of instant in -ReplayFrom..-ReplayTo (step
+# -ReplayStep) through the same scoring seam the live pipeline uses, and writes ONLY under <outRoot>\replays\.
+# It collects nothing, mutates no live store, reads no price, and produces no report - the forward efficacy
+# series under <outRoot>\scores\ is untouched. Without -Replay the baseline behaviour is unchanged.
+#
 # Examples:
 #   powershell -File scripts/run-radar.ps1                       # baseline run -> data\
 #   powershell -File scripts/run-radar.ps1 -Profile low-media    # experiment  -> data\experiments\low-media\
 #   powershell -File scripts/run-radar.ps1 -Profile low-media -WhatIf   # print the resolved command, do not run
+#   powershell -File scripts/run-radar.ps1 -Replay -ReplayFrom 2026-05-01 -ReplayTo 2026-07-25 -ReplayStep 1d
 
 [CmdletBinding()]
 param(
     [string]$Profile       = "default",
     [string]$RepoPath      = "",
     [string]$SecUserAgent  = $(if ($env:RADAR_SEC_UA) { $env:RADAR_SEC_UA } else { "Radar Research your-contact-email@example.com" }),  # SEC EDGAR needs a real name+email: pass -SecUserAgent or set $env:RADAR_SEC_UA. NOT committed (public repo).
+    [switch]$Replay,                    # run a read-only historical as-of replay INSTEAD of the pipeline
+    [string]$ReplayFrom    = "",        # first as-of instant, UTC (e.g. 2026-05-01); required with -Replay
+    [string]$ReplayTo      = "",        # upper bound of the as-of series, UTC; required with -Replay
+    [string]$ReplayStep    = "1d",      # spacing: 1d / 12h / 30m, or a plain TimeSpan string
+    [string]$ReplayLabel   = "",        # output directory segment; blank = derived from the series (idempotent)
     [switch]$SkipBuild,
     [switch]$WhatIf
 )
@@ -91,11 +103,26 @@ $dirArgs = [ordered]@{
     "Radar:ScoringConfigsDirectory"  = (Join-Path $outRoot  "scoring-configs")
     "Radar:PricesDirectory"          = (Join-Path $outRoot  "prices")   # AD-14 price-history reference store (only written when Radar:Prices:Enabled)
     "Radar:EfficacyDirectory"        = (Join-Path $outRoot  "efficacy") # AD-14 read side: per-company score-vs-price SVG/CSV (only written when Radar:Efficacy:Enabled)
+    "Radar:ReplayDirectory"          = (Join-Path $outRoot  "replays")  # spec 139 historical as-of replay output; its OWN root, never under scores\ (only written when Radar:Replay:Enabled)
     "Radar:AnalyzedFilingCacheDirectory" = (Join-Path $outRoot "filings-cache")   # spec 107 per-accession earnings analysis-result cache (AD-14 analogue)
     "Radar:FilingReadDebugDirectory" = (Join-Path $outRoot "ai-debug\filings")   # spec 115 opt-in AI filing-read debug records (only written when Radar:Ai:Filings:PersistReadDebug)
     "Radar:Sec:UserAgent"            = $SecUserAgent
 }
 foreach ($k in $dirArgs.Keys) { $merged[$k] = $dirArgs[$k] }
+
+# --- optional: historical as-of replay (spec 139) instead of a pipeline run ---
+# Fail here rather than at the Worker so the missing bound is obvious before a build happens. From/To are
+# passed through verbatim; the Worker parses them as UTC and fails fast on anything unparseable.
+if ($Replay) {
+    if ([string]::IsNullOrWhiteSpace($ReplayFrom) -or [string]::IsNullOrWhiteSpace($ReplayTo)) {
+        throw "-Replay requires both -ReplayFrom and -ReplayTo (UTC dates, e.g. -ReplayFrom 2026-05-01 -ReplayTo 2026-07-25). A replay range is never inferred."
+    }
+    $merged["Radar:Replay:Enabled"] = "true"
+    $merged["Radar:Replay:From"]    = $ReplayFrom
+    $merged["Radar:Replay:To"]      = $ReplayTo
+    $merged["Radar:Replay:Step"]    = $ReplayStep
+    if (-not [string]::IsNullOrWhiteSpace($ReplayLabel)) { $merged["Radar:Replay:Label"] = $ReplayLabel }
+}
 
 # --- build the arg array ---
 $cliArgs = @()
@@ -103,6 +130,9 @@ foreach ($k in $merged.Keys) { $cliArgs += "--$k=$($merged[$k])" }
 
 Write-Host "==== Radar run profile: $Profile ====" -ForegroundColor Cyan
 Write-Host "Output root: $outRoot"
+if ($Replay) {
+    Write-Host "REPLAY MODE: as-of $ReplayFrom .. $ReplayTo step $ReplayStep -> $(Join-Path $outRoot 'replays') (read-only; the pipeline, price, report and efficacy steps do NOT run)" -ForegroundColor Yellow
+}
 if ($SecUserAgent -like "*example.com*") {
     Write-Warning "SEC User-Agent is the placeholder ('$SecUserAgent') - SEC EDGAR will HTTP 403. Pass -SecUserAgent 'Name email' or set `$env:RADAR_SEC_UA."
 }

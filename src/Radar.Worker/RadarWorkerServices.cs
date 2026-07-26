@@ -1,5 +1,8 @@
+using System.Globalization;
+
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
+using Radar.Application.Replay;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Infrastructure.Ai;
@@ -416,6 +419,20 @@ internal static class RadarWorkerServices
             services.AddRadarEfficacyReport();
         }
 
+        // Wire the historical as-of replay seam ONLY when Radar:Replay:Enabled is true (opt-in gate, mirroring
+        // the Radar:Efficacy gate). Replay is a read-only OFFLINE mode: it re-scores ALREADY-STORED signals at
+        // past instants through the SAME scoring seam the live pipeline uses, and writes only under
+        // Radar:ReplayDirectory. When disabled (the default) NONE of these are registered, Worker's optional
+        // IReplayRunner? stays null, and the pipeline graph is byte-for-byte unchanged.
+        //
+        // The from/to/step series is parsed HERE, in the composition root, and crosses into Radar.Application
+        // already resolved and validated — IConfiguration never reaches that layer (CLAUDE.md layering).
+        if (options.Replay.Enabled)
+        {
+            services.AddSingleton(BuildReplayPlan(options.Replay));
+            services.AddRadarReplay(options.ReplayDirectory);
+        }
+
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
         services.AddFileRawEvidenceStore(options.EvidenceRawDirectory);
         services.AddFileSignalStore(options.SignalsDirectory);
@@ -427,6 +444,142 @@ internal static class RadarWorkerServices
 
         services.AddHostedService<Worker>();
         return services;
+    }
+
+    /// <summary>
+    /// Turns the bound <c>Radar:Replay</c> strings into a validated <see cref="ReplayPlan"/> (spec 139).
+    /// <para>
+    /// This is the config→domain boundary: every parse failure becomes a startup <b>fail-fast</b> naming the
+    /// offending key, because a replay that silently ran over the wrong range (or over an empty one) would
+    /// produce a plausible-looking series that answers a different question than the operator asked.
+    /// </para>
+    /// </summary>
+    private static ReplayPlan BuildReplayPlan(ReplayWorkerOptions replay)
+    {
+        var from = ParseReplayInstant(replay.From, "Radar:Replay:From");
+        var to = ParseReplayInstant(replay.To, "Radar:Replay:To");
+        var step = ParseReplayStep(replay.Step);
+
+        ReplaySeries series;
+        try
+        {
+            series = ReplaySeries.Create(from, to, step);
+        }
+        catch (ArgumentException ex)
+        {
+            // ReplaySeries owns the series rules (positive step, non-inverted range); re-throwing here only
+            // adds the config keys that produced them, so the rule itself is never duplicated.
+            throw new InvalidOperationException(
+                "Radar:Replay:From/To/Step do not describe a usable as-of series: " + ex.Message, ex);
+        }
+
+        var label = string.IsNullOrWhiteSpace(replay.Label)
+            ? DefaultReplayLabel(series)
+            : replay.Label.Trim();
+
+        try
+        {
+            return new ReplayPlan(label, series);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidOperationException(
+                $"Radar:Replay:Label '{label}' is not usable: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Parses one replay bound as a UTC instant. A value without an explicit offset is read as UTC
+    /// (<c>AssumeUniversal</c>) rather than as machine-local time, so "2026-05-01" means the same as-of instant
+    /// on every machine — a replay's whole premise is a reproducible point in time (AD-7).
+    /// </summary>
+    private static DateTimeOffset ParseReplayInstant(string? value, string configKey)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException(
+                $"{configKey} is required when Radar:Replay:Enabled is true; supply a UTC date/time such as "
+                    + "\"2026-05-01\" or \"2026-05-01T00:00:00Z\". A replay range is never inferred.");
+        }
+
+        if (!DateTimeOffset.TryParse(
+                value.Trim(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var parsed))
+        {
+            throw new InvalidOperationException(
+                $"{configKey} is '{value}', which is not a date/time; supply a UTC date/time such as "
+                    + "\"2026-05-01\" or \"2026-05-01T00:00:00Z\".");
+        }
+
+        return parsed;
+    }
+
+    /// <summary>
+    /// Parses <c>Radar:Replay:Step</c>: a "{n}d" / "{n}h" / "{n}m" / "{n}s" token (the readable form an
+    /// operator actually types) or any plain TimeSpan string. Tokens are tried FIRST because "1d" is not a
+    /// TimeSpan at all while a bare "1" parses as one DAY — accepting only one of the two forms silently would
+    /// be the difference between a 90-point and a 3-point replay.
+    /// </summary>
+    private static TimeSpan ParseReplayStep(string? value)
+    {
+        var raw = value?.Trim() ?? string.Empty;
+        if (raw.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Radar:Replay:Step is blank; supply a positive step such as \"1d\", \"12h\" or \"30m\".");
+        }
+
+        var unit = char.ToLowerInvariant(raw[^1]);
+        if (unit is 'd' or 'h' or 'm' or 's'
+            && int.TryParse(
+                raw[..^1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
+        {
+            return unit switch
+            {
+                'd' => TimeSpan.FromDays(count),
+                'h' => TimeSpan.FromHours(count),
+                'm' => TimeSpan.FromMinutes(count),
+                _ => TimeSpan.FromSeconds(count),
+            };
+        }
+
+        if (TimeSpan.TryParse(raw, CultureInfo.InvariantCulture, out var timeSpan))
+        {
+            return timeSpan;
+        }
+
+        throw new InvalidOperationException(
+            $"Radar:Replay:Step is '{value}', which is not a step; supply a \"{{n}}d\"/\"{{n}}h\"/\"{{n}}m\"/"
+                + "\"{n}s\" token (e.g. \"1d\") or a plain TimeSpan string.");
+    }
+
+    /// <summary>
+    /// The label a replay gets when the operator did not name one: a deterministic function of the series
+    /// itself, so re-running the SAME range lands on the SAME output directory (idempotent) while a different
+    /// range is visibly a different run. The step is rendered from the parsed TimeSpan rather than echoing the
+    /// configured token, because a TimeSpan-formatted step ("01:00:00") contains ':' — which is not a legal
+    /// storage-segment character.
+    /// </summary>
+    private static string DefaultReplayLabel(ReplaySeries series)
+    {
+        var step = series.Step;
+        var stepToken = step.Ticks % TimeSpan.TicksPerDay == 0
+            ? $"{step.Ticks / TimeSpan.TicksPerDay}d"
+            : step.Ticks % TimeSpan.TicksPerHour == 0
+                ? $"{step.Ticks / TimeSpan.TicksPerHour}h"
+                : step.Ticks % TimeSpan.TicksPerMinute == 0
+                    ? $"{step.Ticks / TimeSpan.TicksPerMinute}m"
+                    : step.Ticks % TimeSpan.TicksPerSecond == 0
+                        ? $"{step.Ticks / TimeSpan.TicksPerSecond}s"
+                        // Sub-second steps are exotic but must still label UNIQUELY: rounding one to "0s"
+                        // would make two different steps share an output directory.
+                        : $"{step.Ticks}t";
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{series.FromUtc:yyyyMMdd}-{series.ToUtc:yyyyMMdd}-{stepToken}");
     }
 
     // A configured Radar:Ai:OpenAi:ApiKeyEnvVar is treated as a real environment-variable NAME only if it matches

@@ -2,6 +2,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Ai;
 using Radar.Application.Collectors;
@@ -11,6 +12,7 @@ using Radar.Application.Evidence;
 using Radar.Application.Filings;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
+using Radar.Application.Replay;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
@@ -28,6 +30,7 @@ using Radar.Infrastructure.News;
 using Radar.Infrastructure.Patents;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Prices;
+using Radar.Infrastructure.Replay;
 using Radar.Infrastructure.Rss;
 using Radar.Infrastructure.Sec;
 using Radar.Infrastructure.Sources;
@@ -1756,6 +1759,67 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<EfficacySvgRenderer>();
         services.AddSingleton<EfficacyCsvRenderer>();
         services.AddSingleton<IEfficacyReportGenerator, EfficacyReportGenerator>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the opt-in <b>replay</b> harness (spec 139): scoring the configured strategies across a series
+    /// of historical as-of instants from the ALREADY-STORED signals, into a replay-scoped, labelled location
+    /// under <paramref name="replayRootDirectory"/>. Read-only over signals/evidence; it never collects,
+    /// extracts, re-runs the AI read, reports, or writes a run record.
+    /// <para>
+    /// The replay engines are built by the SAME <see cref="ScoringStrategyFactory"/> the live pipeline uses,
+    /// over the SAME <see cref="ScoringStrategySet"/> and every other scoring dependency resolved from this
+    /// container — so a replayed strategy is configured EXACTLY like its live counterpart (same weights, same
+    /// <c>ScoringConfigVersion</c> fingerprint, same signal-type filter). That identity is what the
+    /// replay⊆forward invariant rests on, so nothing here re-derives or substitutes a scoring input.
+    /// </para>
+    /// <para>
+    /// Exactly TWO things are swapped, and both are about isolation rather than scoring:
+    /// </para>
+    /// <list type="bullet">
+    /// <item>a <see cref="ReplayScoreRepositoryFactory"/>, so every strategy — the primary included — writes
+    /// into its own in-memory repository instead of the shared one the weekly report renders;</item>
+    /// <item>a <see cref="ReplayScopedScoreSnapshotFileStoreFactory"/> rooted at
+    /// <paramref name="replayRootDirectory"/> (NOT under the scores root), so a replay can never write into
+    /// the forward efficacy series.</item>
+    /// </list>
+    /// <para>
+    /// Requires the persistence registration (<see cref="AddInMemoryRadarPersistence"/>), the application
+    /// services (<see cref="AddRadarApplicationServices"/>), a signal file store
+    /// (<see cref="AddFileSignalStore"/>), and a registered <see cref="ReplayPlan"/> — the composition root
+    /// owns the plan because parsing a <c>from/to/step</c> series out of configuration is a config concern that
+    /// must not leak into <c>Radar.Application</c>.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarReplay(
+        this IServiceCollection services, string replayRootDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(replayRootDirectory);
+
+        services.TryAddSingleton<IReplayScoreSnapshotFileStoreFactory>(sp =>
+            new ReplayScopedScoreSnapshotFileStoreFactory(
+                replayRootDirectory,
+                sp.GetRequiredService<ILogger<FileScoreSnapshotStore>>()));
+
+        services.TryAddSingleton<IReplayScoringStrategyFactory>(sp => new ReplayScoringStrategyFactory(
+            new ScoringStrategyFactory(
+                sp.GetRequiredService<ScoringStrategySet>(),
+                sp.GetRequiredService<ISignalRepository>(),
+                sp.GetRequiredService<ISignalFileStore>(),
+                sp.GetRequiredService<IEvidenceRepository>(),
+                // The ONE scoring-graph substitution: replay-scoped score repositories.
+                new ReplayScoreRepositoryFactory(),
+                sp.GetRequiredService<ICompanyRepository>(),
+                sp.GetRequiredService<IScoreFormulaFactory>(),
+                sp.GetRequiredService<IAttentionSourceWeights>(),
+                sp.GetRequiredService<ISignalSourceDescriptor>(),
+                sp.GetRequiredService<InsiderMaterialityWeights>(),
+                sp.GetRequiredService<MediaAttentionCollapse>(),
+                sp.GetRequiredService<ScoringOptions>(),
+                sp.GetRequiredService<ILogger<ScoringEngine>>())));
+
+        services.TryAddSingleton<IReplayRunner, ReplayRunner>();
         return services;
     }
 

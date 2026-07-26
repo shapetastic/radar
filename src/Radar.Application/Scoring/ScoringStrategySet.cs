@@ -1,3 +1,5 @@
+using Radar.Application.Storage;
+
 namespace Radar.Application.Scoring;
 
 /// <summary>
@@ -17,12 +19,6 @@ public sealed class ScoringStrategySet
 {
     /// <summary>The strategy name synthesised when <c>Radar:Strategies</c> is absent or empty.</summary>
     public const string DefaultStrategyName = "default";
-
-    /// <summary>
-    /// Characters that are never valid in a strategy name. A name is used verbatim as a directory segment
-    /// for non-primary snapshot storage, so a separator or relative segment would escape the scores root.
-    /// </summary>
-    private static readonly char[] ForbiddenNameChars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
 
     public ScoringStrategySet(IReadOnlyList<ScoringStrategyDefinition> strategies)
     {
@@ -47,15 +43,14 @@ public sealed class ScoringStrategySet
                         + "stamped on every snapshot and names the non-primary storage directory).");
             }
 
-            if (strategy.Name.IndexOfAny(ForbiddenNameChars) >= 0
-                || strategy.Name != strategy.Name.Trim()
-                || strategy.Name == "."
-                || strategy.Name == "..")
+            // The shared "usable as one storage directory segment" rule (see StorageSegmentName): a strategy
+            // name segments the non-primary snapshot storage, so a separator or relative segment would escape
+            // the scores root. The replay run label (spec 139) is checked against the very same rule.
+            if (!StorageSegmentName.IsUsable(strategy.Name))
             {
                 throw new InvalidOperationException(
                     $"Radar:Strategies contains an unusable strategy Name '{strategy.Name}'; a strategy name is "
-                        + "used verbatim as a storage directory segment, so it must be trimmed and must not "
-                        + "contain any of / \\ : * ? \" < > | (nor be \".\" or \"..\").");
+                        + $"used verbatim as a storage directory segment, so {StorageSegmentName.Rule}.");
             }
 
             // Spec 138: SignalTypes defaults to SignalTypeFilter.All, so this can only be null if a caller

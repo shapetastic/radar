@@ -265,6 +265,21 @@ Do not hand back broken code.
   at once. Splitting *data provenance* from *strategy identity* in the fingerprint is spec 137's recommended
   next slice but is **not yet specced** — 138 (signal-type filter) deliberately does not touch the collector
   set, and it gets cheaper to fix the sooner it is done.
+- **Replay is read-only and never forks the scoring path.** `Radar:Replay:Enabled` (spec 139) turns a run into
+  a read-only OFFLINE replay *instead of* a pipeline run: it scores the configured strategies across a
+  `From`/`To`/`Step` series of historical as-of instants by calling the **same** `ScoringEngine` with a past
+  `windowEndUtc` — no second copy of the scoring logic, no collection, no AI read, no report, no price
+  (AD-14). It is honest only because spec 136's `CreatedAtUtc <= windowEndUtc` predicate is load-bearing, so
+  the replay tests assert that predicate rather than trust it. **The hard invariant is replay ⊆ forward:** a
+  replay at as-of D reproduces the forward snapshot at D field-for-field (excluding the per-call minted
+  snapshot/link `Guid`s, which forward runs mint too). Replay writes ONLY under its own
+  `Radar:ReplayDirectory` root (`{root}/{label}/strategies/{name}/{companyId}/{asOf}.json`, as-of-named so a
+  re-run overwrites in place ⇒ idempotent); every strategy — **including the primary** — gets an isolated
+  score repository, so the shared repo the weekly report renders and the spec-101/108 forward series are
+  never touched. No new fingerprint input; the pins do not move. Known gap, recorded not built: the
+  in-memory signal/evidence repositories start empty each process, and `FileRawEvidenceStore`'s on-disk
+  schema omits `EvidenceQuality` (a v8 formula input), so faithfully hydrating accrued history from disk
+  needs a raw-evidence schema addition first — a lossy hydration would silently break replay ⊆ forward.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

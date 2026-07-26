@@ -2,6 +2,7 @@ using Radar.Application.Efficacy;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
+using Radar.Application.Replay;
 
 namespace Radar.Worker;
 
@@ -23,6 +24,13 @@ namespace Radar.Worker;
 /// read side): it READS score history + price and writes only efficacy artifacts. When disabled the dependency
 /// is <c>null</c> and the step is skipped.
 /// </para>
+/// <para>
+/// When the opt-in historical as-of replay is enabled (<c>Radar:Replay:Enabled</c>), the optional
+/// <see cref="IReplayRunner"/> REPLACES the pipeline run entirely (spec 139): after seeding, the worker
+/// replays the configured strategies over stored signals and stops. Replay is a read-only offline mode, so it
+/// deliberately runs NONE of the other steps — no price acquisition (AD-14), no pipeline, no report, no
+/// efficacy render. When disabled the dependency is <c>null</c> and the worker behaves exactly as before.
+/// </para>
 /// </summary>
 public sealed class Worker : BackgroundService
 {
@@ -34,6 +42,7 @@ public sealed class Worker : BackgroundService
     private readonly ILogger<Worker> _logger;
     private readonly IPriceHistoryAcquirer? _priceHistoryAcquirer;
     private readonly IEfficacyReportGenerator? _efficacyReportGenerator;
+    private readonly IReplayRunner? _replayRunner;
 
     public Worker(
         ICompanyUniverseSeeder seeder,
@@ -43,7 +52,8 @@ public sealed class Worker : BackgroundService
         TimeProvider timeProvider,
         ILogger<Worker> logger,
         IPriceHistoryAcquirer? priceHistoryAcquirer = null,
-        IEfficacyReportGenerator? efficacyReportGenerator = null)
+        IEfficacyReportGenerator? efficacyReportGenerator = null,
+        IReplayRunner? replayRunner = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -60,6 +70,7 @@ public sealed class Worker : BackgroundService
         _logger = logger;
         _priceHistoryAcquirer = priceHistoryAcquirer;
         _efficacyReportGenerator = efficacyReportGenerator;
+        _replayRunner = replayRunner;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -69,6 +80,25 @@ public sealed class Worker : BackgroundService
             // Seed the watch-universe once at startup (idempotent, AD-1) before any pipeline run.
             var seeded = await _seeder.SeedAsync(stoppingToken).ConfigureAwait(false);
             _logger.LogInformation("Seeded {Count} companies into the watch-universe.", seeded);
+
+            // Opt-in historical as-of replay (spec 139): REPLACES the run rather than adding to it. Placed
+            // immediately after seeding — replay needs the company universe but must not run price
+            // acquisition, the pipeline, the report or the efficacy render, because it is a read-only offline
+            // re-scoring of ALREADY-STORED signals, not a run that observed anything new. Skipped entirely
+            // (dependency null) unless Radar:Replay:Enabled, so the default worker is byte-for-byte unchanged.
+            if (_replayRunner is not null)
+            {
+                var replay = await _replayRunner.RunAsync(stoppingToken).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Radar replay completed at {RunAt:o}: {SnapshotsWritten} snapshot(s) across "
+                        + "{Strategies} strateg(ies) × {AsOfPoints} as-of point(s). No live store was written.",
+                    _timeProvider.GetUtcNow(),
+                    replay.SnapshotsWritten,
+                    replay.Strategies,
+                    replay.AsOfPoints);
+                _lifetime.StopApplication();
+                return;
+            }
 
             // Opt-in price-history acquisition (AD-14): a SEPARATE step after seeding, DISTINCT from and OUTSIDE
             // IRadarPipeline. Skipped (dependency null) unless Radar:Prices:Enabled. Price is reference/validation
