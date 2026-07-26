@@ -170,6 +170,8 @@ public sealed class EvidenceIdentityCrossRunDedupeTests : IDisposable
     private sealed class StubSourceDescriptor : ISignalSourceDescriptor
     {
         public string CanonicalDescriptor() => "test-src-desc";
+
+        public string CollectionProvenance() => "collectors=test;";
     }
 
     /// <summary>

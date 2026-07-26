@@ -260,11 +260,44 @@ Do not hand back broken code.
   read predicate and the spec-85/113 dedupe — to **both** the current and the previous (velocity) window —
   as a pure membership gate: nothing is deleted, evidence chains for consumed signals are intact, and a
   strategy that consumes zero signals gets the same neutral zero-evidence-link snapshot a zero-signal
-  company already gets. Known coupling, not yet fixed: `SignalSourceDescriptor` still folds the
-  enabled-collector set into every strategy's fingerprint, so enabling a collector re-stamps all strategies
-  at once. Splitting *data provenance* from *strategy identity* in the fingerprint is spec 137's recommended
-  next slice but is **not yet specced** — 138 (signal-type filter) deliberately does not touch the collector
-  set, and it gets cheaper to fix the sooner it is done.
+  company already gets. ~~Known coupling, not yet fixed: `SignalSourceDescriptor` still folds the
+  enabled-collector set into every strategy's fingerprint~~ — **FIXED by spec 141**, see the next bullet: the
+  collector set is out of the hash entirely and enabling a collector no longer re-stamps any strategy.
+- **Strategy identity is the NAME; the fingerprint is a tripwire; collection provenance is recorded, not
+  hashed (spec 141).** AD-10 conflated *stamp the config correctly* (kept) with *the stamp must never change*
+  (dropped — it had already moved 17 times over 851 live snapshots, largest cohort ≈ 3 runs, the pinned AI-ON
+  value exactly **one** run). Rules:
+  - **`ScoreSeriesKey` is the ONE definition of the series key**: `snapshot.StrategyName`, `null`/blank ⇒
+    `"default"`, compared case-insensitively (matching `ScoringStrategySet`'s uniqueness rule). Both consumers
+    route through it — the weekly report's comparability gate and the spec-101/108 efficacy segmentation — so
+    a legacy `null`-named snapshot reads as the primary series instead of being orphaned, and a fingerprint
+    re-stamp *within* one strategy no longer renders "(scoring updated)" or shreds the efficacy line. The
+    efficacy SVG still draws the dashed fingerprint-boundary tick: the stamp stays visible provenance, it just
+    stops breaking the line.
+  - **A strategy is IMMUTABLE BY CONVENTION** — to change one, add a new name (`momentum` → `momentum-v2`).
+    `StrategyIdentityGuard` enforces it at the very start of `RadarPipelineRunner.RunAsync` (before Stage 1,
+    so a misconfiguration costs no collection), comparing each strategy's computed fingerprint against the
+    per-NAME record at `data/scoring-configs/strategies/{name}.json` — a mutable upsert record living *beside*
+    the immutable content-addressed `{fingerprint}.json` files, never inside them. No record ⇒ record and
+    continue; equal ⇒ continue; different ⇒ throw naming the strategy, both fingerprints and the remedy. A
+    read failure degrades to "unrecorded" and never trips (AD-8) — "cannot tell" must not read as "changed".
+  - **`ISignalSourceDescriptor` has two members**: `CanonicalDescriptor()` = strategy identity
+    (`rules=…;[ai=…;]`, the fingerprint input) and `CollectionProvenance()` = `collectors=<csv>;`, stamped
+    verbatim on `CompanyScoreSnapshot.CollectionProvenance` (trailing + nullable) and **hashed into nothing**.
+    It is deliberately NOT added to `EffectiveScoringConfig`: that store is content-addressed and
+    insert-if-new, so a per-run fact stored there would be pinned forever to whichever run wrote the file
+    first. The `ai=` segment stays on the identity side — it carries per-signal magnitudes and the reading
+    model, which change signal DIRECTION (spec 119).
+  - **Scores are byte-identical; only stamps move.** Asserted: two engines differing solely in the enabled
+    collector set stamp the SAME `ScoringConfigVersion`, DIFFERENT `CollectionProvenance`, and identical
+    components/explanation/component JSON/evidence links.
+  - **The pins MOVED, deliberately, and that move IS the deliverable**: AI-OFF
+    `radar-scoring-fp-6b2f468041b9 → radar-scoring-fp-2ce20f8fc497`, AI-ON
+    `radar-scoring-fp-57356123e09b → radar-scoring-fp-3457da53489d`. No `_formula.Version` bump, no
+    `RuleSetVersion` bump, no weight edit. `ScoringConfigFingerprintTests` documents the pins as
+    **change-detectors**: moving one is a normal, intended act that requires a conscious update plus a lineage
+    note — not "scope leakage". History was **not** regenerated (the spec permits taking the discontinuity);
+    nothing was rewritten, deleted or backfilled.
 - **Replay is read-only and never forks the scoring path.** `Radar:Replay:Enabled` (spec 139) turns a run into
   a read-only OFFLINE replay *instead of* a pipeline run: it scores the configured strategies across a
   `From`/`To`/`Step` series of historical as-of instants by calling the **same** `ScoringEngine` with a past

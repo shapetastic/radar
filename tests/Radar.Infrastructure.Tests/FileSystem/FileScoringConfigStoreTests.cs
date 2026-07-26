@@ -194,4 +194,116 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         Assert.Equal(Path.Combine(_tempDir, config.Fingerprint + ".json"), path);
         Assert.False(File.Exists(path), "Serialization failure must not leave a file on disk.");
     }
+
+    // ---- Per-strategy-name fingerprint record (spec 141: the fingerprint as a tripwire) ----
+
+    [Fact]
+    public async Task ReadStrategyFingerprintAsync_NeverRecorded_ReturnsNull()
+    {
+        var store = CreateStore();
+
+        Assert.Null(await store.ReadStrategyFingerprintAsync("momentum", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RecordStrategyFingerprintAsync_WritesUnderStrategiesFolder_AndRoundTrips()
+    {
+        var store = CreateStore();
+
+        var path = await store.RecordStrategyFingerprintAsync(
+            "momentum", "radar-scoring-fp-aaaa1111", CancellationToken.None);
+
+        // A subdirectory, so the root's content-addressed {fingerprint}.json listing is untouched.
+        Assert.Equal(Path.Combine(_tempDir, "strategies", "momentum.json"), path);
+        Assert.True(File.Exists(path));
+        Assert.Empty(Directory.GetFiles(_tempDir, "*.json"));
+
+        Assert.Equal(
+            "radar-scoring-fp-aaaa1111",
+            await store.ReadStrategyFingerprintAsync("momentum", CancellationToken.None));
+
+        // The record names the strategy it belongs to, so a hand-inspected file is self-describing.
+        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+        Assert.Equal("momentum", doc.RootElement.GetProperty("strategyName").GetString());
+        Assert.Equal("radar-scoring-fp-aaaa1111", doc.RootElement.GetProperty("fingerprint").GetString());
+    }
+
+    [Fact]
+    public async Task RecordStrategyFingerprintAsync_IsUpsert_NotInsertIfNew()
+    {
+        // The DELIBERATE opposite of the content-addressed config files above: this record answers "what does
+        // this NAME resolve to NOW", so a legitimate re-record (after an operator consciously retires a
+        // series) must overwrite rather than be skipped.
+        var store = CreateStore();
+
+        await store.RecordStrategyFingerprintAsync("momentum", "radar-scoring-fp-old", CancellationToken.None);
+        await store.RecordStrategyFingerprintAsync("momentum", "radar-scoring-fp-new", CancellationToken.None);
+
+        Assert.Equal(
+            "radar-scoring-fp-new",
+            await store.ReadStrategyFingerprintAsync("momentum", CancellationToken.None));
+        Assert.Single(Directory.GetFiles(Path.Combine(_tempDir, "strategies"), "*.json"));
+    }
+
+    [Fact]
+    public async Task StrategyFingerprints_AreTrackedPerName()
+    {
+        var store = CreateStore();
+
+        await store.RecordStrategyFingerprintAsync("momentum", "radar-scoring-fp-aaaa", CancellationToken.None);
+        await store.RecordStrategyFingerprintAsync(
+            "insider-only", "radar-scoring-fp-bbbb", CancellationToken.None);
+
+        Assert.Equal(
+            "radar-scoring-fp-aaaa",
+            await store.ReadStrategyFingerprintAsync("momentum", CancellationToken.None));
+        Assert.Equal(
+            "radar-scoring-fp-bbbb",
+            await store.ReadStrategyFingerprintAsync("insider-only", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReadStrategyFingerprintAsync_MalformedRecord_ReadsAsUnrecorded_WithoutThrowing()
+    {
+        // Graceful degrade (AD-8): "cannot read" must read as "unrecorded", never as "changed" — otherwise a
+        // corrupted byte would fail every run through the startup tripwire.
+        var store = CreateStore();
+        var path = await store.RecordStrategyFingerprintAsync(
+            "momentum", "radar-scoring-fp-aaaa", CancellationToken.None);
+        await File.WriteAllTextAsync(path, "{ not json");
+
+        Assert.Null(await store.ReadStrategyFingerprintAsync("momentum", CancellationToken.None));
+
+        // A record present but carrying no fingerprint is equally "unrecorded".
+        await File.WriteAllTextAsync(path, "{ \"strategyName\": \"momentum\" }");
+        Assert.Null(await store.ReadStrategyFingerprintAsync("momentum", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RecordStrategyFingerprintAsync_IoFailure_ReturnsAttemptedPathWithoutThrowing()
+    {
+        var rootAsFile = Path.Combine(_tempDir, "not-a-dir-2");
+        await File.WriteAllTextAsync(rootAsFile, "x");
+        var store = CreateStore(rootAsFile);
+
+        var path = await store.RecordStrategyFingerprintAsync(
+            "momentum", "radar-scoring-fp-aaaa", CancellationToken.None);
+
+        Assert.Equal(Path.Combine(rootAsFile, "strategies", "momentum.json"), path);
+    }
+
+    [Theory]
+    [InlineData("../escape")]
+    [InlineData("a/b")]
+    [InlineData("..")]
+    [InlineData(" leading")]
+    public async Task StrategyName_ThatWouldEscapeTheRoot_IsRejected(string name)
+    {
+        // The name is used verbatim as a file name, so it is held to the SAME shared StorageSegmentName rule
+        // ScoringStrategySet enforces at startup — a defence in depth, not a second rule.
+        var store = CreateStore();
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => store.RecordStrategyFingerprintAsync(name, "radar-scoring-fp-aaaa", CancellationToken.None));
+    }
 }

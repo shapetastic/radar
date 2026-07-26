@@ -29,6 +29,11 @@ namespace Radar.Application.Pipeline;
 /// independently-stamped scorings; everything above it — collection, the AI directional read, extraction,
 /// resolution, review and signal persistence — is shared and runs exactly once.
 /// </para>
+/// <para>
+/// Spec 141: the run opens with the <see cref="StrategyIdentityGuard"/> tripwire (before Stage 1), so a
+/// strategy edited in place — which the strategy-name series key forbids — fails the run before any
+/// collection work happens rather than after it has silently extended the wrong series.
+/// </para>
 /// </summary>
 public sealed class RadarPipelineRunner : IRadarPipeline
 {
@@ -149,6 +154,16 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     public async Task<RadarPipelineResult> RunAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+
+        // Stage 0 (spec 141): strategy-identity tripwire, BEFORE any collection work so a misconfiguration
+        // costs no network calls and no partial run. Each configured strategy's computed fingerprint is
+        // checked against the one recorded for its NAME; a name whose fingerprint moved was edited in place,
+        // which the immutability convention behind the strategy-name series key forbids, and the run fails
+        // fast naming the strategy. A collector toggle cannot trip this — the collector set is no longer a
+        // fingerprint input, only recorded provenance on each snapshot.
+        await StrategyIdentityGuard
+            .VerifyAsync(_scoringStrategies.Runtimes, _scoringConfigStore, _logger, ct)
+            .ConfigureAwait(false);
 
         var evidenceCollected = 0;
         var evidenceNew = 0;

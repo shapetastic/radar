@@ -364,6 +364,43 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
         // Spec 137: the same posture for strategyName — a pre-existing file lacks the property entirely and
         // reads back as null, i.e. the primary/legacy strategy.
         Assert.Null(latest.StrategyName);
+        // Spec 141: and again for collectionProvenance — "what was collected then" is genuinely unknown for a
+        // legacy file, which is honest and affects nothing (recorded, never hashed, never compared).
+        Assert.Null(latest.CollectionProvenance);
+    }
+
+    [Fact]
+    public async Task WriteAsync_Snapshot_SerializesAndRoundTripsCollectionProvenance()
+    {
+        // Spec 141: the enabled-collector set is recorded PER SNAPSHOT (not inside the fingerprint, and not in
+        // the content-addressed effective-config file, which is immutable and shared across runs). It must
+        // therefore survive the write→read round trip like any other stamp.
+        var companyId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        const string provenance = "collectors=RssPressReleaseCollector,fda,newssearch,sec-edgar;";
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithStrategyName("default")
+            .WithCollectionProvenance(provenance)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        var path = await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        await using (var stream = File.OpenRead(path))
+        {
+            using var doc = await JsonDocument.ParseAsync(stream);
+            Assert.Equal(provenance, doc.RootElement.GetProperty("collectionProvenance").GetString());
+        }
+
+        var latest = await store.ReadLatestBeforeAsync(companyId, t1.AddDays(1), CancellationToken.None);
+        Assert.Equal(provenance, latest!.CollectionProvenance);
+
+        var all = await store.ReadAllForCompanyAsync(companyId, CancellationToken.None);
+        Assert.Equal(provenance, Assert.Single(all).CollectionProvenance);
     }
 
     [Fact]

@@ -28,19 +28,28 @@ namespace Radar.Application.Scoring;
 /// code constant but a <b>deterministic content fingerprint</b> of the effective resolved scoring config —
 /// the structure identity (<see cref="EngineVersion"/> + <c>_formula.Version</c>) plus every
 /// <see cref="ScoringWeights"/> value plus the attention tier-map descriptor
-/// (<see cref="IAttentionSourceWeights.CanonicalDescriptor"/>) plus the signal-source descriptor
-/// (<see cref="ISignalSourceDescriptor.CanonicalDescriptor"/> — the enabled collector set + extractor
-/// rule-set identity, spec 95) plus the insider-materiality descriptor
+/// (<see cref="IAttentionSourceWeights.CanonicalDescriptor"/>) plus the signal-source IDENTITY descriptor
+/// (<see cref="ISignalSourceDescriptor.CanonicalDescriptor"/> — the extractor rule-set identity + the
+/// optional AI directional-filing magnitudes; spec 95, narrowed by spec 141) plus the insider-materiality
+/// descriptor
 /// (<see cref="InsiderMaterialityWeights.CanonicalDescriptor"/> — the config-tunable buy/sell tiers +
 /// cluster boost, spec 96) plus the media-collapse descriptor
 /// (<see cref="MediaAttentionCollapse.CanonicalDescriptor"/> — the same-event media-attention collapse
 /// structure + window, spec 109), computed once via
 /// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape,
-/// any weight, the tier map, enabling/disabling a collector, an insider materiality tier, the media-collapse
-/// window) re-stamps
-/// automatically, so the spec-69
-/// comparability gate keeps working when weights are runtime-configurable. <c>ScoringVersion</c> (structure
-/// identity, <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
+/// any weight, the tier map, an insider materiality tier, the media-collapse window) re-stamps
+/// automatically. <c>ScoringVersion</c> (structure identity,
+/// <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
+/// </para>
+/// <para>
+/// COLLECTION PROVENANCE IS RECORDED, NOT HASHED (spec 141). The enabled-collector set is no longer a
+/// fingerprint input: it is stamped verbatim on every snapshot as
+/// <see cref="CompanyScoreSnapshot.CollectionProvenance"/> from
+/// <see cref="ISignalSourceDescriptor.CollectionProvenance"/>. Enabling or disabling a collector therefore
+/// changes THAT field and nothing else — not the fingerprint, not a single component score. The score series
+/// is keyed by <see cref="CompanyScoreSnapshot.StrategyName"/> (see <see cref="ScoreSeriesKey"/>), and the
+/// fingerprint is demoted from primary key to recorded provenance plus a startup drift tripwire
+/// (<see cref="StrategyIdentityGuard"/>).
 /// </para>
 /// <para>
 /// ONE ENGINE INSTANCE IS ONE STRATEGY (spec 137). Every scoring-affecting input is constructor-injected and
@@ -86,9 +95,15 @@ public sealed class ScoringEngine : IScoringEngine
 
     // The whole scoring-generation stamp: a content fingerprint of the effective resolved scoring config
     // (structure + all weights + tier map), computed once and stamped on every snapshot's
-    // ScoringConfigVersion (AD-10 amended, spec 89). Gates cross-run comparability (distinct from
-    // ScoringVersion).
+    // ScoringConfigVersion (AD-10 amended, spec 89). Distinct from ScoringVersion. Since spec 141 it is
+    // recorded provenance + the startup drift tripwire, NOT the comparability key — that is StrategyName
+    // (ScoreSeriesKey).
     private readonly string _scoringConfigFingerprint;
+
+    // WHAT WAS COLLECTED on this run (spec 141): the enabled-collector descriptor, captured once here and
+    // stamped verbatim on every snapshot. Deliberately hashed into NOTHING — it is provenance, not identity,
+    // so a collector toggle re-stamps this field alone and never the fingerprint or a score.
+    private readonly string _collectionProvenance;
 
     // The effective resolved scoring config projection (same tuple the fingerprint hashes), built once in
     // the constructor and exposed as a pure accessor for content-addressed persistence (spec 91). Additive:
@@ -148,6 +163,12 @@ public sealed class ScoringEngine : IScoringEngine
         // default "all types" filter Describe() returns its input unchanged, so the pinned default
         // fingerprints do not move.
         var signalSourceDescriptor = _signalTypes.Describe(sourceDescriptor.CanonicalDescriptor());
+
+        // Spec 141: captured alongside the identity descriptor, from the SAME descriptor instance, so the
+        // recorded collector set and the hashed identity are two projections of one composed graph rather
+        // than two independently-resolved answers that could disagree.
+        _collectionProvenance = sourceDescriptor.CollectionProvenance();
+
         var insiderMaterialityDescriptor = insiderMaterialityWeights.CanonicalDescriptor();
         var mediaCollapseDescriptor = mediaCollapse.CanonicalDescriptor();
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
@@ -356,8 +377,11 @@ public sealed class ScoringEngine : IScoringEngine
             CreatedAtUtc: windowEndUtc,
             ScoringConfigVersion: _scoringConfigFingerprint,
             // Human-readable strategy identity (spec 137), additive alongside the opaque fingerprint. Null
-            // ⇒ primary/legacy composition; it never affects the scores, the fingerprint or comparability.
-            StrategyName: _strategyName);
+            // ⇒ primary/legacy composition; it never affects the scores or the fingerprint. Since spec 141 it
+            // IS the series key (ScoreSeriesKey), so comparability is decided by this field, not the hash.
+            StrategyName: _strategyName,
+            // What was collected on this run (spec 141): recorded verbatim, hashed into nothing.
+            CollectionProvenance: _collectionProvenance);
 
         var links = new List<ScoreEvidenceLink>(computation.Contributions.Count);
         foreach (var contribution in computation.Contributions)

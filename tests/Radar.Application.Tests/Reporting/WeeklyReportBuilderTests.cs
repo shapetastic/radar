@@ -595,19 +595,20 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
-    public async Task DifferentScoringGenerationRendersScoringUpdatedAndNoThesisLabel()
+    public async Task DifferentStrategySeriesRendersScoringUpdatedAndNoThesisLabel()
     {
-        // The previous snapshot was produced by a DIFFERENT scoring generation (v0) than the current
-        // run (default v1). Even though the trajectory dropped 80 → 70 (which would normally trip
-        // deterioration), the snapshots are not comparable, so the movement must render
-        // "(scoring updated)" and the policy must NOT emit a thesis label — that drop is a
-        // scoring-logic artifact, not a real-world change (the Mercury defect).
+        // INTENT UPDATED BY SPEC 141. The comparability gate now keys on the SERIES (the strategy name), not
+        // on the ScoringConfigVersion fingerprint: the previous snapshot came from a different STRATEGY
+        // ("insider-only") than the current run (the primary/default series). Even though the trajectory
+        // dropped 80 → 70 (which would normally trip deterioration), the two snapshots measure different
+        // hypotheses, so the movement must render "(scoring updated)" and the policy must NOT emit a thesis
+        // label — the spec-69 Mercury defect, restated on the key that actually distinguishes two scorings.
         var companyId = Guid.NewGuid();
 
         var prevSnapshot = new ScoreSnapshotBuilder()
             .WithId(Guid.NewGuid())
             .WithCompanyId(companyId)
-            .WithScoringConfigVersion("radar-scoring-config-v0")
+            .WithStrategyName("insider-only")
             .WithOpportunityScore(70)
             .WithTrajectoryScore(80)
             .WithEvidenceConfidenceScore(70)
@@ -643,12 +644,63 @@ public sealed class WeeklyReportBuilderTests
     }
 
     [Fact]
-    public async Task OldOnDiskSnapshotLackingStampIsNotComparableRendersScoringUpdated()
+    public async Task SameStrategyDifferentFingerprintStillComparable_RendersDelta()
     {
-        // An old on-disk snapshot written before the ScoringConfigVersion field existed reads back with
-        // a null stamp. A null stamp is never comparable, so the report renders "(scoring updated)" and
-        // does not crash. Here we simulate that by writing a prior snapshot with a null stamp via the
-        // real file store.
+        // THE spec-141 reversal, stated as a test. Both snapshots come from the SAME strategy but carry
+        // different ScoringConfigVersion fingerprints — which, before 141, was the single most common reason
+        // the report said "(scoring updated)": the fingerprint folded the enabled-collector set, so switching
+        // on a collector a strategy consumes nothing from silently broke every week-over-week delta. A
+        // strategy is immutable by convention (enforced at startup by StrategyIdentityGuard), so a moved
+        // fingerprint within one name is drift to be reported, not a reason to stop comparing.
+        var companyId = Guid.NewGuid();
+
+        var prevSnapshot = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithStrategyName("default")
+            .WithScoringConfigVersion("radar-scoring-fp-before")
+            .WithOpportunityScore(60)
+            .WithTrajectoryScore(55)
+            .WithEvidenceConfidenceScore(70)
+            .WithCreatedAtUtc(BeforePeriod)
+            .Build();
+
+        var h = new Harness(scoreFiles: new FakeScoreSnapshotFileStore([prevSnapshot]));
+
+        var currentSnapshotId = Guid.NewGuid();
+        var currentSnapshot = new ScoreSnapshotBuilder()
+            .WithId(currentSnapshotId)
+            .WithCompanyId(companyId)
+            .WithStrategyName("default")
+            .WithScoringConfigVersion("radar-scoring-fp-after")
+            .WithOpportunityScore(80)
+            .WithTrajectoryScore(70)
+            .WithEvidenceConfidenceScore(70)
+            .WithCreatedAtUtc(InPeriod)
+            .Build();
+
+        await h.Companies.AddAsync(new CompanyBuilder().WithId(companyId).Build(), default);
+        await h.Scores.AddSnapshotAsync(currentSnapshot, default);
+        await SeedEvidenceLinkAsync(h, currentSnapshotId);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("(Opportunity +20, Trajectory +15 vs last run)", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("(scoring updated)", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OldOnDiskSnapshotLackingStampReadsAsPrimarySeriesAndIsComparable()
+    {
+        // INTENT REVERSED BY SPEC 141, deliberately. An old on-disk snapshot written before the
+        // ScoringConfigVersion/StrategyName fields existed reads back with BOTH null. Under the old
+        // fingerprint-keyed gate that made it permanently incomparable — "(scoring updated)" forever, for
+        // every one of the 851 accrued snapshots. The series key is now the STRATEGY NAME, and a null name
+        // canonicalises to the primary "default" series (ScoreSeriesKey), because the pre-137 composition IS
+        // the default strategy. So legacy history compares against today's primary run instead of being
+        // orphaned, and the real week-over-week delta renders. Written through the real file store so the
+        // null round-trip is exercised, not assumed.
         var tempDir = Path.Combine(Path.GetTempPath(), $"radar-scores-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
         try
@@ -663,6 +715,7 @@ public sealed class WeeklyReportBuilderTests
                 .WithId(Guid.NewGuid())
                 .WithCompanyId(companyId)
                 .WithScoringConfigVersion(null)
+                .WithStrategyName(null)
                 .WithOpportunityScore(60)
                 .WithTrajectoryScore(80)
                 .WithCreatedAtUtc(BeforePeriod)
@@ -672,9 +725,13 @@ public sealed class WeeklyReportBuilderTests
             var h = new Harness(scoreFiles: fileStore);
 
             var currentSnapshotId = Guid.NewGuid();
+            // The current run is the primary strategy carrying a REAL (and different) fingerprint stamp — the
+            // combination that used to force "(scoring updated)". It must now compare.
             var currentSnapshot = new ScoreSnapshotBuilder()
                 .WithId(currentSnapshotId)
                 .WithCompanyId(companyId)
+                .WithScoringConfigVersion("radar-scoring-fp-something-new")
+                .WithStrategyName("default")
                 .WithOpportunityScore(80)
                 .WithTrajectoryScore(70)
                 .WithCreatedAtUtc(InPeriod)
@@ -687,8 +744,9 @@ public sealed class WeeklyReportBuilderTests
             var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
 
             var markdown = result.Report.MarkdownContent;
-            Assert.Contains("(scoring updated)", markdown, StringComparison.Ordinal);
-            Assert.DoesNotContain("vs last run)", markdown, StringComparison.Ordinal);
+            Assert.Contains(
+                "(Opportunity +20, Trajectory -10 vs last run)", markdown, StringComparison.Ordinal);
+            Assert.DoesNotContain("(scoring updated)", markdown, StringComparison.Ordinal);
             Assert.DoesNotContain("(first snapshot)", markdown, StringComparison.Ordinal);
         }
         finally

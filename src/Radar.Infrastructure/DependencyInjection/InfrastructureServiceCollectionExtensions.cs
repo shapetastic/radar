@@ -107,10 +107,12 @@ public static class InfrastructureServiceCollectionExtensions
         // ScoringConfigVersion fingerprint (via ScoringEngine) so the window is re-stamped by value.
         services.TryAddSingleton(new MediaCollapseOptions());
         services.TryAddSingleton<MediaAttentionCollapse>();
-        // Signal-source descriptor (spec 95): folds the enabled collector NAMES + the extractor rule-set
-        // identity into the ScoringConfigVersion fingerprint. The optional AI directional-filing source (spec
-        // 106) is also folded in when registered — its per-signal magnitudes contribute an ai=… segment, so
-        // enabling the AI path (and tuning Strength/Novelty/MinConfidence) re-stamps the fingerprint
+        // Signal-source descriptor (spec 95, split by spec 141): folds the extractor rule-set identity into
+        // the ScoringConfigVersion fingerprint and exposes the enabled collector NAMES separately as
+        // CollectionProvenance — recorded on every snapshot, hashed into nothing, so a collector toggle no
+        // longer re-stamps a strategy. The optional AI directional-filing source (spec 106) IS folded into
+        // the identity when registered — its per-signal magnitudes contribute an ai=… segment, so enabling
+        // the AI path (and tuning Strength/Novelty/MinConfidence/model) re-stamps the fingerprint
         // automatically; it is null (AI off) => byte-identical AI-off descriptor. Both dependencies are
         // lazy-resolved INSIDE the factory (RESOLUTION time), so this sees ALL collectors AND the AI source even
         // though the Worker registers them AFTER AddRadarApplicationServices. TryAdd lets a composition root

@@ -41,6 +41,8 @@ public sealed class RadarPipelineRunnerTests
     private sealed class StubSourceDescriptor : ISignalSourceDescriptor
     {
         public string CanonicalDescriptor() => "test-src-desc";
+
+        public string CollectionProvenance() => "collectors=test;";
     }
 
     // Minimal ICollectionHealthValidator (spec 98): returns a fixed report. Defaults to Empty (clean),
@@ -303,11 +305,27 @@ public sealed class RadarPipelineRunnerTests
 
         public List<EffectiveScoringConfig> Written { get; } = new();
 
+        /// <summary>
+        /// The per-strategy-name fingerprint records the spec-141 tripwire reads/writes. Pre-seed an entry to
+        /// simulate "this name was recorded on a previous run".
+        /// </summary>
+        public Dictionary<string, string> StrategyFingerprints { get; } = new(StringComparer.Ordinal);
+
         public Task<string> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct)
         {
             WriteCallCount++;
             Written.Add(config);
             return Task.FromResult($"written/scoring-configs/{config.Fingerprint}.json");
+        }
+
+        public Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct) =>
+            Task.FromResult(StrategyFingerprints.GetValueOrDefault(strategyName));
+
+        public Task<string> RecordStrategyFingerprintAsync(
+            string strategyName, string fingerprint, CancellationToken ct)
+        {
+            StrategyFingerprints[strategyName] = fingerprint;
+            return Task.FromResult($"written/scoring-configs/strategies/{strategyName}.json");
         }
     }
 
@@ -350,7 +368,7 @@ public sealed class RadarPipelineRunnerTests
         public RecordingRawEvidenceStore RawStore { get; } = new();
         public RecordingReportFileWriter ReportWriter { get; } = new();
         public RecordingPipelineRunStore RunStore { get; } = new();
-        public RecordingScoringConfigStore ScoringConfigStore { get; } = new();
+        public RecordingScoringConfigStore ScoringConfigStore { get; }
         public InMemoryCompanyRepository Companies { get; } = new();
         public InMemorySignalRepository Signals { get; } = new();
         public InMemorySignalReviewRepository Reviews { get; } = new();
@@ -370,10 +388,12 @@ public sealed class RadarPipelineRunnerTests
             TimeProvider? timeProvider = null,
             IDirectionalFilingSignalSource? directionalFilingSignals = null,
             ICollectionHealthValidator? healthValidator = null,
-            ScoringStrategySet? strategies = null)
+            ScoringStrategySet? strategies = null,
+            RecordingScoringConfigStore? scoringConfigStore = null,
+            ISignalSourceDescriptor? sourceDescriptor = null)
             : this(
                 [collector], extractor, options, timeProvider, directionalFilingSignals, healthValidator,
-                strategies)
+                strategies, scoringConfigStore, sourceDescriptor)
         {
         }
 
@@ -384,8 +404,15 @@ public sealed class RadarPipelineRunnerTests
             TimeProvider? timeProvider = null,
             IDirectionalFilingSignalSource? directionalFilingSignals = null,
             ICollectionHealthValidator? healthValidator = null,
-            ScoringStrategySet? strategies = null)
+            ScoringStrategySet? strategies = null,
+            // Spec 141: shareable across two harnesses so a test can simulate "a previous run recorded this
+            // strategy's identity", which is what the startup tripwire compares against.
+            RecordingScoringConfigStore? scoringConfigStore = null,
+            // Spec 141: lets a test swap in the REAL SignalSourceDescriptor over a chosen collector set, to
+            // prove a collector toggle does not trip that tripwire end-to-end.
+            ISignalSourceDescriptor? sourceDescriptor = null)
         {
+            ScoringConfigStore = scoringConfigStore ?? new RecordingScoringConfigStore();
             var time = timeProvider ?? new FixedTimeProvider(FixedNow);
 
             var resolver = new CompanyResolver(Companies, NullLogger<CompanyResolver>.Instance);
@@ -407,7 +434,7 @@ public sealed class RadarPipelineRunnerTests
                 Companies,
                 new RadarScoreFormulaV8Factory(sourceWeights),
                 sourceWeights,
-                new StubSourceDescriptor(),
+                sourceDescriptor ?? new StubSourceDescriptor(),
                 new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions(),
@@ -2015,5 +2042,134 @@ public sealed class RadarPipelineRunnerTests
 
         var record = Assert.Single(h.RunStore.Written);
         Assert.Equal([ScoringStrategySet.DefaultStrategyName], record.Strategies!.ToArray());
+    }
+
+    // ---- Spec 141: the strategy-identity tripwire runs BEFORE stage 1 ----
+
+    /// <summary>
+    /// A collector that counts <see cref="CollectAsync"/> calls, so a test can prove the startup tripwire
+    /// fires <b>before</b> any collection work rather than after a wasted network pass.
+    /// </summary>
+    private sealed class CountingCollector(CollectionResult result) : IEvidenceCollector
+    {
+        public int CollectCallCount { get; private set; }
+
+        public string CollectorName => "CountingCollector";
+
+        public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
+
+        public Task<CollectionResult> CollectAsync(CollectionContext context, CancellationToken ct)
+        {
+            CollectCallCount++;
+            return Task.FromResult(result);
+        }
+    }
+
+    [Fact]
+    public async Task FirstRun_RecordsEachStrategysIdentity()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        await h.Runner.RunAsync(default);
+
+        // One record per configured strategy NAME, each holding that strategy's own fingerprint.
+        Assert.Equal(["baseline", "low-media"], h.ScoringConfigStore.StrategyFingerprints.Keys.Order().ToArray());
+        foreach (var runtime in h.ScoreStores.Primary.Written)
+        {
+            Assert.Equal(
+                runtime.Snapshot.ScoringConfigVersion,
+                h.ScoringConfigStore.StrategyFingerprints[runtime.Snapshot.StrategyName!]);
+        }
+    }
+
+    [Fact]
+    public async Task EditedInPlaceStrategy_FailsFastBeforeAnyCollection()
+    {
+        // Spec 141: a strategy is immutable by convention because its NAME is the score-series key. A name
+        // whose fingerprint moved was edited in place, and the run must fail fast — before Stage 1, so a
+        // misconfiguration costs no network calls and leaves no partial run behind.
+        var collector = new CountingCollector(AsResult([BuildCollected()]));
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var configStore = new RecordingScoringConfigStore();
+        configStore.StrategyFingerprints[ScoringStrategySet.DefaultStrategyName] = "radar-scoring-fp-stale";
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            scoringConfigStore: configStore);
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => h.Runner.RunAsync(default));
+
+        Assert.Contains(ScoringStrategySet.DefaultStrategyName, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("radar-scoring-fp-stale", ex.Message, StringComparison.Ordinal);
+
+        // Nothing ran: no collection, no evidence, no snapshot, no run record.
+        Assert.Equal(0, collector.CollectCallCount);
+        Assert.Empty(h.RawStore.Written);
+        Assert.Empty(h.ScoreStores.Primary.Written);
+        Assert.Empty(h.RunStore.Written);
+    }
+
+    [Fact]
+    public async Task CollectorToggleBetweenRuns_DoesNotTripTheTripwire()
+    {
+        // THE acceptance criterion, end to end through the runner with the REAL SignalSourceDescriptor: run
+        // once with two collectors, then again with three, sharing the recorded-identity store. Pre-141 the
+        // collector set was hashed into the fingerprint, so the second run would have thrown.
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+        var configStore = new RecordingScoringConfigStore();
+
+        static ISignalSourceDescriptor DescriptorOver(params string[] names) =>
+            new SignalSourceDescriptor(names.Select(n => (IEvidenceCollector)new NamedNoOpCollector(n)));
+
+        var companyId = Guid.NewGuid();
+
+        var first = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]), extractor,
+            new PipelineOptions { GenerateReport = false },
+            scoringConfigStore: configStore,
+            sourceDescriptor: DescriptorOver("rss", "sec-edgar"));
+        await SeedCompanyAsync(first, companyId);
+        await first.Runner.RunAsync(default);
+
+        var recorded = configStore.StrategyFingerprints[ScoringStrategySet.DefaultStrategyName];
+
+        var second = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]), extractor,
+            new PipelineOptions { GenerateReport = false },
+            scoringConfigStore: configStore,
+            sourceDescriptor: DescriptorOver("rss", "sec-edgar", "fda"));
+        await SeedCompanyAsync(second, companyId);
+
+        // No throw, and the recorded identity is unmoved: only the recorded CollectionProvenance differs.
+        await second.Runner.RunAsync(default);
+
+        Assert.Equal(recorded, configStore.StrategyFingerprints[ScoringStrategySet.DefaultStrategyName]);
+        Assert.Equal(
+            recorded, Assert.Single(second.ScoreStores.Primary.Written).Snapshot.ScoringConfigVersion);
+        Assert.Equal(
+            "collectors=rss,sec-edgar;",
+            Assert.Single(first.ScoreStores.Primary.Written).Snapshot.CollectionProvenance);
+        Assert.Equal(
+            "collectors=fda,rss,sec-edgar;",
+            Assert.Single(second.ScoreStores.Primary.Written).Snapshot.CollectionProvenance);
+    }
+
+    /// <summary>A named collector used only to shape the real descriptor; it is never asked to collect.</summary>
+    private sealed class NamedNoOpCollector(string name) : IEvidenceCollector
+    {
+        public string CollectorName { get; } = name;
+
+        public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
+
+        public Task<CollectionResult> CollectAsync(CollectionContext context, CancellationToken ct) =>
+            throw new InvalidOperationException("The descriptor must never call CollectAsync.");
     }
 }

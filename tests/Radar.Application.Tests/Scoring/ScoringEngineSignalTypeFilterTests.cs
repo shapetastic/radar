@@ -25,6 +25,8 @@ public sealed class ScoringEngineSignalTypeFilterTests
     private sealed class StubSourceDescriptor : ISignalSourceDescriptor
     {
         public string CanonicalDescriptor() => SourceDescriptor;
+
+        public string CollectionProvenance() => "collectors=test;";
     }
 
     private sealed class AllGenuineWeights : IAttentionSourceWeights

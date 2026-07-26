@@ -11,8 +11,11 @@ namespace Radar.Application.Efficacy;
 /// </summary>
 public sealed class EfficacyCsvRenderer
 {
+    // Spec 141: the SERIES key (the strategy name) leads, with the scoringConfigVersion fingerprint kept
+    // alongside it as recorded provenance — a consumer grouping the export must group by seriesKey, which a
+    // collector toggle cannot move, not by the fingerprint, which is now only an annotation.
     private const string Header =
-        "scoreDate,scoringConfigVersion,trajectory,opportunity,attention,evidenceConfidence,velocity,"
+        "scoreDate,seriesKey,scoringConfigVersion,trajectory,opportunity,attention,evidenceConfidence,velocity,"
             + "priceAsOfDate,priceClose,priceAdjClose";
 
     public string Render(CompanyEfficacySeries series)
@@ -25,6 +28,7 @@ public sealed class EfficacyCsvRenderer
         foreach (var p in series.Points)
         {
             sb.Append(Date(p.ScoreDate)).Append(',');
+            sb.Append(Csv(p.SeriesKey)).Append(',');
             sb.Append(Csv(p.ScoringConfigVersion)).Append(',');
             sb.Append(Int(p.TrajectoryScore)).Append(',');
             sb.Append(Int(p.OpportunityScore)).Append(',');
@@ -46,8 +50,9 @@ public sealed class EfficacyCsvRenderer
     private static string Decimal(decimal? value) =>
         value is { } v ? v.ToString(CultureInfo.InvariantCulture) : string.Empty;
 
-    // Minimal CSV escaping for the free-text fingerprint field: quote + double-embedded-quotes only when the
-    // value contains a comma, quote, or newline. Fingerprints never do today, but this keeps the export robust.
+    // Minimal CSV escaping for the free-text identity fields (series key + fingerprint): quote +
+    // double-embedded-quotes only when the value contains a comma, quote, or newline. Neither does today
+    // (a strategy name is a validated storage segment), but this keeps the export robust.
     private static string Csv(string? value)
     {
         if (string.IsNullOrEmpty(value))
