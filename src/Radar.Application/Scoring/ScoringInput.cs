@@ -30,6 +30,14 @@ namespace Radar.Application.Scoring;
 /// trajectory, velocity, media counts, or contributions/ScoreEvidenceLinks — provenance still comes from
 /// <see cref="Signals"/> alone. Defaults to empty, which reproduces the pre-v8 (post-collapse-only)
 /// behaviour — the fail-safe when a caller has no pre-collapse set.</para>
+///
+/// <para><see cref="EnabledCollectors"/> is the set of evidence collectors REGISTERED for this run (spec
+/// 146) — the answer to "did that source even run?", which is a different question from "did that source
+/// produce anything", and the difference is exactly what makes a <c>radar-formula-v9</c> channel's 0
+/// explainable after the fact. It is provenance only: no formula may use it to change a score (a channel
+/// scores 0 whether its source was down or genuinely quiet — Radar scores evidence, and absence of evidence
+/// is not evidence), and it is hashed into nothing. Defaults to empty, which reads as "did not run" for every
+/// declared collector — the honest answer when the caller cannot say.</para>
 /// </summary>
 public sealed record ScoringInput(
     Guid CompanyId,
@@ -44,4 +52,11 @@ public sealed record ScoringInput(
     /// empty means "no collapse information", which scores exactly as the post-collapse set alone.
     /// </summary>
     public IReadOnlyList<ScoringSignal> PreCollapseSignals { get; init; } = Array.Empty<ScoringSignal>();
+
+    /// <summary>
+    /// The <c>IEvidenceCollector.CollectorName</c>s registered for this run (spec 146), ordered and distinct.
+    /// Provenance ONLY — never a scoring input, never hashed. Empty means "unknown", which every consumer
+    /// must read as "did not run".
+    /// </summary>
+    public IReadOnlyList<string> EnabledCollectors { get; init; } = Array.Empty<string>();
 }

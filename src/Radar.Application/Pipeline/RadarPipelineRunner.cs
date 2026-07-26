@@ -197,11 +197,24 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // (keeps determinism and avoids hammering the network), then merge their results into one. The
         // merge concatenates evidence in collector order without re-sorting/de-duping; cross-collector
         // duplicates resolve downstream via the insert-only ContentHash dedupe (AD-1).
+        //
+        // COLLECTION PROVENANCE IS STAMPED HERE, AND ONLY HERE (spec 146). CollectionResultMerger.Merge
+        // concatenates every collector's evidence into one list and discards per-collector attribution, so
+        // the collector that produced an item has to be recorded BEFORE the merge — after it, the
+        // information no longer exists. This is the one site that knows both facts, which is why the twelve
+        // collectors are untouched. The stamp goes in the free-form metadata bag, which is NOT an input to
+        // evidence identity (spec 145: the normalized title+body hash alone) nor to ContentHash, so no
+        // evidence id moves, no AddIfNewAsync dedupe decision changes, and no scoring fingerprint moves.
         var results = new List<CollectionResult>(_collectors.Count);
         foreach (var collector in _collectors)
         {
             ct.ThrowIfCancellationRequested();
-            results.Add(await collector.CollectAsync(context, ct).ConfigureAwait(false));
+            var result = await collector.CollectAsync(context, ct).ConfigureAwait(false);
+            results.Add(result with
+            {
+                Evidence = [.. result.Evidence.Select(
+                    e => CollectionProvenanceMetadata.Stamp(e, collector.CollectorName))],
+            });
         }
 
         var collected = CollectionResultMerger.Merge(results);

@@ -418,6 +418,79 @@ Do not hand back broken code.
     reduction) with the total dropped count preserved in aggregate rather than lost.
   - **No fingerprint move**: no `ScoringConfigVersion` input changed, no `_formula.Version` bump, no
     `KeywordSignalExtractor.RuleSetVersion` bump. The pins do not move.
+- **The FORMULA is part of the strategy, and a v9 strategy is a weighted array of channels (spec 146).**
+  Additive, not a migration: **v8 is untouched and stays the default**, so a v8 strategy and a v9 channel
+  strategy run over the SAME collection pass (137) and are directly comparable against price (140).
+  `ScoringStrategyDefinition` gains two additive init-only properties — `Formula` (default
+  `radar-formula-v8`) and `Channels` (default `ScoringChannelSet.Empty`) — resolved through
+  `IScoreFormulaFactory`, whose input widened from bare `ScoringWeights` to the whole definition
+  (`RadarScoreFormulaV8Factory` → `RadarScoreFormulaFactory`). **A strategy that names neither is
+  byte-identical to before and the pins do NOT move** (AI-OFF `radar-scoring-fp-2ce20f8fc497`, AI-ON
+  `radar-scoring-fp-3457da53489d` both unmoved). Rules:
+  - **Why v8 cannot express this**: every v8 component is computed over the signals that ARRIVED, so a
+    missing source is invisible; when visible it is *incoherent* (`SignalVelocity` correctly falls while
+    `AttentionScore`, an INVERSE discount inside Opportunity, perversely rises); and contributions are
+    incommensurable, so a high-traffic source dominates a high-value one.
+  - **`score = Σ (weight_c × channelScore_c)`, and THE WEIGHTS ARE NEVER RENORMALISED.** A channel that
+    produced nothing contributes 0 with the denominator unchanged — that is the entire point. A strategy whose
+    0.50-weight patents channel is dark is down by up to 0.50; a strategy that never declared patents is
+    completely unaffected (asserted side by side). **Renormalising the surviving weights is the
+    obvious-looking wrong fix** and would erase exactly the penalty the design exists to create.
+  - **Channel shapes.** Collector channel: `saturation × directionFactor`, where
+    `activity = Σ(strength·confidence·recency·quality)` over signals whose evidence that channel's collectors
+    retrieved, `saturation = activity/(activity+S_c)`, and `directionFactor = (1+preponderance)/2` (no
+    directional mass ⇒ exactly 0.5). Breadth channel: `reach/(reach+S_c)` over the tier-weighted
+    distinct-publisher reach across the whole gated set — **direction-correct in v9: more genuine breadth
+    contributes MORE.** v8's inverse attention discount stays in v8; it is deliberately not carried over.
+    **Per-channel saturation is mandatory** (RSS emits constantly, Form 4 rarely; a shared saturation pins the
+    chatty channel at 1.0 and makes the weights decorative).
+  - **Reuse, not copy**: v8's per-signal machinery (recency, direction sign, quality weight, directional
+    masses + preponderance, the [0,100] clamp, the whole Attention reach term) was **extracted** into
+    `ScoreSignalMath` and **v8 routes through it**. Every helper preserves v8's original expression shape and
+    accumulation order — `Preponderance` takes the `band` as a parameter precisely so `band*(p−n)/(t+k)` is
+    not re-associated — because IEEE-754 is not associative and a 1-ULP move can flip a midpoint rounding.
+  - **Range reconciliation, verified not assumed**: `ScoreComponents` is five ints clamped to [0,100]. The v9
+    composite ∈ [0,1] maps as `composite×100` into **`OpportunityScore`** (what `WeeklyReportBuilder` ranks by
+    and the 101/108 efficacy read consumes); the other four keep their exact v8 meanings over the gated set,
+    so `WeeklyReportActionPolicyV1`'s Trajectory/EvidenceConfidence thresholds stay valid. `ComponentJson`
+    keeps `ScoreComponents`' five properties first and by name (an existing reader still deserializes it) and
+    adds the unrounded composite plus a per-channel breakdown.
+  - **Collector provenance had to be BUILT first.** The spec assumed channels select on "the recorded
+    provenance of each signal's evidence" — but **there was no recorded collector**: `SourceType` is shared by
+    several collectors (sec-edgar/sec-form4/sec-13dg all emit `Filing`), `SourceName` is the *feed*, and
+    `CollectionResultMerger.Merge` discards per-collector attribution. `CollectionProvenanceMetadata` is now
+    the ONE definition of the `collector` metadata key + its reader, stamped at ONE site
+    (`RadarPipelineRunner`'s collector loop, **before** the merge — after it the information no longer
+    exists), so the twelve collectors are untouched. The bag is **not** an input to evidence identity (145:
+    normalized title+body hash alone) nor to `ContentHash`, so no evidence id moves and no `AddIfNewAsync`
+    decision changes. Two honest caveats, both tested: legacy evidence has no `collector` key and so is
+    consumed by no collector channel (contributes 0 — consistent with never backfilling accrued history), and
+    identical content from two collectors is ONE record (145) carrying the ordinally-first collector.
+  - **"Ran and found nothing" vs "did not run" is recorded, never scored.** `ISignalSourceDescriptor` gains
+    `EnabledCollectors()` — the SAME ordered-distinct projection `CollectionProvenance()` renders, never a
+    second answer — threaded onto `ScoringInput.EnabledCollectors` and split per channel into
+    `CollectorsRan`/`CollectorsNotRun`. A 0 is a 0 either way (absence of evidence is not evidence); only the
+    provenance differs. Hashed into nothing. Under replay this reflects the *replaying* process's collectors.
+  - **Fail-fast at startup, every message naming the strategy**: weights outside [0,1] or not summing to 1.0
+    (tolerance `1e-9`, and the message carries the ACTUAL round-trip-formatted sum), non-positive saturation,
+    blank/duplicate channel names, a breadth channel declaring collectors, a collector channel declaring none,
+    an unknown `Formula`, v9-without-channels, channels-without-v9, and — in `ScoringStrategyFactory`, the
+    first place the registry is known and forced before Stage 1 by `StrategyIdentityGuard` — a channel naming
+    an unregistered collector (matched **exactly**, so a case near-miss also fails rather than silently
+    scoring 0).
+  - **Identity**: the channel set folds into `ScoringConfigVersion` on the SAME `Describe` chain
+    `SignalTypeFilter` uses inside `ScoringEngine` (order: `signalTypes=…;` then `channels=…;`), so the
+    composition and its hashed identity cannot drift; the channels are canonicalised by name (config order is
+    irrelevant, at runtime as well as in the hash) and escaped through the new
+    `DescriptorEscaping.EscapeNested` (a second method, not a widening of `Escape`, because the AI descriptor
+    legitimately contains `:` and widening would move the AI-ON pin). Adding a v9 strategy moves **no**
+    existing strategy's stamp — asserted.
+  - **Out of scope, recorded not built**: replacing/deleting v8, migrating existing strategies onto v9,
+    auto-tuning weights to price, per-channel collector *scheduling*, and strategy-vs-price comparison (140).
+    Price is never an input (AD-14).
+  - **Known pre-existing gap, deliberately NOT fixed here**: `ScoringWeights.TrajectoryCorroborationK` is not
+    a `ScoringConfigFingerprint` field, so tuning it re-stamps nothing — for v8 *and* now for v9's channel
+    direction factor. Adding it would move both pinned fingerprints, which this slice is required not to do.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,
@@ -457,6 +530,11 @@ When implementing a spec that replaces existing functionality:
    onto `ScoringWeights`) — it needs **no code version bump**, and the `ScoringConfigVersion` fingerprint
    re-stamps automatically. The only remaining code-version obligation is bumping `_formula.Version` (a new
    `radar-formula-vN` class) when the formula **structure/shape** changes (AD-6). See AD-10 (as amended).
+   Since spec 146 a new class must also be added to `ScoreFormulaVersions.All` and dispatched in
+   `RadarScoreFormulaFactory` — that list is the closed set of shippable formulas, so config can only pick
+   between structures the maintainer wrote, never define one. **Which** formula a strategy runs is now a
+   per-strategy config choice (`Radar:Strategies[i].Formula`, default `radar-formula-v8`); *writing* one is
+   still code.
 7. A scoring-affecting **extractor rule-STRUCTURE** change (the `KeywordSignalExtractor` phrase→direction/strength
    table shape) bumps `KeywordSignalExtractor.RuleSetVersion` (parallel to `_formula.Version`) — it is folded into
    the `ScoringConfigVersion` fingerprint via `SignalSourceDescriptor` (spec 95, AD-10 amended). The

@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+
 using Radar.Application.Collectors;
 using Radar.Application.Filings;
 using Radar.Application.SignalExtraction;
@@ -34,6 +36,7 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
 {
     private readonly string _identityDescriptor;
     private readonly string _collectionProvenance;
+    private readonly ReadOnlyCollection<string> _enabledCollectors;
 
     public SignalSourceDescriptor(
         IEnumerable<IEvidenceCollector> collectors,
@@ -43,14 +46,21 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
 
         // Read ONLY CollectorName — never CollectAsync (no collection side effects). De-dupe defensively so a
         // mis-registration listing a collector twice does not change the descriptor, and order by Ordinal so
-        // registration order is irrelevant. Enumerated ONCE, feeding the provenance string only.
+        // registration order is irrelevant. Enumerated ONCE, into the ONE ordered-distinct projection that
+        // BOTH the provenance CSV and EnabledCollectors() are derived from (spec 146) — so the snapshot's
+        // recorded collector set and a v9 channel's ran/did-not-run provenance can never disagree.
         var names = collectors
             .Select(c => c.CollectorName)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(n => n, StringComparer.Ordinal)
-            .Select(DescriptorEscaping.Escape);
+            .ToArray();
 
-        var csv = string.Join(',', names);
+        // Handed out behind IReadOnlyList<string>, so it is a genuinely read-only wrapper rather than the
+        // backing array: a bare array can be cast back to string[] and mutated, and this instance is a
+        // process-lifetime singleton every engine reads.
+        _enabledCollectors = Array.AsReadOnly(names);
+
+        var csv = string.Join(',', names.Select(DescriptorEscaping.Escape));
 
         // COLLECTION PROVENANCE (spec 141), hashed into nothing. CollectorName is each collector's stable
         // provenance identifier (e.g. "RssPressReleaseCollector", "sec-edgar", "sec-form4", "usaspending",
@@ -80,4 +90,7 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
 
     /// <inheritdoc />
     public string CollectionProvenance() => _collectionProvenance;
+
+    /// <inheritdoc />
+    public IReadOnlyList<string> EnabledCollectors() => _enabledCollectors;
 }

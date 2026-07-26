@@ -1,7 +1,5 @@
 using System.Text.Json;
 using Radar.Domain.Companies;
-using Radar.Domain.Evidence;
-using Radar.Domain.Signals;
 
 namespace Radar.Application.Scoring;
 
@@ -51,15 +49,18 @@ namespace Radar.Application.Scoring;
 /// contribution per current-window signal, in input order (including Neutral/Mixed, which naturally weigh 0),
 /// and never from <see cref="ScoringInput.PreviousSignals"/>.
 /// </para>
+/// <para>
+/// SPEC 146 MOVED THE PER-SIGNAL PRIMITIVES, NOT THE MATH. Recency, the direction sign, the quality weight,
+/// the directional masses + preponderance ratio, the [0,100] clamp and the whole Attention reach term now
+/// live in the shared <see cref="ScoreSignalMath"/> so <c>radar-formula-v9</c> composes its per-channel
+/// sub-scores from the SAME machinery instead of a second copy of it (CLAUDE.md reuse-over-copy). Every
+/// helper preserves this class's original expression shape and accumulation order, so v8's output — and the
+/// pinned <c>ScoringConfigVersion</c> fingerprints — are byte-for-byte unmoved. v8 itself is otherwise
+/// untouched and remains the default formula.
+/// </para>
 /// </summary>
 public sealed class RadarScoreFormulaV8 : IScoreFormula
 {
-    // Direction → sign used in trajectory. These are structural direction SIGNS, not tunable magnitudes
-    // (flipping a sign is a structural change, not a weight experiment), so they stay const in the formula.
-    private const int DirPositive = +1;
-    private const int DirNegative = -1;
-    // Neutral and Mixed contribute 0 to direction (see DirectionSign()).
-
     // The strength ceiling / band half-width that scales the directional preponderance ratio
     // (Mpos−Mneg)/(Mpos+Mneg+k) ∈ [-1,1] into the same implicit [-10,10] band radar-formula-v5 used (v5's
     // trajectory mean of sign·strength was itself bounded by the [0,10] strength ceiling). This is a
@@ -89,23 +90,7 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
     }
 
     /// <inheritdoc />
-    public string Version => "radar-formula-v8";
-
-    private static int DirectionSign(SignalDirection d) => d switch
-    {
-        SignalDirection.Positive => DirPositive,
-        SignalDirection.Negative => DirNegative,
-        _ => 0,                       // Neutral and Mixed are direction-neutral
-    };
-
-    private double QualityWeight(EvidenceQuality q) => q switch
-    {
-        EvidenceQuality.PrimarySource => _weights.QualityPrimarySource,
-        EvidenceQuality.High          => _weights.QualityHigh,
-        EvidenceQuality.Medium        => _weights.QualityMedium,
-        EvidenceQuality.Low           => _weights.QualityLow,
-        _ => _weights.QualityUnknown, // Unknown (and any unmapped) → QualityUnknown
-    };
+    public string Version => ScoreFormulaVersions.V8;
 
     // The curated-following discount magnitude for a tier (spec 117). Reads the four config-tunable
     // ScoringWeights magnitudes; Small (and any unmapped value) falls through to the Small discount —
@@ -118,9 +103,9 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         _ => _weights.FollowingTierDiscountSmall,
     };
 
-    // Clamp+round any double component to an int in [0,100], deterministic midpoint handling.
-    private static int Score(double v) =>
-        Math.Clamp((int)Math.Round(v, MidpointRounding.AwayFromZero), 0, 100);
+    // Clamp+round any double component to an int in [0,100], deterministic midpoint handling. The rule
+    // itself lives in ScoreSignalMath so every formula clamps identically (spec 146).
+    private static int Score(double v) => ScoreSignalMath.Clamp0To100(v);
 
     /// <inheritdoc />
     public ScoreComputation Compute(ScoringInput input)
@@ -138,26 +123,11 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         }
 
         var windowLength = input.WindowEndUtc - input.WindowStartUtc;
-        var hasPositiveWindow = windowLength > TimeSpan.Zero;
 
-        // Per-signal recency factors (current window only), aligned with input order.
-        var recency = new double[signals.Count];
-        for (var i = 0; i < signals.Count; i++)
-        {
-            double age;
-            if (hasPositiveWindow)
-            {
-                age = (input.WindowEndUtc - signals[i].Signal.ObservedAtUtc).TotalSeconds
-                      / windowLength.TotalSeconds;
-                age = Math.Clamp(age, 0, 1);
-            }
-            else
-            {
-                age = 0; // divide-by-zero guard: recency 1.0 for all
-            }
-
-            recency[i] = 1 - _weights.RecencyFloor * age;
-        }
+        // Per-signal recency factors (current window only), aligned with input order. Shared with every
+        // other formula via ScoreSignalMath (spec 146) — the rule and the divide-by-zero guard are unchanged.
+        var recency = ScoreSignalMath.RecencyFactors(
+            signals, input.WindowStartUtc, input.WindowEndUtc, _weights.RecencyFloor);
 
         // ---- 1. TrajectoryScore (50 = neutral, >50 improving) ----
         // v6: corroboration/consensus-aware. Split the directional signals into a positive mass and a negative
@@ -166,35 +136,14 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         // is rewarded and a lone dissenter is damped-but-not-zeroed. The per-signal weight w = confidence·recency
         // is byte-identical to v5 (only the AGGREGATION over the signals changed — a preponderance ratio, not a
         // mean of sign·strength).
-        var mPos = 0.0;
-        var mNeg = 0.0;
-        for (var i = 0; i < signals.Count; i++)
-        {
-            var signal = signals[i].Signal;
-            var sign = DirectionSign(signal.Direction);
-            if (sign == 0)
-            {
-                continue; // Neutral/Mixed excluded from both masses.
-            }
-
-            var w = (double)signal.Confidence * recency[i];
-            var mass = signal.Strength * w;
-            if (sign > 0)
-            {
-                mPos += mass;
-            }
-            else
-            {
-                mNeg += mass;
-            }
-        }
+        // The mass split and the ratio are shared primitives (spec 146). No quality factors are passed:
+        // v8's per-signal trajectory weight is confidence·recency alone, unchanged since v5.
+        var mass = ScoreSignalMath.DirectionalMasses(signals, recency);
 
         // T_raw = TrajectoryBand·(Mpos − Mneg)/(Mpos + Mneg + k) ∈ [-10, 10]. No directional signals →
         // Mpos == Mneg == 0 → 0 → 50 (the guard keeps v5's sumMass<=0 shape; k>0 makes 0/(0+k)=0 too).
-        var sumMass = mPos + mNeg;
-        var tRaw = sumMass <= 0
-            ? 0
-            : TrajectoryBand * (mPos - mNeg) / (sumMass + _weights.TrajectoryCorroborationK);
+        var tRaw = ScoreSignalMath.Preponderance(
+            mass, _weights.TrajectoryCorroborationK, TrajectoryBand);
         var trajectoryScore = Score(_weights.TrajectoryNeutral + _weights.TrajectoryScale * tRaw);
 
         // ---- 2. AttentionScore (saturating on breadth) ----
@@ -212,27 +161,12 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         // duplicate volume. mediaCount below deliberately stays POST-collapse, so volume/loudness is still
         // collapsed and no velocity term is admitted (AD-14). The extra is tier-weighted exactly like the
         // survivor breadth, so mill re-posts of one event add ≈0.1 each, never 1.0.
-        var survivorPublishers = signals
-            .Where(s => EvidenceSourceTypes.IsThirdPartyAttentionSource(s.Evidence.SourceType))
-            .Select(s => s.Evidence.SourceName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var breadthSurvivors = survivorPublishers.Sum(name => _sourceWeights.WeightFor(name));
-
-        // Publishers present only in the pre-collapse set. An empty PreCollapseSignals (the ScoringInput
-        // default, and every caller that does not collapse) yields 0 here — reach is then exactly v7's.
-        var breadthCollapsedExtra = input.PreCollapseSignals
-            .Where(s => EvidenceSourceTypes.IsThirdPartyAttentionSource(s.Evidence.SourceType))
-            .Select(s => s.Evidence.SourceName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(name => !survivorPublishers.Contains(name))
-            .Sum(name => _sourceWeights.WeightFor(name));
-
-        var mediaCount = signals.Count(s => s.Signal.Type == SignalType.MediaAttention);
-        var reach = breadthSurvivors
-            + _weights.CollapsedBreadthCredit * breadthCollapsedExtra
-            + _weights.MediaReachWeight * mediaCount;
+        // The whole reach term is a shared primitive (spec 146) — the survivor breadth, the collapsed-away
+        // credit and the post-collapse media count, in exactly this order. An empty PreCollapseSignals (the
+        // ScoringInput default, and every caller that does not collapse) contributes 0 to the credit, so
+        // reach is then exactly v7's.
+        var reach = ScoreSignalMath.AttentionReach(
+            signals, input.PreCollapseSignals, _weights, _sourceWeights);
         var attentionScore = Score(100 * reach / (reach + _weights.AttentionHalfSaturation));
 
         // ---- 3. EvidenceConfidenceScore ----
@@ -240,7 +174,7 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         // evidence-quality weight, then apply a saturating diversity multiplier. Adding a weaker
         // signal/lower-quality source can never lower the base, so corroboration is monotonic.
         var bestConf = signals.Max(s => (double)s.Signal.Confidence); // 0..1
-        var bestQualWeight = signals.Max(s => QualityWeight(s.Evidence.Quality));
+        var bestQualWeight = signals.Max(s => ScoreSignalMath.QualityWeight(_weights, s.Evidence.Quality));
         var distinctTypes = signals.Select(s => s.Evidence.SourceType).Distinct().Count();
         var divFactor = Math.Min(1, distinctTypes / _weights.DiversityTarget);
         var evidenceConfidenceScore = Score(
@@ -285,7 +219,7 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
             var signal = signals[i].Signal;
             var w = (double)signal.Confidence * recency[i];
             var weight = (int)Math.Round(
-                DirectionSign(signal.Direction) * signal.Strength * w,
+                ScoreSignalMath.DirectionSign(signal.Direction) * signal.Strength * w,
                 MidpointRounding.AwayFromZero);
 
             contributions.Add(new ScoreContribution(

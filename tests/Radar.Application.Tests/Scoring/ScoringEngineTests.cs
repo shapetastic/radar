@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -50,6 +52,9 @@ public sealed class ScoringEngineTests
         public string CanonicalDescriptor() => SourceDescriptor;
 
         public string CollectionProvenance() => provenance;
+
+        /// <summary>Spec 146: recorded provenance only — hashed into nothing, never a scoring input.</summary>
+        public IReadOnlyList<string> EnabledCollectors() => ["test-a", "test-b"];
     }
 
     private static readonly ISignalSourceDescriptor SourceDesc = new StubSourceDescriptor();
@@ -172,7 +177,8 @@ public sealed class ScoringEngineTests
             IScoreFormula? formula = null,
             ScoringWeights? weights = null,
             ILogger<ScoringEngine>? logger = null,
-            ISignalSourceDescriptor? sourceDescriptor = null)
+            ISignalSourceDescriptor? sourceDescriptor = null,
+            ScoringChannelSet? channels = null)
         {
             Engine = new ScoringEngine(
                 Signals,
@@ -187,7 +193,8 @@ public sealed class ScoringEngineTests
                 new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions { Window = Window },
-                logger ?? NullLogger<ScoringEngine>.Instance);
+                logger ?? NullLogger<ScoringEngine>.Instance,
+                channels: channels);
         }
 
         /// <summary>
@@ -1633,5 +1640,85 @@ public sealed class ScoringEngineTests
         await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
         await harness.Signals.AddAsync(signal, CancellationToken.None);
         return (signal, evidence);
+    }
+
+    // ---- Spec 146: the engine hands the v9 formula the run's ENABLED COLLECTORS ----
+
+    [Fact]
+    public async Task V9Channels_EngineSuppliesEnabledCollectors_SoProvenanceSeparatesRanFromDidNotRun()
+    {
+        // THE seam this test exists for. ScoringEngine is the ONLY production wiring of
+        // ISignalSourceDescriptor.EnabledCollectors() into ScoringInput.EnabledCollectors, and
+        // RadarScoreFormulaV9 splits each channel's declared collectors against exactly that set. If the
+        // engine ever stopped supplying it (or supplied an empty set), every live v9 snapshot would report
+        // "declared collector did not run" for collectors that demonstrably ran — silently, and with every
+        // score unchanged, because the split is recorded provenance and never a scoring input. So it is
+        // asserted END TO END through the engine and off the PERSISTED snapshot, rather than off a formula
+        // call the test wired itself: a formula-level test hands EnabledCollectors in and by construction
+        // cannot see this seam. It is also the engine → v9 path's first end-to-end exercise.
+        //
+        // StubSourceDescriptor.EnabledCollectors() returns ["test-a", "test-b"], so ONE channel declaring
+        // "test-a" (enabled, and the recorded collector behind the seeded signal) plus "never-run" (declared
+        // but not registered) exercises both halves of the distinction.
+        var channels = ScoringChannelSet.Create(
+            [ScoringChannel.Collector("primary", ["test-a", "never-run"], 1.0, 3)],
+            "engine-v9-test");
+        var harness = new Harness(
+            new RadarScoreFormulaV9(new ScoringWeights(), Weights, channels),
+            channels: channels);
+        var companyId = Guid.NewGuid();
+
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash(Guid.NewGuid().ToString("N"))
+            .WithSourceType(EvidenceSourceType.PressRelease)
+            .WithQuality(EvidenceQuality.High)
+            .WithMetadataJson(EvidenceMetadata.Compose(
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [CollectionProvenanceMetadata.MetadataKey] = "test-a",
+                },
+                []))
+            .Build();
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithType(SignalType.CustomerWin)
+            .WithDirection(SignalDirection.Positive)
+            .WithStrength(6)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(WindowEnd.AddDays(-2))
+            .Build();
+
+        await harness.SeedExistingAsync(signal, evidence);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // Read the breakdown off the PERSISTED snapshot — what a reviewer or the report would actually see.
+        var persisted = Assert.Single(
+            await harness.Scores.GetSnapshotsForCompanyAsync(companyId, CancellationToken.None));
+        using var doc = JsonDocument.Parse(persisted.ComponentJson);
+        Assert.Equal(ScoreFormulaVersions.V9, doc.RootElement.GetProperty("Formula").GetString());
+        var channel = Assert.Single(doc.RootElement.GetProperty("Channels").EnumerateArray().ToList());
+
+        // "Declared collector RAN" — this is the assertion that fails if the engine stops supplying the set.
+        Assert.Equal(
+            ["test-a"],
+            channel.GetProperty("CollectorsRan").EnumerateArray().Select(e => e.GetString()));
+        // ...distinguished from "declared collector DID NOT run", which the same snapshot records separately.
+        Assert.Equal(
+            ["never-run"],
+            channel.GetProperty("CollectorsNotRun").EnumerateArray().Select(e => e.GetString()));
+
+        // And the channel genuinely scored through the engine, so the provenance above describes a real run
+        // rather than an empty one: the seeded signal was consumed, the channel is not dark, and it earned
+        // some of its share — with the evidence chain intact.
+        Assert.Equal(1, channel.GetProperty("SignalCount").GetInt32());
+        Assert.False(channel.GetProperty("Dark").GetBoolean());
+        Assert.True(channel.GetProperty("Score").GetDouble() > 0);
+        var link = Assert.Single(result.Links);
+        Assert.Equal(signal.Id, link.SignalId);
+        Assert.Equal(evidence.Id, link.EvidenceId);
     }
 }

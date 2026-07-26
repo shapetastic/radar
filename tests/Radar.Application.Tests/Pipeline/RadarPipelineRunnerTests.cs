@@ -43,6 +43,8 @@ public sealed class RadarPipelineRunnerTests
         public string CanonicalDescriptor() => "test-src-desc";
 
         public string CollectionProvenance() => "collectors=test;";
+
+        public IReadOnlyList<string> EnabledCollectors() => ["test"];
     }
 
     // Minimal ICollectionHealthValidator (spec 98): returns a fixed report. Defaults to Empty (clean),
@@ -432,7 +434,7 @@ public sealed class RadarPipelineRunnerTests
                 Evidence,
                 ScoreRepositories,
                 Companies,
-                new RadarScoreFormulaV8Factory(sourceWeights),
+                new RadarScoreFormulaFactory(sourceWeights),
                 sourceWeights,
                 sourceDescriptor ?? new StubSourceDescriptor(),
                 new InsiderMaterialityWeights(),
@@ -1216,6 +1218,51 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(canonical.Id, stored.Id);
         Assert.Equal(
             EvidenceIdentity.ForContentHash(canonical.ContentHash), stored.Id);
+    }
+
+    [Fact]
+    public async Task Run_RecordsTheCollectorOnEveryNewlyStoredEvidenceItem()
+    {
+        // Spec 146: a radar-formula-v9 collector channel selects on the RECORDED provenance of each signal's
+        // evidence — and before this slice there was none (SourceType is shared by several collectors,
+        // SourceName is the feed, and CollectionResultMerger discards per-collector attribution entirely).
+        // The runner therefore stamps it in the collector loop, before the merge, which is the last moment
+        // the information exists.
+        var companyId = Guid.NewGuid();
+
+        var alpha = BuildCollected();
+        var beta = BuildCollected("Northwind Robotics signed a second, unrelated multi-year agreement.");
+
+        var alphaCollector = new ConfigurableCollector(
+            "AAA", EvidenceSourceType.LocalFile, AsResult([alpha]));
+        var betaCollector = new ConfigurableCollector(
+            "ZZZ", EvidenceSourceType.GovernmentContract, AsResult([beta]));
+
+        var h = new Harness(
+            [betaCollector, alphaCollector],
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+        Assert.Equal(2, result.EvidenceNew);
+
+        var mapper = new CollectedEvidenceMapper(
+            new EvidenceNormalizer(), NullLogger<CollectedEvidenceMapper>.Instance);
+
+        var storedAlpha = await h.Evidence.GetByContentHashAsync(
+            mapper.ToEvidenceItem(alpha).ContentHash, default);
+        var storedBeta = await h.Evidence.GetByContentHashAsync(
+            mapper.ToEvidenceItem(beta).ContentHash, default);
+
+        Assert.Equal("AAA", CollectionProvenanceMetadata.Read(storedAlpha));
+        Assert.Equal("ZZZ", CollectionProvenanceMetadata.Read(storedBeta));
+
+        // The stamp is metadata only: it is NOT an input to evidence identity (spec 145 — the normalized
+        // title+body hash alone) nor to the content hash, so the stored id is still the one an unstamped
+        // mapping of the same content produces. No evidence id moves; no dedupe decision changes.
+        Assert.Equal(mapper.ToEvidenceItem(alpha).Id, storedAlpha!.Id);
+        Assert.Equal(mapper.ToEvidenceItem(alpha).ContentHash, storedAlpha.ContentHash);
     }
 
     [Fact]
