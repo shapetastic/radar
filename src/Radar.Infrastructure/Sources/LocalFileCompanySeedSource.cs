@@ -1,8 +1,7 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Radar.Application.EntityResolution;
+using Radar.Application.Identity;
 using Radar.Domain.Companies;
 
 namespace Radar.Infrastructure.Sources;
@@ -153,7 +152,7 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                     }
 
                     aliases.Add(new CompanyAlias(
-                        Id: DeterministicGuid(companyId, "seed", aliasText),
+                        Id: SeedChildId(companyId, "seed", aliasText),
                         CompanyId: companyId,
                         Alias: aliasText,
                         AliasType: "seed",
@@ -187,7 +186,7 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
                 var feedUrl = feed.Url.Trim();
 
                 feeds.Add(new CompanySourceFeed(
-                    Id: DeterministicGuid(companyId, "feed", $"{feedType}|{feedUrl}"),
+                    Id: SeedChildId(companyId, "feed", $"{feedType}|{feedUrl}"),
                     CompanyId: companyId,
                     FeedType: feedType,
                     Name: feed.Name?.Trim() ?? string.Empty,
@@ -202,16 +201,19 @@ public sealed class LocalFileCompanySeedSource : ICompanySeedSource
     /// <summary>
     /// Derives a stable <see cref="Guid"/> for a seed child row (an alias keyed on its text, or a
     /// source feed keyed on its <c>type|url</c>) from its identifying tuple so that re-seeding upserts the same
-    /// row rather than creating a new one. The Id is the MD5 hash of the canonical string
-    /// <c>$"{companyId}|{kind}|{normalizedValue}"</c> (the value normalized by trim + lower-invariant)
-    /// reinterpreted as a 16-byte Guid. MD5 is used purely as a fast non-cryptographic hash to obtain
-    /// a deterministic 128-bit value, not for security.
+    /// row rather than creating a new one.
+    /// <para>
+    /// This method owns only the CANONICALISATION — <c>$"{companyId}|{kind}|{normalizedValue}"</c>, the value
+    /// normalized by trim + lower-invariant. The canonical-string → <see cref="Guid"/> step is the shared
+    /// <see cref="DeterministicGuid.FromCanonicalString"/> (spec 145), which
+    /// <see cref="Radar.Application.Evidence.EvidenceIdentity"/> also routes through, so the two families
+    /// cannot drift apart. The algorithm is unchanged (UTF-8 → MD5 → <c>new Guid(byte[])</c>), so every
+    /// previously seeded alias/feed Id is byte-identical.
+    /// </para>
     /// </summary>
-    private static Guid DeterministicGuid(Guid companyId, string kind, string value)
+    private static Guid SeedChildId(Guid companyId, string kind, string value)
     {
         var normalized = value.Trim().ToLowerInvariant();
-        var canonical = $"{companyId}|{kind}|{normalized}";
-        var bytes = MD5.HashData(Encoding.UTF8.GetBytes(canonical));
-        return new Guid(bytes);
+        return DeterministicGuid.FromCanonicalString($"{companyId}|{kind}|{normalized}");
     }
 }

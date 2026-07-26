@@ -14,6 +14,18 @@ namespace Radar.Application.Signals;
 /// current scoring window and therefore the score itself, spec 142). Both reads share the key defined here
 /// so the two can never drift apart.
 /// </para>
+///
+/// <para>
+/// <b>This key only works because evidence identity is content-derived (spec 145).</b> The key contains
+/// <see cref="Signal.EvidenceId"/>, and before 145 the mapper minted a fresh evidence <see cref="Guid"/> on
+/// every run — so N re-collections of ONE article produced N distinct evidence ids and therefore N distinct,
+/// non-colliding signal keys. Measured on the live store (2026-07-26) the key collapsed 49,454 accrued
+/// signals to 49,454: a <b>1.000× no-op</b>, while collapsing by content collapsed them <b>9.213×</b>. A key
+/// built on identity cannot dedupe identity. With
+/// <see cref="Radar.Application.Evidence.EvidenceIdentity"/> deriving the id from the normalized title+body
+/// content hash, re-collections of the same content share one evidence id and this key finally collapses
+/// them as it was always meant to. The key itself is unchanged — the defect was upstream of it.
+/// </para>
 /// </summary>
 public static class SignalCrossRunDedupe
 {

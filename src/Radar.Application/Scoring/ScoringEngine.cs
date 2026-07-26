@@ -197,19 +197,43 @@ public sealed class ScoringEngine : IScoringEngine
             .Where(s => _signalTypes.Includes(s.Type));
 
         var pairs = new List<ScoringSignal>();
+
+        // Dropped-signal accounting, AGGREGATED PER COMPANY (spec 145). This used to emit one Warning per
+        // dropped signal — ~9,500 per run PER STRATEGY on the live store, because pre-145 evidence identity
+        // was minted fresh per run and so a signal's EvidenceId rarely matched any persisted evidence.
+        // Spec 145 heals that FORWARD only (accrued history is deliberately left as-is), so the legacy
+        // residue does not go away and the flood would not either. Silencing it is not an option — an
+        // unresolvable evidence chain is a real provenance defect — so it is aggregated instead: ONE Warning
+        // per company carrying the dropped count and the distinct-evidence-id count (those two differing
+        // tells you whether it is N signals off one evidence item or N separate items), with the per-signal
+        // detail demoted to Debug. The HashSet is allocated only if something actually drops, so the healthy
+        // path costs nothing.
+        var droppedSignalCount = 0;
+        HashSet<Guid>? droppedEvidenceIds = null;
+
         foreach (var signal in windowedApproved)
         {
-            // Provenance cannot be established without the source evidence; drop the signal and log once.
+            // Provenance cannot be established without the source evidence; drop the signal.
             var evidence = await _evidenceRepository.GetByIdAsync(signal.EvidenceId, ct).ConfigureAwait(false);
             if (evidence is null)
             {
-                _logger.LogWarning(
+                droppedSignalCount++;
+                (droppedEvidenceIds ??= []).Add(signal.EvidenceId);
+                _logger.LogDebug(
                     "Dropping signal {SignalId} for company {CompanyId}: evidence {EvidenceId} not found.",
                     signal.Id, companyId, signal.EvidenceId);
                 continue;
             }
 
             pairs.Add(new ScoringSignal(signal, evidence));
+        }
+
+        if (droppedSignalCount > 0)
+        {
+            _logger.LogWarning(
+                "Dropped {DroppedSignalCount} signal(s) for company {CompanyId} whose evidence could not be "
+                    + "resolved, across {DistinctEvidenceCount} distinct evidence id(s); per-signal detail at Debug.",
+                droppedSignalCount, companyId, droppedEvidenceIds!.Count);
         }
 
         // Deterministic ordering so the formula input and resulting links are stable across runs.

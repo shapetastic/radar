@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
@@ -162,7 +163,10 @@ public sealed class ScoringEngineTests
         public InMemoryCompanyRepository Companies { get; } = new();
         public ScoringEngine Engine { get; }
 
-        public Harness(IScoreFormula? formula = null, ScoringWeights? weights = null)
+        public Harness(
+            IScoreFormula? formula = null,
+            ScoringWeights? weights = null,
+            ILogger<ScoringEngine>? logger = null)
         {
             Engine = new ScoringEngine(
                 Signals,
@@ -177,7 +181,28 @@ public sealed class ScoringEngineTests
                 new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions { Window = Window },
-                NullLogger<ScoringEngine>.Instance);
+                logger ?? NullLogger<ScoringEngine>.Instance);
+        }
+
+        /// <summary>
+        /// Seeds an Approved in-window signal pointing at an evidence id that was never stored, optionally
+        /// SHARING that id with another signal. Lets a test distinguish "N dropped signals" from
+        /// "N distinct unresolvable evidence items" — the two numbers the aggregated warning carries.
+        /// </summary>
+        public async Task<Signal> SeedSignalWithUnresolvableEvidenceAsync(
+            Guid companyId, DateTimeOffset observedAt, Guid evidenceId, SignalType type = SignalType.CustomerWin)
+        {
+            var signal = new SignalBuilder()
+                .WithId(Guid.NewGuid())
+                .WithEvidenceId(evidenceId)
+                .WithCompanyId(companyId)
+                .WithType(type)
+                .WithReviewStatus(SignalReviewStatus.Approved)
+                .WithObservedAtUtc(observedAt)
+                .Build();
+
+            await Signals.AddAsync(signal, CancellationToken.None);
+            return signal;
         }
 
         public async Task<(Signal signal, EvidenceItem evidence)> SeedPairAsync(
@@ -307,6 +332,82 @@ public sealed class ScoringEngineTests
         Assert.Single(result.Links);
         Assert.Equal(withEvidence.signal.Id, result.Links[0].SignalId);
         Assert.DoesNotContain(result.Links, l => l.SignalId == missing.signal.Id);
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Dropped-signal provenance warnings: AGGREGATED PER COMPANY (spec 145).
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task DroppedSignals_LogExactlyOneAggregatedWarningPerCompany_WithBothCounts()
+    {
+        // The old per-signal Warning emitted ~9,500 lines per run PER STRATEGY on the live store. Spec 145
+        // heals evidence identity FORWARD only — accrued history is deliberately left as-is — so the legacy
+        // residue (89.5% of accrued signals) does not go away and neither would the flood. It is aggregated
+        // rather than silenced: an unresolvable evidence chain is a real provenance defect.
+        var logger = new CapturingLogger<ScoringEngine>();
+        var harness = new Harness(logger: logger);
+        var companyId = Guid.NewGuid();
+
+        var resolvable = await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-3));
+
+        // Three dropped signals over TWO distinct evidence ids — the two counts must differ, so a test
+        // cannot pass by reporting one number twice.
+        var sharedEvidenceId = Guid.NewGuid();
+        await harness.SeedSignalWithUnresolvableEvidenceAsync(
+            companyId, WindowEnd.AddDays(-3), sharedEvidenceId, SignalType.CustomerWin);
+        await harness.SeedSignalWithUnresolvableEvidenceAsync(
+            companyId, WindowEnd.AddDays(-3), sharedEvidenceId, SignalType.ProductLaunch);
+        await harness.SeedSignalWithUnresolvableEvidenceAsync(
+            companyId, WindowEnd.AddDays(-2), Guid.NewGuid(), SignalType.ExecutiveHire);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // Only the resolvable signal is scored — the drop behaviour itself is unchanged.
+        Assert.Equal(resolvable.signal.Id, Assert.Single(result.Links).SignalId);
+
+        var warning = Assert.Single(
+            logger.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Message));
+        Assert.Contains("Dropped 3 signal(s)", warning, StringComparison.Ordinal);
+        Assert.Contains("2 distinct evidence id(s)", warning, StringComparison.Ordinal);
+        Assert.Contains(companyId.ToString(), warning, StringComparison.Ordinal);
+
+        // Per-signal detail is retained, at Debug — nothing is silenced, only re-levelled.
+        Assert.Equal(
+            3,
+            logger.Entries.Count(e => e.Level == LogLevel.Debug
+                && e.Message.Contains("Dropping signal", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task NoDroppedSignals_LogsNoWarningAtAll()
+    {
+        var logger = new CapturingLogger<ScoringEngine>();
+        var harness = new Harness(logger: logger);
+        var companyId = Guid.NewGuid();
+
+        await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-3));
+
+        await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.DoesNotContain(logger.Entries, e => e.Level == LogLevel.Warning);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     [Fact]

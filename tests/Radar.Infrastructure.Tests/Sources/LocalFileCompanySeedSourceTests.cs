@@ -73,6 +73,47 @@ public sealed class LocalFileCompanySeedSourceTests : IDisposable
         }
         """;
 
+    /// <summary>
+    /// Spec 145 extracted this source's private <c>DeterministicGuid</c> canonical-string→Guid step into the
+    /// shared <see cref="Radar.Application.Identity.DeterministicGuid"/> so evidence identity could reuse it
+    /// instead of pasting a second MD5-to-Guid implementation. The extraction MUST be byte-identical: these
+    /// Ids are persisted upsert keys, and re-minting them would orphan every seeded alias/feed row. Pinned by
+    /// VALUE — a self-consistency assertion would stay green through exactly the change that breaks it.
+    /// </summary>
+    [Fact]
+    public async Task GetSeedAsync_DerivedIds_ArePinnedToTheHistoricalAlgorithm()
+    {
+        var path = WriteSeedFile("""
+            {
+              "companies": [
+                {
+                  "id": "11111111-1111-1111-1111-111111111111",
+                  "name": "Acme Corp",
+                  "ticker": "ACME",
+                  "aliases": [ "Acme" ],
+                  "sourceFeeds": [
+                    { "type": "rss", "name": "Acme PR", "url": "https://example.com/acme.rss" }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        var seed = await CreateSource(path).GetSeedAsync(CancellationToken.None);
+
+        // MD5(UTF8("11111111-1111-1111-1111-111111111111|seed|acme")) reinterpreted as a Guid — the value
+        // this source has produced since spec 23. (The alias text is lower-invariant-normalized.)
+        Assert.Equal(
+            Guid.Parse("afd89302-6928-848b-4b64-fcc4627bbaf9"),
+            Assert.Single(seed.Aliases).Id);
+
+        // MD5(UTF8("11111111-1111-1111-1111-111111111111|feed|rss|https://example.com/acme.rss")) — the
+        // spec-97 "type|url" composite, unchanged.
+        Assert.Equal(
+            Guid.Parse("96141952-89e3-da03-def0-9ac53fd155af"),
+            Assert.Single(seed.SourceFeeds).Id);
+    }
+
     [Fact]
     public async Task GetSeedAsync_ReadsCompaniesAndAliases()
     {

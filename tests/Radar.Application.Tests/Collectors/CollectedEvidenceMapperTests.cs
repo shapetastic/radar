@@ -143,6 +143,81 @@ public sealed class CollectedEvidenceMapperTests
         Assert.Equal("High", metadataElement.GetProperty("quality").GetString());
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Content-derived, stable evidence identity (spec 145).
+    //
+    // Pre-145 the mapper minted Guid.NewGuid() per call, so these assertions were all false: the id a
+    // signal referenced was unrelated to the contentHash-keyed id the durable store persisted (only 10.5%
+    // of accrued signals resolved), and the spec-85 dedupe key — which contains EvidenceId — could never
+    // collapse content duplication (measured 1.000x, versus 9.213x by content).
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ToEvidenceItem_IdIsDerivedFromTheContentHash()
+    {
+        var mapper = CreateMapper();
+
+        var item = mapper.ToEvidenceItem(Build());
+
+        Assert.Equal(EvidenceIdentity.ForContentHash(item.ContentHash), item.Id);
+    }
+
+    [Fact]
+    public void ToEvidenceItem_TwoRunsOverIdenticalContent_ProduceTheSameId()
+    {
+        var mapper = CreateMapper();
+
+        var first = mapper.ToEvidenceItem(Build());
+        var second = mapper.ToEvidenceItem(Build());
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void ToEvidenceItem_ExcludedFieldsDoNotChangeIdentity()
+    {
+        // Identity is a function of the normalized title+body ALONE. Everything varied here is a property
+        // of the RETRIEVAL, not of the fact: the collector/source name, the URL (hence every volatile query
+        // parameter and tracking token), the collection timestamp, the published timestamp, the declared
+        // source type, the metadata bag and the company hints. Folding any of them in would re-create the
+        // per-run identity this replaces.
+        var mapper = CreateMapper();
+
+        var baseline = mapper.ToEvidenceItem(Build());
+
+        var varied = mapper.ToEvidenceItem(Build(
+            sourceType: EvidenceSourceType.NewsArticle,
+            sourceName: "Some Other Wire",
+            sourceUrl: "https://other.example/x?utm_source=newsletter&sid=9f3a1",
+            publishedAt: new DateTimeOffset(2026, 2, 7, 3, 0, 0, TimeSpan.Zero),
+            collectedAt: new DateTimeOffset(2026, 3, 9, 1, 2, 3, TimeSpan.Zero),
+            metadata: new Dictionary<string, string> { ["quality"] = "Low", ["run"] = "17" },
+            companyHints: ["NWR"]));
+
+        Assert.Equal(baseline.Id, varied.Id);
+        Assert.Equal(baseline.ContentHash, varied.ContentHash);
+
+        // …while everything else genuinely differs, so the equality above is about identity, not about the
+        // two items accidentally being the same item.
+        Assert.NotEqual(baseline.SourceName, varied.SourceName);
+        Assert.NotEqual(baseline.SourceType, varied.SourceType);
+        Assert.NotEqual(baseline.CollectedAtUtc, varied.CollectedAtUtc);
+    }
+
+    [Fact]
+    public void ToEvidenceItem_DifferentContent_ProducesDifferentIds()
+    {
+        // The other half of the contract: identity collapses copies, it must never merge distinct facts.
+        var mapper = CreateMapper();
+
+        var a = mapper.ToEvidenceItem(Build(title: "Northwind Robotics customer win"));
+        var b = mapper.ToEvidenceItem(Build(title: "Northwind Robotics guidance cut"));
+        var c = mapper.ToEvidenceItem(Build(rawText: "Northwind Robotics lowered guidance today."));
+
+        Assert.Equal(3, new[] { a.Id, b.Id, c.Id }.Distinct().Count());
+    }
+
     [Fact]
     public void ToEvidenceItem_CarriesTimestamps_ConvertingPublishedToUtc()
     {

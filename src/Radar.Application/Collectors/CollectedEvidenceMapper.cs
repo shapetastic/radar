@@ -10,9 +10,20 @@ namespace Radar.Application.Collectors;
 /// becomes an immutable domain <see cref="EvidenceItem"/>. Centralises normalization
 /// (<see cref="IEvidenceNormalizer"/>), content hashing, quality parsing (AD-7), and hint/metadata
 /// serialization. The collector-declared <see cref="EvidenceSourceType"/> is carried straight
-/// through. <c>Id</c> uses <see cref="Guid.NewGuid"/>; <c>CollectedAt</c> comes from the
+/// through. <c>CollectedAt</c> comes from the
 /// <see cref="CollectedEvidence"/> (the collector already stamped the run instant), so no
-/// <see cref="TimeProvider"/> is needed. This mapper is the sole author of the
+/// <see cref="TimeProvider"/> is needed.
+/// <para>
+/// <c>Id</c> is <b>content-derived and stable</b> — <see cref="EvidenceIdentity.ForContentHash"/> over the
+/// normalized title+body hash (spec 145), NOT <see cref="Guid.NewGuid"/>. The same content therefore maps
+/// to the same evidence id on every run and from every collector, which is what lets the durable store
+/// (path-keyed on <c>contentHash</c> all along) and a signal's <c>EvidenceId</c> finally agree, and what
+/// lets the spec-85 cross-run dedupe key see content duplication. Read
+/// <see cref="EvidenceIdentity"/> for the full rule, the exclusions, the cross-collector choice and the
+/// accrued-history decision. Everything else about this mapper is unchanged: the id is the ONLY
+/// non-deterministic thing it used to produce, so it is now a pure function of its input.
+/// </para>
+/// This mapper is the sole author of the
 /// <c>{ "metadata": {...}, "companyHints": [...] }</c> envelope, which every consumer reads back through
 /// <see cref="EvidenceMetadata"/> so author and readers stay adjacent.
 /// </summary>
@@ -50,7 +61,10 @@ public sealed class CollectedEvidenceMapper
         var metadataJson = EvidenceMetadata.Compose(collected.Metadata, collected.CompanyHints);
 
         return new EvidenceItem(
-            Id: Guid.NewGuid(),
+            // Content-derived, stable identity (spec 145): a pure function of the normalized title+body
+            // hash and of NOTHING else — not the retrieval timestamp, not the collector, not the URL.
+            // Two runs, or two collectors, over the same content now produce the SAME evidence id.
+            Id: EvidenceIdentity.ForContentHash(normalized.ContentHash),
             SourceType: sourceType,
             SourceName: collected.SourceName,
             SourceUrl: collected.SourceUrl,

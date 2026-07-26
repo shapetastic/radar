@@ -44,6 +44,17 @@ namespace Radar.Infrastructure.FileSystem;
 /// re-running collection no longer re-extracts signals from already-seen evidence. That is the spec's
 /// idempotency criterion, and it is a real change to how a live baseline run behaves.
 /// </para>
+/// <para>
+/// <b>Evidence identity is content-derived from spec 145 on</b>
+/// (<see cref="Radar.Application.Evidence.EvidenceIdentity"/>), so the id a signal references and the id
+/// this store's <c>contentHash</c>-keyed file carries finally agree. <b>Accrued history is left exactly as
+/// it is</b> — the chosen option, deliberately: legacy files keep their legacy per-run ids, this store
+/// never rewrites or deletes one (insert-only, AD-1), and there is no backfill, migration or "supersede"
+/// marker. Retro-healing resolution would turn the live 30-day window's 2,618 scored signals into 12,145
+/// (~4.6× inflation), so historical series stay exactly as they were actually scored. Duplicate-content
+/// files that predate 145 therefore remain, and hydration COUNTS them separately from unreadable files so
+/// the residual duplication rate stays visible instead of hiding inside a single "skipped" tally.
+/// </para>
 /// </remarks>
 public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepository
 {
@@ -241,16 +252,28 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
             }
 
             var loaded = 0;
-            var skipped = 0;
+
+            // TWO counters, deliberately, not one "skipped" tally (spec 145): a duplicate-content collapse
+            // and an unreadable file mean completely different things. The first is the DUPLICATION RATE —
+            // the number this store's identity fix is measured by, and the number that says whether accrued
+            // history still carries per-run copies. The second is data loss. Summing them into one figure
+            // hid the first behind the second.
+            var duplicatesCollapsed = 0;
+            var unreadable = 0;
 
             if (Directory.Exists(_options.RootDirectory))
             {
                 // Ordinal-sorted, NOT raw enumeration order: hydration de-dupes by ContentHash and
-                // TryAdds, so when two files carry the same hash (they do — the mapper mints a fresh
-                // evidence Guid per run, and copies can land under different source-type folders) the
-                // FIRST file read wins. Directory.EnumerateFiles has no defined order, so an unsorted
-                // walk would let the winning item — and therefore the scored evidence set — vary between
-                // runs and between OSes. Sorting makes the survivor a function of the path alone.
+                // TryAdds, so when two files carry the same hash the FIRST file read wins. Duplicates
+                // exist and always will: legacy files were written when the mapper minted a fresh evidence
+                // Guid per run (pre-spec-145), and even with content-derived identity the same content can
+                // land under two different source-type folders when two collectors find it.
+                // Directory.EnumerateFiles has no defined order, so an unsorted walk would let the winning
+                // item — and therefore the scored evidence set — vary between runs and between OSes.
+                // Sorting makes the survivor a function of the path alone.
+                //
+                // PROVENANCE IS NOT COLLAPSED, only identity is: every contributing source's own file stays
+                // on disk untouched (insert-only, AD-1). Nothing here deletes or rewrites anything.
                 foreach (var file in EnumerateEvidenceFiles().Order(StringComparer.Ordinal))
                 {
                     ct.ThrowIfCancellationRequested();
@@ -263,14 +286,16 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
                         {
                             _logger.LogWarning(
                                 "Raw evidence file '{File}' contained a null record; skipping.", file);
-                            skipped++;
+                            unreadable++;
                             continue;
                         }
 
                         var item = ToEvidenceItem(parsed, file);
                         if (item is null)
                         {
-                            skipped++;
+                            // ToEvidenceItem already logged WHY the file could not be honestly
+                            // reconstructed (unknown sourceType / missing required provenance field).
+                            unreadable++;
                             continue;
                         }
 
@@ -281,25 +306,33 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
                         else
                         {
                             // A duplicate content hash or id — the earlier (ordinal-first) file already
-                            // holds this evidence. Counted, not silent: the log line claims to report
-                            // duplicates, and the duplication rate is the number that tells us whether
-                            // evidence identity (spec 141) still needs fixing.
-                            skipped++;
+                            // holds this evidence, so the identity index keeps ONE canonical record while
+                            // this file stays on disk with its own source attribution intact. Counted
+                            // separately from unreadable files because the two numbers answer different
+                            // questions: this one is the duplication rate.
+                            duplicatesCollapsed++;
+                            _logger.LogDebug(
+                                "Raw evidence file '{File}' duplicates already-indexed content hash "
+                                    + "'{ContentHash}'; collapsing to the ordinal-first record (file retained).",
+                                file,
+                                item.ContentHash);
                         }
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
                     {
                         _logger.LogWarning(ex, "Failed to read raw evidence file '{File}'; skipping.", file);
-                        skipped++;
+                        unreadable++;
                     }
                 }
             }
 
             _logger.LogInformation(
-                "Hydrated {Loaded} raw evidence item(s) from '{Root}' ({Skipped} unreadable/duplicate file(s) skipped).",
+                "Hydrated {Loaded} raw evidence item(s) from '{Root}' "
+                    + "({DuplicateFiles} duplicate-content file(s) collapsed, {UnreadableFiles} unreadable file(s) skipped).",
                 loaded,
                 _options.RootDirectory,
-                skipped);
+                duplicatesCollapsed,
+                unreadable);
 
             _hydrated = true;
         }

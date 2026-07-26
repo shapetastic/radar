@@ -1,5 +1,6 @@
 using System.Text.Json;
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Abstractions.Persistence;
@@ -41,10 +42,10 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
         }
     }
 
-    private FileRawEvidenceStore CreateStore() =>
+    private FileRawEvidenceStore CreateStore(ILogger<FileRawEvidenceStore>? logger = null) =>
         new(
             new FileRawEvidenceStoreOptions { RootDirectory = _tempDir },
-            NullLogger<FileRawEvidenceStore>.Instance);
+            logger ?? NullLogger<FileRawEvidenceStore>.Instance);
 
     // -------------------------------------------------------------------------------------------------
     // Full-fidelity round trip through a FRESH instance (the "new process" the spec's invariant needs).
@@ -326,8 +327,10 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
         Assert.True(await ((IEvidenceRepository)run1).AddIfNewAsync(first, CancellationToken.None));
         Assert.True(await run1.WriteIfNewAsync(first, CancellationToken.None));
 
-        // Run 2 re-collects the SAME content; the mapper mints a fresh evidence Guid every run, so only
-        // the ContentHash identifies it as already-seen.
+        // Run 2 re-collects the SAME content but arrives carrying a DIFFERENT evidence id — the shape every
+        // legacy file on disk has, from when the mapper minted a fresh Guid per run (pre-spec-145). The
+        // ContentHash alone must still identify it as already-seen, which is what keeps accrued history
+        // readable after identity became content-derived.
         var second = new EvidenceBuilder()
             .WithContentHash("shared-hash")
             .WithPublishedAtUtc(new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero))
@@ -360,8 +363,9 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
     [Fact]
     public async Task DuplicateContentHash_ResolvesToTheOrdinalFirstPath_OnEveryHydration()
     {
-        // Two files, same contentHash, different evidence ids — the store holds ~9x content-equivalent
-        // duplication today (the mapper mints a fresh Guid per run). Hydration TryAdds, so the FIRST file
+        // Two files, same contentHash, different evidence ids — the shape ~9x of the accrued store is in,
+        // from when the mapper minted a fresh Guid per run (pre-spec-145; that history is deliberately left
+        // exactly as it is, so these files stay). Hydration TryAdds, so the FIRST file
         // read wins; Directory.EnumerateFiles has no defined order, so without an ordinal sort the winning
         // item — and therefore the scored evidence set — could differ between runs and between OSes.
         // Written ordinal-LAST first, so creation order and ordinal order disagree: the test then fails
@@ -411,10 +415,66 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
         Assert.Empty(await repo.GetAllAsync(CancellationToken.None));
     }
 
+    /// <summary>
+    /// Spec 145: duplicate-content collapse and unreadable files are counted SEPARATELY. They mean
+    /// completely different things — one is the duplication rate (the number evidence identity is measured
+    /// by), the other is data loss — and summing them into a single "skipped" tally hid the first behind
+    /// the second.
+    /// </summary>
+    [Fact]
+    public async Task Hydration_ReportsDuplicateCollapseSeparatelyFromUnreadableFiles()
+    {
+        // One good file, one duplicate of it (same contentHash, different evidence id), one unreadable.
+        await WriteLegacyFileAsync("a-dupe", DuplicateJson("11111111-1111-1111-1111-111111111111"), "aaa");
+        await WriteLegacyFileAsync("b-dupe", DuplicateJson("22222222-2222-2222-2222-222222222222"), "bbb");
+        await WriteLegacyFileAsync("c-broken", "{ this is not json", "ccc");
+
+        var logger = new CapturingLogger<FileRawEvidenceStore>();
+        IEvidenceRepository hydrated = CreateStore(logger);
+        Assert.Single(await hydrated.GetAllAsync(CancellationToken.None));
+
+        var summary = Assert.Single(
+            logger.Entries.Where(e => e.Level == LogLevel.Information).Select(e => e.Message));
+
+        // Both counts appear, and each is attributed to its own cause.
+        Assert.Contains("Hydrated 1 raw evidence item(s)", summary, StringComparison.Ordinal);
+        Assert.Contains("1 duplicate-content file(s) collapsed", summary, StringComparison.Ordinal);
+        Assert.Contains("1 unreadable file(s) skipped", summary, StringComparison.Ordinal);
+
+        // The duplicate is a Debug detail (naming the file, so provenance is traceable), NOT a Warning:
+        // duplicate content is expected in accrued history and must not drown the real failures.
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Debug && e.Message.Contains("duplicates already-indexed content hash",
+                StringComparison.Ordinal));
+
+        // The unreadable file IS a Warning — that one is data loss.
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("c-broken", StringComparison.Ordinal));
+    }
+
     private async Task WriteLegacyFileAsync(string name, string json, string folder = "legacy")
     {
         var dir = Path.Combine(_tempDir, folder);
         Directory.CreateDirectory(dir);
         await File.WriteAllTextAsync(Path.Combine(dir, name + ".json"), json);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 }

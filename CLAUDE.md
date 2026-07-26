@@ -337,9 +337,54 @@ Do not hand back broken code.
     id was never persisted while its signals were. The store therefore holds ~9.2× content-equivalent
     duplication that spec 85's key **cannot** collapse (the duplication is in *evidence* identity, not signal
     identity) — Radar is protected from 9× score inflation only by the accident that those duplicates'
-    evidence is unresolvable and `ScoringEngine` drops them. Do **not** backfill evidence without fixing
-    evidence identity first (spec 141): that would turn a 1.03× scored set into a ~9× one. 142 heals this
-    going forward and does not touch history.
+    evidence is unresolvable and `ScoringEngine` drops them. ~~Do not backfill evidence without fixing
+    evidence identity first (spec 141)~~ — the evidence-identity fix is **spec 145** (not 141, which is
+    *strategy* identity), and it is now **done, forward only**: new evidence gets a content-derived id, so
+    the duplication stops accruing. What remains true, and is the standing rule: **do not backfill or rewrite
+    the accrued 89.5 %.** 145 deliberately left history exactly as it is, so retro-healing resolution would
+    still turn the live 30-day window's 1.03× scored set (2,618 signals) into a 4.6× one (12,145). 142 and
+    145 both heal going forward and neither touches history.
+- **Evidence identity is content-derived (spec 145) — the fix that made spec 85's key non-vacuous.**
+  `CollectedEvidenceMapper` minted `Guid.NewGuid()` per run while `FileRawEvidenceStore` path-keyed files on
+  `contentHash`, so the id a signal referenced was unrelated to the id the file carried: resolution failed
+  (10.5 %) *and* the spec-85 dedupe key `(CompanyId, EvidenceId, Type, Direction)` — which **contains**
+  evidence identity — could never collapse identity duplication (measured **1.000×** key-collapse vs
+  **9.213×** content-collapse over 49,454 signals). `EvidenceIdentity.ForContentHash` now derives the id from
+  the namespaced canonical string `"radar:evidence:" + contentHash`, through the shared
+  `DeterministicGuid.FromCanonicalString` that `LocalFileCompanySeedSource` was **extracted onto** rather than
+  copied (reuse-over-copy; the seed source keeps its own `companyId|kind|value` canonicalisation, and its
+  produced Guids are byte-identical — pinned by value). Rules:
+  - **Identity is the normalized title+body hash ALONE.** Explicitly excluded: `CollectedAt`, `PublishedAt`,
+    run id, any minted id, collector/source name, source URL (hence every volatile query parameter and
+    tracking token), the metadata bag, company hints, and `SourceType`.
+  - **Cross-collector: the same content from two collectors is ONE evidence record**, because identical
+    normalized content is one *fact* and two collectors finding it is two retrieval paths, not two facts.
+    Provenance is **not** collapsed — every contributing source's own raw file stays on disk under its own
+    `{sourceTypeFolder}/{yyyy}/{MM}/{contentHash}.json` (insert-only, AD-1); only the identity **index**
+    collapses, deterministically by ordinal path order, and hydration now **reports** that collapse in its own
+    counter, separate from unreadable-file skips (two counters, not one — the duplication rate and data loss
+    mean different things).
+  - **Scores do not rise, and the reason is structural, not directional.** "Lower breadth ⇒ lower score" is
+    *not* universally true: `OpportunityScore` consumes `AttentionScore` as an **inverse** discount, so a
+    lower attention would *raise* opportunity. It is never exercised because `AddIfNewAsync` has always
+    rejected a second item with an already-seen content hash, so at most one record per distinct content
+    could ever be persisted or resolved — the breadth of a set of identical copies was already exactly 1
+    *before* this slice. 145 changes **which id** that one record carries, not how many there are. Asserted:
+    N runs over identical content yield ONE scored signal, and the duplicated fixture scores **equal** to the
+    single-copy fixture component-for-component. **Measured, not just argued** (spec-139 read-only replay at
+    as-of 2026-07-26 over the live store, run on `origin/main` and on this branch): all **43** companies came
+    back field-for-field identical excluding the per-call minted snapshot/link `Guid`s — **703** evidence links
+    on both sides, **0** components risen, **0** fallen, same `radar-scoring-fp-97207902fd70` stamp.
+  - **Accrued history: left as-is, dedupe forward only** (the chosen option). Nothing deleted, nothing
+    rewritten, no migration, no backfill, no supersede marker. Legacy evidence keeps its legacy ids and legacy
+    signals keep their references, so no historical series moves.
+  - **The dropped-signal warning is aggregated, not silenced.** `ScoringEngine` emitted one Warning per
+    dropped signal (~9,500 per run **per strategy**); since the legacy residue deliberately survives, it is now
+    **one Warning per company** carrying the dropped count *and* the distinct-evidence-id count, with per-signal
+    detail at Debug. Measured over the same live replay: **13,625 → 43** warning lines (one per company, a 317×
+    reduction) with the total dropped count preserved in aggregate rather than lost.
+  - **No fingerprint move**: no `ScoringConfigVersion` input changed, no `_formula.Version` bump, no
+    `KeywordSignalExtractor.RuleSetVersion` bump. The pins do not move.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,
