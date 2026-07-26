@@ -20,6 +20,8 @@ public sealed class ScoreSnapshotBuilder
     // Default a real stamp so builder/renderer/policy tests asserting real deltas / thesis labels keep
     // matching stamps on both current and previous snapshots and stay green.
     private string? _scoringConfigVersion = "radar-scoring-config-v1";
+    // Spec 137: null == the primary/legacy strategy, which is what almost every existing test means.
+    private string? _strategyName;
 
     public ScoreSnapshotBuilder WithId(Guid v) { _id = v; return this; }
     public ScoreSnapshotBuilder WithCompanyId(Guid v) { _companyId = v; return this; }
@@ -37,6 +39,7 @@ public sealed class ScoreSnapshotBuilder
     }
     public ScoreSnapshotBuilder WithCreatedAtUtc(DateTimeOffset v) { _createdAtUtc = v; return this; }
     public ScoreSnapshotBuilder WithScoringConfigVersion(string? v) { _scoringConfigVersion = v; return this; }
+    public ScoreSnapshotBuilder WithStrategyName(string? v) { _strategyName = v; return this; }
 
     public CompanyScoreSnapshot Build() => new(
         Id: _id,
@@ -52,5 +55,6 @@ public sealed class ScoreSnapshotBuilder
         WindowStartUtc: _windowStartUtc,
         WindowEndUtc: _windowEndUtc,
         CreatedAtUtc: _createdAtUtc,
-        ScoringConfigVersion: _scoringConfigVersion);
+        ScoringConfigVersion: _scoringConfigVersion,
+        StrategyName: _strategyName);
 }

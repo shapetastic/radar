@@ -1,0 +1,147 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Radar.Application.Abstractions.Persistence;
+using Radar.Application.Scoring;
+using Radar.Application.SignalExtraction;
+using Radar.Application.Signals;
+using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.Persistence.InMemory;
+
+namespace Radar.Application.Tests.Scoring;
+
+/// <summary>
+/// Spec 137 — one <see cref="ScoringEngine"/> per strategy, built by <see cref="ScoringStrategyFactory"/>.
+/// The two load-bearing properties: (a) the synthesised default strategy's engine stamps EXACTLY the
+/// fingerprint the previous single-engine composition stamped, and (b) the strategy NAME is not a
+/// fingerprint input.
+/// </summary>
+public sealed class ScoringStrategyFactoryTests
+{
+    private static ServiceProvider BuildDefaultGraph()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddInMemoryRadarPersistence();
+        services.AddRadarApplicationServices();
+        // The engine depends on ISignalFileStore (cross-run previous-window read); wire the real file store
+        // over a unique temp dir so the composition resolves.
+        services.AddFileSignalStore(Path.Combine(Path.GetTempPath(), $"radar-signals-{Guid.NewGuid():N}"));
+        return services.BuildServiceProvider();
+    }
+
+    [Fact]
+    public void DefaultGraph_ResolvesExactlyOnePrimaryStrategy_NamedDefault()
+    {
+        using var provider = BuildDefaultGraph();
+
+        var factory = provider.GetRequiredService<IScoringStrategyFactory>();
+
+        var only = Assert.Single(factory.Runtimes);
+        Assert.Equal(ScoringStrategySet.DefaultStrategyName, only.Definition.Name);
+        Assert.True(only.Definition.IsPrimary);
+        Assert.Same(only, factory.Primary);
+    }
+
+    [Fact]
+    public void SynthesisedDefaultStrategy_StampsTheSameFingerprint_AsTheSingleEngineComposition()
+    {
+        using var provider = BuildDefaultGraph();
+
+        // The engine exactly as the pre-spec-137 composition built it: the registered ScoringWeights, a
+        // formula constructed straight over them, and no strategy name.
+        var weights = provider.GetRequiredService<ScoringWeights>();
+        var sourceWeights = provider.GetRequiredService<IAttentionSourceWeights>();
+        var singleEngine = new ScoringEngine(
+            provider.GetRequiredService<ISignalRepository>(),
+            provider.GetRequiredService<ISignalFileStore>(),
+            provider.GetRequiredService<IEvidenceRepository>(),
+            provider.GetRequiredService<IScoreRepository>(),
+            provider.GetRequiredService<ICompanyRepository>(),
+            new RadarScoreFormulaV8(weights, sourceWeights),
+            weights,
+            sourceWeights,
+            provider.GetRequiredService<ISignalSourceDescriptor>(),
+            provider.GetRequiredService<InsiderMaterialityWeights>(),
+            provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<ScoringOptions>(),
+            NullLogger<ScoringEngine>.Instance);
+
+        var strategyEngine = provider.GetRequiredService<IScoringStrategyFactory>().Primary.Engine;
+
+        Assert.Equal(singleEngine.EffectiveConfig.Fingerprint, strategyEngine.EffectiveConfig.Fingerprint);
+        Assert.Equal(singleEngine.EffectiveConfig, strategyEngine.EffectiveConfig);
+    }
+
+    [Fact]
+    public void IScoringEngine_ResolvesToThePrimaryStrategysEngine()
+    {
+        using var provider = BuildDefaultGraph();
+
+        var primary = provider.GetRequiredService<IScoringStrategyFactory>().Primary.Engine;
+
+        // No dormant second engine: the ambient IScoringEngine IS the primary strategy's instance.
+        Assert.Same(primary, provider.GetRequiredService<IScoringEngine>());
+    }
+
+    [Fact]
+    public void Runtimes_AreBuiltOnce_AndCached()
+    {
+        using var provider = BuildDefaultGraph();
+
+        var factory = provider.GetRequiredService<IScoringStrategyFactory>();
+
+        Assert.Same(factory.Runtimes, factory.Runtimes);
+        Assert.Same(factory.Primary.Engine, factory.Primary.Engine);
+    }
+
+    [Fact]
+    public void StrategyName_IsNotAFingerprintInput()
+    {
+        // Two strategies over the SAME resolved weights differ only in name: their fingerprints must be
+        // identical (a fingerprint identifies the effective scoring CONFIG, not the label on it), which is
+        // exactly why the readable StrategyName is carried alongside it rather than folded into it.
+        var weights = new ScoringWeights();
+        var set = new ScoringStrategySet(
+        [
+            new ScoringStrategyDefinition("alpha", "default", weights, IsPrimary: true),
+            new ScoringStrategyDefinition("beta", "default", weights, IsPrimary: false),
+        ]);
+
+        using var provider = BuildDefaultGraph();
+        var factory = new ScoringStrategyFactory(
+            set,
+            provider.GetRequiredService<ISignalRepository>(),
+            provider.GetRequiredService<ISignalFileStore>(),
+            provider.GetRequiredService<IEvidenceRepository>(),
+            new StrategyScopedScoreRepositoryFactory(provider.GetRequiredService<IScoreRepository>()),
+            provider.GetRequiredService<ICompanyRepository>(),
+            provider.GetRequiredService<IScoreFormulaFactory>(),
+            provider.GetRequiredService<IAttentionSourceWeights>(),
+            provider.GetRequiredService<ISignalSourceDescriptor>(),
+            provider.GetRequiredService<InsiderMaterialityWeights>(),
+            provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<ScoringOptions>(),
+            provider.GetRequiredService<ILogger<ScoringEngine>>());
+
+        Assert.Equal(
+            factory.Runtimes[0].Engine.EffectiveConfig.Fingerprint,
+            factory.Runtimes[1].Engine.EffectiveConfig.Fingerprint);
+    }
+
+    [Fact]
+    public void NonPrimaryStrategies_GetTheirOwnScoreRepository()
+    {
+        var shared = new InMemoryScoreRepository();
+        var repositories = new StrategyScopedScoreRepositoryFactory(shared);
+
+        var primary = new ScoringStrategyDefinition("alpha", "default", new ScoringWeights(), IsPrimary: true);
+        var secondary = new ScoringStrategyDefinition("beta", "default", new ScoringWeights(), IsPrimary: false);
+
+        Assert.Same(shared, repositories.ForStrategy(primary));
+        Assert.NotSame(shared, repositories.ForStrategy(secondary));
+        // Stable per strategy: a snapshot and its evidence links must land in the SAME store.
+        Assert.Same(repositories.ForStrategy(secondary), repositories.ForStrategy(secondary));
+    }
+}

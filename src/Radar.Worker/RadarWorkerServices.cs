@@ -83,6 +83,15 @@ internal static class RadarWorkerServices
         // A blank/absent section binds the code default (3-day window). Fails fast on a non-positive window.
         services.AddRadarMediaCollapse(configuration);
 
+        // Scoring strategies (spec 137): resolve Radar:Strategies / Radar:PrimaryStrategy and register the
+        // concrete ScoringStrategySet BEFORE AddRadarApplicationServices so configuration wins over the
+        // library default (its TryAddSingleton is a no-op once this concrete instance is registered). An
+        // absent/empty Radar:Strategies synthesises the single "default" strategy from the ambient
+        // Radar:Scoring:Profile — byte-identical to the single-engine composition, with the pinned default
+        // fingerprints unmoved. Fails fast on an unknown profile, a blank/duplicate strategy name, or a
+        // missing/unknown Radar:PrimaryStrategy.
+        services.AddRadarScoringStrategies(configuration);
+
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
 

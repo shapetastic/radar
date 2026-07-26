@@ -234,7 +234,10 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
                 CreatedAtUtc: parsed.CreatedAtUtc,
                 // Old-format files lack this property and deserialize to null (default System.Text.Json
                 // tolerates missing members). A null stamp is treated as "not comparable".
-                ScoringConfigVersion: parsed.ScoringConfigVersion);
+                ScoringConfigVersion: parsed.ScoringConfigVersion,
+                // Same posture (spec 137): a pre-existing snapshot file has no strategyName property, so it
+                // deserializes to null — read as the primary/legacy strategy.
+                StrategyName: parsed.StrategyName);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -267,7 +270,8 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
                 SignalId: l.SignalId,
                 EvidenceId: l.EvidenceId,
                 ContributionReason: l.ContributionReason,
-                ContributionWeight: l.ContributionWeight))]);
+                ContributionWeight: l.ContributionWeight))],
+            StrategyName: snapshot.StrategyName);
 
         return JsonSerializer.Serialize(file, RadarFileStoreJson.Options);
     }
@@ -295,7 +299,12 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
         // Whole scoring-generation stamp (distinct from ScoringVersion). Trailing + nullable so old-format
         // files that lack the property deserialize to null → treated as not comparable → "(scoring updated)".
         string? ScoringConfigVersion,
-        IReadOnlyList<ScoreEvidenceLinkFile> Links);
+        IReadOnlyList<ScoreEvidenceLinkFile> Links,
+        // Human-readable strategy identity (spec 137), carried alongside the opaque ScoringConfigVersion.
+        // Trailing + nullable with a default, exactly as ScoringConfigVersion was added: pre-existing files
+        // that lack the property deserialize to null → read as the primary/legacy strategy. Property order on
+        // disk is irrelevant (System.Text.Json maps by name).
+        string? StrategyName = null);
 
     /// <summary>
     /// The persisted score-evidence link shape. Its <c>scoreSnapshotId</c> traces back to the parent

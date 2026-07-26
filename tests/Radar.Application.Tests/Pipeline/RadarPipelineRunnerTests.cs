@@ -132,7 +132,10 @@ public sealed class RadarPipelineRunnerTests
     private sealed class ConfigurableCollector(
         string name, EvidenceSourceType type, CollectionResult result) : IEvidenceCollector
     {
-        public bool WasCalled { get; private set; }
+        public bool WasCalled => CallCount > 0;
+
+        /// <summary>How many times this collector ran — must stay 1 per run, spec 137.</summary>
+        public int CallCount { get; private set; }
 
         public string CollectorName => name;
 
@@ -140,7 +143,7 @@ public sealed class RadarPipelineRunnerTests
 
         public Task<CollectionResult> CollectAsync(CollectionContext context, CancellationToken ct)
         {
-            WasCalled = true;
+            CallCount++;
             return Task.FromResult(result);
         }
     }
@@ -308,6 +311,39 @@ public sealed class RadarPipelineRunnerTests
         }
     }
 
+    /// <summary>
+    /// A test <see cref="IScoreSnapshotFileStoreFactory"/> (spec 137) that hands the PRIMARY strategy the
+    /// harness's existing <see cref="RecordingScoreSnapshotFileStore"/> — so every pre-existing assertion over
+    /// the "legacy path" store keeps meaning exactly what it meant — and every non-primary strategy its own
+    /// recording store, addressable by strategy name.
+    /// </summary>
+    private sealed class RecordingScoreSnapshotFileStoreFactory(RecordingScoreSnapshotFileStore primary)
+        : IScoreSnapshotFileStoreFactory
+    {
+        private readonly Dictionary<string, RecordingScoreSnapshotFileStore> _byStrategy =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public RecordingScoreSnapshotFileStore Primary { get; } = primary;
+
+        public RecordingScoreSnapshotFileStore For(string strategyName) => _byStrategy[strategyName];
+
+        public IScoreSnapshotFileStore ForStrategy(ScoringStrategyDefinition strategy)
+        {
+            if (strategy.IsPrimary)
+            {
+                return Primary;
+            }
+
+            if (!_byStrategy.TryGetValue(strategy.Name, out var store))
+            {
+                store = new RecordingScoreSnapshotFileStore();
+                _byStrategy[strategy.Name] = store;
+            }
+
+            return store;
+        }
+    }
+
     private sealed class Harness
     {
         public InMemoryEvidenceRepository Evidence { get; } = new();
@@ -322,6 +358,9 @@ public sealed class RadarPipelineRunnerTests
         public RecordingScoreSnapshotFileStore ScoreStore { get; } = new();
         public InMemoryScoreRepository Scores { get; } = new();
         public InMemoryReportRepository Reports { get; } = new();
+        public RecordingScoreSnapshotFileStoreFactory ScoreStores { get; }
+        public StrategyScopedScoreRepositoryFactory ScoreRepositories { get; }
+        public ScoringStrategySet StrategySet { get; }
         public RadarPipelineRunner Runner { get; }
 
         public Harness(
@@ -330,9 +369,11 @@ public sealed class RadarPipelineRunnerTests
             PipelineOptions options,
             TimeProvider? timeProvider = null,
             IDirectionalFilingSignalSource? directionalFilingSignals = null,
-            ICollectionHealthValidator? healthValidator = null)
+            ICollectionHealthValidator? healthValidator = null,
+            ScoringStrategySet? strategies = null)
             : this(
-                [collector], extractor, options, timeProvider, directionalFilingSignals, healthValidator)
+                [collector], extractor, options, timeProvider, directionalFilingSignals, healthValidator,
+                strategies)
         {
         }
 
@@ -342,23 +383,29 @@ public sealed class RadarPipelineRunnerTests
             PipelineOptions options,
             TimeProvider? timeProvider = null,
             IDirectionalFilingSignalSource? directionalFilingSignals = null,
-            ICollectionHealthValidator? healthValidator = null)
+            ICollectionHealthValidator? healthValidator = null,
+            ScoringStrategySet? strategies = null)
         {
             var time = timeProvider ?? new FixedTimeProvider(FixedNow);
 
             var resolver = new CompanyResolver(Companies, NullLogger<CompanyResolver>.Instance);
             var reviewer = new DeterministicSignalReviewer(
                 time, NullLogger<DeterministicSignalReviewer>.Instance);
-            var scoringWeights = new ScoringWeights();
             var sourceWeights = new AllGenuineWeights();
-            var scoringEngine = new ScoringEngine(
+
+            // Default composition == the single synthesised "default" primary strategy, i.e. exactly the
+            // pre-spec-137 single-engine graph.
+            StrategySet = strategies ?? ScoringStrategySet.SingleDefault(new ScoringWeights());
+            ScoreStores = new RecordingScoreSnapshotFileStoreFactory(ScoreStore);
+            ScoreRepositories = new StrategyScopedScoreRepositoryFactory(Scores);
+            var strategyFactory = new ScoringStrategyFactory(
+                StrategySet,
                 Signals,
                 SignalStore,
                 Evidence,
-                Scores,
+                ScoreRepositories,
                 Companies,
-                new RadarScoreFormulaV8(scoringWeights, sourceWeights),
-                scoringWeights,
+                new RadarScoreFormulaV8Factory(sourceWeights),
                 sourceWeights,
                 new StubSourceDescriptor(),
                 new InsiderMaterialityWeights(),
@@ -395,8 +442,8 @@ public sealed class RadarPipelineRunnerTests
                 Reviews,
                 SignalStore,
                 Companies,
-                scoringEngine,
-                ScoreStore,
+                strategyFactory,
+                ScoreStores,
                 ScoringConfigStore,
                 reportBuilder,
                 ReportWriter,
@@ -1308,9 +1355,13 @@ public sealed class RadarPipelineRunnerTests
     {
         public List<EvidenceItem> ReceivedCandidates { get; } = new();
 
+        /// <summary>How many times the (AI) directional read ran — must stay 1 per run, spec 137.</summary>
+        public int CallCount { get; private set; }
+
         public Task<IReadOnlyList<DirectionalFilingSignal>> ProduceAsync(
             IReadOnlyList<EvidenceItem> candidateEvidence, DateTimeOffset asOfUtc, CancellationToken ct)
         {
+            CallCount++;
             ReceivedCandidates.AddRange(candidateEvidence);
             IReadOnlyList<DirectionalFilingSignal> produced = candidateEvidence
                 .Select(ev => new DirectionalFilingSignal(signalFor(ev), ev))
@@ -1711,5 +1762,248 @@ public sealed class RadarPipelineRunnerTests
             DateTimeOffset.MinValue, DateTimeOffset.MaxValue, default);
         Assert.Empty(observed);
         Assert.Empty(h.SignalStore.Written);
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Spec 137 — N strategies over ONE collection pass.
+    // -------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Two strategies: "baseline" (primary, code-default weights) and "low-media" (non-primary, a different
+    /// MediaReachWeight so its effective config — and therefore its fingerprint — genuinely differs).
+    /// </summary>
+    private static ScoringStrategySet TwoStrategies() =>
+        new(
+        [
+            new ScoringStrategyDefinition(
+                "baseline", "default", new ScoringWeights(), IsPrimary: true),
+            new ScoringStrategyDefinition(
+                "low-media", "low-media", new ScoringWeights { MediaReachWeight = 0.02 }, IsPrimary: false),
+        ]);
+
+    [Fact]
+    public async Task TwoStrategies_ProduceTwoIndependentSnapshotSets_NeitherOverwritingTheOther()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        // The PRIMARY strategy's snapshot went to the legacy store; the non-primary one did NOT.
+        var primaryWritten = Assert.Single(h.ScoreStores.Primary.Written);
+        var secondaryWritten = Assert.Single(h.ScoreStores.For("low-media").Written);
+
+        // Distinct snapshots — neither overwrites the other.
+        Assert.NotEqual(primaryWritten.Snapshot.Id, secondaryWritten.Snapshot.Id);
+        Assert.Equal(companyId, primaryWritten.Snapshot.CompanyId);
+        Assert.Equal(companyId, secondaryWritten.Snapshot.CompanyId);
+
+        // Human-readable strategy identity is stamped on both, including the primary.
+        Assert.Equal("baseline", primaryWritten.Snapshot.StrategyName);
+        Assert.Equal("low-media", secondaryWritten.Snapshot.StrategyName);
+
+        // Different effective configs ⇒ different opaque generation stamps (the two series are correctly
+        // NOT comparable with each other).
+        Assert.NotNull(primaryWritten.Snapshot.ScoringConfigVersion);
+        Assert.NotNull(secondaryWritten.Snapshot.ScoringConfigVersion);
+        Assert.NotEqual(
+            primaryWritten.Snapshot.ScoringConfigVersion, secondaryWritten.Snapshot.ScoringConfigVersion);
+
+        // Provenance survives per strategy: each snapshot keeps its own ScoreEvidenceLink chain.
+        Assert.NotEmpty(primaryWritten.Links);
+        Assert.NotEmpty(secondaryWritten.Links);
+        Assert.All(primaryWritten.Links, l => Assert.Equal(primaryWritten.Snapshot.Id, l.ScoreSnapshotId));
+        Assert.All(secondaryWritten.Links, l => Assert.Equal(secondaryWritten.Snapshot.Id, l.ScoreSnapshotId));
+    }
+
+    [Fact]
+    public async Task TwoStrategies_KeepTheSharedScoreRepository_PrimaryOnly()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        // The shared repository — the one the weekly report reads — holds ONLY the primary's snapshot. If a
+        // non-primary strategy wrote here, the report would silently rank a mixture of strategies.
+        var shared = await h.Scores.GetSnapshotsForCompanyAsync(companyId, default);
+        var snapshot = Assert.Single(shared);
+        Assert.Equal("baseline", snapshot.StrategyName);
+
+        // The non-primary strategy's snapshot exists — in its OWN repository.
+        var secondary = h.ScoreRepositories.ForStrategy(h.StrategySet.Strategies[1]);
+        var isolated = Assert.Single(await secondary.GetSnapshotsForCompanyAsync(companyId, default));
+        Assert.Equal("low-media", isolated.StrategyName);
+    }
+
+    [Fact]
+    public async Task TwoStrategies_WeeklyReport_RendersThePrimaryStrategyOnly()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = true },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // Exactly one item per company (not one per strategy), citing the PRIMARY snapshot.
+        var items = await h.Reports.GetItemsAsync(result.ReportId!.Value, default);
+        var item = Assert.Single(items);
+        Assert.Equal(h.ScoreStores.Primary.Written[0].Snapshot.Id, item.ScoreSnapshotId);
+        Assert.NotEqual(h.ScoreStores.For("low-media").Written[0].Snapshot.Id, item.ScoreSnapshotId);
+    }
+
+    [Fact]
+    public async Task TwoStrategies_CollectAndDirectionalReadRunExactlyOnce()
+    {
+        // The whole point of the slice: N scorings over ONE collection pass. Nothing above the scoring stage
+        // may run per strategy.
+        var companyId = Guid.NewGuid();
+        var collectorA = new ConfigurableCollector(
+            "collector-a", EvidenceSourceType.LocalFile, AsResult([BuildCollected()]));
+        var collectorB = new ConfigurableCollector(
+            "collector-b", EvidenceSourceType.Filing, AsResult([BuildFilingCollected()]));
+
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+        var directional = new FakeDirectionalFilingSignalSource(ev => new ExtractedSignal(
+            CompanyMention: CompanyName,
+            SignalType: "GuidanceChange",
+            Direction: "Positive",
+            Strength: 6,
+            Novelty: 6,
+            Confidence: 0.9m,
+            SupportingExcerpt: ev.Title,
+            Reason: "Directional read: revenue up, guidance raised."));
+
+        var h = new Harness(
+            [collectorA, collectorB], extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: directional,
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, collectorA.CallCount);
+        Assert.Equal(1, collectorB.CallCount);
+        Assert.Equal(1, directional.CallCount);
+
+        // Evidence and signals are collected/extracted/persisted once, not once per strategy.
+        Assert.Equal(2, result.EvidenceCollected);
+        Assert.Equal(2, result.EvidenceNew);
+        var storedSignals = await h.Signals.GetByCompanyAsync(companyId, default);
+        Assert.Equal(h.SignalStore.Written.Count, storedSignals.Count);
+
+        // ...but BOTH strategies scored.
+        Assert.Single(h.ScoreStores.Primary.Written);
+        Assert.Single(h.ScoreStores.For("low-media").Written);
+    }
+
+    [Fact]
+    public async Task TwoStrategies_CompaniesScored_CountsThePrimaryStrategyOnly()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+        await SeedCompanyAsync(h, Guid.NewGuid(), "Acme Dynamics");
+
+        var result = await h.Runner.RunAsync(default);
+
+        // 2 companies × 2 strategies = 4 snapshots written, but the counter keeps its established meaning
+        // ("how many companies were scored this run") rather than silently multiplying by strategy count.
+        Assert.Equal(2, result.CompaniesScored);
+        Assert.Equal(2, h.ScoreStores.Primary.Written.Count);
+        Assert.Equal(2, h.ScoreStores.For("low-media").Written.Count);
+    }
+
+    [Fact]
+    public async Task TwoStrategies_WriteOneEffectiveScoringConfigPerStrategy()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+        await SeedCompanyAsync(h, Guid.NewGuid(), "Acme Dynamics");
+
+        await h.Runner.RunAsync(default);
+
+        // One content-addressed config write per strategy (NOT per company), and each snapshot's stamp
+        // dereferences back to its own strategy's config.
+        Assert.Equal(2, h.ScoringConfigStore.WriteCallCount);
+        Assert.Equal(2, h.ScoringConfigStore.Written.Select(c => c.Fingerprint).Distinct().Count());
+        Assert.Contains(
+            h.ScoringConfigStore.Written,
+            c => c.Fingerprint == h.ScoreStores.Primary.Written[0].Snapshot.ScoringConfigVersion);
+        Assert.Contains(
+            h.ScoringConfigStore.Written,
+            c => c.Fingerprint == h.ScoreStores.For("low-media").Written[0].Snapshot.ScoringConfigVersion);
+    }
+
+    [Fact]
+    public async Task TwoStrategies_RunRecord_ListsTheStrategiesThatRan()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(["baseline", "low-media"], record.Strategies!.ToArray());
+        Assert.Equal("baseline", record.PrimaryStrategy);
+    }
+
+    [Fact]
+    public async Task SingleDefaultStrategy_StampsTheStrategyName_AndChangesNothingElse()
+    {
+        // The byte-identical default: one synthesised "default" primary strategy writing to the legacy
+        // store, with the strategy name as the only additive field on the snapshot.
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, result.CompaniesScored);
+        var written = Assert.Single(h.ScoreStores.Primary.Written);
+        Assert.Equal(ScoringStrategySet.DefaultStrategyName, written.Snapshot.StrategyName);
+        Assert.Same(h.ScoreStore, h.ScoreStores.ForStrategy(h.StrategySet.Primary));
+
+        // Shared repository + report unchanged.
+        Assert.Single(await h.Scores.GetSnapshotsForCompanyAsync(companyId, default));
+        Assert.Single(await h.Reports.GetItemsAsync(result.ReportId!.Value, default));
+        Assert.Equal(1, h.ScoringConfigStore.WriteCallCount);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal([ScoringStrategySet.DefaultStrategyName], record.Strategies!.ToArray());
     }
 }

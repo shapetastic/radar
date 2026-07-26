@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 
 using Radar.Application.Abstractions.Persistence;
@@ -112,6 +111,44 @@ public sealed class PipelineEndToEndTests
     // ---------------------------------------------------------------------------------------------
     // 1. Golden path.
     // ---------------------------------------------------------------------------------------------
+    [Fact]
+    public async Task DefaultSingleStrategy_WritesSnapshotsToTheLegacyPath_AndNoStrategySubtree()
+    {
+        // Spec 137's safety property, end to end: with no Radar:Strategies configured the run composes the
+        // ONE synthesised "default" primary strategy, so every snapshot file still lands at the pre-existing
+        // {scores}/{companyId}/{snapshotId}.json and NO strategies/ subtree is created. The only additive
+        // change on disk is the snapshot's own strategyName property.
+        using var fx = new TempPipelineFixtures();
+        fx.WriteCompanies([new(NorthwindId, Northwind, "NWR", [])]);
+        fx.WriteEvidence(
+            "northwind.json", Northwind, "Northwind update",
+            "Northwind Robotics launches a new platform and signs a multi-year deal with a partner.",
+            InPeriodPublished, quality: "High");
+
+        await using var sp = BuildProvider(fx);
+        var (result, _, _) = await SeedAndRunAsync(sp);
+
+        Assert.Equal(1, result.CompaniesScored);
+
+        var scoresRoot = Path.Combine(fx.RootDir, "scores");
+        var snapshot = await OnlySnapshotAsync(sp, NorthwindId);
+        var expectedPath = Path.Combine(scoresRoot, NorthwindId.ToString(), snapshot.Id + ".json");
+
+        Assert.True(File.Exists(expectedPath), $"Expected snapshot file at {expectedPath}.");
+        Assert.False(
+            Directory.Exists(Path.Combine(scoresRoot, "strategies")),
+            "A single-strategy run must not create a strategy-scoped subtree.");
+
+        // Every persisted snapshot lives directly under {scores}/{companyId}/ — no relocation.
+        Assert.Equal(
+            [expectedPath],
+            Directory.EnumerateFiles(scoresRoot, "*.json", SearchOption.AllDirectories).ToArray());
+
+        // The default strategy stamps its readable name, alongside the unchanged opaque fingerprint.
+        Assert.Equal("default", snapshot.StrategyName);
+        Assert.False(string.IsNullOrEmpty(snapshot.ScoringConfigVersion));
+    }
+
     [Fact]
     public async Task GoldenPath_ThreeCompanies_ProducesRankedReportWithProvenance()
     {
