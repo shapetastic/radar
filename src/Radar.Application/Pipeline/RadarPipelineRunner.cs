@@ -409,7 +409,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _logger.LogInformation(
             "Pipeline run complete: {EvidenceNew}/{EvidenceCollected} new evidence, " +
             "{SignalsApproved} approved / {SignalsNeedingReview} needs-review signals, " +
-            "{CompaniesScored} companies scored by the primary of {StrategyCount} strategy/ies, " +
+            "{CompaniesScored} companies scored by the primary of {StrategyCount} strategies, " +
             "{SourcesFailed}/{SourcesChecked} sources unreadable, report {ReportId}.",
             evidenceNew,
             evidenceCollected,
