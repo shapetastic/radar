@@ -439,7 +439,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
         // Both counts appear, and each is attributed to its own cause.
         Assert.Contains("Hydrated 1 raw evidence item(s)", summary, StringComparison.Ordinal);
         Assert.Contains("1 duplicate-content file(s) collapsed", summary, StringComparison.Ordinal);
-        Assert.Contains("1 unreadable file(s) skipped", summary, StringComparison.Ordinal);
+        Assert.Contains("1 unreadable/conflicting file(s) skipped", summary, StringComparison.Ordinal);
 
         // The duplicate is a Debug detail (naming the file, so provenance is traceable), NOT a Warning:
         // duplicate content is expected in accrued history and must not drown the real failures.
@@ -453,6 +453,60 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
             logger.Entries,
             e => e.Level == LogLevel.Warning && e.Message.Contains("c-broken", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// The index refuses an item for two unrelated reasons, and conflating them mis-reports BOTH numbers.
+    /// A file carrying no <c>evidenceId</c> property leaves that non-nullable Guid at
+    /// <see cref="Guid.Empty"/>, so every such legacy file collides on that one id even though each carries
+    /// DIFFERENT content (a present-but-null one throws and is unreadable already): the loser's content
+    /// is dropped from the index entirely. That is data loss, not a duplicate-content collapse — it must
+    /// not inflate the duplication rate, and it must not hide at Debug.
+    /// </summary>
+    [Fact]
+    public async Task EvidenceIdConflictOnDistinctContent_CountsAsUnreadable_AndWarns()
+    {
+        // Two files, DIFFERENT contentHash, both with no `evidenceId` at all ⇒ both claim Guid.Empty.
+        await WriteLegacyFileAsync("a-noid", IdlessJson("noid-hash-a"), "aaa");
+        await WriteLegacyFileAsync("b-noid", IdlessJson("noid-hash-b"), "bbb");
+
+        var logger = new CapturingLogger<FileRawEvidenceStore>();
+        IEvidenceRepository hydrated = CreateStore(logger);
+
+        // Only the ordinal-first file survives; the second file's content is gone from the index.
+        Assert.Single(await hydrated.GetAllAsync(CancellationToken.None));
+        Assert.NotNull(await hydrated.GetByContentHashAsync("noid-hash-a", CancellationToken.None));
+        Assert.Null(await hydrated.GetByContentHashAsync("noid-hash-b", CancellationToken.None));
+
+        var summary = Assert.Single(
+            logger.Entries.Where(e => e.Level == LogLevel.Information).Select(e => e.Message));
+
+        // Attributed to LOSS, not to duplication: the duplicate-content tally stays at zero.
+        Assert.Contains("0 duplicate-content file(s) collapsed", summary, StringComparison.Ordinal);
+        Assert.Contains("1 unreadable/conflicting file(s) skipped", summary, StringComparison.Ordinal);
+
+        // …and it is a Warning naming the file, not a Debug line about duplicate content.
+        var warning = Assert.Single(
+            logger.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Message));
+        Assert.Contains("b-noid", warning, StringComparison.Ordinal);
+        Assert.Contains("noid-hash-b", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            logger.Entries,
+            e => e.Message.Contains("duplicates already-indexed content hash", StringComparison.Ordinal));
+    }
+
+    private static string IdlessJson(string contentHash) =>
+        $$"""
+        {
+          "sourceType": "press_release",
+          "sourceName": "Example",
+          "title": "T",
+          "rawText": "{{contentHash}}",
+          "collectedAt": "2026-07-06T21:35:31+00:00",
+          "contentHash": "{{contentHash}}",
+          "companyHints": [],
+          "metadata": {}
+        }
+        """;
 
     private async Task WriteLegacyFileAsync(string name, string json, string folder = "legacy")
     {

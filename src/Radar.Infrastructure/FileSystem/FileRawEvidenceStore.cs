@@ -53,7 +53,10 @@ namespace Radar.Infrastructure.FileSystem;
 /// marker. Retro-healing resolution would turn the live 30-day window's 2,618 scored signals into 12,145
 /// (~4.6× inflation), so historical series stay exactly as they were actually scored. Duplicate-content
 /// files that predate 145 therefore remain, and hydration COUNTS them separately from unreadable files so
-/// the residual duplication rate stays visible instead of hiding inside a single "skipped" tally.
+/// the residual duplication rate stays visible instead of hiding inside a single "skipped" tally. That
+/// split is by CAUSE: only a same-content collapse (which loses nothing) counts as a duplicate; a file
+/// whose evidence id is already held by DIFFERENT content has its content dropped, so it is counted — and
+/// logged at Warning — as data loss.
 /// </para>
 /// </remarks>
 public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepository
@@ -203,26 +206,46 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
     }
 
     /// <summary>
+    /// Why <see cref="TryIndexInsert"/> refused an item. The two rejections are NOT interchangeable:
+    /// <see cref="DuplicateContentHash"/> is expected in accrued history and loses nothing (the same
+    /// content is already indexed), whereas <see cref="EvidenceIdConflict"/> means two files carrying
+    /// DIFFERENT content claim the SAME evidence id, so the loser's content is dropped outright.
+    /// </summary>
+    private enum IndexInsertOutcome
+    {
+        Inserted,
+        DuplicateContentHash,
+        EvidenceIdConflict,
+    }
+
+    /// <summary>
     /// The atomic check-and-add shared by <see cref="AddIfNewAsync"/> and <see cref="WriteIfNewAsync"/>:
     /// the content-hash index enforces the unique-hash dedupe rule, and the id index preserves
     /// immutability (an existing record under the same id is never overwritten). A failed id insert rolls
     /// the hash entry back so the two indexes stay consistent. Mirrors
     /// <c>InMemoryEvidenceRepository.AddIfNewAsync</c> exactly.
     /// </summary>
-    private bool IndexInsertOnly(EvidenceItem item)
+    private bool IndexInsertOnly(EvidenceItem item) =>
+        TryIndexInsert(item) == IndexInsertOutcome.Inserted;
+
+    /// <summary>
+    /// <see cref="IndexInsertOnly"/>, but reporting WHICH index refused — hydration needs that distinction
+    /// to tell a duplication-rate figure from a data-loss figure.
+    /// </summary>
+    private IndexInsertOutcome TryIndexInsert(EvidenceItem item)
     {
         if (!_byContentHash.TryAdd(item.ContentHash, item.Id))
         {
-            return false;
+            return IndexInsertOutcome.DuplicateContentHash;
         }
 
         if (!_byId.TryAdd(item.Id, item))
         {
             _byContentHash.TryRemove(item.ContentHash, out _);
-            return false;
+            return IndexInsertOutcome.EvidenceIdConflict;
         }
 
-        return true;
+        return IndexInsertOutcome.Inserted;
     }
 
     /// <summary>
@@ -235,6 +258,8 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
     /// whose <c>sourceType</c> cannot be parsed back, because <see cref="EvidenceItem.SourceType"/> feeds
     /// attention breadth/diversity in the v8 formula and guessing it would corrupt a score more quietly
     /// than dropping the item does. <see cref="OperationCanceledException"/> still propagates.
+    /// A file rejected by the index is classified by <see cref="IndexInsertOutcome"/>: same content is a
+    /// duplicate collapse (Debug, nothing lost), a same-id/different-content clash is data loss (Warning).
     /// </summary>
     private async Task EnsureHydratedAsync(CancellationToken ct)
     {
@@ -257,7 +282,9 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
             // and an unreadable file mean completely different things. The first is the DUPLICATION RATE —
             // the number this store's identity fix is measured by, and the number that says whether accrued
             // history still carries per-run copies. The second is data loss. Summing them into one figure
-            // hid the first behind the second.
+            // hid the first behind the second. The split is by CAUSE, not by convenience: an item rejected
+            // for an evidence-id conflict has had its content dropped, so it counts as unreadable (loss),
+            // never as a duplicate collapse (no loss).
             var duplicatesCollapsed = 0;
             var unreadable = 0;
 
@@ -299,23 +326,45 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
                             continue;
                         }
 
-                        if (IndexInsertOnly(item))
+                        switch (TryIndexInsert(item))
                         {
-                            loaded++;
-                        }
-                        else
-                        {
-                            // A duplicate content hash or id — the earlier (ordinal-first) file already
-                            // holds this evidence, so the identity index keeps ONE canonical record while
-                            // this file stays on disk with its own source attribution intact. Counted
-                            // separately from unreadable files because the two numbers answer different
-                            // questions: this one is the duplication rate.
-                            duplicatesCollapsed++;
-                            _logger.LogDebug(
-                                "Raw evidence file '{File}' duplicates already-indexed content hash "
-                                    + "'{ContentHash}'; collapsing to the ordinal-first record (file retained).",
-                                file,
-                                item.ContentHash);
+                            case IndexInsertOutcome.Inserted:
+                                loaded++;
+                                break;
+
+                            case IndexInsertOutcome.DuplicateContentHash:
+                                // The earlier (ordinal-first) file already holds this exact content, so the
+                                // identity index keeps ONE canonical record while this file stays on disk
+                                // with its own source attribution intact. NOTHING is lost, which is why this
+                                // is Debug — and why it is counted apart from unreadable files: this number
+                                // is the duplication rate.
+                                duplicatesCollapsed++;
+                                _logger.LogDebug(
+                                    "Raw evidence file '{File}' duplicates already-indexed content hash "
+                                        + "'{ContentHash}'; collapsing to the ordinal-first record (file retained).",
+                                    file,
+                                    item.ContentHash);
+                                break;
+
+                            case IndexInsertOutcome.EvidenceIdConflict:
+                                // DIFFERENT content claiming an already-indexed evidence id — the shape a
+                                // legacy file with NO `evidenceId` property takes, since an absent property
+                                // leaves the non-nullable Guid at Guid.Empty and every such file then
+                                // collides on that one id. (A present-but-null/blank one throws instead, and
+                                // is already caught as unreadable a few lines below.) This item's
+                                // content is dropped from the index entirely, so it is DATA LOSS and belongs
+                                // with the unreadable tally at Warning; counting it as a duplicate collapse
+                                // would both overstate the duplication rate and hide the loss at Debug.
+                                unreadable++;
+                                _logger.LogWarning(
+                                    "Raw evidence file '{File}' declares evidence id {EvidenceId}, which is "
+                                        + "already held by DIFFERENT content (this file's hash '{ContentHash}' vs "
+                                        + "indexed '{IndexedContentHash}'); skipping this file.",
+                                    file,
+                                    item.Id,
+                                    item.ContentHash,
+                                    _byId.TryGetValue(item.Id, out var indexed) ? indexed.ContentHash : "(unknown)");
+                                break;
                         }
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -328,7 +377,8 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
 
             _logger.LogInformation(
                 "Hydrated {Loaded} raw evidence item(s) from '{Root}' "
-                    + "({DuplicateFiles} duplicate-content file(s) collapsed, {UnreadableFiles} unreadable file(s) skipped).",
+                    + "({DuplicateFiles} duplicate-content file(s) collapsed, "
+                    + "{UnreadableFiles} unreadable/conflicting file(s) skipped).",
                 loaded,
                 _options.RootDirectory,
                 duplicatesCollapsed,
