@@ -389,6 +389,9 @@ public sealed class ReplayRunnerTests
         Assert.Equal(expected.ScoringVersion, actual.ScoringVersion);
         Assert.Equal(expected.ScoringConfigVersion, actual.ScoringConfigVersion);
         Assert.Equal(expected.StrategyName, actual.StrategyName);
+        // Spec 141: recorded collection provenance is part of "field-for-field" too — a replay of a forward
+        // run must reproduce WHAT WAS COLLECTED, not just what was scored.
+        Assert.Equal(expected.CollectionProvenance, actual.CollectionProvenance);
         Assert.Equal(expected.WindowStartUtc, actual.WindowStartUtc);
         Assert.Equal(expected.WindowEndUtc, actual.WindowEndUtc);
         Assert.Equal(expected.CreatedAtUtc, actual.CreatedAtUtc);
@@ -544,7 +547,8 @@ public sealed class ReplayRunnerTests
                 WindowEndUtc: root.GetProperty("windowEndUtc").GetDateTimeOffset(),
                 CreatedAtUtc: root.GetProperty("createdAtUtc").GetDateTimeOffset(),
                 ScoringConfigVersion: root.GetProperty("scoringConfigVersion").GetString(),
-                StrategyName: root.GetProperty("strategyName").GetString());
+                StrategyName: root.GetProperty("strategyName").GetString(),
+                CollectionProvenance: root.GetProperty("collectionProvenance").GetString());
 
             var links = root.GetProperty("links").EnumerateArray()
                 .Select(l => new ScoreEvidenceLink(

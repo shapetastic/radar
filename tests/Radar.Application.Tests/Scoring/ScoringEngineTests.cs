@@ -42,9 +42,14 @@ public sealed class ScoringEngineTests
     /// </summary>
     private const string SourceDescriptor = "test-src-desc";
 
-    private sealed class StubSourceDescriptor : ISignalSourceDescriptor
+    /// <summary>The collection-provenance string this stub records (spec 141): recorded, never hashed.</summary>
+    private const string SourceProvenance = "collectors=test-a,test-b;";
+
+    private sealed class StubSourceDescriptor(string provenance = SourceProvenance) : ISignalSourceDescriptor
     {
         public string CanonicalDescriptor() => SourceDescriptor;
+
+        public string CollectionProvenance() => provenance;
     }
 
     private static readonly ISignalSourceDescriptor SourceDesc = new StubSourceDescriptor();
@@ -166,7 +171,8 @@ public sealed class ScoringEngineTests
         public Harness(
             IScoreFormula? formula = null,
             ScoringWeights? weights = null,
-            ILogger<ScoringEngine>? logger = null)
+            ILogger<ScoringEngine>? logger = null,
+            ISignalSourceDescriptor? sourceDescriptor = null)
         {
             Engine = new ScoringEngine(
                 Signals,
@@ -177,7 +183,7 @@ public sealed class ScoringEngineTests
                 formula ?? new StubScoreFormula(),
                 weights ?? new ScoringWeights(),
                 Weights,
-                SourceDesc,
+                sourceDescriptor ?? SourceDesc,
                 new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions { Window = Window },
@@ -237,6 +243,16 @@ public sealed class ScoringEngineTests
 
             await Signals.AddAsync(signal, CancellationToken.None);
             return (signal, evidence);
+        }
+
+        /// <summary>
+        /// Seeds an ALREADY-BUILT signal + evidence pair, so two harnesses can be given byte-identical inputs
+        /// (same ids, same content) and their outputs compared field-for-field.
+        /// </summary>
+        public async Task SeedExistingAsync(Signal signal, EvidenceItem evidence)
+        {
+            await Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+            await Signals.AddAsync(signal, CancellationToken.None);
         }
 
         /// <summary>
@@ -566,6 +582,87 @@ public sealed class ScoringEngineTests
     }
 
     [Fact]
+    public async Task CollectorToggle_SameScoringConfigVersion_DifferentCollectionProvenance_IdenticalScores()
+    {
+        // THE spec-141 acceptance criterion, end to end through the engine and under the REAL formula and the
+        // REAL SignalSourceDescriptor: two engines that differ ONLY in the enabled collector set must
+        //   * stamp the SAME ScoringConfigVersion (a collector toggle is not a strategy change),
+        //   * stamp DIFFERENT CollectionProvenance (what was collected IS recorded), and
+        //   * produce byte-identical scores — every component, the explanation, the component JSON, and the
+        //     evidence links (provenance) — because nothing about the scoring math moved.
+        // Identical inputs are seeded into both harnesses by VALUE (same signal id, same evidence id), so a
+        // field-for-field comparison is meaningful rather than trivially true.
+        var companyId = Guid.NewGuid();
+
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash("collector-toggle-hash")
+            .WithSourceType(EvidenceSourceType.Filing)
+            .WithQuality(EvidenceQuality.High)
+            .Build();
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithType(SignalType.CustomerWin)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(WindowEnd.AddDays(-2))
+            .Build();
+
+        static ISignalSourceDescriptor DescriptorOver(params string[] names) =>
+            new SignalSourceDescriptor(names.Select(n => (IEvidenceCollector)new NamedFakeCollector(n)));
+
+        var sixCollectors = new Harness(
+            new RadarScoreFormulaV8(new ScoringWeights(), Weights),
+            sourceDescriptor: DescriptorOver(
+                "RssPressReleaseCollector", "newssearch", "sec-13dg", "sec-edgar", "sec-form4", "usaspending"));
+        var sevenCollectors = new Harness(
+            new RadarScoreFormulaV8(new ScoringWeights(), Weights),
+            sourceDescriptor: DescriptorOver(
+                "RssPressReleaseCollector", "fda", "newssearch", "sec-13dg", "sec-edgar", "sec-form4",
+                "usaspending"));
+
+        await sixCollectors.SeedExistingAsync(signal, evidence);
+        await sevenCollectors.SeedExistingAsync(signal, evidence);
+
+        var six = await sixCollectors.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+        var seven = await sevenCollectors.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // Identity: unmoved. This is the whole point of the descriptor split.
+        Assert.Equal(six.Snapshot.ScoringConfigVersion, seven.Snapshot.ScoringConfigVersion);
+        Assert.Equal(
+            sixCollectors.Engine.EffectiveConfig.Fingerprint,
+            sevenCollectors.Engine.EffectiveConfig.Fingerprint);
+
+        // Provenance: recorded, and different — "what was collected" is not lost, just relocated.
+        Assert.NotEqual(six.Snapshot.CollectionProvenance, seven.Snapshot.CollectionProvenance);
+        Assert.Equal(
+            "collectors=RssPressReleaseCollector,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;",
+            six.Snapshot.CollectionProvenance);
+        Assert.Equal(
+            "collectors=RssPressReleaseCollector,fda,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;",
+            seven.Snapshot.CollectionProvenance);
+
+        // Scores: byte-identical, component for component.
+        Assert.Equal(six.Snapshot.TrajectoryScore, seven.Snapshot.TrajectoryScore);
+        Assert.Equal(six.Snapshot.OpportunityScore, seven.Snapshot.OpportunityScore);
+        Assert.Equal(six.Snapshot.AttentionScore, seven.Snapshot.AttentionScore);
+        Assert.Equal(six.Snapshot.EvidenceConfidenceScore, seven.Snapshot.EvidenceConfidenceScore);
+        Assert.Equal(six.Snapshot.SignalVelocityScore, seven.Snapshot.SignalVelocityScore);
+        Assert.Equal(six.Snapshot.Explanation, seven.Snapshot.Explanation);
+        Assert.Equal(six.Snapshot.ComponentJson, seven.Snapshot.ComponentJson);
+        Assert.Equal(six.Snapshot.ScoringVersion, seven.Snapshot.ScoringVersion);
+
+        // Provenance chain: the same contributing signal/evidence with the same weight and reason. (Link Ids
+        // and ScoreSnapshotIds are freshly minted per call by design, so they are excluded — exactly as the
+        // spec-139 replay ⊆ forward comparison excludes them.)
+        Assert.Equal(
+            six.Links.Select(l => (l.SignalId, l.EvidenceId, l.ContributionReason, l.ContributionWeight)),
+            seven.Links.Select(l => (l.SignalId, l.EvidenceId, l.ContributionReason, l.ContributionWeight)));
+        Assert.NotEmpty(six.Links);
+    }
+
+    [Fact]
     public async Task Versioning_ChangedWeight_StampsDifferentScoringConfigVersion()
     {
         var companyId = Guid.NewGuid();
@@ -864,12 +961,18 @@ public sealed class ScoringEngineTests
 
         using var provider = services.BuildServiceProvider();
 
-        var descriptor = provider.GetRequiredService<ISignalSourceDescriptor>().CanonicalDescriptor();
+        var resolved = provider.GetRequiredService<ISignalSourceDescriptor>();
 
-        // All late-registered collectors appear, sorted Ordinal, alongside the extractor rule-set identity.
+        // All late-registered collectors appear, sorted Ordinal — in the COLLECTION PROVENANCE string (spec
+        // 141), which is what the collector set now feeds. The lazy-resolution property this test exists for
+        // is unchanged; only which of the descriptor's two strings carries the collector names moved.
         Assert.Equal(
-            "rules=radar-keyword-rules-v6;collectors=newssearch,rss,sec-form4,usaspending;",
-            descriptor);
+            "collectors=newssearch,rss,sec-form4,usaspending;",
+            resolved.CollectionProvenance());
+
+        // The IDENTITY descriptor (the fingerprint input) carries the rule-set identity and nothing about
+        // which collectors are registered.
+        Assert.Equal("rules=radar-keyword-rules-v6;", resolved.CanonicalDescriptor());
     }
 
     [Fact]

@@ -64,7 +64,7 @@ public sealed class EfficacyReportGeneratorTests
         var written = Assert.Single(artifacts.Written);
         Assert.Equal("AAA", written.Ticker);
         Assert.StartsWith("<svg", written.Svg, StringComparison.Ordinal);
-        Assert.Contains("scoreDate,scoringConfigVersion", written.Csv, StringComparison.Ordinal);
+        Assert.Contains("scoreDate,seriesKey,scoringConfigVersion", written.Csv, StringComparison.Ordinal);
     }
 
     [Fact]

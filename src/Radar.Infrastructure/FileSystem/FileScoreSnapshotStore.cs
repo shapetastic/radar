@@ -270,7 +270,11 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
                 ScoringConfigVersion: parsed.ScoringConfigVersion,
                 // Same posture (spec 137): a pre-existing snapshot file has no strategyName property, so it
                 // deserializes to null — read as the primary/legacy strategy.
-                StrategyName: parsed.StrategyName);
+                StrategyName: parsed.StrategyName,
+                // Same posture again (spec 141): a file written before the collectionProvenance property
+                // existed deserializes to null — "what was collected then is unknown", which is honest and
+                // affects nothing (the field is recorded, never hashed, never a comparability input).
+                CollectionProvenance: parsed.CollectionProvenance);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -304,7 +308,8 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
                 EvidenceId: l.EvidenceId,
                 ContributionReason: l.ContributionReason,
                 ContributionWeight: l.ContributionWeight))],
-            StrategyName: snapshot.StrategyName);
+            StrategyName: snapshot.StrategyName,
+            CollectionProvenance: snapshot.CollectionProvenance);
 
         return JsonSerializer.Serialize(file, RadarFileStoreJson.Options);
     }
@@ -337,7 +342,11 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
         // Trailing + nullable with a default, exactly as ScoringConfigVersion was added: pre-existing files
         // that lack the property deserialize to null → read as the primary/legacy strategy. Property order on
         // disk is irrelevant (System.Text.Json maps by name).
-        string? StrategyName = null);
+        string? StrategyName = null,
+        // What was collected on the run that produced this snapshot (spec 141): the enabled-collector
+        // descriptor, recorded verbatim and hashed into nothing. Trailing + nullable with a default, the same
+        // posture as the two stamps above: pre-existing files lack the property and deserialize to null.
+        string? CollectionProvenance = null);
 
     /// <summary>
     /// The persisted score-evidence link shape. Its <c>scoreSnapshotId</c> traces back to the parent

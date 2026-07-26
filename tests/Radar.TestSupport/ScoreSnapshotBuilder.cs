@@ -22,6 +22,9 @@ public sealed class ScoreSnapshotBuilder
     private string? _scoringConfigVersion = "radar-scoring-config-v1";
     // Spec 137: null == the primary/legacy strategy, which is what almost every existing test means.
     private string? _strategyName;
+    // Spec 141: what was collected on the run that produced this snapshot. Recorded, never hashed, never a
+    // comparability input — so null (unknown/pre-141) is the harmless default for existing tests.
+    private string? _collectionProvenance;
 
     public ScoreSnapshotBuilder WithId(Guid v) { _id = v; return this; }
     public ScoreSnapshotBuilder WithCompanyId(Guid v) { _companyId = v; return this; }
@@ -40,6 +43,7 @@ public sealed class ScoreSnapshotBuilder
     public ScoreSnapshotBuilder WithCreatedAtUtc(DateTimeOffset v) { _createdAtUtc = v; return this; }
     public ScoreSnapshotBuilder WithScoringConfigVersion(string? v) { _scoringConfigVersion = v; return this; }
     public ScoreSnapshotBuilder WithStrategyName(string? v) { _strategyName = v; return this; }
+    public ScoreSnapshotBuilder WithCollectionProvenance(string? v) { _collectionProvenance = v; return this; }
 
     public CompanyScoreSnapshot Build() => new(
         Id: _id,
@@ -56,5 +60,6 @@ public sealed class ScoreSnapshotBuilder
         WindowEndUtc: _windowEndUtc,
         CreatedAtUtc: _createdAtUtc,
         ScoringConfigVersion: _scoringConfigVersion,
-        StrategyName: _strategyName);
+        StrategyName: _strategyName,
+        CollectionProvenance: _collectionProvenance);
 }

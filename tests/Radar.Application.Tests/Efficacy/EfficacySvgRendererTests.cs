@@ -12,7 +12,12 @@ public sealed class EfficacySvgRendererTests
     private static readonly string[] ForbiddenAdviceWords =
         ["buy", "sell", "target", "return", "outperform", "guaranteed", "safe bet"];
 
-    private static EfficacyPoint Point(DateOnly date, int opportunity, string? fingerprint) =>
+    // Spec 141: the SERIES key (the strategy name) segments the line; the fingerprint only annotates it. The
+    // default series key here is "default" — the single-strategy composition every pre-141 test implied — so
+    // a test that varies only the fingerprint is now asserting the NEW behaviour (bridge + tick), and a test
+    // that means "two different scorings" varies the series key explicitly.
+    private static EfficacyPoint Point(
+        DateOnly date, int opportunity, string? fingerprint, string seriesKey = "default") =>
         new(
             ScoreDate: date,
             TrajectoryScore: 50,
@@ -20,15 +25,16 @@ public sealed class EfficacySvgRendererTests
             AttentionScore: 50,
             EvidenceConfidenceScore: 50,
             SignalVelocityScore: 50,
+            SeriesKey: seriesKey,
             ScoringConfigVersion: fingerprint,
             PriceAsOfDate: date,
             PriceClose: 100m,
             PriceAdjClose: 99m);
 
     // Independently set trajectory and opportunity so a component-scoped test can hold one flat while the
-    // other moves across a fingerprint boundary.
+    // other moves across a series boundary.
     private static EfficacyPoint PointTO(
-        DateOnly date, int trajectory, int opportunity, string? fingerprint) =>
+        DateOnly date, int trajectory, int opportunity, string? fingerprint, string seriesKey = "default") =>
         new(
             ScoreDate: date,
             TrajectoryScore: trajectory,
@@ -36,6 +42,7 @@ public sealed class EfficacySvgRendererTests
             AttentionScore: 50,
             EvidenceConfidenceScore: 50,
             SignalVelocityScore: 50,
+            SeriesKey: seriesKey,
             ScoringConfigVersion: fingerprint,
             PriceAsOfDate: date,
             PriceClose: 100m,
@@ -98,40 +105,64 @@ public sealed class EfficacySvgRendererTests
     }
 
     [Fact]
-    public void Render_SegmentsScoreLineByFingerprint_NeverAcrossBoundary()
+    public void Render_SegmentsScoreLineBySeriesKey_NeverAcrossStrategies()
     {
-        // Two contiguous multi-point segments: fp "AAAA" (x3) then fp "BBBB" (x2).
+        // Two contiguous multi-point series: strategy "momentum" (x3) then strategy "insider-only" (x2), each
+        // with its own fingerprint. Spec 141: the line is segmented by the STRATEGY, because two strategies
+        // are two different scorings whose scores must never be drawn as one trend.
         var series = Series(
             [
-                Point(new DateOnly(2026, 6, 10), 40, "radar-scoring-fp-aaaa1111"),
-                Point(new DateOnly(2026, 6, 11), 45, "radar-scoring-fp-aaaa1111"),
-                Point(new DateOnly(2026, 6, 12), 50, "radar-scoring-fp-aaaa1111"),
-                Point(new DateOnly(2026, 6, 13), 60, "radar-scoring-fp-bbbb2222"),
-                Point(new DateOnly(2026, 6, 14), 65, "radar-scoring-fp-bbbb2222"),
+                Point(new DateOnly(2026, 6, 10), 40, "radar-scoring-fp-aaaa1111", "momentum"),
+                Point(new DateOnly(2026, 6, 11), 45, "radar-scoring-fp-aaaa1111", "momentum"),
+                Point(new DateOnly(2026, 6, 12), 50, "radar-scoring-fp-aaaa1111", "momentum"),
+                Point(new DateOnly(2026, 6, 13), 60, "radar-scoring-fp-bbbb2222", "insider-only"),
+                Point(new DateOnly(2026, 6, 14), 65, "radar-scoring-fp-bbbb2222", "insider-only"),
             ],
             SampleBars());
 
         var svg = new EfficacySvgRenderer().Render(series);
 
-        // TWO separate score-line segments (never a single line across the boundary).
+        // TWO separate score-line segments (never a single line across the strategy boundary).
         var scoreSegments = Regex.Matches(
             svg, "<polyline fill=\"none\" stroke=\"#3366cc\" stroke-width=\"1.5\"").Count;
         Assert.Equal(2, scoreSegments);
 
-        // Exactly one boundary marker (dashed vertical rule) at the A→B change, labelled with B's suffix.
+        // Exactly one boundary marker (dashed vertical rule) at the fingerprint change, labelled with B's suffix.
         var boundaries = Regex.Matches(svg, "stroke-dasharray").Count;
         Assert.Equal(1, boundaries);
         Assert.Contains("bbbb2222", svg, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Render_LengthOneSegments_AreIsolatedDots_NoConnectingLine()
+    public void Render_FingerprintReStampWithinOneStrategy_BridgesTheLine_ButStillTicks()
     {
-        // Every point has a distinct fingerprint → every segment is length 1 → NO score polyline at all.
+        // THE spec-141 deliverable on the read side, and the exact case that used to shred a strategy's line:
+        // one strategy, a re-stamped fingerprint (e.g. an unrelated collector was enabled — which no longer
+        // even moves the fingerprint — or a formula/rules change), and a genuinely MOVING score. Pre-141 this
+        // rendered as two isolated dots; now it is ONE continuous line for ONE strategy, with the config
+        // re-stamp still annotated so the provenance is not lost.
         var series = Series(
             [
                 Point(new DateOnly(2026, 6, 10), 40, "radar-scoring-fp-aaaa1111"),
-                Point(new DateOnly(2026, 6, 12), 50, "radar-scoring-fp-bbbb2222"),
+                Point(new DateOnly(2026, 6, 12), 60, "radar-scoring-fp-bbbb2222"),
+            ],
+            SampleBars());
+
+        var svg = new EfficacySvgRenderer().Render(series);
+
+        Assert.Equal(1, ScorePolylineCount(svg));
+        Assert.Equal(1, BoundaryTickCount(svg));
+        Assert.Contains("bbbb2222", svg, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_LengthOneSegments_AreIsolatedDots_NoConnectingLine()
+    {
+        // Every point belongs to a DIFFERENT strategy → every segment is length 1 → NO score polyline at all.
+        var series = Series(
+            [
+                Point(new DateOnly(2026, 6, 10), 40, "radar-scoring-fp-aaaa1111", "momentum"),
+                Point(new DateOnly(2026, 6, 12), 50, "radar-scoring-fp-bbbb2222", "insider-only"),
             ],
             SampleBars());
 
@@ -158,7 +189,9 @@ public sealed class EfficacySvgRendererTests
 
         var svg = new EfficacySvgRenderer().Render(series);
 
-        // The null (pre-stamp) segment is its own segment; the boundary into the stamped one is marked.
+        // The null → stamped fingerprint transition is still MARKED (the label carries the new stamp's
+        // suffix), even though both points belong to the same strategy so the line itself spans it.
+        Assert.Equal(1, BoundaryTickCount(svg));
         Assert.Contains("bbbb2222", svg, StringComparison.Ordinal);
     }
 
@@ -195,13 +228,13 @@ public sealed class EfficacySvgRendererTests
     }
 
     [Fact]
-    public void Render_RealScoreChangeAcrossBoundary_StillBreaks_AndTicks()
+    public void Render_RealScoreChangeAcrossStrategies_StillBreaks_AndTicks()
     {
-        // Different fingerprint AND different plotted value => a real score change: the line must still break.
+        // Different STRATEGY and different plotted value => two different scorings: the line must still break.
         var series = Series(
             [
-                Point(new DateOnly(2026, 6, 10), 40, "radar-scoring-fp-aaaa1111"),
-                Point(new DateOnly(2026, 6, 12), 60, "radar-scoring-fp-bbbb2222"),
+                Point(new DateOnly(2026, 6, 10), 40, "radar-scoring-fp-aaaa1111", "momentum"),
+                Point(new DateOnly(2026, 6, 12), 60, "radar-scoring-fp-bbbb2222", "insider-only"),
             ],
             SampleBars());
 
@@ -254,13 +287,17 @@ public sealed class EfficacySvgRendererTests
     [Fact]
     public void Render_NonDefaultComponent_BridgeFollowsSelectedComponent()
     {
-        // TrajectoryScore is flat (50) across the boundary while OpportunityScore moves (40→70). A renderer
-        // plotting Trajectory must bridge (value unchanged for the plotted component); a renderer plotting
-        // Opportunity must break (value moved) — proving the rule is component-scoped.
+        // TrajectoryScore is flat (50) across a STRATEGY boundary while OpportunityScore moves (40→70). A
+        // renderer plotting Trajectory must bridge (value unchanged for the plotted component); a renderer
+        // plotting Opportunity must break (value moved) — proving the rule is component-scoped.
         var points = new[]
         {
-            PointTO(new DateOnly(2026, 6, 10), trajectory: 50, opportunity: 40, "radar-scoring-fp-aaaa1111"),
-            PointTO(new DateOnly(2026, 6, 12), trajectory: 50, opportunity: 70, "radar-scoring-fp-bbbb2222"),
+            PointTO(
+                new DateOnly(2026, 6, 10), trajectory: 50, opportunity: 40, "radar-scoring-fp-aaaa1111",
+                "momentum"),
+            PointTO(
+                new DateOnly(2026, 6, 12), trajectory: 50, opportunity: 70, "radar-scoring-fp-bbbb2222",
+                "insider-only"),
         };
         var series = Series(points, SampleBars());
 

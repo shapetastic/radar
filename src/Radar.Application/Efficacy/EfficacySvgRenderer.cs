@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 
 using Radar.Application.Prices;
+using Radar.Application.Scoring;
 
 namespace Radar.Application.Efficacy;
 
@@ -12,18 +13,24 @@ namespace Radar.Application.Efficacy;
 /// right Y-axis is scaled to the price min/max over the window; the dense price series is drawn as one
 /// continuous polyline over adjusted close.
 /// <para>
-/// <b>Continuity-aware fingerprint segmentation (correctness requirement, AD-10).</b> The sparse score points
-/// are connected by the score line across an adjacent pair iff the plotted component value is unchanged
-/// <i>or</i> the <c>ScoringConfigVersion</c> fingerprint is Ordinal-equal (<c>null</c> compares equal only to
-/// <c>null</c>). Equivalently the line breaks between two points ONLY when the fingerprint differs <b>and</b>
-/// the plotted value differs — a real score change from a different scoring generation, which must never be
-/// drawn as a continuous trend (AD-10). A cosmetic re-stamp (fingerprint changed but the plotted value is
-/// identical) is bridged, so a genuinely flat score is not shredded into isolated dots. Independently of where
-/// the line breaks, every fingerprint boundary is still marked with a thin dashed vertical rule + the short
-/// fingerprint suffix, so a config change is always visible even when the connecting line crosses it (a tick
-/// may sit on top of a bridged line — the intended "config re-stamped here, score unchanged" annotation). The
-/// bridge is scoped to the single plotted component (an honest, documented approximation for a one-component
-/// chart). A length-1 run (no connected neighbour) renders as an isolated dot.
+/// <b>Continuity-aware SERIES segmentation (correctness requirement, AD-10 as amended by spec 141).</b> The
+/// sparse score points are connected by the score line across an adjacent pair iff the plotted component
+/// value is unchanged <i>or</i> the two points belong to the same SERIES — the strategy-name key
+/// (<c>EfficacyPoint.SeriesKey</c>, see <c>ScoreSeriesKey</c>). Equivalently the line breaks between two
+/// points ONLY when they are different strategies <b>and</b> the plotted value differs — two hypotheses'
+/// scores must never be drawn as one continuous trend. Before spec 141 the key was the
+/// <c>ScoringConfigVersion</c> fingerprint, which meant an unrelated collector toggle shredded one strategy's
+/// line into fragments; a strategy is immutable by convention instead (to change one, add a new name), so its
+/// name is a stable line identity.
+/// </para>
+/// <para>
+/// <b>The fingerprint remains visible provenance.</b> Independently of where the line breaks, every
+/// <c>ScoringConfigVersion</c> boundary is still marked with a thin dashed vertical rule + the short
+/// fingerprint suffix, so a config re-stamp is always annotated even when the connecting line crosses it (the
+/// intended "config re-stamped here, score continuous" marker). A cosmetic re-stamp — or, now, any re-stamp
+/// within one strategy — is bridged, so a genuinely flat score is not shredded into isolated dots. The bridge
+/// is scoped to the single plotted component (an honest, documented approximation for a one-component chart).
+/// A length-1 run (no connected neighbour) renders as an isolated dot.
 /// </para>
 /// <para>
 /// Determinism (AD-3): <see cref="CultureInfo.InvariantCulture"/> formatting, fixed coordinate precision, no
@@ -152,18 +159,18 @@ public sealed class EfficacySvgRenderer
         }
 
         // Score points, continuity-aware. Draw a connecting polyline across each maximal run of adjacent points
-        // that are Connected (same plotted value, OR same fingerprint); the line breaks only on a real score
-        // change (differing fingerprint AND value, AD-10). Mark every fingerprint boundary with a dashed tick
-        // regardless of where the line breaks. Then dots for every point (on top).
+        // that are Connected (same plotted value, OR same series key); the line breaks only on a real score
+        // change across SERIES (differing strategy AND value, AD-10 as amended by spec 141). Mark every
+        // fingerprint boundary with a dashed tick regardless of where the line breaks. Then dots (on top).
         RenderScoreSegments(sb, points, X, YScore);
 
-        // Legend + caption (a research statistic segmented by scoring-config fingerprint — NOT advice, AD-9).
+        // Legend + caption (a research statistic segmented by scoring strategy — NOT advice, AD-9).
         var legendY = Height - 28;
         sb.Append(CultureInfo.InvariantCulture, $"<line x1=\"{Num(PlotLeft)}\" y1=\"{Num(legendY - 4)}\" x2=\"{Num(PlotLeft + 20)}\" y2=\"{Num(legendY - 4)}\" stroke=\"#3366cc\" stroke-width=\"2\"/>\n");
         sb.Append(CultureInfo.InvariantCulture, $"<text x=\"{Num(PlotLeft + 26)}\" y=\"{Num(legendY)}\" font-size=\"10\" fill=\"#3366cc\">{ComponentLabel()} (score)</text>\n");
         sb.Append(CultureInfo.InvariantCulture, $"<line x1=\"{Num(PlotLeft + 200)}\" y1=\"{Num(legendY - 4)}\" x2=\"{Num(PlotLeft + 220)}\" y2=\"{Num(legendY - 4)}\" stroke=\"#cc6633\" stroke-width=\"2\"/>\n");
         sb.Append(CultureInfo.InvariantCulture, $"<text x=\"{Num(PlotLeft + 226)}\" y=\"{Num(legendY)}\" font-size=\"10\" fill=\"#cc6633\">price (adj close)</text>\n");
-        sb.Append(CultureInfo.InvariantCulture, $"<text x=\"{Num(PlotLeft)}\" y=\"{Num(Height - 10)}\" font-size=\"10\" fill=\"#777777\">Research statistic: score vs price, segmented by scoring-config fingerprint. Not advice.</text>\n");
+        sb.Append(CultureInfo.InvariantCulture, $"<text x=\"{Num(PlotLeft)}\" y=\"{Num(Height - 10)}\" font-size=\"10\" fill=\"#777777\">Research statistic: score vs price, segmented by scoring strategy. Not advice.</text>\n");
 
         sb.Append("</svg>");
         return sb.ToString();
@@ -179,8 +186,9 @@ public sealed class EfficacySvgRenderer
 
         // Single boundary walk with TWO decoupled notions (both driven off the same index i):
         //   1. Line runs — a maximal run of adjacent points where every pair is Connected. The run closes when
-        //      the line breaks (Connected == false, i.e. a real score change: differing fingerprint AND value)
-        //      or the series ends. A run of length >= 2 emits one connecting polyline; length 1 emits no line.
+        //      the line breaks (Connected == false, i.e. a real score change across series: differing series
+        //      key AND value) or the series ends. A run of length >= 2 emits one connecting polyline; length 1
+        //      emits no line.
         //   2. Config-change ticks — emitted at EVERY fingerprint boundary (Ordinal-different key), decoupled
         //      from where the line breaks, so provenance (a config change happened here) is always visible even
         //      when the connecting line bridges the boundary (cosmetic re-stamp, value unchanged).
@@ -190,10 +198,10 @@ public sealed class EfficacySvgRenderer
         // tick — emit that tick inline. A BRIDGED boundary (cosmetic re-stamp, value unchanged) sits INSIDE a
         // still-open run whose spanning polyline is emitted only later when the run closes; emitting the tick
         // inline would let that polyline paint over it. So buffer bridged ticks and flush them right AFTER the
-        // spanning run's polyline. When no bridge occurs (every fingerprint boundary is also a value change, or
-        // the fingerprint never changes) the buffer stays empty and every tick is emitted inline exactly as
-        // before — byte-identical to the pre-continuity renderer. Correctness (AD-10): a line is never drawn
-        // across a real score change. Determinism (AD-3): the run/tick decisions are pure functions of the
+        // spanning run's polyline. When no bridge occurs (every fingerprint boundary is also a series+value
+        // change, or the fingerprint never changes) the buffer stays empty and every tick is emitted inline
+        // exactly as before. Correctness (AD-10): a line is never drawn across a real score change between two
+        // strategies. Determinism (AD-3): the run/tick decisions are pure functions of the
         // already-deterministic point values (integer equality + Ordinal string equality), no wall-clock/culture.
         var pendingBridgeTicks = new List<string>();
         var runStart = 0;
@@ -232,9 +240,11 @@ public sealed class EfficacySvgRenderer
                 runStart = i;
             }
 
-            // 2. Mark a fingerprint boundary (keyed on the fingerprint change, NOT on the line break) with a
-            // dashed vertical rule + fingerprint label at the FIRST point of the new fingerprint.
-            if (i < points.Count && !SameSegment(points[i - 1].ScoringConfigVersion, points[i].ScoringConfigVersion))
+            // 2. Mark a fingerprint boundary (keyed on the FINGERPRINT change, NOT on the series key and NOT
+            // on the line break) with a dashed vertical rule + fingerprint label at the FIRST point of the new
+            // fingerprint. Spec 141 demoted the fingerprint from segment key to annotation — it stays drawn
+            // precisely so a config re-stamp remains visible even though the line now spans it.
+            if (i < points.Count && !SameFingerprint(points[i - 1].ScoringConfigVersion, points[i].ScoringConfigVersion))
             {
                 var tick = BuildBoundaryTick(x(points[i].ScoreDate.DayNumber), points[i].ScoringConfigVersion);
                 if (lineBreaks)
@@ -290,17 +300,18 @@ public sealed class EfficacySvgRenderer
         _ => "opportunity",
     };
 
-    // The score line connects two adjacent points iff the plotted component value is unchanged OR their
-    // fingerprints are the same segment. Equivalently it breaks ONLY on a real score change (differing
-    // fingerprint AND differing plotted value), so AD-10 (never draw a trend across a scoring generation) is
-    // preserved while cosmetic re-stamps (identical plotted value) are bridged. Instance method: it needs
+    // The score line connects two adjacent points iff the plotted component value is unchanged OR they belong
+    // to the same SERIES (spec 141). Equivalently it breaks ONLY on a real score change between two
+    // strategies, so AD-10 (never draw a trend across two different scorings) is preserved while every
+    // re-stamp within one strategy — cosmetic or collector-driven — is bridged. Instance method: it needs
     // SelectScore, and the bridge is honestly scoped to the currently plotted Component.
     private bool Connected(EfficacyPoint a, EfficacyPoint b) =>
         SelectScore(a) == SelectScore(b)
-        || SameSegment(a.ScoringConfigVersion, b.ScoringConfigVersion);
+        || ScoreSeriesKey.SameSeries(a.SeriesKey, b.SeriesKey);
 
-    // Two points share a segment iff their fingerprint keys are Ordinal-equal (null == null; null != any value).
-    private static bool SameSegment(string? a, string? b) => string.Equals(a, b, StringComparison.Ordinal);
+    // Two points carry the same config stamp iff their fingerprints are Ordinal-equal (null == null;
+    // null != any value). Drives the boundary TICK only — never the line.
+    private static bool SameFingerprint(string? a, string? b) => string.Equals(a, b, StringComparison.Ordinal);
 
     // The short suffix used as a boundary label; null = the unknown/pre-stamp segment.
     private static string ShortFingerprint(string? version)

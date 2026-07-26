@@ -144,9 +144,14 @@ public sealed class PipelineEndToEndTests
             [expectedPath],
             Directory.EnumerateFiles(scoresRoot, "*.json", SearchOption.AllDirectories).ToArray());
 
-        // The default strategy stamps its readable name, alongside the unchanged opaque fingerprint.
+        // The default strategy stamps its readable name, alongside the opaque fingerprint.
         Assert.Equal("default", snapshot.StrategyName);
         Assert.False(string.IsNullOrEmpty(snapshot.ScoringConfigVersion));
+
+        // Spec 141: the enabled-collector set is RECORDED on the snapshot (and hashed into nothing), and the
+        // identity fingerprint carries no collector names at all.
+        Assert.StartsWith("collectors=", snapshot.CollectionProvenance, StringComparison.Ordinal);
+        Assert.DoesNotContain("collectors", snapshot.ScoringConfigVersion!, StringComparison.Ordinal);
     }
 
     [Fact]

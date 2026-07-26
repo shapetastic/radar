@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 
 namespace Radar.Infrastructure.FileSystem;
 
@@ -15,6 +16,14 @@ namespace Radar.Infrastructure.FileSystem;
 /// and JSON stay confined to Infrastructure (AD-5); the Application sees only <see cref="IScoringConfigStore"/>.
 /// Disk failures degrade gracefully (warn + return the attempted path) and never crash the run — the
 /// snapshot still carries its fingerprint.
+/// <para>
+/// Alongside the content-addressed files it keeps a per-STRATEGY-NAME record at
+/// <c>{RootDirectory}/strategies/{name}.json</c> holding <c>{ strategyName, fingerprint }</c> (spec 141).
+/// Unlike the config files this one is MUTABLE (last-write-wins upsert): it answers "what did this NAME
+/// resolve to last time", which is exactly the question the startup tripwire asks. Keeping it in a
+/// <c>strategies/</c> subdirectory means it can never collide with a <c>{fingerprint}.json</c> file, so the
+/// existing content-addressed shape is untouched.
+/// </para>
 /// </summary>
 /// <remarks>
 /// <b>Insert-if-new (immutable, AD-1 mirror).</b> A given fingerprint's config is by definition fixed — the
@@ -28,6 +37,13 @@ namespace Radar.Infrastructure.FileSystem;
 /// </remarks>
 public sealed class FileScoringConfigStore : IScoringConfigStore
 {
+    /// <summary>
+    /// Subdirectory holding the per-strategy-name fingerprint records. A subdirectory (rather than a
+    /// filename prefix) keeps the root's content-addressed <c>{fingerprint}.json</c> listing exactly as it
+    /// was — a fingerprint token can never be a directory name, so the two namespaces cannot collide.
+    /// </summary>
+    private const string StrategiesFolder = "strategies";
+
     private readonly FileScoringConfigStoreOptions _options;
     private readonly ILogger<FileScoringConfigStore> _logger;
 
@@ -84,4 +100,93 @@ public sealed class FileScoringConfigStore : IScoringConfigStore
 
         return path;
     }
+
+    public async Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct)
+    {
+        var path = StrategyRecordPath(strategyName);
+
+        if (!File.Exists(path))
+        {
+            // Never recorded: a brand-new strategy name. The guard records it and continues.
+            return null;
+        }
+
+        try
+        {
+            var text = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+            var parsed = JsonSerializer.Deserialize<StrategyFingerprintFile>(text, RadarFileStoreJson.Options);
+            var recorded = parsed?.Fingerprint;
+            if (string.IsNullOrWhiteSpace(recorded))
+            {
+                _logger.LogWarning(
+                    "Strategy fingerprint record '{Path}' carries no fingerprint; treating as unrecorded.", path);
+                return null;
+            }
+
+            return recorded;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // Graceful degrade (AD-8): "cannot read" must read as "unrecorded", never as "changed" — a disk
+            // hiccup must not fail a run through the tripwire. OperationCanceledException still propagates.
+            _logger.LogWarning(
+                ex, "Failed to read strategy fingerprint record '{Path}'; treating as unrecorded.", path);
+            return null;
+        }
+    }
+
+    public async Task<string> RecordStrategyFingerprintAsync(
+        string strategyName, string fingerprint, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(strategyName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
+
+        var path = StrategyRecordPath(strategyName);
+        var record = new StrategyFingerprintFile(strategyName, fingerprint);
+
+        string json;
+        try
+        {
+            json = JsonSerializer.Serialize(record, RadarFileStoreJson.Options);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
+        {
+            _logger.LogWarning(
+                ex, "Failed to serialize strategy fingerprint record for {StrategyName}; skipping write to {Path}.",
+                strategyName, path);
+            return path;
+        }
+
+        // Upsert (last-write-wins), the deliberate opposite of the insert-if-new config files above: this
+        // record tracks what a NAME resolves to NOW, so a legitimate re-record must overwrite.
+        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "Recorded strategy {StrategyName} fingerprint {Fingerprint} at {Path}.",
+                strategyName, fingerprint, path);
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// <c>{RootDirectory}/strategies/{name}.json</c>. The name is validated as a single storage segment
+    /// (<see cref="StorageSegmentName"/> — the same rule <c>ScoringStrategySet</c> enforces at startup) so an
+    /// operator-supplied name can never escape the store root.
+    /// </summary>
+    private string StrategyRecordPath(string strategyName)
+    {
+        if (!StorageSegmentName.IsUsable(strategyName))
+        {
+            throw new ArgumentException(
+                $"Strategy name '{strategyName}' is used verbatim as a storage file name, so "
+                    + $"{StorageSegmentName.Rule}.",
+                nameof(strategyName));
+        }
+
+        return Path.Combine(_options.RootDirectory, StrategiesFolder, strategyName + ".json");
+    }
+
+    /// <summary>The per-name record's persisted shape (camelCase via the shared serializer options).</summary>
+    private sealed record StrategyFingerprintFile(string StrategyName, string Fingerprint);
 }

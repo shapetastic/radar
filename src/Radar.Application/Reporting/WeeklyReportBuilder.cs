@@ -199,13 +199,15 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 .ReadLatestBeforeAsync(c.Current.CompanyId, c.Current.CreatedAtUtc, ct)
                 .ConfigureAwait(false);
 
-            // Two snapshots are comparable only when they were produced by the SAME scoring generation.
-            // A null stamp (old on-disk snapshot, or any pre-stamp snapshot) is never comparable.
-            var comparable =
-                previous is not null
-                && !string.IsNullOrEmpty(c.Current.ScoringConfigVersion)
-                && string.Equals(
-                    c.Current.ScoringConfigVersion, previous.ScoringConfigVersion, StringComparison.Ordinal);
+            // Two snapshots are comparable only when they belong to the SAME SCORE SERIES — i.e. the same
+            // strategy (spec 141, ScoreSeriesKey). A strategy is immutable by convention (to change one you
+            // add a new name, enforced at startup by StrategyIdentityGuard), so the name is a stable series
+            // key that an unrelated collector toggle cannot move; the ScoringConfigVersion fingerprint used
+            // to key this gate and moved 17 times over 851 live snapshots, rendering "(scoring updated)" for
+            // changes that could not touch a score. A legacy null-named snapshot reads as the primary
+            // "default" series, so pre-137 history keeps comparing rather than being orphaned.
+            var comparable = previous is not null
+                && ScoreSeriesKey.SameSeries(c.Current.StrategyName, previous.StrategyName);
 
             // The contributing signal set is built BEFORE Decide because the policy's corroboration
             // floor measures agreement across it (and the report's "why noticed" block reuses the very

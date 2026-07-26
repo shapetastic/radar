@@ -12,22 +12,19 @@ public sealed class ScoringConfigFingerprintTests
     private static string DefaultTierDescriptor() =>
         new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default).CanonicalDescriptor();
 
-    // The signal-source descriptor of the default run profile (spec 95): the enabled collector set + the
+    // The signal-source IDENTITY descriptor of the default run profile (spec 95, narrowed by spec 141): the
     // extractor rule-set identity, canonicalized. It is folded into the fingerprint after the attention
-    // descriptor, so the default fingerprint value depends on it. The collector tokens are the concrete
-    // IEvidenceCollector.CollectorName values the default DI graph registers (rss→"RssPressReleaseCollector",
-    // sec→"sec-edgar", secform4→"sec-form4", sec13dg→"sec-13dg", usaspending→"usaspending",
-    // newssearch→"newssearch", fda→"fda"), Ordinal-sorted — NOT the Radar:Collectors config "kinds" — so it
-    // matches what the Worker actually produces. This is the 7-collector default after spec 133 promoted the
-    // openFDA collector `fda` into scripts/run-profiles/default.json (spec 100 had earlier promoted sec13dg,
-    // commit 58c55f5). The rule-set identity is UNCHANGED at radar-keyword-rules-v6 (spec 130 added the
-    // TrademarkActivity group; spec 129 added RegulatoryApproval; spec 127 added PatentActivity; spec 103 added
-    // HiringActivity) — spec 133 moves only the enabled-collector set, which AD-10 re-stamps automatically with
-    // no RuleSetVersion / _formula.Version bump. hiringats, patents, and trademarks remain opt-in OFF.
-    // Ordinal sort places "fda" second ('R' 0x52 < 'f' 0x66 < 'n' 0x6E) and "sec-13dg" before "sec-edgar" (the
-    // char after "sec-" is '1' 0x31 < 'e' 0x65).
-    private const string SourceDescriptor =
-        "rules=radar-keyword-rules-v6;collectors=RssPressReleaseCollector,fda,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;";
+    // descriptor, so the default fingerprint value depends on it.
+    //
+    // SPEC 141 REMOVED THE COLLECTOR CSV FROM THIS STRING. Until this slice it also carried
+    // `collectors=RssPressReleaseCollector,fda,newssearch,sec-13dg,sec-edgar,sec-form4,usaspending;` — the
+    // 7-collector default — which meant enabling an eighth collector re-stamped every strategy's identity
+    // even when its scores were bit-for-bit identical. The enabled-collector set is now recorded per-snapshot
+    // as `CollectionProvenance` (see SignalSourceDescriptorTests) and hashed into NOTHING, so it is correctly
+    // absent here. The rule-set identity is UNCHANGED at radar-keyword-rules-v6 (spec 130 added the
+    // TrademarkActivity group; spec 129 added RegulatoryApproval; spec 127 added PatentActivity; spec 103
+    // added HiringActivity).
+    private const string SourceDescriptor = "rules=radar-keyword-rules-v6;";
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -95,19 +92,28 @@ public sealed class ScoringConfigFingerprintTests
     [Fact]
     public void Compute_DefaultConfig_MatchesPinnedFingerprint()
     {
-        // Pinned so (a) default runs stay comparable to each other and (b) any accidental default-weight,
-        // default-tier, signal-source, insider-materiality, or media-collapse drift is caught (the automatic
-        // AD-10 replacement for the hand-bumped constant). This value is the spec-133 re-stamp: the openFDA
-        // collector `fda` was promoted INTO scripts/run-profiles/default.json, so the ENABLED-COLLECTOR SET
-        // moved 6 → 7 and the signal-source descriptor folds it into the fingerprint automatically. This is a
-        // collector-set re-stamp only — NO RuleSetVersion bump (radar-keyword-rules-v6 stands) and NO
-        // _formula.Version bump (radar-formula-v8 stands); the scoring math is byte-identical. It supersedes the
-        // spec-130 stamp (radar-scoring-fp-c1e126884b7c) and matches default.json's recorded default.
+        // THIS PIN IS A CHANGE-DETECTOR, NOT AN INVARIANT (spec 141).
+        //
+        // Moving it is a NORMAL, INTENDED act that requires a conscious update in the same slice — it is not
+        // "scope leakage". Its job is to make a fingerprint move IMPOSSIBLE TO MAKE ACCIDENTALLY: an
+        // unnoticed default-weight, default-tier, rule-set, insider-materiality or media-collapse drift fails
+        // here, and the author must then decide whether the move was intended and record its lineage.
+        //
+        // What the pin no longer does is pretend the fingerprint never changes. It has in fact changed 17
+        // times over 851 live snapshots (11 radar-scoring-fp-* + 6 legacy radar-scoring-config-vN); the
+        // largest cohort is 133 snapshots ≈ 3 runs, and the pinned AI-ON value below had exactly 43 — one
+        // single run. The score series is keyed by StrategyName now (ScoreSeriesKey), so a pin move no longer
+        // fragments anything; it re-stamps recorded provenance and trips StrategyIdentityGuard, which is
+        // exactly what it should do.
+        //
+        // Lineage: spec 133 (radar-scoring-fp-6b2f468041b9 — the 7-collector default) → SPEC 141, which
+        // removes the enabled-collector CSV from the hashed identity altogether. THE MOVE IS THE DELIVERABLE.
+        // Scoring math is byte-identical (asserted separately by the engine tests); only the stamp differs.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-6b2f468041b9", fp);
+        Assert.Equal("radar-scoring-fp-2ce20f8fc497", fp);
     }
 
     [Fact]
@@ -140,17 +146,21 @@ public sealed class ScoringConfigFingerprintTests
     }
 
     [Fact]
-    public void Compute_ChangedSignalSourceDescriptor_ChangesFingerprint()
+    public void Compute_ChangedExtractorRuleSet_ChangesFingerprint()
     {
+        // RETARGETED BY SPEC 141. This test used to assert that DROPPING A COLLECTOR re-stamps the
+        // fingerprint (spec 95). That is now the OPPOSITE of the intended behaviour — a collector toggle must
+        // leave a strategy's identity untouched, which SignalSourceDescriptorTests asserts directly at the
+        // source. What remains true, and is what this test now guards, is that a change to the signal-source
+        // IDENTITY descriptor — the extractor rule STRUCTURE identity, which does change what is scored —
+        // still re-stamps.
         var baseline = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        // Dropping a collector from the enabled set changes the signal-production surface, so the fingerprint
-        // must re-stamp (spec 95 — restores the spec-69 comparability guarantee across a collector transition).
         var changed = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(),
-            "rules=radar-keyword-rules-v6;collectors=RssPressReleaseCollector,newssearch,sec-edgar,usaspending;",
+            "rules=radar-keyword-rules-v7;",
             InsiderDescriptor, MediaCollapseDescriptor);
 
         Assert.NotEqual(baseline, changed);
@@ -214,6 +224,11 @@ public sealed class ScoringConfigFingerprintTests
         // provider registered, the AI directional-filing descriptor is folded in (AiOnSourceDescriptor above), so
         // the effective config differs from the AI-OFF pin. Pinned so an accidental drift in the AI directional
         // magnitudes, the earnings-read model, or any other folded input is caught for the AI-ON run too.
+        //
+        // A CHANGE-DETECTOR, NOT AN INVARIANT — see the AI-OFF pin above for why a deliberate move is normal.
+        // This particular value is the sharpest evidence for that position: it had exactly 43 snapshots on the
+        // live store, i.e. ONE RUN of history.
+        //
         // Lineage: spec 112 (radar-scoring-fp-454984785732) → spec 117 radar-formula-v7 structure bump +
         // following-discount weights (radar-scoring-fp-4c06fd2d2d8c) → spec 119, which folded the earnings-read
         // model identity into the directional descriptor by value and built the ai= segment through the real
@@ -225,13 +240,15 @@ public sealed class ScoringConfigFingerprintTests
         // → spec 130, the RuleSetVersion v5→v6 bump for the new TrademarkActivity rule group (opt-in-OFF USPTO
         // trademark collector), which folds into BOTH defaults automatically with scoring math byte-identical
         // (radar-scoring-fp-74c5e077f728) → spec 133, which promotes the openFDA collector `fda` into
-        // scripts/run-profiles/default.json: a COLLECTOR-SET change (6 → 7 collectors) that AD-10 re-stamps
-        // automatically with NO RuleSetVersion and NO _formula.Version bump and byte-identical scoring math.
+        // scripts/run-profiles/default.json: a COLLECTOR-SET change (6 → 7 collectors) that re-stamped
+        // automatically (radar-scoring-fp-57356123e09b) → SPEC 141, which removes the collector CSV from the
+        // hashed identity entirely, so a re-stamp like spec 133's can never happen again. THE MOVE IS THE
+        // DELIVERABLE; scoring math is byte-identical.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
 
-        Assert.Equal("radar-scoring-fp-57356123e09b", fp);
+        Assert.Equal("radar-scoring-fp-3457da53489d", fp);
     }
 
     [Fact]

@@ -812,6 +812,71 @@ out of config entirely (`Radar:Ai:OpenAi:ApiKeyEnvVar` names `DEEPINFRA_API_KEY`
 fails the run loudly) — the SEC-User-Agent secret precedent. *Accepted · 2026-07-21 — comparability-input
 widening; property preserved and strengthened, no scoring-math change.*
 
+### Amendment — spec 141: the series is keyed by strategy NAME; the fingerprint is demoted to a tripwire; collection provenance is recorded, not hashed
+
+AD-10 conflated two obligations. **"Stamp the config correctly" is KEPT** — the fingerprint is still derived,
+still automatic, still stamped on every snapshot, and still dereferences back to the persisted effective config.
+**"The stamp must never change" is DROPPED** — it was never true, and treating it as an invariant did active harm.
+
+**The evidence.** Counted on `origin/main` @ `ba63d56` over the live baseline store (`data/scores`, 851
+snapshots): **17 distinct `ScoringConfigVersion` values already exist** — 11 `radar-scoring-fp-*` fingerprints
+plus 6 legacy `radar-scoring-config-vN` stamps. **The largest single cohort is 133 snapshots ≈ 3 runs** at 43
+companies. **The pinned AI-ON fingerprint `57356123e09b` has exactly 43 snapshots — one single run.** So the
+"no pin edit" criterion that specs 137/138/140 each carried has been protecting *one run's worth of history*
+while the fingerprint moved 17 times. There is no continuous efficacy series to preserve; the migration cost
+is near zero now and grows with every slice built on the wrong key.
+
+**The defect.** `SignalSourceDescriptor` welded two different facts with different lifetimes into one hash:
+*collection provenance* ("what was collected on this run") and *strategy identity* ("what hypothesis produced
+this score"). A strategy declaring `SignalTypes: ["InsiderBuying"]` hashed the full seven-collector CSV, so
+enabling an eighth collector emitting only `RegulatoryApproval` changed its `ScoringConfigVersion` while its
+scores stayed **bit-for-bit identical** — a new series, for no behavioural reason.
+
+**The new position.**
+
+- **The score series is keyed by `StrategyName`** (`ScoreSeriesKey`, the one definition), with `null`/blank
+  canonicalised to `"default"` so the legacy 851 snapshots read as the primary series rather than being
+  orphaned. Every consumer routes through it: the weekly report's comparability gate and the spec-101/108
+  efficacy segmentation. Comparison is case-insensitive, matching `ScoringStrategySet`'s uniqueness rule.
+- **A strategy is IMMUTABLE BY CONVENTION.** To change one, add a new named strategy (`momentum` →
+  `momentum-v2`). The name is then a stable, human-meaningful key that a collector toggle cannot move.
+- **The fingerprint is a TRIPWIRE, not a primary key.** `StrategyIdentityGuard` runs at the very start of
+  `RadarPipelineRunner.RunAsync` (before Stage 1, so a misconfiguration costs no network calls) and compares
+  each strategy's computed fingerprint against the one recorded for that NAME in
+  `data/scoring-configs/strategies/{name}.json` (a per-name, mutable, upsert record living **beside** — never
+  inside — the immutable content-addressed `{fingerprint}.json` files). No record ⇒ record and continue; equal
+  ⇒ continue; different ⇒ throw, naming the strategy, both fingerprints and the new-name remedy. A read
+  failure degrades to "unrecorded" and never trips (AD-8): "cannot tell" must not be reported as "changed".
+- **`CollectionProvenance` is recorded, never hashed.** `ISignalSourceDescriptor` splits into
+  `CanonicalDescriptor()` (identity — `rules=…;[ai=…;]`, the fingerprint input) and `CollectionProvenance()`
+  (`collectors=<csv>;`, hashed into nothing), stamped as a trailing nullable field on `CompanyScoreSnapshot`
+  and persisted by `FileScoreSnapshotStore`. It is deliberately **not** added to `EffectiveScoringConfig`:
+  that store is content-addressed and insert-if-new, so a per-run collector set stored there would be
+  permanently pinned to whichever run wrote the file first. Provenance is not weakened — per-signal and
+  per-evidence source attribution already names the collector behind each item (AD-3), and the run-level set
+  is now recorded *alongside* the score instead of *inside* its identity.
+- **The `ai=` segment stays on the IDENTITY side.** It is not a collector set: it carries the AI
+  directional-filing read's per-signal magnitudes and the reading model, which change signal DIRECTION
+  (spec 119) — genuinely different scorings that must never share a stamp.
+- **Scores are byte-identical.** Identity/record-keeping only: an engine-level test asserts that two engines
+  differing solely in the enabled collector set stamp the SAME `ScoringConfigVersion`, DIFFERENT
+  `CollectionProvenance`, and produce identical components, explanation, component JSON and evidence links.
+- **The pins MOVED, deliberately — that move IS the deliverable, not scope leakage.** AI-OFF
+  **`radar-scoring-fp-6b2f468041b9 → radar-scoring-fp-2ce20f8fc497`** and AI-ON
+  **`radar-scoring-fp-57356123e09b → radar-scoring-fp-3457da53489d`**, caused solely by removing the collector
+  CSV from the hashed identity. `ScoringConfigFingerprintTests` now documents the pins as **change-detectors**:
+  a move is a normal, intended act requiring a conscious update and a lineage note. No `_formula.Version` bump
+  (`radar-formula-v8` stands), no `KeywordSignalExtractor.RuleSetVersion` bump (`radar-keyword-rules-v6`
+  stands), no weight/tier edit. `Compute_ChangedSignalSourceDescriptor_ChangesFingerprint` — which asserted
+  that dropping a collector re-stamps — was **retargeted** onto the extractor rule-set identity, because the
+  old assertion is now the opposite of the intended behaviour.
+- **History was NOT regenerated.** Spec 141 §5 permits taking the discontinuity and saying so; the 27 days of
+  fragmented history are left exactly as they are (append-only, AD-8). Nothing was rewritten, deleted or
+  backfilled — the standing spec-145 rule against retro-healing accrued evidence is untouched.
+
+*Accepted · 2026-07-26 — key correction: the conflated invariant is dropped, the correctness property (never
+compare two different scorings) is preserved on a key that actually distinguishes them.*
+
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
 by spec 70). Amended · 2026-07-04 (spec 89 — stamp becomes a derived content fingerprint; property preserved
 and made automatic; Accepted). Amended · 2026-07-04 (spec 91 — the effective config is persisted
@@ -846,6 +911,13 @@ automatically: AI-OFF radar-scoring-fp-c1e126884b7c → radar-scoring-fp-6b2f468
 radar-scoring-fp-74c5e077f728 → radar-scoring-fp-57356123e09b; the cause is a **collector-set** change, **not** a
 rule or formula change — no `RuleSetVersion` bump (`radar-keyword-rules-v6` stands), no `_formula.Version` bump
 (`radar-formula-v8` stands), no weight/tier edit, no production code change, scoring math byte-identical).
+Amended · 2026-07-26 (spec 141 — the score series is keyed by `StrategyName`, strategies are immutable by
+convention, the fingerprint is demoted from invariant to startup tripwire (`StrategyIdentityGuard`), and the
+enabled-collector set leaves the hash entirely to be recorded per-snapshot as `CollectionProvenance`; BOTH
+defaults re-stamp deliberately — AI-OFF radar-scoring-fp-6b2f468041b9 → radar-scoring-fp-2ce20f8fc497 and AI-ON
+radar-scoring-fp-57356123e09b → radar-scoring-fp-3457da53489d — with no `RuleSetVersion` / `_formula.Version`
+bump and byte-identical scoring math; evidence: 17 distinct stamps already existed over 851 snapshots, largest
+cohort ≈ 3 runs, the AI-ON pin exactly 1 run; Accepted).
 
 ---
 

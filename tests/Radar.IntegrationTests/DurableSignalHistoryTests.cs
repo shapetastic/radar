@@ -83,6 +83,7 @@ public sealed class DurableSignalHistoryTests
         s.CreatedAtUtc,
         s.ScoringConfigVersion,
         s.StrategyName,
+        s.CollectionProvenance,
     };
 
     private static object[] LinkFields(IEnumerable<ScoreEvidenceLink> links) =>

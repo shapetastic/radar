@@ -72,6 +72,10 @@ public sealed class EfficacyDatasetBuilder
                     AttentionScore: snapshot.AttentionScore,
                     EvidenceConfidenceScore: snapshot.EvidenceConfidenceScore,
                     SignalVelocityScore: snapshot.SignalVelocityScore,
+                    // Spec 141: the SERIES key is the strategy name (legacy null ⇒ the primary "default"
+                    // series, so pre-137 history is not orphaned); the fingerprint rides along as recorded
+                    // provenance the renderer still annotates but no longer segments on.
+                    SeriesKey: ScoreSeriesKey.For(snapshot),
                     ScoringConfigVersion: snapshot.ScoringConfigVersion,
                     PriceAsOfDate: bar?.Date,
                     PriceClose: bar?.Close,

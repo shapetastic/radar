@@ -130,4 +130,45 @@ public sealed class EfficacyDatasetBuilderTests
         Assert.Equal(0, scores.WriteCount);
         Assert.Equal(0, prices.WriteCount);
     }
+
+    [Fact]
+    public async Task BuildAsync_SeriesKeyIsStrategyName_LegacyNullReadsAsPrimaryDefaultSeries()
+    {
+        // Spec 141: the efficacy segment key is the STRATEGY NAME, not the fingerprint. A legacy snapshot
+        // written before spec 137 carries a null strategy name and must read as the primary "default" series
+        // — the pre-137 composition IS the default strategy, so those 851 accrued snapshots stay in the same
+        // series as today's primary run rather than being orphaned into an unnamed one. A named non-primary
+        // strategy keeps its own key. The fingerprint rides along untouched as annotation.
+        var companyId = Guid.NewGuid();
+        var company = new CompanyBuilder().WithId(companyId).WithTicker("MRCY").Build();
+
+        var legacy = new ScoreSnapshotBuilder()
+            .WithCompanyId(companyId)
+            .WithStrategyName(null)
+            .WithScoringConfigVersion("radar-scoring-fp-old")
+            .WithCreatedAtUtc(new DateTimeOffset(2026, 6, 10, 0, 0, 0, TimeSpan.Zero))
+            .Build();
+        var primary = new ScoreSnapshotBuilder()
+            .WithCompanyId(companyId)
+            .WithStrategyName("default")
+            .WithScoringConfigVersion("radar-scoring-fp-new")
+            .WithCreatedAtUtc(new DateTimeOffset(2026, 6, 11, 0, 0, 0, TimeSpan.Zero))
+            .Build();
+        var other = new ScoreSnapshotBuilder()
+            .WithCompanyId(companyId)
+            .WithStrategyName("insider-only")
+            .WithScoringConfigVersion("radar-scoring-fp-new")
+            .WithCreatedAtUtc(new DateTimeOffset(2026, 6, 12, 0, 0, 0, TimeSpan.Zero))
+            .Build();
+
+        var scores = new FakeScoreSnapshotFileStore().With(companyId, legacy, primary, other);
+        var builder = Build(new FakeCompanyRepository(company), scores, new FakePriceHistoryStore());
+
+        var one = Assert.Single(await builder.BuildAsync(CancellationToken.None));
+
+        Assert.Equal(["default", "default", "insider-only"], one.Points.Select(p => p.SeriesKey).ToArray());
+        Assert.Equal(
+            ["radar-scoring-fp-old", "radar-scoring-fp-new", "radar-scoring-fp-new"],
+            one.Points.Select(p => p.ScoringConfigVersion ?? string.Empty).ToArray());
+    }
 }

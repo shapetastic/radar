@@ -5,8 +5,9 @@ namespace Radar.Application.Tests.Efficacy;
 
 public sealed class EfficacyCsvRendererTests
 {
+    // Spec 141: the series key (strategy name) leads, with the fingerprint retained beside it as provenance.
     private const string ExpectedHeader =
-        "scoreDate,scoringConfigVersion,trajectory,opportunity,attention,evidenceConfidence,velocity,"
+        "scoreDate,seriesKey,scoringConfigVersion,trajectory,opportunity,attention,evidenceConfidence,velocity,"
             + "priceAsOfDate,priceClose,priceAdjClose";
 
     [Fact]
@@ -19,6 +20,7 @@ public sealed class EfficacyCsvRendererTests
             AttentionScore: 55,
             EvidenceConfidenceScore: 70,
             SignalVelocityScore: 40,
+            SeriesKey: "default",
             ScoringConfigVersion: "radar-scoring-fp-abc",
             PriceAsOfDate: new DateOnly(2026, 6, 12),
             PriceClose: 102.5m,
@@ -31,6 +33,7 @@ public sealed class EfficacyCsvRendererTests
             AttentionScore: 30,
             EvidenceConfidenceScore: 40,
             SignalVelocityScore: 50,
+            SeriesKey: "insider-only",
             ScoringConfigVersion: null,
             PriceAsOfDate: null,
             PriceClose: null,
@@ -49,10 +52,11 @@ public sealed class EfficacyCsvRendererTests
 
         // Rows follow point order; invariant decimal formatting; ISO dates.
         Assert.Equal(
-            "2026-06-12,radar-scoring-fp-abc,50,60,55,70,40,2026-06-12,102.5,101.25", lines[1]);
+            "2026-06-12,default,radar-scoring-fp-abc,50,60,55,70,40,2026-06-12,102.5,101.25", lines[1]);
 
-        // Null price fields (and null fingerprint) render as empty cells.
-        Assert.Equal("2026-06-05,,10,20,30,40,50,,,", lines[2]);
+        // Null price fields (and a null fingerprint) render as empty cells; the series key never does — a
+        // legacy/blank strategy name is canonicalised to "default" upstream, so grouping by it is total.
+        Assert.Equal("2026-06-05,insider-only,,10,20,30,40,50,,,", lines[2]);
     }
 
     [Fact]

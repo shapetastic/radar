@@ -7,16 +7,23 @@ namespace Radar.Application.Scoring;
 /// <summary>
 /// Computes a deterministic content fingerprint of the effective resolved scoring config — the structure
 /// identity (engine + formula version) plus every <see cref="ScoringWeights"/> value plus the attention
-/// tier-map descriptor plus the signal-source descriptor (the enabled collector set + extractor rule-set
-/// identity) plus the insider-materiality descriptor (the config-tunable buy/sell tiers + cluster boost,
-/// spec 96) plus the media-collapse descriptor (the same-event media-attention collapse structure + window,
-/// spec 109) — so a snapshot's <c>ScoringConfigVersion</c> uniquely identifies the generation
-/// that produced it (AD-10 as amended). The canonical string uses a FIXED, explicit field ordering (never
-/// reflection order, which is unstable across runtimes) and culture-invariant round-trip number formatting
-/// (AD-3), then hashes with the shared EvidenceNormalizer idiom
-/// (<c>Convert.ToHexStringLower(SHA256.HashData(...))</c>). Any output-affecting change (formula shape, any
-/// weight, the tier map) changes the fingerprint automatically, so the AD-10 comparability property can no
-/// longer be silently forgotten. Pure and deterministic — no clock, IO, or randomness.
+/// tier-map descriptor plus the signal-source IDENTITY descriptor (the extractor rule-set identity, the
+/// optional AI directional-filing magnitudes and the strategy's declared signal types) plus the
+/// insider-materiality descriptor (the config-tunable buy/sell tiers + cluster boost, spec 96) plus the
+/// media-collapse descriptor (the same-event media-attention collapse structure + window, spec 109) — so a
+/// snapshot's <c>ScoringConfigVersion</c> uniquely identifies the STRATEGY that produced it (AD-10 as
+/// amended). The canonical string uses a FIXED, explicit field ordering (never reflection order, which is
+/// unstable across runtimes) and culture-invariant round-trip number formatting (AD-3), then hashes with the
+/// shared EvidenceNormalizer idiom (<c>Convert.ToHexStringLower(SHA256.HashData(...))</c>). Any
+/// output-affecting change (formula shape, any weight, the tier map) changes the fingerprint automatically.
+/// Pure and deterministic — no clock, IO, or randomness.
+/// <para>
+/// Spec 141 narrowed the VALUE of the <c>srcDesc</c> field, not this signature: the enabled-collector set is
+/// no longer part of the signal-source descriptor handed in here (it is recorded on the snapshot as
+/// <c>CollectionProvenance</c> and hashed into nothing), so a collector toggle no longer re-stamps a
+/// strategy. The field key and ordering are unchanged; the pinned default fingerprints moved once,
+/// deliberately, in that slice.
+/// </para>
 /// </summary>
 public static class ScoringConfigFingerprint
 {
