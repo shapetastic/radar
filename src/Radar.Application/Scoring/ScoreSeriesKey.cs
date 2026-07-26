@@ -25,6 +25,13 @@ namespace Radar.Application.Scoring;
 /// rule: two names that cannot coexist as distinct strategies must not read as two distinct series. Pure and
 /// deterministic (AD-3).
 /// </para>
+/// <para>
+/// THE RETURNED KEY IS THE CANONICAL FORM of that equivalence class — trimmed and invariant-lowercased — so
+/// the string uniquely identifies the series. Anything that groups by the key STRING (the efficacy CSV's
+/// <c>seriesKey</c> column, a spreadsheet pivot, any downstream consumer) therefore groups exactly as
+/// <see cref="SameSeries"/> compares; without the fold, <c>"Momentum"</c> and <c>"momentum"</c> would compare
+/// equal yet split into two groups.
+/// </para>
 /// </summary>
 public static class ScoreSeriesKey
 {
@@ -35,11 +42,15 @@ public static class ScoreSeriesKey
         return For(snapshot.StrategyName);
     }
 
-    /// <summary>The series key of a strategy name: trimmed, with blank/null ⇒ the primary default series.</summary>
+    /// <summary>
+    /// The series key of a strategy name: trimmed and invariant-lowercased (the canonical form of the
+    /// case-insensitive equivalence class <see cref="SameSeries"/> compares), with blank/null ⇒ the primary
+    /// default series. Idempotent, so re-keying an already-canonical key is a no-op.
+    /// </summary>
     public static string For(string? strategyName) =>
         string.IsNullOrWhiteSpace(strategyName)
             ? ScoringStrategySet.DefaultStrategyName
-            : strategyName.Trim();
+            : strategyName.Trim().ToLowerInvariant();
 
     /// <summary>
     /// True when two snapshots belong to the same series — the comparability gate's rule. Defined in terms of

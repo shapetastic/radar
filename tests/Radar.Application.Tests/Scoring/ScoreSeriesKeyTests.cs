@@ -46,6 +46,31 @@ public sealed class ScoreSeriesKeyTests
         Assert.True(ScoreSeriesKey.SameSeries("DEFAULT", null));
     }
 
+    [Theory]
+    [InlineData("Momentum", "momentum")]
+    [InlineData("  Momentum  ", "momentum")]
+    [InlineData("INSIDER-ONLY", "insider-only")]
+    [InlineData("DEFAULT", "default")]
+    public void KeyIsCanonical_SoGroupingByTheStringMatchesSameSeries(string name, string expected)
+    {
+        // The key is not just "a" member of the equivalence class, it is THE representative of it: consumers
+        // that group by the key STRING (the efficacy CSV's seriesKey column, a downstream pivot) must land in
+        // the same bucket that SameSeries puts them in. Without the fold, "Momentum" and "momentum" would
+        // compare equal yet split into two groups.
+        Assert.Equal(expected, ScoreSeriesKey.For(name));
+        Assert.Equal(ScoreSeriesKey.For(name), ScoreSeriesKey.For(expected));
+        Assert.True(ScoreSeriesKey.SameSeries(name, expected));
+    }
+
+    [Fact]
+    public void KeyIsIdempotent_ReKeyingACanonicalKeyChangesNothing()
+    {
+        // EfficacySvgRenderer compares already-keyed EfficacyPoint.SeriesKey values through SameSeries, which
+        // re-applies For() — that second pass must be a no-op.
+        var once = ScoreSeriesKey.For("  Momentum  ");
+        Assert.Equal(once, ScoreSeriesKey.For(once));
+    }
+
     [Fact]
     public void SnapshotOverload_ReadsTheStrategyName_NotTheFingerprint()
     {
