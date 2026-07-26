@@ -1,4 +1,5 @@
 using Radar.Application.Scoring;
+using Radar.Domain.Signals;
 
 namespace Radar.Application.Tests.Scoring;
 
@@ -71,6 +72,41 @@ public sealed class ScoringStrategySetTests
     {
         Assert.Throws<InvalidOperationException>(
             () => new ScoringStrategySet([Def("alpha", true), Def("beta", true)]));
+    }
+
+    [Fact]
+    public void SignalTypes_DefaultToAllTypes()
+    {
+        // Spec 138: a definition that says nothing about signal types consumes everything, which is what keeps
+        // every pre-138 construction site (and the synthesised default) byte-identical.
+        Assert.Same(SignalTypeFilter.All, Def("alpha", primary: true).SignalTypes);
+        Assert.Same(
+            SignalTypeFilter.All,
+            Assert.Single(ScoringStrategySet.SingleDefault(new ScoringWeights()).Strategies).SignalTypes);
+    }
+
+    [Fact]
+    public void NullSignalTypes_IsRejected()
+    {
+        // Only reachable by explicitly nulling the defaulted property; failing fast beats silently scoring a
+        // strategy as "all types" when the operator meant it to be narrow.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ScoringStrategySet([Def("alpha", primary: true) with { SignalTypes = null! }]));
+
+        Assert.Contains("SignalTypes", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SignalTypes_ArePreservedOnTheSet()
+    {
+        var narrow = Def("alpha", primary: true) with
+        {
+            SignalTypes = SignalTypeFilter.Create([SignalType.InsiderBuying]),
+        };
+
+        var set = new ScoringStrategySet([narrow]);
+
+        Assert.Equal([SignalType.InsiderBuying], Assert.Single(set.Strategies).SignalTypes.Types);
     }
 
     [Fact]

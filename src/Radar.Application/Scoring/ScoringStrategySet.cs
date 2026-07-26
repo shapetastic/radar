@@ -58,6 +58,18 @@ public sealed class ScoringStrategySet
                         + "contain any of / \\ : * ? \" < > | (nor be \".\" or \"..\").");
             }
 
+            // Spec 138: SignalTypes defaults to SignalTypeFilter.All, so this can only be null if a caller
+            // explicitly nulled it (e.g. `definition with { SignalTypes = null! }`). Fail fast here rather
+            // than letting the engine silently substitute "all types" for a strategy that meant to declare a
+            // narrow set — that would produce a series stamped as broad while the operator believed it narrow.
+            if (strategy.SignalTypes is null)
+            {
+                throw new InvalidOperationException(
+                    $"Radar:Strategies strategy '{strategy.Name}' has a null SignalTypes filter; a strategy's "
+                        + "consumed signal-type set is a fingerprint input, so it is never inferred (use "
+                        + "SignalTypeFilter.All to consume every signal type).");
+            }
+
             if (!seen.Add(strategy.Name))
             {
                 throw new InvalidOperationException(

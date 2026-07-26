@@ -70,7 +70,11 @@ public sealed class ScoringStrategyFactory : IScoringStrategyFactory
                         mediaCollapse,
                         options,
                         engineLogger,
-                        definition.Name)))
+                        definition.Name,
+                        // Spec 138: the declared signal-type set travels with the strategy into its engine,
+                        // which both applies it at the read→score seam and folds it into that engine's
+                        // fingerprint. Default (all types) is a no-op on both counts.
+                        definition.SignalTypes)))
                 .ToList(),
             LazyThreadSafetyMode.ExecutionAndPublication);
     }

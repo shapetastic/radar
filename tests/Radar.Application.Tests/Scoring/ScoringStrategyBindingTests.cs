@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 using Radar.Application.Scoring;
+using Radar.Domain.Signals;
 using Radar.Infrastructure.DependencyInjection;
 
 namespace Radar.Application.Tests.Scoring;
@@ -171,5 +172,178 @@ public sealed class ScoringStrategyBindingTests
             ["Radar:Scoring:Profiles:broken:OpportunityAttentionDivisor"] = "0",
             ["Radar:PrimaryStrategy"] = "broken",
         });
+    }
+
+    // ---- Spec 138: the per-strategy signal-type set ----------------------------------------------------
+
+    [Fact]
+    public void NoSignalTypes_DefaultsToAllTypes()
+    {
+        // The byte-identical default at the binding seam: an entry that says nothing about SignalTypes gets
+        // the canonical "consume everything" filter, which hashes as a no-op.
+        var set = Resolve(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "baseline",
+            ["Radar:PrimaryStrategy"] = "baseline",
+        });
+
+        Assert.Same(SignalTypeFilter.All, Assert.Single(set.Strategies).SignalTypes);
+    }
+
+    [Fact]
+    public void SynthesisedDefaultStrategy_ConsumesAllTypes()
+    {
+        var set = Resolve(new Dictionary<string, string?>());
+
+        Assert.Same(SignalTypeFilter.All, Assert.Single(set.Strategies).SignalTypes);
+    }
+
+    [Fact]
+    public void SignalTypes_BindToTheDeclaredEnumMembers()
+    {
+        var set = Resolve(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "insider-only",
+            ["Radar:Strategies:0:SignalTypes:0"] = "InsiderBuying",
+            ["Radar:Strategies:1:Name"] = "filings",
+            ["Radar:Strategies:1:SignalTypes:0"] = "GuidanceChange",
+            ["Radar:Strategies:1:SignalTypes:1"] = "GovernmentContract",
+            ["Radar:PrimaryStrategy"] = "insider-only",
+        });
+
+        Assert.Equal([SignalType.InsiderBuying], set.Strategies[0].SignalTypes.Types);
+        Assert.False(set.Strategies[0].SignalTypes.IsAll);
+        // Ordered by underlying enum value, NOT by config list order.
+        Assert.Equal(
+            [SignalType.GuidanceChange, SignalType.GovernmentContract],
+            set.Strategies[1].SignalTypes.Types);
+    }
+
+    [Fact]
+    public void SignalTypes_AreMatchedCaseInsensitivelyByName()
+    {
+        var set = Resolve(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "insider-only",
+            ["Radar:Strategies:0:SignalTypes:0"] = "insiderbuying",
+            ["Radar:PrimaryStrategy"] = "insider-only",
+        });
+
+        Assert.Equal([SignalType.InsiderBuying], Assert.Single(set.Strategies).SignalTypes.Types);
+    }
+
+    [Fact]
+    public void SignalTypes_ListingEveryMember_CanonicalisesToAll()
+    {
+        // Spelling out the full set must be byte-identical to omitting the key, or the default fingerprint
+        // would fork for a config that changed nothing.
+        var config = new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "everything",
+            ["Radar:PrimaryStrategy"] = "everything",
+        };
+
+        var names = Enum.GetNames<SignalType>();
+        for (var i = 0; i < names.Length; i++)
+        {
+            config[$"Radar:Strategies:0:SignalTypes:{i}"] = names[i];
+        }
+
+        var set = Resolve(config);
+
+        Assert.Same(SignalTypeFilter.All, Assert.Single(set.Strategies).SignalTypes);
+    }
+
+    [Fact]
+    public void UnknownSignalType_FailsFast_NamingTheKeyAndTheValue()
+    {
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "typo",
+            ["Radar:Strategies:0:SignalTypes:0"] = "InsiderTransaction",
+            ["Radar:PrimaryStrategy"] = "typo",
+        });
+
+        Assert.Contains("Radar:Strategies:0:SignalTypes:0", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("InsiderTransaction", ex.Message, StringComparison.Ordinal);
+        // The message lists the real members so the fix is obvious from the log line alone.
+        Assert.Contains(nameof(SignalType.InsiderBuying), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NumericSignalType_IsRejected()
+    {
+        // Enum.TryParse would happily accept "5" (and any other number, declared or not); matching against
+        // the declared NAMES is what makes this a startup failure instead of a strategy that scores nothing.
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "numeric",
+            ["Radar:Strategies:0:SignalTypes:0"] = "5",
+            ["Radar:PrimaryStrategy"] = "numeric",
+        });
+
+        Assert.Contains("Radar:Strategies:0:SignalTypes:0", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("'5'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UndeclaredNumericSignalType_IsRejected()
+    {
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "numeric",
+            ["Radar:Strategies:0:SignalTypes:0"] = "9999",
+            ["Radar:PrimaryStrategy"] = "numeric",
+        });
+
+        Assert.Contains("9999", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EmptySignalTypesArray_ResolvesToAllTypes_AndDoesNotTripTheScalarGuard()
+    {
+        // The spec's "omitted OR EMPTY ⇒ all signal types", pinned at the BINDING seam — SignalTypeFilter's
+        // own Create_Empty_IsAll never runs through a config provider, which is exactly why the scalar guard
+        // was briefly able to reject "SignalTypes": [] unnoticed. An empty JSON array binds to the empty
+        // STRING (not null), so "" here is the faithful stand-in for [] and must resolve to All, not throw.
+        var set = Resolve(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "empty-array",
+            ["Radar:Strategies:0:SignalTypes"] = "",
+            ["Radar:PrimaryStrategy"] = "empty-array",
+        });
+
+        Assert.Same(SignalTypeFilter.All, Assert.Single(set.Strategies).SignalTypes);
+    }
+
+    [Fact]
+    public void ScalarSignalTypes_IsRejected_RatherThanSilentlyMeaningAllTypes()
+    {
+        // "SignalTypes": "InsiderBuying" (the array brackets forgotten) binds as a VALUE with no children, so
+        // without this guard it would fall through to "all types" — stamping and scoring BROAD a strategy the
+        // operator wrote to be narrow, which is exactly the failure this slice exists to prevent.
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "scalar",
+            ["Radar:Strategies:0:SignalTypes"] = "InsiderBuying",
+            ["Radar:PrimaryStrategy"] = "scalar",
+        });
+
+        Assert.Contains("Radar:Strategies:0:SignalTypes", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("InsiderBuying", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("ARRAY", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BlankSignalTypeEntry_IsRejected()
+    {
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "blank",
+            ["Radar:Strategies:0:SignalTypes:0"] = "   ",
+            ["Radar:PrimaryStrategy"] = "blank",
+        });
+
+        Assert.Contains("Radar:Strategies:0:SignalTypes:0", ex.Message, StringComparison.Ordinal);
     }
 }
