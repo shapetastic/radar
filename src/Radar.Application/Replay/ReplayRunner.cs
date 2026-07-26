@@ -32,23 +32,29 @@ namespace Radar.Application.Replay;
 /// </para>
 /// </summary>
 /// <remarks>
-/// <b>KNOWN LIMITATION — history hydration is a prerequisite follow-up, and is NOT implemented here.</b>
+/// <b>HISTORY HYDRATION — the prerequisite, now shipped (spec 142).</b>
 /// <para>
-/// Replay reads a company's current-window signals from the in-memory <see cref="ISignalRepository"/> and
-/// their evidence from the in-memory <see cref="IEvidenceRepository"/> (the previous/velocity window already
-/// comes from the on-disk signal store). Both in-memory repositories start EMPTY in a fresh process, so a
-/// replay run that does not also collect has nothing to score beyond the velocity window: today this harness
-/// is exact and honest for a process that already holds the signals (and for tests), but a production replay
-/// over months of accrued history additionally needs those two repositories hydrated from the on-disk stores.
+/// Replay reads a company's current-window signals from <see cref="ISignalRepository"/> and their evidence
+/// from <see cref="IEvidenceRepository"/> (the previous/velocity window already comes from the on-disk
+/// signal store). In the composed app both of those now resolve to the DURABLE file stores, which hydrate
+/// the accrued <c>signals/</c> and <c>evidence/raw/</c> history lazily on first read — so a replay in a
+/// fresh process finally has something to replay. Spec 142 also closed the correctness hole that blocked
+/// this: the raw-evidence schema now carries <c>EvidenceQuality</c> explicitly (recovering it for legacy
+/// files from the <c>metadata.quality</c> the collector persisted all along), so hydrated evidence scores
+/// the way it scored live rather than approximately.
 /// </para>
 /// <para>
-/// That hydration is deliberately NOT built yet, because it cannot currently be done faithfully: the on-disk
-/// raw-evidence schema (<c>FileRawEvidenceStore</c>'s persisted record) does not carry
-/// <c>EvidenceQuality</c>, which the scoring formula reads. A lossy rehydration — defaulting the quality to
-/// some plausible value — would silently produce replay scores that differ from what the forward run
-/// produced, i.e. it would break the one invariant replay exists to uphold, while looking like it worked.
-/// The honest sequence is: add the missing field to the raw-evidence schema first, then hydrate. Until then,
-/// replay is exact over what the process holds and empty over what it does not — never approximated.
+/// A test or a host that composes the in-memory repositories instead still behaves exactly as before —
+/// exact over what the process holds, empty over what it does not, never approximated.
+/// </para>
+/// <para>
+/// <b>What accrued history can actually support is a separate, measured question.</b> A signal is only
+/// replayable if its <c>EvidenceId</c> still resolves, and evidence identity is a fresh <c>Guid</c> per run
+/// while raw-evidence FILES are keyed by content hash — so a signal re-extracted in a later run cites an
+/// evidence id that was never written to disk. Spec 142's durable evidence repository stops this happening
+/// going FORWARD (re-collection no longer re-extracts), but it does not backfill; the honest span of
+/// replayable history is therefore whatever the resolvable-provenance ratio says it is, not the raw signal
+/// count.
 /// </para>
 /// </remarks>
 public sealed class ReplayRunner : IReplayRunner

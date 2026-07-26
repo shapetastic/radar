@@ -1586,7 +1586,12 @@ public static class InfrastructureServiceCollectionExtensions
         this IServiceCollection services, string rootDirectory)
     {
         services.AddSingleton(new FileRawEvidenceStoreOptions { RootDirectory = rootDirectory });
-        services.AddSingleton<IRawEvidenceStore, FileRawEvidenceStore>();
+        // Registered as the CONCRETE type first and exposed through the interface by delegation, so
+        // AddDurableRadarSignalHistory can point IEvidenceRepository at the SAME singleton instance (one
+        // instance ⇒ one hydration cache). Behaviourally identical to the previous direct registration for
+        // every existing caller.
+        services.AddSingleton<FileRawEvidenceStore>();
+        services.AddSingleton<IRawEvidenceStore>(sp => sp.GetRequiredService<FileRawEvidenceStore>());
         return services;
     }
 
@@ -1602,7 +1607,49 @@ public static class InfrastructureServiceCollectionExtensions
         this IServiceCollection services, string rootDirectory)
     {
         services.AddSingleton(new FileSignalStoreOptions { RootDirectory = rootDirectory });
-        services.AddSingleton<ISignalFileStore, FileSignalStore>();
+        // Registered as the CONCRETE type first and exposed through the interface by delegation, so
+        // AddDurableRadarSignalHistory can point ISignalRepository at the SAME singleton instance (one
+        // instance ⇒ one hydration cache). Behaviourally identical to the previous direct registration for
+        // every existing caller.
+        services.AddSingleton<FileSignalStore>();
+        services.AddSingleton<ISignalFileStore>(sp => sp.GetRequiredService<FileSignalStore>());
+        return services;
+    }
+
+    /// <summary>
+    /// Repoints the scoring path's <see cref="ISignalRepository"/> / <see cref="IEvidenceRepository"/> at
+    /// the DURABLE file stores (spec 142) — the slice that lets scoring read accrued history at all.
+    /// <para>
+    /// Before this, both interfaces resolved to in-memory singletons that started EMPTY every process,
+    /// while the durable history was written through a different, disconnected abstraction. Scoring
+    /// therefore only ever saw what the current process had just collected, which made spec 136's
+    /// point-in-time predicate near-vacuous and spec 139's replay inert. The reconciliation choice, recorded
+    /// on the store types themselves, is that <b>the repository IS the file store</b>: no third abstraction,
+    /// no second copy of the persisted shape.
+    /// </para>
+    /// <para>
+    /// Requires <see cref="AddFileRawEvidenceStore"/> and <see cref="AddFileSignalStore"/> to have been
+    /// called (this resolves the very singletons they register). The two interfaces are
+    /// <see cref="ServiceCollectionDescriptorExtensions.RemoveAll{T}(IServiceCollection)"/>'d first so a
+    /// previously-registered in-memory implementation is gone from the <c>IEnumerable&lt;T&gt;</c> view too,
+    /// not merely shadowed by a later "last registration wins" descriptor.
+    /// </para>
+    /// <para>
+    /// <b>Behaviour change, stated plainly:</b> with a durable evidence repository,
+    /// <see cref="IEvidenceRepository.AddIfNewAsync"/> returns <c>false</c> for evidence collected in a
+    /// PREVIOUS run, so re-running collection no longer re-extracts signals from already-seen evidence.
+    /// That is the spec's idempotency criterion.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddDurableRadarSignalHistory(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.RemoveAll<ISignalRepository>();
+        services.RemoveAll<IEvidenceRepository>();
+
+        services.AddSingleton<ISignalRepository>(sp => sp.GetRequiredService<FileSignalStore>());
+        services.AddSingleton<IEvidenceRepository>(sp => sp.GetRequiredService<FileRawEvidenceStore>());
         return services;
     }
 
