@@ -42,6 +42,13 @@ namespace Radar.Application.Scoring;
 /// comparability gate keeps working when weights are runtime-configurable. <c>ScoringVersion</c> (structure
 /// identity, <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
 /// </para>
+/// <para>
+/// ONE ENGINE INSTANCE IS ONE STRATEGY (spec 137). Every scoring-affecting input is constructor-injected and
+/// the effective config + fingerprint are resolved once here, so running N strategies over one collection
+/// pass is purely a COMPOSITION concern (<see cref="IScoringStrategyFactory"/>) — the scoring core, the
+/// <see cref="IScoringEngine"/> signature and the formula are all untouched. The engine additionally stamps
+/// the strategy's human-readable name on each snapshot; that name is NOT a fingerprint input.
+/// </para>
 /// </summary>
 public sealed class ScoringEngine : IScoringEngine
 {
@@ -56,6 +63,13 @@ public sealed class ScoringEngine : IScoringEngine
     private readonly MediaAttentionCollapse _mediaCollapse;
     private readonly ScoringOptions _options;
     private readonly ILogger<ScoringEngine> _logger;
+
+    // The human-readable identity of the strategy this engine instance IS (spec 137), stamped on every
+    // snapshot alongside the opaque fingerprint. Null when the engine is composed outside a strategy set
+    // (⇒ primary/legacy). Deliberately NOT a fingerprint input and NOT part of EffectiveScoringConfig: two
+    // strategies that resolve to the same effective config are genuinely comparable, and hashing the name
+    // would move the pinned default fingerprints for no scoring-affecting reason (AD-10).
+    private readonly string? _strategyName;
 
     // The whole scoring-generation stamp: a content fingerprint of the effective resolved scoring config
     // (structure + all weights + tier map), computed once and stamped on every snapshot's
@@ -81,7 +95,8 @@ public sealed class ScoringEngine : IScoringEngine
         InsiderMaterialityWeights insiderMaterialityWeights,
         MediaAttentionCollapse mediaCollapse,
         ScoringOptions options,
-        ILogger<ScoringEngine> logger)
+        ILogger<ScoringEngine> logger,
+        string? strategyName = null)
     {
         ArgumentNullException.ThrowIfNull(signalRepository);
         ArgumentNullException.ThrowIfNull(signalFileStore);
@@ -106,6 +121,7 @@ public sealed class ScoringEngine : IScoringEngine
         _mediaCollapse = mediaCollapse;
         _options = options;
         _logger = logger;
+        _strategyName = strategyName;
 
         var attentionDescriptor = sourceWeights.CanonicalDescriptor();
         var signalSourceDescriptor = sourceDescriptor.CanonicalDescriptor();
@@ -266,7 +282,10 @@ public sealed class ScoringEngine : IScoringEngine
             // would have CreatedAtUtc > periodEndUtc and be excluded by the report's inclusive
             // upper-bound window — the run could never report the snapshots it just created.
             CreatedAtUtc: windowEndUtc,
-            ScoringConfigVersion: _scoringConfigFingerprint);
+            ScoringConfigVersion: _scoringConfigFingerprint,
+            // Human-readable strategy identity (spec 137), additive alongside the opaque fingerprint. Null
+            // ⇒ primary/legacy composition; it never affects the scores, the fingerprint or comparability.
+            StrategyName: _strategyName);
 
         var links = new List<ScoreEvidenceLink>(computation.Contributions.Count);
         foreach (var contribution in computation.Contributions)
@@ -297,8 +316,9 @@ public sealed class ScoringEngine : IScoringEngine
         }
 
         _logger.LogInformation(
-            "Scored company {CompanyId} from {SignalCount} signal(s) using {ScoringVersion}.",
-            companyId, scoredSignals.Count, scoringVersion);
+            "Scored company {CompanyId} from {SignalCount} signal(s) using {ScoringVersion} " +
+            "(strategy {StrategyName}).",
+            companyId, scoredSignals.Count, scoringVersion, _strategyName ?? "(none)");
 
         return new CompanyScoreResult(snapshot, links);
     }

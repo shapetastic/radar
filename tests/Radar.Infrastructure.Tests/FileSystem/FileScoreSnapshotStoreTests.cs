@@ -361,6 +361,40 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
         Assert.NotNull(latest);
         Assert.Equal(snapshotId, latest!.Id);
         Assert.Null(latest.ScoringConfigVersion);
+        // Spec 137: the same posture for strategyName — a pre-existing file lacks the property entirely and
+        // reads back as null, i.e. the primary/legacy strategy.
+        Assert.Null(latest.StrategyName);
+    }
+
+    [Fact]
+    public async Task WriteAsync_StrategyStampedSnapshot_SerializesAndRoundTripsStrategyName()
+    {
+        // Spec 137: the human-readable strategy identity is persisted alongside the opaque
+        // ScoringConfigVersion (fingerprints are unreadable, and two strategies could share a config).
+        var companyId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithStrategyName("low-media")
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var store = CreateStore();
+        var path = await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        await using (var stream = File.OpenRead(path))
+        {
+            using var doc = await JsonDocument.ParseAsync(stream);
+            Assert.Equal("low-media", doc.RootElement.GetProperty("strategyName").GetString());
+        }
+
+        var latest = await store.ReadLatestBeforeAsync(companyId, t1.AddDays(1), CancellationToken.None);
+        Assert.Equal("low-media", latest!.StrategyName);
+
+        var all = await store.ReadAllForCompanyAsync(companyId, CancellationToken.None);
+        Assert.Equal("low-media", Assert.Single(all).StrategyName);
     }
 
     [Fact]

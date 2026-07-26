@@ -1,8 +1,9 @@
 namespace Radar.Application.Pipeline;
 
 /// <summary>
-/// Immutable, durable record of one completed pipeline run: the run instant, which collectors ran, the
-/// run's observational counts, and the generated report id (if any). It is a run-observability projection
+/// Immutable, durable record of one completed pipeline run: the run instant, which collectors ran, which
+/// scoring strategies scored it, the run's observational counts, and the generated report id (if any). It is
+/// a run-observability projection
 /// of <see cref="RadarPipelineResult"/> — NOT a Domain aggregate — persisted once per run to build a
 /// run history for week-over-week comparison. The counts are observational only; provenance still lives
 /// in the persisted evidence/signals/snapshots/report, not here. All temporal fields are UTC; the run is
@@ -26,4 +27,10 @@ public sealed record PipelineRunRecord(
     // feed types declared in the seed that did not reach the collectors. Trailing + optional so old
     // on-disk run JSON (written before this slice) still deserializes (null == no findings recorded);
     // never evidence/signal/scoring input, and RecentRunSummary does not read it.
-    IReadOnlyList<CollectionHealthWarning>? CollectionWarnings = null);
+    IReadOnlyList<CollectionHealthWarning>? CollectionWarnings = null,
+    // The scoring strategies that scored this run's companies, in run order, alongside which of them was
+    // primary (spec 137 — one collection pass, N independently-stamped scorings). Trailing + optional so old
+    // on-disk run JSON (written before this slice) still deserializes (null == single-strategy/unrecorded);
+    // observational only, never evidence/signal/scoring input, and RecentRunSummary does not read it.
+    IReadOnlyList<string>? Strategies = null,
+    string? PrimaryStrategy = null);

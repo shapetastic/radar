@@ -23,6 +23,12 @@ namespace Radar.Application.Pipeline;
 /// their results (via <see cref="CollectionResultMerger"/>) before storing evidence. Contains
 /// <b>no</b> scoring math, <b>no</b> label thresholds, and <b>no</b> resolution/extraction logic —
 /// each stage's behaviour stays behind its own interface; the runner only sequences them.
+/// <para>
+/// Spec 137: the scoring stage is the ONLY plural stage. It iterates
+/// <see cref="IScoringStrategyFactory.Runtimes"/> × companies, so one collection pass feeds N
+/// independently-stamped scorings; everything above it — collection, the AI directional read, extraction,
+/// resolution, review and signal persistence — is shared and runs exactly once.
+/// </para>
 /// </summary>
 public sealed class RadarPipelineRunner : IRadarPipeline
 {
@@ -37,8 +43,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly ISignalReviewRepository _signalReviewRepository;
     private readonly ISignalFileStore _signalFileStore;
     private readonly ICompanyRepository _companyRepository;
-    private readonly IScoringEngine _scoringEngine;
-    private readonly IScoreSnapshotFileStore _scoreFileStore;
+    private readonly IScoringStrategyFactory _scoringStrategies;
+    private readonly IScoreSnapshotFileStoreFactory _scoreFileStores;
     private readonly IScoringConfigStore _scoringConfigStore;
     private readonly IWeeklyReportBuilder _reportBuilder;
     private readonly IReportFileWriter _reportFileWriter;
@@ -65,8 +71,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ISignalReviewRepository signalReviewRepository,
         ISignalFileStore signalFileStore,
         ICompanyRepository companyRepository,
-        IScoringEngine scoringEngine,
-        IScoreSnapshotFileStore scoreFileStore,
+        IScoringStrategyFactory scoringStrategies,
+        IScoreSnapshotFileStoreFactory scoreFileStores,
         IScoringConfigStore scoringConfigStore,
         IWeeklyReportBuilder reportBuilder,
         IReportFileWriter reportFileWriter,
@@ -88,8 +94,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(signalReviewRepository);
         ArgumentNullException.ThrowIfNull(signalFileStore);
         ArgumentNullException.ThrowIfNull(companyRepository);
-        ArgumentNullException.ThrowIfNull(scoringEngine);
-        ArgumentNullException.ThrowIfNull(scoreFileStore);
+        ArgumentNullException.ThrowIfNull(scoringStrategies);
+        ArgumentNullException.ThrowIfNull(scoreFileStores);
         ArgumentNullException.ThrowIfNull(scoringConfigStore);
         ArgumentNullException.ThrowIfNull(reportBuilder);
         ArgumentNullException.ThrowIfNull(reportFileWriter);
@@ -127,8 +133,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _signalReviewRepository = signalReviewRepository;
         _signalFileStore = signalFileStore;
         _companyRepository = companyRepository;
-        _scoringEngine = scoringEngine;
-        _scoreFileStore = scoreFileStore;
+        _scoringStrategies = scoringStrategies;
+        _scoreFileStores = scoreFileStores;
         _scoringConfigStore = scoringConfigStore;
         _reportBuilder = reportBuilder;
         _reportFileWriter = reportFileWriter;
@@ -336,33 +342,57 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             }
         }
 
-        // Stage 6: score every company at asOfUtc. The engine applies the window/Approved-only
-        // filter and writes the snapshot + links; the runner does not pre-filter which companies
-        // have signals (a company with no in-window signals yields a valid neutral snapshot). Reuses
-        // the company list loaded up front for the collection context (single repository read).
-        // The score file store mirrors each snapshot + its links to disk (AD-8), the durable twin of
-        // the in-memory score repository. Snapshots are upsert-by-Id (the store overwrites
-        // last-write-wins), and the store swallows disk errors, so this must not change any counter or
-        // abort the run. Every scored company still increments companiesScored, including neutral
-        // zero-signal snapshots.
+        // Stage 6: score every company at asOfUtc, once PER CONFIGURED STRATEGY (spec 137) — strategies ×
+        // companies. EVERYTHING ABOVE THIS POINT RUNS EXACTLY ONCE: collection, the AI directional read,
+        // extraction, resolution, review and signal persistence are shared, strategy-independent work, and
+        // the whole point of the slice is one collection pass feeding N independently-stamped scorings. The
+        // strategy loop therefore starts here, after signal persistence, and never earlier.
         //
-        // The effective scoring config is identical for every company this run (same engine, formula,
-        // weights, tier map), so persist it ONCE here — not per company — content-addressed by its
-        // fingerprint (insert-if-new), so a historical snapshot's ScoringConfigVersion stamp dereferences
-        // back to the exact weights (provenance completion, AD-10-as-amended, spec 91). Best-effort like
-        // the other file stores: the store swallows disk errors, so a failure logs + continues and the
-        // snapshots still carry the stamp — it never aborts the run or changes any counter.
-        await _scoringConfigStore
-            .WriteIfNewAsync(_scoringEngine.EffectiveConfig, ct)
-            .ConfigureAwait(false);
-
-        foreach (var company in companies)
+        // Each strategy is one already-configured engine instance (one engine IS one strategy): it applies
+        // the window/Approved-only filter and writes its own snapshot + links; the runner does not pre-filter
+        // which companies have signals (a company with no in-window signals yields a valid neutral snapshot).
+        // Reuses the company list loaded up front for the collection context (single repository read).
+        // The per-strategy score file store mirrors each snapshot + its links to disk (AD-8), the durable twin
+        // of that strategy's score repository — the PRIMARY strategy writes to the existing location, so the
+        // efficacy read, the report and all accrued history are untouched. Snapshots are upsert-by-Id (the
+        // store overwrites last-write-wins), and the store swallows disk errors, so this must not change any
+        // counter or abort the run.
+        //
+        // companiesScored deliberately counts the PRIMARY strategy's companies only, so the run record's
+        // counter keeps its established meaning ("how many companies were scored this run") instead of
+        // silently multiplying by the strategy count. Neutral zero-signal snapshots still count.
+        //
+        // The effective scoring config is identical for every company within a strategy (same engine,
+        // formula, weights, tier map), so persist it ONCE PER STRATEGY — not per company — content-addressed
+        // by its fingerprint (insert-if-new), so a historical snapshot's ScoringConfigVersion stamp
+        // dereferences back to the exact weights (provenance completion, AD-10-as-amended, spec 91). Two
+        // strategies resolving to the same config dedupe naturally. Best-effort like the other file stores:
+        // the store swallows disk errors, so a failure logs + continues and the snapshots still carry the
+        // stamp — it never aborts the run or changes any counter.
+        var strategies = _scoringStrategies.Runtimes;
+        foreach (var strategy in strategies)
         {
             ct.ThrowIfCancellationRequested();
 
-            var result = await _scoringEngine.ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
-            await _scoreFileStore.WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
-            companiesScored++;
+            await _scoringConfigStore
+                .WriteIfNewAsync(strategy.Engine.EffectiveConfig, ct)
+                .ConfigureAwait(false);
+
+            var scoreFileStore = _scoreFileStores.ForStrategy(strategy.Definition);
+
+            foreach (var company in companies)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var result = await strategy.Engine
+                    .ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
+                await scoreFileStore.WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
+
+                if (strategy.Definition.IsPrimary)
+                {
+                    companiesScored++;
+                }
+            }
         }
 
         // Stage 7: optional report.
@@ -379,13 +409,14 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _logger.LogInformation(
             "Pipeline run complete: {EvidenceNew}/{EvidenceCollected} new evidence, " +
             "{SignalsApproved} approved / {SignalsNeedingReview} needs-review signals, " +
-            "{CompaniesScored} companies scored, {SourcesFailed}/{SourcesChecked} sources unreadable, " +
-            "report {ReportId}.",
+            "{CompaniesScored} companies scored by the primary of {StrategyCount} strategies, " +
+            "{SourcesFailed}/{SourcesChecked} sources unreadable, report {ReportId}.",
             evidenceNew,
             evidenceCollected,
             signalsApproved,
             signalsNeedingReview,
             companiesScored,
+            strategies.Count,
             collected.Summary.SourcesFailed,
             collected.Summary.SourcesChecked,
             reportId?.ToString() ?? "none");
@@ -421,7 +452,11 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             SourcesChecked: pipelineResult.SourcesChecked,
             SourcesFailed: pipelineResult.SourcesFailed,
             ReportId: pipelineResult.ReportId,
-            CollectionWarnings: health.Warnings);
+            CollectionWarnings: health.Warnings,
+            // The scoring strategies that ran, in run order, with the primary marked (spec 137) — the run
+            // log's answer to "which scorings does this collection pass back?". Observational only.
+            Strategies: [.. strategies.Select(s => s.Definition.Name)],
+            PrimaryStrategy: _scoringStrategies.Primary.Definition.Name);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

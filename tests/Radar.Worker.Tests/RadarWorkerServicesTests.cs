@@ -86,6 +86,62 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void Graph_Resolves_SingleDefaultScoringStrategy_WhenNoneConfigured()
+    {
+        // Spec 137, the byte-identical default: with no Radar:Strategies, the Worker graph composes exactly
+        // ONE primary strategy named "default", and IScoringEngine IS that strategy's engine.
+        using var provider = BuildProvider();
+
+        var set = provider.GetRequiredService<ScoringStrategySet>();
+        var only = Assert.Single(set.Strategies);
+        Assert.Equal("default", only.Name);
+        Assert.True(only.IsPrimary);
+
+        var factory = provider.GetRequiredService<IScoringStrategyFactory>();
+        Assert.Single(factory.Runtimes);
+        Assert.Same(factory.Primary.Engine, provider.GetRequiredService<IScoringEngine>());
+
+        // The primary strategy keeps the registered (legacy-path) snapshot store.
+        Assert.Same(
+            provider.GetRequiredService<IScoreSnapshotFileStore>(),
+            provider.GetRequiredService<IScoreSnapshotFileStoreFactory>().ForStrategy(set.Primary));
+    }
+
+    [Fact]
+    public void Graph_Resolves_TwoScoringStrategies_WithDistinctFingerprints()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Strategies:0:Name", "baseline"),
+            ("Radar:Strategies:0:ScoringProfile", "default"),
+            ("Radar:Strategies:1:Name", "low-media"),
+            ("Radar:Strategies:1:ScoringProfile", "low-media"),
+            ("Radar:Scoring:Profiles:low-media:MediaReachWeight", "0.02"),
+            ("Radar:PrimaryStrategy", "baseline"));
+
+        var runtimes = provider.GetRequiredService<IScoringStrategyFactory>().Runtimes;
+
+        Assert.Equal(["baseline", "low-media"], runtimes.Select(r => r.Definition.Name).ToArray());
+        Assert.NotEqual(
+            runtimes[0].Engine.EffectiveConfig.Fingerprint,
+            runtimes[1].Engine.EffectiveConfig.Fingerprint);
+
+        // Only the primary gets the legacy-path store.
+        var stores = provider.GetRequiredService<IScoreSnapshotFileStoreFactory>();
+        var legacy = provider.GetRequiredService<IScoreSnapshotFileStore>();
+        Assert.Same(legacy, stores.ForStrategy(runtimes[0].Definition));
+        Assert.NotSame(legacy, stores.ForStrategy(runtimes[1].Definition));
+    }
+
+    [Fact]
+    public void Strategies_WithoutPrimaryStrategy_FailFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => BuildProvider(("Radar:Strategies:0:Name", "baseline")));
+
+        Assert.Contains("Radar:PrimaryStrategy", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Graph_Resolves_WithTwoCollectors_Additively()
     {
         using var provider = BuildProvider(

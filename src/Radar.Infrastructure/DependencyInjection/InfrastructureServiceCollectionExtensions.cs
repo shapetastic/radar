@@ -83,7 +83,12 @@ public static class InfrastructureServiceCollectionExtensions
         // ScoringWeights (bound via AddRadarScoringWeights) winning over this default (mirrors ScoringOptions /
         // AttentionSourceTierOptions).
         services.TryAddSingleton(new ScoringWeights());
-        services.TryAddSingleton<IScoreFormula, RadarScoreFormulaV8>();
+        // Formula composition seam (spec 137): the formula HOLDS its magnitudes, so "one engine per strategy"
+        // implies "one formula per strategy" — a single IScoreFormula singleton could only ever express one
+        // strategy's weights. The human-owned formula boundary is unchanged (IScoreFormula keeps its exact
+        // contract and RadarScoreFormulaV8 is still the only place scoring math lives); only how a formula is
+        // OBTAINED moved behind a factory. TryAdd lets a composition root substitute its own factory.
+        services.TryAddSingleton<IScoreFormulaFactory, RadarScoreFormulaV8Factory>();
         services.TryAddSingleton(new ScoringOptions());
         // Insider materiality magnitudes (spec 96): the default == the spec-93 buy/sell tiers + cluster boost,
         // so a blank/absent config yields byte-identical insider Strengths. TryAdd keeps a
@@ -109,7 +114,24 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton<ISignalSourceDescriptor>(sp => new SignalSourceDescriptor(
             sp.GetRequiredService<IEnumerable<IEvidenceCollector>>(),
             sp.GetService<IDirectionalFilingSignalSource>()));
-        services.AddSingleton<IScoringEngine, ScoringEngine>();
+        // Multi-strategy scoring (spec 137). One ScoringEngine instance IS one strategy (it resolves its whole
+        // effective config + fingerprint once in its constructor), so plural strategies are purely a
+        // COMPOSITION concern: the factory builds one engine per strategy over the SAME shared collection
+        // pass. The default strategy set is the single synthesised "default" strategy carrying whatever
+        // ScoringWeights are registered — i.e. byte-identical to the previous single-engine composition,
+        // including the pinned default fingerprints. TryAdd lets AddRadarScoringStrategies (called from the
+        // composition root BEFORE this method) register the config-bound set instead.
+        services.TryAddSingleton(sp => ScoringStrategySet.SingleDefault(sp.GetRequiredService<ScoringWeights>()));
+        // Per-strategy score repository: the primary keeps the shared registered IScoreRepository (the one the
+        // weekly report reads), non-primary strategies get their own — see the type's remarks for why that
+        // isolation is load-bearing rather than tidiness.
+        services.TryAddSingleton<IScoreRepositoryFactory, StrategyScopedScoreRepositoryFactory>();
+        services.TryAddSingleton<IScoringStrategyFactory, ScoringStrategyFactory>();
+        // IScoringEngine stays resolvable and means exactly what it always did: THE engine the pipeline scores
+        // the reported series with — now sourced from the primary strategy's runtime so there is only ever one
+        // primary engine instance in the graph (no dormant second engine that silently diverges from it).
+        services.AddSingleton<IScoringEngine>(sp =>
+            sp.GetRequiredService<IScoringStrategyFactory>().Primary.Engine);
         services.TryAddSingleton<IReportActionPolicy, WeeklyReportActionPolicyV1>();
         services.TryAddSingleton<IWeeklyReportRenderer, MarkdownWeeklyReportRenderer>();
         services.TryAddSingleton(new WeeklyReportOptions());
@@ -149,8 +171,24 @@ public static class InfrastructureServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var name = configuration["Radar:Scoring:Profile"];
-        var effectiveName = string.IsNullOrWhiteSpace(name) ? "default" : name.Trim();
+        var resolved = ResolveScoringProfile(
+            configuration, configuration["Radar:Scoring:Profile"], "Radar:Scoring:Profile");
+
+        services.AddSingleton(resolved.Weights);
+        return services;
+    }
+
+    /// <summary>
+    /// Resolves ONE named scoring-weight profile from configuration — the single shared implementation behind
+    /// both <see cref="AddRadarScoringWeights"/> (the ambient <c>Radar:Scoring:Profile</c>) and
+    /// <see cref="AddRadarScoringStrategies"/> (each strategy's <c>ScoringProfile</c>), so the two can never
+    /// drift apart. Precedence and fail-fast behaviour are documented on <see cref="AddRadarScoringWeights"/>;
+    /// <paramref name="requestingConfigKey"/> only names the offending key in the thrown message.
+    /// </summary>
+    private static (string EffectiveProfile, ScoringWeights Weights) ResolveScoringProfile(
+        IConfiguration configuration, string? requestedProfile, string requestingConfigKey)
+    {
+        var effectiveName = string.IsNullOrWhiteSpace(requestedProfile) ? "default" : requestedProfile.Trim();
         var section = configuration.GetSection($"Radar:Scoring:Profiles:{effectiveName}");
 
         ScoringWeights weights;
@@ -158,13 +196,13 @@ public static class InfrastructureServiceCollectionExtensions
         {
             weights = section.Get<ScoringWeights>() ?? new ScoringWeights();
         }
-        else if (!string.IsNullOrWhiteSpace(name)
+        else if (!string.IsNullOrWhiteSpace(requestedProfile)
             && !string.Equals(effectiveName, "default", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                $"Radar:Scoring:Profile '{effectiveName}' was requested but no matching profile exists under "
+                $"{requestingConfigKey} '{effectiveName}' was requested but no matching profile exists under "
                     + "Radar:Scoring:Profiles — a named-but-missing profile is almost certainly a typo. Add the "
-                    + $"profile under Radar:Scoring:Profiles:{effectiveName} or clear Radar:Scoring:Profile to use "
+                    + $"profile under Radar:Scoring:Profiles:{effectiveName} or clear {requestingConfigKey} to use "
                     + "the code defaults.");
         }
         else
@@ -175,7 +213,103 @@ public static class InfrastructureServiceCollectionExtensions
         // Fail fast at registration on a nonsensical weight (also enforced in the formula ctor).
         weights.Validate();
 
-        services.AddSingleton(weights);
+        return (effectiveName, weights);
+    }
+
+    /// <summary>
+    /// Resolves the <b>scoring strategies</b> (spec 137) — the N independently-stamped scorings a single
+    /// collection pass feeds — and registers the concrete <see cref="ScoringStrategySet"/> as a singleton so
+    /// it wins over the library's <c>TryAddSingleton</c> default (call this BEFORE
+    /// <see cref="AddRadarApplicationServices"/>, mirroring <see cref="AddRadarScoringWeights"/>).
+    /// <code language="jsonc">
+    /// "Radar": {
+    ///   "Strategies": [ { "Name": "baseline",  "ScoringProfile": "default" },
+    ///                   { "Name": "low-media", "ScoringProfile": "low-media" } ],
+    ///   "PrimaryStrategy": "baseline"
+    /// }
+    /// </code>
+    /// <list type="bullet">
+    /// <item><b>Absent or empty <c>Radar:Strategies</c></b> ⇒ exactly ONE synthesised strategy named
+    /// <c>"default"</c>, carrying the weights of the ambient <c>Radar:Scoring:Profile</c> and treated as
+    /// primary. This is what makes behaviour <b>byte-identical</b> for every existing config (including every
+    /// <c>scripts/run-profiles/</c> profile) with the pinned default fingerprints unmoved.</item>
+    /// <item>Each <c>ScoringProfile</c> resolves through the SAME logic as
+    /// <see cref="AddRadarScoringWeights"/> (<see cref="ResolveScoringProfile"/>): a named-but-missing profile
+    /// fails fast, a blank one means the code defaults, and the result is validated.</item>
+    /// <item><c>Radar:PrimaryStrategy</c> selects the primary — the strategy whose snapshots keep the legacy
+    /// storage location and which the weekly report renders. It is <b>required</b> whenever
+    /// <c>Radar:Strategies</c> is non-empty: which strategy owns the reported series is load-bearing, so it is
+    /// stated explicitly rather than silently defaulted to whichever entry happens to be listed first.</item>
+    /// </list>
+    /// Fails fast at startup — each message naming the offending config key — on an unknown
+    /// <c>ScoringProfile</c>, a blank or unusable <c>Name</c>, duplicate <c>Name</c>s, or a
+    /// <c>PrimaryStrategy</c> that is blank or not present in <c>Strategies</c>. Every one of those otherwise
+    /// surfaces later as a confusing empty or mislabelled score series.
+    /// </summary>
+    public static IServiceCollection AddRadarScoringStrategies(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var entries = configuration.GetSection("Radar:Strategies").GetChildren().ToList();
+
+        if (entries.Count == 0)
+        {
+            // The byte-identical default: one strategy, the ambient profile, primary.
+            var ambient = ResolveScoringProfile(
+                configuration, configuration["Radar:Scoring:Profile"], "Radar:Scoring:Profile");
+            services.AddSingleton(
+                ScoringStrategySet.SingleDefault(ambient.Weights, ambient.EffectiveProfile));
+            return services;
+        }
+
+        var primaryName = configuration["Radar:PrimaryStrategy"];
+        if (string.IsNullOrWhiteSpace(primaryName))
+        {
+            throw new InvalidOperationException(
+                "Radar:PrimaryStrategy must name one of the configured Radar:Strategies; the primary strategy "
+                    + "owns the existing scores location and is the one the weekly report renders, so it is "
+                    + "never inferred. Set Radar:PrimaryStrategy, or clear Radar:Strategies to run the single "
+                    + "synthesised \"default\" strategy.");
+        }
+
+        primaryName = primaryName.Trim();
+
+        var definitions = new List<ScoringStrategyDefinition>(entries.Count);
+        foreach (var entry in entries)
+        {
+            var name = entry["Name"];
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new InvalidOperationException(
+                    $"{entry.Path}:Name is blank; every Radar:Strategies entry needs a Name (it is stamped on "
+                        + "every snapshot and names the non-primary storage directory).");
+            }
+
+            name = name.Trim();
+
+            var resolved = ResolveScoringProfile(
+                configuration, entry["ScoringProfile"], $"{entry.Path}:ScoringProfile");
+
+            definitions.Add(new ScoringStrategyDefinition(
+                Name: name,
+                ScoringProfile: resolved.EffectiveProfile,
+                Weights: resolved.Weights,
+                IsPrimary: string.Equals(name, primaryName, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (!definitions.Any(d => d.IsPrimary))
+        {
+            throw new InvalidOperationException(
+                $"Radar:PrimaryStrategy '{primaryName}' is not one of the configured Radar:Strategies "
+                    + $"({string.Join(", ", definitions.Select(d => d.Name))}); a primary that names no "
+                    + "configured strategy is almost certainly a typo and would leave the reported series "
+                    + "undefined.");
+        }
+
+        // ScoringStrategySet owns the remaining invariants (unusable/duplicate names, exactly one primary) so
+        // there is a single validation implementation regardless of how a set is composed.
+        services.AddSingleton(new ScoringStrategySet(definitions));
         return services;
     }
 
@@ -1397,12 +1531,19 @@ public static class InfrastructureServiceCollectionExtensions
     /// <see cref="Radar.Application.Scoring.IScoreSnapshotFileStore"/>; all file I/O stays in
     /// Infrastructure. Snapshots are upsert-by-Id, so an existing file is overwritten last-write-wins
     /// (AD-1 governs evidence immutability only).
+    /// <para>
+    /// Also registers the <see cref="IScoreSnapshotFileStoreFactory"/> the pipeline runner uses to route each
+    /// scoring strategy's snapshots (spec 137): the PRIMARY strategy gets this very store at
+    /// <paramref name="rootDirectory"/> (unchanged), and every non-primary strategy gets one rooted at
+    /// <c>{rootDirectory}/strategies/{strategyName}/</c> so the series never collide.
+    /// </para>
     /// </summary>
     public static IServiceCollection AddFileScoreStore(
         this IServiceCollection services, string rootDirectory)
     {
         services.AddSingleton(new FileScoreSnapshotStoreOptions { RootDirectory = rootDirectory });
         services.AddSingleton<IScoreSnapshotFileStore, FileScoreSnapshotStore>();
+        services.TryAddSingleton<IScoreSnapshotFileStoreFactory, StrategyScopedScoreSnapshotFileStoreFactory>();
         return services;
     }
 
