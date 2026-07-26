@@ -155,3 +155,4 @@ secrets.json
 /data/filings-cache/
 /data/ai-debug/
 /data/fcc-cache/
+/.playwright-mcp
