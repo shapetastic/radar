@@ -76,7 +76,7 @@ public sealed class ScoringStrategyFactoryTests
     }
 
     [Fact]
-    public void IScoringEngine_ResolvesToThePrimaryStrategysEngine()
+    public void IScoringEngine_ResolvesToThePrimaryStrategyEngine()
     {
         using var provider = BuildDefaultGraph();
 
@@ -132,7 +132,7 @@ public sealed class ScoringStrategyFactoryTests
     }
 
     [Fact]
-    public void DeclaredSignalTypes_ReachTheStrategysEngine_AndReStampOnlyThatStrategy()
+    public void DeclaredSignalTypes_ReachTheStrategyEngine_AndReStampOnlyThatStrategy()
     {
         // Spec 138: the declared set travels definition → engine → fingerprint. Two strategies over identical
         // weights that differ ONLY in the signal types they consume must stamp different ScoringConfigVersions
