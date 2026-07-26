@@ -1171,14 +1171,24 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(3, result.Collection.ItemsCollected);
 
         // The canonical (colliding) hash is stored exactly once, traced to AAA's SourceType (Filing)
-        // because AAA is processed first under the CollectorName-ordinal order. The mapper assigns a
-        // fresh id each map, so the stored item is located by content hash (computed from title+rawText).
+        // because AAA is processed first under the CollectorName-ordinal order.
         var canonical = new CollectedEvidenceMapper(
             new EvidenceNormalizer(), NullLogger<CollectedEvidenceMapper>.Instance)
             .ToEvidenceItem(aEvidence);
         var stored = await h.Evidence.GetByContentHashAsync(canonical.ContentHash, default);
         Assert.NotNull(stored);
         Assert.Equal(EvidenceSourceType.Filing, stored!.SourceType);
+
+        // CROSS-COLLECTOR POLICY (spec 145), asserted rather than implied: AAA's Filing and ZZZ's
+        // GovernmentContract carry the SAME normalized title+body and therefore the same content hash,
+        // differing only in source name / URL / source type — all of which are deliberately excluded from
+        // identity. So they are ONE evidence record, and the id is now reproducible OUTSIDE the run: the
+        // freshly-mapped canonical item has the very id the pipeline stored. Pre-145 the mapper minted a
+        // fresh Guid per map, so this equality could not hold and the stored item could only be found by
+        // content hash.
+        Assert.Equal(canonical.Id, stored.Id);
+        Assert.Equal(
+            EvidenceIdentity.ForContentHash(canonical.ContentHash), stored.Id);
     }
 
     [Fact]
