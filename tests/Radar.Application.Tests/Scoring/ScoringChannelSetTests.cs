@@ -189,6 +189,20 @@ public sealed class ScoringChannelSetTests
     }
 
     [Fact]
+    public void CollectorList_IsCanonicalisedOrdinally_SoACasingNearMissSurvivesToTheStartupCheck()
+    {
+        var channel = ScoringChannel.Collector(
+            "sources", [" sec-form4 ", "patents", "sec-form4", "", "Patents"], 1.0, 3);
+
+        // Trimmed, blank-free, Ordinal-ordered, and EXACT duplicates collapsed...
+        // ...but "Patents" is NOT collapsed onto "patents": collector names are matched exactly everywhere
+        // else, so a case-insensitive de-dupe would swallow the typo before ScoringStrategyFactory could
+        // reject it against the registered collectors — and which spelling survived would be config-order
+        // dependent.
+        Assert.Equal(["Patents", "patents", "sec-form4"], channel.Collectors);
+    }
+
+    [Fact]
     public void Consumes_MatchesExactly_AndNeverMatchesUnrecordedProvenance()
     {
         var channel = ScoringChannel.Collector("filings", ["sec-form4"], 1.0, 3);

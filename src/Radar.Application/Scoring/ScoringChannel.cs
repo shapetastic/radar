@@ -50,8 +50,8 @@ public enum ScoringChannelKind
 /// <param name="Kind">Collector channel or the cross-source breadth channel.</param>
 /// <param name="Collectors">
 /// For a <see cref="ScoringChannelKind.Collector"/> channel, the <c>IEvidenceCollector.CollectorName</c>s
-/// whose evidence this channel consumes — at least one, canonicalised to distinct + Ordinal-ordered so the
-/// order they were listed in config is irrelevant. MUST be empty for a
+/// whose evidence this channel consumes — at least one, canonicalised to Ordinal-distinct + Ordinal-ordered
+/// so the order they were listed in config is irrelevant. MUST be empty for a
 /// <see cref="ScoringChannelKind.Breadth"/> channel. Matching is by EXACT (ordinal) collector name;
 /// unknown names fail fast at startup rather than silently selecting nothing.
 /// </param>
@@ -74,10 +74,17 @@ public sealed record ScoringChannel(
 
     /// <summary>
     /// Builds a <see cref="ScoringChannelKind.Collector"/> channel over <paramref name="collectors"/>,
-    /// canonicalising the list (trimmed, blank-free, distinct case-insensitively, Ordinal-ordered) so two
-    /// strategies that list the same collectors in different orders are the same strategy and hash
-    /// identically. Validation of the values themselves is <see cref="ScoringChannelSet"/>'s job, so a
-    /// misconfiguration is reported with the strategy name attached.
+    /// canonicalising the list (trimmed, blank-free, Ordinal-distinct, Ordinal-ordered) so two strategies
+    /// that list the same collectors in different orders are the same strategy and hash identically.
+    /// Validation of the values themselves is <see cref="ScoringChannelSet"/>'s job, so a misconfiguration is
+    /// reported with the strategy name attached.
+    /// <para>
+    /// The de-dupe is ORDINAL, deliberately: collector names are matched exactly everywhere else (see
+    /// <see cref="Consumes"/> and <c>ScoringStrategyFactory</c>'s registered-collector check), so collapsing
+    /// <c>["patents", "Patents"]</c> case-insensitively would swallow the casing typo before it could reach
+    /// that check — and which spelling survived would depend on config order. Keeping both means the invalid
+    /// one fails fast at startup, which is the point of the exact match.
+    /// </para>
     /// </summary>
     public static ScoringChannel Collector(
         string name, IEnumerable<string>? collectors, double weight, double saturation) =>
@@ -106,7 +113,7 @@ public sealed record ScoringChannel(
         var ordered = collectors
             .Where(c => !string.IsNullOrWhiteSpace(c))
             .Select(c => c.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(StringComparer.Ordinal)
             .OrderBy(c => c, StringComparer.Ordinal)
             .ToArray();
 

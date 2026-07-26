@@ -23,8 +23,12 @@ public static class ScoreFormulaVersions
     /// <summary>The channel-composition formula (spec 146). Opt-in per strategy; v8 is untouched.</summary>
     public const string V9 = "radar-formula-v9";
 
-    /// <summary>Every shippable formula token, in version order (for fail-fast messages and tests).</summary>
-    public static IReadOnlyList<string> All { get; } = [V8, V9];
+    /// <summary>
+    /// Every shippable formula token, in version order (for fail-fast messages and tests). Genuinely
+    /// read-only — the closed set of shippable structures must not be mutable through a downcast, or the
+    /// config validator's "known formulas" and the factory's dispatch could disagree at runtime.
+    /// </summary>
+    public static IReadOnlyList<string> All { get; } = Array.AsReadOnly(new[] { V8, V9 });
 
     /// <summary>
     /// Canonicalises a configured formula name onto one of <see cref="All"/>: trims, matches

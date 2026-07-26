@@ -341,6 +341,31 @@ public sealed class ScoringStrategyFormulaChannelTests
     }
 
     [Fact]
+    public void ChannelListingBothCasings_StillFailsFast_TheDedupeDoesNotSwallowTheTypo()
+    {
+        // The canonicalising de-dupe in ScoringChannel is ORDINAL precisely so this case survives to here.
+        // Were it case-insensitive, ["patents", "Patents"] would collapse to the first-listed spelling — the
+        // valid one — and the typo would score silently, with which spelling won depending on config order.
+        using var provider = BuildGraph();
+
+        var factory = FactoryOver(
+            provider,
+            new ScoringStrategySet(
+            [
+                new ScoringStrategyDefinition("casing-mix", "default", new ScoringWeights(), IsPrimary: true)
+                {
+                    Formula = ScoreFormulaVersions.V9,
+                    Channels = Budget("casing-mix", "patents", "Patents"),
+                },
+            ]),
+            DescriptorOver("patents"));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => factory.Runtimes);
+        Assert.Contains("Patents", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("casing-mix", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RegisteredCollectorNames_AreTheSameProjectionAsTheRecordedCollectionProvenance()
     {
         // One projection, two renderings (spec 141 + 146): "what the snapshot says was collected" and "what a
