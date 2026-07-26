@@ -276,10 +276,70 @@ Do not hand back broken code.
   `Radar:ReplayDirectory` root (`{root}/{label}/strategies/{name}/{companyId}/{asOf}.json`, as-of-named so a
   re-run overwrites in place ⇒ idempotent); every strategy — **including the primary** — gets an isolated
   score repository, so the shared repo the weekly report renders and the spec-101/108 forward series are
-  never touched. No new fingerprint input; the pins do not move. Known gap, recorded not built: the
-  in-memory signal/evidence repositories start empty each process, and `FileRawEvidenceStore`'s on-disk
-  schema omits `EvidenceQuality` (a v8 formula input), so faithfully hydrating accrued history from disk
-  needs a raw-evidence schema addition first — a lossy hydration would silently break replay ⊆ forward.
+  never touched. No new fingerprint input; the pins do not move. ~~Known gap~~ **CLOSED by spec 142** — see
+  the durable-read-path bullet below: the repositories now hydrate accrued history and the raw-evidence
+  schema carries `EvidenceQuality`, so replay finally has something to replay.
+- **The repository IS the file store — scoring reads accrued history (spec 142).** Before 142 there were two
+  disconnected abstractions over the same facts: `ISignalFileStore`/`IRawEvidenceStore` owned the durable
+  format, while `ISignalRepository`/`IEvidenceRepository` resolved to in-memory singletons that started
+  **empty every process** — so scoring had *never once* read accrued history, which made spec 136's
+  point-in-time predicate near-vacuous and spec 139's replay inert. The recorded reconciliation choice is
+  **(b): `FileSignalStore` additionally implements `ISignalRepository` and `FileRawEvidenceStore`
+  additionally implements `IEvidenceRepository`** — no third abstraction, no second copy of the persisted
+  shape (one record definition, one deserializer, one skip-don't-throw rule set, one hydration cache). Each
+  is registered ONCE as a concrete singleton and exposed under both interfaces;
+  `AddDurableRadarSignalHistory()` (called from `RadarWorkerServices`, **no config toggle**) `RemoveAll`s the
+  in-memory registrations and repoints both interfaces at those same instances. The in-memory repositories
+  **stay, unchanged, for tests**, and `AddFileSignalStore`/`AddFileRawEvidenceStore` still do exactly what
+  they did. Rules:
+  - **Hydration is lazy** (never in the ctor), once per instance, thread-safe, and `TryAdd`-only, so a
+    signal/item this process wrote always wins over its own on-disk copy. Writes update disk **and** the
+    index, so a write is immediately visible to a later read in the same process. A malformed file is logged
+    and skipped, never thrown; `OperationCanceledException` still propagates.
+  - **`ISignalRepository.AddAsync` is index-only, deliberately.** It carries no `SignalReview` and the
+    durable format requires one (`WriteAsync` has a review→signal provenance guard), so writing a
+    review-less file would either break that guard or invent a review. Durability keeps coming from the
+    pipeline's existing `ISignalFileStore.WriteAsync` call right after it — append-only (AD-8) and the
+    provenance guard are both preserved.
+  - **Cross-run duplicate collapse on every durable list read.** `SignalCrossRunDedupe` is the ONE
+    definition of the stable identity `(CompanyId, EvidenceId, Type, Direction)` (spec 85's key, extracted),
+    shared by `ReadApprovedInWindowAsync` and the repository reads. Survivor rule differs by call site *and
+    that difference is load-bearing*: the window read collapses **lowest `SignalId`** because it has already
+    applied the known-at predicate, whereas `GetByCompanyAsync`/`GetObservedBetweenAsync` collapse
+    **earliest `CreatedAtUtc`, then lowest `SignalId`** because `ScoringEngine` applies
+    `CreatedAtUtc <= windowEndUtc` *after* the read — keeping a later-created copy would hide, from a replay
+    at T, a signal Radar demonstrably knew about at T.
+  - **`EvidenceQuality` is now persisted** (`quality`, trailing + nullable) — it is a v8 formula input, and
+    hydrating without it would silently score history differently from how it was scored live. Legacy files
+    **recover** it from the `metadata.quality` the collector persisted all along, via the shared
+    `EvidenceQualityParser` — the *exact* rule `CollectedEvidenceMapper` applied at collection time, so this
+    reproduces the real value rather than defaulting. Neither present ⇒ `Unknown`, which is exactly what the
+    mapper itself produces for quality-less evidence and whose weight (`QualityUnknown` 0.40) sits **below**
+    Medium 0.60 / High 0.85 / PrimarySource 1.00 — it never flatters a score. Legacy null is **never** mapped
+    to Medium or higher. `summary` is persisted too (trailing, nullable, omitted when null so real files are
+    byte-unchanged) so the round-trip is lossless rather than green by accident, and `sourceType` parses back
+    from its snake_case token via a table built *from* the enum (every member round-trips by construction);
+    an unparseable value degrades the **file** (log + skip), never the source type, because `SourceType` feeds
+    attention breadth/diversity. `EvidenceItem.MetadataJson` is re-composed through the shared
+    `EvidenceMetadata.Compose` the mapper authors it with, so the envelope is byte-identical **by
+    construction**.
+  - **The invariant, asserted:** scoring a window against the hydrated durable store is field-for-field
+    identical to scoring the same signals held in memory (excluding the per-call minted snapshot/link
+    `Guid`s) — mirroring replay ⊆ forward. No scoring change, no formula bump, **no fingerprint input**;
+    the pins do not move.
+  - **Real behaviour change:** `AddIfNewAsync` now returns `false` for evidence collected in a **previous**
+    run, so re-running collection no longer re-extracts signals from already-seen evidence. That is the
+    idempotency the spec asked for, and it changes how a live baseline run behaves.
+  - **Measured against the live store (2026-07-26), and it is not comfortable:** 49,454 signals / 6,044
+    evidence items; signals span 2006-02→2026-07 (observed) over 44 companies, evidence collected
+    2026-06-30→2026-07-26. Only **10.5 % of signals' `EvidenceId`s resolve** on disk. Cause: the mapper mints
+    a fresh evidence `Guid` per run while raw files are keyed by `contentHash`, so a re-collected item's new
+    id was never persisted while its signals were. The store therefore holds ~9.2× content-equivalent
+    duplication that spec 85's key **cannot** collapse (the duplication is in *evidence* identity, not signal
+    identity) — Radar is protected from 9× score inflation only by the accident that those duplicates'
+    evidence is unresolvable and `ScoringEngine` drops them. Do **not** backfill evidence without fixing
+    evidence identity first (spec 141): that would turn a 1.03× scored set into a ~9× one. 142 heals this
+    going forward and does not touch history.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

@@ -436,6 +436,13 @@ internal static class RadarWorkerServices
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
         services.AddFileRawEvidenceStore(options.EvidenceRawDirectory);
         services.AddFileSignalStore(options.SignalsDirectory);
+        // Spec 142: the composed app reads accrued history. Repoints ISignalRepository /
+        // IEvidenceRepository from the empty-every-process in-memory singletons registered by
+        // AddInMemoryRadarPersistence onto the SAME file-store instances registered on the two lines above.
+        // Must follow them (it resolves those singletons) and AddInMemoryRadarPersistence (it removes their
+        // in-memory registrations). No config toggle: a composed run that could silently score from an empty
+        // store is precisely the failure mode this slice exists to remove.
+        services.AddDurableRadarSignalHistory();
         services.AddFileScoreStore(options.ScoresDirectory);
         services.AddFileReportWriter(options.ReportDirectory);
         services.AddFilePipelineRunStore(options.RunsDirectory);

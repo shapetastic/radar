@@ -141,4 +141,87 @@ public sealed class EvidenceMetadataTests
 
         Assert.Equal(sourceHints, hints);
     }
+
+    // -------------------------------------------------------------------------------------------------
+    // Compose — the envelope WRITER (spec 142). Shared by the mapper and the durable hydration path so
+    // a hydrated EvidenceItem.MetadataJson is byte-identical to the one collection produced.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Compose_ProducesExactlyTheEnvelopeTheMapperUsedToWriteInline()
+    {
+        // The pre-142 mapper serialized this anonymous shape with default options. Compose must be
+        // byte-identical to it, or every previously-written MetadataJson would change meaning.
+        IReadOnlyDictionary<string, string> metadata = new Dictionary<string, string>
+        {
+            ["quality"] = "High",
+            ["form"] = "8-K",
+        };
+        IReadOnlyList<string> hints = ["ACME", "Northwind"];
+
+        var expected = JsonSerializer.Serialize(new { metadata, companyHints = hints });
+
+        Assert.Equal(expected, EvidenceMetadata.Compose(metadata, hints));
+    }
+
+    [Fact]
+    public void Compose_ThenTryRead_RoundTrips()
+    {
+        IReadOnlyDictionary<string, string> metadata = new Dictionary<string, string>
+        {
+            ["a"] = "1",
+            ["b"] = "two",
+        };
+        IReadOnlyList<string> hints = ["X"];
+
+        var ok = EvidenceMetadata.TryRead(
+            EvidenceMetadata.Compose(metadata, hints), out var readMetadata, out var readHints);
+
+        Assert.True(ok);
+        Assert.Equal(metadata, readMetadata);
+        Assert.Equal(hints, readHints);
+    }
+
+    [Fact]
+    public void Compose_PreservesKeyOrder_SoTheEnvelopeIsStable()
+    {
+        // Dictionary insertion order is what the on-disk `metadata` node records, and what the hydration
+        // path replays back in document order — so composing twice from the same source is deterministic.
+        IReadOnlyDictionary<string, string> metadata = new Dictionary<string, string>
+        {
+            ["z"] = "1",
+            ["a"] = "2",
+            ["m"] = "3",
+        };
+
+        Assert.Equal(
+            """{"metadata":{"z":"1","a":"2","m":"3"},"companyHints":[]}""",
+            EvidenceMetadata.Compose(metadata, []));
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // ReadMetadataObject — the SAME projection TryRead applies, exposed for the durable raw-evidence store
+    // whose on-disk shape stores `metadata` and `companyHints` as separate nodes.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ReadMetadataObject_ProjectsStringValuedPropertiesInDocumentOrder()
+    {
+        using var doc = JsonDocument.Parse("""{"quality":"High","count":7,"form":"8-K","nested":{"x":"y"}}""");
+
+        var projected = EvidenceMetadata.ReadMetadataObject(doc.RootElement);
+
+        Assert.Equal(["quality", "form"], projected.Keys.ToArray());
+        Assert.Equal("High", projected["quality"]);
+        Assert.Equal("8-K", projected["form"]);
+    }
+
+    [Fact]
+    public void ReadMetadataObject_NonObjectElement_ProjectsEmpty()
+    {
+        using var doc = JsonDocument.Parse("[1,2,3]");
+
+        Assert.Empty(EvidenceMetadata.ReadMetadataObject(doc.RootElement));
+        Assert.Empty(EvidenceMetadata.ReadMetadataObject(default));
+    }
 }

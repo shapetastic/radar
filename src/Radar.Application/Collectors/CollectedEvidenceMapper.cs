@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Evidence;
@@ -20,8 +18,6 @@ namespace Radar.Application.Collectors;
 /// </summary>
 public sealed class CollectedEvidenceMapper
 {
-    private static readonly JsonSerializerOptions MetadataJsonOptions = new();
-
     private readonly IEvidenceNormalizer _normalizer;
     private readonly ILogger<CollectedEvidenceMapper> _logger;
 
@@ -48,9 +44,10 @@ public sealed class CollectedEvidenceMapper
                 ? declaredQuality
                 : null);
 
-        var metadataJson = JsonSerializer.Serialize(
-            new { metadata = collected.Metadata, companyHints = collected.CompanyHints },
-            MetadataJsonOptions);
+        // The envelope is AUTHORED here and re-authored, byte-identically, by the durable raw-evidence
+        // hydration path (spec 142). Both go through EvidenceMetadata.Compose so that identity holds by
+        // construction rather than by two copies of the same serializer call happening to agree.
+        var metadataJson = EvidenceMetadata.Compose(collected.Metadata, collected.CompanyHints);
 
         return new EvidenceItem(
             Id: Guid.NewGuid(),
@@ -68,29 +65,29 @@ public sealed class CollectedEvidenceMapper
     }
 
     /// <summary>
-    /// Maps a declared evidence quality string to <see cref="EvidenceQuality"/>. Accepts only a
-    /// defined enum name (case-insensitive); rejects digit-only input (which
-    /// <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/> would otherwise accept). Missing,
-    /// blank, or unparseable values default to <see cref="EvidenceQuality.Unknown"/> (skip-don't-throw).
+    /// Applies the shared <see cref="EvidenceQualityParser"/> rule (the SINGLE definition of how a declared
+    /// quality string becomes an <see cref="EvidenceQuality"/>, spec 142) and keeps this mapper's Debug
+    /// logging of the two failure modes. The rule itself lives in the parser so the durable raw-evidence
+    /// hydration path can recover a legacy file's quality using the EXACT rule that produced it live.
     /// </summary>
     private EvidenceQuality ParseQuality(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value) || value.Trim().All(char.IsDigit))
+        var quality = EvidenceQualityParser.Parse(value, out var status);
+
+        switch (status)
         {
-            _logger.LogDebug(
-                "Evidence declared quality '{Quality}' is missing, blank, or digit-only; defaulting to Unknown.",
-                value);
-            return EvidenceQuality.Unknown;
+            case EvidenceQualityParseStatus.Missing:
+                _logger.LogDebug(
+                    "Evidence declared quality '{Quality}' is missing, blank, or digit-only; defaulting to Unknown.",
+                    value);
+                break;
+            case EvidenceQualityParseStatus.Unrecognized:
+                _logger.LogDebug(
+                    "Evidence declared quality '{Quality}' is not a recognized EvidenceQuality; defaulting to Unknown.",
+                    value);
+                break;
         }
 
-        if (Enum.TryParse<EvidenceQuality>(value, ignoreCase: true, out var q) && Enum.IsDefined(q))
-        {
-            return q;
-        }
-
-        _logger.LogDebug(
-            "Evidence declared quality '{Quality}' is not a recognized EvidenceQuality; defaulting to Unknown.",
-            value);
-        return EvidenceQuality.Unknown;
+        return quality;
     }
 }

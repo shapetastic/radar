@@ -2,8 +2,11 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Ai;
 using Radar.Application.Collectors;
+using Radar.Application.Evidence;
+using Radar.Application.Signals;
 using Radar.Application.Efficacy;
 using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
@@ -12,6 +15,7 @@ using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Infrastructure.Filings;
+using Radar.Infrastructure.FileSystem;
 
 namespace Radar.Worker.Tests;
 
@@ -40,6 +44,27 @@ public sealed class RadarWorkerServicesTests
 
         var worker = provider.GetServices<IHostedService>().OfType<Worker>().Single();
         Assert.NotNull(worker);
+    }
+
+    [Fact]
+    public void Graph_Resolves_DurableSignalAndEvidenceRepositories()
+    {
+        // Spec 142 acceptance criterion 1: in the COMPOSED app the scoring path's repositories are the
+        // durable file stores, not the empty-every-process in-memory singletons — and they are the SAME
+        // instances the file-store interfaces resolve to (one instance ⇒ one hydration cache).
+        using var provider = BuildProvider();
+
+        var signalRepository = provider.GetRequiredService<ISignalRepository>();
+        var evidenceRepository = provider.GetRequiredService<IEvidenceRepository>();
+
+        Assert.IsType<FileSignalStore>(signalRepository);
+        Assert.IsType<FileRawEvidenceStore>(evidenceRepository);
+        Assert.Same(provider.GetRequiredService<ISignalFileStore>(), signalRepository);
+        Assert.Same(provider.GetRequiredService<IRawEvidenceStore>(), evidenceRepository);
+
+        // Exactly one registration each: no dangling in-memory descriptor left in the IEnumerable view.
+        Assert.Single(provider.GetServices<ISignalRepository>());
+        Assert.Single(provider.GetServices<IEvidenceRepository>());
     }
 
     [Fact]
