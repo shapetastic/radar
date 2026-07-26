@@ -102,6 +102,15 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public EfficacyWorkerOptions Efficacy { get; init; } = new();
 
+    /// <summary>
+    /// Historical as-of replay configuration (bound from "Radar:Replay"; spec 139). DISABLED by default
+    /// (<see cref="ReplayWorkerOptions.Enabled"/> is <c>false</c>): when disabled, nothing replay-related is
+    /// registered and the pipeline graph is byte-for-byte unchanged. When ENABLED the run becomes a read-only
+    /// OFFLINE replay INSTEAD of a pipeline run — it scores stored signals at past instants and writes only to
+    /// the replay root; it collects nothing, mutates no live store, and produces no report.
+    /// </summary>
+    public ReplayWorkerOptions Replay { get; init; } = new();
+
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
 
@@ -128,6 +137,15 @@ public sealed class RadarWorkerOptions
 
     /// <summary>Root directory for the per-company price-efficacy artifacts (AD-14 read side). Only used when "Radar:Efficacy:Enabled" is true.</summary>
     public string EfficacyDirectory { get; init; } = "data/efficacy";
+
+    /// <summary>
+    /// Root directory for the historical as-of replay output (spec 139). Only used when
+    /// "Radar:Replay:Enabled" is true. Deliberately its OWN root, NOT a subdirectory of
+    /// <see cref="ScoresDirectory"/>: the forward efficacy series is accrued history and a replay is a
+    /// hypothesis, so "replay never writes into the live scores directory" is structural rather than a rule
+    /// someone must remember.
+    /// </summary>
+    public string ReplayDirectory { get; init; } = "data/replays";
 
     /// <summary>
     /// Root directory for the per-accession earnings-analysis-result cache (spec 107, AD-14 analogue). Only used
@@ -565,4 +583,50 @@ public sealed class EfficacyWorkerOptions
 {
     /// <summary>Whether to render the per-company price-efficacy SVG + CSV artifacts. DISABLED by default.</summary>
     public bool Enabled { get; init; }
+}
+
+/// <summary>
+/// Historical as-of replay configuration (bound from "Radar:Replay"; spec 139). DISABLED by default: a
+/// <see cref="Enabled"/> of <c>false</c> means nothing replay-related is registered, Worker's optional
+/// <c>IReplayRunner?</c> stays null, and the graph is byte-for-byte unchanged.
+/// <para>
+/// When enabled the run is a read-only OFFLINE replay: for each as-of instant in the
+/// <see cref="From"/>/<see cref="To"/>/<see cref="Step"/> series, the configured strategies re-score the
+/// already-stored signals through the SAME scoring seam the live pipeline uses (spec 136's
+/// <c>CreatedAtUtc &lt;= windowEndUtc</c> predicate is what makes that honest), and the resulting snapshots
+/// go ONLY to <c>Radar:ReplayDirectory</c>. It collects nothing, mutates no live store, reads no price
+/// (AD-14), and produces no report — it replaces the pipeline run rather than adding to it.
+/// </para>
+/// </summary>
+public sealed class ReplayWorkerOptions
+{
+    /// <summary>Whether this run is a historical as-of replay instead of a pipeline run. DISABLED by default.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>
+    /// First as-of instant, as a UTC date/time (e.g. "2026-05-01" or "2026-05-01T00:00:00Z"). REQUIRED when
+    /// <see cref="Enabled"/> — there is no sensible default start for "what would this strategy have said?".
+    /// </summary>
+    public string From { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Upper bound of the as-of series, as a UTC date/time. REQUIRED when <see cref="Enabled"/>. It is
+    /// included only when it lands exactly on a <see cref="Step"/> boundary — a trailing partial step is never
+    /// rounded up into a fabricated as-of point.
+    /// </summary>
+    public string To { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Spacing between successive as-of instants: a "{n}d" / "{n}h" / "{n}m" / "{n}s" token, or any plain
+    /// TimeSpan string. Defaults to "1d" (one snapshot per day, matching the forward daily cadence).
+    /// </summary>
+    public string Step { get; init; } = "1d";
+
+    /// <summary>
+    /// The replay run's label — the directory segment its output lands under, and how one replay is told
+    /// apart from another. Optional: when blank, a deterministic label is derived from the series itself
+    /// ("{from:yyyyMMdd}-{to:yyyyMMdd}-{step}"), so re-running the same range overwrites the same output
+    /// rather than silently accumulating near-duplicate runs.
+    /// </summary>
+    public string Label { get; init; } = string.Empty;
 }

@@ -3,8 +3,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Radar.Application.Collectors;
+using Radar.Application.Efficacy;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
+using Radar.Application.Prices;
+using Radar.Application.Replay;
 
 namespace Radar.Worker.Tests;
 
@@ -155,6 +158,100 @@ public sealed class WorkerTests
         await worker.StopAsync(CancellationToken.None);
 
         Assert.True(pipeline.RunCount >= 2, $"expected >= 2 runs, got {pipeline.RunCount}");
+    }
+
+    [Fact]
+    public async Task ReplayRunner_Present_ReplacesThePipelineRun_AndSkipsPriceAndEfficacy()
+    {
+        // Spec 139: replay is a read-only OFFLINE mode. It seeds (it needs the company universe) and then
+        // runs the replay INSTEAD of the pipeline — no price acquisition, no pipeline, no efficacy render —
+        // then stops the application.
+        var callLog = new List<string>();
+        var seeder = new RecordingSeeder(callLog);
+        var pipeline = new RecordingPipeline(callLog, EmptyResult);
+        var replay = new RecordingReplayRunner(callLog);
+        var prices = new RecordingPriceAcquirer(callLog);
+        var efficacy = new RecordingEfficacyGenerator(callLog);
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            seeder,
+            pipeline,
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            prices,
+            efficacy,
+            replay);
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "replay"], callLog);
+        Assert.Equal(0, pipeline.RunCount);
+        Assert.True(lifetime.ApplicationStopping.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task ReplayRunner_Absent_LeavesTheDefaultWorkerUnchanged()
+    {
+        var callLog = new List<string>();
+        var seeder = new RecordingSeeder(callLog);
+        var pipeline = new RecordingPipeline(callLog, EmptyResult);
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            seeder,
+            pipeline,
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance);
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run"], callLog);
+    }
+
+    private sealed class RecordingReplayRunner(List<string> callLog) : IReplayRunner
+    {
+        public Task<ReplayResult> RunAsync(CancellationToken ct)
+        {
+            lock (callLog)
+            {
+                callLog.Add("replay");
+            }
+
+            return Task.FromResult(new ReplayResult(1, 1, 1));
+        }
+    }
+
+    private sealed class RecordingPriceAcquirer(List<string> callLog) : IPriceHistoryAcquirer
+    {
+        public Task AcquireAsync(CancellationToken ct)
+        {
+            lock (callLog)
+            {
+                callLog.Add("prices");
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingEfficacyGenerator(List<string> callLog) : IEfficacyReportGenerator
+    {
+        public Task GenerateAsync(CancellationToken ct)
+        {
+            lock (callLog)
+            {
+                callLog.Add("efficacy");
+            }
+
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingSeeder(List<string> callLog) : ICompanyUniverseSeeder

@@ -527,4 +527,50 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
             rootAsFile, snapshot.CompanyId.ToString(), snapshot.Id + ".json");
         Assert.Equal(expectedPath, path);
     }
+
+    [Fact]
+    public async Task WriteAsync_NullFileNameSelector_KeepsTheSnapshotIdName()
+    {
+        // Pins the FORWARD path byte-identical: the spec-139 SnapshotFileName option is opt-in, and a null
+        // selector (every live composition) must name the file exactly as it always did.
+        var snapshot = new ScoreSnapshotBuilder().WithWindow(WindowStart, WindowEnd).Build();
+
+        var store = new FileScoreSnapshotStore(
+            new FileScoreSnapshotStoreOptions { RootDirectory = _tempDir, SnapshotFileName = null },
+            NullLogger<FileScoreSnapshotStore>.Instance);
+
+        var path = await store.WriteAsync(snapshot, [], CancellationToken.None);
+
+        Assert.Equal(
+            Path.Combine(_tempDir, snapshot.CompanyId.ToString(), snapshot.Id + ".json"), path);
+        Assert.True(File.Exists(path));
+    }
+
+    [Theory]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("")]
+    [InlineData(" padded.json")]
+    public async Task WriteAsync_FileNameSelectorReturningAnUnusableName_Throws(string returned)
+    {
+        // A selector is code, not data, so an unusable name is a programming error and throws rather than
+        // degrading. "." and ".." matter specifically: they pass a naive Path.GetFileName(name) == name check
+        // yet resolve to the company DIRECTORY, not a file inside it.
+        var snapshot = new ScoreSnapshotBuilder().WithWindow(WindowStart, WindowEnd).Build();
+
+        var store = new FileScoreSnapshotStore(
+            new FileScoreSnapshotStoreOptions
+            {
+                RootDirectory = _tempDir,
+                SnapshotFileName = _ => returned,
+            },
+            NullLogger<FileScoreSnapshotStore>.Instance);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.WriteAsync(snapshot, [], CancellationToken.None));
+
+        Assert.Contains("SnapshotFileName", ex.Message);
+    }
 }
