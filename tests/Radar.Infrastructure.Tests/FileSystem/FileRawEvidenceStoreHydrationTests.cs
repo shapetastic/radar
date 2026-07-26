@@ -358,6 +358,50 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
     }
 
     [Fact]
+    public async Task DuplicateContentHash_ResolvesToTheOrdinalFirstPath_OnEveryHydration()
+    {
+        // Two files, same contentHash, different evidence ids — the store holds ~9x content-equivalent
+        // duplication today (the mapper mints a fresh Guid per run). Hydration TryAdds, so the FIRST file
+        // read wins; Directory.EnumerateFiles has no defined order, so without an ordinal sort the winning
+        // item — and therefore the scored evidence set — could differ between runs and between OSes.
+        // Written ordinal-LAST first, so creation order and ordinal order disagree: the test then fails
+        // on a creation-ordered filesystem if the sort is removed outright, not merely if it is reversed.
+        await WriteLegacyFileAsync("dupe", DuplicateJson("22222222-2222-2222-2222-222222222222"), "zzz");
+        await WriteLegacyFileAsync("dupe", DuplicateJson("11111111-1111-1111-1111-111111111111"), "aaa");
+
+        var expected = Guid.Parse("11111111-1111-1111-1111-111111111111");
+
+        // Repeated FRESH instances must agree — a single assertion could pass on enumeration luck.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            IEvidenceRepository hydrated = CreateStore();
+
+            var winner = await hydrated.GetByContentHashAsync("dupe-hash", CancellationToken.None);
+            Assert.Equal(expected, winner!.Id);
+
+            // The loser is dropped entirely, not indexed under its own id.
+            Assert.Null(await hydrated.GetByIdAsync(
+                Guid.Parse("22222222-2222-2222-2222-222222222222"), CancellationToken.None));
+            Assert.Single(await hydrated.GetAllAsync(CancellationToken.None));
+        }
+    }
+
+    private static string DuplicateJson(string evidenceId) =>
+        $$"""
+        {
+          "evidenceId": "{{evidenceId}}",
+          "sourceType": "press_release",
+          "sourceName": "Example",
+          "title": "T",
+          "rawText": "R",
+          "collectedAt": "2026-07-06T21:35:31+00:00",
+          "contentHash": "dupe-hash",
+          "companyHints": [],
+          "metadata": {}
+        }
+        """;
+
+    [Fact]
     public async Task GetAllAsync_OverAnEmptyRoot_ReturnsEmpty_AndDoesNotThrow()
     {
         IEvidenceRepository repo = new FileRawEvidenceStore(
@@ -367,9 +411,9 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
         Assert.Empty(await repo.GetAllAsync(CancellationToken.None));
     }
 
-    private async Task WriteLegacyFileAsync(string name, string json)
+    private async Task WriteLegacyFileAsync(string name, string json, string folder = "legacy")
     {
-        var dir = Path.Combine(_tempDir, "legacy");
+        var dir = Path.Combine(_tempDir, folder);
         Directory.CreateDirectory(dir);
         await File.WriteAllTextAsync(Path.Combine(dir, name + ".json"), json);
     }

@@ -217,7 +217,10 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
     /// <summary>
     /// Loads every persisted raw-evidence file into the in-memory indexes, exactly once per instance.
     /// Lazy (never in the constructor) and thread-safe: concurrent first callers queue on the gate and
-    /// only one walks the tree. Per-file failures are logged and SKIPPED, never thrown — including a file
+    /// only one walks the tree. Files are visited in ORDINAL PATH ORDER so that, where duplicate content
+    /// hashes exist on disk, the surviving item is a function of the path alone rather than of the
+    /// undefined order <see cref="Directory.EnumerateFiles(string, string, SearchOption)"/> returns.
+    /// Per-file failures are logged and SKIPPED, never thrown — including a file
     /// whose <c>sourceType</c> cannot be parsed back, because <see cref="EvidenceItem.SourceType"/> feeds
     /// attention breadth/diversity in the v8 formula and guessing it would corrupt a score more quietly
     /// than dropping the item does. <see cref="OperationCanceledException"/> still propagates.
@@ -242,7 +245,13 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
 
             if (Directory.Exists(_options.RootDirectory))
             {
-                foreach (var file in EnumerateEvidenceFiles())
+                // Ordinal-sorted, NOT raw enumeration order: hydration de-dupes by ContentHash and
+                // TryAdds, so when two files carry the same hash (they do — the mapper mints a fresh
+                // evidence Guid per run, and copies can land under different source-type folders) the
+                // FIRST file read wins. Directory.EnumerateFiles has no defined order, so an unsorted
+                // walk would let the winning item — and therefore the scored evidence set — vary between
+                // runs and between OSes. Sorting makes the survivor a function of the path alone.
+                foreach (var file in EnumerateEvidenceFiles().Order(StringComparer.Ordinal))
                 {
                     ct.ThrowIfCancellationRequested();
 
@@ -268,6 +277,14 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
                         if (IndexInsertOnly(item))
                         {
                             loaded++;
+                        }
+                        else
+                        {
+                            // A duplicate content hash or id — the earlier (ordinal-first) file already
+                            // holds this evidence. Counted, not silent: the log line claims to report
+                            // duplicates, and the duplication rate is the number that tells us whether
+                            // evidence identity (spec 141) still needs fixing.
+                            skipped++;
                         }
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
