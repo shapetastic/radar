@@ -1,3 +1,4 @@
+using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
@@ -5,8 +6,8 @@ namespace Radar.Application.Scoring;
 
 /// <summary>
 /// The per-signal scoring PRIMITIVES shared by every <c>radar-formula-vN</c> — recency, direction sign,
-/// evidence-quality weight, the directional positive/negative masses and their preponderance ratio, and the
-/// tier-weighted distinct-publisher attention reach.
+/// evidence-quality weight, the directional positive/negative masses and their preponderance ratio, the
+/// tier-weighted distinct-publisher attention reach, and (spec 149) the notedness/following discount.
 /// <para>
 /// EXTRACTED FROM <see cref="RadarScoreFormulaV8"/>, NOT COPIED (spec 146, CLAUDE.md reuse-over-copy).
 /// <c>radar-formula-v9</c> composes a strategy's score from per-CHANNEL sub-scores, and every one of those
@@ -296,7 +297,9 @@ public static class ScoreSignalMath
     /// <para>
     /// <c>radar-formula-v9</c> reuses this whole term as its BREADTH channel's raw input, so "breadth" means
     /// the same measured thing in both formulas — only how it enters the composite differs (v8 discounts
-    /// Opportunity by attention; v9 gives breadth its own positively-weighted channel).
+    /// Opportunity by attention; v9 gives breadth its own positively-weighted channel AND, since spec 149,
+    /// damps the composed score by <see cref="NotednessDiscount"/> — so in v9 attention enters twice, with
+    /// opposite signs and different meanings).
     /// </para>
     /// </summary>
     public static double AttentionReach(
@@ -324,6 +327,72 @@ public static class ScoreSignalMath
         return breadthSurvivors
             + weights.CollapsedBreadthCredit * breadthCollapsedExtra
             + weights.MediaReachWeight * mediaCount;
+    }
+
+    /// <summary>
+    /// The curated-following discount magnitude for a tier (spec 117). Reads the four config-tunable
+    /// <see cref="ScoringWeights"/> magnitudes; <see cref="FollowingTier.Small"/> — and any unmapped value —
+    /// falls through to the Small discount, the fail-safe "no extra discount" default.
+    /// <para>
+    /// The tier is CURATED seed metadata (AD-14 — never price/market-cap/volume-derived).
+    /// <see cref="ScoringWeights.Validate"/> enforces the discounts monotone Mega ≥ Large ≥ Mid ≥ Small, so a
+    /// higher tier can never be discounted LESS than a lower one.
+    /// </para>
+    /// </summary>
+    public static double TierDiscount(ScoringWeights weights, FollowingTier tier)
+    {
+        ArgumentNullException.ThrowIfNull(weights);
+
+        return tier switch
+        {
+            FollowingTier.Mega  => weights.FollowingTierDiscountMega,
+            FollowingTier.Large => weights.FollowingTierDiscountLarge,
+            FollowingTier.Mid   => weights.FollowingTierDiscountMid,
+            _ => weights.FollowingTierDiscountSmall,
+        };
+    }
+
+    /// <summary>
+    /// THE NOTEDNESS DISCOUNT — the multiplicative factor by which "already noticed" damps a company's
+    /// headline score, folding MEASURED attention together with the CURATED following tier (spec 117):
+    /// <c>clamp(1 − (attention/OpportunityAttentionDivisor)·OpportunityAttentionDiscountWeight
+    /// − TierDiscount(tier)·FollowingTierDiscountWeight, OpportunityDiscountFloor, 1)</c>.
+    /// <para>
+    /// EXTRACTED FROM <see cref="RadarScoreFormulaV8"/> BY SPEC 149, NOT COPIED. <c>radar-formula-v9</c>
+    /// shipped with zero references to it, so a v9 strategy ranked on raw channel activity — largely a size
+    /// proxy, close to the inverse of Radar's stated purpose (surface companies BEFORE the market notices).
+    /// Both formulas now read the same knobs through this one implementation, so the two differ in
+    /// COMPOSITION — where the discount is applied — and never in what notedness MEANS.
+    /// </para>
+    /// <para>
+    /// It is a graded LEAN, never a filter: the strictly-positive
+    /// <see cref="ScoringWeights.OpportunityDiscountFloor"/> means a strong-enough trajectory can still
+    /// surface a mega-cap, and the ceiling of 1 means the discount can never become a bonus. Setting BOTH
+    /// <see cref="ScoringWeights.OpportunityAttentionDiscountWeight"/> and
+    /// <see cref="ScoringWeights.FollowingTierDiscountWeight"/> to 0 makes this return EXACTLY <c>1.0</c>
+    /// (both subtracted terms are a finite value times zero, and the default floor 0.05 ≤ 1), which is how a
+    /// strategy opts out — and multiplying by exactly 1.0 is the IEEE-754 identity, so an opted-out strategy
+    /// is bit-for-bit undiscounted rather than approximately so.
+    /// </para>
+    /// <para>
+    /// <paramref name="attentionScore"/> is the CLAMPED INT attention component, not a raw reach: v8 has
+    /// always fed the rounded [0,100] component here, and v9 feeds the same one, so "how noticed is this
+    /// company" is one number in both formulas.
+    /// </para>
+    /// </summary>
+    public static double NotednessDiscount(
+        ScoringWeights weights, int attentionScore, FollowingTier tier)
+    {
+        ArgumentNullException.ThrowIfNull(weights);
+
+        // v8's ORIGINAL expression shape and accumulation order, moved verbatim (see the type remarks on
+        // floating-point exactness). Do not re-associate or factor these terms: IEEE-754 arithmetic is not
+        // associative and a 1-ULP move can flip a midpoint Clamp0To100 rounding.
+        var followingDiscount =
+            1 - attentionScore / weights.OpportunityAttentionDivisor * weights.OpportunityAttentionDiscountWeight
+              - TierDiscount(weights, tier) * weights.FollowingTierDiscountWeight;
+
+        return Math.Clamp(followingDiscount, weights.OpportunityDiscountFloor, 1.0);
     }
 }
 

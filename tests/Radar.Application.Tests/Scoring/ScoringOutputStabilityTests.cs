@@ -32,6 +32,14 @@ namespace Radar.Application.Tests.Scoring;
 /// away. A deliberate formula change must update these pins consciously, exactly as it must the fingerprint
 /// pins in <c>ScoringConfigFingerprintTests</c>.
 /// </para>
+/// <para>
+/// SPEC 149 REUSED THIS FILE RATHER THAN WRITING A THIRD HARNESS, and it is the reason this file is not
+/// merely historical. That slice EXTRACTED v8's notedness/following discount into
+/// <see cref="ScoreSignalMath.NotednessDiscount"/> so <c>radar-formula-v9</c> could apply the same one, and
+/// its constraint was that v8 stays byte-identical. This file is untouched by that slice and still passes —
+/// which is exactly the evidence required, because the fixture below exercises the discount (a Reuters media
+/// item gives it a non-zero Attention to discount by).
+/// </para>
 /// </summary>
 public sealed class ScoringOutputStabilityTests
 {

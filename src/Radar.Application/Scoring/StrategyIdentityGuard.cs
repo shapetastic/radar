@@ -18,8 +18,22 @@ namespace Radar.Application.Scoring;
 /// A collector toggle CANNOT trip it: the enabled-collector set is no longer a fingerprint input (it is
 /// recorded on the snapshot as <c>CollectionProvenance</c>), which is exactly what the spec-141 descriptor
 /// split buys. What DOES trip it is a real edit to a named strategy's weights, profile, signal types,
-/// formula structure or extractor rule structure — i.e. the cases where a series would otherwise silently
-/// continue under one name while measuring something else.
+/// formula structure <b>expressed as a <c>_formula.Version</c> bump</b> (the AD-6 obligation — the guard sees
+/// the version token, never the formula's code) or extractor rule structure — i.e. the cases where a series
+/// would otherwise silently continue under one name while measuring something else.
+/// </para>
+/// <para>
+/// ⚠ <b>THE FORMULA-STRUCTURE ARM IS ONLY AS STRONG AS AD-6 COMPLIANCE, and spec 149 shipped the
+/// counterexample.</b> Spec 149 added the notedness discount to the COMPOSITION of
+/// <see cref="RadarScoreFormulaV9"/> without bumping past <c>radar-formula-v9</c> (v10 was out of scope), and
+/// the default <see cref="ScoringWeights"/> did not move either — so a v9 strategy behaves differently before
+/// and after that slice while its fingerprint is unchanged and this guard stays silent. Pre- and post-149 v9
+/// snapshots under one name are therefore exactly the "silently continuing under one name while measuring
+/// something else" case this guard otherwise catches. The recorded remedy is spec 141's
+/// immutable-by-convention rule applied by hand: give the retuned strategy a NEW NAME
+/// (<c>patents-led</c> → <c>patents-led-v2</c>), which re-keys the series via <see cref="ScoreSeriesKey"/>
+/// without needing the stamp to move. See the AD-6 paragraph on <see cref="RadarScoreFormulaV9"/> for the full
+/// reasoning and the mitigating facts; keep the two in step.
 /// </para>
 /// <para>
 /// It runs BEFORE any collection work so a misconfiguration costs no network calls, and it is read-mostly:

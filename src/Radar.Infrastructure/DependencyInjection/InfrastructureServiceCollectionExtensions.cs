@@ -253,7 +253,11 @@ public static class InfrastructureServiceCollectionExtensions
     ///                     "Channels": [
     ///                       { "Name": "patents",   "Collectors": [ "patents" ],   "Weight": 0.50, "Saturation": 3 },
     ///                       { "Name": "insider",   "Collectors": [ "sec-form4" ], "Weight": 0.30, "Saturation": 2 },
-    ///                       { "Name": "attention", "Kind": "breadth",             "Weight": 0.20, "Saturation": 3 } ] } ],
+    ///                       { "Name": "attention", "Kind": "breadth",             "Weight": 0.20, "Saturation": 3 } ] },
+    ///                   // Spec 149: inline per-strategy weight overrides, applied ON TOP of ScoringProfile.
+    ///                   { "Name": "attention-light", "ScoringProfile": "default",
+    ///                     "Weights": { "FollowingTierDiscountWeight": 0.0,
+    ///                                  "OpportunityAttentionDiscountWeight": 0.25 } } ],
     ///   "PrimaryStrategy": "baseline"
     /// }
     /// </code>
@@ -284,12 +288,20 @@ public static class InfrastructureServiceCollectionExtensions
     /// <c>IEvidenceCollector.CollectorName</c>s. Weights must each lie in <c>[0,1]</c> and <b>sum to
     /// 1.0</b> — a sum that is not 1 silently rescales every score that strategy produces, so it is a startup
     /// failure naming the strategy and the actual sum.</item>
+    /// <item><c>Weights</c> (spec 149) declares INLINE magnitude overrides for that strategy alone. The merge
+    /// order is <b>code defaults → named <c>ScoringProfile</c> → inline <c>Weights</c>, last wins</b>, so a
+    /// strategy can differ from a shared profile by a single number without a whole profile of its own. An
+    /// <b>unknown key fails fast</b> naming the strategy and the key (the binder would otherwise ignore it
+    /// silently, leaving a strategy stamped and ranked as tuned while scoring untuned), and
+    /// <see cref="ScoringWeights.Validate"/> runs on the MERGED result. Omitted ⇒ byte-identical to before the
+    /// key existed. See <see cref="ApplyInlineWeightOverrides"/>.</item>
     /// </list>
     /// Fails fast at startup — each message naming the offending config key or strategy — on an unknown
     /// <c>ScoringProfile</c>, a blank or unusable <c>Name</c>, duplicate <c>Name</c>s, a blank/unknown
     /// <c>SignalTypes</c> entry, an unknown <c>Formula</c>, a malformed or unbalanced <c>Channels</c> budget,
-    /// or a <c>PrimaryStrategy</c> that is blank or not present in <c>Strategies</c>. Every one of those
-    /// otherwise surfaces later as a confusing empty, mislabelled or silently rescaled score series.
+    /// an unknown, non-numeric or out-of-range inline <c>Weights</c> entry, or a <c>PrimaryStrategy</c> that is
+    /// blank or not present in <c>Strategies</c>. Every one of those otherwise surfaces later as a confusing
+    /// empty, mislabelled or silently rescaled score series.
     /// </summary>
     public static IServiceCollection AddRadarScoringStrategies(
         this IServiceCollection services, IConfiguration configuration)
@@ -336,10 +348,13 @@ public static class InfrastructureServiceCollectionExtensions
             var resolved = ResolveScoringProfile(
                 configuration, entry["ScoringProfile"], $"{entry.Path}:ScoringProfile");
 
+            // Spec 149: the LAST step of the merge — code defaults → named ScoringProfile → inline Weights.
+            var weights = ApplyInlineWeightOverrides(entry, name, resolved.Weights);
+
             definitions.Add(new ScoringStrategyDefinition(
                 Name: name,
                 ScoringProfile: resolved.EffectiveProfile,
-                Weights: resolved.Weights,
+                Weights: weights,
                 IsPrimary: string.Equals(name, primaryName, StringComparison.OrdinalIgnoreCase))
             {
                 SignalTypes = ResolveSignalTypes(entry),
@@ -365,6 +380,134 @@ public static class InfrastructureServiceCollectionExtensions
         // there is a single validation implementation regardless of how a set is composed.
         services.AddSingleton(new ScoringStrategySet(definitions));
         return services;
+    }
+
+    /// <summary>
+    /// The public, settable <see cref="ScoringWeights"/> property names — the ONLY accepted keys under a
+    /// strategy's inline <c>Weights</c> (spec 149). Built by reflection FROM the record, so a new weight is
+    /// tunable inline the day it is added and this set can never drift from what the binder would actually
+    /// bind.
+    /// <para>
+    /// <b>Case-INSENSITIVE, deliberately.</b> <c>ConfigurationBinder</c> matches config keys to properties
+    /// case-insensitively, so a case-sensitive validator would disagree with the binder in both directions:
+    /// it would reject <c>"recencyfloor"</c>, which binds perfectly well, and — far worse — its verdict on
+    /// what is "unknown" would stop being the same question the binder answers. The validator must decide
+    /// exactly what the binder decides, or the fail-fast guarantee is not a guarantee. A near-miss such as
+    /// <c>RecencyFlooor</c> is unknown to BOTH and therefore still fails fast.
+    /// </para>
+    /// </summary>
+    private static readonly HashSet<string> ScoringWeightNames =
+        typeof(ScoringWeights)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Where(p => p.CanRead && p.CanWrite)
+            .Select(p => p.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Applies ONE strategy's inline <c>Weights</c> object (spec 149) on top of the weights its
+    /// <c>ScoringProfile</c> resolved to. The merge order is <b>code defaults → named profile → inline
+    /// Weights, last wins</b>: <paramref name="profileWeights"/> already carries the first two (a profile's
+    /// present fields bound onto a fresh <see cref="ScoringWeights"/>), and each inline key then overwrites
+    /// exactly the field it names and nothing else.
+    /// <para>
+    /// Why inline at all: tuning one magnitude used to mean defining a whole named profile under
+    /// <c>Radar:Scoring:Profiles:{name}</c>, which is clumsy when the point is to run several near-identical
+    /// strategies that differ in one number — the experiment spec 140's leaderboard exists to judge.
+    /// </para>
+    /// <para>
+    /// <b>An unknown key fails fast, naming the strategy AND the key.</b> <c>ConfigurationBinder</c> silently
+    /// ignores config keys that match no property, so a typo would leave the ambient value in place and
+    /// produce a strategy that is stamped, scored and RANKED as tuned while being nothing of the sort. That
+    /// fail-open is the exact shape this arc has been closing (spec 138 shipped one). Out-of-range values fail
+    /// fast too: <see cref="ScoringWeights.Validate"/> runs on the MERGED result, so an inline override cannot
+    /// smuggle past a check its profile would have failed. So does a known key that carries no number — a
+    /// nested object, an array or an explicit <c>null</c> — for the same fail-open reason: every
+    /// <see cref="ScoringWeights"/> field is a plain number, so such an entry can only leave the strategy
+    /// untuned (or differently tuned) while it reads as tuned.
+    /// </para>
+    /// <para>
+    /// Layering: this is the composition root, so <c>IConfiguration</c> stops here and
+    /// <c>Radar.Application</c> receives an already-resolved, already-validated
+    /// <see cref="ScoringWeights"/>. <see cref="ScoringStrategyDefinition"/> needs no new property — it
+    /// already carries the resolved weights, and those are hashed into <c>ScoringConfigVersion</c> BY VALUE,
+    /// so two strategies differing only in one inline weight get different fingerprints automatically.
+    /// </para>
+    /// </summary>
+    private static ScoringWeights ApplyInlineWeightOverrides(
+        IConfigurationSection entry, string strategyName, ScoringWeights profileWeights)
+    {
+        var section = entry.GetSection("Weights");
+        var children = section.GetChildren().ToList();
+        if (children.Count == 0)
+        {
+            // Shape guard, mirroring ResolveSignalTypes/ResolveChannels: a SCALAR where an object was meant
+            // (e.g. "Weights": "0.25") binds as a value with no children and would otherwise fall through as
+            // "no overrides" — silently scoring an untuned strategy the operator wrote to be tuned.
+            if (!string.IsNullOrWhiteSpace(section.Value))
+            {
+                throw new InvalidOperationException(
+                    $"{section.Path} is the scalar '{section.Value}' for strategy '{strategyName}'; a "
+                        + "strategy's Weights must be a JSON OBJECT of ScoringWeights field names to numbers "
+                        + "(e.g. { \"FollowingTierDiscountWeight\": 0.0 }). Omit Weights entirely to use the "
+                        + "ScoringProfile's values unchanged.");
+            }
+
+            // The byte-identical default: no inline block ⇒ exactly the profile's weights, same instance.
+            return profileWeights;
+        }
+
+        foreach (var child in children)
+        {
+            if (!ScoringWeightNames.Contains(child.Key))
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path} names '{child.Key}', which is not a ScoringWeights field, so strategy "
+                        + $"'{strategyName}' would be scored with the ambient value while appearing tuned. "
+                        + "Inline Weights keys must each name a scoring weight (valid names: "
+                        + $"{string.Join(", ", ScoringWeightNames.Order(StringComparer.Ordinal))}).");
+            }
+
+            // Per-ENTRY shape guard, the scalar guard's mirror image: every ScoringWeights field is a plain
+            // number, so a known key that carries no scalar (a nested object/array, or an explicit JSON null)
+            // is never a valid override. Left unguarded, binding such an entry would either leave the profile
+            // value in place or produce a value the operator never wrote — and either way the strategy is
+            // stamped, scored and RANKED as tuned while being nothing of the sort, which is exactly the
+            // fail-open the unknown-key guard above exists to close.
+            if (child.GetChildren().Any() || child.Value is null)
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path} carries no numeric value for strategy '{strategyName}'; every inline "
+                        + "Weights entry must be a NUMBER (e.g. { \"FollowingTierDiscountWeight\": 0.0 }), not "
+                        + "a nested object, an array or null. Omit the key entirely to keep the "
+                        + "ScoringProfile's value.");
+            }
+        }
+
+        // Bind the inline values ONTO a copy of the profile's weights, which is what makes "last wins"
+        // literal: an absent inline key leaves the profile value untouched because nothing overwrites it.
+        // ConfigurationBinder sets init-only properties through their (public) init accessors — the same
+        // mechanism section.Get<ScoringWeights>() already relies on in ResolveScoringProfile — and a
+        // non-numeric value throws here rather than binding to 0.
+        var merged = profileWeights with { };
+        section.Bind(merged);
+
+        // Validate the MERGED result: an inline override is as capable of producing a nonsensical weight as a
+        // profile is, and the combination of a valid profile and a valid-looking override can still break an
+        // invariant that spans fields (the monotone tier ordering, say). Rethrown with the strategy named,
+        // because with several near-identical strategies the field name alone does not say which one is broken.
+        try
+        {
+            merged.Validate();
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException(
+                $"{section.Path}: strategy '{strategyName}' resolves to an invalid scoring configuration once "
+                    + $"its inline Weights are applied. {ex.Message}",
+                ex);
+        }
+
+        return merged;
     }
 
     /// <summary>
