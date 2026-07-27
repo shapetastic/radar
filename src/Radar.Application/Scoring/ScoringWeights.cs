@@ -19,7 +19,10 @@ public sealed record ScoringWeights
     // directional mass (≈ one full-strength·full-
     // confidence·full-recency signal) that must accrue before Trajectory swings halfway; larger k damps small
     // directional sets more (a lone dissenter is damped-but-not-zeroed). It is the denominator smoother in
-    // T_raw = 10·(Mpos−Mneg)/(Mpos+Mneg+k), so it must be strictly positive (Validate()).
+    // T_raw = 10·(Mpos−Mneg)/(Mpos+Mneg+k), so it must be strictly positive (Validate()). Since spec 146 it
+    // is ALSO the denominator smoother of radar-formula-v9's per-channel direction factor, and since spec 148
+    // it is finally folded into the ScoringConfigVersion fingerprint by value like every other weight — it
+    // was the one field the fold had missed, so tuning it used to produce falsely-comparable snapshots.
     public double TrajectoryCorroborationK { get; init; } = 10.0;
     public double AttentionHalfSaturation { get; init; } = 3.0;   // v4 value (post spec 88)
     public double MediaReachWeight { get; init; } = 0.10;         // spec 94 recalibration (was 0.25, the v4 value)

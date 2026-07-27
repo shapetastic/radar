@@ -877,6 +877,101 @@ scores stayed **bit-for-bit identical** — a new series, for no behavioural rea
 *Accepted · 2026-07-26 — key correction: the conflated invariant is dropped, the correctness property (never
 compare two different scorings) is preserved on a key that actually distinguishes them.*
 
+### Amendment (spec 148) — the fold is COMPLETE: the scoring window and `TrajectoryCorroborationK` are hashed
+
+The `radar-architecture-reviewer` sweep of `main` @ `b9b3f65` found that `ScoringConfigFingerprint.Compute`
+folded every output-affecting input **except two**, and both genuinely change scores:
+
+- **`ScoringOptions.Window`** (bound from `Radar:ScoringWindowDays`) bounds the current window *and* the
+  previous/velocity window, so a 14-day and a 30-day run over identical evidence produce materially different
+  Trajectory, SignalVelocity and Attention — and stamped the **same** `ScoringConfigVersion`.
+  `EffectiveScoringConfig` carried no window field at all, so the difference was not even recoverable
+  after the fact.
+- **`ScoringWeights.TrajectoryCorroborationK`** — the denominator smoother in v8's
+  `T_raw = 10·(Mpos−Mneg)/(Mpos+Mneg+k)` and, since spec 146, in v9's per-channel direction factor. It was
+  recorded as a known gap at the spec-146 hand-back; the audit confirmed it was the **only** missing
+  `ScoringWeights` field. Verified again here by enumerating all 27 public properties against the fold.
+
+**This was worse after spec 141, not merely older.** A window edit is an in-place edit to a NAMED strategy —
+precisely the category `StrategyIdentityGuard` now *promises* to catch and structurally could not see — while
+`ScoreSeriesKey` kept both cohorts in the same `default` series. An unseeable category is a broken promise
+rather than a gap.
+
+- **Encoding: ticks, invariant-culture.** The window is appended as a new fixed-position `window` field after
+  `mediaCollapse`, following the pattern specs 96/109 used. Ticks is INJECTIVE over every `TimeSpan` (AD-3);
+  whole-days is not — a 36-hour and a 24-hour window would truncate onto the same value and two genuinely
+  different scorings would share one stamp, the exact failure the field exists to prevent.
+- **`EffectiveScoringConfig.Window` is trailing and NULLABLE.** A config file written before this slice has no
+  window field, and deserializing that absence as `TimeSpan.Zero` would be a FALSE record of a zero-length
+  window. `null` means "written pre-148; not recorded". New writes always populate it, so the store's
+  descriptor↔fingerprint self-verification still holds for everything written from here on.
+- **Completeness is now enforced by reflection, not by review.** `ScoringConfigFingerprintTests` perturbs every
+  public `ScoringWeights` property in turn and asserts the fingerprint moves, and pins `ScoringOptions`'
+  property set to exactly `{ Window }`. A future unfolded knob fails the day it is added.
+- **Scores are byte-identical, and that is MEASURED.** `ScoringOutputStabilityTests` pins one fixture's entire
+  output under the real `radar-formula-v8` — all five components, the explanation, the `ComponentJson` and the
+  ordered evidence-link chain — and that file was compiled and run against the pre-148 sources
+  (`origin/main` @ `b9b3f65`), where it also passes. No formula file was touched.
+- **The pins MOVED, deliberately, once — the move IS the deliverable.** AI-OFF
+  **`radar-scoring-fp-2ce20f8fc497 → radar-scoring-fp-0c46e07b94db`** and AI-ON
+  **`radar-scoring-fp-3457da53489d → radar-scoring-fp-28226897f97b`**. No `_formula.Version` bump
+  (`radar-formula-v8` stands), no `KeywordSignalExtractor.RuleSetVersion` bump (`radar-keyword-rules-v6`
+  stands), no weight or tier edit. AD-10 as amended by spec 141 explicitly permits an intended pin move
+  recorded with its lineage; this is one.
+- **⚠ THIS SLICE ALSO BROKE "THE PIN IS THE LIVE STAMP", and that consequence is part of the decision.** Until
+  now every hashed input was a code default, so the value pinned in `ScoringConfigFingerprintTests` was also
+  the value a live baseline run wrote, and every prior amendment above could quote one pair. The window is not
+  a code default. The pins above are computed at the `ScoringOptions` code default of **30 days** — which the
+  Worker never uses — while the baseline runs at `Radar:ScoringWindowDays` = **60**
+  (`RadarWorkerOptions.ScoringWindowDays`, `src/Radar.Worker/appsettings.json`; `run-profiles/default.json`
+  does not override it) and stamps AI-OFF **`radar-scoring-fp-4eb2fe5d3cdf`** / AI-ON
+  **`radar-scoring-fp-4da4b5ff6ec9`**; `-Profile long-window` (120 days) stamps
+  `radar-scoring-fp-0a7058d94582` / `radar-scoring-fp-81e9fab711f8`. Both sets are correct at their own
+  window and must not be reconciled onto one value. Accepted deliberately: the alternative — hashing a
+  "canonical" window rather than the one actually used — would reintroduce exactly the false-comparability
+  defect this amendment exists to close. The operator-facing live record is `default.json`'s comment; the
+  test pins are the unit-level change-detector. The same split now applies to any future config-bound
+  fingerprint input.
+- **History was NOT regenerated**, exactly as in spec 141: append-only (AD-8), nothing rewritten, deleted or
+  backfilled. Accrued snapshots keep their old stamps, and `StrategyIdentityGuard` will trip once per strategy
+  name on the next run — which is the correct, visible outcome of a deliberate identity change (delete the
+  affected `data/scoring-configs/strategies/{name}.json` record to acknowledge it, or add a new strategy name
+  if the two cohorts must stay separable).
+
+*Accepted · 2026-07-27 — the stamp now covers every input that can move a score; nothing else about AD-10
+changes.*
+
+### Amendment (spec 148, Part B) — replay records the provenance it writes
+
+`ReplayRunner` took neither `IScoringConfigStore` nor the startup tripwire, while all three forward runners
+take both. A replay-only run in a fresh data root therefore emitted snapshots whose `ScoringConfigVersion`
+**dereferenced to nothing** — the weights that produced those scores were unrecoverable. That was the weakest
+provenance in the system sitting on exactly the path `Radar:Efficacy:Comparison:ReplayLabel` and spec 140's
+leaderboard are meant to rank strategies from.
+
+- `StrategyIdentityGuard.VerifyAsync` is now the FIRST statement of `RunAsync`, mirroring the forward runners:
+  a misconfiguration costs no scoring, and no snapshot lands in a labelled series under a name whose meaning
+  has changed. Confirmed (not assumed) that `FileScoringConfigStore.ReadStrategyFingerprintAsync` degrades to
+  "unrecorded" on `IOException`/`UnauthorizedAccessException`/`JsonException`, so a disk hiccup cannot fail a
+  read-only mode; `OperationCanceledException` still propagates.
+- `WriteIfNewAsync(strategy.Engine.EffectiveConfig, ct)` runs once per strategy in the outer loop —
+  insert-if-new, so it is free when the forward pipeline already wrote that config.
+- **Writing the scoring-config store is a PROVENANCE RECORD, not a scoring mutation.** Replay still mutates no
+  signal or evidence store, still never writes the live scores directory, and `replay ⊆ forward` (spec 139)
+  still holds field for field. The read-only test now names the config store as the ONE sanctioned outside
+  write and pins its exact two files, so the distinction is asserted rather than argued.
+- **Same-label overwrite: WARN, aggregated per strategy.** As-of-keyed file names make a re-replay idempotent
+  and equally make it replace an already-ranked series. Failing would break the legitimate "re-replay after
+  fixing a data problem" workflow; silence is how a comparison quietly becomes wrong. One `LogWarning` per
+  (label, strategy) carries the count and what it means. Detected in `FileScoreSnapshotStore`, the only place
+  that knows the target path before the write (an optional `OnSnapshotOverwritten` probe the live/forward path
+  never wires), and surfaced through `IReplayScoreSnapshotFileStoreFactory.OverwrittenCount`.
+- **Part B moves NO fingerprint input**: it touches neither `Compute`, nor `EffectiveScoringConfig`'s hashed
+  content, nor any descriptor. Both pin moves above belong to Part A.
+
+*Accepted · 2026-07-27 — after this slice every snapshot Radar writes (forward, score-only or replay) has a
+dereferenceable `ScoringConfigVersion`.*
+
 **Status.** Accepted · 2026-07-02 (trunk cleanup slice; convention introduced by spec 69, first bumped
 by spec 70). Amended · 2026-07-04 (spec 89 — stamp becomes a derived content fingerprint; property preserved
 and made automatic; Accepted). Amended · 2026-07-04 (spec 91 — the effective config is persisted
@@ -917,7 +1012,15 @@ enabled-collector set leaves the hash entirely to be recorded per-snapshot as `C
 defaults re-stamp deliberately — AI-OFF radar-scoring-fp-6b2f468041b9 → radar-scoring-fp-2ce20f8fc497 and AI-ON
 radar-scoring-fp-57356123e09b → radar-scoring-fp-3457da53489d — with no `RuleSetVersion` / `_formula.Version`
 bump and byte-identical scoring math; evidence: 17 distinct stamps already existed over 851 snapshots, largest
-cohort ≈ 3 runs, the AI-ON pin exactly 1 run; Accepted).
+cohort ≈ 3 runs, the AI-ON pin exactly 1 run; Accepted). Amended · 2026-07-27 (spec 148 — the fold is completed:
+`ScoringOptions.Window` (as ticks) and `ScoringWeights.TrajectoryCorroborationK`, the last two output-affecting
+inputs hashed into nothing, are folded by value and the window is carried on `EffectiveScoringConfig` as a
+trailing nullable field; BOTH defaults re-stamp deliberately — AI-OFF radar-scoring-fp-2ce20f8fc497 →
+**radar-scoring-fp-0c46e07b94db** and AI-ON radar-scoring-fp-3457da53489d → **radar-scoring-fp-28226897f97b** —
+with no `RuleSetVersion` / `_formula.Version` bump and scoring math proven byte-identical against pre-148
+sources; a reflection completeness guard now makes the next unfolded knob fail immediately. Part B, moving no
+fingerprint input, gives `ReplayRunner` the effective-config write and the startup tripwire the forward runners
+already had; Accepted).
 
 ---
 

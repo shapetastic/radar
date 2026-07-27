@@ -21,7 +21,16 @@ namespace Radar.Application.Tests.Scoring;
 public sealed class ScoringEngineTests
 {
     private static readonly DateTimeOffset WindowEnd = new(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
-    private static readonly TimeSpan Window = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// The harness's scoring window. DELIBERATELY NOT the <see cref="ScoringOptions"/> default of 30 days
+    /// (spec 148): every windowing test here expresses its boundaries relative to this constant, so the value
+    /// itself is free — and choosing a non-default one makes
+    /// <see cref="Versioning_StampsScoringConfigVersion"/> DISCRIMINATING. While it coincided with the default,
+    /// that test could not tell the engine reading <c>ScoringOptions.Window</c> from the engine hard-coding
+    /// 30 days, which is precisely the wiring spec 148 added.
+    /// </summary>
+    private static readonly TimeSpan Window = TimeSpan.FromDays(21);
 
     /// <summary>
     /// In-test <see cref="IAttentionSourceWeights"/> for the real formula: every publisher counts as a full
@@ -178,7 +187,8 @@ public sealed class ScoringEngineTests
             ScoringWeights? weights = null,
             ILogger<ScoringEngine>? logger = null,
             ISignalSourceDescriptor? sourceDescriptor = null,
-            ScoringChannelSet? channels = null)
+            ScoringChannelSet? channels = null,
+            TimeSpan? window = null)
         {
             Engine = new ScoringEngine(
                 Signals,
@@ -192,7 +202,7 @@ public sealed class ScoringEngineTests
                 sourceDescriptor ?? SourceDesc,
                 new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
-                new ScoringOptions { Window = Window },
+                new ScoringOptions { Window = window ?? Window },
                 logger ?? NullLogger<ScoringEngine>.Instance,
                 channels: channels);
         }
@@ -584,8 +594,80 @@ public sealed class ScoringEngineTests
         var expected = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", formula.Version, new ScoringWeights(), Weights.CanonicalDescriptor(),
             SourceDescriptor, new InsiderMaterialityWeights().CanonicalDescriptor(),
-            new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor());
+            new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor(),
+            // Spec 148: the recent-signal window is a hashed field now. This is the HARNESS's window, which is
+            // deliberately NOT the ScoringOptions default (see the constant's note) — so this assertion fails
+            // if the engine ever stops reading _options.Window and hashes a hard-coded default instead.
+            Window);
         Assert.Equal(expected, result.Snapshot.ScoringConfigVersion);
+    }
+
+    /// <summary>
+    /// THE spec-148 acceptance criterion, at the level the spec actually asks for: <b>the same inputs scored
+    /// under two window lengths</b>, through two REAL engines that differ in nothing else.
+    /// <para>
+    /// The pure <c>ScoringConfigFingerprint.Compute</c> tests prove the FIELD is hashed; they cannot prove the
+    /// engine feeds it <c>ScoringOptions.Window</c> rather than a constant. Hard-coding 30 days at either of
+    /// the two production sites (the <c>Compute</c> call and the <c>EffectiveScoringConfig</c> projection)
+    /// silently reintroduces the whole defect — a 14-day and a 30-day run sharing one
+    /// <c>ScoringConfigVersion</c> and persisting a false 30-day window — so this test exists to kill exactly
+    /// those two mutations, and was verified against both.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task TwoEnginesDifferingOnlyInScoringWindow_StampDifferentConfigVersions_AndRecordTheirOwnWindow()
+    {
+        var thirtyDays = TimeSpan.FromDays(30);
+        var fourteenDays = TimeSpan.FromDays(14);
+
+        var wide = new Harness(new StubScoreFormula(), window: thirtyDays);
+        var narrow = new Harness(new StubScoreFormula(), window: fourteenDays);
+
+        // Byte-identical inputs on both sides — same ids, same content — so any difference below is the
+        // window and nothing else.
+        var companyId = Guid.NewGuid();
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash("window-fixture-hash")
+            .Build();
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(WindowEnd.AddDays(-2))
+            .Build();
+
+        await wide.SeedExistingAsync(signal, evidence);
+        await narrow.SeedExistingAsync(signal, evidence);
+
+        // (a) Two windows are two scorings: their identities must differ.
+        Assert.NotEqual(
+            wide.Engine.EffectiveConfig.Fingerprint, narrow.Engine.EffectiveConfig.Fingerprint);
+
+        // (b) Each persisted config records ITS OWN window — not the default, and not the other engine's.
+        //     Neither value may be assumed: 30 days happens to BE the ScoringOptions default, so only the
+        //     14-day side can catch a hard-coded default, and only the 30-day side proves the field is
+        //     carried rather than left null.
+        Assert.Equal(thirtyDays, wide.Engine.EffectiveConfig.Window);
+        Assert.Equal(fourteenDays, narrow.Engine.EffectiveConfig.Window);
+
+        // (c) …and the difference reaches the SNAPSHOT, which is what a historical reader dereferences.
+        var wideSnapshot = await wide.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+        var narrowSnapshot =
+            await narrow.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.NotEqual(
+            wideSnapshot.Snapshot.ScoringConfigVersion, narrowSnapshot.Snapshot.ScoringConfigVersion);
+        Assert.Equal(
+            wide.Engine.EffectiveConfig.Fingerprint, wideSnapshot.Snapshot.ScoringConfigVersion);
+        Assert.Equal(
+            narrow.Engine.EffectiveConfig.Fingerprint, narrowSnapshot.Snapshot.ScoringConfigVersion);
+
+        // Not vacuous in the other direction either: the window really is the operative difference, so the
+        // two engines slice the SAME window bounds they hashed.
+        Assert.Equal(WindowEnd - thirtyDays, wideSnapshot.Snapshot.WindowStartUtc);
+        Assert.Equal(WindowEnd - fourteenDays, narrowSnapshot.Snapshot.WindowStartUtc);
     }
 
     [Fact]

@@ -35,10 +35,11 @@ namespace Radar.Application.Scoring;
 /// (<see cref="InsiderMaterialityWeights.CanonicalDescriptor"/> — the config-tunable buy/sell tiers +
 /// cluster boost, spec 96) plus the media-collapse descriptor
 /// (<see cref="MediaAttentionCollapse.CanonicalDescriptor"/> — the same-event media-attention collapse
-/// structure + window, spec 109), computed once via
+/// structure + window, spec 109) plus the recent-signal WINDOW length
+/// (<see cref="ScoringOptions.Window"/>, spec 148), computed once via
 /// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape,
-/// any weight, the tier map, an insider materiality tier, the media-collapse window) re-stamps
-/// automatically. <c>ScoringVersion</c> (structure identity,
+/// any weight, the tier map, an insider materiality tier, the media-collapse window, the scoring window)
+/// re-stamps automatically. <c>ScoringVersion</c> (structure identity,
 /// <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
 /// </para>
 /// <para>
@@ -205,9 +206,14 @@ public sealed class ScoringEngine : IScoringEngine
 
         var insiderMaterialityDescriptor = insiderMaterialityWeights.CanonicalDescriptor();
         var mediaCollapseDescriptor = mediaCollapse.CanonicalDescriptor();
+
+        // Spec 148: the recent-signal window is an output-affecting input (it decides which signals the
+        // current AND previous/velocity windows contain), so it is hashed too. It is read from the SAME
+        // _options instance ScoreCompanyAsync slices with, so the hashed value and the value actually used
+        // cannot disagree — the same reasoning as the "SAME tuple" note below.
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
             EngineVersion, formula.Version, weights, attentionDescriptor, signalSourceDescriptor,
-            insiderMaterialityDescriptor, mediaCollapseDescriptor);
+            insiderMaterialityDescriptor, mediaCollapseDescriptor, _options.Window);
 
         // Build the effective-config projection from the SAME tuple the fingerprint hashes, so
         // EffectiveConfig.Fingerprint always equals the stamp on every snapshot this engine produces.
@@ -219,7 +225,8 @@ public sealed class ScoringEngine : IScoringEngine
             AttentionDescriptor: attentionDescriptor,
             SignalSourceDescriptor: signalSourceDescriptor,
             InsiderMaterialityDescriptor: insiderMaterialityDescriptor,
-            MediaCollapseDescriptor: mediaCollapseDescriptor);
+            MediaCollapseDescriptor: mediaCollapseDescriptor,
+            Window: _options.Window);
     }
 
     public EffectiveScoringConfig EffectiveConfig => _effectiveConfig;

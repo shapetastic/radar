@@ -2111,7 +2111,10 @@ public static class InfrastructureServiceCollectionExtensions
     /// <para>
     /// Requires the persistence registration (<see cref="AddInMemoryRadarPersistence"/>), the application
     /// services (<see cref="AddRadarApplicationServices"/>), a signal file store
-    /// (<see cref="AddFileSignalStore"/>), and a registered <see cref="ReplayPlan"/> — the composition root
+    /// (<see cref="AddFileSignalStore"/>), a scoring-config store
+    /// (<see cref="AddFileScoringConfigStore"/> — spec 148: the runner records each strategy's effective
+    /// config and runs the startup identity tripwire, exactly as the forward runners do), and a registered
+    /// <see cref="ReplayPlan"/> — the composition root
     /// owns the plan because parsing a <c>from/to/step</c> series out of configuration is a config concern that
     /// must not leak into <c>Radar.Application</c>.
     /// </para>

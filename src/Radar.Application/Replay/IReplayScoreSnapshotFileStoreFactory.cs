@@ -24,4 +24,19 @@ public interface IReplayScoreSnapshotFileStoreFactory
     /// <paramref name="runLabel"/>.
     /// </summary>
     IScoreSnapshotFileStore ForStrategy(string runLabel, ScoringStrategyDefinition strategy);
+
+    /// <summary>
+    /// How many snapshot writes into (<paramref name="runLabel"/>, <paramref name="strategy"/>) have
+    /// REPLACED a file that was already on disk (spec 148). Replay names its files by AS-OF instant so that
+    /// a re-run is idempotent — which also means a re-run under the same label silently replaces a series
+    /// that may already have been ranked. Only the layer that computes the target path can tell, so it is
+    /// counted there and surfaced here.
+    /// <para>
+    /// The counter is MONOTONIC for the lifetime of the factory instance and is never reset, so a caller
+    /// spanning several runs takes a before/after difference rather than reading an absolute. Returns 0 for
+    /// a pair that has never been written. It is pure bookkeeping: it changes no path, no file content and
+    /// no score, and it is hashed into nothing.
+    /// </para>
+    /// </summary>
+    int OverwrittenCount(string runLabel, ScoringStrategyDefinition strategy);
 }

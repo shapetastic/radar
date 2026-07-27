@@ -121,8 +121,12 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         // emitted signal's Strength/Novelty/confidence-gate are hashed, plus (spec 119) the READING MODEL
         // identity, because a different model produces a different DIRECTION for the same filing.
         // MaxFilingsPerRun and MaxConsecutiveRateLimited are cost/operational caps (a per-run fetch limit and a
-        // 429 circuit breaker, like ScoringWindowDays which spec 105 confirmed is deliberately NOT a fingerprint
-        // input) — they are EXCLUDED so tuning them does not falsely re-stamp otherwise-comparable runs.
+        // 429 circuit breaker) — they are EXCLUDED so tuning them does not falsely re-stamp otherwise-comparable
+        // runs. They bound how MANY filings get read, never the Strength/Novelty/direction/confidence-gate of a
+        // signal that IS emitted. NOTE: spec 105 excluded ScoringWindowDays on what looked like the same
+        // grounds; SPEC 148 REVERSED THAT SPECIFIC CALL — the scoring window IS hashed now, because it changes
+        // WHICH signals are scored (it bounds both the current and the previous/velocity window). These caps do
+        // not, so they stay excluded on their own merits rather than by that analogy.
         // InvariantCulture keeps the string culture-independent; "G29" is the decimal round-trip format ("R" is
         // documented only for the floating-point types, not decimal), so the MinConfidence contribution is
         // injective across [0,1]. Field order is FIXED (str, nov, minconf, model — model appended LAST so the

@@ -24,4 +24,28 @@ public sealed class FileScoreSnapshotStoreOptions
     /// </para>
     /// </summary>
     public Func<CompanyScoreSnapshot, string>? SnapshotFileName { get; init; }
+
+    /// <summary>
+    /// Optional observer invoked when a write has SUCCESSFULLY replaced a file that was already on disk at
+    /// the same path (spec 148). <c>null</c> (the default) is the forward/live path: the existence probe is
+    /// not even made, so nothing about the established behaviour changes.
+    /// <para>
+    /// The probe necessarily happens before the write (afterwards the file always exists) but the callback
+    /// fires only on the success branch: serialization or the graceful disk-failure path can still abandon the
+    /// write, and the aggregated operator warning this feeds must not assert a replacement that never
+    /// happened.
+    /// </para>
+    /// <para>
+    /// It exists because <see cref="SnapshotFileName"/> above makes replay idempotent by NAME — and the very
+    /// same property means a second replay under the same label replaces a series that may already have been
+    /// ranked, silently. The only place that can tell is <see cref="FileScoreSnapshotStore.WriteAsync"/>,
+    /// which knows the target path before it writes; putting the probe anywhere else would need a second copy
+    /// of the path arithmetic, which would then be free to drift.
+    /// </para>
+    /// <para>
+    /// It must not throw and must not write: it is bookkeeping for an aggregated operator warning, never a
+    /// gate. The write proceeds either way (upsert-by-Id / last-write-wins is unchanged).
+    /// </para>
+    /// </summary>
+    public Action<CompanyScoreSnapshot>? OnSnapshotOverwritten { get; init; }
 }

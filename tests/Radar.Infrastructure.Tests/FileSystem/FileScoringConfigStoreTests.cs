@@ -16,6 +16,11 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     private const string InsiderMaterialityDescriptor = "buy=5000000:8;sell=5000000:8;cluster=1;";
     private const string MediaCollapseDescriptor = "media-collapse-v1;window=3;";
 
+    // Spec 148: the recent-signal window is a hashed field AND is carried verbatim on the persisted record,
+    // so the store's descriptor↔fingerprint self-verification still holds. Deliberately NOT the 30-day
+    // default, so a self-verification that ignored the field would fail rather than pass by coincidence.
+    private static readonly TimeSpan Window = TimeSpan.FromDays(21);
+
     private readonly string _tempDir;
 
     public FileScoringConfigStoreTests()
@@ -52,14 +57,15 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         new(
             Fingerprint: ScoringConfigFingerprint.Compute(
                 EngineVersion, FormulaVersion, weights, AttentionDescriptor, SignalSourceDescriptor,
-                InsiderMaterialityDescriptor, MediaCollapseDescriptor),
+                InsiderMaterialityDescriptor, MediaCollapseDescriptor, Window),
             EngineVersion: EngineVersion,
             FormulaVersion: FormulaVersion,
             Weights: weights,
             AttentionDescriptor: AttentionDescriptor,
             SignalSourceDescriptor: SignalSourceDescriptor,
             InsiderMaterialityDescriptor: InsiderMaterialityDescriptor,
-            MediaCollapseDescriptor: MediaCollapseDescriptor);
+            MediaCollapseDescriptor: MediaCollapseDescriptor,
+            Window: Window);
 
     private static EffectiveScoringConfig ReadStored(string path)
     {
@@ -88,8 +94,35 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         Assert.Equal(config.SignalSourceDescriptor, stored.SignalSourceDescriptor);
         Assert.Equal(config.InsiderMaterialityDescriptor, stored.InsiderMaterialityDescriptor);
         Assert.Equal(config.MediaCollapseDescriptor, stored.MediaCollapseDescriptor);
+        Assert.Equal(config.Window, stored.Window);
         // Every ScoringWeights value round-trips (record equality compares all init properties).
         Assert.Equal(config.Weights, stored.Weights);
+    }
+
+    [Fact]
+    public void LegacyConfigFile_WithNoWindowProperty_DeserializesAsUnrecorded_NotZero()
+    {
+        // Spec 148: EffectiveScoringConfig.Window is nullable ON PURPOSE. A config file written before this
+        // slice has no window field, and reading that absence as TimeSpan.Zero would be a FALSE record — it
+        // would claim a zero-length window no run ever used, and (worse) it would look recomputable. null
+        // means "written pre-148; not recorded", which is honest and visibly un-recomputable.
+        var json = """
+        {
+          "fingerprint": "radar-scoring-fp-legacy00000",
+          "engineVersion": "mvp-engine-v1",
+          "formulaVersion": "radar-formula-v8",
+          "weights": {},
+          "attentionDescriptor": "attn:v1;unknown=0.4",
+          "signalSourceDescriptor": "rules=radar-keyword-rules-v6;",
+          "insiderMaterialityDescriptor": "buy=5000000:8;sell=5000000:8;cluster=1;",
+          "mediaCollapseDescriptor": "media-collapse-v1;window=3;"
+        }
+        """;
+
+        var config = JsonSerializer.Deserialize<EffectiveScoringConfig>(json, RadarFileStoreJson.Options);
+
+        Assert.NotNull(config);
+        Assert.Null(config!.Window);
     }
 
     [Fact]
@@ -125,11 +158,17 @@ public sealed class FileScoringConfigStoreTests : IDisposable
 
         var stored = ReadStored(path);
 
+        // Spec 148: the window is carried on the record precisely so the recompute below is still possible.
+        // Every NEW write populates it (null would mean "written before spec 148"), so a missing value here
+        // is a defect, not a legacy file.
+        Assert.Equal(Window, stored.Window);
+
         // Self-verification: the hash is no longer opaque — recomputing it from the DESERIALIZED config
         // equals both the filename (sans .json) and the stored Fingerprint field.
         var recomputed = ScoringConfigFingerprint.Compute(
             stored.EngineVersion, stored.FormulaVersion, stored.Weights, stored.AttentionDescriptor,
-            stored.SignalSourceDescriptor, stored.InsiderMaterialityDescriptor, stored.MediaCollapseDescriptor);
+            stored.SignalSourceDescriptor, stored.InsiderMaterialityDescriptor, stored.MediaCollapseDescriptor,
+            stored.Window!.Value);
 
         Assert.Equal(Path.GetFileNameWithoutExtension(path), recomputed);
         Assert.Equal(stored.Fingerprint, recomputed);

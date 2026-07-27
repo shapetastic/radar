@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
+
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Replay;
@@ -22,15 +25,23 @@ namespace Radar.Application.Tests.Replay;
 /// </summary>
 internal sealed class ReplayTestHarness : IDisposable
 {
-    private ReplayTestHarness(string root, ServiceProvider provider)
+    private readonly bool _ownsRoot;
+
+    private ReplayTestHarness(
+        string root, ServiceProvider provider, CapturingLoggerProvider logs, bool ownsRoot)
     {
         Root = root;
         Provider = provider;
+        Logs = logs;
+        _ownsRoot = ownsRoot;
     }
 
     public string Root { get; }
 
     public ServiceProvider Provider { get; }
+
+    /// <summary>Every log entry the composed graph emitted, so aggregated operator warnings are assertable.</summary>
+    public CapturingLoggerProvider Logs { get; }
 
     /// <summary>The on-disk signal store root — the cross-run previous/velocity window's source.</summary>
     public string SignalsDirectory => Path.Combine(Root, "signals");
@@ -40,6 +51,12 @@ internal sealed class ReplayTestHarness : IDisposable
 
     /// <summary>The replay output root — its own directory, not under <see cref="ScoresDirectory"/>.</summary>
     public string ReplaysDirectory => Path.Combine(Root, "replays");
+
+    /// <summary>
+    /// The content-addressed effective-scoring-config store root, plus its per-strategy-name identity records
+    /// under <c>strategies/</c>. Spec 148: a replay writes here — provenance, not a scoring mutation.
+    /// </summary>
+    public string ScoringConfigsDirectory => Path.Combine(Root, "scoring-configs");
 
     public ISignalRepository Signals => Provider.GetRequiredService<ISignalRepository>();
 
@@ -59,16 +76,27 @@ internal sealed class ReplayTestHarness : IDisposable
 
     public IReplayRunner ReplayRunner => Provider.GetRequiredService<IReplayRunner>();
 
+    /// <summary>
+    /// A SECOND, independently-composed graph over an existing harness's data root — a stand-in for "the same
+    /// operator, a later process, a different replay label". It never deletes the root; the harness that
+    /// created it still owns cleanup.
+    /// </summary>
+    public static ReplayTestHarness CreateSharingRootOf(ReplayTestHarness other, ReplayPlan plan) =>
+        Create(plan, root: other.Root, ownsRoot: false);
+
     public static ReplayTestHarness Create(
         ReplayPlan plan,
         ScoringStrategySet? strategies = null,
         IScoreFormulaFactory? formulaFactory = null,
-        TimeSpan? scoringWindow = null)
+        TimeSpan? scoringWindow = null,
+        string? root = null,
+        bool ownsRoot = true)
     {
-        var root = Path.Combine(Path.GetTempPath(), $"radar-replay-{Guid.NewGuid():N}");
+        root ??= Path.Combine(Path.GetTempPath(), $"radar-replay-{Guid.NewGuid():N}");
 
+        var logs = new CapturingLoggerProvider();
         var services = new ServiceCollection();
-        services.AddLogging();
+        services.AddLogging(b => b.AddProvider(logs).SetMinimumLevel(LogLevel.Debug));
 
         // Registered BEFORE AddRadarApplicationServices so these concrete instances win over its TryAdd
         // defaults — exactly the precedence the Worker composition relies on.
@@ -91,12 +119,15 @@ internal sealed class ReplayTestHarness : IDisposable
         services.AddRadarApplicationServices();
         services.AddFileSignalStore(Path.Combine(root, "signals"));
         services.AddFileScoreStore(Path.Combine(root, "scores"));
+        // Spec 148: replay records its provenance (the effective config) and runs the identity tripwire, so
+        // the graph needs the same scoring-config store the Worker registers in every run mode.
+        services.AddFileScoringConfigStore(Path.Combine(root, "scoring-configs"));
 
         // The composition root owns the plan (config parsing never reaches Radar.Application).
         services.AddSingleton(plan);
         services.AddRadarReplay(Path.Combine(root, "replays"));
 
-        return new ReplayTestHarness(root, services.BuildServiceProvider());
+        return new ReplayTestHarness(root, services.BuildServiceProvider(), logs, ownsRoot);
     }
 
     /// <summary>
@@ -139,9 +170,14 @@ internal sealed class ReplayTestHarness : IDisposable
         return (signal, evidence);
     }
 
-    public async Task<Guid> SeedCompanyAsync(string ticker = "ACME")
+    /// <summary>
+    /// Seeds a company into this graph's company repository. <paramref name="id"/> lets a second harness over
+    /// a SHARED data root enrol the SAME subject company: the repositories are per-container, so a replay
+    /// there would otherwise enumerate a brand-new, signal-less company instead of replaying the same series.
+    /// </summary>
+    public async Task<Guid> SeedCompanyAsync(string ticker = "ACME", Guid? id = null)
     {
-        var company = new CompanyBuilder().WithId(Guid.NewGuid()).WithTicker(ticker).Build();
+        var company = new CompanyBuilder().WithId(id ?? Guid.NewGuid()).WithTicker(ticker).Build();
         await Companies.AddAsync(company, CancellationToken.None);
         return company.Id;
     }
@@ -172,6 +208,39 @@ internal sealed class ReplayTestHarness : IDisposable
         return map;
     }
 
+    /// <summary>
+    /// Captures every log entry the composed graph emits, keyed by category, so a test can assert on an
+    /// aggregated operator warning (spec 148's same-label overwrite) rather than on a side effect of it.
+    /// </summary>
+    internal sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<(string Category, LogLevel Level, string Message)> _entries = new();
+
+        public IReadOnlyList<(string Category, LogLevel Level, string Message)> Entries => [.. _entries];
+
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, _entries);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class CapturingLogger(
+            string category, ConcurrentQueue<(string, LogLevel, string)> entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter) =>
+                entries.Enqueue((category, logLevel, formatter(state, exception)));
+        }
+    }
+
     private static Radar.Domain.Signals.SignalReview ReviewFor(Signal signal) => new(
         Id: Guid.NewGuid(),
         SignalId: signal.Id,
@@ -184,6 +253,12 @@ internal sealed class ReplayTestHarness : IDisposable
     public void Dispose()
     {
         Provider.Dispose();
+
+        if (!_ownsRoot)
+        {
+            // A shared-root harness never deletes the directory out from under its owner.
+            return;
+        }
 
         try
         {
