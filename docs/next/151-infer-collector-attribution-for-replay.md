@@ -28,6 +28,29 @@ This is re-deriving a fact that was known and dropped — categorically differen
 which the standing rule (and spec 145) forbids. **But it is still an inference, and it must never be
 indistinguishable from a recorded fact.**
 
+## Pre-validated before this spec was dispatched (2026-07-27)
+
+The mapping below was run over the live store **before** queueing this slice, against the 341 records that
+carry recorded attribution, ignoring their recorded value:
+
+- **341 / 341 agree — 100%, zero disagreements.**
+- **Zero ambiguous:** all 6,388 files resolve. `newssearch` 3,365 (52.7%) / `sec-edgar` 1,160 (18.2%) /
+  `sec-13dg` 850 (13.3%) / `sec-form4` 673 (10.5%) / `RssPressReleaseCollector` 319 (5.0%) /
+  `usaspending` 21 (0.3%).
+
+Rules used: `government_contract` → `usaspending`; `press_release` → `RssPressReleaseCollector`;
+`news_article` → `newssearch`; `filing` + `form=4` → `sec-form4`; `filing` + `form` starting `SC 13` →
+`sec-13dg`; any other `filing` with a form → `sec-edgar`.
+
+⚠️ **Re-run this yourself — do not take it on trust — and note WHAT IT DOES NOT PROVE.** The 341 ground-truth
+records are 337 `newssearch`, 2 `sec-form4`, 2 `RssPressReleaseCollector`. **`sec-edgar` (1,160) and
+`sec-13dg` (850) are reasoned, not validated** — and `filings-led`'s two channels are exactly `sec-form4` and
+`sec-13dg`, so the least-validated mappings carry the experiment. **Specifically check whether the general
+SEC/EDGAR collector also fetches Form 4 and 13D/G filings**; if it does, `form` alone does not identify the
+producing collector and the mapping needs a stronger discriminator (e.g. `metadata.secFeedUrl`) or those
+records must stay unattributed. Since nothing is currently ambiguous, an over-confident mapping is the main
+risk this slice carries.
+
 ## Design
 
 ### 1. Validate the mapping against the 341 records that DO have recorded attribution
