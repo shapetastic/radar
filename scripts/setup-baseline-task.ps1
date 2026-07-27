@@ -13,6 +13,32 @@
 # duration of that process). Keep the key file outside the repo and ACL'd to your account.
 #
 # Use -WhatIf to print what would be registered without touching the scheduler.
+#
+# SPLITTING THE SCHEDULE (spec 144) - MAINTAINER ACTION, NOT DONE BY THIS SLICE.
+# -Mode defaults to 'full', so re-running this script with the arguments you already use re-registers exactly
+# today's combined RadarBaselineDaily and nothing changes. Splitting collection from scoring is an explicit,
+# elevated, opt-in step: register two tasks with distinct -TaskName values and delete/disable the combined one.
+#
+#   # from an ELEVATED PowerShell, in the repo root:
+#   .\scripts\setup-baseline-task.ps1 -TaskName RadarCollectDaily -Mode collect -At 09:00 `
+#       -KeyFile 'C:\path\to\your\deepinfra-key.txt' -SecUserAgent 'Your Name you@example.com'
+#   .\scripts\setup-baseline-task.ps1 -TaskName RadarScoreDaily   -Mode score   -At 09:30 `
+#       -KeyFile 'C:\path\to\your\deepinfra-key.txt' -SecUserAgent 'Your Name you@example.com'
+#   Unregister-ScheduledTask -TaskName RadarBaselineDaily -Confirm:$false   # only once the two above are proven
+#
+# Notes for that split:
+#   * schedule the score task AFTER the collect task has had time to finish - they are independent processes and
+#     nothing sequences them for you. A score pass that runs early simply scores slightly less recent evidence;
+#     it never fails for that reason.
+#   * a score task STILL needs -KeyFile and -SecUserAgent: the AI descriptor is a ScoringConfigVersion input, so
+#     the AI seam is registered (never invoked) and the earnings reader it wires demands the SEC User-Agent.
+#     Dropping either would re-stamp every strategy's fingerprint.
+#   * a score task runs NO collector, so it costs no SEC / GDELT / Google News traffic and no AI spend - that
+#     is what makes repeating it cheap. It is NOT request-free, though: Radar:Prices:Enabled is independent of
+#     Radar:RunMode and the default profile sets it true, so each score pass also fetches daily price history
+#     per ticker (AD-14 reference data, acquired outside the pipeline). Before registering a score task that
+#     repeats often, point it at a profile overlay with "Prices": { "Enabled": false } (via -Profile) and leave
+#     price acquisition on the collect task.
 
 [CmdletBinding()]
 param(
@@ -23,6 +49,8 @@ param(
     [string]$TaskName      = "RadarBaselineDaily",
     [string]$At            = "09:00",
     [string]$Profile       = "default",
+    [ValidateSet("full", "collect", "score")]
+    [string]$Mode          = "full",                    # Which pass the task runs (spec 144). Default leaves RadarBaselineDaily exactly as it is.
     [string]$KeyEnvVar     = "DEEPINFRA_API_KEY",
     [string]$RepoPath      = "",
     [switch]$WhatIf
@@ -45,6 +73,7 @@ $argumentString = @(
     '-KeyFile', ('"{0}"' -f $KeyFile)
     '-KeyEnvVar', $KeyEnvVar
     '-Profile', $Profile
+    '-Mode', $Mode
     '-SecUserAgent', ('"{0}"' -f $SecUserAgent)
 ) -join ' '
 
@@ -52,6 +81,7 @@ Write-Host "==== $TaskName ====" -ForegroundColor Cyan
 Write-Host "Action    : powershell.exe $argumentString"
 Write-Host "Working in: $RepoPath"
 Write-Host "Trigger   : daily at $At"
+Write-Host "Mode      : $Mode$(if ($Mode -eq 'full') { '  (the combined collect+score run - unchanged)' })"
 Write-Host "Note      : the API key VALUE is not stored in the task - only the key-file PATH; the wrapper loads it at run time."
 
 if ($WhatIf) { Write-Host "`n(-WhatIf: the scheduled task was NOT registered)" -ForegroundColor Yellow; return }
@@ -64,4 +94,4 @@ $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIden
 # -Force re-points an existing task at the current wrapper/arguments instead of failing.
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 
-Write-Host "Registered '$TaskName' (daily $At)." -ForegroundColor Green
+Write-Host "Registered '$TaskName' (daily $At, mode $Mode)." -ForegroundColor Green

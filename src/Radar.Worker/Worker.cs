@@ -77,6 +77,11 @@ public sealed class Worker : BackgroundService
     {
         try
         {
+            // Which pass this process is (spec 144), logged ONCE up front so an unattended scheduled run's
+            // log says whether it was the combined pass, a collect pass, a score pass or a replay. Purely
+            // observational: the registered IRadarPipeline / IReplayRunner is what selects the behaviour.
+            _logger.LogInformation("Radar run mode: {RunMode}.", RadarRunModes.Token(_options.Mode));
+
             // Seed the watch-universe once at startup (idempotent, AD-1) before any pipeline run.
             var seeded = await _seeder.SeedAsync(stoppingToken).ConfigureAwait(false);
             _logger.LogInformation("Seeded {Count} companies into the watch-universe.", seeded);

@@ -383,6 +383,14 @@ public sealed class RadarPipelineRunnerTests
         public ScoringStrategySet StrategySet { get; }
         public RadarPipelineRunner Runner { get; }
 
+        // Spec 144: the two extracted passes and the two standalone verb runners over the SAME graph.
+        public CollectionPass CollectionPass { get; }
+        public ScoringPass ScoringPass { get; }
+        public CollectOnlyPipelineRunner CollectOnlyRunner { get; }
+        public IScoringStrategyFactory StrategyFactory { get; }
+        public IWeeklyReportBuilder ReportBuilder { get; }
+        public TimeProvider Clock { get; }
+
         public Harness(
             IEvidenceCollector collector,
             ISignalExtractor extractor,
@@ -416,6 +424,7 @@ public sealed class RadarPipelineRunnerTests
         {
             ScoringConfigStore = scoringConfigStore ?? new RecordingScoringConfigStore();
             var time = timeProvider ?? new FixedTimeProvider(FixedNow);
+            Clock = time;
 
             var resolver = new CompanyResolver(Companies, NullLogger<CompanyResolver>.Instance);
             var reviewer = new DeterministicSignalReviewer(
@@ -441,6 +450,7 @@ public sealed class RadarPipelineRunnerTests
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
                 new ScoringOptions(),
                 NullLogger<ScoringEngine>.Instance);
+            StrategyFactory = strategyFactory;
             var reportBuilder = new WeeklyReportBuilder(
                 Companies,
                 Scores,
@@ -455,11 +465,15 @@ public sealed class RadarPipelineRunnerTests
                 new WeeklyReportOptions(),
                 time,
                 NullLogger<WeeklyReportBuilder>.Instance);
+            ReportBuilder = reportBuilder;
 
             var mapper = new CollectedEvidenceMapper(
                 new EvidenceNormalizer(), NullLogger<CollectedEvidenceMapper>.Instance);
 
-            Runner = new RadarPipelineRunner(
+            // Spec 144: the runner is now the COMPOSITION of the two extracted passes. The harness builds
+            // them from exactly the same fakes the runner used to hold directly, so every pre-existing
+            // assertion still exercises the same code — only the seam moved.
+            CollectionPass = new CollectionPass(
                 collectors,
                 mapper,
                 Evidence,
@@ -471,18 +485,50 @@ public sealed class RadarPipelineRunnerTests
                 Reviews,
                 SignalStore,
                 Companies,
+                healthValidator ?? new StubCollectionHealthValidator(),
+                time,
+                NullLogger<CollectionPass>.Instance,
+                directionalFilingSignals);
+
+            ScoringPass = new ScoringPass(strategyFactory, ScoreStores, ScoringConfigStore);
+
+            Runner = new RadarPipelineRunner(
+                CollectionPass,
+                ScoringPass,
                 strategyFactory,
-                ScoreStores,
                 ScoringConfigStore,
                 reportBuilder,
                 ReportWriter,
                 RunStore,
-                healthValidator ?? new StubCollectionHealthValidator(),
                 options,
-                time,
-                NullLogger<RadarPipelineRunner>.Instance,
-                directionalFilingSignals);
+                NullLogger<RadarPipelineRunner>.Instance);
+
+            CollectOnlyRunner = new CollectOnlyPipelineRunner(
+                CollectionPass,
+                strategyFactory,
+                ScoringConfigStore,
+                RunStore,
+                NullLogger<CollectOnlyPipelineRunner>.Instance);
         }
+
+        /// <summary>
+        /// A standalone score runner over the SAME graph, at the supplied as-of instant (null ⇒ now from the
+        /// harness clock). Built on demand so a test can choose the instant.
+        /// </summary>
+        public ScoreOnlyPipelineRunner ScoreOnlyRunner(
+            PipelineOptions options, DateTimeOffset? asOfUtc = null, TimeProvider? timeProvider = null) =>
+            new(
+                ScoringPass,
+                Companies,
+                StrategyFactory,
+                ScoringConfigStore,
+                ReportBuilder,
+                ReportWriter,
+                RunStore,
+                options,
+                new ScoringPassOptions { AsOfUtc = asOfUtc },
+                timeProvider ?? Clock,
+                NullLogger<ScoreOnlyPipelineRunner>.Instance);
     }
 
     /// <summary>
@@ -2219,4 +2265,344 @@ public sealed class RadarPipelineRunnerTests
         public Task<CollectionResult> CollectAsync(CollectionContext context, CancellationToken ct) =>
             throw new InvalidOperationException("The descriptor must never call CollectAsync.");
     }
+
+    // =================================================================================================
+    // Spec 144 — collect and score as independently invokable passes.
+    // =================================================================================================
+
+    /// <summary>
+    /// THE primary acceptance criterion (spec 144): <c>collect</c> then <c>score</c> produces
+    /// byte-identical scores to the combined run over the same inputs and the same as-of instant.
+    /// <para>
+    /// Two identical fixture worlds on the SAME fixed clock: one runs the combined
+    /// <see cref="RadarPipelineRunner"/>, the other runs <see cref="CollectOnlyPipelineRunner"/> and then
+    /// <see cref="ScoreOnlyPipelineRunner"/>. The persisted snapshots are compared as RECORDS — i.e. on
+    /// every field at once, so a field added later is covered by construction — with only the per-call
+    /// minted <c>Guid</c>s normalised away. That is the same deliberate exclusion the spec-139
+    /// replay⊆forward tests make: the engine mints those on EVERY call, so two consecutive forward runs
+    /// differ in them just as much; they identify a scoring EVENT, not a scoring RESULT. The evidence links
+    /// are compared the same way.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task CollectThenScore_ProducesByteIdenticalScoresToTheCombinedRun()
+    {
+        var companyId = Guid.NewGuid();
+        var options = new PipelineOptions { GenerateReport = true };
+
+        var combined = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]),
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            options);
+        await SeedCompanyAsync(combined, companyId);
+
+        var split = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]),
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            options);
+        await SeedCompanyAsync(split, companyId);
+
+        var combinedResult = await combined.Runner.RunAsync(default);
+
+        var collectResult = await split.CollectOnlyRunner.RunAsync(default);
+        var scoreResult = await split.ScoreOnlyRunner(options).RunAsync(default);
+
+        // Not vacuous: the combined run really did score this company off real evidence.
+        Assert.Equal(1, combinedResult.CompaniesScored);
+        Assert.NotEmpty(combined.ScoreStores.Primary.Written);
+
+        // The two passes between them reproduce every counter the combined run reported.
+        Assert.Equal(combinedResult.EvidenceCollected, collectResult.EvidenceCollected);
+        Assert.Equal(combinedResult.EvidenceNew, collectResult.EvidenceNew);
+        Assert.Equal(combinedResult.SignalsExtracted, collectResult.SignalsExtracted);
+        Assert.Equal(combinedResult.SignalsApproved, collectResult.SignalsApproved);
+        Assert.Equal(combinedResult.CompaniesScored, scoreResult.CompaniesScored);
+
+        var expected = combined.ScoreStores.Primary.Written;
+        var actual = split.ScoreStores.Primary.Written;
+        Assert.Equal(expected.Count, actual.Count);
+
+        for (var i = 0; i < expected.Count; i++)
+        {
+            Assert.Equal(WithoutMintedId(expected[i].Snapshot), WithoutMintedId(actual[i].Snapshot));
+            Assert.Equal(
+                expected[i].Links.Select(WithoutMintedIds),
+                actual[i].Links.Select(WithoutMintedIds));
+        }
+
+        // The provenance chain survived the split: the scored snapshot still links to real evidence, and
+        // each link's SignalId — the one id normalised away above — really does resolve to a stored signal.
+        var links = Assert.Single(actual).Links;
+        Assert.NotEmpty(links);
+        var storedSignalIds = (await split.Signals.GetByCompanyAsync(companyId, default))
+            .Select(s => s.Id)
+            .ToHashSet();
+        Assert.All(links, l => Assert.Contains(l.SignalId, storedSignalIds));
+    }
+
+    /// <summary>
+    /// A <c>score</c> pass performs NO collection and NO AI read. Structural, not incidental: the runner is
+    /// handed a spy collector and a spy directional (AI) filing source through the shared graph and neither
+    /// is ever called, because <see cref="ScoreOnlyPipelineRunner"/> has no dependency that could reach them.
+    /// </summary>
+    [Fact]
+    public async Task ScorePass_InvokesNoCollectorAndPerformsNoAiRead()
+    {
+        var collector = new CountingCollector(AsResult([BuildFilingCollected()]));
+        var ai = new FakeDirectionalFilingSignalSource(_ => MaterialSignal(type: "GuidanceChange"));
+
+        var h = new Harness(
+            collector,
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: ai);
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        var result = await h.ScoreOnlyRunner(new PipelineOptions { GenerateReport = false }).RunAsync(default);
+
+        Assert.Equal(0, collector.CollectCallCount);
+        Assert.Equal(0, ai.CallCount);
+
+        // …and it really did score (so the assertions above are not green because nothing happened).
+        Assert.Equal(1, result.CompaniesScored);
+        Assert.Single(h.ScoreStores.Primary.Written);
+
+        // Every collection counter is honestly zero, and the run record names no collector.
+        Assert.Equal(0, result.EvidenceCollected);
+        Assert.Equal(0, result.SignalsExtracted);
+        Assert.Equal(0, result.SourcesChecked);
+        Assert.Empty(Assert.Single(h.RunStore.Written).Collectors);
+    }
+
+    /// <summary>
+    /// The structural guarantee behind the test above, asserted directly so it survives future edits: the
+    /// standalone score runner takes NO dependency through which collection could happen. A future change
+    /// that injects a collector, mapper, extractor, resolver, reviewer, raw-evidence store or AI source into
+    /// this type fails here rather than silently re-hitting external APIs on a scheduled scoring run.
+    /// </summary>
+    [Fact]
+    public void ScoreOnlyPipelineRunner_TakesNoCollectionDependency()
+    {
+        Type[] forbidden =
+        [
+            typeof(IEvidenceCollector),
+            typeof(IEnumerable<IEvidenceCollector>),
+            typeof(CollectedEvidenceMapper),
+            typeof(ISignalExtractor),
+            typeof(ICompanyResolver),
+            typeof(ISignalReviewer),
+            typeof(IRawEvidenceStore),
+            typeof(IDirectionalFilingSignalSource),
+            typeof(ICollectionPass),
+        ];
+
+        var parameters = typeof(ScoreOnlyPipelineRunner)
+            .GetConstructors()
+            .SelectMany(c => c.GetParameters())
+            .Select(p => p.ParameterType)
+            .ToList();
+
+        Assert.NotEmpty(parameters);
+        foreach (var type in forbidden)
+        {
+            Assert.DoesNotContain(type, parameters);
+        }
+    }
+
+    /// <summary>
+    /// A PAST-DATED standalone score is a replay, and must not write the live series. It throws pointing at
+    /// <c>Radar:Replay:*</c>, and — because the guard runs before anything is loaded or written — leaves no
+    /// snapshot, no score-file write, no report and no run record behind.
+    /// </summary>
+    [Fact]
+    public async Task PastDatedScorePass_Throws_AndWritesNothing()
+    {
+        var h = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]),
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = true });
+        var companyId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId);
+
+        var runner = h.ScoreOnlyRunner(
+            new PipelineOptions { GenerateReport = true }, asOfUtc: FixedNow.AddDays(-1));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(default));
+        Assert.Contains("Radar:Replay", ex.Message, StringComparison.Ordinal);
+
+        Assert.Empty(h.ScoreStores.Primary.Written);
+        Assert.Empty(await h.Scores.GetSnapshotsForCompanyAsync(companyId, default));
+        Assert.Empty(h.ReportWriter.Written);
+        Assert.Empty(h.RunStore.Written);
+    }
+
+    /// <summary>
+    /// An as-of instant equal to "now" is NOT past-dated — the boundary is inclusive, so the ordinary
+    /// explicitly-pinned-to-this-instant case still runs. (A future instant is likewise allowed: it is not a
+    /// replay, and the spec-136 known-at predicate simply includes everything Radar knows.)
+    /// </summary>
+    [Fact]
+    public async Task ScorePassAtExactlyNow_IsAllowed()
+    {
+        var h = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]),
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        var result = await h
+            .ScoreOnlyRunner(new PipelineOptions { GenerateReport = false }, asOfUtc: FixedNow)
+            .RunAsync(default);
+
+        Assert.Equal(1, result.CompaniesScored);
+        Assert.Equal(FixedNow, Assert.Single(h.ScoreStores.Primary.Written).Snapshot.WindowEndUtc);
+    }
+
+    /// <summary>
+    /// An UNCONFIGURED as-of ("now") must never trip its own past-date guard on an advancing clock. The
+    /// runner takes exactly ONE <c>GetUtcNow()</c> and feeds it to both the guard's "now" and the <c>??</c>
+    /// default; two reads — with the default resolved from the earlier one — would make <c>asOf &lt; now</c>
+    /// on any real clock and turn every unconfigured score pass into a hard failure. Asserted here on the
+    /// harness's advancing clock (every read is strictly later than the last), which is what a production
+    /// wall clock does.
+    /// </summary>
+    [Fact]
+    public async Task ScorePassWithNoConfiguredAsOf_DoesNotTripItsOwnPastDateGuard_OnAnAdvancingClock()
+    {
+        var advancing = new AdvancingTimeProvider(FixedNow, TimeSpan.FromMilliseconds(200));
+
+        var h = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]),
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = false },
+            timeProvider: advancing);
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        // asOfUtc null ⇒ "now". No throw, and the pass really scores.
+        var result = await h
+            .ScoreOnlyRunner(new PipelineOptions { GenerateReport = false }, asOfUtc: null)
+            .RunAsync(default);
+
+        Assert.Equal(1, result.CompaniesScored);
+        Assert.Single(h.ScoreStores.Primary.Written);
+    }
+
+    /// <summary>
+    /// A <c>collect</c> pass writes evidence and signals and writes NO score snapshot and NO report. It
+    /// still writes the append-only run record, with the scoring fields left unclaimed.
+    /// </summary>
+    [Fact]
+    public async Task CollectPass_WritesEvidenceAndSignals_ButNoScoreAndNoReport()
+    {
+        var h = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]),
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = true });
+        var companyId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.CollectOnlyRunner.RunAsync(default);
+
+        // Stages 1–5 all happened.
+        Assert.Equal(1, result.EvidenceNew);
+        Assert.Single(h.RawStore.Written);
+        Assert.NotEmpty(h.SignalStore.Written);
+        Assert.NotEmpty(await h.Signals.GetByCompanyAsync(companyId, default));
+
+        // Stage 6 and 7 did not — even though GenerateReport is true, because a collect pass has no
+        // reporting stage at all.
+        Assert.Equal(0, result.CompaniesScored);
+        Assert.Null(result.ReportId);
+        Assert.Empty(h.ScoreStores.Primary.Written);
+        Assert.Empty(await h.Scores.GetSnapshotsForCompanyAsync(companyId, default));
+        Assert.Empty(h.ReportWriter.Written);
+
+        // The run record is written, names the collectors that ran, and claims no scoring.
+        var run = Assert.Single(h.RunStore.Written);
+        Assert.NotEmpty(run.Collectors);
+        Assert.Equal(0, run.CompaniesScored);
+        Assert.Null(run.ReportId);
+        Assert.Null(run.Strategies);
+        Assert.Null(run.PrimaryStrategy);
+    }
+
+    /// <summary>
+    /// The spec-141 tripwire still guards a standalone pass — both of them. A strategy edited in place fails
+    /// the collect pass before any collection happens AND fails the score pass before any snapshot lands.
+    /// </summary>
+    [Fact]
+    public async Task StandalonePasses_StillFailFastOnAnEditedStrategyIdentity()
+    {
+        var collector = new CountingCollector(AsResult([BuildCollected()]));
+        var configStore = new RecordingScoringConfigStore();
+        configStore.StrategyFingerprints[ScoringStrategySet.DefaultStrategyName] = "radar-scoring-fp-stale";
+
+        var h = new Harness(
+            collector,
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = false },
+            scoringConfigStore: configStore);
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.CollectOnlyRunner.RunAsync(default));
+        Assert.Equal(0, collector.CollectCallCount);
+        Assert.Empty(h.RawStore.Written);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.ScoreOnlyRunner(new PipelineOptions { GenerateReport = false }).RunAsync(default));
+        Assert.Empty(h.ScoreStores.Primary.Written);
+        Assert.Empty(h.RunStore.Written);
+    }
+
+    /// <summary>
+    /// A <c>score</c> pass may still build the report (stage 7 is optional, not removed), and it does so with
+    /// an EMPTY collection summary — nothing was collected this pass, so the transparency footer must not
+    /// claim otherwise.
+    /// </summary>
+    [Fact]
+    public async Task ScorePass_BuildsTheReport_WhenGenerateReportIsTrue()
+    {
+        var h = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]),
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        // Accrue something to score first.
+        await h.CollectOnlyRunner.RunAsync(default);
+        h.RunStore.Written.Clear();
+
+        var result = await h
+            .ScoreOnlyRunner(new PipelineOptions { GenerateReport = true })
+            .RunAsync(default);
+
+        Assert.NotNull(result.ReportId);
+        Assert.Equal(result.ReportId, Assert.Single(h.ReportWriter.Written).Id);
+        Assert.Equal(CollectionSummary.Empty, result.Collection);
+
+        var run = Assert.Single(h.RunStore.Written);
+        Assert.Equal(result.ReportId, run.ReportId);
+        Assert.Equal([ScoringStrategySet.DefaultStrategyName], run.Strategies);
+        Assert.Equal(ScoringStrategySet.DefaultStrategyName, run.PrimaryStrategy);
+    }
+
+    /// <summary>
+    /// Normalises the per-call minted <c>Guid</c> out of a snapshot so two runs can be compared as RECORDS on
+    /// every other field. Same deliberate exclusion the replay⊆forward tests make.
+    /// </summary>
+    private static Radar.Domain.Scoring.CompanyScoreSnapshot WithoutMintedId(
+        Radar.Domain.Scoring.CompanyScoreSnapshot snapshot) => snapshot with { Id = Guid.Empty };
+
+    /// <summary>
+    /// The link equivalent of <see cref="WithoutMintedId"/>. <c>SignalId</c> is normalised too, for the SAME
+    /// reason: <c>ExtractedSignalMapper</c> mints a fresh <c>Signal.Id</c> on every extraction, so two
+    /// independent collection passes over identical content mint different signal ids — exactly as two
+    /// consecutive combined runs do. The link's CONTENT-derived identity, <c>EvidenceId</c> (spec 145), is
+    /// compared verbatim, as are the contribution reason and weight; the caller additionally asserts that
+    /// each normalised <c>SignalId</c> resolves to a stored signal, so the chain is checked rather than
+    /// waved through.
+    /// </summary>
+    private static Radar.Domain.Scoring.ScoreEvidenceLink WithoutMintedIds(
+        Radar.Domain.Scoring.ScoreEvidenceLink link) =>
+        link with { Id = Guid.Empty, ScoreSnapshotId = Guid.Empty, SignalId = Guid.Empty };
 }

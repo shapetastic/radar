@@ -32,6 +32,12 @@ internal static class RadarWorkerServices
     {
         var options = configuration.GetSection("Radar").Get<RadarWorkerOptions>() ?? new RadarWorkerOptions();
 
+        // Which PASS this process runs (spec 144), resolved here in the composition root — verb parsing is a
+        // hosting concern and Radar.Application never sees a mode string. Reconciles Radar:RunMode with the
+        // spec-139 Radar:Replay:Enabled switch and fails fast on an unknown mode or on the one contradictory
+        // combination (a live collect/score pass asked for alongside a read-only replay).
+        var runMode = RadarRunModes.Resolve(options.RunMode, options.Replay.Enabled);
+
         // Fail fast with a clear message: a non-positive interval would otherwise throw an opaque
         // ArgumentOutOfRangeException from PeriodicTimer when the worker starts looping.
         if (!options.RunOnce && options.IntervalMinutes <= 0)
@@ -55,6 +61,7 @@ internal static class RadarWorkerServices
         {
             RunOnce = options.RunOnce,
             Interval = TimeSpan.FromMinutes(options.IntervalMinutes),
+            Mode = runMode,
         });
 
         // Attention source-quality tiers (spec 88): bind the optional Radar:Attention section and register it
@@ -124,10 +131,147 @@ internal static class RadarWorkerServices
             FetchTimeout = TimeSpan.FromSeconds(options.Sec.GlobalFetchTimeoutSeconds),
         });
 
-        // Enable the configured evidence collectors additively (case-insensitive). Each kind registers
-        // its collector as IEvidenceCollector, composing into the IEnumerable the runner now consumes.
-        // Fail fast with a clear message on an empty list or an unknown kind, mirroring the interval
-        // check above. De-dupe defensively so a config typo listing the same kind twice registers once.
+        // Enable the configured evidence collectors additively — UNLESS this is a standalone "score" pass
+        // (spec 144), which registers NO COLLECTOR AT ALL and does not even validate Radar:Collectors.
+        // Construction is what opens the typed HttpClients (and, for the SEC kinds, what enforces the
+        // User-Agent), so "constructs and invokes no collector" has to mean "is never registered", not "is
+        // registered but never called". Consequences, stated rather than hidden:
+        // ISignalSourceDescriptor.CollectionProvenance() records the EMPTY collector set on that pass's
+        // snapshots (recorded provenance, hashed into NOTHING — no fingerprint moves, no component score
+        // changes), and a radar-formula-v9 strategy declaring collector channels cannot start up in score
+        // mode, because the spec-146 "a channel may only name a REGISTERED collector" guard is deliberately
+        // left intact rather than weakened. Same class of caveat spec 139 already records for replay.
+        if (runMode != RadarRunMode.Score)
+        {
+            AddConfiguredCollectors(services, options);
+        }
+
+        // Wire the AI chat-client seam ONLY when a provider is configured (opt-in gate). AI is not a collector,
+        // so it is gated on Provider presence rather than the Collectors list. A blank Provider (the default)
+        // leaves the graph byte-for-byte identical to today — no IChatClient/IChatClientFactory is registered.
+        //
+        // SPEC 144: this block runs in EVERY mode, INCLUDING "score", and that is deliberate.
+        // IDirectionalFilingSignalSource.ScoringDescriptor() is folded into ScoringConfigVersion via
+        // SignalSourceDescriptor's ai= segment (spec 106/119), so omitting the seam from a score pass would
+        // move the fingerprint and break "collect-then-score is byte-identical to the combined run". The
+        // source is only ever INVOKED by the collection pass — which a score pass does not have — so "a score
+        // pass performs no AI read" still holds structurally. Practical consequence: a score pass needs the
+        // same Radar:Ai configuration (and the same API key in the environment) as the collect pass.
+        AddConfiguredAi(services, options);
+
+        // Wire the price-history reference seam ONLY when Radar:Prices:Enabled is true (opt-in gate, mirroring the
+        // Radar:Ai gate). Price is validation/reference data — NOT evidence, NOT a signal, NOT a scoring input
+        // (AD-14): the reader is not an IEvidenceCollector, the store is consumed by nothing in the pipeline, and
+        // the acquirer runs OUTSIDE IRadarPipeline. When disabled (the default) NONE of these are registered,
+        // Worker's optional IPriceHistoryAcquirer? stays null, and the pipeline graph is byte-for-byte unchanged.
+        if (options.Prices.Enabled)
+        {
+            if (options.Prices.InterRequestDelaySeconds < 0)
+            {
+                throw new InvalidOperationException(
+                    "Radar:Prices:InterRequestDelaySeconds must not be negative; configure a non-negative polite "
+                        + "pace (default 1) — a negative value is nonsensical configuration.");
+            }
+
+            // AddHttpPriceHistoryReader validates the range and fails fast on a typo'd Radar:Prices:Range.
+            services.AddHttpPriceHistoryReader(options.Prices.Range);
+            services.AddFilePriceHistoryStore(options.PricesDirectory);
+            services.AddSingleton(new PriceAcquisitionOptions
+            {
+                InterRequestDelay = TimeSpan.FromSeconds(options.Prices.InterRequestDelaySeconds),
+            });
+            // TimeProvider.System is already registered by AddRadarApplicationServices (called above).
+            services.AddSingleton<IPriceHistoryAcquirer, PriceHistoryAcquirer>();
+        }
+
+        // Wire the price-efficacy reporting seam ONLY when Radar:Efficacy:Enabled is true (opt-in gate, mirroring
+        // the Radar:Prices gate). The efficacy layer is READ-ONLY over score history + price (AD-14 read side): it
+        // JOINs persisted score snapshots to the price reference store and writes a per-company score-vs-price
+        // SVG + CSV; it never feeds evidence/signal/scoring and runs OUTSIDE IRadarPipeline. When disabled (the
+        // default) NONE of these are registered, Worker's optional IEfficacyReportGenerator? stays null, and the
+        // pipeline graph is byte-for-byte unchanged.
+        if (options.Efficacy.Enabled)
+        {
+            // The efficacy JOIN READS the price reference store. When price ACQUISITION is disabled the store is
+            // not registered by the block above, so register the read-only file store here (pointing at the same
+            // data/prices root) so the builder can read any existing {ticker}.json. When Prices.Enabled it is
+            // already registered — avoid a duplicate registration.
+            if (!options.Prices.Enabled)
+            {
+                services.AddFilePriceHistoryStore(options.PricesDirectory);
+            }
+
+            services.AddFileEfficacyArtifactStore(options.EfficacyDirectory);
+            services.AddRadarEfficacyReport();
+        }
+
+        // Wire the historical as-of replay seam ONLY when the resolved run mode is Replay (spec 139, extended
+        // by spec 144's Radar:RunMode reconciliation — Radar:Replay:Enabled alone still selects it, unchanged).
+        // Replay is a read-only OFFLINE mode: it re-scores ALREADY-STORED signals at past instants through the
+        // SAME scoring seam the live pipeline uses, and writes only under Radar:ReplayDirectory. Otherwise NONE
+        // of these are registered, Worker's optional IReplayRunner? stays null, and the pipeline graph is
+        // byte-for-byte unchanged.
+        //
+        // The from/to/step series is parsed HERE, in the composition root, and crosses into Radar.Application
+        // already resolved and validated — IConfiguration never reaches that layer (CLAUDE.md layering).
+        if (runMode == RadarRunMode.Replay)
+        {
+            services.AddSingleton(BuildReplayPlan(options.Replay));
+            services.AddRadarReplay(options.ReplayDirectory);
+        }
+
+        services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
+        services.AddFileRawEvidenceStore(options.EvidenceRawDirectory);
+        services.AddFileSignalStore(options.SignalsDirectory);
+        // Spec 142: the composed app reads accrued history. Repoints ISignalRepository /
+        // IEvidenceRepository from the empty-every-process in-memory singletons registered by
+        // AddInMemoryRadarPersistence onto the SAME file-store instances registered on the two lines above.
+        // Must follow them (it resolves those singletons) and AddInMemoryRadarPersistence (it removes their
+        // in-memory registrations). No config toggle: a composed run that could silently score from an empty
+        // store is precisely the failure mode this slice exists to remove. It is ALSO what makes spec 144's
+        // standalone score pass possible at all — without it that pass would score an empty store.
+        services.AddDurableRadarSignalHistory();
+        services.AddFileScoreStore(options.ScoresDirectory);
+        services.AddFileReportWriter(options.ReportDirectory);
+        services.AddFilePipelineRunStore(options.RunsDirectory);
+        services.AddFileScoringConfigStore(options.ScoringConfigsDirectory);
+
+        // Spec 144: which PASS this process runs. Replay keeps registering the combined pipeline exactly as
+        // before — the replay runner REPLACES the run inside Worker, so the graph must stay byte-for-byte
+        // what it was.
+        switch (runMode)
+        {
+            case RadarRunMode.Collect:
+                services.AddRadarCollectOnlyPipeline();
+                break;
+            case RadarRunMode.Score:
+                // The as-of instant is parsed here (config→domain boundary) and crosses into
+                // Radar.Application already resolved. Blank ⇒ null ⇒ "now" at run time.
+                services.AddSingleton(new ScoringPassOptions
+                {
+                    AsOfUtc = string.IsNullOrWhiteSpace(options.Score.AsOfUtc)
+                        ? null
+                        : ParseUtcInstant(options.Score.AsOfUtc, "Radar:Score:AsOfUtc"),
+                });
+                services.AddRadarScoreOnlyPipeline();
+                break;
+            default:
+                services.AddRadarPipeline();
+                break;
+        }
+
+        services.AddHostedService<Worker>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the configured evidence collectors additively (case-insensitive). Each kind registers its
+    /// collector as <c>IEvidenceCollector</c>, composing into the <c>IEnumerable</c> the collection pass
+    /// consumes. Fails fast with a clear message on an empty list or an unknown kind. De-dupes defensively so
+    /// a config typo listing the same kind twice registers once.
+    /// </summary>
+    private static void AddConfiguredCollectors(IServiceCollection services, RadarWorkerOptions options)
+    {
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
             throw new InvalidOperationException(
@@ -257,10 +401,22 @@ internal static class RadarWorkerServices
                     $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", \"fda\", and \"trademarks\".");
             }
         }
+    }
 
-        // Wire the AI chat-client seam ONLY when a provider is configured (opt-in gate). AI is not a collector,
-        // so it is gated on Provider presence rather than the Collectors list. A blank Provider (the default)
-        // leaves the graph byte-for-byte identical to today — no IChatClient/IChatClientFactory is registered.
+    /// <summary>
+    /// Wires the AI chat-client seam ONLY when a provider is configured (opt-in gate). AI is not a collector,
+    /// so it is gated on Provider presence rather than the Collectors list. A blank Provider (the default)
+    /// leaves the graph byte-for-byte identical to before AI existed — no IChatClient/IChatClientFactory is
+    /// registered.
+    /// <para>
+    /// Spec 144: this runs in EVERY run mode, INCLUDING <c>score</c>, deliberately. The directional filing
+    /// source's <c>ScoringDescriptor()</c> is a <c>ScoringConfigVersion</c> INPUT (via
+    /// <c>SignalSourceDescriptor</c>'s <c>ai=</c> segment), so leaving it out of a score pass would move the
+    /// fingerprint and break the byte-identical-scores guarantee. Only the collection pass ever INVOKES it.
+    /// </para>
+    /// </summary>
+    private static void AddConfiguredAi(IServiceCollection services, RadarWorkerOptions options)
+    {
         if (!string.IsNullOrWhiteSpace(options.Ai.Provider))
         {
             // For the OpenAI-compatible provider, an optional nested model (Radar:Ai:OpenAi:Model) overrides the
@@ -372,85 +528,6 @@ internal static class RadarWorkerServices
                 services.AddFileFilingReadDebugStore(options.FilingReadDebugDirectory);
             }
         }
-
-        // Wire the price-history reference seam ONLY when Radar:Prices:Enabled is true (opt-in gate, mirroring the
-        // Radar:Ai gate). Price is validation/reference data — NOT evidence, NOT a signal, NOT a scoring input
-        // (AD-14): the reader is not an IEvidenceCollector, the store is consumed by nothing in the pipeline, and
-        // the acquirer runs OUTSIDE IRadarPipeline. When disabled (the default) NONE of these are registered,
-        // Worker's optional IPriceHistoryAcquirer? stays null, and the pipeline graph is byte-for-byte unchanged.
-        if (options.Prices.Enabled)
-        {
-            if (options.Prices.InterRequestDelaySeconds < 0)
-            {
-                throw new InvalidOperationException(
-                    "Radar:Prices:InterRequestDelaySeconds must not be negative; configure a non-negative polite "
-                        + "pace (default 1) — a negative value is nonsensical configuration.");
-            }
-
-            // AddHttpPriceHistoryReader validates the range and fails fast on a typo'd Radar:Prices:Range.
-            services.AddHttpPriceHistoryReader(options.Prices.Range);
-            services.AddFilePriceHistoryStore(options.PricesDirectory);
-            services.AddSingleton(new PriceAcquisitionOptions
-            {
-                InterRequestDelay = TimeSpan.FromSeconds(options.Prices.InterRequestDelaySeconds),
-            });
-            // TimeProvider.System is already registered by AddRadarApplicationServices (called above).
-            services.AddSingleton<IPriceHistoryAcquirer, PriceHistoryAcquirer>();
-        }
-
-        // Wire the price-efficacy reporting seam ONLY when Radar:Efficacy:Enabled is true (opt-in gate, mirroring
-        // the Radar:Prices gate). The efficacy layer is READ-ONLY over score history + price (AD-14 read side): it
-        // JOINs persisted score snapshots to the price reference store and writes a per-company score-vs-price
-        // SVG + CSV; it never feeds evidence/signal/scoring and runs OUTSIDE IRadarPipeline. When disabled (the
-        // default) NONE of these are registered, Worker's optional IEfficacyReportGenerator? stays null, and the
-        // pipeline graph is byte-for-byte unchanged.
-        if (options.Efficacy.Enabled)
-        {
-            // The efficacy JOIN READS the price reference store. When price ACQUISITION is disabled the store is
-            // not registered by the block above, so register the read-only file store here (pointing at the same
-            // data/prices root) so the builder can read any existing {ticker}.json. When Prices.Enabled it is
-            // already registered — avoid a duplicate registration.
-            if (!options.Prices.Enabled)
-            {
-                services.AddFilePriceHistoryStore(options.PricesDirectory);
-            }
-
-            services.AddFileEfficacyArtifactStore(options.EfficacyDirectory);
-            services.AddRadarEfficacyReport();
-        }
-
-        // Wire the historical as-of replay seam ONLY when Radar:Replay:Enabled is true (opt-in gate, mirroring
-        // the Radar:Efficacy gate). Replay is a read-only OFFLINE mode: it re-scores ALREADY-STORED signals at
-        // past instants through the SAME scoring seam the live pipeline uses, and writes only under
-        // Radar:ReplayDirectory. When disabled (the default) NONE of these are registered, Worker's optional
-        // IReplayRunner? stays null, and the pipeline graph is byte-for-byte unchanged.
-        //
-        // The from/to/step series is parsed HERE, in the composition root, and crosses into Radar.Application
-        // already resolved and validated — IConfiguration never reaches that layer (CLAUDE.md layering).
-        if (options.Replay.Enabled)
-        {
-            services.AddSingleton(BuildReplayPlan(options.Replay));
-            services.AddRadarReplay(options.ReplayDirectory);
-        }
-
-        services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
-        services.AddFileRawEvidenceStore(options.EvidenceRawDirectory);
-        services.AddFileSignalStore(options.SignalsDirectory);
-        // Spec 142: the composed app reads accrued history. Repoints ISignalRepository /
-        // IEvidenceRepository from the empty-every-process in-memory singletons registered by
-        // AddInMemoryRadarPersistence onto the SAME file-store instances registered on the two lines above.
-        // Must follow them (it resolves those singletons) and AddInMemoryRadarPersistence (it removes their
-        // in-memory registrations). No config toggle: a composed run that could silently score from an empty
-        // store is precisely the failure mode this slice exists to remove.
-        services.AddDurableRadarSignalHistory();
-        services.AddFileScoreStore(options.ScoresDirectory);
-        services.AddFileReportWriter(options.ReportDirectory);
-        services.AddFilePipelineRunStore(options.RunsDirectory);
-        services.AddFileScoringConfigStore(options.ScoringConfigsDirectory);
-        services.AddRadarPipeline();
-
-        services.AddHostedService<Worker>();
-        return services;
     }
 
     /// <summary>
@@ -496,9 +573,8 @@ internal static class RadarWorkerServices
     }
 
     /// <summary>
-    /// Parses one replay bound as a UTC instant. A value without an explicit offset is read as UTC
-    /// (<c>AssumeUniversal</c>) rather than as machine-local time, so "2026-05-01" means the same as-of instant
-    /// on every machine — a replay's whole premise is a reproducible point in time (AD-7).
+    /// Parses one replay bound as a UTC instant. Blank is a startup failure here (a replay range is never
+    /// inferred); the parse itself is the shared <see cref="ParseUtcInstant"/>.
     /// </summary>
     private static DateTimeOffset ParseReplayInstant(string? value, string configKey)
     {
@@ -509,6 +585,18 @@ internal static class RadarWorkerServices
                     + "\"2026-05-01\" or \"2026-05-01T00:00:00Z\". A replay range is never inferred.");
         }
 
+        return ParseUtcInstant(value, configKey);
+    }
+
+    /// <summary>
+    /// Parses a configured as-of instant (a replay bound, or <c>Radar:Score:AsOfUtc</c>) as UTC. A value
+    /// without an explicit offset is read as UTC (<c>AssumeUniversal</c>) rather than as machine-local time,
+    /// so "2026-05-01" means the same as-of instant on every machine — an as-of instant's whole premise is a
+    /// reproducible point in time (AD-7). ONE parser for every such key, so the two can never disagree about
+    /// what an offsetless value means.
+    /// </summary>
+    private static DateTimeOffset ParseUtcInstant(string value, string configKey)
+    {
         if (!DateTimeOffset.TryParse(
                 value.Trim(),
                 CultureInfo.InvariantCulture,

@@ -491,6 +491,62 @@ Do not hand back broken code.
   - **Known pre-existing gap, deliberately NOT fixed here**: `ScoringWeights.TrajectoryCorroborationK` is not
     a `ScoringConfigFingerprint` field, so tuning it re-stamps nothing — for v8 *and* now for v9's channel
     direction factor. Adding it would move both pinned fingerprints, which this slice is required not to do.
+- **Collection and scoring are two independently invokable passes; there is still ONE scoring code path
+  (spec 144).** `Radar:RunMode` ∈ `full` (default) | `collect` | `score` | `replay`, case-insensitive, unknown
+  ⇒ fail fast listing the valid tokens. **`full` is byte-for-byte the pre-144 combined run** — same stage
+  order, counters, log line and run record. The point: collection runs daily on its own schedule and writes
+  durable evidence + signals; scoring runs separately over whatever has accrued, as often as you like, so
+  adding or re-running a strategy costs a scoring pass — no collector runs, hence no SEC fair-access exposure,
+  no GDELT/Google-News traffic and no AI spend. **It is not request-free**, though: `Radar:Prices:Enabled` is
+  independent of `RunMode` and price acquisition runs OUTSIDE `IRadarPipeline` (AD-14), so with the shipped
+  `default.json` (which enables it) a score pass still fetches daily price history per ticker — turn
+  `Radar:Prices:Enabled` off on a frequently-repeated score pass. Rules:
+  - **The runner was SPLIT, not copied.** `RadarPipelineRunner.RunAsync`'s body is now `ICollectionPass`
+    (stages 1–5, incl. the collection-health validation and the after-collection `asOfUtc` capture) +
+    `IScoringPass` (the stage-6 strategy × company loop). `RadarPipelineRunner` (combined),
+    `CollectOnlyPipelineRunner` and `ScoreOnlyPipelineRunner` all implement `IRadarPipeline` and all compose
+    those SAME two types — there is exactly one stage-6 loop in the codebase, and replay (139) still drives
+    the same `ScoringEngine`. A second copy would drift and silently invalidate `replay ⊆ forward`.
+  - **`StrategyIdentityGuard` (141) stays the FIRST statement of all three runners** — "a misconfiguration
+    costs no collection", and for the score pass "…and no snapshot lands under the old name".
+  - **A `score` pass registers NO collector — but DOES register the AI seam.** In score mode
+    `RadarWorkerServices` skips the whole `Radar:Collectors` loop (and does not validate the key): CONSTRUCTION
+    is what opens the typed HttpClients, so "constructs and invokes no collector" has to mean "is never
+    registered". The AI block still runs, deliberately, because
+    `IDirectionalFilingSignalSource.ScoringDescriptor()` is a `ScoringConfigVersion` input via
+    `SignalSourceDescriptor`'s `ai=` segment — omitting it would move the fingerprint and break the
+    byte-identical-scores criterion. It is only ever *invoked* by the collection pass, so "no AI read" holds
+    structurally. **Operational consequence: a score pass needs the same `Radar:Ai` config (and
+    `DEEPINFRA_API_KEY`) — and the same `Radar:Sec:UserAgent`, since the AI seam wires the earnings reader — as
+    a collect pass, even though it issues no request.**
+  - **Recorded limitation, same class as replay's**: with no collector registered, a score pass's snapshots
+    record `collectors=;` in `CollectionProvenance` (recorded, hashed into nothing — no fingerprint moves, no
+    component changes; asserted end-to-end), and `ScoringInput.EnabledCollectors` is empty, so a
+    `radar-formula-v9` collector channel reads as "did not run". Consequently **a v9 strategy declaring
+    collector channels cannot start up in `score` mode** — the spec-146 "a channel may only name a REGISTERED
+    collector" guard is deliberately left INTACT rather than weakened. No shipped config uses v9 channels.
+  - **A past-dated standalone `score` is refused.** `Radar:Score:AsOfUtc` (blank ⇒ now, parsed through the
+    same `AssumeUniversal|AdjustToUniversal` helper the replay bounds use) may not be in the past: `score`
+    writes the LIVE series (what Radar thinks now) while `replay` writes the replay-scoped series (what Radar
+    *would* have thought). The guard throws before anything is loaded or written and points at
+    `Radar:Replay:*`; the boundary is inclusive, so "exactly now" runs.
+  - **Reconciled with 139, not a third mechanism**: `Radar:Replay:Enabled` alone still selects replay
+    (unchanged, and `run-radar.ps1 -Replay` still just sets it); `RunMode=replay` also selects it (a missing
+    range then fails in `BuildReplayPlan`, one message); `RunMode` `collect`/`score` **with**
+    `Replay:Enabled=true` fails fast naming both keys.
+  - **`collect` writes no score and no report** (even with `GenerateReport` true — it has no reporting stage),
+    and its run record carries `Strategies`/`PrimaryStrategy` `null` rather than claiming a scoring that never
+    happened. `score` reports zero collection counters, `Collectors: []` and `CollectionWarnings: null`.
+  - **Spec 142 is the load-bearing prerequisite** — mutation-proven: without `AddDurableRadarSignalHistory`
+    the score pass's container starts empty and scores nothing.
+  - **Scripts**: `run-radar.ps1 -Mode full|collect|score` (rejects `-Mode` + `-Replay` itself),
+    `run-baseline-scheduled.ps1 -Mode` passthrough, `setup-baseline-task.ps1 -Mode` threaded into the
+    registered task. **All three default to `full`, so `RadarBaselineDaily` is undisturbed by this slice** —
+    splitting the schedule is an explicit, elevated, maintainer-only step (register `RadarCollectDaily -Mode
+    collect` and `RadarScoreDaily -Mode score`, then retire the combined task; the header of
+    `setup-baseline-task.ps1` carries the exact commands).
+  - **No scoring change**: no new fingerprint input, no `_formula.Version` bump, no `RuleSetVersion` bump; the
+    pins (`radar-scoring-fp-2ce20f8fc497` / `radar-scoring-fp-3457da53489d`) do not move.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

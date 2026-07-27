@@ -2068,15 +2068,68 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the end-to-end pipeline runner. Requires the persistence registration
-    /// (<see cref="AddInMemoryRadarPersistence"/>), the application services
-    /// (<see cref="AddRadarApplicationServices"/>), and an evidence collector
+    /// Registers the end-to-end (COMBINED) pipeline runner — collect → … → score → report in one pass, which
+    /// is what <c>Radar:RunMode</c> <c>full</c> (the default) runs and what every existing composition means.
+    /// Requires the persistence registration (<see cref="AddInMemoryRadarPersistence"/>), the application
+    /// services (<see cref="AddRadarApplicationServices"/>), and an evidence collector
     /// (e.g. <see cref="AddLocalFileCollector"/>) to also be registered.
+    /// <para>
+    /// Spec 144 split the runner's body into <see cref="ICollectionPass"/> (stages 1–5) and
+    /// <see cref="IScoringPass"/> (stage 6), both registered here. The combined runner's observable behaviour
+    /// — stage order, counters, log line and run record — is unchanged; see
+    /// <see cref="AddRadarCollectOnlyPipeline"/> / <see cref="AddRadarScoreOnlyPipeline"/> for the two
+    /// standalone verbs.
+    /// </para>
     /// </summary>
     public static IServiceCollection AddRadarPipeline(this IServiceCollection services)
     {
         services.TryAddSingleton(new PipelineOptions());
+        services.TryAddSingleton<ICollectionPass, CollectionPass>();
+        services.TryAddSingleton<IScoringPass, ScoringPass>();
         services.AddSingleton<IRadarPipeline, RadarPipelineRunner>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the standalone <c>collect</c> pipeline (spec 144): stages 1–5 only — collect, extract,
+    /// resolve, review, store — then the run record. It runs the SAME <see cref="ICollectionPass"/> the
+    /// combined runner does; it simply never scores and never reports.
+    /// <para>
+    /// Same prerequisites as <see cref="AddRadarPipeline"/>, including at least one registered
+    /// <see cref="IEvidenceCollector"/>. <see cref="IScoringPass"/> is deliberately NOT registered — a collect
+    /// pass has no scoring stage to reach.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarCollectOnlyPipeline(this IServiceCollection services)
+    {
+        services.TryAddSingleton(new PipelineOptions());
+        services.TryAddSingleton<ICollectionPass, CollectionPass>();
+        services.AddSingleton<IRadarPipeline, CollectOnlyPipelineRunner>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the standalone <c>score</c> pipeline (spec 144): stage 6 (+ optionally 7) over the accrued
+    /// durable stores, with no collection and no AI read. It runs the SAME <see cref="IScoringPass"/> the
+    /// combined runner does, so there is exactly one stage-6 loop.
+    /// <para>
+    /// <see cref="ICollectionPass"/> is deliberately NOT registered, and the composition root registers no
+    /// <see cref="IEvidenceCollector"/> at all in this mode, so no collector is even constructed. Requires
+    /// the DURABLE signal/evidence read path (<see cref="AddDurableRadarSignalHistory"/>, spec 142) to be
+    /// meaningful: without it the scoring repositories start empty every process and a standalone score pass
+    /// would score nothing.
+    /// </para>
+    /// <para>
+    /// A <see cref="ScoringPassOptions"/> registered by the composition root selects the as-of instant; the
+    /// <c>TryAdd</c> default here means "now".
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarScoreOnlyPipeline(this IServiceCollection services)
+    {
+        services.TryAddSingleton(new PipelineOptions());
+        services.TryAddSingleton(new ScoringPassOptions());
+        services.TryAddSingleton<IScoringPass, ScoringPass>();
+        services.AddSingleton<IRadarPipeline, ScoreOnlyPipelineRunner>();
         return services;
     }
 

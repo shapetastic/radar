@@ -178,17 +178,4 @@ public sealed class ReplayWorkerOptionsTests
 
         Assert.Contains("Radar:Replay:From/To/Step", ex.Message);
     }
-
-    private sealed class FakeLifetime : IHostApplicationLifetime
-    {
-        public CancellationToken ApplicationStarted => CancellationToken.None;
-
-        public CancellationToken ApplicationStopping => CancellationToken.None;
-
-        public CancellationToken ApplicationStopped => CancellationToken.None;
-
-        public void StopApplication()
-        {
-        }
-    }
 }

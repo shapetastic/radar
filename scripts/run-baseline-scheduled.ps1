@@ -11,6 +11,15 @@
 #     time by scripts/setup-baseline-task.ps1.
 #   - A missing/empty key file FAILS LOUD (non-zero exit) rather than letting the run silently degrade.
 #
+# Mode passthrough (spec 144): -Mode selects which pass the scheduled run performs - 'full' (the default, the
+# combined collect+score run this task has always performed), 'collect' (stages 1-5 only) or 'score' (stage 6+7
+# over the accrued store, running NO collector - so no SEC / GDELT / Google News traffic and no AI spend).
+# A score pass is NOT request-free: Radar:Prices:Enabled is independent of Radar:RunMode, so with the default
+# profile it still fetches daily price history per ticker - see the -Mode score caveats in run-radar.ps1 and the
+# scheduling notes in setup-baseline-task.ps1. The key is still loaded for EVERY mode: a score pass needs the
+# same Radar:Ai configuration as a collect pass because the AI descriptor is a ScoringConfigVersion input, even
+# though it never issues an AI read.
+#
 # Example (interactive smoke test before registering the task):
 #   powershell -File scripts/run-baseline-scheduled.ps1 -KeyFile C:\path\to\key.txt -SecUserAgent "Name email" -WhatIf
 
@@ -20,6 +29,8 @@ param(
     [string]$KeyFile,                                   # Path to a file whose ENTIRE contents are the API key. Never committed, never echoed.
     [string]$KeyEnvVar     = "DEEPINFRA_API_KEY",       # The env var NAME the run profile's Radar:Ai:OpenAi:ApiKeyEnvVar declares.
     [string]$Profile       = "default",                 # The baseline profile; override only for a scheduled experiment.
+    [ValidateSet("full", "collect", "score")]
+    [string]$Mode          = "full",                    # Which pass to run (spec 144). Default keeps the existing combined baseline behaviour.
     [string]$SecUserAgent  = $(if ($env:RADAR_SEC_UA) { $env:RADAR_SEC_UA } else { "" }),  # SEC EDGAR needs a real "Name email"; falls back to $env:RADAR_SEC_UA.
     [switch]$SkipBuild,
     [switch]$WhatIf
@@ -59,6 +70,7 @@ if ([string]::IsNullOrWhiteSpace($SecUserAgent)) {
 
 Write-Host "==== Radar scheduled baseline ====" -ForegroundColor Cyan
 Write-Host "Profile: $Profile"
+Write-Host "Mode   : $Mode"
 Write-Host "API key: loaded into `$env:$KeyEnvVar from the configured key file (value never logged)."
 
 # --- run the measurement ---
@@ -66,7 +78,7 @@ Write-Host "API key: loaded into `$env:$KeyEnvVar from the configured key file (
 # (`[CmdletBinding()]`) script like run-radar.ps1 - the -SecUserAgent value gets orphaned as a positional
 # ("A positional parameter cannot be found ..."). Hashtable splatting binds by name and is the correct form.
 $runRadar = Join-Path $scriptDir "run-radar.ps1"
-$runArgs = @{ Profile = $Profile; SecUserAgent = $SecUserAgent }
+$runArgs = @{ Profile = $Profile; SecUserAgent = $SecUserAgent; Mode = $Mode }
 if ($SkipBuild) { $runArgs['SkipBuild'] = $true }
 if ($WhatIf)    { $runArgs['WhatIf']    = $true }
 
