@@ -45,6 +45,11 @@ public sealed record StrategyWindowMetric(
 /// <summary>
 /// One ranked strategy. <see cref="Rank"/> is assigned from the IN-SAMPLE metric only; the headline number a
 /// reader should weigh is <see cref="OutOfSample"/>, computed on dates the ranking never saw.
+/// <para>
+/// <see cref="ObservationsWithoutForwardPrice"/> counts company-days — the same (company, as-of) unit an
+/// observation is, de-duped the same way — so it is directly comparable with the coverage counts beside it
+/// rather than inflated by same-day re-runs that the usable side would have collapsed.
+/// </para>
 /// </summary>
 public sealed record StrategyLeaderboardRow(
     int Rank,

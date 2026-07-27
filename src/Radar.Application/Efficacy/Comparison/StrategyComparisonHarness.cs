@@ -164,11 +164,22 @@ public sealed class StrategyComparisonHarness
     /// LAST occurrence in the store's deterministic ascending-by-CreatedAtUtc order wins, so a same-day re-run
     /// replaces rather than double-counts its earlier self.
     /// </para>
+    /// <para>
+    /// <b>The unusable count is de-duped on the SAME key, for the same reason.</b> It is reported next to a
+    /// de-duped observation count, so counting raw points there would make the two sides of "how much of this
+    /// series was usable?" incommensurable — three snapshots of one company-day with no forward price would
+    /// read as three lost observations when the usable side would only ever have yielded one. It counts
+    /// company-days with NO usable observation: a key excluded here after any occurrence succeeded is not
+    /// lost coverage. Definedness cannot differ between occurrences of one key WITHIN one company's series —
+    /// the forward return is a function of that series' bars, the as-of date and the horizon alone — but a
+    /// strategy may legally carry the same company id in two series with different bars, and then it can, so
+    /// the exclusion is load-bearing rather than defensive.
+    /// </para>
     /// </summary>
     private static StrategyObservations BuildObservations(StrategyScoreSeries strategy, int horizonDays)
     {
         var byKey = new Dictionary<(Guid CompanyId, DateOnly AsOf), Observation>();
-        var withoutForwardPrice = 0;
+        var withoutForwardPrice = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
 
         foreach (var company in strategy.Companies)
         {
@@ -178,7 +189,7 @@ public sealed class StrategyComparisonHarness
                 var forward = ForwardReturn.TryCompute(company.PriceBars, asOf, horizonDays);
                 if (!forward.IsDefined)
                 {
-                    withoutForwardPrice++;
+                    withoutForwardPrice.Add((company.CompanyId, asOf));
                     continue;
                 }
 
@@ -187,6 +198,8 @@ public sealed class StrategyComparisonHarness
             }
         }
 
+        withoutForwardPrice.ExceptWith(byKey.Keys);
+
         var usable = byKey.Values.ToList();
         usable.Sort(static (a, b) =>
         {
@@ -194,7 +207,7 @@ public sealed class StrategyComparisonHarness
             return byDate != 0 ? byDate : a.CompanyId.CompareTo(b.CompanyId);
         });
 
-        return new StrategyObservations(strategy.StrategyName, usable, withoutForwardPrice);
+        return new StrategyObservations(strategy.StrategyName, usable, withoutForwardPrice.Count);
     }
 
     private static StrategyWindowMetric Metric(

@@ -183,8 +183,8 @@ public sealed class StrategyComparisonHarnessTests
     [Fact]
     public void Compare_CountsObservationsWithNoForwardPriceRatherThanHidingThem()
     {
-        // Every as-of date is inside the bar range, so shrink the horizon until the LAST dates run out of a
-        // distinct exit bar… instead, drop the price bars entirely for one company by comparing coverage.
+        // One company loses its price bars entirely, so every one of its scored days becomes unusable. No
+        // duplicate points here — this isolates "counted, not silently dropped" from the de-duping below.
         var full = ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout);
         var withoutPrices = new StrategyScoreSeries(
             full.StrategyName,
@@ -200,6 +200,62 @@ public sealed class StrategyComparisonHarnessTests
         Assert.Equal(ComparisonFixtures.AsOfDateCount, row.ObservationsWithoutForwardPrice);
         Assert.Equal(60, row.InSample.Coverage.Observations);   // 3 remaining companies × 20 dates
         Assert.Equal(3, row.InSample.Coverage.DistinctCompanies);
+    }
+
+    [Fact]
+    public void Compare_CountsCompanyDaysWithoutAForwardPriceOnceEvenWhenTheDayWasScoredTwice()
+    {
+        // Two runs on the same day both stamp a snapshot, so every (company, as-of) pair appears twice. The
+        // usable side collapses those to one observation; the unusable side must collapse them on the SAME
+        // key, or "observations without a forward price" is measured in a different unit from the coverage
+        // counts printed beside it and reads as double the coverage actually lost.
+        var full = ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout);
+        var duplicatedAndPartlyPriceless = new StrategyScoreSeries(
+            full.StrategyName,
+            [.. full.Companies.Select((c, i) => new CompanyEfficacySeries(
+                c.CompanyId,
+                c.CompanyName,
+                c.Ticker,
+                [.. c.Points, .. c.Points],           // same company-days, scored twice
+                i == 0 ? [] : c.PriceBars))]);        // company 0 has no price at all
+
+        var leaderboard = Harness.Compare([duplicatedAndPartlyPriceless], ComparisonFixtures.Options());
+
+        var row = Assert.Single(leaderboard.Rows);
+
+        // 30 company-days lost, not 60 points.
+        Assert.Equal(ComparisonFixtures.AsOfDateCount, row.ObservationsWithoutForwardPrice);
+
+        // …and the usable side is unmoved by the duplication, which is what makes the two commensurable.
+        Assert.Equal(60, row.InSample.Coverage.Observations);
+        Assert.Equal(30, row.OutOfSample.Coverage.Observations);
+        Assert.Equal(3, row.InSample.Coverage.DistinctCompanies);
+    }
+
+    [Fact]
+    public void Compare_DoesNotCountACompanyDayAsLostWhenAnotherSeriesForTheSameCompanyPricedIt()
+    {
+        // A strategy may legally carry one company id in two series — and only then can two occurrences of the
+        // same (company, as-of) key disagree about whether a forward return exists, because the bars differ.
+        // A key some occurrence DID price is not lost coverage, so it must not be counted as lost.
+        var full = ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout);
+        var company0 = full.Companies[0];
+        var withAPricelessShadow = new StrategyScoreSeries(
+            full.StrategyName,
+            [
+                .. full.Companies,
+                new CompanyEfficacySeries(
+                    company0.CompanyId, company0.CompanyName, company0.Ticker, company0.Points, []),
+            ]);
+
+        var leaderboard = Harness.Compare([withAPricelessShadow], ComparisonFixtures.Options());
+
+        var row = Assert.Single(leaderboard.Rows);
+        Assert.Equal(0, row.ObservationsWithoutForwardPrice);
+
+        // Every company-day is still scored exactly once — the shadow series adds no observation either.
+        Assert.Equal(80, row.InSample.Coverage.Observations);
+        Assert.Equal(4, row.InSample.Coverage.DistinctCompanies);
     }
 
     [Fact]
