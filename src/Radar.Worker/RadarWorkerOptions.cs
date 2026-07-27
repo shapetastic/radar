@@ -624,6 +624,55 @@ public sealed class EfficacyWorkerOptions
 {
     /// <summary>Whether to render the per-company price-efficacy SVG + CSV artifacts. DISABLED by default.</summary>
     public bool Enabled { get; init; }
+
+    /// <summary>
+    /// Strategy-vs-price comparison configuration (bound from "Radar:Efficacy:Comparison"; spec 140). Only
+    /// consulted when <see cref="Enabled"/> — the comparison is part of the efficacy read side.
+    /// </summary>
+    public StrategyComparisonWorkerOptions Comparison { get; init; } = new();
+}
+
+/// <summary>
+/// Strategy-vs-price comparison configuration (bound from "Radar:Efficacy:Comparison"; spec 140). ENABLED by
+/// default <b>within</b> the already-opt-in <c>Radar:Efficacy</c> gate, because with too little history it is a
+/// no-op that writes an honest "nothing could be ranked" leaderboard rather than an error, and it never touches
+/// an existing artifact.
+/// <para>
+/// It ranks strategies by how closely their scores tracked SUBSEQUENT price movement, with a chronological
+/// hold-out: the ranking is computed in-sample and the headline number is out-of-sample. Price is
+/// validation-only and read strictly downstream of scoring (AD-14); nothing here feeds a score.
+/// </para>
+/// </summary>
+public sealed class StrategyComparisonWorkerOptions
+{
+    /// <summary>Whether to emit the strategy leaderboard when efficacy reporting is enabled. Defaults to true.</summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// The forward horizon <c>h</c> in calendar days: a score at D is judged only against price over
+    /// <c>(D, D+h]</c>. Defaults to 21 (≈ one trading month). Must be at least 1.
+    /// </summary>
+    public int ForwardHorizonDays { get; init; } = 21;
+
+    /// <summary>
+    /// The share of DISTINCT as-of dates — taken from the chronologically latest end — held out of ranking and
+    /// used for the headline number. Defaults to 0.30. Must be strictly between 0 and 1.
+    /// </summary>
+    public double HoldOutFraction { get; init; } = 0.30;
+
+    /// <summary>
+    /// The minimum usable observations a strategy needs in EACH window to be ranked; below it the strategy is
+    /// dropped and named in the output. Defaults to 20. Must be at least 4 (the Fisher-z interval's floor).
+    /// </summary>
+    public int MinimumObservations { get; init; } = 20;
+
+    /// <summary>
+    /// Optional: compare a spec-139 REPLAY run's per-strategy series (the label under
+    /// <c>Radar:ReplayDirectory</c>) instead of the live forward series. Blank (the default) reads the live
+    /// forward series. A replay run replaces the pipeline run and never renders efficacy, so using this means
+    /// running the replay first and pointing a later pass at its label.
+    /// </summary>
+    public string ReplayLabel { get; init; } = string.Empty;
 }
 
 /// <summary>

@@ -1,4 +1,5 @@
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
@@ -22,7 +23,9 @@ namespace Radar.Worker;
 /// <see cref="IEfficacyReportGenerator"/> is invoked AFTER each pipeline run (so the freshly-persisted snapshot
 /// is included in the join) as a SEPARATE step, DISTINCT from and OUTSIDE <see cref="IRadarPipeline"/> (AD-14
 /// read side): it READS score history + price and writes only efficacy artifacts. When disabled the dependency
-/// is <c>null</c> and the step is skipped.
+/// is <c>null</c> and the step is skipped. The optional
+/// <see cref="IStrategyComparisonReportGenerator"/> (spec 140, <c>Radar:Efficacy:Comparison:Enabled</c>) runs
+/// in the same step, immediately after it, with the same read-only posture.
 /// </para>
 /// <para>
 /// When the opt-in historical as-of replay is enabled (<c>Radar:Replay:Enabled</c>), the optional
@@ -43,6 +46,7 @@ public sealed class Worker : BackgroundService
     private readonly IPriceHistoryAcquirer? _priceHistoryAcquirer;
     private readonly IEfficacyReportGenerator? _efficacyReportGenerator;
     private readonly IReplayRunner? _replayRunner;
+    private readonly IStrategyComparisonReportGenerator? _strategyComparisonGenerator;
 
     public Worker(
         ICompanyUniverseSeeder seeder,
@@ -53,7 +57,8 @@ public sealed class Worker : BackgroundService
         ILogger<Worker> logger,
         IPriceHistoryAcquirer? priceHistoryAcquirer = null,
         IEfficacyReportGenerator? efficacyReportGenerator = null,
-        IReplayRunner? replayRunner = null)
+        IReplayRunner? replayRunner = null,
+        IStrategyComparisonReportGenerator? strategyComparisonGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -71,6 +76,7 @@ public sealed class Worker : BackgroundService
         _priceHistoryAcquirer = priceHistoryAcquirer;
         _efficacyReportGenerator = efficacyReportGenerator;
         _replayRunner = replayRunner;
+        _strategyComparisonGenerator = strategyComparisonGenerator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -160,6 +166,15 @@ public sealed class Worker : BackgroundService
         if (_efficacyReportGenerator is not null)
         {
             await _efficacyReportGenerator.GenerateAsync(ct).ConfigureAwait(false);
+        }
+
+        // Spec 140's strategy-vs-price comparison: the same AD-14 read-side posture, immediately after the
+        // per-company render and still OUTSIDE IRadarPipeline. Skipped (dependency null) unless
+        // Radar:Efficacy:Enabled AND Radar:Efficacy:Comparison:Enabled. It ranks Radar's own strategies
+        // against subsequent price movement and writes one leaderboard artifact pair; it promotes nothing.
+        if (_strategyComparisonGenerator is not null)
+        {
+            await _strategyComparisonGenerator.GenerateAsync(ct).ConfigureAwait(false);
         }
     }
 }

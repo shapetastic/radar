@@ -21,4 +21,24 @@ public sealed record EfficacyPoint(
     string? ScoringConfigVersion,   // the config fingerprint (null = pre-stamp/unknown); annotation, not a key
     DateOnly? PriceAsOfDate,        // the actual bar date used (at-or-before ScoreDate), null if unpaired
     decimal? PriceClose,
-    decimal? PriceAdjClose);
+    decimal? PriceAdjClose)
+{
+    /// <summary>
+    /// The date the score's knowledge window ENDED (the snapshot's <c>WindowEndUtc</c>) — the <c>D</c> in
+    /// spec 140's "score at D judged against price over (D, D+h]". Additive and trailing (init-only) so every
+    /// existing construction site and every existing rendered artifact is unchanged; the CSV/SVG renderers do
+    /// not read it, so their output is byte-identical.
+    /// <para>
+    /// It is NOT the same fact as <see cref="ScoreDate"/> (which is <c>CreatedAtUtc</c>, the run instant). For
+    /// a forward run the two coincide. For a spec-139 <b>replay</b> snapshot they do not: <c>CreatedAtUtc</c>
+    /// is the replay process's wall clock (identical for every point in the replay), while
+    /// <c>WindowEndUtc</c> is the simulated as-of instant that actually bounded what the score could see. Only
+    /// the as-of date is a meaningful anchor for a forward-return horizon, so the comparison harness uses it.
+    /// </para>
+    /// <para>
+    /// <c>null</c> means "not recorded" (a hand-constructed point); consumers fall back to
+    /// <see cref="ScoreDate"/>.
+    /// </para>
+    /// </summary>
+    public DateOnly? AsOfDate { get; init; }
+}

@@ -82,4 +82,52 @@ public sealed class FileEfficacyArtifactStoreTests : IDisposable
         Assert.Equal(Path.Combine(rootAsFile, "mrcy.svg"), paths.SvgPath);
         Assert.Equal(Path.Combine(rootAsFile, "mrcy.csv"), paths.CsvPath);
     }
+
+    [Fact]
+    public async Task WriteLeaderboardAsync_WritesOneFixedNamedPairUnderTheRoot()
+    {
+        var store = CreateStore();
+
+        var paths = await store.WriteLeaderboardAsync(
+            "status,rank\nranked,1\n", "# Strategy vs price\n", CancellationToken.None);
+
+        var expectedCsv = Path.Combine(_tempDir, "strategy-leaderboard.csv");
+        var expectedMd = Path.Combine(_tempDir, "strategy-leaderboard.md");
+        Assert.Equal(expectedCsv, paths.CsvPath);
+        Assert.Equal(expectedMd, paths.MarkdownPath);
+        Assert.Equal("status,rank\nranked,1\n", await File.ReadAllTextAsync(expectedCsv));
+        Assert.Equal("# Strategy vs price\n", await File.ReadAllTextAsync(expectedMd));
+    }
+
+    [Fact]
+    public async Task WriteLeaderboardAsync_OverwritesInPlace_AndCoexistsWithPerCompanyArtifacts()
+    {
+        var store = CreateStore();
+
+        await store.WriteAsync("MRCY", "<svg></svg>", "h\n", CancellationToken.None);
+        await store.WriteLeaderboardAsync("first\n", "# first\n", CancellationToken.None);
+        var paths = await store.WriteLeaderboardAsync("second\n", "# second\n", CancellationToken.None);
+
+        // Idempotent: a re-run replaces its own output rather than accumulating a second copy.
+        Assert.Equal("second\n", await File.ReadAllTextAsync(paths.CsvPath));
+        Assert.Equal("# second\n", await File.ReadAllTextAsync(paths.MarkdownPath));
+
+        // The existing per-company artifacts are untouched.
+        Assert.True(File.Exists(Path.Combine(_tempDir, "mrcy.svg")));
+        Assert.True(File.Exists(Path.Combine(_tempDir, "mrcy.csv")));
+    }
+
+    [Fact]
+    public async Task WriteLeaderboardAsync_IoFailure_ReturnsAttemptedPathsWithoutThrowing()
+    {
+        var rootAsFile = Path.Combine(_tempDir, "not-a-dir-either");
+        await File.WriteAllTextAsync(rootAsFile, "x");
+
+        var store = CreateStore(rootAsFile);
+
+        var paths = await store.WriteLeaderboardAsync("csv\n", "md\n", CancellationToken.None);
+
+        Assert.Equal(Path.Combine(rootAsFile, "strategy-leaderboard.csv"), paths.CsvPath);
+        Assert.Equal(Path.Combine(rootAsFile, "strategy-leaderboard.md"), paths.MarkdownPath);
+    }
 }

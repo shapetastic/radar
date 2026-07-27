@@ -349,4 +349,26 @@ public sealed class EfficacySvgRendererTests
             Assert.DoesNotContain(word, svg, StringComparison.OrdinalIgnoreCase);
         }
     }
+
+    [Fact]
+    public void Render_IsByteUnchangedByTheSpec140AsOfDateAddition()
+    {
+        // EfficacyPoint gained a trailing AsOfDate for the strategy-comparison harness (spec 140). The
+        // per-company SVG is an EXISTING artifact: it does not read that field, so points differing only in
+        // it must render byte-identically.
+        var points = new[]
+        {
+            Point(new DateOnly(2026, 6, 10), 40, "radar-scoring-fp-aaaa1111"),
+            Point(new DateOnly(2026, 6, 12), 90, "radar-scoring-fp-bbbb2222"),
+        };
+
+        var renderer = new EfficacySvgRenderer();
+        var baseline = renderer.Render(Series(points, SampleBars()));
+        var stamped = renderer.Render(Series(
+            [.. points.Select(p => p with { AsOfDate = new DateOnly(2001, 2, 3) })],
+            SampleBars()));
+
+        Assert.All(points, p => Assert.Null(p.AsOfDate));
+        Assert.Equal(baseline, stamped);
+    }
 }

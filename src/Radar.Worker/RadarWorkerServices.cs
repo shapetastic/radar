@@ -1,6 +1,7 @@
 using System.Globalization;
 
 using Radar.Application.Collectors;
+using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -240,6 +241,27 @@ internal static class RadarWorkerServices
 
             services.AddFileEfficacyArtifactStore(options.EfficacyDirectory);
             services.AddRadarEfficacyReport();
+
+            // Spec 140: the strategy-vs-price comparison. Also READ-ONLY and downstream of scoring (AD-14) —
+            // it re-runs the SAME join per strategy over the persisted score series and writes one extra
+            // artifact pair. Enabled by default inside this already-opt-in gate: with too little joined
+            // history it writes an honest "nothing could be ranked" leaderboard rather than failing, and it
+            // never touches an existing artifact. The knobs are parsed and VALIDATED here, at the config
+            // boundary, and cross into Radar.Application already resolved.
+            if (options.Efficacy.Comparison.Enabled)
+            {
+                var comparisonOptions = BuildStrategyComparisonOptions(options.Efficacy.Comparison);
+                var replayLabel = options.Efficacy.Comparison.ReplayLabel?.Trim();
+                if (!string.IsNullOrEmpty(replayLabel))
+                {
+                    services.AddRadarStrategyComparisonOverReplay(
+                        comparisonOptions, options.ReplayDirectory, replayLabel);
+                }
+                else
+                {
+                    services.AddRadarStrategyComparison(comparisonOptions);
+                }
+            }
         }
 
         // Wire the historical as-of replay seam ONLY when the resolved run mode is Replay (spec 139, extended
@@ -607,6 +629,33 @@ internal static class RadarWorkerServices
             {
                 services.AddFileFilingReadDebugStore(options.FilingReadDebugDirectory);
             }
+        }
+    }
+
+    /// <summary>
+    /// Turns the bound <c>Radar:Efficacy:Comparison</c> numbers into validated
+    /// <see cref="StrategyComparisonOptions"/> (spec 140) — the config→Application boundary, so
+    /// <c>IConfiguration</c> never crosses into <c>Radar.Application</c>.
+    /// <para>
+    /// Every invalid value becomes a startup <b>fail-fast</b> naming the offending key. A leaderboard computed
+    /// over a nonsensical horizon or a degenerate split would look exactly like a valid one, so the error has
+    /// to arrive before anything is rendered.
+    /// </para>
+    /// </summary>
+    private static StrategyComparisonOptions BuildStrategyComparisonOptions(
+        StrategyComparisonWorkerOptions comparison)
+    {
+        try
+        {
+            return new StrategyComparisonOptions(
+                comparison.ForwardHorizonDays,
+                comparison.HoldOutFraction,
+                comparison.MinimumObservations);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            throw new InvalidOperationException(
+                "Radar:Efficacy:Comparison is misconfigured: " + ex.Message, ex);
         }
     }
 
