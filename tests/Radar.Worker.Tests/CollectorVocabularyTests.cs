@@ -191,22 +191,24 @@ public sealed class CollectorVocabularyTests : IDisposable
         Assert.Empty(provider.GetServices<IEvidenceCollector>());
     }
 
-    [Fact]
-    public void ScoreMode_WithNoCollectorsConfigured_StillRecordsANonEmptyDistinguishableProvenance()
+    [Theory]
+    [InlineData("rss")]
+    [InlineData("rss", "usaspending")]
+    [InlineData("rss", "usaspending", "patents")]
+    public void ScoreMode_NeverRecordsAnEmptyProvenance_WhateverTheConfiguredCollectors(
+        params string[] collectorKinds)
     {
-        // The empty-vocabulary edge: "no collector is configured" and "nothing was collected in this pass"
-        // are both true here, and the record says so without collapsing to the old ambiguous "collectors=;".
+        // The invariant, independent of how the collector list is configured: a score pass never records the
+        // empty/ambiguous "collectors=;" a pre-147 score pass recorded — the marker is always present to say
+        // collection did not happen in THIS pass. (The empty-VOCABULARY edge cannot be reached through config
+        // binding — the binder keeps the default when the section has no indexed children — so it is asserted
+        // directly at the descriptor in SignalSourceDescriptorTests.)
         using var provider = BuildProvider([
             ("Radar:RunMode", "score"),
-            ("Radar:Collectors:0", "rss"),
-            ("Radar:Collectors:1", "usaspending"),
+            .. collectorKinds.Select((kind, index) => ($"Radar:Collectors:{index}", kind)),
             .. TempDirectories(),
         ]);
 
-        // (Config binding cannot produce an EMPTY Radar:Collectors — the binder keeps the default when the
-        // section has no indexed children — so the empty-vocabulary case is asserted at the descriptor in
-        // SignalSourceDescriptorTests. What is asserted here is that a score pass NEVER records an empty
-        // provenance string.)
         var provenance = provider.GetRequiredService<ISignalSourceDescriptor>().CollectionProvenance();
 
         Assert.NotEmpty(provenance);

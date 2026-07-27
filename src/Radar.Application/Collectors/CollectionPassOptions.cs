@@ -17,8 +17,10 @@ public enum CollectionPassKind
 
     /// <summary>
     /// This pass ran NO collector: spec 144's standalone <c>score</c> pass, which scores whatever a previous
-    /// <c>collect</c> pass accrued. The configured vocabulary is still recorded — it describes what produced
-    /// the data being scored — but the pass is marked so a later reader cannot mistake it for a collection.
+    /// <c>collect</c> pass accrued. The configured vocabulary is still recorded — it describes what THIS
+    /// scoring process is configured with, which is not necessarily what gathered the data being scored (the
+    /// collector configuration may have changed since that collect pass) — and the pass is marked precisely
+    /// so a later reader reads it as configuration rather than mistaking it for a record of collection.
     /// </summary>
     NoCollectionThisPass,
 }
