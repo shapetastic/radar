@@ -101,9 +101,11 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
     {
         ct.ThrowIfCancellationRequested();
 
-        // Stage 0 (spec 141): the strategy-identity tripwire, kept first here too. A score pass costs no
-        // network, but it DOES write the live series, so an in-place strategy edit must fail before a single
-        // snapshot lands under the old name.
+        // Stage 0 (spec 141): the strategy-identity tripwire, kept first here too. A score pass runs no
+        // collector and no AI read — which, as the type remarks spell out, is NOT the same as issuing no
+        // request, since price acquisition is gated independently and sits outside this pipeline — but it
+        // DOES write the live series, so an in-place strategy edit must fail before a single snapshot lands
+        // under the old name.
         await StrategyIdentityGuard
             .VerifyAsync(_scoringStrategies.Runtimes, _scoringConfigStore, _logger, ct)
             .ConfigureAwait(false);
