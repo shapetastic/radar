@@ -37,6 +37,7 @@ using Radar.Infrastructure.Sources;
 using Radar.Infrastructure.Trademarks;
 using Radar.Infrastructure.UsaSpending;
 
+using System.Globalization;
 using System.Net;
 
 namespace Radar.Infrastructure.DependencyInjection;
@@ -92,7 +93,7 @@ public static class InfrastructureServiceCollectionExtensions
         // strategy's weights. The human-owned formula boundary is unchanged (IScoreFormula keeps its exact
         // contract and RadarScoreFormulaV8 is still the only place scoring math lives); only how a formula is
         // OBTAINED moved behind a factory. TryAdd lets a composition root substitute its own factory.
-        services.TryAddSingleton<IScoreFormulaFactory, RadarScoreFormulaV8Factory>();
+        services.TryAddSingleton<IScoreFormulaFactory, RadarScoreFormulaFactory>();
         services.TryAddSingleton(new ScoringOptions());
         // Insider materiality magnitudes (spec 96): the default == the spec-93 buy/sell tiers + cluster boost,
         // so a blank/absent config yields byte-identical insider Strengths. TryAdd keeps a
@@ -233,7 +234,13 @@ public static class InfrastructureServiceCollectionExtensions
     ///                   { "Name": "low-media", "ScoringProfile": "low-media" },
     ///                   // Spec 138: an optional per-strategy signal-type set. Omitted/empty ⇒ ALL types.
     ///                   { "Name": "insider-only", "ScoringProfile": "default",
-    ///                     "SignalTypes": [ "InsiderBuying" ] } ],
+    ///                     "SignalTypes": [ "InsiderBuying" ] },
+    ///                   // Spec 146: an optional per-strategy formula + channel budget. Omitted ⇒ v8, no channels.
+    ///                   { "Name": "patents-led", "Formula": "radar-formula-v9",
+    ///                     "Channels": [
+    ///                       { "Name": "patents",   "Collectors": [ "patents" ],   "Weight": 0.50, "Saturation": 3 },
+    ///                       { "Name": "insider",   "Collectors": [ "sec-form4" ], "Weight": 0.30, "Saturation": 2 },
+    ///                       { "Name": "attention", "Kind": "breadth",             "Weight": 0.20, "Saturation": 3 } ] } ],
     ///   "PrimaryStrategy": "baseline"
     /// }
     /// </code>
@@ -254,12 +261,22 @@ public static class InfrastructureServiceCollectionExtensions
     /// hashes as a no-op — so the byte-identical default holds. Values are matched by EXACT enum member name
     /// (case-insensitively); numeric and unknown values are rejected rather than quietly accepted as a
     /// nonexistent type.</item>
+    /// <item><c>Formula</c> (spec 146) names the <c>radar-formula-vN</c> that strategy scores with.
+    /// <b>Omitted ⇒ <see cref="ScoreFormulaVersions.V8"/></b>, i.e. byte-identical to before the key existed,
+    /// with the pinned default fingerprints unmoved.</item>
+    /// <item><c>Channels</c> (spec 146) declares that strategy's weighted channel budget — required by, and
+    /// only meaningful to, <see cref="ScoreFormulaVersions.V9"/>. Each entry needs a <c>Name</c>, a
+    /// <c>Weight</c> and a <c>Saturation</c>; <c>Kind</c> is <c>"collector"</c> (the default) or
+    /// <c>"breadth"</c>, and a collector channel additionally needs a <c>Collectors</c> array of registered
+    /// <c>IEvidenceCollector.CollectorName</c>s. Weights must each lie in <c>[0,1]</c> and <b>sum to
+    /// 1.0</b> — a sum that is not 1 silently rescales every score that strategy produces, so it is a startup
+    /// failure naming the strategy and the actual sum.</item>
     /// </list>
-    /// Fails fast at startup — each message naming the offending config key — on an unknown
+    /// Fails fast at startup — each message naming the offending config key or strategy — on an unknown
     /// <c>ScoringProfile</c>, a blank or unusable <c>Name</c>, duplicate <c>Name</c>s, a blank/unknown
-    /// <c>SignalTypes</c> entry, or a <c>PrimaryStrategy</c> that is blank or not present in
-    /// <c>Strategies</c>. Every one of those otherwise surfaces later as a confusing empty or mislabelled
-    /// score series.
+    /// <c>SignalTypes</c> entry, an unknown <c>Formula</c>, a malformed or unbalanced <c>Channels</c> budget,
+    /// or a <c>PrimaryStrategy</c> that is blank or not present in <c>Strategies</c>. Every one of those
+    /// otherwise surfaces later as a confusing empty, mislabelled or silently rescaled score series.
     /// </summary>
     public static IServiceCollection AddRadarScoringStrategies(
         this IServiceCollection services, IConfiguration configuration)
@@ -313,6 +330,12 @@ public static class InfrastructureServiceCollectionExtensions
                 IsPrimary: string.Equals(name, primaryName, StringComparison.OrdinalIgnoreCase))
             {
                 SignalTypes = ResolveSignalTypes(entry),
+                // Spec 146: an omitted Formula keeps the strategy on radar-formula-v8 with no channels, which
+                // is byte-identical to before this key existed. ScoringStrategySet does the cross-field
+                // validation (unknown formula, v9-without-channels, channels-without-v9) so there is one
+                // validation implementation regardless of how a definition is composed.
+                Formula = ResolveFormula(entry),
+                Channels = ResolveChannels(entry, name),
             });
         }
 
@@ -396,6 +419,178 @@ public static class InfrastructureServiceCollectionExtensions
         // Create() canonicalises: duplicates collapse, order is irrelevant, and a list naming EVERY declared
         // type returns All — so "all types spelled out" is byte-identical to omitting the key.
         return SignalTypeFilter.Create(types);
+    }
+
+    /// <summary>
+    /// Resolves ONE strategy's <c>Formula</c> (spec 146). Absent or blank ⇒ <see cref="ScoreFormulaVersions.V8"/>,
+    /// the byte-identical default. A non-blank value is canonicalised against the shipped
+    /// <c>radar-formula-vN</c> list and rejected here (rather than defaulting) so a typo is a startup error
+    /// instead of a strategy silently scored with a structure nobody asked for. <see cref="ScoringStrategySet"/>
+    /// re-checks the resulting value, so a definition composed in code is held to the same rule.
+    /// </summary>
+    private static string ResolveFormula(IConfigurationSection entry)
+    {
+        var raw = entry["Formula"];
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return ScoreFormulaVersions.V8;
+        }
+
+        return ScoreFormulaVersions.Canonicalize(raw)
+            ?? throw new InvalidOperationException(
+                $"{entry.Path}:Formula is '{raw}', which is not a known scoring formula (known formulas: "
+                    + $"{ScoreFormulaVersions.KnownList}). Omit Formula to use the default "
+                    + $"{ScoreFormulaVersions.V8}.");
+    }
+
+    /// <summary>
+    /// Resolves ONE strategy's <c>Channels</c> array (spec 146) into a validated
+    /// <see cref="ScoringChannelSet"/>. An absent or empty array ⇒ <see cref="ScoringChannelSet.Empty"/>. This
+    /// is the layering seam: <c>IConfiguration</c> never reaches <c>Radar.Application</c>, so the strings and
+    /// numbers are parsed here and only resolved types cross the boundary; the INVARIANTS (weights in [0,1],
+    /// weights summing to 1, positive saturation, unique names, breadth-declares-no-collectors) belong to
+    /// <see cref="ScoringChannelSet.Create"/> so they hold however a set is composed.
+    /// <para>
+    /// Shape guards mirror <see cref="ResolveSignalTypes"/>' reasoning: a scalar where an array was meant
+    /// binds as a value with no children, which would otherwise fall through to "no channels" and silently
+    /// score a v9 strategy 0 — exactly the failure this slice exists to prevent.
+    /// </para>
+    /// </summary>
+    private static ScoringChannelSet ResolveChannels(IConfigurationSection entry, string strategyName)
+    {
+        var section = entry.GetSection("Channels");
+        var children = section.GetChildren().ToList();
+        if (children.Count == 0)
+        {
+            if (!string.IsNullOrWhiteSpace(section.Value))
+            {
+                throw new InvalidOperationException(
+                    $"{section.Path} is the scalar '{section.Value}'; a strategy's Channels must be a JSON "
+                        + "ARRAY of channel objects. Omit Channels entirely to declare none.");
+            }
+
+            return ScoringChannelSet.Empty;
+        }
+
+        var channels = new List<ScoringChannel>(children.Count);
+        foreach (var child in children)
+        {
+            var name = child["Name"];
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path}:Name is blank; every channel needs a Name (it is recorded in the score "
+                        + "explanation and in every consumed signal's contribution reason).");
+            }
+
+            name = name.Trim();
+
+            var kind = ResolveChannelKind(child, name);
+            var weight = RequireChannelNumber(child, "Weight", name);
+            var saturation = RequireChannelNumber(child, "Saturation", name);
+            // Read Collectors for BOTH kinds and hand them through. A breadth channel must declare none, and
+            // ScoringChannelSet.Create is the single place that says so — dropping them here instead would
+            // silently discard what the operator wrote, which is the failure mode this slice exists to close.
+            var collectors = ResolveChannelCollectors(child, name);
+
+            channels.Add(kind == ScoringChannelKind.Breadth
+                ? new ScoringChannel(name, ScoringChannelKind.Breadth, collectors, weight, saturation)
+                : ScoringChannel.Collector(name, collectors, weight, saturation));
+        }
+
+        // Create() validates the budget as a whole (the weight sum is a property of the SET, not of any one
+        // channel) and canonicalises the ordering, so two strategies declaring the same budget in a different
+        // order are the same strategy and hash identically.
+        return ScoringChannelSet.Create(channels, strategyName);
+    }
+
+    private static ScoringChannelKind ResolveChannelKind(IConfigurationSection channel, string channelName)
+    {
+        var raw = channel["Kind"];
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            // Collector is the default kind: it is the common case, and the alternative (breadth) is the one
+            // that has to be stated because it changes what the channel measures.
+            return ScoringChannelKind.Collector;
+        }
+
+        var trimmed = raw.Trim();
+        foreach (var kind in Enum.GetValues<ScoringChannelKind>())
+        {
+            if (string.Equals(ScoringChannelSet.KindToken(kind), trimmed, StringComparison.OrdinalIgnoreCase))
+            {
+                return kind;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"{channel.Path}:Kind is '{raw}' for channel '{channelName}', which is not a channel kind (valid "
+                + $"values: {string.Join(", ", Enum.GetValues<ScoringChannelKind>().Select(ScoringChannelSet.KindToken))}). "
+                + "Omit Kind for a collector channel.");
+    }
+
+    private static IReadOnlyList<string> ResolveChannelCollectors(
+        IConfigurationSection channel, string channelName)
+    {
+        var section = channel.GetSection("Collectors");
+        var children = section.GetChildren().ToList();
+        if (children.Count == 0)
+        {
+            if (!string.IsNullOrWhiteSpace(section.Value))
+            {
+                throw new InvalidOperationException(
+                    $"{section.Path} is the scalar '{section.Value}' for channel '{channelName}'; a channel's "
+                        + "Collectors must be a JSON ARRAY of collector names (e.g. [ \"sec-form4\" ]).");
+            }
+
+            // Empty is not an error HERE — ScoringChannelSet.Create reports it with the strategy name
+            // attached, so there is exactly one message for "a collector channel names no collectors".
+            return [];
+        }
+
+        var names = new List<string>(children.Count);
+        foreach (var collector in children)
+        {
+            var value = collector.Value?.Trim();
+            if (string.IsNullOrEmpty(value))
+            {
+                throw new InvalidOperationException(
+                    $"{collector.Path} is blank for channel '{channelName}'; every entry must name a registered "
+                        + "IEvidenceCollector.CollectorName.");
+            }
+
+            names.Add(value);
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// Reads a REQUIRED culture-invariant channel number. Absent and unparseable are both startup failures:
+    /// a defaulted weight or saturation would silently rebalance a declared budget, which is the one thing
+    /// this design cannot tolerate quietly.
+    /// </summary>
+    private static double RequireChannelNumber(
+        IConfigurationSection channel, string key, string channelName)
+    {
+        var raw = channel[key];
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            throw new InvalidOperationException(
+                $"{channel.Path}:{key} is missing for channel '{channelName}'; a channel's Weight (its share of "
+                    + "the composite) and Saturation (how much traffic counts as a full share) are both required "
+                    + "— defaulting either would silently rebalance the declared budget.");
+        }
+
+        if (!double.TryParse(
+                raw.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+        {
+            throw new InvalidOperationException(
+                $"{channel.Path}:{key} is '{raw}' for channel '{channelName}', which is not a number. Channel "
+                    + "numbers are parsed culture-invariantly, so use '.' as the decimal separator.");
+        }
+
+        return value;
     }
 
     /// <summary>

@@ -172,6 +172,8 @@ public sealed class EvidenceIdentityCrossRunDedupeTests : IDisposable
         public string CanonicalDescriptor() => "test-src-desc";
 
         public string CollectionProvenance() => "collectors=test;";
+
+        public IReadOnlyList<string> EnabledCollectors() => ["test"];
     }
 
     /// <summary>

@@ -65,6 +65,17 @@ namespace Radar.Application.Scoring;
 /// scorings. The default filter consumes everything and folds in as a no-op, so the pinned default
 /// fingerprints are unmoved.
 /// </para>
+/// <para>
+/// A strategy may further declare a <see cref="ScoringChannelSet"/> — the weighted channel budget
+/// <c>radar-formula-v9</c> composes its score from (spec 146). Like the signal-type set it IS a fingerprint
+/// input, folded in on the SAME <c>Describe</c> chain so the composition the formula performs and the hashed
+/// identity of that composition cannot drift; and like it, the default (no channels) folds in as a no-op, so
+/// the pinned default fingerprints stay put. The formula VERSION was already a hashed field, so nothing new
+/// was needed for a v9 strategy to stamp differently from a v8 one. The engine additionally hands the formula
+/// the run's registered collector names as <see cref="ScoringInput.EnabledCollectors"/> — recorded provenance
+/// (it lets a v9 channel say "declared collector did not run" rather than only "scored 0"), hashed into
+/// nothing, and never a scoring input.
+/// </para>
 /// </summary>
 public sealed class ScoringEngine : IScoringEngine
 {
@@ -93,6 +104,12 @@ public sealed class ScoringEngine : IScoringEngine
     // input: two strategies scoring different signal sets are genuinely different scorings.
     private readonly SignalTypeFilter _signalTypes;
 
+    // The weighted channel budget this strategy composes its score from (spec 146). Defaults to
+    // ScoringChannelSet.Empty, which Describe() folds into the source descriptor as a NO-OP, so a strategy
+    // that declares none hashes exactly what it hashed before this existed. Only radar-formula-v9 consumes
+    // it; ScoringStrategySet rejects the two incoherent combinations (v9 with none, non-v9 with some).
+    private readonly ScoringChannelSet _channels;
+
     // The whole scoring-generation stamp: a content fingerprint of the effective resolved scoring config
     // (structure + all weights + tier map), computed once and stamped on every snapshot's
     // ScoringConfigVersion (AD-10 amended, spec 89). Distinct from ScoringVersion. Since spec 141 it is
@@ -104,6 +121,11 @@ public sealed class ScoringEngine : IScoringEngine
     // stamped verbatim on every snapshot. Deliberately hashed into NOTHING — it is provenance, not identity,
     // so a collector toggle re-stamps this field alone and never the fingerprint or a score.
     private readonly string _collectionProvenance;
+
+    // The same enabled-collector set as _collectionProvenance, as names, handed to the formula on every
+    // ScoringInput (spec 146) so a v9 channel can distinguish "declared collector ran and found nothing"
+    // from "declared collector did not run". Recorded provenance, hashed into nothing, never a score input.
+    private readonly IReadOnlyList<string> _enabledCollectors;
 
     // The effective resolved scoring config projection (same tuple the fingerprint hashes), built once in
     // the constructor and exposed as a pure accessor for content-addressed persistence (spec 91). Additive:
@@ -125,7 +147,8 @@ public sealed class ScoringEngine : IScoringEngine
         ScoringOptions options,
         ILogger<ScoringEngine> logger,
         string? strategyName = null,
-        SignalTypeFilter? signalTypes = null)
+        SignalTypeFilter? signalTypes = null,
+        ScoringChannelSet? channels = null)
     {
         ArgumentNullException.ThrowIfNull(signalRepository);
         ArgumentNullException.ThrowIfNull(signalFileStore);
@@ -152,6 +175,7 @@ public sealed class ScoringEngine : IScoringEngine
         _logger = logger;
         _strategyName = strategyName;
         _signalTypes = signalTypes ?? SignalTypeFilter.All;
+        _channels = channels ?? ScoringChannelSet.Empty;
 
         var attentionDescriptor = sourceWeights.CanonicalDescriptor();
 
@@ -162,12 +186,20 @@ public sealed class ScoringEngine : IScoringEngine
         // invariant (the persisted descriptor reproduces the persisted fingerprint) still holds. For the
         // default "all types" filter Describe() returns its input unchanged, so the pinned default
         // fingerprints do not move.
-        var signalSourceDescriptor = _signalTypes.Describe(sourceDescriptor.CanonicalDescriptor());
+        //
+        // Spec 146 extends the SAME chain with the channel budget, for the same reason: a strategy that
+        // allocates its score differently is a different scoring, and the fold happens here — inside the
+        // engine that also hands the budget to the formula — so the composition and its hashed identity can
+        // never drift. An empty channel set returns its input verbatim, so the pinned fingerprints hold.
+        var signalSourceDescriptor = _channels.Describe(
+            _signalTypes.Describe(sourceDescriptor.CanonicalDescriptor()));
 
         // Spec 141: captured alongside the identity descriptor, from the SAME descriptor instance, so the
         // recorded collector set and the hashed identity are two projections of one composed graph rather
-        // than two independently-resolved answers that could disagree.
+        // than two independently-resolved answers that could disagree. Spec 146 takes the third projection —
+        // the bare names — from that same instance, for the same reason.
         _collectionProvenance = sourceDescriptor.CollectionProvenance();
+        _enabledCollectors = sourceDescriptor.EnabledCollectors();
 
         var insiderMaterialityDescriptor = insiderMaterialityWeights.CanonicalDescriptor();
         var mediaCollapseDescriptor = mediaCollapse.CanonicalDescriptor();
@@ -341,6 +373,8 @@ public sealed class ScoringEngine : IScoringEngine
             companyId, windowStartUtc, windowEndUtc, scoredSignals, previousSignals, followingTier)
         {
             PreCollapseSignals = superseded,
+            // Spec 146: what RAN this process, as provenance the formula may record but must never score on.
+            EnabledCollectors = _enabledCollectors,
         };
         var computation = _formula.Compute(input);
 

@@ -109,6 +109,12 @@ public sealed class ScoringConfigFingerprintTests
         // Lineage: spec 133 (radar-scoring-fp-6b2f468041b9 — the 7-collector default) → SPEC 141, which
         // removes the enabled-collector CSV from the hashed identity altogether. THE MOVE IS THE DELIVERABLE.
         // Scoring math is byte-identical (asserted separately by the engine tests); only the stamp differs.
+        //
+        // SPEC 146 DELIBERATELY DID NOT MOVE THIS PIN. It added a per-strategy Formula and a channel budget,
+        // and it extracted v8's per-signal primitives into the shared ScoreSignalMath — but the default
+        // strategy still names radar-formula-v8, still declares no channels (ScoringChannelSet.Empty folds in
+        // as a verbatim passthrough), and the extraction preserved v8's expression shapes and accumulation
+        // order, so both the hashed inputs and the scores are unchanged.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), SourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);
@@ -243,7 +249,8 @@ public sealed class ScoringConfigFingerprintTests
         // scripts/run-profiles/default.json: a COLLECTOR-SET change (6 → 7 collectors) that re-stamped
         // automatically (radar-scoring-fp-57356123e09b) → SPEC 141, which removes the collector CSV from the
         // hashed identity entirely, so a re-stamp like spec 133's can never happen again. THE MOVE IS THE
-        // DELIVERABLE; scoring math is byte-identical.
+        // DELIVERABLE; scoring math is byte-identical. → SPEC 146 deliberately did NOT move it: see the
+        // AI-OFF pin above for why the per-strategy Formula/Channels addition folds in here as a no-op.
         var fp = ScoringConfigFingerprint.Compute(
             "mvp-engine-v1", "radar-formula-v8", new ScoringWeights(), DefaultTierDescriptor(), AiOnSourceDescriptor,
             InsiderDescriptor, MediaCollapseDescriptor);

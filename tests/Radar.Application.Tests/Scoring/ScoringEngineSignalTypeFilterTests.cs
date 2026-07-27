@@ -27,6 +27,8 @@ public sealed class ScoringEngineSignalTypeFilterTests
         public string CanonicalDescriptor() => SourceDescriptor;
 
         public string CollectionProvenance() => "collectors=test;";
+
+        public IReadOnlyList<string> EnabledCollectors() => ["test"];
     }
 
     private sealed class AllGenuineWeights : IAttentionSourceWeights

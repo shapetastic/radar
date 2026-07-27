@@ -49,4 +49,32 @@ public sealed record ScoringStrategyDefinition(
     /// </para>
     /// </summary>
     public SignalTypeFilter SignalTypes { get; init; } = SignalTypeFilter.All;
+
+    /// <summary>
+    /// The <c>radar-formula-vN</c> this strategy scores with (spec 146). Defaults to
+    /// <see cref="ScoreFormulaVersions.V8"/>, so <b>a strategy that does not name a formula is
+    /// byte-identical to today</b> and the pinned default fingerprints do not move. Resolved through
+    /// <see cref="IScoreFormulaFactory"/>; an unknown name fails fast at startup naming the strategy.
+    /// <para>
+    /// Additive and init-only for the same reason as <see cref="SignalTypes"/>: every existing construction
+    /// site keeps compiling and keeps today's behaviour. Which formula produced a score has always been part
+    /// of the <c>ScoringConfigVersion</c> fingerprint (<c>_formula.Version</c> is a hashed field), so nothing
+    /// new had to be added to the hash for this to re-stamp correctly.
+    /// </para>
+    /// </summary>
+    public string Formula { get; init; } = ScoreFormulaVersions.V8;
+
+    /// <summary>
+    /// The weighted channel budget this strategy allocates its score across (spec 146). Defaults to
+    /// <see cref="ScoringChannelSet.Empty"/>, which folds into the fingerprint as a NO-OP — so a strategy
+    /// that declares no channels hashes exactly what it hashed before this property existed.
+    /// <para>
+    /// Required by (and only meaningful to) <see cref="ScoreFormulaVersions.V9"/>;
+    /// <see cref="ScoringStrategySet"/> rejects a v9 strategy with no channels and a non-v9 strategy that
+    /// declares them, so a channel array can never be silently ignored. Like <see cref="SignalTypes"/> — and
+    /// unlike <see cref="Name"/> — it IS a fingerprint input: two strategies allocating their score
+    /// differently are genuinely different scorings.
+    /// </para>
+    /// </summary>
+    public ScoringChannelSet Channels { get; init; } = ScoringChannelSet.Empty;
 }

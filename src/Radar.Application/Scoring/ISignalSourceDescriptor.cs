@@ -50,4 +50,18 @@ public interface ISignalSourceDescriptor
     /// nothing. Enabling or disabling a collector changes this value and <b>only</b> this value.
     /// </summary>
     string CollectionProvenance();
+
+    /// <summary>
+    /// The same enabled-collector set as <see cref="CollectionProvenance"/>, but as the ordered distinct
+    /// NAMES rather than an escaped descriptor string (spec 146) — so a
+    /// <c>radar-formula-v9</c> collector channel can record which of its declared collectors actually RAN,
+    /// as opposed to ran-and-found-nothing.
+    /// <para>
+    /// It must be the SAME projection the descriptor is built from, never a second independently-resolved
+    /// answer: "what the snapshot says was collected" and "what the channel provenance says ran" cannot be
+    /// allowed to disagree. Like <see cref="CollectionProvenance"/> it is recorded provenance and is hashed
+    /// into <b>nothing</b>.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<string> EnabledCollectors();
 }
