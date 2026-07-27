@@ -29,7 +29,11 @@ public interface IDirectionalFilingSignalSource
     /// an emitted directional <c>GuidanceChange</c> signal's Strength/Novelty/confidence-gate — so enabling the
     /// AI path (vs. disabling it) and tuning those magnitudes both re-stamp <c>ScoringConfigVersion</c>
     /// automatically (restoring AD-10 comparability). Cost/operational caps (per-run fetch limits, rate-limit
-    /// breakers) are deliberately excluded, mirroring how <c>ScoringWindowDays</c> is not a fingerprint input.
+    /// breakers) are deliberately excluded, on their own reasoning: they bound how MANY filings are read in a
+    /// run, never the Strength, Novelty, direction or confidence gate of any signal that IS emitted, so two
+    /// runs at different caps remain comparable. (This exclusion used to be justified by analogy to
+    /// <c>ScoringWindowDays</c>; spec 148 reversed that one — the scoring window IS a fingerprint input now,
+    /// because it changes WHICH signals are scored. The analogy is gone; the reasoning above stands alone.)
     /// </summary>
     string ScoringDescriptor();
 }

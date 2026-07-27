@@ -565,6 +565,89 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
         Assert.Equal(expectedPath, path);
     }
 
+    // ---- spec 148: the same-label overwrite probe ------------------------------------------------------
+
+    private FileScoreSnapshotStore CreateStoreObserving(List<Guid> overwritten) =>
+        new(
+            new FileScoreSnapshotStoreOptions
+            {
+                RootDirectory = _tempDir,
+                // As-of-keyed naming (the replay shape) is what makes a re-write land on the SAME path.
+                SnapshotFileName = _ => "asof.json",
+                OnSnapshotOverwritten = s => overwritten.Add(s.Id),
+            },
+            NullLogger<FileScoreSnapshotStore>.Instance);
+
+    [Fact]
+    public async Task WriteAsync_ReplacingAnExistingFile_NotifiesTheOverwriteObserver_ExactlyOnce()
+    {
+        var overwritten = new List<Guid>();
+        var store = CreateStoreObserving(overwritten);
+
+        var companyId = Guid.NewGuid();
+        var first = new ScoreSnapshotBuilder().WithCompanyId(companyId).WithWindow(WindowStart, WindowEnd).Build();
+        var second = new ScoreSnapshotBuilder().WithCompanyId(companyId).WithWindow(WindowStart, WindowEnd).Build();
+
+        // The FIRST write creates the file: nothing was replaced, so nothing is reported.
+        await store.WriteAsync(first, [], CancellationToken.None);
+        Assert.Empty(overwritten);
+
+        // The SECOND lands on the same as-of-keyed path and really does replace it.
+        await store.WriteAsync(second, [], CancellationToken.None);
+        Assert.Equal([second.Id], overwritten);
+    }
+
+    [Fact]
+    public async Task WriteAsync_OverwriteThatFailsToWrite_DoesNotNotifyTheObserver()
+    {
+        // Spec 148: the existence probe necessarily runs BEFORE the write (afterwards the file always
+        // exists), but the observer feeds an operator warning that asserts "N as-of point(s) were replaced".
+        // A write that degrades gracefully replaced nothing, so it must report nothing — otherwise the
+        // warning states a fact that did not happen.
+        var overwritten = new List<Guid>();
+        var store = CreateStoreObserving(overwritten);
+
+        var companyId = Guid.NewGuid();
+        var first = new ScoreSnapshotBuilder().WithCompanyId(companyId).WithWindow(WindowStart, WindowEnd).Build();
+        var path = await store.WriteAsync(first, [], CancellationToken.None);
+        var originalBytes = await File.ReadAllTextAsync(path);
+
+        // Read-only ⇒ File.WriteAllTextAsync throws UnauthorizedAccessException ⇒ GracefulFileWriter degrades.
+        File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
+        try
+        {
+            var second = new ScoreSnapshotBuilder()
+                .WithCompanyId(companyId).WithWindow(WindowStart, WindowEnd).Build();
+
+            var attempted = await store.WriteAsync(second, [], CancellationToken.None);
+
+            // Degraded, not thrown — and the original file genuinely survived, so "nothing was replaced" is
+            // a fact about the disk rather than about the observer's plumbing.
+            Assert.Equal(path, attempted);
+            Assert.Equal(originalBytes, await File.ReadAllTextAsync(path));
+            Assert.Empty(overwritten);
+        }
+        finally
+        {
+            File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_WithNoObserver_MakesNoExistenceProbe_AndBehavesExactlyAsBefore()
+    {
+        // The live/forward composition leaves OnSnapshotOverwritten null. Re-writing the same snapshot id
+        // stays plain upsert-by-Id last-write-wins, unchanged by spec 148.
+        var store = CreateStore();
+        var snapshot = new ScoreSnapshotBuilder().WithWindow(WindowStart, WindowEnd).Build();
+
+        var path = await store.WriteAsync(snapshot, [], CancellationToken.None);
+        var second = await store.WriteAsync(snapshot, [], CancellationToken.None);
+
+        Assert.Equal(path, second);
+        Assert.Single(Directory.GetFiles(Path.Combine(_tempDir, snapshot.CompanyId.ToString()), "*.json"));
+    }
+
     [Fact]
     public async Task WriteAsync_NullFileNameSelector_KeepsTheSnapshotIdName()
     {

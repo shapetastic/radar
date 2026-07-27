@@ -18,11 +18,41 @@ namespace Radar.Application.Replay;
 /// whole exercise meaningful — so there is none.
 /// </para>
 /// <para>
-/// READ-ONLY. Replay does not collect, extract, re-run the AI directional read, resolve, review, write the
-/// scoring-config store, write a run record, or build a report. It reads companies + signals + evidence and
-/// writes score snapshots into its OWN replay-scoped, labelled store. The live scores directory and the
-/// shared score repository the weekly report renders are never touched — structurally, via the separate
+/// READ-ONLY OVER EVERYTHING IT SCORES. Replay does not collect, extract, re-run the AI directional read,
+/// resolve, review, write a run record, or build a report. It reads companies + signals + evidence and writes
+/// score snapshots into its OWN replay-scoped, labelled store. The live scores directory and the shared score
+/// repository the weekly report renders are never touched — structurally, via the separate
 /// <see cref="IReplayScoreSnapshotFileStoreFactory"/> / <see cref="IReplayScoringStrategyFactory"/> seams.
+/// </para>
+/// <para>
+/// <b>IT DOES WRITE THE SCORING-CONFIG STORE, AND THAT IS A PROVENANCE RECORD RATHER THAN A SCORING MUTATION
+/// (spec 148).</b> Until this slice replay took neither the config store nor the tripwire, so a replay-only
+/// run in a fresh data root emitted snapshots stamped with a <c>ScoringConfigVersion</c> that dereferenced to
+/// NOTHING — the weights that produced those scores were unrecoverable. That is the weakest provenance in the
+/// system sitting on exactly the path the spec-140 leaderboard is meant to rank strategies from. So the
+/// runner now does what all three forward runners do, and only that:
+/// <list type="bullet">
+/// <item><description><see cref="StrategyIdentityGuard.VerifyAsync"/> runs FIRST, before a single company is
+/// read, so an in-place strategy edit costs no scoring — and no snapshot lands under the old name. The guard
+/// is read-mostly and its store read degrades to "unrecorded" on failure (AD-8), so it cannot fail a
+/// read-only mode on a disk hiccup;</description></item>
+/// <item><description><c>WriteIfNewAsync(strategy.Engine.EffectiveConfig)</c> once per strategy, so every
+/// replayed snapshot's stamp dereferences back to the exact weights. Insert-if-new, so it is free when the
+/// config already exists — which, for a replay of a strategy the forward pipeline also runs, it does.
+/// </description></item>
+/// </list>
+/// Neither writes a signal, an evidence item, or a byte under the live scores root, and neither changes a
+/// single score: the whole point is that <c>replay ⊆ forward</c> still holds field for field.
+/// </para>
+/// <para>
+/// <b>SAME-LABEL OVERWRITE WARNS LOUDLY, AGGREGATED PER STRATEGY (spec 148).</b> Replay files are named by
+/// as-of instant, which is what makes a re-run idempotent — and equally what makes a re-run under an
+/// already-used label REPLACE a series that may already have been ranked. The decision recorded here is
+/// warn, not fail and not silent: failing would break the legitimate "re-replay after fixing a data problem"
+/// workflow, and silence is how a comparison quietly becomes wrong. It is ONE warning per (label, strategy)
+/// carrying the count of replaced as-of points — per-file warnings would be thousands of lines, so this
+/// follows spec 145's aggregation precedent — and it says what the count MEANS: if the strategy's config
+/// changed since the old output was written, the two are not comparable, and a new label keeps both.
 /// </para>
 /// <para>
 /// DETERMINISTIC (AD-3). The nesting is fixed — strategies in configured order, then as-of instants
@@ -62,6 +92,7 @@ public sealed class ReplayRunner : IReplayRunner
     private readonly ICompanyRepository _companyRepository;
     private readonly IReplayScoringStrategyFactory _strategies;
     private readonly IReplayScoreSnapshotFileStoreFactory _scoreFileStores;
+    private readonly IScoringConfigStore _scoringConfigStore;
     private readonly ReplayPlan _plan;
     private readonly ILogger<ReplayRunner> _logger;
 
@@ -69,18 +100,21 @@ public sealed class ReplayRunner : IReplayRunner
         ICompanyRepository companyRepository,
         IReplayScoringStrategyFactory strategies,
         IReplayScoreSnapshotFileStoreFactory scoreFileStores,
+        IScoringConfigStore scoringConfigStore,
         ReplayPlan plan,
         ILogger<ReplayRunner> logger)
     {
         ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(strategies);
         ArgumentNullException.ThrowIfNull(scoreFileStores);
+        ArgumentNullException.ThrowIfNull(scoringConfigStore);
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(logger);
 
         _companyRepository = companyRepository;
         _strategies = strategies;
         _scoreFileStores = scoreFileStores;
+        _scoringConfigStore = scoringConfigStore;
         _plan = plan;
         _logger = logger;
     }
@@ -90,6 +124,15 @@ public sealed class ReplayRunner : IReplayRunner
         ct.ThrowIfCancellationRequested();
 
         var strategies = _strategies.Runtimes;
+
+        // Spec 141's tripwire, spec 148's addition: the FIRST real statement, mirroring all three forward
+        // runners. A strategy that was edited in place must fail before anything is read or written, so a
+        // misconfiguration costs no scoring and — the point for replay specifically — no snapshot lands in a
+        // labelled series under a name whose meaning has changed. Read failures degrade to "unrecorded"
+        // inside the store (AD-8), so a disk hiccup cannot fail this read-only mode.
+        await StrategyIdentityGuard
+            .VerifyAsync(strategies, _scoringConfigStore, _logger, ct).ConfigureAwait(false);
+
         var series = _plan.Series;
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
 
@@ -99,7 +142,7 @@ public sealed class ReplayRunner : IReplayRunner
         _logger.LogInformation(
             "Replay '{Label}': {AsOfPoints} as-of point(s) from {From:o} to {To:o} step {Step} × "
                 + "{StrategyCount} strateg(ies) × {CompanyCount} company/companies = {Scorings} scoring(s). "
-                + "Read-only over signals/evidence; output goes only to the replay-scoped store.",
+                + "Read-only over signals/evidence; score output goes only to the replay-scoped store.",
             _plan.Label,
             series.Count,
             series.FromUtc,
@@ -117,7 +160,20 @@ public sealed class ReplayRunner : IReplayRunner
         {
             ct.ThrowIfCancellationRequested();
 
+            // Spec 148: persist the effective resolved config ONCE PER STRATEGY, exactly as ScoringPass does
+            // for a forward run — content-addressed and insert-if-new, so it costs nothing when the forward
+            // pipeline already wrote it, and it is the difference between a replayed snapshot's stamp
+            // dereferencing to the weights that produced it and dereferencing to nothing. Best-effort like
+            // every other file store: it never aborts the replay or changes a count.
+            await _scoringConfigStore
+                .WriteIfNewAsync(strategy.Engine.EffectiveConfig, ct)
+                .ConfigureAwait(false);
+
             var scoreFileStore = _scoreFileStores.ForStrategy(_plan.Label, strategy.Definition);
+
+            // Monotonic per factory instance (a re-run in the same process keeps counting), so the number
+            // this run is responsible for is the DIFFERENCE across the strategy's loop.
+            var overwrittenBefore = _scoreFileStores.OverwrittenCount(_plan.Label, strategy.Definition);
 
             foreach (var asOfUtc in series.Points)
             {
@@ -134,6 +190,26 @@ public sealed class ReplayRunner : IReplayRunner
                         .WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
                     snapshotsWritten++;
                 }
+            }
+
+            // ONE warning per (label, strategy), never per file (spec 145's aggregation precedent): a
+            // per-point line would be thousands of entries on a real series and the operator would learn
+            // nothing extra from any of them. It warns rather than fails because re-replaying a label after
+            // fixing a data problem is legitimate; it is not silent because a replaced series that was
+            // already ranked is how a strategy comparison quietly becomes wrong.
+            var overwritten =
+                _scoreFileStores.OverwrittenCount(_plan.Label, strategy.Definition) - overwrittenBefore;
+            if (overwritten > 0)
+            {
+                _logger.LogWarning(
+                    "Replay '{Label}': strategy {StrategyName} OVERWROTE {OverwrittenCount} as-of point(s) "
+                        + "already on disk under this label. A previously written — and possibly already "
+                        + "ranked — series has been replaced in place; if this strategy's configuration "
+                        + "changed since that output was written, the old and new results are NOT comparable. "
+                        + "Use a NEW replay label to keep both.",
+                    _plan.Label,
+                    strategy.Definition.Name,
+                    overwritten);
             }
 
             _logger.LogInformation(

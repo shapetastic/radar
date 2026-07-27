@@ -150,12 +150,20 @@ public sealed class ReplayRunnerTests
     }
 
     /// <summary>
-    /// Replay mutates nothing but its own output: the signal store, the raw evidence on disk, the LIVE scores
+    /// Replay mutates nothing it scores: the signal store, the raw evidence on disk, the LIVE scores
     /// directory and the shared score repository the weekly report renders are all byte-for-byte untouched.
     /// The forward efficacy series is accrued history; a replay is a hypothesis.
+    /// <para>
+    /// <b>Spec 148 added exactly ONE new write, and it is deliberately outside the set above:</b> the
+    /// scoring-config store, where the runner records each strategy's effective config (and the identity
+    /// tripwire records its first sighting). That is a PROVENANCE RECORD, not a scoring mutation — without it
+    /// a replayed snapshot's <c>ScoringConfigVersion</c> dereferences to nothing and the weights that produced
+    /// those scores are unrecoverable. The distinction is asserted here rather than assumed: the config store
+    /// gains content, and every scored store stays byte-identical.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Replay_WritesOnlyUnderTheReplayRoot_AndMutatesNoLiveStore()
+    public async Task Replay_WritesOnlyItsOwnOutputPlusProvenance_AndMutatesNoLiveStore()
     {
         using var harness = ReplayTestHarness.Create(
             new ReplayPlan("hypothesis", ReplaySeries.Create(D.AddDays(-2), D, TimeSpan.FromDays(1))));
@@ -196,13 +204,19 @@ public sealed class ReplayRunnerTests
             (await harness.LiveScoreRepository
                 .GetSnapshotsForCompanyAsync(companyId, CancellationToken.None)).Count);
 
-        // …and the output exists ONLY under the replay root, labelled.
+        // …and the SCORE output exists ONLY under the replay root, labelled.
         var replayFiles = ReplayTestHarness.FilesUnder(harness.ReplaysDirectory);
         Assert.Equal(3, replayFiles.Count);
         Assert.All(
             replayFiles,
             f => Assert.StartsWith(
                 $"hypothesis/strategies/{primary.Definition.Name}/{companyId}/", f, StringComparison.Ordinal));
+
+        // Spec 148: the ONE sanctioned write outside the replay root — provenance, and nothing else. Exactly
+        // two files: the content-addressed effective config, and this strategy name's identity record.
+        Assert.Equal(
+            [$"{primary.Engine.EffectiveConfig.Fingerprint}.json", $"strategies/{primary.Definition.Name}.json"],
+            ReplayTestHarness.FilesUnder(harness.ScoringConfigsDirectory));
     }
 
     /// <summary>
@@ -341,6 +355,182 @@ public sealed class ReplayRunnerTests
             [start, start.AddMilliseconds(500), start.AddMilliseconds(1000), D],
             snapshots.Select(s => s.Snapshot.WindowEndUtc).OrderBy(t => t).ToArray());
     }
+
+    // ---- spec 148: replay records its provenance ---------------------------------------------------------
+
+    /// <summary>
+    /// Every replayed snapshot's <c>ScoringConfigVersion</c> must dereference back to the weights that
+    /// produced it — the same guarantee every forward pass gives (<c>ScoringPass</c> writes the effective
+    /// config once per strategy). Before spec 148 a replay-only run in a fresh data root emitted snapshots
+    /// stamped with a fingerprint that pointed at nothing at all.
+    /// </summary>
+    [Fact]
+    public async Task Replay_PersistsEachStrategysEffectiveScoringConfig_OncePerStrategy()
+    {
+        var strategies = new ScoringStrategySet(
+        [
+            new ScoringStrategyDefinition("broad", "default", new ScoringWeights(), IsPrimary: true),
+            new ScoringStrategyDefinition("insider-only", "default", new ScoringWeights(), IsPrimary: false)
+            {
+                SignalTypes = SignalTypeFilter.Create([SignalType.InsiderBuying]),
+            },
+        ]);
+
+        using var harness = ReplayTestHarness.Create(SinglePointPlan(D, "provenance"), strategies);
+        var companyId = await harness.SeedCompanyAsync();
+        await harness.SeedSignalAsync(companyId, SignalType.CustomerWin, D.AddDays(-4), D.AddDays(-4));
+
+        await harness.ReplayRunner.RunAsync(CancellationToken.None);
+
+        // One content-addressed file per strategy (their signal-type sets differ, so their configs do too),
+        // and each is the file a reader of that strategy's snapshots would follow the stamp to.
+        var runtimes = harness.LiveStrategies.Runtimes;
+        Assert.Equal(2, runtimes.Count);
+
+        foreach (var runtime in runtimes)
+        {
+            var fingerprint = runtime.Engine.EffectiveConfig.Fingerprint;
+            var path = Path.Combine(harness.ScoringConfigsDirectory, fingerprint + ".json");
+            Assert.True(File.Exists(path), $"Expected the effective config for '{runtime.Definition.Name}' at {path}.");
+
+            // Not vacuous: the persisted file really is THAT strategy's config, and the replayed snapshot
+            // really does carry the fingerprint that names it.
+            using var doc = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(path));
+            Assert.Equal(fingerprint, doc.RootElement.GetProperty("fingerprint").GetString());
+
+            var replayed = Assert.Single(
+                ReadReplayedSnapshots(harness, "provenance", runtime.Definition.Name, companyId));
+            Assert.Equal(fingerprint, replayed.Snapshot.ScoringConfigVersion);
+        }
+    }
+
+    /// <summary>
+    /// The spec-141 tripwire runs in replay too, and it runs FIRST: a strategy edited in place fails the run
+    /// before a single snapshot lands in the labelled series.
+    /// </summary>
+    [Fact]
+    public async Task Replay_RunsTheIdentityTripwire_RecordingFirstSighting_AndFailingOnAnInPlaceEdit()
+    {
+        using var first = ReplayTestHarness.Create(SinglePointPlan(D, "tripwire"));
+        var companyId = await first.SeedCompanyAsync();
+        await first.SeedSignalAsync(companyId, SignalType.CustomerWin, D.AddDays(-4), D.AddDays(-4));
+
+        await first.ReplayRunner.RunAsync(CancellationToken.None);
+
+        var primaryName = first.LiveStrategies.Primary.Definition.Name;
+        var recordPath = Path.Combine(first.ScoringConfigsDirectory, "strategies", primaryName + ".json");
+        Assert.True(File.Exists(recordPath), $"Expected a first-sighting identity record at {recordPath}.");
+
+        // A SECOND replay whose 'default'-named strategy resolves differently — a genuine in-place edit,
+        // planted by pre-recording a different fingerprint for that name.
+        using var edited = ReplayTestHarness.Create(SinglePointPlan(D, "tripwire"));
+        await edited.SeedCompanyAsync();
+        Directory.CreateDirectory(Path.Combine(edited.ScoringConfigsDirectory, "strategies"));
+        await File.WriteAllTextAsync(
+            Path.Combine(edited.ScoringConfigsDirectory, "strategies", primaryName + ".json"),
+            $$"""{"strategyName":"{{primaryName}}","fingerprint":"radar-scoring-fp-somethingelse"}""");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => edited.ReplayRunner.RunAsync(CancellationToken.None));
+        Assert.Contains(primaryName, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("radar-scoring-fp-somethingelse", ex.Message, StringComparison.Ordinal);
+
+        // …and it ran FIRST: nothing was scored, so the labelled series is untouched by the failed run.
+        Assert.Empty(ReplayTestHarness.FilesUnder(edited.ReplaysDirectory));
+    }
+
+    /// <summary>
+    /// AD-8: "cannot read the identity record" must degrade to "unrecorded", never to "changed". A disk
+    /// hiccup must not fail a read-only mode — confirmed against the REAL FileScoringConfigStore rather than
+    /// assumed from the guard's prose.
+    /// </summary>
+    [Fact]
+    public async Task Replay_WithAnUnreadableIdentityRecord_StillRuns()
+    {
+        using var harness = ReplayTestHarness.Create(SinglePointPlan(D, "degrade"));
+        var companyId = await harness.SeedCompanyAsync();
+        await harness.SeedSignalAsync(companyId, SignalType.CustomerWin, D.AddDays(-4), D.AddDays(-4));
+
+        var primaryName = harness.LiveStrategies.Primary.Definition.Name;
+        Directory.CreateDirectory(Path.Combine(harness.ScoringConfigsDirectory, "strategies"));
+        await File.WriteAllTextAsync(
+            Path.Combine(harness.ScoringConfigsDirectory, "strategies", primaryName + ".json"),
+            "{ not json at all");
+
+        var result = await harness.ReplayRunner.RunAsync(CancellationToken.None);
+
+        Assert.Equal(1, result.SnapshotsWritten);
+        Assert.Single(ReadReplayedSnapshots(harness, "degrade", primaryName, companyId));
+    }
+
+    /// <summary>
+    /// Same-label re-replay OVERWRITES a series that may already have been ranked. The recorded decision is
+    /// WARN — loudly, once per (label, strategy), carrying the count — because failing would break the
+    /// legitimate "re-replay after fixing a data problem" workflow while silence is how a comparison quietly
+    /// becomes wrong.
+    /// </summary>
+    [Fact]
+    public async Task SameLabelReplay_WarnsOncePerStrategy_WithTheOverwrittenCount()
+    {
+        using var harness = ReplayTestHarness.Create(
+            new ReplayPlan("same-label", ReplaySeries.Create(D.AddDays(-2), D, TimeSpan.FromDays(1))));
+        var companyId = await harness.SeedCompanyAsync();
+        await harness.SeedSignalAsync(companyId, SignalType.CustomerWin, D.AddDays(-4), D.AddDays(-4));
+
+        // The FIRST run writes into an empty label: nothing is replaced, so nothing is warned about.
+        await harness.ReplayRunner.RunAsync(CancellationToken.None);
+        Assert.Empty(OverwriteWarnings(harness));
+
+        // The SECOND run replaces all three as-of points.
+        await harness.ReplayRunner.RunAsync(CancellationToken.None);
+
+        var warning = Assert.Single(OverwriteWarnings(harness));
+        Assert.Contains("same-label", warning, StringComparison.Ordinal);
+        Assert.Contains(harness.LiveStrategies.Primary.Definition.Name, warning, StringComparison.Ordinal);
+        Assert.Contains("OVERWROTE 3 as-of point(s)", warning, StringComparison.Ordinal);
+        // It says what the count MEANS, not merely that it happened.
+        Assert.Contains("NOT comparable", warning, StringComparison.Ordinal);
+        Assert.Contains("NEW replay label", warning, StringComparison.Ordinal);
+
+        // A THIRD run reports ITS OWN 3, not a running total of 6 — the runner takes a difference.
+        await harness.ReplayRunner.RunAsync(CancellationToken.None);
+        Assert.Equal(2, OverwriteWarnings(harness).Count);
+        Assert.All(OverwriteWarnings(harness), w => Assert.Contains("OVERWROTE 3", w, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A DIFFERENT label over the same store replaces nothing, so it must not warn — otherwise the warning
+    /// would be noise rather than a signal, and the remedy it recommends ("use a new label") would look
+    /// ineffective.
+    /// </summary>
+    [Fact]
+    public async Task ReplayUnderANewLabel_OverwritesNothing_AndDoesNotWarn()
+    {
+        using var first = ReplayTestHarness.Create(SinglePointPlan(D, "attempt-one"));
+        var companyId = await first.SeedCompanyAsync();
+        await first.SeedSignalAsync(companyId, SignalType.CustomerWin, D.AddDays(-4), D.AddDays(-4));
+        await first.ReplayRunner.RunAsync(CancellationToken.None);
+
+        // A second process over the SAME data root, under a NEW label: both series coexist and nothing is
+        // lost, so the remedy the warning recommends demonstrably works.
+        using var second = ReplayTestHarness.CreateSharingRootOf(first, SinglePointPlan(D, "attempt-two"));
+        await second.SeedCompanyAsync();
+        await second.SeedSignalAsync(companyId, SignalType.CustomerWin, D.AddDays(-4), D.AddDays(-4));
+
+        await second.ReplayRunner.RunAsync(CancellationToken.None);
+
+        Assert.Empty(OverwriteWarnings(second));
+        var files = ReplayTestHarness.FilesUnder(first.ReplaysDirectory);
+        Assert.Contains(files, f => f.StartsWith("attempt-one/", StringComparison.Ordinal));
+        Assert.Contains(files, f => f.StartsWith("attempt-two/", StringComparison.Ordinal));
+    }
+
+    /// <summary>The aggregated same-label overwrite warnings the runner emitted (spec 148).</summary>
+    private static IReadOnlyList<string> OverwriteWarnings(ReplayTestHarness harness) =>
+        [.. harness.Logs.Entries
+            .Where(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+                && e.Message.Contains("OVERWROTE", StringComparison.Ordinal))
+            .Select(e => e.Message)];
 
     [Fact]
     public async Task Cancellation_Propagates()

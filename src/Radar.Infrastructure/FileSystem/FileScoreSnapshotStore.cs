@@ -64,10 +64,25 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
             snapshot.CompanyId.ToString(),
             ResolveFileName(snapshot));
 
+        // Spec 148: the existence PROBE has to happen here — before anything is written, while the target
+        // path is the only thing computed — but the observer must only be told once the replacement has
+        // actually HAPPENED. Serialization or the graceful disk-failure path can still abandon the write, and
+        // an aggregated "OVERWROTE N as-of point(s)" warning must not assert a replacement that never
+        // occurred. Only ever wired by the replay-scoped factory, whose as-of-keyed names make a same-label
+        // re-run overwrite in place; on the live/forward path the observer is null and no probe is even made.
+        var willReplaceExisting = _options.OnSnapshotOverwritten is not null && File.Exists(path);
+
         var json = Serialize(snapshot, links);
 
         if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
         {
+            // The write succeeded, so the earlier file really is gone (upsert-by-Id / last-write-wins,
+            // unchanged). Now, and only now, is the observer told.
+            if (willReplaceExisting)
+            {
+                _options.OnSnapshotOverwritten!(snapshot);
+            }
+
             _logger.LogInformation(
                 "Wrote score snapshot {SnapshotId} for company {CompanyId} to {Path}.",
                 snapshot.Id,
