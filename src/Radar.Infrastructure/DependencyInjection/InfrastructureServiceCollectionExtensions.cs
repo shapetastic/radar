@@ -489,7 +489,24 @@ public static class InfrastructureServiceCollectionExtensions
         // mechanism section.Get<ScoringWeights>() already relies on in ResolveScoringProfile — and a
         // non-numeric value throws here rather than binding to 0.
         var merged = profileWeights with { };
-        section.Bind(merged);
+        try
+        {
+            section.Bind(merged);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // ConfigurationBinder's own message names the PATH but not the strategy, and the path is indexed
+            // (Radar:Strategies:3:Weights:RecencyFloor) rather than named — so with several near-identical
+            // strategies the operator has to count array entries to find the broken one. Rethrow naming it,
+            // keeping the binder's exception as InnerException so the offending key, target type and the
+            // underlying FormatException all survive. Same treatment as the Validate() failure below, so
+            // EVERY inline-Weights failure names the strategy, exactly as this method's contract promises.
+            throw new InvalidOperationException(
+                $"{section.Path}: strategy '{strategyName}' has an inline Weights entry that could not be "
+                    + "bound; every entry must be a NUMBER (e.g. { \"FollowingTierDiscountWeight\": 0.0 }). "
+                    + $"{ex.Message}",
+                ex);
+        }
 
         // Validate the MERGED result: an inline override is as capable of producing a nonsensical weight as a
         // profile is, and the combination of a valid profile and a valid-looking override can still break an

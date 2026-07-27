@@ -506,20 +506,26 @@ public sealed class ScoringStrategyBindingTests
         Assert.Contains("monotone", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void NonNumericInlineWeightValue_FailsFast_RatherThanBindingToZero()
+    [Theory]
+    [InlineData("not-a-number")]
+    [InlineData("")]
+    public void NonNumericInlineWeightValue_FailsFast_NamingTheStrategy_RatherThanBindingToZero(string value)
     {
-        Assert.ThrowsAny<Exception>(() =>
+        // ConfigurationBinder's own message names the indexed PATH but never the strategy, so a bind failure
+        // used to be the ONE inline-Weights failure that did not say which of several near-identical
+        // strategies was broken. The rethrow names it and keeps the binder's exception as InnerException, so
+        // the offending key, the target type and the underlying conversion error all survive.
+        var ex = Rejects(new Dictionary<string, string?>
         {
-            var configuration = new ConfigurationBuilder().AddInMemoryCollection(
-                new Dictionary<string, string?>
-                {
-                    ["Radar:Strategies:0:Name"] = "text",
-                    ["Radar:Strategies:0:Weights:RecencyFloor"] = "not-a-number",
-                    ["Radar:PrimaryStrategy"] = "text",
-                }).Build();
-            new ServiceCollection().AddRadarScoringStrategies(configuration);
+            ["Radar:Strategies:0:Name"] = "text",
+            ["Radar:Strategies:0:Weights:RecencyFloor"] = value,
+            ["Radar:PrimaryStrategy"] = "text",
         });
+
+        Assert.Contains("'text'", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Radar:Strategies:0:Weights", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(ScoringWeights.RecencyFloor), ex.Message, StringComparison.Ordinal);
+        Assert.NotNull(ex.InnerException);
     }
 
     [Fact]

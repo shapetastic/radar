@@ -836,7 +836,11 @@ Do not hand back broken code.
     `Weights` returns the profile's instance unchanged. A **known** key that carries no number is rejected
     too — every `ScoringWeights` field is a plain number, so an object (`{ "Value": 0.0 }`) would be silently
     ignored and an explicit `null` binds to **0** (measured), i.e. a silently *disabled* discount on a
-    strategy that reads as tuned.
+    strategy that reads as tuned. **Every** inline-`Weights` failure names the strategy, bind failures
+    included: `ConfigurationBinder`'s own message carries the *indexed* path
+    (`Radar:Strategies:3:Weights:RecencyFloor`) but no name, so a non-numeric or empty value is rethrown
+    named, with the binder exception kept as `InnerException` — same treatment as the merged-`Validate()`
+    failure, so the contract holds for the whole method rather than most of it.
   - **Identity verified, not assumed**: resolved weights are hashed into `ScoringConfigVersion` **by value**,
     so two strategies differing only in one inline weight get **different** fingerprints (asserted through the
     real `AddRadarScoringStrategies` → `ScoringStrategyFactory` path) while the strategy that declared nothing
