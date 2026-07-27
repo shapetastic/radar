@@ -20,6 +20,12 @@ using Radar.Domain.Signals;
 /// thresholds — labels come from the policy, layout from the renderer. Every item carries its
 /// <see cref="RadarReportItem.ScoreSnapshotId"/> so a reported company is reproducible from stored
 /// data: report → snapshot → signals/evidence.
+/// <para>
+/// Everything above is the PRIMARY strategy's series (spec 137) and stays that way. Spec 150 adds one
+/// additional, purely-numeric <see cref="StrategyReportSection"/> per configured strategy when more than one
+/// is configured — see <c>BuildStrategySectionsAsync</c> — so a multi-strategy run stops being a report
+/// about one of them. With a single strategy nothing is built and the report is byte-identical to before.
+/// </para>
 /// </summary>
 public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
 {
@@ -33,6 +39,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private readonly IReportRepository _reportRepository;
     private readonly IPipelineRunStore _runStore;
     private readonly IScoreSnapshotFileStore _scoreSnapshotFileStore;
+    private readonly IScoringStrategyFactory _scoringStrategies;
+    private readonly IScoreRepositoryFactory _scoreRepositoryFactory;
     private readonly WeeklyReportOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WeeklyReportBuilder> _logger;
@@ -48,6 +56,12 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         IReportRepository reportRepository,
         IPipelineRunStore runStore,
         IScoreSnapshotFileStore scoreSnapshotFileStore,
+        // Spec 150: both are REQUIRED, never optional-nullable. An optional dependency that is silently
+        // null means a production wiring mistake produces no strategy sections while every test stays
+        // green — the exact class of bug spec 146's review caught. Both are already registered in DI, so
+        // AddSingleton<IWeeklyReportBuilder, WeeklyReportBuilder>() resolves them automatically.
+        IScoringStrategyFactory scoringStrategies,
+        IScoreRepositoryFactory scoreRepositoryFactory,
         WeeklyReportOptions options,
         TimeProvider timeProvider,
         ILogger<WeeklyReportBuilder> logger)
@@ -62,6 +76,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         ArgumentNullException.ThrowIfNull(reportRepository);
         ArgumentNullException.ThrowIfNull(runStore);
         ArgumentNullException.ThrowIfNull(scoreSnapshotFileStore);
+        ArgumentNullException.ThrowIfNull(scoringStrategies);
+        ArgumentNullException.ThrowIfNull(scoreRepositoryFactory);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -94,6 +110,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _reportRepository = reportRepository;
         _runStore = runStore;
         _scoreSnapshotFileStore = scoreSnapshotFileStore;
+        _scoringStrategies = scoringStrategies;
+        _scoreRepositoryFactory = scoreRepositoryFactory;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -326,6 +344,12 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 "Failed to read recent run history for the weekly report footer; omitting the section.");
         }
 
+        // Spec 150: one plain ranked table per configured strategy, appended after everything above. Built
+        // from the SAME company list the primary walk used, so the two views cannot disagree about which
+        // companies exist.
+        var strategySections = await BuildStrategySectionsAsync(
+            companies, periodStartUtc, periodEndUtc, ct).ConfigureAwait(false);
+
         var generatedAt = _timeProvider.GetUtcNow();
         var title = string.Format(
             CultureInfo.InvariantCulture,
@@ -342,7 +366,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             SignalsNeedingReview: needsReview,
             Collection: collection,
             RecentRuns: recentRuns,
-            Health: health);
+            Health: health,
+            Strategies: strategySections);
 
         var markdown = _renderer.Render(model);
 
@@ -376,6 +401,154 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             periodEndUtc);
 
         return new WeeklyReportResult(report, items);
+    }
+
+    /// <summary>
+    /// Builds one plain ranked table per configured scoring strategy (spec 150), primary first.
+    /// <para>
+    /// <b>Gated on more than one strategy.</b> With a single configured strategy — the synthesised
+    /// <c>default</c>, i.e. every deployment that never set <c>Radar:Strategies</c> — this returns
+    /// <c>null</c> and the report is byte-identical to the pre-150 output. Null rather than an empty list,
+    /// consistently, so "no sections" has exactly one representation.
+    /// </para>
+    /// <para>
+    /// <b>The <c>MaxItems</c> cap applies PER SECTION, independently.</b> Decided rather than inherited:
+    /// each strategy is capped by the same <see cref="WeeklyReportOptions.MaxItems"/> the primary narrative
+    /// uses, so one strategy can never crowd another out of the report, and every strategy is shown on the
+    /// same terms. Because that cap can hide rows, the section carries both the number of companies with
+    /// linked evidence and the number of rows actually kept, and the renderer states the truncation in the
+    /// section header — silently shortening a table is the spec-125 failure that motivated raising the cap
+    /// in the first place.
+    /// </para>
+    /// <para>
+    /// Snapshots are read through <see cref="IScoreRepositoryFactory"/> — the SAME read path the scoring
+    /// stage writes through — so this adds no second route to the per-strategy score files. Both the
+    /// candidate rule (latest snapshot in <c>(periodStartUtc, periodEndUtc]</c>, a company with none simply
+    /// omitted) and the ordering (Opportunity descending, then CompanyId ascending — deterministic, AD-3)
+    /// are the primary walk's existing rules, reused verbatim.
+    /// </para>
+    /// <para>
+    /// Deliberately NOT built here, and deliberately not built at all in this slice: cross-strategy
+    /// composition of any kind (disagreement metrics, merged rankings, composite scores, "consensus"
+    /// columns), per-strategy evidence blocks or "why noticed", per-strategy labels, and strategy-vs-price
+    /// ranking (spec 140 already does that). Composition over a few days of accrued history would rank
+    /// noise and invite trusting it.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<StrategyReportSection>?> BuildStrategySectionsAsync(
+        IReadOnlyList<Company> companies,
+        DateTimeOffset periodStartUtc,
+        DateTimeOffset periodEndUtc,
+        CancellationToken ct)
+    {
+        var runtimes = _scoringStrategies.Runtimes;
+        if (runtimes.Count <= 1)
+        {
+            return null; // single strategy → byte-identical to the pre-150 report
+        }
+
+        // Primary first (a reader needs to know which series the narrative sections above describe), then
+        // the remaining runtimes in their configured relative order. Runtimes is already in configured
+        // order and the primary may be anywhere in it, so this is a stable partition, not a sort.
+        var ordered = new List<ScoringStrategyRuntime>(runtimes.Count);
+        ordered.AddRange(runtimes.Where(r => r.Definition.IsPrimary));
+        ordered.AddRange(runtimes.Where(r => !r.Definition.IsPrimary));
+
+        var sections = new List<StrategyReportSection>(ordered.Count);
+        foreach (var runtime in ordered)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var repository = _scoreRepositoryFactory.ForStrategy(runtime.Definition);
+
+            var candidates = new List<CandidateEntry>();
+            foreach (var company in companies)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // Already ordered by CreatedAtUtc ascending (AD-3) → the last in-period match is the latest.
+                var snapshots = await repository
+                    .GetSnapshotsForCompanyAsync(company.Id, ct)
+                    .ConfigureAwait(false);
+
+                CompanyScoreSnapshot? current = null;
+                foreach (var snapshot in snapshots)
+                {
+                    if (snapshot.CreatedAtUtc > periodStartUtc && snapshot.CreatedAtUtc <= periodEndUtc)
+                    {
+                        current = snapshot;
+                    }
+                }
+
+                if (current is null)
+                {
+                    continue; // this strategy did not score this company in-period → omitted, never invented
+                }
+
+                candidates.Add(new CandidateEntry(company, current));
+            }
+
+            var ranked = candidates
+                .OrderByDescending(c => c.Current.OpportunityScore)
+                .ThenBy(c => c.Company.Id)
+                .ToList();
+
+            // Links are fetched for EVERY candidate rather than only up to the cap (as the primary walk
+            // does), because "how many companies had linked evidence" is a number this section renders: it
+            // is what makes the spec-53 exclusion visible instead of silent. The cost is one link lookup per
+            // in-period company per non-primary strategy.
+            var withLinks = new List<CandidateEntry>(ranked.Count);
+            foreach (var c in ranked)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var links = await repository
+                    .GetLinksForSnapshotAsync(c.Current.Id, ct)
+                    .ConfigureAwait(false);
+
+                if (links.Count == 0)
+                {
+                    // Spec 53, reused verbatim: a company scored from zero in-window signals is an absence
+                    // of data, not an opportunity. An all-zero row in a rank table repeats exactly the
+                    // mistake that rule fixed, so it is excluded here too — and counted, so it is not silent.
+                    continue;
+                }
+
+                withLinks.Add(c);
+            }
+
+            var rows = new List<StrategyReportRow>(Math.Min(withLinks.Count, _options.MaxItems));
+            foreach (var c in withLinks)
+            {
+                if (rows.Count >= _options.MaxItems)
+                {
+                    break;
+                }
+
+                rows.Add(new StrategyReportRow(
+                    Rank: rows.Count + 1,
+                    CompanyId: c.Current.CompanyId,
+                    CompanyName: c.Company.Name,
+                    Ticker: c.Company.Ticker,
+                    ScoreSnapshotId: c.Current.Id,
+                    Snapshot: c.Current));
+            }
+
+            // One engine IS one strategy (it resolves its effective config once in its constructor), so this
+            // is a single authoritative fingerprint for the whole section — DISPLAYED, never computed here.
+            var fingerprint = runtime.Engine.EffectiveConfig.Fingerprint;
+
+            sections.Add(new StrategyReportSection(
+                StrategyName: runtime.Definition.Name,
+                FormulaVersion: runtime.Definition.Formula,
+                ScoringConfigVersion: string.IsNullOrWhiteSpace(fingerprint) ? null : fingerprint,
+                IsPrimary: runtime.Definition.IsPrimary,
+                CompaniesScored: candidates.Count,
+                CompaniesWithLinkedEvidence: withLinks.Count,
+                Rows: rows));
+        }
+
+        return sections;
     }
 
     private async Task<IReadOnlyList<ReportEvidenceRef>> BuildEvidenceRefsAsync(

@@ -13,6 +13,11 @@ using Radar.Domain.Reports;
 /// Watch, Ignore, Needs more evidence, Thesis improving, Thesis deteriorating), the required
 /// disclaimers are always present, and every entry carries its score-snapshot id plus attributed
 /// evidence links so a reported company is reproducible from stored data.
+/// <para>
+/// Since spec 150 it also appends one PLAIN RANKED TABLE per configured scoring strategy after all of the
+/// above, when (and only when) the model carries strategy sections. Those tables are scores only — no
+/// labels, no evidence, no "why noticed" — and nothing in them is combined across strategies.
+/// </para>
 /// </summary>
 public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
 {
@@ -83,6 +88,34 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             }
         }
 
+        // The same provenance invariant, applied to the per-strategy tables (spec 150): a row's cited
+        // snapshot id and company id must match the snapshot its scores are read from, or the table would
+        // print one snapshot's numbers under another's citation.
+        if (model.Strategies is { Count: > 0 } strategies)
+        {
+            foreach (var section in strategies)
+            {
+                foreach (var row in section.Rows)
+                {
+                    if (row.ScoreSnapshotId != row.Snapshot.Id)
+                    {
+                        throw new InvalidOperationException(
+                            $"Strategy '{section.StrategyName}' row for '{row.CompanyName}' cites score "
+                            + $"snapshot '{row.ScoreSnapshotId}' but the attached snapshot is "
+                            + $"'{row.Snapshot.Id}'.");
+                    }
+
+                    if (row.CompanyId != row.Snapshot.CompanyId)
+                    {
+                        throw new InvalidOperationException(
+                            $"Strategy '{section.StrategyName}' row for '{row.CompanyName}' has company id "
+                            + $"'{row.CompanyId}' but the attached snapshot belongs to company "
+                            + $"'{row.Snapshot.CompanyId}'.");
+                    }
+                }
+            }
+        }
+
         var sb = new StringBuilder();
 
         AppendHeading(sb, model);
@@ -96,6 +129,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         AppendCollectionSummary(sb, model);
         AppendCollectionHealth(sb, model);
         AppendRecentRuns(sb, model);
+        AppendStrategySections(sb, model);
 
         return sb.ToString();
     }
@@ -459,4 +493,113 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         }
         sb.Append(Lf);
     }
+
+    // Spec 150: one plain ranked table per configured scoring strategy, primary first, appended after ALL
+    // existing content. Omitted entirely when the model carries no strategy sections (a single-strategy run,
+    // i.e. every deployment that never configured Radar:Strategies), which is what keeps the pre-150 report
+    // byte-identical.
+    //
+    // SCORES ONLY. No labels (Watch/Ignore/Investigate stay the primary's — a company labelled Watch under
+    // one strategy and Ignore under another would read as Radar equivocating, which the output-language
+    // rules do not contemplate), no evidence blocks, no "why noticed", and no advice vocabulary. Nothing
+    // here is combined across strategies either: no disagreement metric, no merged ranking, no composite —
+    // the reader compares by eye, and ranking strategies against price is spec 140's leaderboard.
+    private static void AppendStrategySections(StringBuilder sb, WeeklyReportModel model)
+    {
+        var strategies = model.Strategies;
+        if (strategies is null || strategies.Count == 0)
+        {
+            return;
+        }
+
+        var first = true;
+        foreach (var section in strategies)
+        {
+            AppendStrategySection(sb, section, isFirst: first);
+            first = false;
+        }
+    }
+
+    private static void AppendStrategySection(
+        StringBuilder sb, StrategyReportSection section, bool isFirst)
+    {
+        sb.Append("## Strategy: ")
+            .Append(section.StrategyName)
+            .Append(" (")
+            .Append(section.FormulaVersion)
+            .Append(')');
+        if (section.IsPrimary)
+        {
+            // So a reader can tell which series the narrative sections above describe.
+            sb.Append(" — primary (the series reported above)");
+        }
+        sb.Append(Lf);
+
+        sb.Append("Fingerprint: ")
+            .Append(string.IsNullOrWhiteSpace(section.ScoringConfigVersion)
+                ? "(unstamped)"
+                : section.ScoringConfigVersion)
+            .Append(" · ")
+            .Append(section.CompaniesScored.ToString(CultureInfo.InvariantCulture))
+            .Append(" companies scored · ")
+            .Append(section.CompaniesWithLinkedEvidence.ToString(CultureInfo.InvariantCulture))
+            .Append(" with linked evidence");
+        if (section.Truncated)
+        {
+            // Never silent (spec 125): when the report's MaxItems cap removed rows, the header says so.
+            sb.Append(" · showing top ")
+                .Append(section.Rows.Count.ToString(CultureInfo.InvariantCulture));
+        }
+        sb.Append(Lf);
+        sb.Append(Lf);
+
+        if (isFirst)
+        {
+            // Spec 150 §4. A reader who eyeballs two rankings will otherwise infer a winner, which is the
+            // multiple-comparisons trap arriving via the reader instead of the statistics.
+            sb.Append("These are independent scorings of the SAME collection pass. Absolute scores are not ")
+                .Append("comparable across strategies when the formulas differ, and a higher-looking table ")
+                .Append("is not a better strategy. Ranking strategies against subsequent price movement is ")
+                .Append("data/efficacy/strategy-leaderboard.md, not this table.")
+                .Append(Lf);
+            sb.Append(Lf);
+        }
+
+        sb.Append("| rank | company | ticker | Opportunity | Trajectory | Attention | Evidence | Velocity |")
+            .Append(Lf);
+        sb.Append("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |").Append(Lf);
+
+        foreach (var row in section.Rows)
+        {
+            var snap = row.Snapshot;
+            sb.Append("| ")
+                .Append(row.Rank.ToString(CultureInfo.InvariantCulture))
+                .Append(" | ")
+                .Append(EscapeTableCell(row.CompanyName))
+                .Append(" | ")
+                .Append(string.IsNullOrEmpty(row.Ticker) ? "—" : EscapeTableCell(row.Ticker))
+                .Append(" | ")
+                .Append(snap.OpportunityScore.ToString(CultureInfo.InvariantCulture))
+                .Append(" | ")
+                .Append(snap.TrajectoryScore.ToString(CultureInfo.InvariantCulture))
+                .Append(" | ")
+                .Append(snap.AttentionScore.ToString(CultureInfo.InvariantCulture))
+                .Append(" | ")
+                .Append(snap.EvidenceConfidenceScore.ToString(CultureInfo.InvariantCulture))
+                .Append(" | ")
+                .Append(snap.SignalVelocityScore.ToString(CultureInfo.InvariantCulture))
+                .Append(" |")
+                .Append(Lf);
+        }
+
+        sb.Append(Lf);
+    }
+
+    // A markdown table cell is pipe-delimited, so an unescaped '|' in a company name or ticker would split
+    // that row into extra columns and silently corrupt every value after it. Escaping the pipe is the whole
+    // job: no other character can end a cell.
+    private static string EscapeTableCell(string value) =>
+        value.Contains('|', StringComparison.Ordinal)
+            ? value.Replace("|", "\\|", StringComparison.Ordinal)
+            : value;
 }

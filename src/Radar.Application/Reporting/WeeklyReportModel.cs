@@ -15,4 +15,9 @@ public sealed record WeeklyReportModel(
     IReadOnlyList<RecentRunSummary>? RecentRuns = null,
     // Diagnostic collection-health findings (spec 98); null/empty renders no section. Observational
     // only — never a label/score/advice, never a scoring input.
-    CollectionHealthReport? Health = null);
+    CollectionHealthReport? Health = null,
+    // One plain ranked table per configured scoring strategy (spec 150), primary first. NULL when the run
+    // has a single strategy — which is every deployment that never configured Radar:Strategies — so the
+    // rendered report stays BYTE-IDENTICAL to the pre-150 output. Trailing and defaulted so every existing
+    // construction site keeps compiling. Scores only: no labels, no evidence, no "why noticed".
+    IReadOnlyList<StrategyReportSection>? Strategies = null);
