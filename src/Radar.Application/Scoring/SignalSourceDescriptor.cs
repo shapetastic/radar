@@ -1,5 +1,3 @@
-using System.Collections.ObjectModel;
-
 using Radar.Application.Collectors;
 using Radar.Application.Filings;
 using Radar.Application.SignalExtraction;
@@ -8,7 +6,7 @@ namespace Radar.Application.Scoring;
 
 /// <summary>
 /// Default <see cref="ISignalSourceDescriptor"/>: builds BOTH canonical strings ONCE at construction from the
-/// composed signal-source set, walking the collector list exactly once.
+/// composed signal-source set.
 /// <list type="bullet">
 /// <item><description>
 /// <b>Identity</b> (<see cref="CanonicalDescriptor"/>) — <c>rules=&lt;RuleSetVersion&gt;;[ai=…;]</c>: the
@@ -18,47 +16,49 @@ namespace Radar.Application.Scoring;
 /// <c>ScoringConfigVersion</c> fingerprint hashes.
 /// </description></item>
 /// <item><description>
-/// <b>Provenance</b> (<see cref="CollectionProvenance"/>) — <c>collectors=&lt;csv&gt;;</c>: the distinct,
-/// Ordinal-ordered, escaped enabled collector names. Recorded on every snapshot, hashed into nothing
-/// (spec 141).
+/// <b>Provenance</b> (<see cref="CollectionProvenance"/>) — <c>collectors=&lt;csv&gt;;</c>, plus a
+/// <c>collection=none-this-pass;</c> marker when this pass ran no collector (spec 147). Recorded on every
+/// snapshot, hashed into nothing (spec 141).
 /// </description></item>
 /// </list>
 /// <para>
-/// It reads only <see cref="IEvidenceCollector.CollectorName"/> and
-/// <see cref="IDirectionalFilingSignalSource.ScoringDescriptor"/> and NEVER calls
-/// <see cref="IEvidenceCollector.CollectAsync"/> or <see cref="IDirectionalFilingSignalSource.ProduceAsync"/>,
-/// so it has zero collection side effects and stays a pure function of the composed signal-source set (AD-3).
-/// When the AI source is absent (null — AI off) NOTHING is appended to the identity descriptor, so the AI-off
-/// identity is byte-identical to the AI-on-minus-<c>ai=</c> form.
+/// The collector names come from the name-only <see cref="EnabledCollectorVocabulary"/> (spec 147), NOT from
+/// the composed <see cref="IEvidenceCollector"/> instances. The descriptor always treated collectors as
+/// name-only by contract; making that structural is what lets a spec-144 <c>score</c> pass — which registers
+/// no collector at all — still record the truthful collector set instead of an empty one. This type therefore
+/// reads only <see cref="IDirectionalFilingSignalSource.ScoringDescriptor"/> and never calls
+/// <see cref="IDirectionalFilingSignalSource.ProduceAsync"/>, so it has zero side effects and stays a pure
+/// function of the composed signal-source set (AD-3). When the AI source is absent (null — AI off) NOTHING is
+/// appended to the identity descriptor, so the AI-off identity is byte-identical to the AI-on-minus-<c>ai=</c>
+/// form.
 /// </para>
 /// </summary>
 public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
 {
+    /// <summary>
+    /// The marker segment appended when this pass ran no collector (spec 147). It is a SEGMENT rather than a
+    /// different CSV so the collector set stays in exactly one place and a reader that only knows
+    /// <c>collectors=</c> keeps working.
+    /// </summary>
+    internal const string NoCollectionThisPassSegment = "collection=none-this-pass;";
+
     private readonly string _identityDescriptor;
     private readonly string _collectionProvenance;
-    private readonly ReadOnlyCollection<string> _enabledCollectors;
+    private readonly IReadOnlyList<string> _enabledCollectors;
 
     public SignalSourceDescriptor(
-        IEnumerable<IEvidenceCollector> collectors,
-        IDirectionalFilingSignalSource? aiFilingSource = null)
+        EnabledCollectorVocabulary collectors,
+        IDirectionalFilingSignalSource? aiFilingSource = null,
+        CollectionPassOptions? collectionPass = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
 
-        // Read ONLY CollectorName — never CollectAsync (no collection side effects). De-dupe defensively so a
-        // mis-registration listing a collector twice does not change the descriptor, and order by Ordinal so
-        // registration order is irrelevant. Enumerated ONCE, into the ONE ordered-distinct projection that
-        // BOTH the provenance CSV and EnabledCollectors() are derived from (spec 146) — so the snapshot's
-        // recorded collector set and a v9 channel's ran/did-not-run provenance can never disagree.
-        var names = collectors
-            .Select(c => c.CollectorName)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(n => n, StringComparer.Ordinal)
-            .ToArray();
-
-        // Handed out behind IReadOnlyList<string>, so it is a genuinely read-only wrapper rather than the
-        // backing array: a bare array can be cast back to string[] and mutated, and this instance is a
-        // process-lifetime singleton every engine reads.
-        _enabledCollectors = Array.AsReadOnly(names);
+        // ONE ordered-distinct projection (owned by EnabledCollectorVocabulary since spec 147) feeds BOTH the
+        // provenance CSV and EnabledCollectors() — so the snapshot's recorded collector set and a v9 channel's
+        // ran/did-not-run provenance can never disagree, and neither can the spec-146 startup guard that
+        // validates channel collectors against the very same list.
+        var names = collectors.CollectorNames;
+        _enabledCollectors = names;
 
         var csv = string.Join(',', names.Select(DescriptorEscaping.Escape));
 
@@ -67,7 +67,22 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // "newssearch") — NOT the Radar:Collectors config "kind" token. Treat it as opaque: it is
         // delimiter-free today, but escaping keeps the serialization injective (AD-3) so a name that ever
         // contained a reserved delimiter cannot collide with a different collector set.
-        _collectionProvenance = $"collectors={csv};";
+        //
+        // SPEC 147: "no collector is CONFIGURED" and "no collection happened in THIS pass" are different
+        // facts, and only the second is ever true of a standalone score pass. A bare `collectors=;` claimed
+        // the first when the second was true — a lie about provenance, which is sacred. The marker segment
+        // makes a score pass's record unmistakable while keeping the configured vocabulary in the CSV. Note
+        // precisely what that CSV is: the collector set the SCORING process is configured with, which is not
+        // necessarily the set that collected the evidence — if config changed between the collect and score
+        // passes the two differ. Answering "what produced this data" per-signal is the spec's option (C),
+        // deliberately deferred; the marker is what keeps this record honest in the meantime, because it says
+        // "configured vocabulary, nothing collected here" rather than claiming a collection.
+        // A Collected pass renders exactly what it always did, byte for byte, and never carries a second segment.
+        _collectionProvenance = (collectionPass?.Kind ?? CollectionPassKind.Collected) switch
+        {
+            CollectionPassKind.NoCollectionThisPass => $"collectors={csv};{NoCollectionThisPassSegment}",
+            _ => $"collectors={csv};",
+        };
 
         // STRATEGY IDENTITY (spec 141): the extractor rule-set identity, plus the AI directional-filing
         // magnitudes when that path is registered (fixed field ordering, AD-3, reusing the shared
@@ -75,7 +90,8 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // deliberately ABSENT: a collector toggle must not move a strategy's identity, because it does not
         // change what hypothesis the strategy scores. The ai= segment stays here because it carries per-signal
         // magnitudes and the reading model, which change signal DIRECTION (spec 119) — genuinely different
-        // scorings that must never share a fingerprint.
+        // scorings that must never share a fingerprint. The spec-147 pass kind is likewise absent: it is
+        // provenance, not identity.
         var descriptor = $"rules={KeywordSignalExtractor.RuleSetVersion};";
         if (aiFilingSource is not null)
         {

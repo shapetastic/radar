@@ -28,7 +28,8 @@ public sealed class ScoringStrategyFormulaChannelTests
     }
 
     private static ISignalSourceDescriptor DescriptorOver(params string[] names) =>
-        new SignalSourceDescriptor(names.Select(n => (IEvidenceCollector)new NamedCollector(n)));
+        new SignalSourceDescriptor(EnabledCollectorVocabulary.FromCollectors(
+            names.Select(n => (IEvidenceCollector)new NamedCollector(n))));
 
     private static ServiceProvider BuildGraph()
     {

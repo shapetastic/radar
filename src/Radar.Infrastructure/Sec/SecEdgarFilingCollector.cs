@@ -43,7 +43,15 @@ internal sealed class SecEdgarFilingCollector : IEvidenceCollector
         _forms = new HashSet<string>(options.Forms ?? [], StringComparer.OrdinalIgnoreCase);
     }
 
-    public string CollectorName => "sec-edgar";
+    /// <summary>
+    /// THE definition of this collector's stable provenance name (spec 147). A const so the composition
+    /// root's kind→collector table can name it without a magic string — that table is what lets a standalone
+    /// <c>score</c> pass (which registers no collector at all) still know the collector VOCABULARY.
+    /// </summary>
+    public const string Name = "sec-edgar";
+
+    /// <inheritdoc />
+    public string CollectorName => Name;
 
     public EvidenceSourceType SourceType => EvidenceSourceType.Filing;
 

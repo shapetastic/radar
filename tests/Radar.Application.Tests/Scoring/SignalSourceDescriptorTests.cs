@@ -39,13 +39,17 @@ public sealed class SignalSourceDescriptorTests
             throw new InvalidOperationException("The descriptor must never call ProduceAsync.");
     }
 
-    private static SignalSourceDescriptor Build(params string[] names) =>
-        new(names.Select(n => (IEvidenceCollector)new FakeCollector(n)));
+    /// <summary>
+    /// Builds the vocabulary the way a library-only composition does — FROM the collector instances — so
+    /// these tests still prove the descriptor never triggers collection (the fakes' CollectAsync throws).
+    /// </summary>
+    private static EnabledCollectorVocabulary Vocabulary(params string[] names) =>
+        EnabledCollectorVocabulary.FromCollectors(names.Select(n => (IEvidenceCollector)new FakeCollector(n)));
+
+    private static SignalSourceDescriptor Build(params string[] names) => new(Vocabulary(names));
 
     private static SignalSourceDescriptor BuildWithAi(string aiDescriptor, params string[] names) =>
-        new(
-            names.Select(n => (IEvidenceCollector)new FakeCollector(n)),
-            new FakeAiFilingSource(aiDescriptor));
+        new(Vocabulary(names), new FakeAiFilingSource(aiDescriptor));
 
     private static string DescriptorFor(params string[] names) => Build(names).CanonicalDescriptor();
 
@@ -158,9 +162,8 @@ public sealed class SignalSourceDescriptorTests
     [Fact]
     public void EmptyCollectorSet_YieldsStableProvenance()
     {
-        Assert.Equal(
-            "collectors=;",
-            new SignalSourceDescriptor(Array.Empty<IEvidenceCollector>()).CollectionProvenance());
+        Assert.Equal("collectors=;", new SignalSourceDescriptor(EnabledCollectorVocabulary.Empty)
+            .CollectionProvenance());
     }
 
     [Fact]
@@ -168,6 +171,70 @@ public sealed class SignalSourceDescriptorTests
     {
         Assert.Throws<ArgumentNullException>(() => new SignalSourceDescriptor(null!));
     }
+
+    // ---- spec 147: the pass kind is a SECOND fact, and it never touches identity ----------------------
+
+    [Fact]
+    public void CollectedPass_RendersExactlyThePre147ProvenanceString()
+    {
+        // THE byte-identical criterion for full/collect/replay: a pass that collected renders the bare CSV
+        // and NEVER a second segment, whether the pass kind is omitted or stated explicitly.
+        const string expected = "collectors=rss,sec-edgar;";
+
+        Assert.Equal(expected, Build("sec-edgar", "rss").CollectionProvenance());
+        Assert.Equal(
+            expected,
+            new SignalSourceDescriptor(
+                    Vocabulary("sec-edgar", "rss"),
+                    aiFilingSource: null,
+                    new CollectionPassOptions { Kind = CollectionPassKind.Collected })
+                .CollectionProvenance());
+    }
+
+    [Fact]
+    public void NoCollectionThisPass_RecordsTheConfiguredVocabulary_AndMarksThePass()
+    {
+        // The spec-147 fix: a score pass's snapshot must not claim "no collectors" over evidence a collect
+        // pass genuinely gathered. The configured set is recorded, and the marker says collection did not
+        // happen HERE.
+        Assert.Equal(
+            "collectors=rss,sec-edgar;collection=none-this-pass;",
+            ScorePassDescriptor("sec-edgar", "rss").CollectionProvenance());
+    }
+
+    [Fact]
+    public void NoCollectionThisPass_WithAnEmptyVocabulary_IsStillDistinguishableFromNoCollectorsConfigured()
+    {
+        // The two states this string used to conflate, side by side. Neither is empty, and they differ.
+        var noCollectorsConfigured = new SignalSourceDescriptor(EnabledCollectorVocabulary.Empty)
+            .CollectionProvenance();
+        var noCollectionThisPass = ScorePassDescriptor().CollectionProvenance();
+
+        Assert.Equal("collectors=;", noCollectorsConfigured);
+        Assert.Equal("collectors=;collection=none-this-pass;", noCollectionThisPass);
+        Assert.NotEqual(noCollectorsConfigured, noCollectionThisPass);
+        Assert.NotEmpty(noCollectionThisPass);
+    }
+
+    [Fact]
+    public void PassKind_DoesNotTouchIdentity_NorTheEnabledCollectorNames()
+    {
+        // The pass kind is provenance, exactly like the collector set (spec 141): it must not reach the
+        // fingerprint input, and it must not change what a v9 channel sees as the vocabulary.
+        var collected = Build("rss", "sec-edgar");
+        var scorePass = ScorePassDescriptor("rss", "sec-edgar");
+
+        Assert.Equal(collected.CanonicalDescriptor(), scorePass.CanonicalDescriptor());
+        Assert.DoesNotContain("collection=", collected.CanonicalDescriptor(), StringComparison.Ordinal);
+        Assert.DoesNotContain("collection=", scorePass.CanonicalDescriptor(), StringComparison.Ordinal);
+        Assert.Equal(collected.EnabledCollectors(), scorePass.EnabledCollectors());
+    }
+
+    private static SignalSourceDescriptor ScorePassDescriptor(params string[] names) =>
+        new(
+            Vocabulary(names),
+            aiFilingSource: null,
+            new CollectionPassOptions { Kind = CollectionPassKind.NoCollectionThisPass });
 
     [Fact]
     public void NullAiSource_YieldsRulesOnlyIdentity_NoAiSegment()

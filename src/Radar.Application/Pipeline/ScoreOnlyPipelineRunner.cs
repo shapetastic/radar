@@ -34,15 +34,18 @@ namespace Radar.Application.Pipeline;
 /// allowed to back-date the live series.
 /// </para>
 /// <para>
-/// <b>Recorded limitation.</b> With no collector registered,
-/// <see cref="ISignalSourceDescriptor.CollectionProvenance"/> resolves to the empty collector set, so
-/// snapshots written by a standalone score pass record <c>collectors=;</c> and a <c>radar-formula-v9</c>
-/// channel sees every declared collector as "did not run". This is the same class of caveat spec 139 records
-/// for replay ("under replay this reflects the replaying process's collectors"): the collector set is
-/// recorded provenance of the PROCESS, hashed into nothing, so no fingerprint moves and no component score
-/// changes. It does mean a v9 strategy declaring collector channels cannot start up in <c>score</c> mode —
-/// the spec-146 startup guard (a channel may only name a REGISTERED collector) is deliberately left intact
-/// rather than weakened. No shipped configuration uses v9 channels today.
+/// <b>How this pass records provenance (spec 147).</b> No collector is registered, but the collector
+/// VOCABULARY is: the composition root resolves <c>Radar:Collectors</c> in every mode and registers the
+/// name-only <c>EnabledCollectorVocabulary</c>, so
+/// <see cref="ISignalSourceDescriptor.CollectionProvenance"/> records the CONFIGURED collector set plus an
+/// explicit <c>collection=none-this-pass;</c> marker — <c>collectors=rss,sec-edgar;collection=none-this-pass;</c>
+/// — instead of the bare <c>collectors=;</c> it used to write, which claimed no collector existed over
+/// evidence a <c>collect</c> pass had genuinely gathered from several. It stays recorded provenance, hashed
+/// into nothing, so no fingerprint moves and no component score changes. A <c>radar-formula-v9</c> strategy
+/// declaring collector channels therefore starts and scores in <c>score</c> mode, with the spec-146 guard
+/// (a channel may only name a collector in the vocabulary) unweakened. Spec 139's replay is deliberately
+/// NOT marked: it registers real collectors and its <c>replay ⊆ forward</c> invariant compares snapshots
+/// field for field.
 /// </para>
 /// </summary>
 public sealed class ScoreOnlyPipelineRunner : IRadarPipeline

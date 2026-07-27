@@ -1,5 +1,6 @@
 using System.Globalization;
 
+using Radar.Application.Collectors;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -46,6 +47,15 @@ internal static class RadarWorkerServices
                 $"Radar:IntervalMinutes must be greater than zero when Radar:RunOnce is false (was {options.IntervalMinutes}).");
         }
 
+        // Resolve Radar:Collectors ONCE, through the ONE kind→collector table (spec 147), for BOTH the
+        // vocabulary and the registrations below. Score mode is the only mode that does not require at least
+        // one collector — there is nothing to collect with — but every other rule (unknown kind, blank entry,
+        // case-insensitive matching, defensive de-dupe) applies identically in every mode: a silently-wrong
+        // vocabulary would corrupt recorded provenance and could make the spec-146 channel guard reject a
+        // legitimately-named collector.
+        var configuredCollectors = ResolveConfiguredCollectors(
+            options, requireAtLeastOne: runMode != RadarRunMode.Score);
+
         // Register the configured option instances FIRST so the libraries' TryAddSingleton defaults
         // (ScoringOptions / WeeklyReportOptions / PipelineOptions) do not override them. Do NOT reorder
         // these below the AddRadar* helpers — that would let configuration lose to the library defaults.
@@ -57,6 +67,29 @@ internal static class RadarWorkerServices
             RecentRunsInReport = options.RecentRunsInReport,
         });
         services.AddSingleton(new PipelineOptions { GenerateReport = options.GenerateReport });
+
+        // The enabled-collector VOCABULARY (spec 147) — the collector NAMES and nothing else. Registered in
+        // EVERY run mode, and BEFORE AddRadarApplicationServices so the library's TryAddSingleton default
+        // (which derives the names from the REGISTERED collectors) loses to configuration. This is what makes
+        // a standalone score pass — which registers no collector at all, deliberately — record the truthful
+        // collector set instead of an empty one, and lets a radar-formula-v9 collector-channel strategy start
+        // and score in that mode. It holds strings: it cannot collect and references nothing that can.
+        services.AddSingleton(
+            EnabledCollectorVocabulary.FromNames(configuredCollectors.Select(c => c.CollectorName)));
+
+        // …and the orthogonal fact: whether collection happened in THIS pass. Only the standalone score pass
+        // is marked, so full/collect/replay provenance is byte-identical to before spec 147. Replay is
+        // deliberately NOT marked: it registers real collectors, and spec 139's replay ⊆ forward invariant
+        // compares a replay snapshot against a forward one FIELD FOR FIELD — changing replay's provenance
+        // string would break it.
+        if (runMode == RadarRunMode.Score)
+        {
+            services.AddSingleton(new CollectionPassOptions
+            {
+                Kind = CollectionPassKind.NoCollectionThisPass,
+            });
+        }
+
         services.AddSingleton(new WorkerRunOptions
         {
             RunOnce = options.RunOnce,
@@ -132,18 +165,22 @@ internal static class RadarWorkerServices
         });
 
         // Enable the configured evidence collectors additively — UNLESS this is a standalone "score" pass
-        // (spec 144), which registers NO COLLECTOR AT ALL and does not even validate Radar:Collectors.
-        // Construction is what opens the typed HttpClients (and, for the SEC kinds, what enforces the
-        // User-Agent), so "constructs and invokes no collector" has to mean "is never registered", not "is
-        // registered but never called". Consequences, stated rather than hidden:
-        // ISignalSourceDescriptor.CollectionProvenance() records the EMPTY collector set on that pass's
-        // snapshots (recorded provenance, hashed into NOTHING — no fingerprint moves, no component score
-        // changes), and a radar-formula-v9 strategy declaring collector channels cannot start up in score
-        // mode, because the spec-146 "a channel may only name a REGISTERED collector" guard is deliberately
-        // left intact rather than weakened. Same class of caveat spec 139 already records for replay.
+        // (spec 144), which registers NO COLLECTOR AT ALL. Construction is what opens the typed HttpClients
+        // (and, for the SEC kinds, what enforces the User-Agent), so "constructs and invokes no collector"
+        // has to mean "is never registered", not "is registered but never called".
+        //
+        // SPEC 147: the capability is still withheld, but the VOCABULARY is not — Radar:Collectors is
+        // resolved and validated above in every mode, and the resulting EnabledCollectorVocabulary is
+        // registered in every mode. So a score pass records the configured collector set (plus the
+        // "collection=none-this-pass" marker) rather than a false empty one, and a radar-formula-v9 strategy
+        // declaring collector channels starts and scores in score mode. The spec-146 guard ("a channel may
+        // only name an ENABLED collector") is unweakened — it now validates against that same vocabulary.
         if (runMode != RadarRunMode.Score)
         {
-            AddConfiguredCollectors(services, options);
+            foreach (var collector in configuredCollectors)
+            {
+                collector.Register(services, options);
+            }
         }
 
         // Wire the AI chat-client seam ONLY when a provider is configured (opt-in gate). AI is not a collector,
@@ -265,20 +302,159 @@ internal static class RadarWorkerServices
     }
 
     /// <summary>
-    /// Registers the configured evidence collectors additively (case-insensitive). Each kind registers its
-    /// collector as <c>IEvidenceCollector</c>, composing into the <c>IEnumerable</c> the collection pass
-    /// consumes. Fails fast with a clear message on an empty list or an unknown kind. De-dupes defensively so
-    /// a config typo listing the same kind twice registers once.
+    /// ONE <c>Radar:Collectors</c> kind ↦ (provenance name, registration) entry. The name is taken from the
+    /// collector class's own <c>Name</c> const, never re-typed, so the vocabulary a score pass records can
+    /// never claim a name the registered collector does not have.
     /// </summary>
-    private static void AddConfiguredCollectors(IServiceCollection services, RadarWorkerOptions options)
+    private sealed record CollectorKind(
+        string Kind, string CollectorName, Action<IServiceCollection, RadarWorkerOptions> Register);
+
+    /// <summary>
+    /// THE kind→collector table (spec 147). Both paths that need to know the collectors — the registration
+    /// path (full/collect/replay) and the vocabulary path (every mode, including the standalone score pass
+    /// that registers none) — resolve <c>Radar:Collectors</c> through this ONE table, so they cannot disagree.
+    /// A vocabulary that drifted from the registrations would be worse than the failure it replaces: the
+    /// spec-146 channel guard would pass on a collector that cannot run.
+    /// <para>Order defines the order the kinds are listed in every fail-fast message.</para>
+    /// </summary>
+    private static readonly IReadOnlyList<CollectorKind> CollectorKinds =
+    [
+        new("rss", RadarCollectorNames.Rss,
+            static (services, _) => services.AddRssPressReleaseCollector()),
+        new("localfile", RadarCollectorNames.LocalFile,
+            static (services, options) => services.AddLocalFileCollector(options.EvidenceSourceDirectory)),
+        new("sec", RadarCollectorNames.SecEdgar,
+            static (services, options) => services.AddSecEdgarCollector(new SecCollectorOptions
+            {
+                UserAgent = options.Sec.UserAgent,
+                Forms = options.Sec.Forms,
+                MaxFilingsPerCompany = options.Sec.MaxFilingsPerCompany,
+            })),
+        new("secform4", RadarCollectorNames.SecForm4,
+            static (services, options) => services.AddSecForm4Collector(new SecForm4CollectorOptions
+            {
+                UserAgent = options.SecForm4.UserAgent,
+                MaxFilingsPerCompany = options.SecForm4.MaxFilingsPerCompany,
+            })),
+        new("sec13dg", RadarCollectorNames.Sec13DG,
+            static (services, options) => services.AddSec13DGCollector(new Sec13DGCollectorOptions
+            {
+                UserAgent = options.Sec13DG.UserAgent,
+                MaxFilingsPerCompany = options.Sec13DG.MaxFilingsPerCompany,
+            })),
+        new("usaspending", RadarCollectorNames.UsaSpending,
+            static (services, options) => services.AddUsaSpendingContractCollector(new UsaSpendingCollectorOptions
+            {
+                AwardTypeCodes = options.UsaSpending.AwardTypeCodes,
+                LookbackDays = options.UsaSpending.LookbackDays,
+                MaxAwardsPerCompany = options.UsaSpending.MaxAwardsPerCompany,
+            })),
+        new("news", RadarCollectorNames.GdeltNews,
+            static (services, options) => services.AddGdeltNewsCollector(new GdeltCollectorOptions
+            {
+                Timespan = options.Gdelt.Timespan,
+                MaxRecordsPerCompany = options.Gdelt.MaxRecordsPerCompany,
+                EnglishOnly = options.Gdelt.EnglishOnly,
+                InterRequestDelay = TimeSpan.FromSeconds(options.Gdelt.InterRequestDelaySeconds),
+                MaxRetriesOn429 = options.Gdelt.MaxRetriesOn429,
+                RetryBackoff = TimeSpan.FromSeconds(options.Gdelt.RetryBackoffSeconds),
+            })),
+        new("newssearch", RadarCollectorNames.NewsSearch,
+            static (services, options) => services.AddNewsAttentionCollector(new NewsCollectorOptions
+            {
+                MaxRecordsPerCompany = options.News.MaxRecordsPerCompany,
+                EnglishOnly = options.News.EnglishOnly,
+                InterRequestDelay = TimeSpan.FromSeconds(options.News.InterRequestDelaySeconds),
+            })),
+        new("hiringats", RadarCollectorNames.HiringAts,
+            static (services, options) => services.AddHiringBoardCollector(new HiringCollectorOptions
+            {
+                MaxSampleTitles = options.Hiring.MaxSampleTitles,
+            })),
+        new("patents", RadarCollectorNames.Patents,
+            static (services, options) => services.AddPatentActivityCollector(new PatentCollectorOptions
+            {
+                BaseUrl = options.Patents.BaseUrl,
+                LookbackDays = options.Patents.LookbackDays,
+                MaxSampleTitles = options.Patents.MaxSampleTitles,
+                ApiKeyEnvVar = options.Patents.ApiKeyEnvVar,
+                MaxPageSize = options.Patents.MaxPageSize,
+            })),
+        new("fda", RadarCollectorNames.Fda,
+            static (services, options) => services.AddFdaClearanceCollector(new FdaCollectorOptions
+            {
+                LookbackDays = options.Fda.LookbackDays,
+                MaxSampleClearances = options.Fda.MaxSampleClearances,
+                MaxPageSize = options.Fda.MaxPageSize,
+            })),
+        new("trademarks", RadarCollectorNames.Trademarks,
+            static (services, options) => services.AddTrademarkActivityCollector(new TrademarkCollectorOptions
+            {
+                LookbackDays = options.Trademarks.LookbackDays,
+                MaxSampleMarks = options.Trademarks.MaxSampleMarks,
+                MaxPageSize = options.Trademarks.MaxPageSize,
+                ApiKeyEnvVar = options.Trademarks.ApiKeyEnvVar,
+            })),
+    ];
+
+    /// <summary>
+    /// The valid-kind list every <c>Radar:Collectors</c> failure message quotes, rendered FROM
+    /// <see cref="CollectorKinds"/> so a new collector cannot be added to the table and forgotten in the
+    /// messages (asserted by a test).
+    /// </summary>
+    private static readonly string CollectorKindList = FormatCollectorKindList();
+
+    /// <summary>
+    /// The table's <c>(kind, collector name)</c> pairs, exposed for the spec-147 anti-drift test: it builds a
+    /// provider for EVERY kind and asserts the registered <c>IEvidenceCollector.CollectorName</c> is the name
+    /// recorded here, so the vocabulary can never claim a name the collector does not have.
+    /// </summary>
+    internal static IReadOnlyList<(string Kind, string CollectorName)> CollectorKindTable { get; } =
+        CollectorKinds.Select(k => (k.Kind, k.CollectorName)).ToArray();
+
+    /// <summary>
+    /// The rendered valid-kind list quoted by every <c>Radar:Collectors</c> failure message, exposed so a
+    /// test can assert it is derived from the table rather than hand-maintained alongside it.
+    /// </summary>
+    internal static string CollectorKindMessageList => CollectorKindList;
+
+    private static string FormatCollectorKindList()
+    {
+        var quoted = CollectorKinds.Select(k => $"\"{k.Kind}\"").ToArray();
+        return quoted.Length == 1
+            ? quoted[0]
+            : string.Join(", ", quoted[..^1]) + ", and " + quoted[^1];
+    }
+
+    /// <summary>
+    /// Resolves <c>Radar:Collectors</c> against <see cref="CollectorKinds"/> (case-insensitive), preserving
+    /// config order and de-duping defensively so a config typo listing the same kind twice resolves once.
+    /// Fails fast with a clear message on an unknown kind or a null/empty/whitespace entry — in EVERY run
+    /// mode, because the resolved list is also the recorded provenance VOCABULARY (spec 147) and a silently
+    /// wrong one would misrepresent what produced a snapshot's data.
+    /// <para>
+    /// <paramref name="requireAtLeastOne"/> is the ONE mode-dependent rule: full/collect/replay must enable a
+    /// collector (a run that collects nothing is a misconfiguration), while a standalone <c>score</c> pass
+    /// has nothing to collect with and legitimately runs with none configured — it then records the empty
+    /// vocabulary, which the <c>collection=none-this-pass</c> marker keeps unambiguous.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<CollectorKind> ResolveConfiguredCollectors(
+        RadarWorkerOptions options, bool requireAtLeastOne)
     {
         if (options.Collectors is null || options.Collectors.Count == 0)
         {
+            if (!requireAtLeastOne)
+            {
+                return [];
+            }
+
             throw new InvalidOperationException(
-                "Radar:Collectors must enable at least one collector; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", \"fda\", and \"trademarks\".");
+                $"Radar:Collectors must enable at least one collector; valid kinds are {CollectorKindList}.");
         }
 
         var seenKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var resolved = new List<CollectorKind>(options.Collectors.Count);
         foreach (var rawKind in options.Collectors)
         {
             // Validate/normalize first so a null/empty/whitespace entry fails fast with a clear
@@ -286,7 +462,8 @@ internal static class RadarWorkerServices
             if (string.IsNullOrWhiteSpace(rawKind))
             {
                 throw new InvalidOperationException(
-                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", \"fda\", and \"trademarks\".");
+                    "Radar:Collectors entries must not be null, empty, or whitespace; valid kinds are "
+                        + $"{CollectorKindList}.");
             }
 
             var kind = rawKind.Trim();
@@ -295,112 +472,15 @@ internal static class RadarWorkerServices
                 continue;
             }
 
-            if (string.Equals(kind, "rss", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddRssPressReleaseCollector();
-            }
-            else if (string.Equals(kind, "localfile", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddLocalFileCollector(options.EvidenceSourceDirectory);
-            }
-            else if (string.Equals(kind, "sec", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddSecEdgarCollector(new SecCollectorOptions
-                {
-                    UserAgent = options.Sec.UserAgent,
-                    Forms = options.Sec.Forms,
-                    MaxFilingsPerCompany = options.Sec.MaxFilingsPerCompany,
-                });
-            }
-            else if (string.Equals(kind, "secform4", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddSecForm4Collector(new SecForm4CollectorOptions
-                {
-                    UserAgent = options.SecForm4.UserAgent,
-                    MaxFilingsPerCompany = options.SecForm4.MaxFilingsPerCompany,
-                });
-            }
-            else if (string.Equals(kind, "sec13dg", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddSec13DGCollector(new Sec13DGCollectorOptions
-                {
-                    UserAgent = options.Sec13DG.UserAgent,
-                    MaxFilingsPerCompany = options.Sec13DG.MaxFilingsPerCompany,
-                });
-            }
-            else if (string.Equals(kind, "usaspending", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddUsaSpendingContractCollector(new UsaSpendingCollectorOptions
-                {
-                    AwardTypeCodes = options.UsaSpending.AwardTypeCodes,
-                    LookbackDays = options.UsaSpending.LookbackDays,
-                    MaxAwardsPerCompany = options.UsaSpending.MaxAwardsPerCompany,
-                });
-            }
-            else if (string.Equals(kind, "news", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddGdeltNewsCollector(new GdeltCollectorOptions
-                {
-                    Timespan = options.Gdelt.Timespan,
-                    MaxRecordsPerCompany = options.Gdelt.MaxRecordsPerCompany,
-                    EnglishOnly = options.Gdelt.EnglishOnly,
-                    InterRequestDelay = TimeSpan.FromSeconds(options.Gdelt.InterRequestDelaySeconds),
-                    MaxRetriesOn429 = options.Gdelt.MaxRetriesOn429,
-                    RetryBackoff = TimeSpan.FromSeconds(options.Gdelt.RetryBackoffSeconds),
-                });
-            }
-            else if (string.Equals(kind, "newssearch", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddNewsAttentionCollector(new NewsCollectorOptions
-                {
-                    MaxRecordsPerCompany = options.News.MaxRecordsPerCompany,
-                    EnglishOnly = options.News.EnglishOnly,
-                    InterRequestDelay = TimeSpan.FromSeconds(options.News.InterRequestDelaySeconds),
-                });
-            }
-            else if (string.Equals(kind, "hiringats", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddHiringBoardCollector(new HiringCollectorOptions
-                {
-                    MaxSampleTitles = options.Hiring.MaxSampleTitles,
-                });
-            }
-            else if (string.Equals(kind, "patents", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddPatentActivityCollector(new PatentCollectorOptions
-                {
-                    BaseUrl = options.Patents.BaseUrl,
-                    LookbackDays = options.Patents.LookbackDays,
-                    MaxSampleTitles = options.Patents.MaxSampleTitles,
-                    ApiKeyEnvVar = options.Patents.ApiKeyEnvVar,
-                    MaxPageSize = options.Patents.MaxPageSize,
-                });
-            }
-            else if (string.Equals(kind, "fda", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddFdaClearanceCollector(new FdaCollectorOptions
-                {
-                    LookbackDays = options.Fda.LookbackDays,
-                    MaxSampleClearances = options.Fda.MaxSampleClearances,
-                    MaxPageSize = options.Fda.MaxPageSize,
-                });
-            }
-            else if (string.Equals(kind, "trademarks", StringComparison.OrdinalIgnoreCase))
-            {
-                services.AddTrademarkActivityCollector(new TrademarkCollectorOptions
-                {
-                    LookbackDays = options.Trademarks.LookbackDays,
-                    MaxSampleMarks = options.Trademarks.MaxSampleMarks,
-                    MaxPageSize = options.Trademarks.MaxPageSize,
-                    ApiKeyEnvVar = options.Trademarks.ApiKeyEnvVar,
-                });
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are \"rss\", \"localfile\", \"sec\", \"secform4\", \"sec13dg\", \"usaspending\", \"news\", \"newssearch\", \"hiringats\", \"patents\", \"fda\", and \"trademarks\".");
-            }
+            var match = CollectorKinds.FirstOrDefault(
+                k => string.Equals(k.Kind, kind, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException(
+                    $"Radar:Collectors kind '{kind}' is not supported; valid kinds are {CollectorKindList}.");
+
+            resolved.Add(match);
         }
+
+        return resolved;
     }
 
     /// <summary>

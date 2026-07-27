@@ -31,13 +31,15 @@ namespace Radar.Application.Scoring;
 /// <see cref="Signals"/> alone. Defaults to empty, which reproduces the pre-v8 (post-collapse-only)
 /// behaviour — the fail-safe when a caller has no pre-collapse set.</para>
 ///
-/// <para><see cref="EnabledCollectors"/> is the set of evidence collectors REGISTERED for this run (spec
-/// 146) — the answer to "did that source even run?", which is a different question from "did that source
-/// produce anything", and the difference is exactly what makes a <c>radar-formula-v9</c> channel's 0
-/// explainable after the fact. It is provenance only: no formula may use it to change a score (a channel
-/// scores 0 whether its source was down or genuinely quiet — Radar scores evidence, and absence of evidence
-/// is not evidence), and it is hashed into nothing. Defaults to empty, which reads as "did not run" for every
-/// declared collector — the honest answer when the caller cannot say.</para>
+/// <para><see cref="EnabledCollectors"/> is the enabled-collector VOCABULARY for this run (spec 146, made
+/// mode-independent by spec 147) — the answer to "is that source part of this run's configuration?". It is
+/// provenance only: no formula may use it to change a score (a channel scores 0 whether its source was down
+/// or genuinely quiet — Radar scores evidence, and absence of evidence is not evidence), and it is hashed
+/// into nothing. Defaults to empty, the honest answer when the caller cannot say.
+/// <b>Read the "what did not run actually means" note on
+/// <see cref="ISignalSourceDescriptor.EnabledCollectors"/> before treating a channel's
+/// <c>CollectorsNotRun</c> as an outage signal</b>: the startup guard validates channel collectors against
+/// this very list, so in a composed run it is structurally empty.</para>
 /// </summary>
 public sealed record ScoringInput(
     Guid CompanyId,
@@ -54,9 +56,10 @@ public sealed record ScoringInput(
     public IReadOnlyList<ScoringSignal> PreCollapseSignals { get; init; } = Array.Empty<ScoringSignal>();
 
     /// <summary>
-    /// The <c>IEvidenceCollector.CollectorName</c>s registered for this run (spec 146), ordered and distinct.
-    /// Provenance ONLY — never a scoring input, never hashed. Empty means "unknown", which every consumer
-    /// must read as "did not run".
+    /// The <c>IEvidenceCollector.CollectorName</c>s this run is configured with (spec 146; sourced from the
+    /// mode-independent <c>EnabledCollectorVocabulary</c> since spec 147), ordered and distinct. Provenance
+    /// ONLY — never a scoring input, never hashed. Empty means "unknown", which every consumer must read as
+    /// "did not run".
     /// </summary>
     public IReadOnlyList<string> EnabledCollectors { get; init; } = Array.Empty<string>();
 }

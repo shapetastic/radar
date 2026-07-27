@@ -617,7 +617,8 @@ public sealed class ScoringEngineTests
             .Build();
 
         static ISignalSourceDescriptor DescriptorOver(params string[] names) =>
-            new SignalSourceDescriptor(names.Select(n => (IEvidenceCollector)new NamedFakeCollector(n)));
+            new SignalSourceDescriptor(EnabledCollectorVocabulary.FromCollectors(
+                names.Select(n => (IEvidenceCollector)new NamedFakeCollector(n))));
 
         var sixCollectors = new Harness(
             new RadarScoreFormulaV8(new ScoringWeights(), Weights),

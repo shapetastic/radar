@@ -48,6 +48,13 @@ public interface ISignalSourceDescriptor
     /// <summary>
     /// COLLECTION PROVENANCE — the enabled-collector descriptor, recorded on every snapshot and hashed into
     /// nothing. Enabling or disabling a collector changes this value and <b>only</b> this value.
+    /// <para>
+    /// Spec 147 added a second, orthogonal fact to it: <c>collectors=&lt;csv&gt;;</c> is what this run is
+    /// CONFIGURED with, and a trailing <c>collection=none-this-pass;</c> marks a pass that ran no collector
+    /// (spec 144's standalone <c>score</c>). The two used to be conflated onto one empty CSV, so a score pass
+    /// recorded "no collectors" over evidence seven collectors had genuinely gathered. A pass that did
+    /// collect renders exactly the pre-147 string, byte for byte.
+    /// </para>
     /// </summary>
     string CollectionProvenance();
 
@@ -61,6 +68,19 @@ public interface ISignalSourceDescriptor
     /// answer: "what the snapshot says was collected" and "what the channel provenance says ran" cannot be
     /// allowed to disagree. Like <see cref="CollectionProvenance"/> it is recorded provenance and is hashed
     /// into <b>nothing</b>.
+    /// </para>
+    /// <para>
+    /// <b>What "did not run" actually means (spec 147, §4 — stated plainly because it is weaker than it
+    /// looks).</b> <c>ScoringStrategyFactory</c> validates every v9 channel collector against THIS list at
+    /// startup and refuses to build any engine if one is missing, and <c>ScoringEngine</c> then hands the very
+    /// same list to the formula as <c>ScoringInput.EnabledCollectors</c>. So in any composed run that started
+    /// successfully, <c>ChannelBreakdown.CollectorsNotRun</c> is <b>structurally empty</b> — in EVERY mode,
+    /// not just <c>score</c> — and a channel scoring 0 always means "this window holds no signals whose
+    /// evidence that collector retrieved". It is NOT an outage signal, and it never was: a collector that was
+    /// registered and then failed every fetch is indistinguishable here from one that found nothing. Since
+    /// spec 147 the vocabulary is the CONFIGURED set in every mode, so a <c>score</c> pass no longer inverts
+    /// this (before it, every declared collector read as "did not run", which was the exact opposite of the
+    /// truth). Collection HEALTH lives in the collection summary and the run record, not here.
     /// </para>
     /// </summary>
     IReadOnlyList<string> EnabledCollectors();

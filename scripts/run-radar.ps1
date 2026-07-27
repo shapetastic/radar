@@ -41,8 +41,13 @@
 #   * it STILL needs the AI configuration (and the DEEPINFRA_API_KEY environment variable) that the profile
 #     declares, because the AI directional-read descriptor is an INPUT to the ScoringConfigVersion
 #     fingerprint - dropping it would silently re-stamp every strategy. The AI read itself never runs.
-#   * with no collector registered, each snapshot records the EMPTY collector set in its (never-hashed)
-#     CollectionProvenance field. Same class of caveat -Replay already carries.
+#   * (spec 147) no collector is CONSTRUCTED, but the collector VOCABULARY is still known: each snapshot
+#     records the CONFIGURED collector set plus an explicit marker that nothing was collected in this pass -
+#     "collectors=rss,sec-edgar;collection=none-this-pass;" - in its (never-hashed) CollectionProvenance
+#     field. Before 147 it recorded a bare "collectors=;", claiming no collector existed over evidence a
+#     collect pass had genuinely gathered with several. A radar-formula-v9 collector-channel strategy also
+#     starts and scores normally in this mode now; the "a channel may only name an enabled collector" guard
+#     is unweakened and validates against that same vocabulary.
 #   * it writes the LIVE score series, so it may not be back-dated. Scoring a historical instant is -Replay.
 # -Mode and -Replay are mutually exclusive and this script says so rather than letting the Worker fail later.
 #
@@ -166,7 +171,7 @@ Write-Host "==== Radar run profile: $Profile ====" -ForegroundColor Cyan
 Write-Host "Output root: $outRoot"
 Write-Host "Mode       : $Mode$(if ($Mode -eq 'collect') { '  (stages 1-5 only: no scoring, no report)' } elseif ($Mode -eq 'score') { '  (stage 6+7 over the accrued store: NO collector is constructed or invoked)' })"
 if ($Mode -eq "score") {
-    Write-Host "NOTE: a score pass still needs the profile's AI config + API key (the AI descriptor is a ScoringConfigVersion input); it just never issues an AI read. Snapshots record the EMPTY collector set in CollectionProvenance (never hashed)." -ForegroundColor DarkYellow
+    Write-Host "NOTE: a score pass still needs the profile's AI config + API key (the AI descriptor is a ScoringConfigVersion input); it just never issues an AI read. Snapshots record the CONFIGURED collector set plus a 'collection=none-this-pass' marker in CollectionProvenance (never hashed)." -ForegroundColor DarkYellow
     if ($merged["Radar:Prices:Enabled"] -eq 'true') {
         Write-Host "NOTE: Radar:Prices:Enabled is true, so this score pass WILL fetch daily price history per ticker (AD-14 reference data, outside the pipeline). If you repeat this pass often, run it under a -Profile whose JSON sets `"Prices`": { `"Enabled`": false }." -ForegroundColor DarkYellow
     }

@@ -107,11 +107,18 @@ public sealed class ScoringStrategyFactory : IScoringStrategyFactory
     }
 
     /// <summary>
-    /// Fails fast when a collector channel names a collector that is not registered for this run. Matching is
-    /// EXACT (ordinal) against <c>IEvidenceCollector.CollectorName</c>: a case-insensitive match would have to
-    /// pick a spelling to select with, and a near-miss that quietly selects nothing is precisely the silent
-    /// failure a declared budget exists to prevent — so a case typo is a startup error too, with both the
-    /// offending name and every known name in the message.
+    /// Fails fast when a collector channel names a collector outside this run's enabled-collector VOCABULARY.
+    /// Matching is EXACT (ordinal) against <c>IEvidenceCollector.CollectorName</c>: a case-insensitive match
+    /// would have to pick a spelling to select with, and a near-miss that quietly selects nothing is precisely
+    /// the silent failure a declared budget exists to prevent — so a case typo is a startup error too, with
+    /// both the offending name and every known name in the message.
+    /// <para>
+    /// The guard is unweakened in every run mode (spec 147). What changed is what it validates AGAINST: the
+    /// vocabulary is now config-derived and therefore present even in a spec-144 <c>score</c> pass, which
+    /// registers no collector instance. Before that, this rejected every v9 collector channel in score mode
+    /// with "(none)" — the mode where strategies are actually iterated on. The "(none)" branch remains, for
+    /// the genuinely-no-collectors-configured case.
+    /// </para>
     /// </summary>
     private static void ValidateChannelCollectors(
         ScoringStrategySet strategies, IReadOnlyList<string> enabledCollectors)
@@ -131,7 +138,7 @@ public sealed class ScoringStrategyFactory : IScoringStrategyFactory
 
                     throw new InvalidOperationException(
                         $"Strategy '{definition.Name}' channel '{channel.Name}' names collector "
-                            + $"'{collector}', which is not a registered evidence collector (registered "
+                            + $"'{collector}', which is not an enabled evidence collector (enabled "
                             + $"collectors: {(known.Count == 0 ? "(none)" : string.Join(", ", enabledCollectors))}). "
                             + "A channel over a collector that does not exist could only ever score 0, silently "
                             + "costing the strategy this channel's whole share; collector names are matched "

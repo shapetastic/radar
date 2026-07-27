@@ -80,7 +80,8 @@ public sealed class StrategyIdentityGuardTests
             new RadarScoreFormulaV8(weights, attention),
             weights,
             attention,
-            new SignalSourceDescriptor(collectors.Select(c => (IEvidenceCollector)new FakeCollector(c))),
+            new SignalSourceDescriptor(EnabledCollectorVocabulary.FromCollectors(
+                collectors.Select(c => (IEvidenceCollector)new FakeCollector(c)))),
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
             new ScoringOptions(),

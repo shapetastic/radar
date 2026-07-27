@@ -72,9 +72,11 @@ namespace Radar.Application.Scoring;
 /// identity of that composition cannot drift; and like it, the default (no channels) folds in as a no-op, so
 /// the pinned default fingerprints stay put. The formula VERSION was already a hashed field, so nothing new
 /// was needed for a v9 strategy to stamp differently from a v8 one. The engine additionally hands the formula
-/// the run's registered collector names as <see cref="ScoringInput.EnabledCollectors"/> — recorded provenance
-/// (it lets a v9 channel say "declared collector did not run" rather than only "scored 0"), hashed into
-/// nothing, and never a scoring input.
+/// this run's enabled-collector VOCABULARY as <see cref="ScoringInput.EnabledCollectors"/> — recorded
+/// provenance, hashed into nothing, never a scoring input. Since spec 147 that vocabulary is config-derived
+/// and so is correct in every run mode, including a <c>score</c> pass that registers no collector instance;
+/// read the note on <see cref="ISignalSourceDescriptor.EnabledCollectors"/> for what a channel's
+/// "did not run" split does and does not tell you.
 /// </para>
 /// </summary>
 public sealed class ScoringEngine : IScoringEngine
