@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Abstractions.Persistence;
@@ -108,6 +109,76 @@ public sealed class WeeklyReportBuilderTests
         }
     }
 
+    // Captures the assembled model on its way to the production renderer, so a test can assert what the
+    // BUILDER produced (e.g. that a single-strategy run yields no strategy sections at all) rather than
+    // inferring it from the rendered markdown. Rendering is delegated verbatim, so output is unchanged.
+    private sealed class CapturingRenderer(IWeeklyReportRenderer inner) : IWeeklyReportRenderer
+    {
+        public WeeklyReportModel? LastModel { get; private set; }
+
+        public string Render(WeeklyReportModel model)
+        {
+            LastModel = model;
+            return inner.Render(model);
+        }
+    }
+
+    // A strategy engine that can report its effective config but CANNOT score: the weekly report only ever
+    // reads persisted snapshots (spec 150 is a read-only slice), so any attempt to score from the reporting
+    // path fails loudly here instead of silently minting a snapshot.
+    private sealed class NonScoringEngine(EffectiveScoringConfig config) : IScoringEngine
+    {
+        public EffectiveScoringConfig EffectiveConfig => config;
+
+        public Task<CompanyScoreResult> ScoreCompanyAsync(
+            Guid companyId, DateTimeOffset windowEndUtc, CancellationToken ct) =>
+            throw new NotSupportedException(
+                "The weekly report must never score; it reads persisted snapshots only.");
+    }
+
+    private sealed class FakeScoringStrategyFactory : IScoringStrategyFactory
+    {
+        public FakeScoringStrategyFactory(IReadOnlyList<TestStrategy> strategies)
+        {
+            Runtimes =
+            [
+                .. strategies.Select(s => new ScoringStrategyRuntime(
+                    new ScoringStrategyDefinition(
+                        Name: s.Name,
+                        ScoringProfile: s.Name,
+                        Weights: new ScoringWeights(),
+                        IsPrimary: s.IsPrimary)
+                    {
+                        Formula = s.Formula,
+                    },
+                    new NonScoringEngine(new EffectiveScoringConfig(
+                        Fingerprint: s.Fingerprint,
+                        EngineVersion: "mvp-engine-v1",
+                        FormulaVersion: s.Formula,
+                        Weights: new ScoringWeights(),
+                        AttentionDescriptor: "attention",
+                        SignalSourceDescriptor: "rules=v1;",
+                        InsiderMaterialityDescriptor: "insider",
+                        MediaCollapseDescriptor: "media",
+                        Window: TimeSpan.FromDays(30))))),
+            ];
+        }
+
+        public IReadOnlyList<ScoringStrategyRuntime> Runtimes { get; }
+
+        public ScoringStrategyRuntime Primary => Runtimes.First(r => r.Definition.IsPrimary);
+    }
+
+    /// <summary>One configured strategy, as the report-side tests need to describe it.</summary>
+    private sealed record TestStrategy(
+        string Name,
+        bool IsPrimary,
+        string Fingerprint = "radar-scoring-fp-000000000000",
+        string Formula = ScoreFormulaVersions.V8);
+
+    private static readonly IReadOnlyList<TestStrategy> SingleDefaultStrategy =
+        [new TestStrategy("default", IsPrimary: true)];
+
     private sealed class Harness
     {
         public InMemoryCompanyRepository Companies { get; } = new();
@@ -118,15 +189,29 @@ public sealed class WeeklyReportBuilderTests
         public InMemoryReportRepository Reports { get; } = new();
         public CountingSignalRepository CountingSignals { get; }
         public RecordingActionPolicy Policy { get; }
+        public CapturingRenderer Renderer { get; }
+        public FakeScoringStrategyFactory StrategyFactory { get; }
+
+        /// <summary>
+        /// The SAME factory the scoring stage writes through: the primary strategy resolves to
+        /// <see cref="Scores"/>, every other strategy to its own repository (which a test seeds by asking
+        /// for it here — repeated calls return the same instance).
+        /// </summary>
+        public StrategyScopedScoreRepositoryFactory ScoreRepositories { get; }
+
         public WeeklyReportBuilder Builder { get; }
 
         public Harness(
             WeeklyReportOptions? options = null,
             IReadOnlyList<PipelineRunRecord>? runs = null,
-            IScoreSnapshotFileStore? scoreFiles = null)
+            IScoreSnapshotFileStore? scoreFiles = null,
+            IReadOnlyList<TestStrategy>? strategies = null)
         {
             CountingSignals = new CountingSignalRepository(Signals);
             Policy = new RecordingActionPolicy(new WeeklyReportActionPolicyV1());
+            Renderer = new CapturingRenderer(new MarkdownWeeklyReportRenderer());
+            StrategyFactory = new FakeScoringStrategyFactory(strategies ?? SingleDefaultStrategy);
+            ScoreRepositories = new StrategyScopedScoreRepositoryFactory(Scores);
             Builder = new WeeklyReportBuilder(
                 Companies,
                 Scores,
@@ -134,14 +219,23 @@ public sealed class WeeklyReportBuilderTests
                 CountingSignals,
                 SignalReviews,
                 Policy,
-                new MarkdownWeeklyReportRenderer(),
+                Renderer,
                 Reports,
                 new FakeRunStore(runs ?? []),
                 scoreFiles ?? new FakeScoreSnapshotFileStore(),
+                StrategyFactory,
+                ScoreRepositories,
                 options ?? new WeeklyReportOptions(),
                 new FixedTimeProvider(FixedNow),
                 NullLogger<WeeklyReportBuilder>.Instance);
         }
+
+        /// <summary>The score repository a non-primary strategy's snapshots must be seeded into.</summary>
+        public IScoreRepository RepositoryFor(string strategyName) =>
+            ScoreRepositories.ForStrategy(
+                StrategyFactory.Runtimes.First(r =>
+                    string.Equals(r.Definition.Name, strategyName, StringComparison.OrdinalIgnoreCase))
+                    .Definition);
     }
 
     // Builds a PipelineRunRecord with a distinctive collector + counts so ordering/cap assertions are
@@ -1295,6 +1389,10 @@ public sealed class WeeklyReportBuilderTests
         services.AddFilePipelineRunStore(Path.Combine(Path.GetTempPath(), $"radar-runs-{Guid.NewGuid():N}"));
         // WeeklyReportBuilder now also depends on IScoreSnapshotFileStore; register the file store.
         services.AddFileScoreStore(Path.Combine(Path.GetTempPath(), $"radar-scores-{Guid.NewGuid():N}"));
+        // Spec 150: the builder now resolves IScoringStrategyFactory, whose ScoringStrategyFactory
+        // implementation takes ISignalFileStore — so a composition that renders a report must register the
+        // signal store too (the Worker always does).
+        services.AddFileSignalStore(Path.Combine(Path.GetTempPath(), $"radar-signals-{Guid.NewGuid():N}"));
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedNow));
         var provider = services.BuildServiceProvider();
 
@@ -1544,5 +1642,409 @@ public sealed class WeeklyReportBuilderTests
         var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
 
         Assert.DoesNotContain("## Recent runs", result.Report.MarkdownContent, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Spec 150 — one plain ranked table per configured strategy. Nothing below is combined ACROSS
+    // strategies (no disagreement metric, no merged ranking, no composite) and nothing below carries a
+    // label, evidence block or "why noticed": those stay primary-only, deliberately.
+    // ---------------------------------------------------------------------------------------------
+
+    private static readonly IReadOnlyList<TestStrategy> TwoStrategies =
+    [
+        new TestStrategy("default", IsPrimary: true, "radar-scoring-fp-111111111111"),
+        new TestStrategy("filings-led", IsPrimary: false, "radar-scoring-fp-222222222222", "radar-formula-v9"),
+    ];
+
+    /// <summary>Seeds only the company record (no snapshot), for "this strategy did not score it" cases.</summary>
+    private static async Task SeedCompanyOnlyAsync(Harness h, Guid companyId, string name, string ticker)
+    {
+        var company = new CompanyBuilder()
+            .WithId(companyId)
+            .WithName(name)
+            .WithTicker(ticker)
+            .Build();
+        await h.Companies.AddAsync(company, default);
+    }
+
+    /// <summary>
+    /// Seeds one snapshot (and, unless suppressed, one score-evidence link) into the repository the named
+    /// strategy writes through — the same <see cref="StrategyScopedScoreRepositoryFactory"/> the scoring
+    /// stage uses, so this exercises the production read path rather than a test-only one.
+    /// </summary>
+    private static async Task SeedStrategySnapshotAsync(
+        Harness h,
+        string strategyName,
+        Guid companyId,
+        Guid snapshotId,
+        int opportunity,
+        DateTimeOffset? createdAt = null,
+        bool withLink = true,
+        int trajectory = 60,
+        int attention = 20,
+        int evidenceConfidence = 80,
+        int velocity = 50)
+    {
+        var repository = h.RepositoryFor(strategyName);
+
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithId(snapshotId)
+            .WithCompanyId(companyId)
+            .WithOpportunityScore(opportunity)
+            .WithTrajectoryScore(trajectory)
+            .WithAttentionScore(attention)
+            .WithEvidenceConfidenceScore(evidenceConfidence)
+            .WithSignalVelocityScore(velocity)
+            .WithStrategyName(strategyName)
+            .WithCreatedAtUtc(createdAt ?? InPeriod)
+            .Build();
+        await repository.AddSnapshotAsync(snapshot, default);
+
+        if (withLink)
+        {
+            await repository.AddEvidenceLinkAsync(
+                new ScoreEvidenceLink(
+                    Id: DeriveGuid(snapshotId, 0x21),
+                    ScoreSnapshotId: snapshotId,
+                    SignalId: DeriveGuid(snapshotId, 0x61),
+                    EvidenceId: DeriveGuid(snapshotId, 0xE1),
+                    ContributionReason: "Contributed to the score.",
+                    ContributionWeight: 5),
+                default);
+        }
+    }
+
+    /// <summary>The rendered markdown from the first "## Strategy:" heading onwards.</summary>
+    private static string StrategySectionsOf(string markdown)
+    {
+        var index = markdown.IndexOf("## Strategy:", StringComparison.Ordinal);
+        return index < 0 ? string.Empty : markdown[index..];
+    }
+
+    [Fact]
+    public async Task SingleConfiguredStrategy_ProducesNoStrategySectionsAtAll()
+    {
+        var h = new Harness();
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        // Null, not an empty list: "no sections" has exactly one representation.
+        Assert.Null(h.Renderer.LastModel!.Strategies);
+        Assert.DoesNotContain("## Strategy:", result.Report.MarkdownContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TwoStrategies_RenderOneTableEach_PrimaryFirst_WithFingerprintAndCounts()
+    {
+        var h = new Harness(strategies: TwoStrategies);
+        var acmeId = Guid.NewGuid();
+        var borealisId = Guid.NewGuid();
+        await SeedCompanyAsync(h, acmeId, Guid.NewGuid(), opportunity: 71, name: "Acme Dynamics",
+            ticker: "ACME");
+        await SeedCompanyAsync(h, borealisId, Guid.NewGuid(), opportunity: 40, name: "Borealis Systems",
+            ticker: "BOR");
+
+        // The primary series lives in the shared repository (already seeded by SeedCompanyAsync); the
+        // non-primary strategy writes its own.
+        await SeedStrategySnapshotAsync(h, "filings-led", acmeId, Guid.NewGuid(), opportunity: 12);
+        await SeedStrategySnapshotAsync(h, "filings-led", borealisId, Guid.NewGuid(), opportunity: 88);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var markdown = result.Report.MarkdownContent;
+
+        var sections = h.Renderer.LastModel!.Strategies;
+        Assert.NotNull(sections);
+        Assert.Equal(["default", "filings-led"], sections.Select(s => s.StrategyName).ToArray());
+        Assert.True(sections[0].IsPrimary);
+        Assert.False(sections[1].IsPrimary);
+        Assert.Equal("radar-formula-v8", sections[0].FormulaVersion);
+        Assert.Equal("radar-formula-v9", sections[1].FormulaVersion);
+        Assert.Equal("radar-scoring-fp-222222222222", sections[1].ScoringConfigVersion);
+        Assert.Equal(2, sections[0].CompaniesScored);
+        Assert.Equal(2, sections[1].CompaniesScored);
+
+        Assert.Contains(
+            "## Strategy: default (radar-formula-v8) — primary (the series reported above)",
+            markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "Fingerprint: radar-scoring-fp-111111111111 · 2 companies scored · 2 with linked evidence",
+            markdown, StringComparison.Ordinal);
+        Assert.Contains("## Strategy: filings-led (radar-formula-v9)", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "Fingerprint: radar-scoring-fp-222222222222 · 2 companies scored · 2 with linked evidence",
+            markdown, StringComparison.Ordinal);
+
+        // Each strategy ranks on its OWN scores: Acme leads the primary, Borealis leads filings-led.
+        var filingsLed = markdown[markdown.IndexOf("## Strategy: filings-led", StringComparison.Ordinal)..];
+        Assert.Contains("| 1 | Borealis Systems | BOR | 88 |", filingsLed, StringComparison.Ordinal);
+        Assert.Contains("| 2 | Acme Dynamics | ACME | 12 |", filingsLed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompanyOnlyOneStrategyScored_AppearsInThatTableOnly_AndTheOtherCountReflectsIt()
+    {
+        var h = new Harness(strategies: TwoStrategies);
+        var scoredByBoth = Guid.NewGuid();
+        var primaryOnly = Guid.NewGuid();
+        await SeedCompanyAsync(h, scoredByBoth, Guid.NewGuid(), opportunity: 70, name: "Shared Corp",
+            ticker: "SHR");
+        await SeedCompanyAsync(h, primaryOnly, Guid.NewGuid(), opportunity: 65, name: "Primary Only Corp",
+            ticker: "PON");
+
+        // filings-led scored only ONE of the two companies.
+        await SeedStrategySnapshotAsync(h, "filings-led", scoredByBoth, Guid.NewGuid(), opportunity: 50);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var sections = h.Renderer.LastModel!.Strategies!;
+
+        Assert.Equal(2, sections[0].CompaniesScored);
+        Assert.Equal(1, sections[1].CompaniesScored);
+        Assert.Equal(["Shared Corp"], sections[1].Rows.Select(r => r.CompanyName).ToArray());
+
+        var filingsLed = result.Report.MarkdownContent[
+            result.Report.MarkdownContent.IndexOf("## Strategy: filings-led", StringComparison.Ordinal)..];
+        Assert.Contains("1 company scored · 1 with linked evidence", filingsLed, StringComparison.Ordinal);
+        // The unscored company is OMITTED, never invented with a zero row.
+        Assert.DoesNotContain("Primary Only Corp", filingsLed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompanyScoredOutsideThePeriod_IsOmittedFromThatStrategysTable()
+    {
+        var h = new Harness(strategies: TwoStrategies);
+        var companyId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId, Guid.NewGuid(), opportunity: 70, name: "Stale Corp",
+            ticker: "STL");
+
+        await SeedStrategySnapshotAsync(
+            h, "filings-led", companyId, Guid.NewGuid(), opportunity: 55, createdAt: BeforePeriod);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var sections = h.Renderer.LastModel!.Strategies!;
+
+        Assert.Equal(0, sections[1].CompaniesScored);
+        Assert.Empty(sections[1].Rows);
+        Assert.Contains("0 companies scored · 0 with linked evidence",
+            result.Report.MarkdownContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ZeroEvidenceLinkSnapshot_IsExcludedFromRows_ButCountedAsScored()
+    {
+        var h = new Harness(strategies: TwoStrategies);
+        var withEvidence = Guid.NewGuid();
+        var withoutEvidence = Guid.NewGuid();
+        await SeedCompanyOnlyAsync(h, withEvidence, "Evidenced Corp", "EVD");
+        await SeedCompanyOnlyAsync(h, withoutEvidence, "Zero Signal Corp", "ZRO");
+
+        await SeedStrategySnapshotAsync(h, "filings-led", withEvidence, Guid.NewGuid(), opportunity: 30);
+        // A neutral zero-signal snapshot: scored, but backed by no evidence at all (spec 53).
+        await SeedStrategySnapshotAsync(
+            h, "filings-led", withoutEvidence, Guid.NewGuid(), opportunity: 99, withLink: false);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var section = h.Renderer.LastModel!.Strategies![1];
+
+        Assert.Equal(2, section.CompaniesScored);
+        Assert.Equal(1, section.CompaniesWithLinkedEvidence);
+        Assert.Equal(["Evidenced Corp"], section.Rows.Select(r => r.CompanyName).ToArray());
+        Assert.False(section.Truncated); // the exclusion is NOT a truncation
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Contains("2 companies scored · 1 with linked evidence", markdown, StringComparison.Ordinal);
+        // Despite the highest Opportunity in the set, the zero-evidence company never surfaces.
+        Assert.DoesNotContain("Zero Signal Corp", StrategySectionsOf(markdown), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RowsAreOrderedByOpportunityDescendingThenCompanyIdAscending()
+    {
+        var lowId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var highId = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        var topId = Guid.Parse("88888888-8888-8888-8888-888888888888");
+
+        var h = new Harness(strategies: TwoStrategies);
+        await SeedCompanyOnlyAsync(h, lowId, "Tie A", "TIEA");
+        await SeedCompanyOnlyAsync(h, highId, "Tie B", "TIEB");
+        await SeedCompanyOnlyAsync(h, topId, "Top", "TOP");
+
+        // Seeded deliberately out of rank order, and the two ties share an Opportunity.
+        await SeedStrategySnapshotAsync(h, "filings-led", highId, Guid.NewGuid(), opportunity: 40);
+        await SeedStrategySnapshotAsync(h, "filings-led", topId, Guid.NewGuid(), opportunity: 90);
+        await SeedStrategySnapshotAsync(h, "filings-led", lowId, Guid.NewGuid(), opportunity: 40);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var section = h.Renderer.LastModel!.Strategies![1];
+
+        Assert.Equal(["Top", "Tie A", "Tie B"], section.Rows.Select(r => r.CompanyName).ToArray());
+        Assert.Equal([1, 2, 3], section.Rows.Select(r => r.Rank).ToArray());
+
+        // Deterministic across an independently-seeded, identically-configured second run (AD-3).
+        var h2 = new Harness(strategies: TwoStrategies);
+        await SeedCompanyOnlyAsync(h2, topId, "Top", "TOP");
+        await SeedCompanyOnlyAsync(h2, lowId, "Tie A", "TIEA");
+        await SeedCompanyOnlyAsync(h2, highId, "Tie B", "TIEB");
+        await SeedStrategySnapshotAsync(h2, "filings-led", lowId, Guid.NewGuid(), opportunity: 40);
+        await SeedStrategySnapshotAsync(h2, "filings-led", highId, Guid.NewGuid(), opportunity: 40);
+        await SeedStrategySnapshotAsync(h2, "filings-led", topId, Guid.NewGuid(), opportunity: 90);
+
+        var result2 = await h2.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        // The snapshot ids differ between the two harnesses, but the strategy TABLE (which cites no ids)
+        // must be byte-identical.
+        Assert.Equal(
+            StrategySectionsOf(result.Report.MarkdownContent),
+            StrategySectionsOf(result2.Report.MarkdownContent));
+    }
+
+    [Fact]
+    public async Task MaxItemsCapsEachSectionIndependently_AndTheHeaderSaysSo()
+    {
+        // MaxItems = 1: each strategy shows its own top row, and neither crowds the other out.
+        var h = new Harness(new WeeklyReportOptions { MaxItems = 1 }, strategies: TwoStrategies);
+        var alphaId = Guid.NewGuid();
+        var bravoId = Guid.NewGuid();
+        await SeedCompanyAsync(h, alphaId, Guid.NewGuid(), opportunity: 70, name: "Alpha Corp",
+            ticker: "ALP");
+        await SeedCompanyAsync(h, bravoId, Guid.NewGuid(), opportunity: 60, name: "Bravo Corp",
+            ticker: "BRV");
+
+        // filings-led ranks them the other way round, so an independent cap is observable.
+        await SeedStrategySnapshotAsync(h, "filings-led", alphaId, Guid.NewGuid(), opportunity: 10);
+        await SeedStrategySnapshotAsync(h, "filings-led", bravoId, Guid.NewGuid(), opportunity: 99);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var sections = h.Renderer.LastModel!.Strategies!;
+
+        Assert.All(sections, s => Assert.Single(s.Rows));
+        Assert.All(sections, s => Assert.True(s.Truncated));
+        Assert.Equal("Alpha Corp", sections[0].Rows[0].CompanyName);
+        Assert.Equal("Bravo Corp", sections[1].Rows[0].CompanyName);
+
+        var markdown = result.Report.MarkdownContent;
+        Assert.Equal(
+            2,
+            markdown.Split("· 2 companies scored · 2 with linked evidence · showing top 1").Length - 1);
+        Assert.DoesNotContain("Bravo Corp | BRV | 60", StrategySectionsOf(markdown),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StrategySectionsCarryNoLabelsNoEvidenceAndNoWhyNoticed()
+    {
+        var h = new Harness(strategies: TwoStrategies);
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId, snapshotId, opportunity: 70, name: "Acme Dynamics",
+            ticker: "ACME");
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Multi-year agreement announced.");
+        await SeedStrategySnapshotAsync(h, "filings-led", companyId, Guid.NewGuid(), opportunity: 55);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var sectionsOnly = StrategySectionsOf(result.Report.MarkdownContent);
+
+        Assert.NotEqual(string.Empty, sectionsOnly);
+        Assert.DoesNotContain("- Label:", sectionsOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain("- Evidence:", sectionsOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain("- Why noticed:", sectionsOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain("Investigate", sectionsOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain("Watch", sectionsOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ignore", sectionsOnly, StringComparison.Ordinal);
+        // The policy is still consulted exactly once per surfaced PRIMARY entry — never per strategy row.
+        Assert.Single(h.Policy.Contexts);
+    }
+
+    [Fact]
+    public async Task PipeInACompanyNameIsEscapedInTheStrategyTable()
+    {
+        var h = new Harness(strategies: TwoStrategies);
+        var companyId = Guid.NewGuid();
+        await SeedCompanyOnlyAsync(h, companyId, "Acme | Dynamics", "AC|ME");
+        await SeedStrategySnapshotAsync(h, "filings-led", companyId, Guid.NewGuid(), opportunity: 44);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        Assert.Contains(@"| 1 | Acme \| Dynamics | AC\|ME | 44 |",
+            result.Report.MarkdownContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MultiStrategyDiWiringProducesStrategySections()
+    {
+        // The production wiring, not a hand-built builder: AddSingleton<IWeeklyReportBuilder,
+        // WeeklyReportBuilder>() must resolve the strategy factory + score-repository factory itself, or a
+        // multi-strategy deployment silently renders a single-strategy report.
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Radar:Strategies:0:Name"] = "default",
+                ["Radar:Strategies:0:ScoringProfile"] = "default",
+                ["Radar:Strategies:1:Name"] = "low-media",
+                ["Radar:Strategies:1:ScoringProfile"] = "low-media",
+                ["Radar:Scoring:Profiles:low-media:MediaReachWeight"] = "0.02",
+                ["Radar:PrimaryStrategy"] = "default",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddInMemoryRadarPersistence();
+        // BEFORE AddRadarApplicationServices so the config-bound set wins over its TryAdd default.
+        services.AddRadarScoringStrategies(configuration);
+        services.AddRadarApplicationServices();
+        services.AddFilePipelineRunStore(Path.Combine(Path.GetTempPath(), $"radar-runs-{Guid.NewGuid():N}"));
+        services.AddFileScoreStore(Path.Combine(Path.GetTempPath(), $"radar-scores-{Guid.NewGuid():N}"));
+        services.AddFileSignalStore(Path.Combine(Path.GetTempPath(), $"radar-signals-{Guid.NewGuid():N}"));
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedNow));
+        var provider = services.BuildServiceProvider();
+
+        var companies = provider.GetRequiredService<ICompanyRepository>();
+        var strategySet = provider.GetRequiredService<ScoringStrategySet>();
+        var repositories = provider.GetRequiredService<IScoreRepositoryFactory>();
+
+        var companyId = Guid.NewGuid();
+        await companies.AddAsync(
+            new CompanyBuilder().WithId(companyId).WithName("Acme Dynamics").WithTicker("ACME").Build(),
+            default);
+
+        foreach (var strategy in strategySet.Strategies)
+        {
+            var repository = repositories.ForStrategy(strategy);
+            var snapshotId = Guid.NewGuid();
+            await repository.AddSnapshotAsync(
+                new ScoreSnapshotBuilder()
+                    .WithId(snapshotId)
+                    .WithCompanyId(companyId)
+                    .WithOpportunityScore(70)
+                    .WithStrategyName(strategy.Name)
+                    .WithCreatedAtUtc(InPeriod)
+                    .Build(),
+                default);
+            await repository.AddEvidenceLinkAsync(
+                new ScoreEvidenceLink(
+                    Id: Guid.NewGuid(),
+                    ScoreSnapshotId: snapshotId,
+                    SignalId: Guid.NewGuid(),
+                    EvidenceId: Guid.NewGuid(),
+                    ContributionReason: "Contributed to the score.",
+                    ContributionWeight: 5),
+                default);
+        }
+
+        var builder = provider.GetRequiredService<IWeeklyReportBuilder>();
+        var result = await builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var markdown = result.Report.MarkdownContent;
+
+        Assert.Contains("## Strategy: default (radar-formula-v8) — primary", markdown,
+            StringComparison.Ordinal);
+        Assert.Contains("## Strategy: low-media (radar-formula-v8)", markdown, StringComparison.Ordinal);
+        Assert.Contains("1 company scored · 1 with linked evidence", markdown, StringComparison.Ordinal);
+        // Each section carries the strategy's OWN fingerprint, resolved from its own engine.
+        var lowMediaFingerprint = provider.GetRequiredService<IScoringStrategyFactory>()
+            .Runtimes.Single(r => r.Definition.Name == "low-media").Engine.EffectiveConfig.Fingerprint;
+        Assert.Contains($"Fingerprint: {lowMediaFingerprint} ·", markdown, StringComparison.Ordinal);
     }
 }

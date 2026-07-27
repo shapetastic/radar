@@ -727,6 +727,51 @@ Do not hand back broken code.
     of extracting them — real, guarded by a pinning test, its own slice), M4 (documenting the score-store
     boundary), the `StrategyIdentityGuard`-vs-routine-`RuleSetVersion`-bump operating procedure, and the
     stale-doc cleanups L1–L4.
+- **Every strategy gets its own plain ranked table in the weekly report — and nothing is combined (spec
+  150).** Spec 137 made the primary "the series the weekly report renders", so the first live 3-strategy run
+  scored 43 companies under `default`/`filings-led`/`narrative-led` and only `default` appeared anywhere; the
+  other two existed solely as JSON under `data/scores/strategies/{name}/`. `WeeklyReportModel` gains one
+  trailing, defaulted, nullable `Strategies` list of `StrategyReportSection`, rendered after ALL existing
+  content. Rules:
+  - **Gated on `Runtimes.Count > 1`, and a single strategy passes `null` (never an empty list)** — so every
+    deployment that never configured `Radar:Strategies` renders a report that is **byte-identical** to
+    pre-150. Asserted as a **full-string pin** (`MarkdownWeeklyReportStrategySectionTests.PreSpec150Golden`),
+    captured by running the shared golden model through the *unmodified* renderer — a real before/after, not
+    a restatement of current behaviour.
+  - **`IScoringStrategyFactory` + `IScoreRepositoryFactory` are REQUIRED ctor dependencies of
+    `WeeklyReportBuilder`**, never optional-nullable: a silently-null optional dependency means a production
+    wiring mistake renders no sections while every test stays green (the class of bug spec 146's review
+    caught). Both were already registered, so DI resolves them; a composition that renders a report must
+    therefore also register `ISignalFileStore` (the Worker always does).
+  - **Same read path, reused rules.** Snapshots come from `_scoreRepositoryFactory.ForStrategy(...)` — the
+    very repository the scoring stage wrote through, no second route to the strategy score files. The
+    candidate rule (latest snapshot in `(periodStart, periodEnd]`, a company with none **omitted**, never
+    invented), the ordering (`OpportunityScore` desc, then `CompanyId` asc — AD-3) and the spec-53
+    zero-evidence-link exclusion are the primary walk's existing rules verbatim.
+  - **`MaxItems` applies PER SECTION, independently, and truncation is stated.** Decided, documented on
+    `BuildStrategySectionsAsync` and tested: one strategy can never crowd out another, and when the cap bites
+    the header appends `· showing top N` rather than silently shortening (the spec-125 failure). The section
+    carries `CompaniesScored`, `CompaniesWithLinkedEvidence` and `Rows`, all three rendered — the spec-53
+    exclusion is visible arithmetic instead of a silent drop — with `Truncated` derived so it cannot disagree
+    with the numbers beside it. Links are fetched for every candidate (not just up to the cap) precisely
+    because that middle number is rendered.
+  - **Scores only, and NOTHING is composed.** No labels (`WeeklyReportActionPolicyV1` is asserted to be
+    consulted once per surfaced *primary* entry, never per strategy row — a company `Watch` under one
+    strategy and `Ignore` under another would read as Radar equivocating), no evidence blocks, no "why
+    noticed", no advice vocabulary. **Explicitly out of scope, recorded not built: every form of
+    cross-strategy composition** — disagreement metrics, merged rankings, composite scores, "consensus"
+    columns — because a computed disagreement number over a few days of accrued history would rank noise and
+    invite trusting it. One honesty line under the FIRST section says these are independent scorings of the
+    SAME collection pass, that absolute scores are not comparable when formulas differ, and that ranking
+    strategies against price is spec 140's `data/efficacy/strategy-leaderboard.md` — otherwise the
+    multiple-comparisons trap simply arrives via the reader.
+  - **Provenance holds**: a row carries the whole `CompanyScoreSnapshot`, so every printed number is read off
+    the stored snapshot, and the renderer applies the same snapshot-id/company-id guard it applies to
+    narrative entries. `|` is escaped in names/tickers (an unescaped pipe would silently add columns); a
+    missing ticker renders `—`; a null/blank fingerprint renders `(unstamped)`.
+  - **Read-only: no scoring change, no new fingerprint input, no pin move.** `ScoringConfigVersion` is
+    DISPLAYED (from `runtime.Engine.EffectiveConfig`), never computed here; nothing under `Scoring/` or
+    `Domain/` was touched.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

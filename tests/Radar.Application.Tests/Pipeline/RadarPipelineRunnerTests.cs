@@ -462,6 +462,11 @@ public sealed class RadarPipelineRunnerTests
                 Reports,
                 RunStore,
                 ScoreStore,
+                // Spec 150: the report renders one plain ranked table per strategy when more than one is
+                // configured, so it reads the same strategy set + per-strategy score repositories the
+                // scoring pass writes through.
+                strategyFactory,
+                ScoreRepositories,
                 new WeeklyReportOptions(),
                 time,
                 NullLogger<WeeklyReportBuilder>.Instance);
