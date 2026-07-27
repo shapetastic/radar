@@ -60,12 +60,19 @@ namespace Radar.Application.Scoring;
 /// five properties are still exactly <see cref="ScoreComponents"/>' so any existing reader keeps
 /// working.</para>
 ///
-/// <para><b>"Ran and found nothing" vs "did not run".</b> A channel scores 0 whether its source was down or
-/// genuinely quiet — Radar scores evidence, and absence of evidence is not evidence — but the per-channel
-/// provenance records WHICH it was, by splitting each channel's declared collectors against
-/// <see cref="ScoringInput.EnabledCollectors"/>. Under a spec-139 replay that reflects the REPLAYING
-/// process's registered collectors, not the historical run's; the historical answer is on each snapshot's
-/// own <c>CollectionProvenance</c>.</para>
+/// <para><b>"Ran and found nothing" vs "did not run" — weaker than it looks, stated plainly (spec 147).</b>
+/// A channel scores 0 whether its source was down or genuinely quiet — Radar scores evidence, and absence of
+/// evidence is not evidence — and the per-channel provenance splits each channel's declared collectors
+/// against <see cref="ScoringInput.EnabledCollectors"/>. But <c>ScoringStrategyFactory</c> validates those
+/// same channel collectors against that same vocabulary at STARTUP and refuses to build any engine if one is
+/// missing, so once a run has started <see cref="ChannelBreakdown.CollectorsNotRun"/> is <b>structurally
+/// empty</b> — in every run mode. A channel 0 therefore always means "this window holds no signals whose
+/// evidence that collector retrieved"; it is not an outage signal. Spec 147 did not weaken this, it
+/// UN-inverted it: before it, a spec-144 <c>score</c> pass had an empty vocabulary, so every declared
+/// collector read as "did not run" for collectors that demonstrably had (and a v9 collector-channel strategy
+/// could not start at all). Under a spec-139 replay the vocabulary reflects the REPLAYING process's
+/// configuration, not the historical run's; the historical answer is on each snapshot's own
+/// <c>CollectionProvenance</c>.</para>
 ///
 /// <para>Pure and deterministic (no clock, no randomness, no I/O). Emits exactly one provenance-carrying
 /// contribution per current-window signal, in input order, each naming the channel(s) that consumed it —

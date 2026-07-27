@@ -510,21 +510,22 @@ Do not hand back broken code.
   - **`StrategyIdentityGuard` (141) stays the FIRST statement of all three runners** — "a misconfiguration
     costs no collection", and for the score pass "…and no snapshot lands under the old name".
   - **A `score` pass registers NO collector — but DOES register the AI seam.** In score mode
-    `RadarWorkerServices` skips the whole `Radar:Collectors` loop (and does not validate the key): CONSTRUCTION
-    is what opens the typed HttpClients, so "constructs and invokes no collector" has to mean "is never
-    registered". The AI block still runs, deliberately, because
+    `RadarWorkerServices` registers no collector: CONSTRUCTION is what opens the typed HttpClients, so
+    "constructs and invokes no collector" has to mean "is never registered". (It *used* to skip reading
+    `Radar:Collectors` entirely — **spec 147 changed that**: the key is now resolved and validated in every
+    mode, because it is also the recorded-provenance vocabulary. Only the "at least one" rule is relaxed.)
+    The AI block still runs, deliberately, because
     `IDirectionalFilingSignalSource.ScoringDescriptor()` is a `ScoringConfigVersion` input via
     `SignalSourceDescriptor`'s `ai=` segment — omitting it would move the fingerprint and break the
     byte-identical-scores criterion. It is only ever *invoked* by the collection pass, so "no AI read" holds
     structurally. **Operational consequence: a score pass needs the same `Radar:Ai` config (and
     `DEEPINFRA_API_KEY`) — and the same `Radar:Sec:UserAgent`, since the AI seam wires the earnings reader — as
     a collect pass, even though it issues no request.**
-  - **Recorded limitation, same class as replay's**: with no collector registered, a score pass's snapshots
-    record `collectors=;` in `CollectionProvenance` (recorded, hashed into nothing — no fingerprint moves, no
-    component changes; asserted end-to-end), and `ScoringInput.EnabledCollectors` is empty, so a
-    `radar-formula-v9` collector channel reads as "did not run". Consequently **a v9 strategy declaring
-    collector channels cannot start up in `score` mode** — the spec-146 "a channel may only name a REGISTERED
-    collector" guard is deliberately left INTACT rather than weakened. No shipped config uses v9 channels.
+  - ~~**Recorded limitation, same class as replay's**: with no collector registered, a score pass's snapshots
+    record `collectors=;`… and **a v9 strategy declaring collector channels cannot start up in `score`
+    mode**~~ — **BOTH FIXED by spec 147**, see the vocabulary bullet below. A score pass now records the
+    CONFIGURED collector set plus a `collection=none-this-pass;` marker, and a v9 collector-channel strategy
+    starts and scores in `score` mode with the spec-146 guard unweakened.
   - **A past-dated standalone `score` is refused.** `Radar:Score:AsOfUtc` (blank ⇒ now, parsed through the
     same `AssumeUniversal|AdjustToUniversal` helper the replay bounds use) may not be in the past: `score`
     writes the LIVE series (what Radar thinks now) while `replay` writes the replay-scoped series (what Radar
@@ -547,6 +548,59 @@ Do not hand back broken code.
     `setup-baseline-task.ps1` carries the exact commands).
   - **No scoring change**: no new fingerprint input, no `_formula.Version` bump, no `RuleSetVersion` bump; the
     pins (`radar-scoring-fp-2ce20f8fc497` / `radar-scoring-fp-3457da53489d`) do not move.
+- **"Can collect" and "is a known collector" are different capabilities; a `score` pass gets the second only
+  (spec 147).** 144 and 146 were each correct and did not compose: 144 registers **zero** collectors in
+  `score` mode (correct — construction is what opens the HttpClients), and `SignalSourceDescriptor` derived
+  everything from the injected `IEnumerable<IEvidenceCollector>`, reading only `CollectorName`. So in score
+  mode ⛔ **every snapshot recorded false provenance** (`collectors=;` over evidence seven collectors had
+  genuinely gathered — live, and it hit **v8** strategies too, not just v9), a v9 collector-channel strategy
+  could not start at all, and the ran-vs-quiet split inverted. Rules:
+  - **`EnabledCollectorVocabulary` (in `Radar.Application.Collectors`) is THE ordered-distinct-Ordinal
+    projection** — moved out of the descriptor's ctor, handed out behind a read-only wrapper, `FromNames` /
+    `FromCollectors` / `Empty`. It **holds strings**: it cannot collect and references nothing that can, so
+    144's asserted "a score pass constructs and invokes no collector" is untouched
+    (`Assert.Empty(GetServices<IEvidenceCollector>())` in score mode still holds and is non-negotiable). No
+    `IConfiguration` in Application. `SignalSourceDescriptor` consumes the vocabulary and no longer reaches
+    into `IEvidenceCollector` at all.
+  - **ONE kind→collector table in `RadarWorkerServices`**, each entry naming the collector class's own
+    `public const string Name` (re-exported publicly as `RadarCollectorNames.*`, since the collector classes
+    are `internal`) — so the registration path and the vocabulary path resolve `Radar:Collectors` through the
+    same resolver and **cannot drift**. A drifting vocabulary would be *worse* than the failure it replaces:
+    the spec-146 guard would pass on a collector that cannot run. Pinned by an anti-drift test that builds a
+    provider per kind and compares the vocabulary against the actually-registered `CollectorName`s, plus one
+    asserting the fail-fast messages' kind list is rendered FROM the table.
+  - **The list is now read in EVERY mode.** Case-insensitive matching, defensive de-dupe, blank entry ⇒ fail
+    fast, unknown kind ⇒ fail fast — identical everywhere, and the message text is byte-unchanged. The ONE
+    mode-dependent rule is `requireAtLeastOne`, false for `score` only. **Behaviour change:** a blank/unknown
+    `Radar:Collectors` entry now fails startup in score mode too (it used to be ignored) — deliberate, because
+    that list IS the recorded vocabulary.
+  - **Provenance representation (the spec's option B): `collectors={csv};` for a pass that collected —
+    byte-identical to pre-147, never a second segment — and `collectors={csv};collection=none-this-pass;` for
+    a `score` pass.** Non-empty even with an empty vocabulary (`collectors=;collection=none-this-pass;`), so
+    it is unmistakable from the "no collectors configured" form `collectors=;`. Carried by a
+    `CollectionPassOptions { CollectionPassKind Kind }` singleton (`TryAddSingleton` default `Collected`, so
+    every existing composition is unchanged); the Worker registers `NoCollectionThisPass` for
+    `RadarRunMode.Score` **only**.
+  - **Replay is deliberately NOT re-stamped.** It registers real collectors and 139's `replay ⊆ forward`
+    compares snapshots FIELD FOR FIELD; marking replay would break that invariant. Asserted.
+  - **The typo guard is unweakened in every mode** — it now validates against the same vocabulary everywhere,
+    and its `(none)` branch survives for the genuinely-no-collectors-configured case. Asserted in score mode
+    for an unknown AND a mis-cased name.
+  - **§4, stated plainly because it is weaker than it looks: `CollectorsNotRun` is STRUCTURALLY EMPTY in any
+    composed run — in every mode, not just `score`.** `ScoringStrategyFactory` validates channel collectors
+    against the very list `ScoringEngine` then hands the formula as `ScoringInput.EnabledCollectors`, so once
+    startup succeeds nothing can be missing. A channel 0 therefore always means "this window holds no signals
+    whose evidence that collector retrieved" — **never an outage**, and it never was (a registered collector
+    that failed every fetch is indistinguishable here). Collection HEALTH lives in the collection summary and
+    the run record. 147 did not weaken this; it un-inverted it.
+  - **No fingerprint move**: `CollectionProvenance` (marker included) is hashed into **nothing**, no
+    `_formula.Version` bump, no `RuleSetVersion` bump; the pins (`radar-scoring-fp-2ce20f8fc497` /
+    `radar-scoring-fp-3457da53489d`) do not move and `ScoringConfigFingerprintTests` is untouched. Asserted:
+    a full-mode and a score-mode graph over the same config stamp the SAME fingerprint and DIFFERENT
+    provenance.
+  - **Out of scope, recorded not built**: spec 140's strategy-vs-price comparison (which this unblocks), the
+    `ScoringWeights.TrajectoryCorroborationK` fingerprint gap (moves both pins — its own spec), and
+    backfilling `CollectionProvenance` on existing snapshots (append-only, AD-8: fix forward).
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

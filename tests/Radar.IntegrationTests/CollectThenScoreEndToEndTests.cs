@@ -46,6 +46,21 @@ public sealed class CollectThenScoreEndToEndTests
         var services = new ServiceCollection();
         services.AddSingleton<TimeProvider>(new FakeTimeProvider(FixedNow));
         services.AddLogging();
+
+        if (mode == Mode.Score)
+        {
+            // Spec 147, mirroring the composition root: a score pass registers NO collector but DOES register
+            // the collector VOCABULARY (name-only, config-derived — here the one collector this fixture
+            // collects with) and the pass kind. Both go in BEFORE AddRadarApplicationServices so the library's
+            // TryAddSingleton defaults lose, exactly as in RadarWorkerServices.
+            services.AddSingleton(
+                EnabledCollectorVocabulary.FromNames([RadarCollectorNames.LocalFile]));
+            services.AddSingleton(new CollectionPassOptions
+            {
+                Kind = CollectionPassKind.NoCollectionThisPass,
+            });
+        }
+
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
 
@@ -112,9 +127,9 @@ public sealed class CollectThenScoreEndToEndTests
     /// <para>
     /// The comparison is over the whole snapshot RECORD with the per-call minted <c>Id</c> normalised away
     /// (the spec-139 exclusion) and <c>CollectionProvenance</c> compared SEPARATELY — see the assertions
-    /// below: a score pass registers no collector, so it honestly records the empty collector set. That is
-    /// recorded provenance, hashed into nothing, and the assertions prove the fingerprint and every
-    /// component are unaffected by it.
+    /// below: a score pass records the same configured collector plus an explicit "nothing was collected in
+    /// this pass" marker (spec 147). That is recorded provenance, hashed into nothing, and the assertions
+    /// prove the fingerprint and every component are unaffected by it.
     /// </para>
     /// </summary>
     [Fact]
@@ -194,10 +209,14 @@ public sealed class CollectThenScoreEndToEndTests
         Assert.Equal(combinedSnapshot.ScoringConfigVersion, splitSnapshot.ScoringConfigVersion);
         Assert.Equal(combinedSnapshot.StrategyName, splitSnapshot.StrategyName);
 
-        // …and the one honest difference, recorded rather than hidden: a score pass ran no collector, so it
-        // records the empty collector set. Same class of caveat spec 139 records for replay.
+        // …and the one honest difference, recorded rather than hidden (spec 147): both passes record the SAME
+        // configured collector — the one that genuinely produced this evidence — and the score pass
+        // additionally marks that no collection happened in IT. Before 147 it recorded "collectors=;",
+        // claiming no collector existed over evidence the collect pass had just gathered with one.
         Assert.Equal("collectors=LocalFileEvidenceCollector;", combinedSnapshot.CollectionProvenance);
-        Assert.Equal("collectors=;", splitSnapshot.CollectionProvenance);
+        Assert.Equal(
+            "collectors=LocalFileEvidenceCollector;collection=none-this-pass;",
+            splitSnapshot.CollectionProvenance);
     }
 
     /// <summary>

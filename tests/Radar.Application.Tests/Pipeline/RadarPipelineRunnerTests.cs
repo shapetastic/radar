@@ -2220,7 +2220,8 @@ public sealed class RadarPipelineRunnerTests
         var configStore = new RecordingScoringConfigStore();
 
         static ISignalSourceDescriptor DescriptorOver(params string[] names) =>
-            new SignalSourceDescriptor(names.Select(n => (IEvidenceCollector)new NamedNoOpCollector(n)));
+            new SignalSourceDescriptor(EnabledCollectorVocabulary.FromCollectors(
+                names.Select(n => (IEvidenceCollector)new NamedNoOpCollector(n))));
 
         var companyId = Guid.NewGuid();
 

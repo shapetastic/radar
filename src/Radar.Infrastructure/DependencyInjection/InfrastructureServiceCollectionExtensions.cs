@@ -108,19 +108,31 @@ public static class InfrastructureServiceCollectionExtensions
         // ScoringConfigVersion fingerprint (via ScoringEngine) so the window is re-stamped by value.
         services.TryAddSingleton(new MediaCollapseOptions());
         services.TryAddSingleton<MediaAttentionCollapse>();
+        // Enabled-collector VOCABULARY (spec 147): the collector NAMES, with no capacity to collect. The
+        // library-only default derives them from whatever collectors this composition registered — resolved
+        // lazily INSIDE the factory, so it still sees collectors registered after this call. The Worker
+        // registers the CONFIG-derived vocabulary BEFORE this method instead, which is what gives a
+        // spec-144 score pass (zero registered collectors, deliberately) a truthful collector set.
+        services.TryAddSingleton(sp => EnabledCollectorVocabulary.FromCollectors(
+            sp.GetRequiredService<IEnumerable<IEvidenceCollector>>()));
+        // Whether collection happened in THIS pass (spec 147) — a different fact from the vocabulary above.
+        // The default (Collected) keeps every existing composition's provenance string byte-identical; the
+        // Worker registers NoCollectionThisPass for the standalone score pass only.
+        services.TryAddSingleton(new CollectionPassOptions());
         // Signal-source descriptor (spec 95, split by spec 141): folds the extractor rule-set identity into
         // the ScoringConfigVersion fingerprint and exposes the enabled collector NAMES separately as
         // CollectionProvenance — recorded on every snapshot, hashed into nothing, so a collector toggle no
         // longer re-stamps a strategy. The optional AI directional-filing source (spec 106) IS folded into
         // the identity when registered — its per-signal magnitudes contribute an ai=… segment, so enabling
         // the AI path (and tuning Strength/Novelty/MinConfidence/model) re-stamps the fingerprint
-        // automatically; it is null (AI off) => byte-identical AI-off descriptor. Both dependencies are
-        // lazy-resolved INSIDE the factory (RESOLUTION time), so this sees ALL collectors AND the AI source even
-        // though the Worker registers them AFTER AddRadarApplicationServices. TryAdd lets a composition root
-        // substitute its own descriptor.
+        // automatically; it is null (AI off) => byte-identical AI-off descriptor. Every dependency is
+        // lazy-resolved INSIDE the factory (RESOLUTION time), so this sees the vocabulary AND the AI source
+        // even though the Worker registers the AI seam AFTER AddRadarApplicationServices. TryAdd lets a
+        // composition root substitute its own descriptor.
         services.TryAddSingleton<ISignalSourceDescriptor>(sp => new SignalSourceDescriptor(
-            sp.GetRequiredService<IEnumerable<IEvidenceCollector>>(),
-            sp.GetService<IDirectionalFilingSignalSource>()));
+            sp.GetRequiredService<EnabledCollectorVocabulary>(),
+            sp.GetService<IDirectionalFilingSignalSource>(),
+            sp.GetRequiredService<CollectionPassOptions>()));
         // Multi-strategy scoring (spec 137). One ScoringEngine instance IS one strategy (it resolves its whole
         // effective config + fingerprint once in its constructor), so plural strategies are purely a
         // COMPOSITION concern: the factory builds one engine per strategy over the SAME shared collection

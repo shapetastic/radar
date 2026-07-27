@@ -36,7 +36,15 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
         _timeProvider = timeProvider;
     }
 
-    public string CollectorName => "LocalFileEvidenceCollector";
+    /// <summary>
+    /// THE definition of this collector's stable provenance name (spec 147). A const so the composition
+    /// root's kind→collector table can name it without a magic string — that table is what lets a standalone
+    /// <c>score</c> pass (which registers no collector at all) still know the collector VOCABULARY.
+    /// </summary>
+    public const string Name = "LocalFileEvidenceCollector";
+
+    /// <inheritdoc />
+    public string CollectorName => Name;
 
     public EvidenceSourceType SourceType => EvidenceSourceType.LocalFile;
 

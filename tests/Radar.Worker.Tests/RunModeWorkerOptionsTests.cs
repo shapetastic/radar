@@ -171,12 +171,40 @@ public sealed class RunModeWorkerOptionsTests
     [Fact]
     public void ScoreMode_DoesNotRequireCollectorsToBeConfigured()
     {
-        // A blank Radar:Collectors is a hard error in full/collect mode; in score mode there is nothing to
-        // collect with, so the list is not read at all.
-        using var provider = BuildProvider(("Radar:RunMode", "score"), ("Radar:Collectors:0", ""));
+        // Score mode is the one mode that does not require an enabled collector — there is nothing to collect
+        // with. It starts with no Radar:Collectors section at all and still registers no collector.
+        //
+        // SPEC 147 changed WHY this passes. The list used to be ignored entirely in score mode; it is now
+        // read in every mode, because it is also the recorded-provenance VOCABULARY. Only the
+        // "at least one" rule is relaxed here.
+        using var provider = BuildProvider(("Radar:RunMode", "score"));
 
         Assert.NotNull(provider.GetService<IRadarPipeline>());
         Assert.Empty(provider.GetServices<IEvidenceCollector>());
+    }
+
+    [Fact]
+    public void ScoreMode_StillRejectsABlankCollectorEntry()
+    {
+        // SPEC 147: a blank entry now fails fast in score mode too. Before 147 this configuration started,
+        // because score mode never looked at the list. It cannot be tolerated any more: the list IS the
+        // vocabulary a score pass records as provenance and validates v9 channel collectors against, so a
+        // silently-dropped entry would either misrepresent what produced the scored data or make the
+        // spec-146 guard reject a legitimately-named collector.
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+            ("Radar:RunMode", "score"), ("Radar:Collectors:0", "")));
+
+        Assert.Contains("Radar:Collectors", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ScoreMode_StillRejectsAnUnknownCollectorKind()
+    {
+        // Same reasoning as the blank entry: a typo'd kind would silently shrink the recorded vocabulary.
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+            ("Radar:RunMode", "score"), ("Radar:Collectors:0", "bogus")));
+
+        Assert.Contains("bogus", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
