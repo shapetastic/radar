@@ -168,7 +168,7 @@ public sealed class MarkdownWeeklyReportStrategySectionTests
             output, StringComparison.Ordinal);
         Assert.Contains("## Strategy: filings-led (radar-formula-v9)", output, StringComparison.Ordinal);
         Assert.Contains(
-            "Fingerprint: radar-scoring-fp-111111111111 · 1 companies scored · 1 with linked evidence",
+            "Fingerprint: radar-scoring-fp-111111111111 · 1 company scored · 1 with linked evidence",
             output, StringComparison.Ordinal);
         Assert.Contains(
             "| rank | company | ticker | Opportunity | Trajectory | Attention | Evidence | Velocity |",
@@ -306,6 +306,49 @@ public sealed class MarkdownWeeklyReportStrategySectionTests
         }
 
         Assert.Equal(9, unescaped); // 8 columns ⇒ 9 delimiters
+    }
+
+    [Fact]
+    public void LineBreakInCompanyNameOrTicker_CollapsesToASpace_SoTheRowStaysOneTableRow()
+    {
+        var snapshot = Snapshot(Guid.NewGuid(), Guid.NewGuid());
+        var model = MarkdownWeeklyReportGoldenModel.Create(
+        [
+            Section("default", isPrimary: true, [Row(1, "Acme\r\nDynamics", "AC\nME", snapshot)]),
+            Section("filings-led", isPrimary: false, []),
+        ]);
+
+        var output = new MarkdownWeeklyReportRenderer().Render(model);
+
+        Assert.Contains("| 1 | Acme Dynamics | AC ME | 70 | 60 | 20 | 80 | 50 |",
+            output, StringComparison.Ordinal);
+
+        // The whole row survives as ONE line: a raw newline would have broken it out of the table.
+        var row = output
+            .Split('\n')
+            .Single(l => l.StartsWith("| 1 | Acme", StringComparison.Ordinal));
+        Assert.EndsWith("| 50 |", row.TrimEnd('\r'), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HeaderCounts_AgreeInNumber_SoASingleCompanyDoesNotReadAsCompanies()
+    {
+        var model = MarkdownWeeklyReportGoldenModel.Create(
+        [
+            Section("default", isPrimary: true,
+                [Row(1, "Acme Dynamics", "ACME", Snapshot(Guid.NewGuid(), Guid.NewGuid()))],
+                companiesScored: 1, withLinkedEvidence: 1,
+                fingerprint: "radar-scoring-fp-111111111111"),
+            Section("filings-led", isPrimary: false, [], companiesScored: 0, withLinkedEvidence: 0,
+                fingerprint: "radar-scoring-fp-222222222222"),
+        ]);
+
+        var output = new MarkdownWeeklyReportRenderer().Render(model);
+
+        Assert.Contains("· 1 company scored · 1 with linked evidence", output, StringComparison.Ordinal);
+        // Zero takes the plural, as English does.
+        Assert.Contains("· 0 companies scored · 0 with linked evidence", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("1 companies scored", output, StringComparison.Ordinal);
     }
 
     [Fact]

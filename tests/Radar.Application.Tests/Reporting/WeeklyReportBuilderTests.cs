@@ -1804,7 +1804,7 @@ public sealed class WeeklyReportBuilderTests
 
         var filingsLed = result.Report.MarkdownContent[
             result.Report.MarkdownContent.IndexOf("## Strategy: filings-led", StringComparison.Ordinal)..];
-        Assert.Contains("1 companies scored · 1 with linked evidence", filingsLed, StringComparison.Ordinal);
+        Assert.Contains("1 company scored · 1 with linked evidence", filingsLed, StringComparison.Ordinal);
         // The unscored company is OMITTED, never invented with a zero row.
         Assert.DoesNotContain("Primary Only Corp", filingsLed, StringComparison.Ordinal);
     }
@@ -2041,10 +2041,10 @@ public sealed class WeeklyReportBuilderTests
         Assert.Contains("## Strategy: default (radar-formula-v8) — primary", markdown,
             StringComparison.Ordinal);
         Assert.Contains("## Strategy: low-media (radar-formula-v8)", markdown, StringComparison.Ordinal);
-        Assert.Contains("1 companies scored · 1 with linked evidence", markdown, StringComparison.Ordinal);
+        Assert.Contains("1 company scored · 1 with linked evidence", markdown, StringComparison.Ordinal);
         // Each section carries the strategy's OWN fingerprint, resolved from its own engine.
-        var primaryFingerprint = provider.GetRequiredService<IScoringStrategyFactory>()
+        var lowMediaFingerprint = provider.GetRequiredService<IScoringStrategyFactory>()
             .Runtimes.Single(r => r.Definition.Name == "low-media").Engine.EffectiveConfig.Fingerprint;
-        Assert.Contains($"Fingerprint: {primaryFingerprint} ·", markdown, StringComparison.Ordinal);
+        Assert.Contains($"Fingerprint: {lowMediaFingerprint} ·", markdown, StringComparison.Ordinal);
     }
 }

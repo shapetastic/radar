@@ -541,7 +541,9 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                 : section.ScoringConfigVersion)
             .Append(" · ")
             .Append(section.CompaniesScored.ToString(CultureInfo.InvariantCulture))
-            .Append(" companies scored · ")
+            .Append(' ')
+            .Append(section.CompaniesScored == 1 ? "company" : "companies")
+            .Append(" scored · ")
             .Append(section.CompaniesWithLinkedEvidence.ToString(CultureInfo.InvariantCulture))
             .Append(" with linked evidence");
         if (section.Truncated)
@@ -596,10 +598,21 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     }
 
     // A markdown table cell is pipe-delimited, so an unescaped '|' in a company name or ticker would split
-    // that row into extra columns and silently corrupt every value after it. Escaping the pipe is the whole
-    // job: no other character can end a cell.
-    private static string EscapeTableCell(string value) =>
-        value.Contains('|', StringComparison.Ordinal)
+    // that row into extra columns and silently corrupt every value after it. A line break is the only other
+    // character that can end a cell — and nothing in the Company domain type forbids one in a name or ticker
+    // — so CR/LF collapse to a space rather than breaking the row out of the table entirely.
+    private static string EscapeTableCell(string value)
+    {
+        var escaped = value.Contains('|', StringComparison.Ordinal)
             ? value.Replace("|", "\\|", StringComparison.Ordinal)
             : value;
+
+        return escaped.Contains('\n', StringComparison.Ordinal)
+            || escaped.Contains('\r', StringComparison.Ordinal)
+            ? escaped
+                .Replace("\r\n", " ", StringComparison.Ordinal)
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+            : escaped;
+    }
 }
