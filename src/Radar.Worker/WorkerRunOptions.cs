@@ -11,4 +11,11 @@ public sealed class WorkerRunOptions
 
     /// <summary>Interval between runs when <see cref="RunOnce"/> is false.</summary>
     public TimeSpan Interval { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// The resolved pass this process runs (spec 144), already reconciled with <c>Radar:Replay:Enabled</c>
+    /// by the composition root. The Worker only LOGS it — which pipeline implementation is registered is what
+    /// actually selects the behaviour — so an unattended scheduled run says in one line which pass it was.
+    /// </summary>
+    public RadarRunMode Mode { get; init; } = RadarRunMode.Full;
 }

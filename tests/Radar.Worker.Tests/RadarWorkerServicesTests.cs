@@ -806,17 +806,4 @@ public sealed class RadarWorkerServicesTests
 
         Assert.False(pipelineOptions.GenerateReport);
     }
-
-    private sealed class FakeLifetime : IHostApplicationLifetime
-    {
-        public CancellationToken ApplicationStarted => CancellationToken.None;
-
-        public CancellationToken ApplicationStopping => CancellationToken.None;
-
-        public CancellationToken ApplicationStopped => CancellationToken.None;
-
-        public void StopApplication()
-        {
-        }
-    }
 }

@@ -1,0 +1,114 @@
+using Microsoft.Extensions.Logging;
+
+using Radar.Application.Scoring;
+
+namespace Radar.Application.Pipeline;
+
+/// <summary>
+/// The standalone <c>collect</c> pass (spec 144): stages 1–5 and nothing else. It writes the durable evidence
+/// and signal stores, then the append-only run record — it does <b>not</b> score and does <b>not</b> report.
+/// <para>
+/// It is the same <see cref="ICollectionPass"/> the combined <see cref="RadarPipelineRunner"/> runs, so
+/// "collect on its own schedule" costs no second copy of stages 1–5 and cannot drift from the combined run.
+/// The scoring stage is simply absent: a later <see cref="ScoreOnlyPipelineRunner"/> pass scores whatever has
+/// accrued, as often as the operator likes, with no re-collection — no collector runs there, so no SEC /
+/// GDELT / Google-News traffic and no AI spend. That is narrower than "no requests at all"; see
+/// <see cref="ScoreOnlyPipelineRunner"/> for the price-acquisition caveat.
+/// </para>
+/// <para>
+/// The <see cref="StrategyIdentityGuard"/> tripwire still runs FIRST, for exactly the spec-141 reason: a
+/// strategy edited in place must cost no collection. A collect pass does not score, but the run it feeds will,
+/// and failing at the start of the collect pass is the cheapest place to find out.
+/// </para>
+/// </summary>
+public sealed class CollectOnlyPipelineRunner : IRadarPipeline
+{
+    private readonly ICollectionPass _collectionPass;
+    private readonly IScoringStrategyFactory _scoringStrategies;
+    private readonly IScoringConfigStore _scoringConfigStore;
+    private readonly IPipelineRunStore _runStore;
+    private readonly ILogger<CollectOnlyPipelineRunner> _logger;
+
+    public CollectOnlyPipelineRunner(
+        ICollectionPass collectionPass,
+        IScoringStrategyFactory scoringStrategies,
+        IScoringConfigStore scoringConfigStore,
+        IPipelineRunStore runStore,
+        ILogger<CollectOnlyPipelineRunner> logger)
+    {
+        ArgumentNullException.ThrowIfNull(collectionPass);
+        ArgumentNullException.ThrowIfNull(scoringStrategies);
+        ArgumentNullException.ThrowIfNull(scoringConfigStore);
+        ArgumentNullException.ThrowIfNull(runStore);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        _collectionPass = collectionPass;
+        _scoringStrategies = scoringStrategies;
+        _scoringConfigStore = scoringConfigStore;
+        _runStore = runStore;
+        _logger = logger;
+    }
+
+    public async Task<RadarPipelineResult> RunAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        // Stage 0 (spec 141), kept first for the same reason the combined run keeps it first: a
+        // misconfiguration costs no collection.
+        await StrategyIdentityGuard
+            .VerifyAsync(_scoringStrategies.Runtimes, _scoringConfigStore, _logger, ct)
+            .ConfigureAwait(false);
+
+        var collection = await _collectionPass.RunAsync(ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Collect-only run complete: {EvidenceNew}/{EvidenceCollected} new evidence, " +
+            "{SignalsApproved} approved / {SignalsNeedingReview} needs-review signals, " +
+            "{SourcesFailed}/{SourcesChecked} sources unreadable. No company was scored and no report was " +
+            "generated — run a score pass over the accrued store.",
+            collection.EvidenceNew,
+            collection.EvidenceCollected,
+            collection.SignalsApproved,
+            collection.SignalsNeedingReview,
+            collection.Collection.SourcesFailed,
+            collection.Collection.SourcesChecked);
+
+        var pipelineResult = new RadarPipelineResult(
+            EvidenceCollected: collection.EvidenceCollected,
+            EvidenceNew: collection.EvidenceNew,
+            SignalsExtracted: collection.SignalsExtracted,
+            SignalsValid: collection.SignalsValid,
+            SignalsApproved: collection.SignalsApproved,
+            SignalsNeedingReview: collection.SignalsNeedingReview,
+            // Nothing was scored and nothing was reported — reported as 0/null rather than omitted, so a
+            // reader of the run log can tell a collect pass from a combined run that scored nothing.
+            CompaniesScored: 0,
+            ReportId: null,
+            SourcesChecked: collection.Collection.SourcesChecked,
+            SourcesFailed: collection.Collection.SourcesFailed,
+            Collection: collection.Collection);
+
+        var runRecord = new PipelineRunRecord(
+            Id: Guid.NewGuid(),
+            CreatedAtUtc: collection.AsOfUtc,
+            Collectors: collection.Collectors,
+            EvidenceCollected: pipelineResult.EvidenceCollected,
+            EvidenceNew: pipelineResult.EvidenceNew,
+            SignalsExtracted: pipelineResult.SignalsExtracted,
+            SignalsValid: pipelineResult.SignalsValid,
+            SignalsApproved: pipelineResult.SignalsApproved,
+            SignalsNeedingReview: pipelineResult.SignalsNeedingReview,
+            CompaniesScored: pipelineResult.CompaniesScored,
+            SourcesChecked: pipelineResult.SourcesChecked,
+            SourcesFailed: pipelineResult.SourcesFailed,
+            ReportId: pipelineResult.ReportId,
+            CollectionWarnings: collection.Health.Warnings,
+            // No strategy scored this pass. Left null (the "unrecorded" value old run JSON also carries)
+            // rather than listing the configured strategies, which would claim a scoring that never happened.
+            Strategies: null,
+            PrimaryStrategy: null);
+        await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
+
+        return pipelineResult;
+    }
+}

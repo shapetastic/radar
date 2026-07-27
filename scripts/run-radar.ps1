@@ -25,10 +25,33 @@
 # It collects nothing, mutates no live store, reads no price, and produces no report - the forward efficacy
 # series under <outRoot>\scores\ is untouched. Without -Replay the baseline behaviour is unchanged.
 #
+# TWO VERBS (spec 144): -Mode selects which PASS this process runs. Default 'full' is the combined
+# collect+score run and behaves exactly as it always has.
+#   -Mode collect : stages 1-5 only. Collects evidence and stores signals into <outRoot>\evidence\raw and
+#                   <outRoot>\signals. Does NOT score and does NOT write a report.
+#   -Mode score   : stage 6 (+ the report) over whatever has ALREADY accrued. Constructs and invokes NO
+#                   collector, so no SEC / GDELT / Google News traffic and no AI spend. Re-running a strategy
+#                   therefore costs a scoring pass.
+# Caveats worth knowing before you use -Mode score:
+#   * it is NOT request-free with the default profile. Radar:Prices:Enabled is independent of Radar:RunMode and
+#     default.json sets it true, so a score pass still fetches daily price history per ticker (AD-14 reference
+#     data, acquired OUTSIDE the pipeline - never evidence, never a scoring input). This script builds the
+#     --Radar:* args itself and takes no passthrough, so the remedy is a PROFILE: run a frequently-repeated
+#     score pass under -Profile <name> whose JSON carries "Prices": { "Enabled": false }.
+#   * it STILL needs the AI configuration (and the DEEPINFRA_API_KEY environment variable) that the profile
+#     declares, because the AI directional-read descriptor is an INPUT to the ScoringConfigVersion
+#     fingerprint - dropping it would silently re-stamp every strategy. The AI read itself never runs.
+#   * with no collector registered, each snapshot records the EMPTY collector set in its (never-hashed)
+#     CollectionProvenance field. Same class of caveat -Replay already carries.
+#   * it writes the LIVE score series, so it may not be back-dated. Scoring a historical instant is -Replay.
+# -Mode and -Replay are mutually exclusive and this script says so rather than letting the Worker fail later.
+#
 # Examples:
 #   powershell -File scripts/run-radar.ps1                       # baseline run -> data\
 #   powershell -File scripts/run-radar.ps1 -Profile low-media    # experiment  -> data\experiments\low-media\
 #   powershell -File scripts/run-radar.ps1 -Profile low-media -WhatIf   # print the resolved command, do not run
+#   powershell -File scripts/run-radar.ps1 -Mode collect          # collect only; score later, as often as you like
+#   powershell -File scripts/run-radar.ps1 -Mode score            # score the accrued store; no collector runs (see the -Mode score caveats above)
 #   powershell -File scripts/run-radar.ps1 -Replay -ReplayFrom 2026-05-01 -ReplayTo 2026-07-25 -ReplayStep 1d
 
 [CmdletBinding()]
@@ -36,6 +59,8 @@ param(
     [string]$Profile       = "default",
     [string]$RepoPath      = "",
     [string]$SecUserAgent  = $(if ($env:RADAR_SEC_UA) { $env:RADAR_SEC_UA } else { "Radar Research your-contact-email@example.com" }),  # SEC EDGAR needs a real name+email: pass -SecUserAgent or set $env:RADAR_SEC_UA. NOT committed (public repo).
+    [ValidateSet("full", "collect", "score")]
+    [string]$Mode          = "full",    # which pass to run (spec 144); 'full' is the combined collect+score run
     [switch]$Replay,                    # run a read-only historical as-of replay INSTEAD of the pipeline
     [string]$ReplayFrom    = "",        # first as-of instant, UTC (e.g. 2026-05-01); required with -Replay
     [string]$ReplayTo      = "",        # upper bound of the as-of series, UTC; required with -Replay
@@ -110,6 +135,15 @@ $dirArgs = [ordered]@{
 }
 foreach ($k in $dirArgs.Keys) { $merged[$k] = $dirArgs[$k] }
 
+# --- which pass to run (spec 144) ---
+# A live collect/score pass and a read-only replay describe two different runs; reject the combination HERE
+# with a message naming both switches, rather than letting the Worker's equivalent fail-fast surface after a
+# build. 'full' is passed through explicitly so the resolved args always state the mode.
+if ($Replay -and $Mode -ne "full") {
+    throw "-Mode $Mode cannot be combined with -Replay. A replay is a read-only hypothesis written to <outRoot>\replays\; collect/score are live passes that write the durable stores and the live score series. Drop -Replay, or drop -Mode."
+}
+$merged["Radar:RunMode"] = $Mode
+
 # --- optional: historical as-of replay (spec 139) instead of a pipeline run ---
 # Fail here rather than at the Worker so the missing bound is obvious before a build happens. From/To are
 # passed through verbatim; the Worker parses them as UTC and fails fast on anything unparseable.
@@ -130,6 +164,13 @@ foreach ($k in $merged.Keys) { $cliArgs += "--$k=$($merged[$k])" }
 
 Write-Host "==== Radar run profile: $Profile ====" -ForegroundColor Cyan
 Write-Host "Output root: $outRoot"
+Write-Host "Mode       : $Mode$(if ($Mode -eq 'collect') { '  (stages 1-5 only: no scoring, no report)' } elseif ($Mode -eq 'score') { '  (stage 6+7 over the accrued store: NO collector is constructed or invoked)' })"
+if ($Mode -eq "score") {
+    Write-Host "NOTE: a score pass still needs the profile's AI config + API key (the AI descriptor is a ScoringConfigVersion input); it just never issues an AI read. Snapshots record the EMPTY collector set in CollectionProvenance (never hashed)." -ForegroundColor DarkYellow
+    if ($merged["Radar:Prices:Enabled"] -eq 'true') {
+        Write-Host "NOTE: Radar:Prices:Enabled is true, so this score pass WILL fetch daily price history per ticker (AD-14 reference data, outside the pipeline). If you repeat this pass often, run it under a -Profile whose JSON sets `"Prices`": { `"Enabled`": false }." -ForegroundColor DarkYellow
+    }
+}
 if ($Replay) {
     Write-Host "REPLAY MODE: as-of $ReplayFrom .. $ReplayTo step $ReplayStep -> $(Join-Path $outRoot 'replays') (read-only; the pipeline, price, report and efficacy steps do NOT run)" -ForegroundColor Yellow
 }
@@ -159,6 +200,6 @@ if (-not $SkipBuild) {
     & dotnet build (Join-Path $RepoPath "Radar.sln") -c Release
     if ($LASTEXITCODE) { throw "build failed (exit $LASTEXITCODE)" }
 }
-Write-Host "`n==== dotnet run (profile: $Profile) ====" -ForegroundColor Cyan
+Write-Host "`n==== dotnet run (profile: $Profile, mode: $Mode) ====" -ForegroundColor Cyan
 & dotnet run --project $proj -c Release --no-launch-profile --no-build -- @cliArgs
 exit $LASTEXITCODE

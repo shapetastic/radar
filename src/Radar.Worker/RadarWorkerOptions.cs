@@ -3,7 +3,28 @@ namespace Radar.Worker;
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
 public sealed class RadarWorkerOptions
 {
-    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents", "fda", "trademarks".</summary>
+    /// <summary>
+    /// Which pass this process runs (spec 144), case-insensitively: <c>"full"</c> (the default — collect AND
+    /// score in one pass, exactly as before this key existed), <c>"collect"</c> (stages 1–5 only: writes the
+    /// durable evidence + signal stores, no scoring, no report), <c>"score"</c> (stage 6 + optionally 7 over
+    /// whatever has accrued — no collector is constructed or invoked and no AI read happens), or
+    /// <c>"replay"</c> (the read-only historical as-of replay of spec 139).
+    /// <para>
+    /// Reconciled with the pre-existing <see cref="ReplayWorkerOptions.Enabled"/> switch:
+    /// <c>Radar:Replay:Enabled</c> alone still selects a replay (unchanged), while combining it with
+    /// <c>"collect"</c>/<c>"score"</c> fails fast naming both keys. An unknown value fails fast listing the
+    /// valid ones.
+    /// </para>
+    /// </summary>
+    public string RunMode { get; init; } = "full";
+
+    /// <summary>
+    /// Standalone <c>score</c>-pass configuration (bound from "Radar:Score"; spec 144). Only read when
+    /// <see cref="RunMode"/> is <c>"score"</c>; the defaults score at the current instant.
+    /// </summary>
+    public ScoreWorkerOptions Score { get; init; } = new();
+
+    /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents", "fda", "trademarks". Not read in <c>"score"</c> <see cref="RunMode"/> — that pass registers no collector at all.</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 
     /// <summary>
@@ -190,6 +211,26 @@ public sealed class RadarWorkerOptions
 
     /// <summary>Interval between runs in minutes when RunOnce is false.</summary>
     public int IntervalMinutes { get; init; } = 60;
+}
+
+/// <summary>
+/// Standalone <c>score</c>-pass configuration (bound from "Radar:Score"; spec 144). Only read when
+/// <see cref="RadarWorkerOptions.RunMode"/> is <c>"score"</c>.
+/// </summary>
+public sealed class ScoreWorkerOptions
+{
+    /// <summary>
+    /// The as-of instant the score pass scores at, as a UTC date/time (e.g. "2026-07-27T09:00:00Z"). BLANK
+    /// (the default) means the current instant, which is the normal case.
+    /// <para>
+    /// A value in the PAST is rejected at run time: a standalone score pass writes the LIVE series — the
+    /// record of what Radar thinks now — and back-dating it would rewrite accrued history with a hypothesis.
+    /// Scoring a historical instant is a REPLAY (<c>Radar:Replay:*</c>, spec 139), which writes only under
+    /// <c>Radar:ReplayDirectory</c>. Parsed at startup with the same UTC treatment the replay bounds get, so
+    /// an unparseable value fails fast rather than silently scoring "now".
+    /// </para>
+    /// </summary>
+    public string AsOfUtc { get; init; } = string.Empty;
 }
 
 /// <summary>
