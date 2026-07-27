@@ -66,6 +66,14 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "newssearch";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "newsSearchFeedUrl";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -274,7 +282,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
             // Third-party news is lower-integrity than primary filings/awards (aggregators, wires, listicles),
             // so it declares a Medium baseline — below the SEC/USASpending High, consistent with GDELT.
             ["quality"] = "Medium",
-            ["newsSearchFeedUrl"] = feed.Url,
+            [MetadataMarkerKey] = feed.Url,
             ["url"] = article.Url,
             ["publisher"] = publisher,
             // The per-company feed attribution, still recoverable for provenance/display now that SourceName

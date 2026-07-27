@@ -724,6 +724,12 @@ public sealed class RadarScoreFormulaV9Tests
         //                Channels: the five ScoreComponents properties still come first and by name, so any
         //                existing reader is unaffected, and the discount is provenance a v9 snapshot cannot
         //                otherwise carry (the curated FollowingTier appears nowhere else in its output).
+        //   ALSO CHANGED, spec 151 — each CHANNEL object gains three additive counts (RecordedSignals /
+        //                InferredSignals / UnattributedSignals). Same argument again, one level down: they are
+        //                appended after the existing channel properties, and they exist so an artifact built
+        //                on re-derived collector attribution can state what fraction of a channel's mass is a
+        //                reconstruction. Their values are ASSERTED below before being stripped, so the strip
+        //                cannot hide a wrong number.
         //
         // MEASURED, NOT ASSERTED ABOUT ITSELF: this exact fixture was also run against the pre-149 sources
         // (origin/main @ 230948f, in a throwaway worktree) and produced these components, this explanation,
@@ -753,9 +759,23 @@ public sealed class RadarScoreFormulaV9Tests
             result.Explanation);
         Assert.DoesNotContain("notedness", result.Explanation, StringComparison.OrdinalIgnoreCase);
 
-        // ---- ComponentJson with the ONE new property removed is byte-identical to the pre-149 shape ----
+        // ---- ComponentJson with the additive properties removed is byte-identical to the pre-149 shape ----
         var node = System.Text.Json.Nodes.JsonNode.Parse(result.ComponentJson)!.AsObject();
         Assert.True(node.Remove("Discount"));
+
+        // Spec 151's three per-channel counts: asserted (every signal here carries a RECORDED "newssearch",
+        // so nothing is inferred and nothing is unattributed) and only then stripped.
+        foreach (var channel in node["Channels"]!.AsArray())
+        {
+            var obj = channel!.AsObject();
+            Assert.Equal(6, (int)obj["RecordedSignals"]!);
+            Assert.Equal(0, (int)obj["InferredSignals"]!);
+            Assert.Equal(0, (int)obj["UnattributedSignals"]!);
+            Assert.True(obj.Remove("RecordedSignals"));
+            Assert.True(obj.Remove("InferredSignals"));
+            Assert.True(obj.Remove("UnattributedSignals"));
+        }
+
         Assert.Equal(
             "{\"TrajectoryScore\":84,\"OpportunityScore\":69,\"AttentionScore\":67,"
                 + "\"EvidenceConfidenceScore\":60,\"SignalVelocityScore\":100,\"Formula\":\"radar-formula-v9\","
@@ -1009,5 +1029,218 @@ public sealed class RadarScoreFormulaV9Tests
         Assert.Equal(
             a.Contributions.Select(c => (c.SignalId, c.EvidenceId, c.ContributionReason, c.ContributionWeight)),
             b.Contributions.Select(c => (c.SignalId, c.EvidenceId, c.ContributionReason, c.ContributionWeight)));
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 151 — collector attribution arrives through ONE seam, and inferred is never mistaken for recorded
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A test-double resolver with the SAME precedence the shipped inferring resolver has (recorded wins;
+    /// the lookup is consulted only when nothing was recorded). The real inference table lives in
+    /// Infrastructure and is tested there — what the formula owes is that it honours whatever the seam
+    /// returns, which is what these tests exercise.
+    /// </summary>
+    private sealed class StubAttributionResolver(Func<EvidenceItem, string?> infer) : ICollectorAttributionResolver
+    {
+        public CollectorAttribution Resolve(EvidenceItem? evidence)
+        {
+            if (evidence is null)
+            {
+                return CollectorAttribution.Unattributed;
+            }
+
+            var recorded = CollectionProvenanceMetadata.Read(evidence);
+            if (recorded is not null)
+            {
+                return CollectorAttribution.Recorded(recorded);
+            }
+
+            var inferred = infer(evidence);
+            return inferred is null
+                ? CollectorAttribution.Unattributed
+                : CollectorAttribution.Inferred(inferred);
+        }
+    }
+
+    private static RadarScoreFormulaV9 FormulaResolving(
+        ICollectorAttributionResolver? resolver, params ScoringChannel[] channels) =>
+        new(new ScoringWeights(), AllGenuine, ScoringChannelSet.Create(channels, "test-strategy"), resolver);
+
+    /// <summary>Six LEGACY news signals — no recorded collector, exactly as pre-spec-146 evidence persists.</summary>
+    private static IReadOnlyList<ScoringSignal> LegacyNewsFixture() =>
+        Enumerable.Range(0, 6)
+            .Select(i => BuildSignal(
+                collector: null,
+                sourceType: EvidenceSourceType.NewsArticle,
+                sourceName: $"outlet-{i}"))
+            .ToList();
+
+    private static ScoringChannel[] NewsAndBreadthChannels() =>
+    [
+        ScoringChannel.Collector("news", ["newssearch"], 0.6, 3),
+        ScoringChannel.Breadth("attention", 0.4, 3),
+    ];
+
+    [Fact]
+    public void OmittedResolver_IsExactlyTheRecordedOnlyResolver_SoLegacyEvidenceStillFeedsNoCollectorChannel()
+    {
+        // THE default-off criterion. Over legacy evidence the formula must behave exactly as it did before the
+        // seam existed: the collector channel is dark and every contribution carries the unchanged pre-151
+        // reason. Proven twice over — by pinning the pre-151 strings, and by asserting the omitted-resolver
+        // overload is field-for-field identical to explicitly passing the recorded-only resolver, so "the
+        // default is safe" is a measured equality rather than a claim about a null-coalesce.
+        var signals = LegacyNewsFixture();
+
+        var implicitDefault = FormulaResolving(null, NewsAndBreadthChannels()).Compute(InputFrom(signals));
+        var explicitDefault = FormulaResolving(
+            RecordedOnlyCollectorAttributionResolver.Instance, NewsAndBreadthChannels())
+            .Compute(InputFrom(signals));
+
+        Assert.Equal(explicitDefault.Components, implicitDefault.Components);
+        Assert.Equal(explicitDefault.Explanation, implicitDefault.Explanation);
+        Assert.Equal(explicitDefault.ComponentJson, implicitDefault.ComponentJson);
+        Assert.Equal(
+            explicitDefault.Contributions.Select(c => (c.ContributionReason, c.ContributionWeight)),
+            implicitDefault.Contributions.Select(c => (c.ContributionReason, c.ContributionWeight)));
+
+        // The collector channel saw nothing, and says so as an ABSENCE (dark) rather than as a measured 0.
+        var news = Breakdown(implicitDefault, "news");
+        Assert.Equal(0, news.GetProperty("SignalCount").GetInt32());
+        Assert.True(news.GetProperty("Dark").GetBoolean());
+        Assert.Equal(0.0, news.GetProperty("Score").GetDouble());
+        Assert.Equal(0, news.GetProperty("RecordedSignals").GetInt32());
+        Assert.Equal(0, news.GetProperty("InferredSignals").GetInt32());
+
+        // …and the persisted reason is byte-identical to pre-151 — no "inferred" vocabulary anywhere.
+        Assert.All(
+            implicitDefault.Contributions,
+            c =>
+            {
+                Assert.Equal(
+                    "CustomerWin (Positive), strength 6, confidence 0.80 — channel attention",
+                    c.ContributionReason);
+                Assert.DoesNotContain("inferred", c.ContributionReason, StringComparison.OrdinalIgnoreCase);
+            });
+    }
+
+    [Fact]
+    public void InferredAttribution_FeedsTheCollectorChannel_AndIsMarkedInferredEverywhereItLands()
+    {
+        // The whole point of the slice: with inference on, the accrued legacy window stops scoring every
+        // collector channel at 0 — and every artifact built on it can say the attribution was re-derived.
+        var signals = LegacyNewsFixture();
+        var formula = FormulaResolving(
+            new StubAttributionResolver(_ => "newssearch"), NewsAndBreadthChannels());
+
+        var result = formula.Compute(InputFrom(signals));
+
+        var news = Breakdown(result, "news");
+        Assert.Equal(6, news.GetProperty("SignalCount").GetInt32());
+        Assert.False(news.GetProperty("Dark").GetBoolean());
+        Assert.True(news.GetProperty("Score").GetDouble() > 0);
+
+        // The provenance split — this is what lets a hand-back state "this series is 100% inferred".
+        Assert.Equal(0, news.GetProperty("RecordedSignals").GetInt32());
+        Assert.Equal(6, news.GetProperty("InferredSignals").GetInt32());
+        Assert.Equal(0, news.GetProperty("UnattributedSignals").GetInt32());
+
+        // …and per signal, in the persisted contribution reason.
+        Assert.All(
+            result.Contributions,
+            c => Assert.Equal(
+                "CustomerWin (Positive), strength 6, confidence 0.80 — channel attention + news "
+                    + "(collector attribution inferred)",
+                c.ContributionReason));
+    }
+
+    [Fact]
+    public void RecordedAttribution_IsNeverMarkedInferred_EvenWhenInferenceIsOn()
+    {
+        // Recorded wins, and reads as recorded. An operator turning inference on must not find their
+        // first-hand provenance relabelled as a reconstruction.
+        var signals = Enumerable.Range(0, 6)
+            .Select(i => BuildSignal(
+                "newssearch", sourceType: EvidenceSourceType.NewsArticle, sourceName: $"outlet-{i}"))
+            .ToList();
+
+        var result = FormulaResolving(
+            new StubAttributionResolver(_ => "sec-form4"), NewsAndBreadthChannels())
+            .Compute(InputFrom(signals));
+
+        var news = Breakdown(result, "news");
+        Assert.Equal(6, news.GetProperty("RecordedSignals").GetInt32());
+        Assert.Equal(0, news.GetProperty("InferredSignals").GetInt32());
+        Assert.All(
+            result.Contributions,
+            c => Assert.DoesNotContain("inferred", c.ContributionReason, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void MixedAttribution_SplitsTheChannelMassBetweenRecordedAndInferred()
+    {
+        // The realistic shape while the store heals forward: some evidence carries the spec-146 stamp, the
+        // rest is re-derived. The counts must show the mix rather than round to one story.
+        var signals = new List<ScoringSignal>
+        {
+            BuildSignal("newssearch", sourceType: EvidenceSourceType.NewsArticle, sourceName: "outlet-a"),
+            BuildSignal("newssearch", sourceType: EvidenceSourceType.NewsArticle, sourceName: "outlet-b"),
+            BuildSignal(null, sourceType: EvidenceSourceType.NewsArticle, sourceName: "outlet-c"),
+            BuildSignal(null, sourceType: EvidenceSourceType.NewsArticle, sourceName: "outlet-d"),
+            BuildSignal(null, sourceType: EvidenceSourceType.NewsArticle, sourceName: "outlet-e"),
+        };
+
+        var result = FormulaResolving(
+            new StubAttributionResolver(_ => "newssearch"), NewsAndBreadthChannels())
+            .Compute(InputFrom(signals));
+
+        var news = Breakdown(result, "news");
+        Assert.Equal(5, news.GetProperty("SignalCount").GetInt32());
+        Assert.Equal(2, news.GetProperty("RecordedSignals").GetInt32());
+        Assert.Equal(3, news.GetProperty("InferredSignals").GetInt32());
+        Assert.Equal(0, news.GetProperty("UnattributedSignals").GetInt32());
+    }
+
+    [Fact]
+    public void UnattributedSignals_AreStructurallyZeroForACollectorChannel_AndCountedForBreadth()
+    {
+        // Stated in the ChannelBreakdown docs, asserted here because it is weaker than it looks:
+        // ScoringChannel.Consumes is false for a null collector name, so an unattributed signal can never BE
+        // one of a collector channel's consumed signals. The breadth channel consumes on reach rather than on
+        // provenance, so it is the only place the count is informative.
+        var result = FormulaResolving(
+            new StubAttributionResolver(_ => null), NewsAndBreadthChannels())
+            .Compute(InputFrom(LegacyNewsFixture()));
+
+        var news = Breakdown(result, "news");
+        Assert.Equal(0, news.GetProperty("SignalCount").GetInt32());
+        Assert.Equal(0, news.GetProperty("UnattributedSignals").GetInt32());
+
+        var attention = Breakdown(result, "attention");
+        Assert.Equal(6, attention.GetProperty("SignalCount").GetInt32());
+        Assert.Equal(6, attention.GetProperty("UnattributedSignals").GetInt32());
+        Assert.Equal(0, attention.GetProperty("RecordedSignals").GetInt32());
+        Assert.Equal(0, attention.GetProperty("InferredSignals").GetInt32());
+    }
+
+    [Fact]
+    public void AttributionMode_DoesNotChangeWhatAChannelMeans()
+    {
+        // Spec 151 is explicitly out of scope for "changing what a v9 channel means". A channel still matches
+        // its declared collector names EXACTLY: an inferred name the strategy did not budget for is consumed
+        // by no collector channel, exactly as a recorded one would not be.
+        var result = FormulaResolving(
+            new StubAttributionResolver(_ => "sec-form4"), NewsAndBreadthChannels())
+            .Compute(InputFrom(LegacyNewsFixture()));
+
+        var news = Breakdown(result, "news");
+        Assert.Equal(0, news.GetProperty("SignalCount").GetInt32());
+        Assert.True(news.GetProperty("Dark").GetBoolean());
+        Assert.All(
+            result.Contributions,
+            c => Assert.Equal(
+                "CustomerWin (Positive), strength 6, confidence 0.80 — channel attention "
+                    + "(collector attribution inferred)",
+                c.ContributionReason));
     }
 }

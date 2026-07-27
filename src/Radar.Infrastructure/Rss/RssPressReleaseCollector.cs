@@ -41,6 +41,14 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "RssPressReleaseCollector";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "rssFeedUrl";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -97,7 +105,7 @@ internal sealed class RssPressReleaseCollector : IEvidenceCollector
 
                 var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    ["rssFeedUrl"] = feed.Url,
+                    [MetadataMarkerKey] = feed.Url,
                     ["rssItemId"] = item.Id ?? item.Link ?? string.Empty,
                     // Declared baseline evidence quality (AD-7), read by CollectedEvidenceMapper.ParseQuality.
                     // An official IR-newsroom press release is a first-party source, so Unknown is the wrong

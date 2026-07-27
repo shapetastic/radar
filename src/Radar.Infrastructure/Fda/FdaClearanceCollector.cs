@@ -66,6 +66,14 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "fda";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "fdaFeedUrl";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -208,7 +216,7 @@ internal sealed class FdaClearanceCollector : IEvidenceCollector
             // Declared baseline evidence quality (AD-7), read by CollectedEvidenceMapper.ParseQuality. FDA
             // decisions are an authoritative public record — on par with the SEC/USASpending High.
             ["quality"] = "High",
-            ["fdaFeedUrl"] = feed.Url,
+            [MetadataMarkerKey] = feed.Url,
             ["applicant"] = applicant,
             // POST-FILTER: material events only (every 510(k) + original/'Panel Track' PMA approvals). Routine
             // post-market PMA supplements are NOT counted here (spec 135).

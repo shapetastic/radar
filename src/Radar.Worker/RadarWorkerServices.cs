@@ -127,6 +127,14 @@ internal static class RadarWorkerServices
         // A blank/absent section binds the code default (3-day window). Fails fast on a non-positive window.
         services.AddRadarMediaCollapse(configuration);
 
+        // Collector attribution (spec 151): resolve Radar:Scoring:InferLegacyCollectorAttribution and register
+        // the concrete CollectorAttributionOptions + ICollectorAttributionResolver BEFORE
+        // AddRadarApplicationServices so configuration wins over the library defaults (their TryAddSingletons
+        // are no-ops once these concrete instances are registered). Absent/false — the shipped default — binds
+        // the recorded-only resolver, which is behaviourally identical to pre-151: no score moves, no
+        // provenance string changes, no fingerprint moves. Fails fast on an unparseable value.
+        services.AddRadarCollectorAttribution(configuration);
+
         // Scoring strategies (spec 137): resolve Radar:Strategies / Radar:PrimaryStrategy and register the
         // concrete ScoringStrategySet BEFORE AddRadarApplicationServices so configuration wins over the
         // library default (its TryAddSingleton is a no-op once this concrete instance is registered). An

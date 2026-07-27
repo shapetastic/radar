@@ -59,6 +59,14 @@ internal sealed class PatentActivityCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "patents";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "patentsFeedUrl";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -175,7 +183,7 @@ internal sealed class PatentActivityCollector : IEvidenceCollector
             // Declared baseline evidence quality (AD-7), read by CollectedEvidenceMapper.ParseQuality. Granted
             // patents are an authoritative public record — on par with the SEC/USASpending High.
             ["quality"] = "High",
-            ["patentsFeedUrl"] = feed.Url,
+            [MetadataMarkerKey] = feed.Url,
             ["assignee"] = assignee,
             // The grant count is the accrued patent history slice B will read.
             ["grantCount"] = count.ToString(CultureInfo.InvariantCulture),

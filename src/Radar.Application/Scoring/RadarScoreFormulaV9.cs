@@ -108,6 +108,17 @@ namespace Radar.Application.Scoring;
 /// configuration, not the historical run's; the historical answer is on each snapshot's own
 /// <c>CollectionProvenance</c>.</para>
 ///
+/// <para><b>WHERE A SIGNAL'S COLLECTOR COMES FROM (spec 151).</b> A collector channel selects on the
+/// collector behind each signal's evidence, resolved through the single
+/// <see cref="ICollectorAttributionResolver"/> seam rather than by reading the metadata key inline. The
+/// default resolver reads only what spec 146 RECORDED, so this formula's behaviour is unchanged; an opt-in
+/// resolver additionally re-derives attribution for evidence that predates that recording. The formula keeps
+/// the whole <see cref="CollectorAttribution"/> rather than just the name, so <b>how</b> each answer was
+/// obtained survives into the provenance it emits: the per-channel breakdown counts recorded vs inferred vs
+/// unattributed signals, and a contribution whose collector was inferred says so. What a channel MEANS is
+/// untouched — <c>ScoringChannel.Consumes</c> still matches the collector name exactly, and an unattributed
+/// signal is still consumed by no collector channel.</para>
+///
 /// <para>Pure and deterministic (no clock, no randomness, no I/O). Emits exactly one provenance-carrying
 /// contribution per current-window signal, in input order, each naming the channel(s) that consumed it —
 /// so evidence → signal → channel → score is traceable end to end — and never from
@@ -127,6 +138,7 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
     private readonly ScoringWeights _weights;
     private readonly IAttentionSourceWeights _sourceWeights;
     private readonly ScoringChannelSet _channels;
+    private readonly ICollectorAttributionResolver _attribution;
 
     /// <summary>
     /// Constructs the formula with the strategy's magnitudes, the shared publisher tier map, and the
@@ -135,8 +147,17 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
     /// a pure function (AD-3). Fails fast on a nonsensical weight (<see cref="ScoringWeights.Validate"/>) and
     /// on an empty channel set — a v9 strategy with no channels could only ever score 0.
     /// </summary>
+    /// <param name="attributionResolver">
+    /// How the collector behind each signal's evidence is established (spec 151). Optional and defaulting to
+    /// <see cref="RecordedOnlyCollectorAttributionResolver"/> — i.e. exactly what this formula did inline
+    /// before the seam existed — so an omitted resolver is not merely "safe" but behaviourally identical to
+    /// pre-151.
+    /// </param>
     public RadarScoreFormulaV9(
-        ScoringWeights weights, IAttentionSourceWeights sourceWeights, ScoringChannelSet channels)
+        ScoringWeights weights,
+        IAttentionSourceWeights sourceWeights,
+        ScoringChannelSet channels,
+        ICollectorAttributionResolver? attributionResolver = null)
     {
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
@@ -154,6 +175,7 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
         _weights = weights;
         _sourceWeights = sourceWeights;
         _channels = channels;
+        _attribution = attributionResolver ?? RecordedOnlyCollectorAttributionResolver.Instance;
     }
 
     /// <inheritdoc />
@@ -175,13 +197,15 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
             signals, input.WindowStartUtc, input.WindowEndUtc, _weights.RecencyFloor);
         var quality = ScoreSignalMath.QualityFactors(signals, _weights);
 
-        // The recorded collector behind each signal's evidence (spec 146). Null for legacy evidence that
-        // predates the recording — such a signal is consumed by NO collector channel and contributes 0, which
-        // is exactly what the standing "never backfill accrued history" rule implies.
-        var collectorOf = new string?[signals.Count];
+        // The collector behind each signal's evidence, WITH how that answer was obtained (spec 146 recorded
+        // it; spec 151 added the seam and the opt-in legacy inference). Unattributed evidence is consumed by
+        // NO collector channel and contributes 0 — which is exactly what the standing "never backfill accrued
+        // history" rule implies, and remains the default answer for every pre-spec-146 record unless an
+        // operator explicitly turns the inference on.
+        var attributionOf = new CollectorAttribution[signals.Count];
         for (var i = 0; i < signals.Count; i++)
         {
-            collectorOf[i] = CollectionProvenanceMetadata.Read(signals[i].Evidence);
+            attributionOf[i] = _attribution.Resolve(signals[i].Evidence);
         }
 
         var enabled = new HashSet<string>(input.EnabledCollectors, StringComparer.Ordinal);
@@ -195,12 +219,16 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
         foreach (var channel in _channels.Channels)
         {
             double channelScore;
-            int consumed;
             // "Nothing to measure" — the state the no-renormalisation rule is about. It is NOT the same as
             // "scored 0": a collector channel whose signals are uniformly negative also scores 0, and that is
             // a measurement, not an absence. So it is recorded per kind at the source rather than inferred
             // from the score.
             bool dark;
+
+            // The current-window signals this channel consumed, in input order. Filled by BOTH branches so
+            // the attribution tally below has exactly one definition of "this channel's signals" — the same
+            // set SignalCount reports and the same set each branch attributes in the contribution reasons.
+            var consumedIndices = new List<int>();
 
             if (channel.Kind == ScoringChannelKind.Breadth)
             {
@@ -216,36 +244,36 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
                 // MediaAttention signal), not simply every signal in the window — so a contribution reason
                 // naming this channel is true of that signal. Publishers credited only from the pre-collapse
                 // set have no current-window signal to attribute to, by construction.
-                consumed = 0;
                 for (var i = 0; i < signals.Count; i++)
                 {
                     if (ScoreSignalMath.ContributesToReach(signals[i]))
                     {
-                        consumed++;
+                        consumedIndices.Add(i);
                         (channelsPerSignal[i] ??= []).Add(channel.Name);
                     }
                 }
             }
             else
             {
-                var indices = new List<int>();
                 for (var i = 0; i < signals.Count; i++)
                 {
-                    if (channel.Consumes(collectorOf[i]))
+                    // Consumes() matches the collector NAME exactly and is false for a null name, so an
+                    // unattributed signal selects into no collector channel regardless of how attribution was
+                    // resolved (spec 151 changes which signals HAVE a name, never what a channel means).
+                    if (channel.Consumes(attributionOf[i].CollectorName))
                     {
-                        indices.Add(i);
+                        consumedIndices.Add(i);
                         (channelsPerSignal[i] ??= []).Add(channel.Name);
                     }
                 }
 
-                consumed = indices.Count;
-                dark = consumed == 0;
+                dark = consumedIndices.Count == 0;
 
                 // Sub-slices in the SAME input order, so the shared primitives see exactly the shape they see
                 // for a whole window — the channel changes the SET, never the math.
-                var subSignals = indices.Select(i => signals[i]).ToList();
-                var subRecency = indices.Select(i => recency[i]).ToList();
-                var subQuality = indices.Select(i => quality[i]).ToList();
+                var subSignals = consumedIndices.Select(i => signals[i]).ToList();
+                var subRecency = consumedIndices.Select(i => recency[i]).ToList();
+                var subQuality = consumedIndices.Select(i => quality[i]).ToList();
 
                 var activity = ScoreSignalMath.ActivityMass(subSignals, subRecency, subQuality);
                 var saturation = Saturate(activity, channel.Saturation);
@@ -270,6 +298,29 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
             var ran = channel.Collectors.Where(enabled.Contains).ToArray();
             var notRun = channel.Collectors.Where(c => !enabled.Contains(c)).ToArray();
 
+            // ATTRIBUTION PROVENANCE (spec 151): how much of this channel's mass rests on a collector the
+            // producing collector RECORDED, versus one Radar re-derived afterwards. Recorded in the snapshot
+            // so that any artifact built on inferred attribution — a replayed series, a strategy leaderboard —
+            // can state the fraction rather than imply it is all first-hand.
+            var recordedSignals = 0;
+            var inferredSignals = 0;
+            var unattributedSignals = 0;
+            foreach (var i in consumedIndices)
+            {
+                switch (attributionOf[i].Source)
+                {
+                    case CollectorAttributionSource.Recorded:
+                        recordedSignals++;
+                        break;
+                    case CollectorAttributionSource.Inferred:
+                        inferredSignals++;
+                        break;
+                    default:
+                        unattributedSignals++;
+                        break;
+                }
+            }
+
             breakdown.Add(new ChannelBreakdown(
                 Name: channel.Name,
                 Kind: ScoringChannelSet.KindToken(channel.Kind),
@@ -277,11 +328,14 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
                 Saturation: channel.Saturation,
                 Score: channelScore,
                 WeightedContribution: channel.Weight * channelScore,
-                SignalCount: consumed,
+                SignalCount: consumedIndices.Count,
                 Dark: dark,
                 Collectors: channel.Collectors,
                 CollectorsRan: ran,
-                CollectorsNotRun: notRun));
+                CollectorsNotRun: notRun,
+                RecordedSignals: recordedSignals,
+                InferredSignals: inferredSignals,
+                UnattributedSignals: unattributedSignals));
         }
 
         // THE COMPOSITE. Summed over the DECLARED channels — never over "the channels that fired" — so a dark
@@ -385,7 +439,7 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
                 EvidenceId: signals[i].Evidence.Id,
                 ContributionReason:
                     $"{signal.Type} ({signal.Direction}), strength {signal.Strength}, "
-                        + $"confidence {signal.Confidence:0.00} — {DescribeAttribution(channelsPerSignal[i], collectorOf[i])}",
+                        + $"confidence {signal.Confidence:0.00} — {DescribeAttribution(channelsPerSignal[i], attributionOf[i])}",
                 ContributionWeight: weight));
         }
 
@@ -433,19 +487,28 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
     /// <summary>The half-saturation shape <c>x/(x+S)</c>, in <c>[0,1)</c> for non-negative <c>x</c>.</summary>
     private static double Saturate(double raw, double halfSaturation) => raw / (raw + halfSaturation);
 
-    private static string DescribeAttribution(IReadOnlyList<string>? channels, string? collector)
+    private static string DescribeAttribution(
+        IReadOnlyList<string>? channels, CollectorAttribution attribution)
     {
+        // Spec 151: an INFERRED collector is named as such, in the persisted contribution reason, so the
+        // provenance chain itself says which of its links is a re-derivation. Appended only when the
+        // attribution actually was inferred — with the default recorded-only resolver this is always empty and
+        // every reason below is byte-identical to pre-151.
+        var inferred = attribution.Source == CollectorAttributionSource.Inferred
+            ? " (collector attribution inferred)"
+            : string.Empty;
+
         if (channels is { Count: > 0 })
         {
-            return $"channel {string.Join(" + ", channels)}";
+            return $"channel {string.Join(" + ", channels)}{inferred}";
         }
 
         // Explicitly distinguishes the two reasons a signal fed no collector channel, because they mean very
         // different things: legacy evidence that predates collector recording (never backfilled, by rule)
         // versus a collector this strategy simply did not budget for.
-        return collector is null
+        return attribution.CollectorName is null
             ? "no channel (evidence has no recorded collector)"
-            : $"no channel (collector {collector} is not budgeted by this strategy)";
+            : $"no channel (collector {attribution.CollectorName} is not budgeted by this strategy){inferred}";
     }
 
     /// <summary>
@@ -465,6 +528,24 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
     /// breadth channel with zero reach. Deliberately distinct from <c>Score == 0</c>: a channel whose signals
     /// are uniformly negative also scores 0, and that is a measurement, not an absence.
     /// </param>
+    /// <param name="RecordedSignals">
+    /// How many of this channel's <paramref name="SignalCount"/> signals sit on evidence whose producing
+    /// collector RECORDED its own name (spec 146). First-hand provenance.
+    /// </param>
+    /// <param name="InferredSignals">
+    /// How many sit on evidence whose collector Radar re-derived afterwards (spec 151). <b>This is the number
+    /// that qualifies the channel</b>: a channel whose mass is mostly inferred is measuring a reconstruction,
+    /// and any artifact ranking it must say so. It is 0 unless
+    /// <c>Radar:Scoring:InferLegacyCollectorAttribution</c> is enabled.
+    /// </param>
+    /// <param name="UnattributedSignals">
+    /// How many sit on evidence with no establishable collector. <b>Stated plainly because it is weaker than
+    /// it looks: for a COLLECTOR channel this is structurally 0</b> — <c>ScoringChannel.Consumes</c> is false
+    /// for a null collector name, so an unattributed signal can never be one of that channel's consumed
+    /// signals. It is meaningful only for the BREADTH channel, which consumes on reach rather than on
+    /// provenance and therefore does count unattributed signals. The window-wide unattributed fraction is not
+    /// a per-channel fact and is deliberately not reported here.
+    /// </param>
     private sealed record ChannelBreakdown(
         string Name,
         string Kind,
@@ -476,7 +557,10 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
         bool Dark,
         IReadOnlyList<string> Collectors,
         IReadOnlyList<string> CollectorsRan,
-        IReadOnlyList<string> CollectorsNotRun);
+        IReadOnlyList<string> CollectorsNotRun,
+        int RecordedSignals,
+        int InferredSignals,
+        int UnattributedSignals);
 
     /// <summary>
     /// The <c>ComponentJson</c> shape. The first five properties are <see cref="ScoreComponents"/>' exactly,

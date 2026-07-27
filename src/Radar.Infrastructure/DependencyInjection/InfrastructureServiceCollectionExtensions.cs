@@ -22,6 +22,7 @@ using Radar.Application.Signals;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.Attention;
+using Radar.Infrastructure.Collectors;
 using Radar.Infrastructure.Fda;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.FileSystem;
@@ -120,6 +121,14 @@ public static class InfrastructureServiceCollectionExtensions
         // The default (Collected) keeps every existing composition's provenance string byte-identical; the
         // Worker registers NoCollectionThisPass for the standalone score pass only.
         services.TryAddSingleton(new CollectionPassOptions());
+        // Collector-attribution policy (spec 151): how scoring establishes WHICH collector retrieved a piece
+        // of evidence. The default pair — inference OFF plus the recorded-only resolver — is behaviourally
+        // identical to the pre-151 inline metadata read, so a composition that never mentions either type
+        // scores byte-identically and records a byte-identical provenance string. The Worker registers the
+        // config-bound pair BEFORE this method (AddRadarCollectorAttribution), which then wins over both
+        // TryAdds.
+        services.TryAddSingleton(new CollectorAttributionOptions());
+        services.TryAddSingleton<ICollectorAttributionResolver>(RecordedOnlyCollectorAttributionResolver.Instance);
         // Signal-source descriptor (spec 95, split by spec 141): folds the extractor rule-set identity into
         // the ScoringConfigVersion fingerprint and exposes the enabled collector NAMES separately as
         // CollectionProvenance — recorded on every snapshot, hashed into nothing, so a collector toggle no
@@ -133,7 +142,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton<ISignalSourceDescriptor>(sp => new SignalSourceDescriptor(
             sp.GetRequiredService<EnabledCollectorVocabulary>(),
             sp.GetService<IDirectionalFilingSignalSource>(),
-            sp.GetRequiredService<CollectionPassOptions>()));
+            sp.GetRequiredService<CollectionPassOptions>(),
+            sp.GetRequiredService<CollectorAttributionOptions>()));
         // Multi-strategy scoring (spec 137). One ScoringEngine instance IS one strategy (it resolves its whole
         // effective config + fingerprint once in its constructor), so plural strategies are purely a
         // COMPOSITION concern: the factory builds one engine per strategy over the SAME shared collection
@@ -864,6 +874,60 @@ public static class InfrastructureServiceCollectionExtensions
         options.Validate();
 
         services.AddSingleton(options);
+        return services;
+    }
+
+    /// <summary>
+    /// Resolves the collector-attribution policy (spec 151) and registers BOTH the
+    /// <see cref="CollectorAttributionOptions"/> and the matching
+    /// <see cref="ICollectorAttributionResolver"/> as singletons, so they win over the library's
+    /// <c>TryAddSingleton</c> defaults (call this BEFORE <see cref="AddRadarApplicationServices"/>, mirroring
+    /// <see cref="AddRadarScoringWeights"/>). Registering the pair together — here, in the one place that
+    /// reads the setting — is what keeps the BEHAVIOUR (does this process infer?) and the RECORDED PROVENANCE
+    /// (does the snapshot say so?) from ever disagreeing.
+    /// <para>
+    /// <c>Radar:Scoring:InferLegacyCollectorAttribution</c>, a bool, <b>default false</b>. Absent or blank ⇒
+    /// false ⇒ the recorded-only resolver, i.e. byte-identical scoring, provenance and fingerprints to
+    /// pre-151. A value that is present but not parseable as a bool FAILS FAST rather than defaulting: this
+    /// setting decides whether ~94.7% of the accrued evidence store is visible to a <c>radar-formula-v9</c>
+    /// collector channel, and silently reading <c>"yes"</c> as "off" would produce a full series of near-zero
+    /// scores that look like data.
+    /// </para>
+    /// <para>
+    /// ⚠ Enabling this is a research affordance for the accrued backfill gap, NOT a permanent operating mode —
+    /// see the warning on <see cref="CollectorAttributionOptions.InferLegacyAttribution"/>. Forward collection
+    /// keeps recording the real collector either way; the inference is consulted only where nothing was
+    /// recorded.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarCollectorAttribution(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        const string key = "Radar:Scoring:InferLegacyCollectorAttribution";
+        var raw = configuration[key];
+
+        bool infer;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            infer = false;
+        }
+        else if (!bool.TryParse(raw.Trim(), out infer))
+        {
+            throw new InvalidOperationException(
+                $"{key} must be 'true' or 'false' (it was '{raw}'). It decides whether scoring re-derives the "
+                    + "collector for evidence collected before that provenance was recorded; an unparseable "
+                    + "value must not silently read as 'false', because that would score every "
+                    + "radar-formula-v9 collector channel against a near-empty attributed set and produce a "
+                    + "series that looks like data.");
+        }
+
+        services.AddSingleton(new CollectorAttributionOptions { InferLegacyAttribution = infer });
+        services.AddSingleton<ICollectorAttributionResolver>(infer
+            ? new InferringCollectorAttributionResolver()
+            : RecordedOnlyCollectorAttributionResolver.Instance);
+
         return services;
     }
 

@@ -857,6 +857,65 @@ Do not hand back broken code.
     comparison rendering (spec 150 — deliberately after this one, since comparing across a formula that
     ignores notedness would compare the wrong thing), and auto-tuning weights against price (humans declare;
     spec 140 judges; price is never an input, AD-14).
+- **Collector attribution is RECOVERABLE for legacy evidence, opt-in, and never mistakable for a recorded fact
+  (spec 151).** Spec 146 began recording the producing collector on evidence; **6,047 of 6,388 accrued raw
+  files (94.7 %) predate it**, so replaying a v9 collector-channel strategy over the accrued window scored
+  every channel against ~5 % attribution — worse than no series, because it would populate spec 140's
+  leaderboard with numbers measuring the missing attribution. The attribution was deterministic at collection
+  time and simply was not persisted, so re-deriving it is *recovery*, not fabrication — but it is still an
+  inference. Rules:
+  - **`ICollectorAttributionResolver` is the ONE seam.** `RadarScoreFormulaV9` no longer reads the metadata key
+    inline; it asks the resolver and keeps the whole `CollectorAttribution`
+    (`{ string? CollectorName, CollectorAttributionSource Source }`, `Unattributed`/`Recorded`/`Inferred`).
+    **Inferred ≠ recorded STRUCTURALLY, not by convention**: the invariant "`CollectorName` is non-null iff
+    `Source != Unattributed`" is enforced by private-ctor factories, and `Unattributed = 0` so even
+    `default(CollectorAttribution)` satisfies it. `ScoringChannel.Consumes` is unchanged (exact ordinal match,
+    false for null) — **what a v9 channel MEANS is untouched**; only which signals carry a name changes.
+  - **Default OFF, and the default is the compatibility proof.** `Radar:Scoring:InferLegacyCollectorAttribution`
+    (bool, default `false`) → `RecordedOnlyCollectorAttributionResolver`, which is *behaviourally identical* to
+    the pre-151 inline read. So scoring output, provenance strings and every fingerprint are byte-identical,
+    `replay ⊆ forward` is untouched, and no already-produced score can move. An unparseable value **fails
+    fast** (reading `"yes"` as off would emit a full near-zero series that looks like data).
+  - **The table lives in Infrastructure and reuses the spec-147 vocabulary.**
+    `LegacyCollectorAttributionInference` keys on `EvidenceSourceType` + each collector's **own exclusive
+    metadata marker key**, now a `MetadataMarkerKey` const on the collector itself and *referenced* by the
+    table (and `RadarCollectorNames.*` for the names) — so neither can drift. **The marker rule is not the
+    obvious rule and that matters**: `sourceType ⇒ newssearch` would have MISATTRIBUTED the 5 live GDELT
+    records (both emit `NewsArticle`); `metadata.secFeedUrl` does not discriminate (all three SEC collectors
+    write the same submissions-JSON shape); and `metadata.form` is **config-dependent** (it separates only
+    while `Radar:Sec:Forms` excludes `4`/`SC 13*`). `sec-edgar` writes no exclusive key, so it is the ONE
+    elimination rule over a **closed** three-collector `Filing` set — pinned by a test, as is "every shipped
+    collector is covered".
+  - **Recorded ALWAYS wins; ambiguity stays unattributed.** Not "when they agree" — always, which is what makes
+    the inference strictly additive over the attributed cohort. Two contradictory markers, an unknown source
+    type, or no marker with no elimination rule ⇒ `Unattributed`. Radar never guesses.
+  - **Validated vs merely REASONED, stated because the split is uncomfortable.** Against the 341 records that
+    do carry recorded attribution, ignoring their recorded value: **341/341 agree, 0 disagreements, 0 of 6,388
+    ambiguous.** But that cohort is 337 `newssearch` / 2 `sec-form4` / 2 `RssPressReleaseCollector`.
+    **`sec-edgar` (1,160), `sec-13dg` (850), `usaspending` (21), GDELT `news` (5) and the five zero-record
+    collectors are REASONED, not ground-truth validated** — and `filings-led`'s two channels are exactly
+    `sec-form4`/`sec-13dg`, so the least-validated mappings carry the experiment.
+  - **Nothing is persisted; no evidence file is rewritten; the spec's side index was considered and REJECTED.**
+    Attribution here is a pure function of `SourceType` + the metadata bag — fields already in memory on the
+    object being scored. A `contentHash`-keyed side index would be a materialized cache of that function: it
+    adds a file to keep in sync with an append-only store, a regeneration step, and a staleness mode where the
+    index silently wins. Deriving on read persists no new state, cannot drift from the store, is reversible by
+    deleting one class, and needs no backfill — satisfying AD-8/AD-1 more strongly than an index would.
+  - **Every artifact can say so.** `CollectionProvenance` gains a trailing `attribution=inferred-legacy;`
+    segment (spec 147's precedent; composes with `collection=none-this-pass;`); each v9 `ChannelBreakdown`
+    gains additive `RecordedSignals`/`InferredSignals`/`UnattributedSignals`; each affected contribution reason
+    gains `(collector attribution inferred)`. **`UnattributedSignals` is structurally 0 for a COLLECTOR
+    channel** (`Consumes(null)` is false) and informative only for the breadth channel.
+  - **No fingerprint move**: the attribution mode is hashed into **nothing** — asserted, engine-level and in
+    the composed Worker graph, that two graphs differing only in the flag stamp the SAME `ScoringConfigVersion`
+    and DIFFERENT `CollectionProvenance` with byte-identical scores. All four spec-148 pins stand;
+    `ScoringConfigFingerprintTests` and `ScoringOutputStabilityTests` are untouched.
+  - ⚠ **It must never become a silent fallback (spec §4).** Forward collection records the real collector; if
+    it ever stops, that is a defect that must surface as unattributed evidence rather than be papered over.
+    Hence opt-in, marked everywhere, and documented as a research affordance for a bounded historical gap.
+  - **Out of scope, recorded not built**: backfilling missing *evidence* (spec 142's 89.5 % unresolvable
+    cohort — a different problem, still healed forward only), auto-running the replay or promoting its output,
+    and changing what a v9 channel means.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

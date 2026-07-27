@@ -52,6 +52,14 @@ internal sealed class Sec13DGCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "sec-13dg";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "ownershipCategory";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -176,7 +184,7 @@ internal sealed class Sec13DGCollector : IEvidenceCollector
             ["form"] = filing.Form,
             ["filingDate"] = filing.FilingDate,
             // Debug/traceability only — NOT read by the extractor (direction rides the fixed phrase).
-            ["ownershipCategory"] = filing.Category.ToString(),
+            [MetadataMarkerKey] = filing.Category.ToString(),
         };
 
         return new CollectedEvidence(
