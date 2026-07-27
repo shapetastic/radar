@@ -512,17 +512,20 @@ public sealed class ReplayRunnerTests
         await first.ReplayRunner.RunAsync(CancellationToken.None);
 
         // A second process over the SAME data root, under a NEW label: both series coexist and nothing is
-        // lost, so the remedy the warning recommends demonstrably works.
+        // lost, so the remedy the warning recommends demonstrably works. The company id is carried over
+        // deliberately — the repositories are per-container, so seeding a fresh one would replay a different,
+        // signal-less subject and the "same store, new label" claim would be untested.
         using var second = ReplayTestHarness.CreateSharingRootOf(first, SinglePointPlan(D, "attempt-two"));
-        await second.SeedCompanyAsync();
+        await second.SeedCompanyAsync(id: companyId);
         await second.SeedSignalAsync(companyId, SignalType.CustomerWin, D.AddDays(-4), D.AddDays(-4));
 
         await second.ReplayRunner.RunAsync(CancellationToken.None);
 
         Assert.Empty(OverwriteWarnings(second));
-        var files = ReplayTestHarness.FilesUnder(first.ReplaysDirectory);
-        Assert.Contains(files, f => f.StartsWith("attempt-one/", StringComparison.Ordinal));
-        Assert.Contains(files, f => f.StartsWith("attempt-two/", StringComparison.Ordinal));
+        var primaryName = second.LiveStrategies.Primary.Definition.Name;
+        // The SAME subject company now has a series under BOTH labels — the earlier one still intact.
+        Assert.Single(ReadReplayedSnapshots(first, "attempt-one", primaryName, companyId));
+        Assert.Single(ReadReplayedSnapshots(second, "attempt-two", primaryName, companyId));
     }
 
     /// <summary>The aggregated same-label overwrite warnings the runner emitted (spec 148).</summary>

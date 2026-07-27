@@ -170,9 +170,14 @@ internal sealed class ReplayTestHarness : IDisposable
         return (signal, evidence);
     }
 
-    public async Task<Guid> SeedCompanyAsync(string ticker = "ACME")
+    /// <summary>
+    /// Seeds a company into this graph's company repository. <paramref name="id"/> lets a second harness over
+    /// a SHARED data root enrol the SAME subject company: the repositories are per-container, so a replay
+    /// there would otherwise enumerate a brand-new, signal-less company instead of replaying the same series.
+    /// </summary>
+    public async Task<Guid> SeedCompanyAsync(string ticker = "ACME", Guid? id = null)
     {
-        var company = new CompanyBuilder().WithId(Guid.NewGuid()).WithTicker(ticker).Build();
+        var company = new CompanyBuilder().WithId(id ?? Guid.NewGuid()).WithTicker(ticker).Build();
         await Companies.AddAsync(company, CancellationToken.None);
         return company.Id;
     }
