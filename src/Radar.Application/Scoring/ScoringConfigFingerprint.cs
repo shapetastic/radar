@@ -16,8 +16,9 @@ namespace Radar.Application.Scoring;
 /// amended). The canonical string uses a FIXED, explicit field ordering (never reflection order, which is
 /// unstable across runtimes) and culture-invariant round-trip number formatting (AD-3), then hashes with the
 /// shared EvidenceNormalizer idiom (<c>Convert.ToHexStringLower(SHA256.HashData(...))</c>). Any
-/// output-affecting change (formula shape, any weight, the tier map, the window length) changes the
-/// fingerprint automatically. Pure and deterministic — no clock, IO, or randomness.
+/// output-affecting change (formula shape <b>as expressed by the formula's version token</b>, any weight, the
+/// tier map, the window length) changes the fingerprint automatically. Pure and deterministic — no clock, IO,
+/// or randomness.
 /// <para>
 /// Spec 141 narrowed the VALUE of the <c>srcDesc</c> field, not this signature: the enabled-collector set is
 /// no longer part of the signal-source descriptor handed in here (it is recorded on the snapshot as
@@ -32,6 +33,20 @@ namespace Radar.Application.Scoring;
 /// v8 Trajectory denominator, and since spec 146 the v9 channel direction factor's denominator too). Both are
 /// folded now; the pinned defaults moved once, deliberately, in that slice. The <c>window</c> is the LAST
 /// field, appended after <c>mediaCollapse</c>, following the fixed-position pattern specs 96/109 used.
+/// Spec 148 also elevated fingerprint COMPLETENESS to a first-class invariant here, backed by a reflection
+/// guard that perturbs every <see cref="ScoringWeights"/> property in turn and pins
+/// <see cref="ScoringOptions"/>' property set — so the next unfolded CONFIG knob fails the day it is added.
+/// </para>
+/// <para>
+/// ⚠ <b>SPEC 149 BREACHED THAT COMPLETENESS ON THE ONE AXIS THE GUARD CANNOT SEE: the formula's own code.</b>
+/// The <c>formula</c> field hashed here is a VERSION TOKEN, so completeness over formula shape holds only
+/// while AD-6 is honoured (a structure change earns a new <c>radar-formula-vN</c> class). Spec 149
+/// deliberately did not: it added the notedness discount to <see cref="RadarScoreFormulaV9"/>'s composition
+/// while keeping <c>radar-formula-v9</c> and the default weights, so a v9 strategy's fingerprint is unchanged
+/// across an output-affecting change and <see cref="StrategyIdentityGuard"/> stays silent. Recorded here
+/// rather than left implied, because a reader of this summary would otherwise infer a completeness that no
+/// longer holds; the remedy is a NEW strategy name, and the full reasoning is on
+/// <see cref="RadarScoreFormulaV9"/>'s AD-6 paragraph.
 /// </para>
 /// </summary>
 public static class ScoringConfigFingerprint

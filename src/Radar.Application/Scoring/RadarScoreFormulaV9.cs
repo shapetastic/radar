@@ -35,12 +35,44 @@ namespace Radar.Application.Scoring;
 /// distinct-publisher <see cref="ScoreSignalMath.AttentionReach"/>, computed across every signal surviving
 /// the strategy's <see cref="SignalTypeFilter"/> gate. Attention is inherently cross-source, so it is a
 /// strategy-level channel rather than a per-collector sub-score. <b>In v9 it is DIRECTION-CORRECT: more
-/// genuine breadth contributes MORE.</b> v8's inverse attention discount stays in v8 and is deliberately not
-/// carried over.</item>
+/// genuine breadth contributes MORE</b> — v8's per-component inverse attention discount is not carried
+/// over.</item>
 /// </list>
 /// Direction, confidence, strength, recency and quality semantics are byte-identical to v8 — they come from
 /// the shared <see cref="ScoreSignalMath"/>. Only the SET each term is computed over changes.
 /// </para>
+///
+/// <para><b>THE NOTEDNESS DISCOUNT (spec 149), applied to the COMPOSED score.</b> The composite is
+/// multiplied by <see cref="ScoreSignalMath.NotednessDiscount"/> — the same clamped
+/// <c>1 − attention·w − tierDiscount·w</c> expression <c>radar-formula-v8</c> applies, over the same
+/// <see cref="ScoringWeights"/> knobs and the same clamped-int attention component. v9 shipped with ZERO
+/// references to it, and the first live three-strategy run (2026-07-27) showed the consequence: v9 nearly
+/// inverted the v8 primary at the extremes (CAT 43rd of 43 under the v8 default, 1st under a v9 strategy),
+/// because a formula that ranks on raw channel activity is largely ranking on SIZE — close to the inverse of
+/// Radar's purpose. It is applied ONCE, to the composite, not per channel: notedness is a property of the
+/// COMPANY, not of a source. Note that attention now enters v9 twice with opposite signs and different
+/// meanings — as budgetable breadth a strategy earns share for, and as the fame that damps whatever it found.
+/// Setting <see cref="ScoringWeights.OpportunityAttentionDiscountWeight"/> and
+/// <see cref="ScoringWeights.FollowingTierDiscountWeight"/> to 0 (conveniently, inline under
+/// <c>Radar:Strategies[i].Weights</c>) makes the discount exactly 1.0 and reproduces pre-149 v9
+/// bit-for-bit — components, explanation and contributions — <b>except <c>ComponentJson</c>, which gains the
+/// one additive <c>Discount</c> property, recorded unconditionally (see the <c>ComponentJson</c> note
+/// below)</b>.</para>
+///
+/// <para>⚠ <b>AD-6, answered explicitly because the honest answer is uncomfortable.</b> Adding a
+/// multiplicative discount changes v9's COMPOSITION, not merely its inputs: at the DEFAULT weights a v9
+/// strategy scores differently after spec 149 than before it. Under a strict reading of AD-6 that is a
+/// structure change and would earn a <c>radar-formula-v10</c>. Spec 149 put v10 out of scope, so the version
+/// stays <c>radar-formula-v9</c> — and the consequence must be stated rather than buried: the default
+/// <see cref="ScoringWeights"/> did not change either, so <b>a v9 strategy's <c>ScoringConfigVersion</c> does
+/// NOT move even though its behaviour did</b>. v9 snapshots written before and after this slice are therefore
+/// falsely comparable, and <c>StrategyIdentityGuard</c> will not trip on the difference. That is precisely the
+/// failure mode spec 148 exists to prevent, accepted here on the strength of the mitigating facts: v9 is
+/// opt-in, shipped days earlier, and has exactly ONE live run of history. Anyone who cares about the
+/// discontinuity should apply spec 141's immutable-by-convention rule and give the retuned strategy a NEW
+/// NAME (<c>patents-led</c> → <c>patents-led-v2</c>), which re-keys the series via <c>ScoreSeriesKey</c>
+/// without needing the stamp to move. A future structural change to v9 should bump to
+/// <c>radar-formula-v10</c> instead of repeating this.</para>
 ///
 /// <para><b>ABSENCE COSTS SOMETHING, AND THE WEIGHTS ARE NEVER RENORMALISED.</b> A channel that produced no
 /// signals scores 0 and the denominator does not shrink, so a strategy declaring three channels can only
@@ -51,14 +83,16 @@ namespace Radar.Application.Scoring;
 /// <para><b>Range reconciliation, verified rather than assumed.</b> <see cref="ScoreComponents"/>' contract
 /// is five <c>int</c>s each clamped to <c>[0,100]</c>, and v8 honours it via
 /// <see cref="ScoreSignalMath.Clamp0To100"/>. The v9 composite is a <c>double</c> in <c>[0,1]</c>, so it is
-/// mapped as <c>composite · 100</c> into <see cref="ScoreComponents.OpportunityScore"/> — the field
+/// mapped as <c>composite · notednessDiscount · 100</c> into
+/// <see cref="ScoreComponents.OpportunityScore"/> — the discount is itself in <c>(0,1]</c>, so the product
+/// stays in range — the field
 /// <c>WeeklyReportBuilder</c> ranks by and the spec-101/108 efficacy read side consumes, i.e. the one that
 /// has to carry "this strategy's answer". The other four components keep their exact v8 meanings, computed
 /// over the strategy's gated signal set, so <c>WeeklyReportActionPolicyV1</c>'s Trajectory /
 /// EvidenceConfidence thresholds remain valid and the report stays legible for a v9 strategy. The unrounded
-/// composite and the full per-channel breakdown are additionally carried in <c>ComponentJson</c>, whose first
-/// five properties are still exactly <see cref="ScoreComponents"/>' so any existing reader keeps
-/// working.</para>
+/// composite, the applied notedness discount and the full per-channel breakdown are additionally carried in
+/// <c>ComponentJson</c>, whose first five properties are still exactly <see cref="ScoreComponents"/>' so any
+/// existing reader keeps working.</para>
 ///
 /// <para><b>"Ran and found nothing" vs "did not run" — weaker than it looks, stated plainly (spec 147).</b>
 /// A channel scores 0 whether its source was down or genuinely quiet — Radar scores evidence, and absence of
@@ -299,10 +333,29 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
             signalVelocityScore = ScoreSignalMath.Clamp0To100(_weights.VelocitySteady * ratio);
         }
 
+        // ---- The notedness discount (spec 149) ----
+        // Applied to the COMPOSED channel score, never per channel: notedness is a property of the COMPANY
+        // ("how much of this is already priced into everyone's attention"), not of a source, so discounting
+        // each channel separately would apply it once per channel and confuse a source's reach with the
+        // company's fame. The same clamped expression v8 uses, over the same ScoringWeights knobs, fed the
+        // same clamped-int attentionScore — see ScoreSignalMath.NotednessDiscount.
+        //
+        // NOTE the remaining, deliberate asymmetry with v8: breadth still earns its own POSITIVE channel share
+        // here (v8's inverse per-component attention discount is not carried over). Attention therefore enters
+        // v9 twice with opposite signs and different meanings — as genuine reach a strategy can budget for,
+        // and as the notedness that damps whatever it found — which is the whole point: a widely-covered
+        // company is easy to find evidence about and correspondingly less interesting to surface.
+        //
+        // At OpportunityAttentionDiscountWeight = 0 AND FollowingTierDiscountWeight = 0 the discount is
+        // EXACTLY 1.0, and multiplying by exactly 1.0 is the IEEE-754 identity — so a strategy opts out
+        // bit-for-bit, reproducing pre-149 v9 output. That is the compatibility proof, asserted in
+        // RadarScoreFormulaV9Tests.
+        var notednessDiscount = ScoreSignalMath.NotednessDiscount(
+            _weights, attentionScore, input.FollowingTier);
+
         // The composite IS this strategy's answer, so it lands in OpportunityScore — see the range
-        // reconciliation in the class remarks. NOTE the deliberate asymmetry with v8: v9's Opportunity is NOT
-        // discounted by attention (that inversion stays in v8); breadth earns its share positively instead.
-        var opportunityScore = ScoreSignalMath.Clamp0To100(100.0 * composite);
+        // reconciliation in the class remarks.
+        var opportunityScore = ScoreSignalMath.Clamp0To100(100.0 * composite * notednessDiscount);
 
         var components = new ScoreComponents(
             TrajectoryScore: trajectoryScore,
@@ -341,15 +394,28 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
             ", ",
             breakdown.Select(c =>
                 $"{c.Name} {c.Score:0.000}×{c.Weight:0.00}{(c.Dark ? " (dark)" : string.Empty)}"));
+        // The discount is named in the explanation ONLY when it actually moved the number (spec 149). Two
+        // reasons, and they point the same way. (1) Honesty: "Opportunity 33 (composite 0.412 = …)" reads as
+        // an arithmetic error unless the transform between the two is stated, and a score Radar cannot explain
+        // is not a score. (2) Compatibility: an inert discount is exactly 1.0, so omitting it then is not a
+        // hidden term — it is the true statement that Opportunity IS composite·100 — and it keeps a strategy
+        // that opted out (both discount weights 0) byte-identical to pre-149 v9, explanation included.
+        var notednessSummary = notednessDiscount == 1.0
+            ? string.Empty
+            : $"; × notedness {notednessDiscount:0.000}";
         var explanation =
             $"{ScoreFormulaVersions.V9}: {signals.Count} signal(s) over {windowDays}d across "
                 + $"{breakdown.Count} channel(s) → Opportunity {opportunityScore} (composite {composite:0.000} = "
-                + $"{channelSummary}); Trajectory {trajectoryScore}, Attention {attentionScore}, "
+                + $"{channelSummary}{notednessSummary}); Trajectory {trajectoryScore}, Attention {attentionScore}, "
                 + $"Confidence {evidenceConfidenceScore}, Velocity {signalVelocityScore}.";
 
         // ComponentJson keeps ScoreComponents' five properties FIRST and by the same names, so an existing
         // reader that deserializes it as ScoreComponents is unaffected (extra properties are ignored), and
-        // adds the unrounded composite plus the per-channel breakdown that makes each share auditable.
+        // adds the unrounded composite, the spec-149 notedness discount and the per-channel breakdown that
+        // makes each share auditable. Discount is recorded UNCONDITIONALLY (unlike the explanation's
+        // conditional mention): this is the machine-readable record, and "the discount was 1.000" is a fact a
+        // later audit needs stated rather than inferred from its absence. It is the one thing about a v9
+        // snapshot's ComponentJson that spec 149 changed — see the class remarks.
         var componentJson = JsonSerializer.Serialize(new V9ComponentJson(
             TrajectoryScore: components.TrajectoryScore,
             OpportunityScore: components.OpportunityScore,
@@ -358,6 +424,7 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
             SignalVelocityScore: components.SignalVelocityScore,
             Formula: Version,
             Composite: composite,
+            Discount: notednessDiscount,
             Channels: breakdown));
 
         return new ScoreComputation(components, explanation, componentJson, contributions);
@@ -416,6 +483,16 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
     /// by name and order, so the enrichment is backward-compatible with any reader that deserializes it as
     /// <see cref="ScoreComponents"/>.
     /// </summary>
+    /// <param name="Composite">
+    /// The unrounded weighted channel sum, BEFORE <paramref name="Discount"/> is applied —
+    /// <c>OpportunityScore ≈ round(100 · Composite · Discount)</c>.
+    /// </param>
+    /// <param name="Discount">
+    /// The spec-149 notedness discount actually applied to <paramref name="Composite"/>. Recorded because it
+    /// is a multiplicative transform on the headline number and because the curated
+    /// <c>FollowingTier</c> that feeds it is not otherwise present anywhere in a v9 snapshot; without it a
+    /// reader cannot reconcile the composite with the Opportunity score. <c>1.0</c> means it was inert.
+    /// </param>
     private sealed record V9ComponentJson(
         int TrajectoryScore,
         int OpportunityScore,
@@ -424,5 +501,6 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
         int SignalVelocityScore,
         string Formula,
         double Composite,
+        double Discount,
         IReadOnlyList<ChannelBreakdown> Channels);
 }

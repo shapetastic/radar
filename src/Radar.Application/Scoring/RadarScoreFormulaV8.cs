@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Radar.Domain.Companies;
 
 namespace Radar.Application.Scoring;
 
@@ -58,6 +57,16 @@ namespace Radar.Application.Scoring;
 /// pinned <c>ScoringConfigVersion</c> fingerprints — are byte-for-byte unmoved. v8 itself is otherwise
 /// untouched and remains the default formula.
 /// </para>
+/// <para>
+/// SPEC 149 MOVED ONE MORE PIECE, ON THE SAME TERMS. The following/notedness discount — the tier lookup and
+/// the clamped <c>1 − attention·w − tierDiscount·w</c> expression — now lives in
+/// <see cref="ScoreSignalMath.NotednessDiscount"/> because <c>radar-formula-v9</c> shipped without it and had
+/// to gain it; copying would have let the two definitions of "already noticed" drift. The clamp was already a
+/// separate sub-expression in this class, so substituting the helper's return value into the Opportunity
+/// product leaves this formula's arithmetic — including its last bit — untouched. Asserted by
+/// <c>ScoringOutputStabilityTests</c>, which pins this formula's whole output and was verified against the
+/// pre-149 sources.
+/// </para>
 /// </summary>
 public sealed class RadarScoreFormulaV8 : IScoreFormula
 {
@@ -91,17 +100,6 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
 
     /// <inheritdoc />
     public string Version => ScoreFormulaVersions.V8;
-
-    // The curated-following discount magnitude for a tier (spec 117). Reads the four config-tunable
-    // ScoringWeights magnitudes; Small (and any unmapped value) falls through to the Small discount —
-    // the fail-safe "no extra discount" default.
-    private double TierDiscount(FollowingTier tier) => tier switch
-    {
-        FollowingTier.Mega  => _weights.FollowingTierDiscountMega,
-        FollowingTier.Large => _weights.FollowingTierDiscountLarge,
-        FollowingTier.Mid   => _weights.FollowingTierDiscountMid,
-        _ => _weights.FollowingTierDiscountSmall,
-    };
 
     // Clamp+round any double component to an int in [0,100], deterministic midpoint handling. The rule
     // itself lives in ScoreSignalMath so every formula clamps identically (spec 146).
@@ -193,13 +191,17 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         // The clamp's strictly-positive floor keeps this a graded lean, never a hard exclusion, and the
         // ceiling 1 means the discount can never become a bonus. At default weights a Small tier reduces
         // this to the v6 term 1 − attention/250 exactly (the clamp is inert there: 0.6 ≤ term ≤ 1).
+        //
+        // Spec 149 EXTRACTED the whole clamped expression into ScoreSignalMath.NotednessDiscount (v9 needed
+        // the same notedness, and a second copy would drift). The clamp was already a separate sub-expression
+        // here, so returning it from the helper leaves this multiplication tree — and therefore v8's last bit —
+        // exactly as it was.
         var followingDiscount =
-            1 - attentionScore / _weights.OpportunityAttentionDivisor * _weights.OpportunityAttentionDiscountWeight
-              - TierDiscount(input.FollowingTier) * _weights.FollowingTierDiscountWeight;
+            ScoreSignalMath.NotednessDiscount(_weights, attentionScore, input.FollowingTier);
         var opportunityScore = Score(
             trajectoryScore
             * (evidenceConfidenceScore / 100.0)
-            * Math.Clamp(followingDiscount, _weights.OpportunityDiscountFloor, 1.0));
+            * followingDiscount);
 
         var components = new ScoreComponents(
             TrajectoryScore: trajectoryScore,

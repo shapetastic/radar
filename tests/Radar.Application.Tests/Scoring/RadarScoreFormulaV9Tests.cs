@@ -2,6 +2,7 @@ using System.Text.Json;
 
 using Radar.Application.Collectors;
 using Radar.Application.Scoring;
+using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 using Radar.TestSupport;
@@ -676,6 +677,316 @@ public sealed class RadarScoreFormulaV9Tests
         Assert.Equal(a.SignalVelocityScore, b.SignalVelocityScore);
         // Opportunity is the one that differs: v8 discounts by attention, v9 composes the channel budget.
         Assert.NotEqual(a.OpportunityScore, b.OpportunityScore);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 149 — the notedness discount v9 shipped without
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>The spec-149 opt-out: both discount weights at 0 ⇒ the discount is exactly 1.0.</summary>
+    private static ScoringWeights OptedOutOfNotedness() => new()
+    {
+        OpportunityAttentionDiscountWeight = 0.0,
+        FollowingTierDiscountWeight = 0.0,
+    };
+
+    private static RadarScoreFormulaV9 FormulaWith(
+        ScoringWeights weights, params ScoringChannel[] channels) =>
+        new(weights, AllGenuine, ScoringChannelSet.Create(channels, "test-strategy"));
+
+    private static ScoringInput NotedInput(
+        IReadOnlyList<ScoringSignal> signals, FollowingTier tier) => new(
+        CompanyId: Guid.NewGuid(),
+        WindowStartUtc: WindowStart,
+        WindowEndUtc: WindowEnd,
+        Signals: signals,
+        PreviousSignals: Array.Empty<Signal>(),
+        FollowingTier: tier);
+
+    /// <summary>A fixture with genuine third-party breadth, so the attention term is non-zero and bites.</summary>
+    private static IReadOnlyList<ScoringSignal> NotedFixture() =>
+        Enumerable.Range(0, 6)
+            .Select(i => BuildSignal(
+                "newssearch",
+                sourceType: EvidenceSourceType.NewsArticle,
+                sourceName: $"outlet-{i}"))
+            .ToList();
+
+    [Fact]
+    public void BothDiscountWeightsZero_ReproducePre149V9_ExceptForOneAdditiveComponentJsonProperty()
+    {
+        // THE COMPATIBILITY PROOF, and the SCOPE of "byte-identical" spelled out so nobody has to guess:
+        //
+        //   IDENTICAL  — the five ScoreComponents, the explanation string, the composite, and every
+        //                contribution (id, evidence id, reason, weight).
+        //   CHANGED    — ComponentJson gains exactly ONE additive property, "Discount". That is the same
+        //                backward-compatibility argument spec 146 made when it added Formula/Composite/
+        //                Channels: the five ScoreComponents properties still come first and by name, so any
+        //                existing reader is unaffected, and the discount is provenance a v9 snapshot cannot
+        //                otherwise carry (the curated FollowingTier appears nowhere else in its output).
+        //
+        // MEASURED, NOT ASSERTED ABOUT ITSELF: this exact fixture was also run against the pre-149 sources
+        // (origin/main @ 230948f, in a throwaway worktree) and produced these components, this explanation,
+        // this contribution chain and — since pre-149 v9 has no Discount property at all — this exact
+        // ComponentJson string. So the pins below are the OLD formula's output, not a capture of the new
+        // one's.
+        var formula = FormulaWith(
+            OptedOutOfNotedness(),
+            ScoringChannel.Collector("news", ["newssearch"], 0.6, 3),
+            ScoringChannel.Breadth("attention", 0.4, 3));
+
+        // A MEGA-tier company with real breadth: the case where the discount would bite hardest if it were on.
+        var result = formula.Compute(NotedInput(NotedFixture(), FollowingTier.Mega));
+
+        using var doc = JsonDocument.Parse(result.ComponentJson);
+        Assert.Equal(1.0, doc.RootElement.GetProperty("Discount").GetDouble());
+
+        // ---- the five components (pre-149 values) ----
+        Assert.Equal(new ScoreComponents(84, 69, 67, 60, 100), result.Components);
+
+        // ---- the explanation, byte-identical: an inert discount is NOT mentioned, because Opportunity
+        //      genuinely IS composite·100 when the discount is 1.0, and saying so twice would be noise ----
+        Assert.Equal(
+            "radar-formula-v9: 6 signal(s) over 30d across 2 channel(s) → Opportunity 69 (composite 0.689 = "
+                + "attention 0.667×0.40, news 0.704×0.60); Trajectory 84, Attention 67, Confidence 60, "
+                + "Velocity 100.",
+            result.Explanation);
+        Assert.DoesNotContain("notedness", result.Explanation, StringComparison.OrdinalIgnoreCase);
+
+        // ---- ComponentJson with the ONE new property removed is byte-identical to the pre-149 shape ----
+        var node = System.Text.Json.Nodes.JsonNode.Parse(result.ComponentJson)!.AsObject();
+        Assert.True(node.Remove("Discount"));
+        Assert.Equal(
+            "{\"TrajectoryScore\":84,\"OpportunityScore\":69,\"AttentionScore\":67,"
+                + "\"EvidenceConfidenceScore\":60,\"SignalVelocityScore\":100,\"Formula\":\"radar-formula-v9\","
+                + "\"Composite\":0.6887967000867468,\"Channels\":["
+                + "{\"Name\":\"attention\",\"Kind\":\"breadth\",\"Weight\":0.4,\"Saturation\":3,"
+                + "\"Score\":0.6666666666666666,\"WeightedContribution\":0.26666666666666666,"
+                + "\"SignalCount\":6,\"Dark\":false,\"Collectors\":[],\"CollectorsRan\":[],"
+                + "\"CollectorsNotRun\":[]},"
+                + "{\"Name\":\"news\",\"Kind\":\"collector\",\"Weight\":0.6,\"Saturation\":3,"
+                + "\"Score\":0.7035500557001334,\"WeightedContribution\":0.42213003342008004,"
+                + "\"SignalCount\":6,\"Dark\":false,\"Collectors\":[\"newssearch\"],\"CollectorsRan\":[],"
+                + "\"CollectorsNotRun\":[\"newssearch\"]}]}",
+            node.ToJsonString());
+
+        // ---- and the whole contribution chain, unchanged ----
+        Assert.Equal(6, result.Contributions.Count);
+        Assert.All(
+            result.Contributions,
+            c =>
+            {
+                Assert.Equal(4, c.ContributionWeight);
+                Assert.Equal(
+                    "CustomerWin (Positive), strength 6, confidence 0.80 — channel attention + news",
+                    c.ContributionReason);
+            });
+    }
+
+    [Fact]
+    public void BothDiscountWeightsZero_LeaveOpportunityExactlyCompositeTimesOneHundred()
+    {
+        // The same opt-out stated as the invariant rather than as pinned numbers, across a spread of tiers and
+        // breadths: with the discount inert, v9's headline number is the untouched composite.
+        var formula = FormulaWith(
+            OptedOutOfNotedness(),
+            ScoringChannel.Collector("news", ["newssearch"], 0.5, 3),
+            ScoringChannel.Breadth("attention", 0.5, 3));
+
+        foreach (var tier in Enum.GetValues<FollowingTier>())
+        {
+            foreach (var publishers in new[] { 0, 1, 5, 30 })
+            {
+                var signals = Enumerable.Range(0, publishers)
+                    .Select(i => BuildSignal(
+                        "newssearch",
+                        sourceType: EvidenceSourceType.NewsArticle,
+                        sourceName: $"outlet-{i}"))
+                    .ToList();
+
+                var result = formula.Compute(NotedInput(signals, tier));
+                var composite = JsonDocument.Parse(result.ComponentJson).RootElement
+                    .GetProperty("Composite").GetDouble();
+
+                Assert.Equal(
+                    ScoreSignalMath.Clamp0To100(100.0 * composite), result.Components.OpportunityScore);
+            }
+        }
+    }
+
+    [Fact]
+    public void AtDefaultWeights_AMoreFollowedCompany_ScoresLowerOnIdenticalEvidence()
+    {
+        // THE POINT OF SPEC 149. v9 shipped ranking on raw channel activity — largely a size proxy, close to
+        // the inverse of Radar's purpose (surface companies BEFORE the market notices). With the discount in
+        // place, identical evidence about a mega-cap is worth less than the same evidence about a small-cap.
+        var formula = FormulaWith(
+            new ScoringWeights(),
+            ScoringChannel.Collector("news", ["newssearch"], 0.6, 3),
+            ScoringChannel.Breadth("attention", 0.4, 3));
+
+        var signals = NotedFixture();
+
+        var small = formula.Compute(NotedInput(signals, FollowingTier.Small));
+        var mid = formula.Compute(NotedInput(signals, FollowingTier.Mid));
+        var mega = formula.Compute(NotedInput(signals, FollowingTier.Mega));
+
+        Assert.True(
+            small.Components.OpportunityScore > mid.Components.OpportunityScore,
+            $"small {small.Components.OpportunityScore} must exceed mid {mid.Components.OpportunityScore}");
+        Assert.True(
+            mid.Components.OpportunityScore > mega.Components.OpportunityScore,
+            $"mid {mid.Components.OpportunityScore} must exceed mega {mega.Components.OpportunityScore}");
+
+        // The channels themselves are untouched — only the composed answer is damped, which is what "applied
+        // to the composite, not per channel" means.
+        Assert.Equal(
+            Breakdown(small, "news").GetProperty("Score").GetDouble(),
+            Breakdown(mega, "news").GetProperty("Score").GetDouble());
+        Assert.Equal(
+            JsonDocument.Parse(small.ComponentJson).RootElement.GetProperty("Composite").GetDouble(),
+            JsonDocument.Parse(mega.ComponentJson).RootElement.GetProperty("Composite").GetDouble());
+    }
+
+    [Fact]
+    public void TheDiscount_IsAppliedOnceToTheComposite_NotPerChannel()
+    {
+        // Notedness is a property of the COMPANY, not of a source. Applying it per channel would compound it
+        // with the number of channels a strategy happens to declare, which would make two equally-noticed
+        // companies score differently for a reason that has nothing to do with notedness.
+        var weights = new ScoringWeights();
+        var formula = FormulaWith(
+            weights,
+            ScoringChannel.Collector("news", ["newssearch"], 0.3, 3),
+            ScoringChannel.Collector("filings", ["sec-edgar"], 0.3, 3),
+            ScoringChannel.Breadth("attention", 0.4, 3));
+
+        var signals = NotedFixture().Append(BuildSignal("sec-edgar")).ToList();
+        var result = formula.Compute(NotedInput(signals, FollowingTier.Large));
+
+        using var doc = JsonDocument.Parse(result.ComponentJson);
+        var composite = doc.RootElement.GetProperty("Composite").GetDouble();
+        var discount = doc.RootElement.GetProperty("Discount").GetDouble();
+
+        // Exactly one application: Opportunity = round(100 · composite · discount).
+        Assert.Equal(
+            ScoreSignalMath.Clamp0To100(100.0 * composite * discount), result.Components.OpportunityScore);
+        // …and the recorded discount is the SHARED primitive's answer over the clamped-int attention
+        // component, so v8 and v9 cannot drift on what notedness means.
+        Assert.Equal(
+            ScoreSignalMath.NotednessDiscount(
+                weights, result.Components.AttentionScore, FollowingTier.Large),
+            discount);
+
+        // Each channel's own WeightedContribution still sums to the UNdiscounted composite: the discount is
+        // not smuggled into the per-channel provenance.
+        var summed = doc.RootElement.GetProperty("Channels").EnumerateArray()
+            .Sum(c => c.GetProperty("WeightedContribution").GetDouble());
+        Assert.Equal(summed, composite, 12);
+    }
+
+    [Fact]
+    public void V8AndV9_ApplyTheSameNotednessDiscount_OverTheSameKnobs()
+    {
+        // The extraction's whole purpose: the two formulas differ in COMPOSITION (where the discount lands),
+        // never in what notedness MEANS. Same weights, same signals, same tier ⇒ the same discount factor,
+        // recoverable from each formula's own output.
+        var weights = new ScoringWeights();
+        var v8 = new RadarScoreFormulaV8(weights, AllGenuine);
+        var v9 = FormulaWith(
+            weights,
+            ScoringChannel.Collector("news", ["newssearch"], 0.5, 3),
+            ScoringChannel.Breadth("attention", 0.5, 3));
+
+        var input = NotedInput(NotedFixture(), FollowingTier.Mid);
+
+        var a = v8.Compute(input);
+        var b = v9.Compute(input);
+
+        var expected = ScoreSignalMath.NotednessDiscount(
+            weights, a.Components.AttentionScore, FollowingTier.Mid);
+
+        // v9 records it directly…
+        Assert.Equal(
+            expected, JsonDocument.Parse(b.ComponentJson).RootElement.GetProperty("Discount").GetDouble());
+        // …and v8's Opportunity is its Trajectory · (Confidence/100) · that same factor.
+        Assert.Equal(
+            ScoreSignalMath.Clamp0To100(
+                a.Components.TrajectoryScore * (a.Components.EvidenceConfidenceScore / 100.0) * expected),
+            a.Components.OpportunityScore);
+        // Same attention reading on both sides — the discount's measured input is one number, not two.
+        Assert.Equal(a.Components.AttentionScore, b.Components.AttentionScore);
+    }
+
+    [Fact]
+    public void Explanation_NamesTheDiscount_OnlyWhenItActuallyMovedTheNumber()
+    {
+        // Conditional by design (spec 149). "Opportunity 33 (composite 0.412 = …)" without the transform
+        // between them reads as an arithmetic error, and a score Radar cannot explain is not a score — so when
+        // the discount bites it is stated. When it is exactly 1.0 the equation Opportunity = composite·100 is
+        // literally true, so mentioning it would add noise and break the opt-out's byte-identity.
+        var channels = new[]
+        {
+            ScoringChannel.Collector("news", ["newssearch"], 0.6, 3),
+            ScoringChannel.Breadth("attention", 0.4, 3),
+        };
+
+        var discounted = FormulaWith(new ScoringWeights(), channels)
+            .Compute(NotedInput(NotedFixture(), FollowingTier.Mega));
+        var undiscounted = FormulaWith(OptedOutOfNotedness(), channels)
+            .Compute(NotedInput(NotedFixture(), FollowingTier.Mega));
+
+        Assert.Contains("× notedness 0.", discounted.Explanation, StringComparison.Ordinal);
+        Assert.DoesNotContain("notedness", undiscounted.Explanation, StringComparison.Ordinal);
+
+        // A Small-tier company with NO measured attention also has an inert discount, so it too is unmentioned
+        // — the rule is "mention it iff it moved the number", not "iff the weights are non-zero".
+        var quiet = FormulaWith(new ScoringWeights(), channels)
+            .Compute(NotedInput([BuildSignal("newssearch")], FollowingTier.Small));
+        Assert.Equal(
+            1.0, JsonDocument.Parse(quiet.ComponentJson).RootElement.GetProperty("Discount").GetDouble());
+        Assert.DoesNotContain("notedness", quiet.Explanation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheDiscount_NeverZeroesAScore_AndNeverBecomesABonus()
+    {
+        // It is a graded LEAN: even a maximally-noticed, maximally-followed company keeps a positive share of
+        // whatever its channels earned (the strictly-positive floor), and an unnoticed one is never boosted
+        // above its composite.
+        var harsh = new ScoringWeights
+        {
+            OpportunityAttentionDiscountWeight = 5.0,
+            FollowingTierDiscountWeight = 5.0,
+        };
+        var formula = FormulaWith(harsh, ScoringChannel.Breadth("attention", 1.0, 3));
+
+        var loud = formula.Compute(NotedInput(
+            Enumerable.Range(0, 60)
+                .Select(i => BuildSignal(
+                    "newssearch", sourceType: EvidenceSourceType.NewsArticle, sourceName: $"outlet-{i}"))
+                .ToList(),
+            FollowingTier.Mega));
+
+        using var doc = JsonDocument.Parse(loud.ComponentJson);
+        Assert.Equal(harsh.OpportunityDiscountFloor, doc.RootElement.GetProperty("Discount").GetDouble());
+        Assert.True(loud.Components.OpportunityScore > 0, "a graded lean must never zero a score outright");
+
+        var quiet = formula.Compute(NotedInput([BuildSignal("newssearch")], FollowingTier.Small));
+        Assert.Equal(1.0, JsonDocument.Parse(quiet.ComponentJson).RootElement
+            .GetProperty("Discount").GetDouble());
+    }
+
+    [Fact]
+    public void ComponentJson_StillDeserializesAsScoreComponents_WithTheDiscountAdded()
+    {
+        // The spec-146 backward-compatibility contract, re-asserted with the new property present: the five
+        // ScoreComponents properties still come first and by name, so an existing reader is unaffected.
+        var formula = FormulaWith(new ScoringWeights(), ScoringChannel.Breadth("attention", 1.0, 3));
+
+        var result = formula.Compute(NotedInput(NotedFixture(), FollowingTier.Mega));
+
+        Assert.Equal(result.Components, JsonSerializer.Deserialize<ScoreComponents>(result.ComponentJson));
     }
 
     [Fact]

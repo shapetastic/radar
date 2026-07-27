@@ -37,10 +37,20 @@ namespace Radar.Application.Scoring;
 /// (<see cref="MediaAttentionCollapse.CanonicalDescriptor"/> — the same-event media-attention collapse
 /// structure + window, spec 109) plus the recent-signal WINDOW length
 /// (<see cref="ScoringOptions.Window"/>, spec 148), computed once via
-/// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape,
-/// any weight, the tier map, an insider materiality tier, the media-collapse window, the scoring window)
-/// re-stamps automatically. <c>ScoringVersion</c> (structure identity,
-/// <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
+/// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape
+/// <b>as expressed by <c>_formula.Version</c></b>, any weight, the tier map, an insider materiality tier, the
+/// media-collapse window, the scoring window) re-stamps automatically. <c>ScoringVersion</c> (structure
+/// identity, <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
+/// </para>
+/// <para>
+/// ⚠ <b>THE "formula shape" TERM IS EXACTLY AS STRONG AS AD-6 COMPLIANCE, and spec 149 is the shipped
+/// exception.</b> This engine hashes the formula's VERSION TOKEN, not its code, so a formula edited in place
+/// without a <c>radar-formula-vN</c> bump re-stamps nothing. Spec 149 did that deliberately: it added the
+/// notedness discount to <see cref="RadarScoreFormulaV9"/>'s composition while leaving the version at
+/// <c>radar-formula-v9</c> and the default <see cref="ScoringWeights"/> untouched, so a v9 strategy's
+/// <c>ScoringConfigVersion</c> does NOT move even though its output did — and
+/// <see cref="StrategyIdentityGuard"/> does not trip. The remedy is a NEW strategy name; see the AD-6
+/// paragraph on <see cref="RadarScoreFormulaV9"/>.
 /// </para>
 /// <para>
 /// COLLECTION PROVENANCE IS RECORDED, NOT HASHED (spec 141). The enabled-collector set is no longer a

@@ -443,7 +443,10 @@ Do not hand back broken code.
     retrieved, `saturation = activity/(activity+S_c)`, and `directionFactor = (1+preponderance)/2` (no
     directional mass ⇒ exactly 0.5). Breadth channel: `reach/(reach+S_c)` over the tier-weighted
     distinct-publisher reach across the whole gated set — **direction-correct in v9: more genuine breadth
-    contributes MORE.** v8's inverse attention discount stays in v8; it is deliberately not carried over.
+    contributes MORE.** v8's inverse *per-component* attention discount stays in v8 and is deliberately not
+    carried over. ⚠ **AMENDED BY SPEC 149**: dropping the discount ENTIRELY was the over-correction — v9 now
+    applies the shared notedness discount once, to the COMPOSED score, so attention enters v9 twice with
+    opposite signs (positive budgetable breadth; negative company-level fame). See the spec-149 bullet.
     **Per-channel saturation is mandatory** (RSS emits constantly, Form 4 rarely; a shared saturation pins the
     chatty channel at 1.0 and makes the weights decorative).
   - **Reuse, not copy**: v8's per-signal machinery (recency, direction sign, quality weight, directional
@@ -490,9 +493,10 @@ Do not hand back broken code.
   - **Out of scope, recorded not built**: replacing/deleting v8, migrating existing strategies onto v9,
     auto-tuning weights to price, per-channel collector *scheduling*, and strategy-vs-price comparison (140).
     Price is never an input (AD-14).
-  - **Known pre-existing gap, deliberately NOT fixed here**: `ScoringWeights.TrajectoryCorroborationK` is not
-    a `ScoringConfigFingerprint` field, so tuning it re-stamps nothing — for v8 *and* now for v9's channel
-    direction factor. Adding it would move both pinned fingerprints, which this slice is required not to do.
+  - ~~**Known pre-existing gap, deliberately NOT fixed here**: `ScoringWeights.TrajectoryCorroborationK` is
+    not a `ScoringConfigFingerprint` field, so tuning it re-stamps nothing — for v8 *and* now for v9's channel
+    direction factor.~~ — **FIXED by spec 148**, which folded it (and the scoring window) in and moved both
+    pins deliberately. See the spec-148 bullet.
 - **Collection and scoring are two independently invokable passes; there is still ONE scoring code path
   (spec 144).** `Radar:RunMode` ∈ `full` (default) | `collect` | `score` | `replay`, case-insensitive, unknown
   ⇒ fail fast listing the valid tokens. **`full` is byte-for-byte the pre-144 combined run** — same stage
@@ -772,6 +776,87 @@ Do not hand back broken code.
   - **Read-only: no scoring change, no new fingerprint input, no pin move.** `ScoringConfigVersion` is
     DISPLAYED (from `runtime.Engine.EffectiveConfig`), never computed here; nothing under `Scoring/` or
     `Domain/` was touched.
+- **v9 got the notedness discount it never had, and a strategy can now be tuned INLINE (spec 149).** Found by
+  running it: the first live 3-strategy run (2026-07-27) had the two v9 strategies nearly *inverting* the v8
+  primary at the extremes (CAT 43rd of 43 under `default`, **1st** under `filings-led`), because
+  `RadarScoreFormulaV8` referenced the following-tier/notedness discount in 13 places and
+  `RadarScoreFormulaV9` in **zero** — so a v9 strategy ranked on raw channel activity, largely a size proxy
+  and close to the inverse of Radar's purpose. A gap in spec 146, not a defect in it. Rules:
+  - **One definition of notedness, EXTRACTED not copied.** `ScoreSignalMath.NotednessDiscount` (+
+    `TierDiscount`) now owns the clamped
+    `1 − attention/OpportunityAttentionDivisor·OpportunityAttentionDiscountWeight −
+    TierDiscount(tier)·FollowingTierDiscountWeight` expression, and **both** formulas route through it, over
+    the same `ScoringWeights` knobs and the same clamped-int `AttentionScore`. The two formulas differ in
+    **composition** — where the discount lands — never in what notedness *means*. v8's expression shape and
+    accumulation order are preserved verbatim (the clamp was already a separate sub-expression), so v8 is
+    byte-identical: `ScoringOutputStabilityTests` (spec 148) is untouched, still passes, and its fixture
+    genuinely exercises the discount.
+  - **v9 applies it ONCE, to the COMPOSED score**, `Clamp0To100(100·composite·discount)` — notedness is a
+    property of the COMPANY, not of a source, so per-channel application would compound it with however many
+    channels a strategy happens to declare. Attention consequently enters v9 **twice with opposite signs**:
+    as budgetable positive breadth (spec 146's direction correction, kept) and as the fame that damps whatever
+    was found. Per-channel `WeightedContribution`s still sum to the *undiscounted* composite — the discount is
+    not smuggled into per-channel provenance.
+  - **The opt-out is exact, and that is the compatibility proof.** With `OpportunityAttentionDiscountWeight` =
+    0 **and** `FollowingTierDiscountWeight` = 0 the discount is **exactly `1.0`** (both subtracted terms are a
+    finite value × 0; the default floor 0.05 ≤ 1), and ×1.0 is the IEEE-754 identity. Measured, not argued: the
+    pinned fixture was run against pre-149 `origin/main` @ `230948f` and reproduces its components,
+    explanation and contribution chain field-for-field.
+  - **Scope of "byte-identical", stated so it cannot be misread**: identical = the five `ScoreComponents`, the
+    explanation, the composite, every contribution. Changed = `ComponentJson` gains **one additive property,
+    `Discount`** — same backward-compatibility argument spec 146 made for `Formula`/`Composite`/`Channels`
+    (the five `ScoreComponents` properties still come first and by name). It is recorded because the discount
+    is a multiplicative transform on the headline number and the curated `FollowingTier` appears nowhere else
+    in a v9 snapshot. The **explanation names the discount only when it is ≠ 1.0** — i.e. iff it moved the
+    number: "Opportunity 33 (composite 0.412 = …)" without the transform between them reads as an arithmetic
+    error, and a score Radar cannot explain is not a score; when it is inert, `Opportunity = composite·100` is
+    literally true and mentioning it would be noise.
+  - ⚠ **AD-6, answered explicitly, and the answer is uncomfortable.** Adding a multiplicative discount changes
+    v9's COMPOSITION, not merely its inputs: **at default weights a v9 strategy scores differently after this
+    slice than before it.** Spec 149 put `radar-formula-v10` out of scope, so `_formula.Version` stays
+    `radar-formula-v9` and the default `ScoringWeights` are unchanged — therefore **a v9 strategy's
+    `ScoringConfigVersion` does NOT move even though its behaviour did**. v9 snapshots from before and after
+    are falsely comparable and `StrategyIdentityGuard` will not trip. That is precisely the failure spec 148
+    exists to prevent, accepted here only because v9 is opt-in, shipped days earlier, and has **one** live run
+    of history. The remedy for anyone who cares is spec 141's immutable-by-convention rule: give the retuned
+    strategy a NEW NAME (`patents-led` → `patents-led-v2`), which re-keys the series via `ScoreSeriesKey`
+    without the stamp having to move. **A future structural change to v9 must bump to `radar-formula-v10`
+    rather than repeat this.**
+  - **Inline per-strategy weights: `Radar:Strategies[i].Weights`, merge order defaults → named
+    `ScoringProfile` → inline, last wins.** Parsing stays in the composition root
+    (`ApplyInlineWeightOverrides`); `ScoringStrategyDefinition` needed **no** new property (it already carries
+    resolved `Weights`) and `IConfiguration` still never reaches Application. **An unknown key FAILS FAST
+    naming the strategy and the key** — `ConfigurationBinder` silently ignores unmatched keys, and a typo'd
+    override would leave a strategy stamped, scored and *ranked* as tuned while being nothing of the sort
+    (the fail-open shape spec 138 already had to close once). Key matching is **case-INSENSITIVE,
+    deliberately**: the binder matches case-insensitively, so a case-sensitive validator would reject keys
+    that bind fine and, worse, would stop answering the binder's question. `ScoringWeights.Validate()` runs on
+    the **merged** result (so a cross-field invariant like the monotone tier ordering is enforced too), a
+    scalar `"Weights": "x"` is rejected like the `SignalTypes`/`Channels` shape guards, and an omitted
+    `Weights` returns the profile's instance unchanged. A **known** key that carries no number is rejected
+    too — every `ScoringWeights` field is a plain number, so an object (`{ "Value": 0.0 }`) would be silently
+    ignored and an explicit `null` binds to **0** (measured), i.e. a silently *disabled* discount on a
+    strategy that reads as tuned. **Every** inline-`Weights` failure names the strategy, bind failures
+    included: `ConfigurationBinder`'s own message carries the *indexed* path
+    (`Radar:Strategies:3:Weights:RecencyFloor`) but no name, so a non-numeric or empty value is rethrown
+    named, with the binder exception kept as `InnerException` — same treatment as the merged-`Validate()`
+    failure, so the contract holds for the whole method rather than most of it.
+  - **Identity verified, not assumed**: resolved weights are hashed into `ScoringConfigVersion` **by value**,
+    so two strategies differing only in one inline weight get **different** fingerprints (asserted through the
+    real `AddRadarScoringStrategies` → `ScoringStrategyFactory` path) while the strategy that declared nothing
+    keeps the untouched default stamp.
+  - **NO PIN MOVE.** No `ScoringWeights` property added, no `ScoringOptions` change, no `_formula.Version`
+    bump, no `RuleSetVersion` bump. The spec-148 pins hold at every window: 30d (unit pins)
+    `0c46e07b94db`/`28226897f97b`, **60d (live baseline)** `4eb2fe5d3cdf`/**`4da4b5ff6ec9`**, 120d
+    (`-Profile long-window`) `0a7058d94582`/`81e9fab711f8` — all four recomputed on this branch.
+  - **M3 (spec 148's deferred item) was NOT done here** — v9 still holds its own copy of v8's
+    EvidenceConfidence/SignalVelocity blocks. It does not fall out of this slice naturally: those blocks are
+    multi-line accumulations whose extraction would have to preserve v8's arithmetic shape under a much larger
+    surface than a single clamped expression, and spec 149 explicitly said not to let it grow the slice.
+  - **Out of scope, recorded not built**: `radar-formula-v10`, per-strategy report tables / cross-strategy
+    comparison rendering (spec 150 — deliberately after this one, since comparing across a formula that
+    ignores notedness would compare the wrong thing), and auto-tuning weights against price (humans declare;
+    spec 140 judges; price is never an input, AD-14).
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

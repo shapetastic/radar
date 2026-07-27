@@ -1,4 +1,5 @@
 using Radar.Application.Scoring;
+using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 using Radar.TestSupport;
@@ -6,8 +7,9 @@ using Radar.TestSupport;
 namespace Radar.Application.Tests.Scoring;
 
 /// <summary>
-/// Spec 146 — the per-signal primitives EXTRACTED from <c>radar-formula-v8</c> so <c>radar-formula-v9</c>
-/// composes its channels from the same machinery instead of a second copy.
+/// Specs 146 and 149 — the primitives EXTRACTED from <c>radar-formula-v8</c> so <c>radar-formula-v9</c>
+/// composes from the same machinery instead of a second copy: spec 146 moved the per-signal terms, spec 149
+/// the notedness/following discount.
 /// <para>
 /// These are BIT-EXACTNESS guards, not behavioural tests: v8's own characterization tests already pin its
 /// output, but they round to ints, so a one-ULP change from a re-associated expression could hide there and
@@ -237,6 +239,133 @@ public sealed class ScoreSignalMathTests
         // A third-party source with no publisher name names nobody, so it adds no breadth.
         Assert.False(ScoreSignalMath.ContributesToReach(
             Build(EvidenceSourceType.NewsArticle, "  ", SignalType.CustomerWin)));
+    }
+
+    // ---- spec 149: the notedness/following discount, extracted from radar-formula-v8 -------------------
+
+    [Theory]
+    [InlineData(FollowingTier.Mega, 0.45)]
+    [InlineData(FollowingTier.Large, 0.30)]
+    [InlineData(FollowingTier.Mid, 0.15)]
+    [InlineData(FollowingTier.Small, 0.0)]
+    public void TierDiscount_ReadsTheConfiguredMagnitudeForEachTier(FollowingTier tier, double expected)
+    {
+        Assert.Equal(expected, ScoreSignalMath.TierDiscount(new ScoringWeights(), tier));
+    }
+
+    [Fact]
+    public void TierDiscount_UnmappedTier_FallsThroughToSmall_TheFailSafeNoExtraDiscount()
+    {
+        // v8's original `_ => FollowingTierDiscountSmall` arm, preserved: an unknown tier must never be
+        // discounted HARDER than the least-followed one on the strength of a value nobody mapped.
+        var weights = new ScoringWeights { FollowingTierDiscountSmall = 0.02 };
+
+        Assert.Equal(0.02, ScoreSignalMath.TierDiscount(weights, (FollowingTier)9999));
+    }
+
+    [Theory]
+    [InlineData(0, FollowingTier.Small)]
+    [InlineData(27, FollowingTier.Small)]
+    [InlineData(80, FollowingTier.Mid)]
+    [InlineData(100, FollowingTier.Mega)]
+    public void NotednessDiscount_ReproducesV8sOriginalExpression_BitForBit(
+        int attentionScore, FollowingTier tier)
+    {
+        // BIT-EXACTNESS, like every other test in this file: v8's expression written out literally, compared
+        // with Assert.Equal on doubles (no tolerance) so a re-association that moves the result by an ULP —
+        // enough to flip a midpoint Clamp0To100 rounding downstream — fails here.
+        var weights = new ScoringWeights();
+        var tierDiscount = tier switch
+        {
+            FollowingTier.Mega => weights.FollowingTierDiscountMega,
+            FollowingTier.Large => weights.FollowingTierDiscountLarge,
+            FollowingTier.Mid => weights.FollowingTierDiscountMid,
+            _ => weights.FollowingTierDiscountSmall,
+        };
+        var expected = 1 - attentionScore / weights.OpportunityAttentionDivisor * weights.OpportunityAttentionDiscountWeight
+                         - tierDiscount * weights.FollowingTierDiscountWeight;
+
+        Assert.Equal(
+            Math.Clamp(expected, weights.OpportunityDiscountFloor, 1.0),
+            ScoreSignalMath.NotednessDiscount(weights, attentionScore, tier));
+    }
+
+    [Fact]
+    public void NotednessDiscount_BothWeightsZero_IsExactlyOne_TheOptOut()
+    {
+        // THE COMPATIBILITY PROOF spec 149 rests on: at both discount weights 0 the two subtracted terms are
+        // each a finite value times zero, so the result is EXACTLY 1.0 (not 0.9999999999999999) and the
+        // default floor 0.05 leaves the clamp inert. Multiplying a score by exactly 1.0 is the IEEE-754
+        // identity, which is what lets radar-formula-v9 reproduce its pre-149 output bit-for-bit.
+        var optedOut = new ScoringWeights
+        {
+            OpportunityAttentionDiscountWeight = 0.0,
+            FollowingTierDiscountWeight = 0.0,
+        };
+
+        foreach (var tier in Enum.GetValues<FollowingTier>())
+        {
+            for (var attention = 0; attention <= 100; attention++)
+            {
+                var discount = ScoreSignalMath.NotednessDiscount(optedOut, attention, tier);
+                Assert.Equal(1.0, discount);
+                // …and the identity holds on an actual product, not just on the factor.
+                Assert.Equal(12.3456789, 12.3456789 * discount);
+            }
+        }
+    }
+
+    [Fact]
+    public void NotednessDiscount_IsAGradedLean_NeverAHardExclusion_AndNeverABonus()
+    {
+        // The floor is strictly positive by ScoringWeights.Validate, so even a maximally-noticed, maximally-
+        // followed company keeps a positive share of its score — a lean, never a filter. And the ceiling of 1
+        // means the discount can never turn into a bonus for an unnoticed one.
+        var harsh = new ScoringWeights
+        {
+            OpportunityAttentionDiscountWeight = 5.0,
+            FollowingTierDiscountWeight = 5.0,
+        };
+
+        Assert.Equal(
+            harsh.OpportunityDiscountFloor,
+            ScoreSignalMath.NotednessDiscount(harsh, 100, FollowingTier.Mega));
+        Assert.Equal(1.0, ScoreSignalMath.NotednessDiscount(harsh, 0, FollowingTier.Small));
+    }
+
+    [Fact]
+    public void NotednessDiscount_FallsMonotonically_WithAttentionAndWithTier()
+    {
+        var weights = new ScoringWeights();
+
+        // More measured attention ⇒ never a larger discount factor.
+        var previous = ScoreSignalMath.NotednessDiscount(weights, 0, FollowingTier.Small);
+        for (var attention = 1; attention <= 100; attention++)
+        {
+            var current = ScoreSignalMath.NotednessDiscount(weights, attention, FollowingTier.Small);
+            Assert.True(current <= previous, $"attention {attention}: {current} must not exceed {previous}");
+            previous = current;
+        }
+
+        // And a more-followed tier is never discounted less (the monotone ordering Validate enforces).
+        Assert.True(
+            ScoreSignalMath.NotednessDiscount(weights, 40, FollowingTier.Mega)
+                <= ScoreSignalMath.NotednessDiscount(weights, 40, FollowingTier.Large));
+        Assert.True(
+            ScoreSignalMath.NotednessDiscount(weights, 40, FollowingTier.Large)
+                <= ScoreSignalMath.NotednessDiscount(weights, 40, FollowingTier.Mid));
+        Assert.True(
+            ScoreSignalMath.NotednessDiscount(weights, 40, FollowingTier.Mid)
+                <= ScoreSignalMath.NotednessDiscount(weights, 40, FollowingTier.Small));
+    }
+
+    [Fact]
+    public void NotednessDiscount_RejectsNullWeights()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => ScoreSignalMath.NotednessDiscount(null!, 10, FollowingTier.Small));
+        Assert.Throws<ArgumentNullException>(
+            () => ScoreSignalMath.TierDiscount(null!, FollowingTier.Small));
     }
 
     private sealed class TieredWeights : IAttentionSourceWeights

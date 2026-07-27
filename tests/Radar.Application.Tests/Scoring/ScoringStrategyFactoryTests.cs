@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -171,6 +172,61 @@ public sealed class ScoringStrategyFactoryTests
         var shared = provider.GetRequiredService<ISignalSourceDescriptor>().CanonicalDescriptor();
         Assert.Equal(shared, unfiltered.SignalSourceDescriptor);
         Assert.Equal($"{shared}signalTypes=InsiderBuying;", filtered.SignalSourceDescriptor);
+    }
+
+    [Fact]
+    public void InlineWeightOverride_ReStampsOnlyThatStrategy()
+    {
+        // SPEC 149's identity criterion, VERIFIED rather than assumed. The claim being checked is that a
+        // resolved ScoringWeights value is already hashed into ScoringConfigVersion by value, so an inline
+        // Radar:Strategies[i].Weights override folds in for free — which is what stops two differently-tuned
+        // strategies sharing one score series (and, via ScoreSeriesKey, one efficacy line).
+        //
+        // The weights are BOUND FROM CONFIG through the real AddRadarScoringStrategies here, not hand-built,
+        // so this exercises the actual composition path an operator's JSON takes.
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Radar:Strategies:0:Name"] = "baseline",
+                ["Radar:Strategies:1:Name"] = "attention-light",
+                // The ONLY difference between the two strategies.
+                ["Radar:Strategies:1:Weights:OpportunityAttentionDiscountWeight"] = "0.25",
+                ["Radar:PrimaryStrategy"] = "baseline",
+            }).Build();
+
+        var bound = new ServiceCollection();
+        bound.AddRadarScoringStrategies(configuration);
+        using var boundProvider = bound.BuildServiceProvider();
+        var set = boundProvider.GetRequiredService<ScoringStrategySet>();
+
+        using var provider = BuildDefaultGraph();
+        var factory = new ScoringStrategyFactory(
+            set,
+            provider.GetRequiredService<ISignalRepository>(),
+            provider.GetRequiredService<ISignalFileStore>(),
+            provider.GetRequiredService<IEvidenceRepository>(),
+            new StrategyScopedScoreRepositoryFactory(provider.GetRequiredService<IScoreRepository>()),
+            provider.GetRequiredService<ICompanyRepository>(),
+            provider.GetRequiredService<IScoreFormulaFactory>(),
+            provider.GetRequiredService<IAttentionSourceWeights>(),
+            provider.GetRequiredService<ISignalSourceDescriptor>(),
+            provider.GetRequiredService<InsiderMaterialityWeights>(),
+            provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<ScoringOptions>(),
+            provider.GetRequiredService<ILogger<ScoringEngine>>());
+
+        var untuned = factory.Runtimes[0].Engine.EffectiveConfig;
+        var tuned = factory.Runtimes[1].Engine.EffectiveConfig;
+
+        Assert.NotEqual(untuned.Fingerprint, tuned.Fingerprint);
+        // The tuned value is RECORDED, not merely hashed — the stamp has to dereference to something.
+        Assert.Equal(0.25, tuned.Weights.OpportunityAttentionDiscountWeight);
+        // …and the strategy that declared nothing keeps the untouched default stamp: an override re-stamps
+        // its own strategy and nobody else's.
+        Assert.Equal(new ScoringWeights(), untuned.Weights);
+        Assert.Equal(
+            provider.GetRequiredService<IScoringStrategyFactory>().Primary.Engine.EffectiveConfig.Fingerprint,
+            untuned.Fingerprint);
     }
 
     [Fact]
