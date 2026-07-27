@@ -7,6 +7,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Ai;
 using Radar.Application.Collectors;
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
@@ -2016,6 +2017,73 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<EfficacyCsvRenderer>();
         services.AddSingleton<IEfficacyReportGenerator, EfficacyReportGenerator>();
         return services;
+    }
+
+    /// <summary>
+    /// Registers the opt-in <b>strategy-vs-price comparison</b> (spec 140, AD-14 read side): the pure
+    /// <see cref="StrategyComparisonHarness"/> + <see cref="StrategyLeaderboardRenderer"/> and the
+    /// <see cref="IStrategyComparisonReportGenerator"/> that composes them over each configured strategy's
+    /// persisted score series.
+    /// <para>
+    /// It reuses <see cref="AddRadarEfficacyReport"/>'s <see cref="EfficacyDatasetBuilder"/> (the SAME
+    /// no-look-ahead join, run once per strategy) and the SAME <see cref="IEfficacyArtifactStore"/>, so call
+    /// this alongside those. No second price source is registered — spec 140 forbids one, and the existing
+    /// <see cref="IPriceHistoryStore"/> is sufficient.
+    /// </para>
+    /// <para>
+    /// The score series read defaults to the LIVE forward one
+    /// (<see cref="LiveStrategyScoreSnapshotStoreSelector"/> over the registered
+    /// <see cref="IScoreSnapshotFileStoreFactory"/>). It is registered with <c>TryAdd</c>, so a caller that has
+    /// already registered <see cref="AddRadarStrategyComparisonOverReplay"/>'s replay-scoped selector keeps it.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarStrategyComparison(
+        this IServiceCollection services, StrategyComparisonOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        services.AddSingleton(options);
+        services.TryAddSingleton<IStrategyScoreSnapshotStoreSelector, LiveStrategyScoreSnapshotStoreSelector>();
+        services.AddSingleton<StrategyComparisonHarness>();
+        services.AddSingleton<StrategyLeaderboardRenderer>();
+        services.AddSingleton<IStrategyComparisonReportGenerator, StrategyComparisonReportGenerator>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the spec-140 comparison reading ONE spec-139 <b>replay</b> run's per-strategy output instead
+    /// of the live forward series (<c>Radar:Efficacy:Comparison:ReplayLabel</c>). Everything else — the join,
+    /// the harness, the renderer, the artifact store — is identical; only WHICH persisted series is read
+    /// changes.
+    /// <para>
+    /// It registers its own <see cref="IReplayScoreSnapshotFileStoreFactory"/> rooted at
+    /// <paramref name="replayRootDirectory"/> because <see cref="AddRadarReplay"/> is registered only when the
+    /// run IS a replay — and a replay run replaces the pipeline run entirely, so it never reaches the efficacy
+    /// step. Both use <c>TryAdd</c> and construct the same factory type over the same root, so a graph that
+    /// somehow had both is consistent either way.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarStrategyComparisonOverReplay(
+        this IServiceCollection services,
+        StrategyComparisonOptions options,
+        string replayRootDirectory,
+        string replayLabel)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(replayRootDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(replayLabel);
+
+        services.TryAddSingleton<IReplayScoreSnapshotFileStoreFactory>(sp =>
+            new ReplayScopedScoreSnapshotFileStoreFactory(
+                replayRootDirectory,
+                sp.GetRequiredService<ILogger<FileScoreSnapshotStore>>()));
+
+        services.TryAddSingleton<IStrategyScoreSnapshotStoreSelector>(sp =>
+            new ReplayLabelStrategyScoreSnapshotStoreSelector(
+                sp.GetRequiredService<IReplayScoreSnapshotFileStoreFactory>(),
+                replayLabel));
+
+        return services.AddRadarStrategyComparison(options);
     }
 
     /// <summary>

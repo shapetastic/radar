@@ -171,4 +171,72 @@ public sealed class EfficacyDatasetBuilderTests
             ["radar-scoring-fp-old", "radar-scoring-fp-new", "radar-scoring-fp-new"],
             one.Points.Select(p => p.ScoringConfigVersion ?? string.Empty).ToArray());
     }
+
+    [Fact]
+    public async Task BuildAsync_ExplicitStoreOverloadIsTheSameJoinAsTheInjectedOne()
+    {
+        // Spec 140 runs the join per STRATEGY by handing it that strategy's own store. There must be exactly
+        // one join implementation: the no-argument overload delegates to this one with the injected store.
+        var companyId = Guid.NewGuid();
+        var company = new CompanyBuilder().WithId(companyId).WithTicker("MRCY").Build();
+
+        var d = new DateOnly(2026, 6, 10);
+        var injected = new FakeScoreSnapshotFileStore().With(companyId, SnapshotOn(companyId, d, 42));
+        var other = new FakeScoreSnapshotFileStore().With(companyId, SnapshotOn(companyId, d, 88));
+        var prices = new FakePriceHistoryStore().With("MRCY", Bar(d, 10m));
+
+        var builder = Build(new FakeCompanyRepository(company), injected, prices);
+
+        var viaInjected = await builder.BuildAsync(CancellationToken.None);
+        var viaExplicit = await builder.BuildAsync(injected, CancellationToken.None);
+        var viaOther = await builder.BuildAsync(other, CancellationToken.None);
+
+        // Same store ⇒ identical dataset, field for field (the existing single-series read is untouched).
+        // Compared element-wise: CompanyEfficacySeries' list members use reference equality.
+        Assert.Equal(viaInjected.Count, viaExplicit.Count);
+        for (var i = 0; i < viaInjected.Count; i++)
+        {
+            Assert.Equal(viaInjected[i].CompanyId, viaExplicit[i].CompanyId);
+            Assert.Equal(viaInjected[i].CompanyName, viaExplicit[i].CompanyName);
+            Assert.Equal(viaInjected[i].Ticker, viaExplicit[i].Ticker);
+            Assert.Equal(viaInjected[i].Points, viaExplicit[i].Points);
+            Assert.Equal(viaInjected[i].PriceBars, viaExplicit[i].PriceBars);
+        }
+
+        // A different store ⇒ a different series, read through the very same join.
+        Assert.Equal(42, viaInjected.Single().Points.Single().OpportunityScore);
+        Assert.Equal(88, viaOther.Single().Points.Single().OpportunityScore);
+        Assert.Equal(viaInjected.Single().PriceBars, viaOther.Single().PriceBars);
+
+        Assert.Equal(0, injected.WriteCount);
+        Assert.Equal(0, other.WriteCount);
+    }
+
+    [Fact]
+    public async Task BuildAsync_RecordsTheWindowEndAsTheAsOfDate_DistinctFromTheRunDate()
+    {
+        // Spec 140: the forward-return anchor is WindowEndUtc, not CreatedAtUtc. On a forward run they are the
+        // same instant; on a spec-139 replay snapshot CreatedAtUtc is the replay's wall clock, so only the
+        // as-of date is a meaningful anchor.
+        var companyId = Guid.NewGuid();
+        var company = new CompanyBuilder().WithId(companyId).WithTicker("MRCY").Build();
+
+        var replayed = new ScoreSnapshotBuilder()
+            .WithCompanyId(companyId)
+            .WithWindow(
+                new DateTimeOffset(2026, 3, 2, 0, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero))
+            .WithCreatedAtUtc(new DateTimeOffset(2026, 7, 26, 9, 0, 0, TimeSpan.Zero))
+            .Build();
+
+        var builder = Build(
+            new FakeCompanyRepository(company),
+            new FakeScoreSnapshotFileStore().With(companyId, replayed),
+            new FakePriceHistoryStore());
+
+        var point = Assert.Single(Assert.Single(await builder.BuildAsync(CancellationToken.None)).Points);
+
+        Assert.Equal(new DateOnly(2026, 7, 26), point.ScoreDate);   // the run instant — unchanged behaviour
+        Assert.Equal(new DateOnly(2026, 4, 1), point.AsOfDate);     // the knowledge-window end
+    }
 }

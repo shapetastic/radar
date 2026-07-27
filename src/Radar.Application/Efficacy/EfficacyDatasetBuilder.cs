@@ -38,8 +38,26 @@ public sealed class EfficacyDatasetBuilder
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<CompanyEfficacySeries>> BuildAsync(CancellationToken ct)
+    /// <summary>
+    /// Builds the dataset over the REGISTERED score-snapshot store — the spec-101/108 forward series. Exactly
+    /// <c>BuildAsync(_scoreStore, ct)</c>; there is one join implementation, not two.
+    /// </summary>
+    public Task<IReadOnlyList<CompanyEfficacySeries>> BuildAsync(CancellationToken ct) =>
+        BuildAsync(_scoreStore, ct);
+
+    /// <summary>
+    /// Builds the dataset over an EXPLICIT score-snapshot store (spec 140), so the same deterministic
+    /// no-look-ahead join can be run per scoring strategy — the strategy-scoped stores handed out by
+    /// <c>IScoreSnapshotFileStoreFactory</c> / <c>IReplayScoreSnapshotFileStoreFactory</c> — instead of only
+    /// over the registered one. Company universe, price read and join semantics are identical; only WHICH
+    /// score series is read differs, so the primary strategy's store reproduces the existing single-series
+    /// read by construction.
+    /// </summary>
+    public async Task<IReadOnlyList<CompanyEfficacySeries>> BuildAsync(
+        IScoreSnapshotFileStore scoreStore, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(scoreStore);
+
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
         var series = new List<CompanyEfficacySeries>(companies.Count);
 
@@ -54,7 +72,7 @@ public sealed class EfficacyDatasetBuilder
                 continue;
             }
 
-            var snapshots = await _scoreStore.ReadAllForCompanyAsync(company.Id, ct).ConfigureAwait(false);
+            var snapshots = await scoreStore.ReadAllForCompanyAsync(company.Id, ct).ConfigureAwait(false);
             var history = await _priceStore.ReadAsync(ticker, ct).ConfigureAwait(false);
             var bars = history?.Bars ?? [];
 
@@ -79,7 +97,12 @@ public sealed class EfficacyDatasetBuilder
                     ScoringConfigVersion: snapshot.ScoringConfigVersion,
                     PriceAsOfDate: bar?.Date,
                     PriceClose: bar?.Close,
-                    PriceAdjClose: bar?.AdjClose));
+                    PriceAdjClose: bar?.AdjClose)
+                {
+                    // Spec 140: the knowledge-window end — the honest anchor for a forward-return horizon.
+                    // Equal to ScoreDate on a forward run; the simulated as-of on a replay snapshot.
+                    AsOfDate = DateOnly.FromDateTime(snapshot.WindowEndUtc.UtcDateTime),
+                });
             }
 
             series.Add(new CompanyEfficacySeries(

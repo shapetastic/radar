@@ -52,19 +52,8 @@ public sealed class EfficacyCsvRenderer
 
     // Minimal CSV escaping for the free-text identity fields (series key + fingerprint): quote +
     // double-embedded-quotes only when the value contains a comma, quote, or newline. Neither does today
-    // (a strategy name is a validated storage segment), but this keeps the export robust.
-    private static string Csv(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return string.Empty;
-        }
-
-        if (value.IndexOfAny([',', '"', '\n', '\r']) < 0)
-        {
-            return value;
-        }
-
-        return "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
-    }
+    // (a strategy name is a validated storage segment), but this keeps the export robust. The rule itself
+    // lives in the SHARED CsvField (spec 140 extracted it so the leaderboard export cannot drift from it) —
+    // the behaviour here is byte-identical to the inline copy it replaced.
+    private static string Csv(string? value) => CsvField.Escape(value);
 }

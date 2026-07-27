@@ -69,4 +69,39 @@ public sealed class EfficacyCsvRendererTests
 
         Assert.Equal(ExpectedHeader + "\n", csv);
     }
+
+    [Fact]
+    public void Render_IsByteUnchangedByTheSpec140AsOfDateAddition()
+    {
+        // EfficacyPoint gained a trailing AsOfDate for the strategy-comparison harness. The per-company CSV
+        // is an EXISTING artifact and must not move: no new column, and two points differing ONLY in AsOfDate
+        // must render byte-identically.
+        var point = new EfficacyPoint(
+            ScoreDate: new DateOnly(2026, 6, 12),
+            TrajectoryScore: 50,
+            OpportunityScore: 60,
+            AttentionScore: 55,
+            EvidenceConfidenceScore: 70,
+            SignalVelocityScore: 40,
+            SeriesKey: "default",
+            ScoringConfigVersion: "radar-scoring-fp-abc",
+            PriceAsOfDate: new DateOnly(2026, 6, 12),
+            PriceClose: 102.5m,
+            PriceAdjClose: 101.25m);
+
+        var renderer = new EfficacyCsvRenderer();
+
+        string Render(EfficacyPoint p) => renderer.Render(new CompanyEfficacySeries(
+            Guid.Empty, "Acme Corp", "MRCY", [p], Array.Empty<PriceBar>()));
+
+        var withoutAsOf = Render(point);
+        var withAsOf = Render(point with { AsOfDate = new DateOnly(2026, 6, 12) });
+        var withDifferentAsOf = Render(point with { AsOfDate = new DateOnly(2020, 1, 1) });
+
+        Assert.Null(point.AsOfDate);
+        Assert.Equal(withoutAsOf, withAsOf);
+        Assert.Equal(withoutAsOf, withDifferentAsOf);
+        Assert.StartsWith(ExpectedHeader + "\n", withoutAsOf, StringComparison.Ordinal);
+        Assert.Equal(2, withoutAsOf.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
 }

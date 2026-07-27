@@ -1,5 +1,6 @@
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Prices;
 using Radar.Application.Scoring;
 using Radar.Domain.Companies;
@@ -99,10 +100,40 @@ internal sealed class RecordingEfficacyArtifactStore : IEfficacyArtifactStore
 {
     public List<(string Ticker, string Svg, string Csv)> Written { get; } = [];
 
+    public List<(string Csv, string Markdown)> Leaderboards { get; } = [];
+
     public Task<EfficacyArtifactPaths> WriteAsync(
         string ticker, string svg, string csv, CancellationToken ct)
     {
         Written.Add((ticker, svg, csv));
         return Task.FromResult(new EfficacyArtifactPaths($"{ticker}.svg", $"{ticker}.csv"));
     }
+
+    public Task<StrategyLeaderboardPaths> WriteLeaderboardAsync(
+        string csv, string markdown, CancellationToken ct)
+    {
+        Leaderboards.Add((csv, markdown));
+        return Task.FromResult(new StrategyLeaderboardPaths(
+            "strategy-leaderboard.csv", "strategy-leaderboard.md"));
+    }
+}
+
+/// <summary>Hands out a caller-supplied score store per strategy NAME (case-insensitive).</summary>
+internal sealed class FakeStrategyScoreSnapshotStoreSelector : IStrategyScoreSnapshotStoreSelector
+{
+    private readonly Dictionary<string, IScoreSnapshotFileStore> _byStrategy =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public string SeriesDescription => "the test score series";
+
+    public FakeStrategyScoreSnapshotStoreSelector With(string strategyName, IScoreSnapshotFileStore store)
+    {
+        _byStrategy[strategyName] = store;
+        return this;
+    }
+
+    public IScoreSnapshotFileStore ForStrategy(ScoringStrategyDefinition strategy) =>
+        _byStrategy.TryGetValue(strategy.Name, out var store)
+            ? store
+            : new FakeScoreSnapshotFileStore();
 }

@@ -601,6 +601,66 @@ Do not hand back broken code.
   - **Out of scope, recorded not built**: spec 140's strategy-vs-price comparison (which this unblocks), the
     `ScoringWeights.TrajectoryCorroborationK` fingerprint gap (moves both pins — its own spec), and
     backfilling `CollectionProvenance` on existing snapshots (append-only, AD-8: fix forward).
+- **Strategies are RANKED against price, downstream of scoring, with the hold-out built into the harness
+  (spec 140).** The payoff of the 136–147 arc. `Radar.Application/Efficacy/Comparison/` reads each configured
+  strategy's persisted score series, relates each score to SUBSEQUENT price movement, and writes ONE leaderboard
+  pair at `data/efficacy/strategy-leaderboard.{csv,md}`. It ranks; it does not act (no auto-promotion — a human
+  decides). Rules:
+  - **The spec's premise was wrong and the correction is load-bearing: 101/108 emit NO numeric efficacy
+    metric.** `EfficacyDatasetBuilder` produces a per-company JOIN of snapshots to the price bar
+    *at-or-before* the score date (correct for a chart; a future bar there would be an artefact), rendered as
+    an SVG + CSV. There is no correlation and no aggregate number anywhere. So "reuse the 101/108 metric
+    definition" means **reuse the join and its inputs** (`ICompanyRepository` /
+    `IScoreSnapshotFileStore.ReadAllForCompanyAsync` / `IPriceHistoryStore`) — which this slice does, via a
+    single additive `BuildAsync(scoreStore, ct)` overload the existing no-arg one now delegates to, so there is
+    exactly ONE join. The forward-horizon **metric is DEFINED here**, because none existed.
+  - **`ForwardReturn` is the causality primitive and its guarantee is STRUCTURAL.** Score at D vs
+    `(D, D+h]`: entry = earliest bar strictly after D, exit = latest bar within the horizon; fewer than two
+    distinct bars, or a non-positive entry price, drops the observation **with a named reason and a count**.
+    The only place the bar list is touched is one admission filter whose predicate is `bar.Date > asOf` —
+    nothing downstream can reach a bar at or before D. This is the mirror of spec 136's hindsight leak on the
+    price side, and it is tested with **poison** at-or-before bars whose two wildly different variants must
+    produce byte-identical answers. Price = `AdjClose` (what the SVG plots), falling back to `Close` only when
+    the adjusted value is unusable.
+  - **The anchor is `WindowEndUtc`, not `CreatedAtUtc`.** `EfficacyPoint` gained a trailing, nullable
+    `AsOfDate`; the existing CSV/SVG renderers do not read it and their output is **asserted byte-unchanged**.
+    It matters because a spec-139 replay snapshot's `CreatedAtUtc` is the replay process's wall clock (identical
+    for every point) while `WindowEndUtc` is the simulated as-of that actually bounded what the score could see.
+  - **Metric: Spearman ρ with average ranks, plus a closed-form Fisher-z interval — never a bootstrap.**
+    Randomness is forbidden (AD-3), and a resampled interval would make two runs over identical data disagree.
+    Every degeneracy is NAMED rather than producing NaN: n < 4 (the interval's floor, `se = 1/sqrt(n−3)`), a
+    constant vector on either side, and |ρ| = 1 (a zero-width interval would read as certainty). The score is
+    `OpportunityScore` — what the weekly report ranks by, what the efficacy chart plots, and where a v9 channel
+    composite lands. **Stated honestly in the rendered output:** observations are pooled across companies and
+    dates and are NOT independent, so the interval is optimistically narrow — dispersion, not significance.
+  - **Hold-out and honest N are properties of the API, not of the reader's discipline.** ONE chronological
+    index partition of the sorted distinct as-of dates across ALL strategies (so every strategy is judged on the
+    same calendar, and a date belongs to exactly one side by construction); ranking is computed **inside** the
+    harness on the in-sample window only, and the caller receives an already-ordered list — an
+    out-of-sample-ranked leaderboard is not expressible. `StrategiesCompared` (the count actually ranked) and
+    `DroppedStrategies` (name + machine-readable reason + the counts that triggered it) are **fields on the
+    result**, not log lines, and both rendered artifacts state them. Proven by a fixture where the rank-1
+    strategy is deliberately the WORSE one out-of-sample.
+  - **AD-14 is asserted on the TYPE GRAPH, not on prose.** `EfficacyReadOnlyGuardrailTests` walks the
+    transitive closure of `Radar.Application.Scoring` (base types, interfaces, private fields, signatures, every
+    generic argument) and fails if any `Radar.Application.Prices`/`Efficacy` type is reachable — mutation-proven
+    to catch a `List<PriceBar>` hidden in a private field. A positive control asserts the comparison module DOES
+    reach price, so the guardrail cannot pass vacuously, and a third test pins the comparison's scoring
+    dependencies to an allow-list of OUTPUT types (`IScoreSnapshotFileStore`, `ScoringStrategyDefinition`,
+    `ScoringStrategySet`).
+  - **Wiring**: `Radar:Efficacy:Comparison` (`Enabled` default **true**, but only INSIDE the already-opt-in
+    `Radar:Efficacy` gate), horizon/hold-out/minimum validated at the config boundary and crossing into
+    Application already resolved. It runs in `Worker` right after `IEfficacyReportGenerator` — outside
+    `IRadarPipeline`, and skipped entirely by a replay run. With too little history it writes an honest
+    "No strategy could be ranked" leaderboard rather than failing. `ReplayLabel` (blank ⇒ the live forward
+    series) points it at one spec-139 replay run's per-strategy output instead; because a replay run REPLACES
+    the pipeline run and never renders efficacy, that is a deliberate two-process workflow.
+  - **Reuse over copy**: `EfficacyCsvRenderer`'s inline CSV escape was **extracted** into the shared
+    `CsvField` and both exports route through it.
+  - **No fingerprint move, no scoring change**: not one file under `Scoring/`, `Domain/` or `Pipeline/` was
+    touched; the pins (`radar-scoring-fp-2ce20f8fc497` / `radar-scoring-fp-3457da53489d`) stand.
+  - **Out of scope, recorded not built**: auto-promoting the winner, a new price collector, live/streaming
+    comparison, and any portfolio/return simulation or trading P&L.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

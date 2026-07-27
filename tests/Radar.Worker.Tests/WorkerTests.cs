@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Radar.Application.Collectors;
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
@@ -194,6 +195,86 @@ public sealed class WorkerTests
     }
 
     [Fact]
+    public async Task StrategyComparison_RunsAfterThePipelineAndTheEfficacyRender_OutsideThePipeline()
+    {
+        // Spec 140: the comparison is a Worker step DISTINCT from and OUTSIDE IRadarPipeline (AD-14 read
+        // side), invoked after the pipeline run so the freshly-persisted snapshots are in the join, and after
+        // the per-company render so the artifacts land together.
+        var callLog = new List<string>();
+        var seeder = new RecordingSeeder(callLog);
+        var pipeline = new RecordingPipeline(callLog, EmptyResult);
+        var efficacy = new RecordingEfficacyGenerator(callLog);
+        var comparison = new RecordingStrategyComparisonGenerator(callLog);
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            seeder,
+            pipeline,
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: efficacy,
+            replayRunner: null,
+            strategyComparisonGenerator: comparison);
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run", "efficacy", "comparison"], callLog);
+    }
+
+    [Fact]
+    public async Task StrategyComparison_Absent_LeavesTheWorkerUnchanged()
+    {
+        var callLog = new List<string>();
+        var seeder = new RecordingSeeder(callLog);
+        var pipeline = new RecordingPipeline(callLog, EmptyResult);
+        var efficacy = new RecordingEfficacyGenerator(callLog);
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            seeder,
+            pipeline,
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: efficacy);
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run", "efficacy"], callLog);
+    }
+
+    [Fact]
+    public async Task ReplayRun_SkipsTheStrategyComparisonToo()
+    {
+        // A replay REPLACES the run (spec 139): it must not render efficacy and must not rank strategies.
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            new RecordingPriceAcquirer(callLog),
+            new RecordingEfficacyGenerator(callLog),
+            new RecordingReplayRunner(callLog),
+            new RecordingStrategyComparisonGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "replay"], callLog);
+    }
+
+    [Fact]
     public async Task ReplayRunner_Absent_LeavesTheDefaultWorkerUnchanged()
     {
         var callLog = new List<string>();
@@ -238,6 +319,26 @@ public sealed class WorkerTests
             }
 
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingStrategyComparisonGenerator(List<string> callLog)
+        : IStrategyComparisonReportGenerator
+    {
+        public Task<StrategyLeaderboard> GenerateAsync(CancellationToken ct)
+        {
+            lock (callLog)
+            {
+                callLog.Add("comparison");
+            }
+
+            return Task.FromResult(new StrategyLeaderboard(
+                StrategiesCompared: 0,
+                StrategiesConsidered: 0,
+                Rows: [],
+                DroppedStrategies: [],
+                Windows: new StrategyComparisonWindows(0, 0, 0, null, null, null, null),
+                Options: StrategyComparisonOptions.Default));
         }
     }
 

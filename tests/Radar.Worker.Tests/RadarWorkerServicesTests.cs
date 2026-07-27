@@ -8,6 +8,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Evidence;
 using Radar.Application.Signals;
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -653,6 +654,110 @@ public sealed class RadarWorkerServicesTests
         // The efficacy seam is NOT an evidence collector — enabling it does not change the collector list.
         Assert.Single(provider.GetServices<IEvidenceCollector>());
         Assert.NotNull(provider.GetService<IRadarPipeline>());
+    }
+
+    [Fact]
+    public void EfficacyEnabled_AlsoRegistersTheStrategyComparison_OverTheLiveForwardSeriesByDefault()
+    {
+        // Spec 140: the comparison is ON inside the already-opt-in Radar:Efficacy gate — with too little
+        // history it writes an honest "nothing could be ranked" leaderboard rather than failing.
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"));
+
+        Assert.NotNull(provider.GetService<IStrategyComparisonReportGenerator>());
+        Assert.NotNull(provider.GetService<StrategyComparisonHarness>());
+        Assert.NotNull(provider.GetService<StrategyLeaderboardRenderer>());
+
+        // Defaults, resolved at the config boundary.
+        var options = provider.GetRequiredService<StrategyComparisonOptions>();
+        Assert.Equal(21, options.ForwardHorizonDays);
+        Assert.Equal(0.30, options.HoldOutFraction);
+        Assert.Equal(20, options.MinimumObservations);
+
+        // With no replay label it reads the LIVE forward series through the existing per-strategy factory.
+        var selector = provider.GetRequiredService<IStrategyScoreSnapshotStoreSelector>();
+        Assert.IsType<LiveStrategyScoreSnapshotStoreSelector>(selector);
+        Assert.Equal("the live forward score series", selector.SeriesDescription);
+
+        // The primary strategy resolves to the SAME registered store the spec-101/108 read uses.
+        var strategies = provider.GetRequiredService<ScoringStrategySet>();
+        Assert.Same(
+            provider.GetRequiredService<IScoreSnapshotFileStore>(),
+            selector.ForStrategy(strategies.Primary));
+
+        // Still not a collector, and still outside the pipeline.
+        Assert.Single(provider.GetServices<IEvidenceCollector>());
+        Assert.NotNull(provider.GetService<IRadarPipeline>());
+    }
+
+    [Fact]
+    public void EfficacyComparisonWithAReplayLabel_ReadsThatReplayRunInstead()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            ("Radar:Efficacy:Comparison:ReplayLabel", "  20260101-20260726-1d  "),
+            ("Radar:Efficacy:Comparison:ForwardHorizonDays", "10"),
+            ("Radar:Efficacy:Comparison:HoldOutFraction", "0.5"),
+            ("Radar:Efficacy:Comparison:MinimumObservations", "7"));
+
+        var selector = provider.GetRequiredService<IStrategyScoreSnapshotStoreSelector>();
+        Assert.IsType<ReplayLabelStrategyScoreSnapshotStoreSelector>(selector);
+        Assert.Equal("replay run '20260101-20260726-1d'", selector.SeriesDescription);
+
+        // A replay-scoped store is NEVER the live one — the forward series cannot be read or touched here.
+        var strategies = provider.GetRequiredService<ScoringStrategySet>();
+        Assert.NotSame(
+            provider.GetRequiredService<IScoreSnapshotFileStore>(),
+            selector.ForStrategy(strategies.Primary));
+
+        var options = provider.GetRequiredService<StrategyComparisonOptions>();
+        Assert.Equal(10, options.ForwardHorizonDays);
+        Assert.Equal(0.5, options.HoldOutFraction);
+        Assert.Equal(7, options.MinimumObservations);
+    }
+
+    [Fact]
+    public void EfficacyComparisonDisabled_LeavesEveryOtherEfficacyArtifactRegistered()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            ("Radar:Efficacy:Comparison:Enabled", "false"));
+
+        Assert.Null(provider.GetService<IStrategyComparisonReportGenerator>());
+        Assert.Null(provider.GetService<StrategyComparisonOptions>());
+        Assert.Null(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
+
+        // The per-company efficacy artifacts are unaffected.
+        Assert.NotNull(provider.GetService<IEfficacyReportGenerator>());
+        Assert.NotNull(provider.GetService<EfficacyDatasetBuilder>());
+    }
+
+    [Fact]
+    public void EfficacyDisabled_RegistersNoStrategyComparisonAtAll()
+    {
+        using var provider = BuildProvider(("Radar:Collectors:0", "rss"));
+
+        Assert.Null(provider.GetService<IStrategyComparisonReportGenerator>());
+        Assert.Null(provider.GetService<StrategyComparisonOptions>());
+        Assert.Null(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
+    }
+
+    [Theory]
+    [InlineData("Radar:Efficacy:Comparison:ForwardHorizonDays", "0", "ForwardHorizonDays")]
+    [InlineData("Radar:Efficacy:Comparison:HoldOutFraction", "1", "HoldOutFraction")]
+    [InlineData("Radar:Efficacy:Comparison:MinimumObservations", "2", "MinimumObservations")]
+    public void EfficacyComparisonMisconfigured_FailsFastNamingTheKey(string key, string value, string named)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            (key, value)));
+
+        Assert.Contains("Radar:Efficacy:Comparison", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(named, ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

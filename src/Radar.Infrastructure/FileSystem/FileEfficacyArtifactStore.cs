@@ -63,4 +63,37 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
 
         return new EfficacyArtifactPaths(svgPath, csvPath);
     }
+
+    /// <summary>
+    /// Writes the single strategy-vs-price leaderboard pair (spec 140) to
+    /// <c>{RootDirectory}/strategy-leaderboard.{csv,md}</c> through the SAME shared
+    /// <see cref="GracefulFileWriter.TryWriteAllTextAsync"/> the per-company write uses — no second write
+    /// helper, and the same best-effort AD-8 posture. The file name is a fixed constant (the leaderboard is
+    /// per-run, not per-ticker), so no sanitisation is needed and the write can never leave the root.
+    /// </summary>
+    public async Task<StrategyLeaderboardPaths> WriteLeaderboardAsync(
+        string csv, string markdown, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(csv);
+        ArgumentNullException.ThrowIfNull(markdown);
+
+        var csvPath = Path.Combine(_options.RootDirectory, LeaderboardFileStem + ".csv");
+        var markdownPath = Path.Combine(_options.RootDirectory, LeaderboardFileStem + ".md");
+
+        if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
+        {
+            _logger.LogInformation("Wrote strategy-comparison leaderboard CSV to {Path}.", csvPath);
+        }
+
+        if (await GracefulFileWriter.TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
+            .ConfigureAwait(false))
+        {
+            _logger.LogInformation("Wrote strategy-comparison leaderboard markdown to {Path}.", markdownPath);
+        }
+
+        return new StrategyLeaderboardPaths(csvPath, markdownPath);
+    }
+
+    /// <summary>The fixed leaderboard file stem (deliberately not a shape any real ticker takes).</summary>
+    private const string LeaderboardFileStem = "strategy-leaderboard";
 }
