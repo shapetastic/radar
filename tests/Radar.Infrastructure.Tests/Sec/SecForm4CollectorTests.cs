@@ -60,14 +60,18 @@ public sealed class SecForm4CollectorTests
             Shares: shares,
             HasCluster: hasCluster,
             Is10b5Plan: is10b5Plan,
-            // Default mirrors the reader's own branch resolution so existing tests stay honest fixtures.
+            // Default mirrors the reader's own branch resolution so existing tests stay honest fixtures:
+            // a Neutral filing with NetValue > 0 is the mixed buy+sell branch (netValue = max(buy, sell)),
+            // while Neutral with NetValue == 0 is the no-discretionary-transactions branch.
             ClassificationReason: classificationReason ?? (is10b5Plan
                 ? SecForm4ClassificationReasons.Plan10b51
                 : direction == SignalDirection.Positive
                     ? SecForm4ClassificationReasons.DiscretionaryBuy
                     : direction == SignalDirection.Negative
                         ? SecForm4ClassificationReasons.DiscretionarySale
-                        : SecForm4ClassificationReasons.NoDiscretionaryTransactions));
+                        : netValue > 0m
+                            ? SecForm4ClassificationReasons.MixedBuySell
+                            : SecForm4ClassificationReasons.NoDiscretionaryTransactions));
 
     private static SecForm4Collector CreateCollector(
         FakeSecForm4Reader reader, SecForm4CollectorOptions? options = null) =>

@@ -38,7 +38,7 @@ $ErrorActionPreference = 'Stop'
 
 $resolvedRoot = (Resolve-Path -LiteralPath $DataRoot).ProviderPath.TrimEnd('\', '/')
 $signalsRoot = Join-Path $resolvedRoot 'signals'
-$evidenceRoot = Join-Path $resolvedRoot 'evidence\raw'
+$evidenceRoot = Join-Path (Join-Path $resolvedRoot 'evidence') 'raw'
 if (-not (Test-Path -LiteralPath $signalsRoot)) { throw "No signals directory at '$signalsRoot'." }
 if (-not (Test-Path -LiteralPath $evidenceRoot)) { throw "No raw evidence directory at '$evidenceRoot'." }
 
