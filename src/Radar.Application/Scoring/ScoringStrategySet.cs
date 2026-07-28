@@ -103,6 +103,33 @@ public sealed class ScoringStrategySet
                         + $"{ScoreFormulaVersions.V8}.");
             }
 
+            // Spec 157 §3 (amended after spec 158 measured it): radar-formula-v11's configuration contract
+            // REJECTS a breadth channel, so no legal v11 configuration can silently spend weight on breadth.
+            // Positive-only breadth is structurally zero in the current collector mix (a dead budget under
+            // the never-renormalise rule), and unfiltered breadth would let a Neutral news item raise
+            // OpportunityScore, contradicting AD-16. Keyed off the same one-definition predicate the formula
+            // constructor uses (ScoreFormulaVersions.RejectsBreadthChannels), so the validator and the
+            // formula cannot drift; this boundary check exists so the failure names the STRATEGY.
+            if (ScoreFormulaVersions.RejectsBreadthChannels(strategy.Formula))
+            {
+                var breadth = strategy.Channels.Channels
+                    .Where(c => c.Kind == ScoringChannelKind.Breadth)
+                    .Select(c => c.Name)
+                    .ToArray();
+                if (breadth.Length > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Radar:Strategies strategy '{strategy.Name}' declares breadth channel(s) "
+                            + $"{string.Join(", ", breadth)}, but Formula '{ScoreFormulaVersions.V11}' rejects "
+                            + "breadth outright: spec 158 measured positive-only breadth as structurally ZERO "
+                            + "in the current collector mix (the declared weight would be silently dead under "
+                            + "the never-renormalise rule), and unfiltered breadth would let a Neutral news "
+                            + "item raise OpportunityScore, contradicting AD-16. See "
+                            + "docs/158-channel-feasibility-findings.md. Declare collector channels only, or "
+                            + $"use {ScoreFormulaVersions.V10} if you want breadth.");
+                }
+            }
+
             if (!ScoreFormulaVersions.ConsumesChannels(strategy.Formula) && !strategy.Channels.IsEmpty)
             {
                 throw new InvalidOperationException(
