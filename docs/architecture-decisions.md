@@ -1212,7 +1212,7 @@ baseline's saturation constants means a NEW NAME, e.g. `baseline-activity-only` 
 
 ## AD-16 — Radar tests a STEALTH thesis: evidence accumulates before attention arrives
 
-> **Status: PROPOSED · 2026-07-28.** Written before the next scoring change deliberately, because the two
+> **Status: ACCEPTED · 2026-07-28.** Written and accepted before the next scoring change deliberately, because the two
 > candidate theses imply *opposite* fixes to `radar-formula-v10` and the choice must not be made implicitly
 > by whoever edits it next.
 
@@ -1287,7 +1287,11 @@ window (of 32 companies with an active `sec-form4` channel, 13 all-Neutral and 1
 more patient score computed over evidence that carries no direction will accumulate nothing more reliably.
 Fixing directional extraction is therefore prior to any further tuning of what consumes it.
 
-**Status.** Proposed · 2026-07-28 — awaiting the maintainer's acceptance; **not yet binding**. Cross-references
+**Status.** **Accepted · 2026-07-28** — accepted by the maintainer on the day it was proposed, and **binding
+from this point**: the stealth thesis is what Radar tests, and the consequences listed above (long window,
+notedness discount load-bearing, no neutral amplification, attention-arrival as the primary outcome,
+benchmark-adjusted price) govern subsequent work. Superseding it requires a new AD, not a config edit.
+Cross-references
 AD-6 (formula structure is code), AD-9 (no advice language), AD-14 (price is validation-only), AD-15 (a
 composite must beat every baseline out-of-sample), and spec 153's `CompositionRevision` mechanism, which is
 how the v10 correction this AD implies must be made visible.
