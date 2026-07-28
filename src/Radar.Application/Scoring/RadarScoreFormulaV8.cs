@@ -67,16 +67,18 @@ namespace Radar.Application.Scoring;
 /// <c>ScoringOutputStabilityTests</c>, which pins this formula's whole output and was verified against the
 /// pre-149 sources.
 /// </para>
+/// <para>
+/// SPEC 153 MOVED FOUR WHOLE COMPONENT BLOCKS, ON THE SAME TERMS AGAIN. Trajectory (with its structural
+/// <c>TrajectoryBand</c>), the Attention component's saturating map, EvidenceConfidence and SignalVelocity now
+/// live in <see cref="ScoreSignalMath"/> because <c>radar-formula-v9</c> held VERBATIM COPIES of all four (the
+/// architecture audit's M3) and <c>radar-formula-v10</c> would have made a third. Each helper preserves this
+/// class's expression shape and accumulation order exactly, so v8's output — including its last bit — is
+/// unmoved; <c>ScoringOutputStabilityTests</c> pins it. <b>v8's BEHAVIOUR is untouched by spec 153 (§3): it is
+/// the established baseline and the control for every strategy comparison.</b>
+/// </para>
 /// </summary>
 public sealed class RadarScoreFormulaV8 : IScoreFormula
 {
-    // The strength ceiling / band half-width that scales the directional preponderance ratio
-    // (Mpos−Mneg)/(Mpos+Mneg+k) ∈ [-1,1] into the same implicit [-10,10] band radar-formula-v5 used (v5's
-    // trajectory mean of sign·strength was itself bounded by the [0,10] strength ceiling). This is a
-    // STRUCTURAL constant — the band's shape, not a tunable magnitude — so it stays const in the formula
-    // (like the direction-sign consts). The tunable corroboration-smoothing constant k lives in config.
-    private const double TrajectoryBand = 10.0;
-
     private readonly ScoringWeights _weights;
     private readonly IAttentionSourceWeights _sourceWeights;
 
@@ -134,15 +136,11 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         // is rewarded and a lone dissenter is damped-but-not-zeroed. The per-signal weight w = confidence·recency
         // is byte-identical to v5 (only the AGGREGATION over the signals changed — a preponderance ratio, not a
         // mean of sign·strength).
-        // The mass split and the ratio are shared primitives (spec 146). No quality factors are passed:
-        // v8's per-signal trajectory weight is confidence·recency alone, unchanged since v5.
-        var mass = ScoreSignalMath.DirectionalMasses(signals, recency);
-
-        // T_raw = TrajectoryBand·(Mpos − Mneg)/(Mpos + Mneg + k) ∈ [-10, 10]. No directional signals →
+        // The mass split, the ratio and — since spec 153 — the whole block are shared primitives. No quality
+        // factors are passed: v8's per-signal trajectory weight is confidence·recency alone, unchanged since
+        // v5. T_raw = TrajectoryBand·(Mpos − Mneg)/(Mpos + Mneg + k) ∈ [-10, 10]; no directional signals →
         // Mpos == Mneg == 0 → 0 → 50 (the guard keeps v5's sumMass<=0 shape; k>0 makes 0/(0+k)=0 too).
-        var tRaw = ScoreSignalMath.Preponderance(
-            mass, _weights.TrajectoryCorroborationK, TrajectoryBand);
-        var trajectoryScore = Score(_weights.TrajectoryNeutral + _weights.TrajectoryScale * tRaw);
+        var trajectoryScore = ScoreSignalMath.TrajectoryScore(signals, recency, _weights);
 
         // ---- 2. AttentionScore (saturating on breadth) ----
         // v2: only third-party (market attention) evidence source names count toward reach; a company's
@@ -165,26 +163,18 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         // reach is then exactly v7's.
         var reach = ScoreSignalMath.AttentionReach(
             signals, input.PreCollapseSignals, _weights, _sourceWeights);
-        var attentionScore = Score(100 * reach / (reach + _weights.AttentionHalfSaturation));
+        var attentionScore = ScoreSignalMath.AttentionComponent(reach, _weights);
 
         // ---- 3. EvidenceConfidenceScore ----
         // v2: best-anchored + diversity bonus. Anchor on the strongest signal confidence and the highest
         // evidence-quality weight, then apply a saturating diversity multiplier. Adding a weaker
-        // signal/lower-quality source can never lower the base, so corroboration is monotonic.
-        var bestConf = signals.Max(s => (double)s.Signal.Confidence); // 0..1
-        var bestQualWeight = signals.Max(s => ScoreSignalMath.QualityWeight(_weights, s.Evidence.Quality));
-        var distinctTypes = signals.Select(s => s.Evidence.SourceType).Distinct().Count();
-        var divFactor = Math.Min(1, distinctTypes / _weights.DiversityTarget);
-        var evidenceConfidenceScore = Score(
-            100 * bestConf
-                * (_weights.EcQualityBase + _weights.EcQualitySpan * bestQualWeight)
-                * (_weights.EcDiversityBase + _weights.EcDiversitySpan * divFactor));
+        // signal/lower-quality source can never lower the base, so corroboration is monotonic. Shared since
+        // spec 153.
+        var evidenceConfidenceScore = ScoreSignalMath.EvidenceConfidenceScore(signals, _weights);
 
-        // ---- 4. SignalVelocityScore (50 = steady activity) ---- (unchanged from v1)
-        var actNow = signals.Sum(s => s.Signal.Strength);
-        var actPrev = input.PreviousSignals.Sum(s => s.Strength);
-        var ratio = (actNow + _weights.VelocitySmoothing) / (actPrev + _weights.VelocitySmoothing);
-        var signalVelocityScore = Score(_weights.VelocitySteady * ratio);
+        // ---- 4. SignalVelocityScore (50 = steady activity) ---- (unchanged from v1; shared since spec 153)
+        var signalVelocityScore = ScoreSignalMath.SignalVelocityScore(
+            signals, input.PreviousSignals, _weights);
 
         // ---- 5. OpportunityScore (multiplicative; uses clamped int components above) ----
         // v7: the discount folds the curated following tier alongside the measured attention (spec 117).

@@ -85,26 +85,31 @@ public sealed class ScoringStrategySet
                         + "to declare none).");
             }
 
-            // A channel budget only means something to radar-formula-v9, and v9 means nothing without one.
-            // Both directions fail fast, because either way the operator's stated intent would be silently
-            // discarded: a v8 strategy would ignore the budget it declared, and a v9 strategy without one
-            // would score every company 0.
-            var formula = ScoreFormulaVersions.Canonicalize(strategy.Formula);
-            if (formula == ScoreFormulaVersions.V9 && strategy.Channels.IsEmpty)
+            // A channel budget only means something to a CHANNEL-COMPOSITION formula, and such a formula means
+            // nothing without one. Both directions fail fast, because either way the operator's stated intent
+            // would be silently discarded: a v8 strategy would ignore the budget it declared, and a channel
+            // formula without one would score every company 0.
+            //
+            // Spec 153 generalised these two rules from a hard-coded radar-formula-v9 onto the SET of channel
+            // formulas — ScoreFormulaVersions.ConsumesChannels — which the formula factory's dispatch also
+            // reads, so "which formulas take channels" has exactly one definition and the validator and the
+            // factory cannot drift apart.
+            if (ScoreFormulaVersions.ConsumesChannels(strategy.Formula) && strategy.Channels.IsEmpty)
             {
                 throw new InvalidOperationException(
-                    $"Radar:Strategies strategy '{strategy.Name}' declares Formula {ScoreFormulaVersions.V9} but "
+                    $"Radar:Strategies strategy '{strategy.Name}' declares Formula '{strategy.Formula}' but "
                         + "no Channels; a channel-composition formula with no channels would score every company "
                         + "0. Declare at least one channel, or use "
                         + $"{ScoreFormulaVersions.V8}.");
             }
 
-            if (formula != ScoreFormulaVersions.V9 && !strategy.Channels.IsEmpty)
+            if (!ScoreFormulaVersions.ConsumesChannels(strategy.Formula) && !strategy.Channels.IsEmpty)
             {
                 throw new InvalidOperationException(
                     $"Radar:Strategies strategy '{strategy.Name}' declares Channels but Formula "
                         + $"'{strategy.Formula}', which does not consume them — the declared budget would be "
-                        + $"silently ignored. Set Formula to {ScoreFormulaVersions.V9}, or remove Channels.");
+                        + $"silently ignored. Set Formula to one of the channel-composition formulas "
+                        + $"({ScoreFormulaVersions.ChannelFormulaList}), or remove Channels.");
             }
 
             if (!seen.Add(strategy.Name))

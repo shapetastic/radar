@@ -25,9 +25,10 @@ public sealed class RadarScoreFormulaFactory : IScoreFormulaFactory
     private readonly ICollectorAttributionResolver _attributionResolver;
 
     /// <param name="attributionResolver">
-    /// How <c>radar-formula-v9</c> establishes the collector behind each signal's evidence (spec 151).
+    /// How a channel formula (<c>radar-formula-v9</c>/<c>v10</c>) establishes the collector behind each
+    /// signal's evidence (spec 151).
     /// Strategy-independent — it is a property of the DATA, not of a strategy's hypothesis — so it is
-    /// resolved once here and handed to every v9 formula this factory builds. Optional and defaulting to the
+    /// resolved once here and handed to every channel formula this factory builds. Optional and defaulting to the
     /// recorded-only resolver, i.e. pre-151 behaviour.
     /// </param>
     public RadarScoreFormulaFactory(
@@ -54,10 +55,17 @@ public sealed class RadarScoreFormulaFactory : IScoreFormulaFactory
                     + $"scoring formula (known formulas: {ScoreFormulaVersions.KnownList}). Omit Formula to use "
                     + $"the default {ScoreFormulaVersions.V8}.");
 
+        // The channel formulas take identical constructor arguments by design, so adding one is a single arm
+        // here. Which of them CONSUME channels is answered by ScoreFormulaVersions.ConsumesChannels, the same
+        // predicate ScoringStrategySet's two channel rules use — so the validator and this dispatch cannot
+        // disagree about whether a strategy's declared budget will actually be read.
         return formula switch
         {
             ScoreFormulaVersions.V9 =>
                 new RadarScoreFormulaV9(
+                    definition.Weights, _sourceWeights, definition.Channels, _attributionResolver),
+            ScoreFormulaVersions.V10 =>
+                new RadarScoreFormulaV10(
                     definition.Weights, _sourceWeights, definition.Channels, _attributionResolver),
             _ => new RadarScoreFormulaV8(definition.Weights, _sourceWeights),
         };

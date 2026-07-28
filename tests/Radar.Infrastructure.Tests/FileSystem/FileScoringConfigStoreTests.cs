@@ -175,6 +175,54 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ComposedFormulaIdentity_RoundTrips_AndTheSelfVerificationStillHolds()
+    {
+        // SPEC 153. A formula may now declare a CompositionRevision, in which case ScoringEngine stamps the
+        // COMPOSED identity "{Version}@{Revision}" (radar-formula-v10@rev1) rather than the bare token — in
+        // all three places, including this record's FormulaVersion. That matters HERE specifically: this store
+        // recomputes the fingerprint FROM the persisted FormulaVersion, so storing the composed value is
+        // exactly what keeps the self-verification invariant true. Storing the bare version while hashing the
+        // composed one would break it silently, and the failure would only surface as an unresolvable stamp.
+        var composed = $"{ScoreFormulaVersions.V10}{FormulaIdentity.RevisionSeparator}rev1";
+        var weights = new ScoringWeights();
+        var config = new EffectiveScoringConfig(
+            Fingerprint: ScoringConfigFingerprint.Compute(
+                EngineVersion, composed, weights, AttentionDescriptor, SignalSourceDescriptor,
+                InsiderMaterialityDescriptor, MediaCollapseDescriptor, Window),
+            EngineVersion: EngineVersion,
+            FormulaVersion: composed,
+            Weights: weights,
+            AttentionDescriptor: AttentionDescriptor,
+            SignalSourceDescriptor: SignalSourceDescriptor,
+            InsiderMaterialityDescriptor: InsiderMaterialityDescriptor,
+            MediaCollapseDescriptor: MediaCollapseDescriptor,
+            Window: Window);
+
+        var store = CreateStore();
+        var path = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var stored = ReadStored(path);
+
+        Assert.Equal(composed, stored.FormulaVersion);
+
+        var recomputed = ScoringConfigFingerprint.Compute(
+            stored.EngineVersion, stored.FormulaVersion, stored.Weights, stored.AttentionDescriptor,
+            stored.SignalSourceDescriptor, stored.InsiderMaterialityDescriptor, stored.MediaCollapseDescriptor,
+            stored.Window!.Value);
+
+        Assert.Equal(Path.GetFileNameWithoutExtension(path), recomputed);
+        Assert.Equal(stored.Fingerprint, recomputed);
+
+        // …and a revision bump is a genuinely different identity, which is the whole mechanism: it re-stamps,
+        // so StrategyIdentityGuard trips instead of two compositions sharing one series.
+        Assert.NotEqual(
+            config.Fingerprint,
+            ScoringConfigFingerprint.Compute(
+                EngineVersion, $"{ScoreFormulaVersions.V10}{FormulaIdentity.RevisionSeparator}rev2", weights,
+                AttentionDescriptor, SignalSourceDescriptor, InsiderMaterialityDescriptor,
+                MediaCollapseDescriptor, Window));
+    }
+
+    [Fact]
     public async Task CustomProfile_ProducesDistinctFile_WithCustomValuesRecoverable()
     {
         var store = CreateStore();

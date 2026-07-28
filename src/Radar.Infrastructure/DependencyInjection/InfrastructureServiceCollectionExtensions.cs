@@ -264,6 +264,13 @@ public static class InfrastructureServiceCollectionExtensions
     ///                       { "Name": "patents",   "Collectors": [ "patents" ],   "Weight": 0.50, "Saturation": 3 },
     ///                       { "Name": "insider",   "Collectors": [ "sec-form4" ], "Weight": 0.30, "Saturation": 2 },
     ///                       { "Name": "attention", "Kind": "breadth",             "Weight": 0.20, "Saturation": 3 } ] },
+    ///                   // Spec 153: radar-formula-v10 binds identically — same Channels shape, same rules.
+    ///                   // The difference is behavioural: a collector channel with no NET DIRECTIONAL mass
+    ///                   // contributes exactly 0 instead of half its saturated share.
+    ///                   { "Name": "patents-led-v10", "Formula": "radar-formula-v10",
+    ///                     "Channels": [
+    ///                       { "Name": "patents",   "Collectors": [ "patents" ],   "Weight": 0.80, "Saturation": 3 },
+    ///                       { "Name": "attention", "Kind": "breadth",             "Weight": 0.20, "Saturation": 3 } ] },
     ///                   // Spec 149: inline per-strategy weight overrides, applied ON TOP of ScoringProfile.
     ///                   { "Name": "attention-light", "ScoringProfile": "default",
     ///                     "Weights": { "FollowingTierDiscountWeight": 0.0,
@@ -288,11 +295,15 @@ public static class InfrastructureServiceCollectionExtensions
     /// hashes as a no-op — so the byte-identical default holds. Values are matched by EXACT enum member name
     /// (case-insensitively); numeric and unknown values are rejected rather than quietly accepted as a
     /// nonexistent type.</item>
-    /// <item><c>Formula</c> (spec 146) names the <c>radar-formula-vN</c> that strategy scores with.
+    /// <item><c>Formula</c> (spec 146) names the <c>radar-formula-vN</c> that strategy scores with — one of
+    /// <see cref="ScoreFormulaVersions.All"/>, which since spec 153 also carries
+    /// <see cref="ScoreFormulaVersions.V10"/>.
     /// <b>Omitted ⇒ <see cref="ScoreFormulaVersions.V8"/></b>, i.e. byte-identical to before the key existed,
     /// with the pinned default fingerprints unmoved.</item>
     /// <item><c>Channels</c> (spec 146) declares that strategy's weighted channel budget — required by, and
-    /// only meaningful to, <see cref="ScoreFormulaVersions.V9"/>. Each entry needs a <c>Name</c>, a
+    /// only meaningful to, the channel-composition formulas
+    /// (<see cref="ScoreFormulaVersions.ConsumesChannels"/>: <see cref="ScoreFormulaVersions.V9"/> and
+    /// <see cref="ScoreFormulaVersions.V10"/>). Each entry needs a <c>Name</c>, a
     /// <c>Weight</c> and a <c>Saturation</c>; <c>Kind</c> is <c>"collector"</c> (the default) or
     /// <c>"breadth"</c>, and a collector channel additionally needs a <c>Collectors</c> array of registered
     /// <c>IEvidenceCollector.CollectorName</c>s. Weights must each lie in <c>[0,1]</c> and <b>sum to

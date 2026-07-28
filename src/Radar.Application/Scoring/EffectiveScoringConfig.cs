@@ -35,7 +35,11 @@ namespace Radar.Application.Scoring;
 /// </summary>
 /// <param name="Fingerprint">The generation stamp (== the <c>CompanyScoreSnapshot.ScoringConfigVersion</c>).</param>
 /// <param name="EngineVersion">The engine structure identity (e.g. <c>mvp-engine-v1</c>).</param>
-/// <param name="FormulaVersion">The formula structure identity (e.g. <c>radar-formula-v8</c>).</param>
+/// <param name="FormulaVersion">The formula structure identity (e.g. <c>radar-formula-v8</c>) — the COMPOSED
+/// identity from <see cref="FormulaIdentity"/>, so a formula that declares an
+/// <see cref="IScoreFormula.CompositionRevision"/> is stored as <c>{Version}@{Revision}</c> (e.g.
+/// <c>radar-formula-v10@rev1</c>, spec 153). It is stored exactly as it was hashed, which is what keeps the
+/// recompute-from-stored self-verification above true for every formula.</param>
 /// <param name="Weights">Every scoring magnitude value (the spec-89 record).</param>
 /// <param name="AttentionDescriptor">The attention tier-map <c>CanonicalDescriptor()</c>, stored verbatim.</param>
 /// <param name="SignalSourceDescriptor">The signal-source IDENTITY <c>CanonicalDescriptor()</c> (extractor

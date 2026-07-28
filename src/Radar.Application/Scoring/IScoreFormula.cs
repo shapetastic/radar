@@ -26,6 +26,35 @@ public interface IScoreFormula
     /// <summary>Stable formula version recorded on every score snapshot.</summary>
     string Version { get; }
 
+    /// <summary>
+    /// The formula's COMPOSITION revision — an opt-in second identity component that closes the hole spec 149
+    /// exposed. Default <see cref="string.Empty"/>, which means "not versioned separately"; the composed
+    /// identity is then the bare <see cref="Version"/> token.
+    /// <para>
+    /// <b>WHY IT EXISTS.</b> <c>ScoringEngine</c> hashes a formula's VERSION TOKEN, not its code, so a formula
+    /// edited in place without a <c>radar-formula-vN</c> bump re-stamps nothing. Spec 149 did exactly that to
+    /// <c>radar-formula-v9</c> — it added the notedness discount to v9's composition while leaving the token
+    /// and the default <see cref="ScoringWeights"/> untouched — so v9 snapshots written before and after it
+    /// are falsely comparable and <c>StrategyIdentityGuard</c> cannot see the difference. This member makes
+    /// that failure mode UNREACHABLE for any formula that opts in: bumping the revision moves the strategy's
+    /// <c>ScoringConfigVersion</c>, which trips the guard on the next run.
+    /// </para>
+    /// <para>
+    /// <b>Its relationship to AD-6, stated so it cannot be misread as a loophole:</b> a genuinely NEW
+    /// structure still earns a new <c>radar-formula-vN</c> class and token. The revision exists so that an
+    /// in-place ADJUSTMENT to an existing structure — the spec-149 shape — cannot happen invisibly; it is not
+    /// a licence to keep amending one formula forever.
+    /// </para>
+    /// <para>
+    /// It is a DEFAULT interface member on purpose: <c>radar-formula-v8</c> and <c>radar-formula-v9</c> do not
+    /// override it, so their composed identity, their persisted <c>EffectiveScoringConfig.FormulaVersion</c>,
+    /// their <c>ScoringVersion</c> stamp and every pinned fingerprint are byte-identical to before it existed.
+    /// Compose it through <see cref="FormulaIdentity.Of"/> — never by hand — so the three places the engine
+    /// stamps it cannot drift.
+    /// </para>
+    /// </summary>
+    string CompositionRevision => string.Empty;
+
     /// <summary>Computes the component scores and contributions for the given windowed input.</summary>
     ScoreComputation Compute(ScoringInput input);
 }

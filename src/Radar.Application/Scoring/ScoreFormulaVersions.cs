@@ -24,11 +24,42 @@ public static class ScoreFormulaVersions
     public const string V9 = "radar-formula-v9";
 
     /// <summary>
+    /// The channel-composition formula in which a collector channel with NO NET DIRECTIONAL MASS contributes
+    /// exactly <c>0</c> rather than half its saturated share (spec 153). Opt-in per strategy; v8 and v9 are
+    /// both untouched and remain available as the controls that make the change measurable.
+    /// </summary>
+    public const string V10 = "radar-formula-v10";
+
+    /// <summary>
     /// Every shippable formula token, in version order (for fail-fast messages and tests). Genuinely
     /// read-only — the closed set of shippable structures must not be mutable through a downcast, or the
     /// config validator's "known formulas" and the factory's dispatch could disagree at runtime.
     /// </summary>
-    public static IReadOnlyList<string> All { get; } = Array.AsReadOnly(new[] { V8, V9 });
+    public static IReadOnlyList<string> All { get; } = Array.AsReadOnly(new[] { V8, V9, V10 });
+
+    /// <summary>
+    /// The formulas that COMPOSE their score from a <see cref="ScoringChannelSet"/> — currently
+    /// <see cref="V9"/> and <see cref="V10"/>.
+    /// <para>
+    /// ONE predicate, deliberately, because three separate places have to agree about it: the "this formula
+    /// needs channels" rule, the "this formula must not declare channels" rule (both in
+    /// <see cref="ScoringStrategySet"/>) and <see cref="RadarScoreFormulaFactory"/>'s dispatch. Spec 146
+    /// hard-coded <see cref="V9"/> in the first two; adding v10 against that shape would have let a v10
+    /// strategy declare channels that the validator silently permitted and a rule elsewhere rejected. If they
+    /// can drift they eventually will.
+    /// </para>
+    /// </summary>
+    public static bool ConsumesChannels(string? name) =>
+        Canonicalize(name) is { } canonical
+        && (string.Equals(canonical, V9, StringComparison.Ordinal)
+            || string.Equals(canonical, V10, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The comma-separated channel-composition tokens, for fail-fast messages. Rendered FROM
+    /// <see cref="All"/> through <see cref="ConsumesChannels"/>, so a message can never name a different set
+    /// from the one the rules enforce.
+    /// </summary>
+    public static string ChannelFormulaList => string.Join(", ", All.Where(ConsumesChannels));
 
     /// <summary>
     /// Canonicalises a configured formula name onto one of <see cref="All"/>: trims, matches

@@ -53,6 +53,16 @@ namespace Radar.Application.Scoring;
 /// paragraph on <see cref="RadarScoreFormulaV9"/>.
 /// </para>
 /// <para>
+/// SPEC 153 CLOSES THAT HOLE FOR ANY FORMULA THAT OPTS IN. What this engine stamps is no longer
+/// <c>_formula.Version</c> but the COMPOSED identity <see cref="FormulaIdentity.Of"/> returns —
+/// <c>{Version}@{CompositionRevision}</c> when the formula declares a revision, the bare token otherwise. All
+/// THREE stamping sites (the hashed <c>formulaVersion</c> field, <see cref="EffectiveScoringConfig.FormulaVersion"/>
+/// and <c>ScoringVersion</c>) route through that one helper, so the hashed identity and the persisted record
+/// cannot disagree — which is what keeps the scoring-config store's recompute-from-stored self-verification
+/// true. v8 and v9 declare no revision, so their stamps are byte-identical to before; only
+/// <c>radar-formula-v10</c> currently carries one.
+/// </para>
+/// <para>
 /// COLLECTION PROVENANCE IS RECORDED, NOT HASHED (spec 141). The enabled-collector set is no longer a
 /// fingerprint input: it is stamped verbatim on every snapshot as
 /// <see cref="CompanyScoreSnapshot.CollectionProvenance"/> from
@@ -145,6 +155,11 @@ public sealed class ScoringEngine : IScoringEngine
     // it does not change scoring output or the stamped fingerprint value.
     private readonly EffectiveScoringConfig _effectiveConfig;
 
+    // The formula's COMPOSED identity (spec 153): Version, plus @CompositionRevision when the formula
+    // declares one. Resolved ONCE so the hashed field, the persisted EffectiveScoringConfig record and every
+    // snapshot's ScoringVersion are the same string by construction (see FormulaIdentity).
+    private readonly string _formulaIdentity;
+
     public ScoringEngine(
         ISignalRepository signalRepository,
         ISignalFileStore signalFileStore,
@@ -217,12 +232,18 @@ public sealed class ScoringEngine : IScoringEngine
         var insiderMaterialityDescriptor = insiderMaterialityWeights.CanonicalDescriptor();
         var mediaCollapseDescriptor = mediaCollapse.CanonicalDescriptor();
 
+        // Spec 153: the formula's COMPOSED identity — resolved ONCE here so the hashed field, the persisted
+        // EffectiveScoringConfig record and the per-snapshot ScoringVersion are literally the same string.
+        // A formula that declares no CompositionRevision (v8, v9) composes to its bare version token, so this
+        // is byte-identical to the pre-153 `formula.Version` at every one of those three sites.
+        _formulaIdentity = FormulaIdentity.Of(formula);
+
         // Spec 148: the recent-signal window is an output-affecting input (it decides which signals the
         // current AND previous/velocity windows contain), so it is hashed too. It is read from the SAME
         // _options instance ScoreCompanyAsync slices with, so the hashed value and the value actually used
         // cannot disagree — the same reasoning as the "SAME tuple" note below.
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
-            EngineVersion, formula.Version, weights, attentionDescriptor, signalSourceDescriptor,
+            EngineVersion, _formulaIdentity, weights, attentionDescriptor, signalSourceDescriptor,
             insiderMaterialityDescriptor, mediaCollapseDescriptor, _options.Window);
 
         // Build the effective-config projection from the SAME tuple the fingerprint hashes, so
@@ -230,7 +251,7 @@ public sealed class ScoringEngine : IScoringEngine
         _effectiveConfig = new EffectiveScoringConfig(
             Fingerprint: _scoringConfigFingerprint,
             EngineVersion: EngineVersion,
-            FormulaVersion: formula.Version,
+            FormulaVersion: _formulaIdentity,
             Weights: weights,
             AttentionDescriptor: attentionDescriptor,
             SignalSourceDescriptor: signalSourceDescriptor,
@@ -397,8 +418,10 @@ public sealed class ScoringEngine : IScoringEngine
         };
         var computation = _formula.Compute(input);
 
-        // Record both identities so snapshots remain reproducible and auditable.
-        var scoringVersion = $"{EngineVersion}+{_formula.Version}";
+        // Record both identities so snapshots remain reproducible and auditable. The formula side is the
+        // spec-153 COMPOSED identity, resolved once in the constructor — the same string the fingerprint
+        // hashed and the effective-config record persists.
+        var scoringVersion = $"{EngineVersion}+{_formulaIdentity}";
 
         // ZERO CONSUMED SIGNALS (spec 138), stated explicitly because it is a deliberate choice: a strategy
         // whose signal-type filter excludes every one of a company's signals gets EXACTLY what a company with
