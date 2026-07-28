@@ -208,6 +208,47 @@ public sealed class DefaultRunProfileTests
     }
 
     // ---------------------------------------------------------------------------------------------------
+    // Spec 157 — the matched disclosure-led pair (the predeclared spec-157 §7 / AD-16 budget)
+    // ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void DefaultProfile_ShipsTheDisclosureLedV11Arm_AndItsMatchedV10Control()
+    {
+        // Spec 157 §7 (as amended after spec 158 and the post-merge observability review) PREDECLARES this
+        // pair — the budget is not an implementer's choice, and AD-16's precommitted outcome reads the
+        // disclosure-led-v11 snapshot, so the arm silently changing shape would corrupt the screen. Both arms
+        // must carry the IDENTICAL budget: that is what makes any ranking difference attributable to
+        // directional-only versus all-signal collector saturation and to nothing else.
+        var set = DefaultProfileStrategies();
+
+        var v11 = set.Strategies.Single(s => s.Name == "disclosure-led-v11");
+        var control = set.Strategies.Single(s => s.Name == "disclosure-led-v10-control");
+
+        Assert.Equal(ScoreFormulaVersions.V11, v11.Formula);
+        Assert.Equal(ScoreFormulaVersions.V10, control.Formula);
+        Assert.False(v11.IsPrimary);
+        Assert.False(control.IsPrimary);
+
+        foreach (var arm in new[] { v11, control })
+        {
+            // ONE sec-edgar channel at the whole budget — spec 158's measured option A (43/43 companies have
+            // a sec-edgar source; RSS only 26/43, so a press share would conflate missing configuration with
+            // valid quiet). And NO breadth channel: neither arm may declare one, v11 because its formula
+            // rejects it (spec 158) and the control because the budgets must stay identical.
+            var channel = Assert.Single(arm.Channels.Channels);
+            Assert.Equal("filings", channel.Name);
+            Assert.Equal(ScoringChannelKind.Collector, channel.Kind);
+            Assert.Equal(["sec-edgar"], channel.Collectors);
+            Assert.Equal(1.00, channel.Weight);
+            Assert.Equal(3.0, channel.Saturation);
+        }
+
+        // Identical budgets, asserted as value equality of the canonical channel set — the same equality the
+        // fingerprint's channels= segment is built from, so "identical" here means identical where it counts.
+        Assert.Equal(v11.Channels, control.Channels);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
     // The OPERATOR OBLIGATION spec 154 created: an overlay profile must re-point the primary's ScoringProfile
     // ---------------------------------------------------------------------------------------------------
 

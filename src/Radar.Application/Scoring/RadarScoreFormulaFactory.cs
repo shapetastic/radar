@@ -68,6 +68,9 @@ public sealed class RadarScoreFormulaFactory : IScoreFormulaFactory
             ScoreFormulaVersions.V10 =>
                 new RadarScoreFormulaV10(
                     definition.Weights, _sourceWeights, definition.Channels, _attributionResolver),
+            ScoreFormulaVersions.V11 =>
+                new RadarScoreFormulaV11(
+                    definition.Weights, _sourceWeights, definition.Channels, _attributionResolver),
             // Spec 154's CONTROL. Same constructor contract as the composite channel formulas, so it is one
             // more arm here and needs no special-casing anywhere downstream — a baseline is just a strategy.
             ScoreFormulaVersions.BaselineActivityV1 =>

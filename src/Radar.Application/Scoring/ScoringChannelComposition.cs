@@ -67,8 +67,11 @@ public delegate double CollectorChannelScore(double saturation, double preponder
 /// <item><c>radar-formula-v9</c> / <c>radar-formula-v10</c> / <c>radar-baseline-activity-v1</c> pass the
 /// existing <see cref="ScoreSignalMath.AttentionReach"/> explicitly — the same static method the shared pass
 /// used to call directly, so their arithmetic (and therefore their last bit) is unchanged.</item>
-/// <item>The prospective <c>radar-formula-v11</c> (spec 157 §3) passes
-/// <see cref="ScoreSignalMath.PositiveAttentionReach"/>, the positive-only narrowing of the same term.</item>
+/// <item><c>radar-formula-v11</c> was originally slated to pass
+/// <see cref="ScoreSignalMath.PositiveAttentionReach"/>, but spec 157 §3 (as amended after spec 158 measured
+/// positive-only breadth as structurally zero) REJECTS a breadth channel for v11 at construction, so it
+/// passes a throwing, unreachable-by-construction delegate instead; the positive-only helper stays for the
+/// spec-158 audit and is consumed by no shipped formula.</item>
 /// </list>
 /// <para>
 /// <b>REQUIRED, with no default value, deliberately</b> — the same reasoning as
@@ -305,8 +308,8 @@ public static class ScoringChannelComposition
                 // collector retrieved what, and it is POSITIVE — more genuine (tier-weighted,
                 // distinct-publisher) reach earns more of its share. HOW reach is measured is the formula's
                 // own choice (spec 158 §4): v9/v10/baseline pass ScoreSignalMath.AttentionReach — the exact
-                // call this pass previously made inline — and the prospective v11 passes the positive-only
-                // PositiveAttentionReach.
+                // call this pass previously made inline — while v11 rejects breadth channels outright
+                // (spec 157 §3 as amended) and passes an unreachable throwing delegate.
                 var reach = breadthReach(
                     signals, input.PreCollapseSignals, weights, sourceWeights);
                 channelScore = ScoreSignalMath.Saturate(reach, channel.Saturation);

@@ -458,18 +458,17 @@ public static class ScoreSignalMath
     }
 
     /// <summary>
-    /// PROSPECTIVE <c>radar-formula-v11</c> PRIMITIVE (spec 158 §4, normatively fixed by spec 157 §1):
-    /// a collector channel's DIRECTIONAL-ONLY activity — exactly
+    /// THE <c>radar-formula-v11</c> COLLECTOR-ACTIVITY PRIMITIVE (extracted by spec 158 §4, normatively fixed
+    /// and consumed by spec 157 §1): a collector channel's DIRECTIONAL-ONLY activity — exactly
     /// <c>DirectionalMasses(signals, recency, qualityFactors).Total</c>, i.e. the
     /// <c>strength · confidence · recency · quality</c> mass summed over Positive and Negative signals only.
     /// Neutral/Mixed signals contribute <b>exactly zero</b>, so a channel's saturation built on this term
     /// cannot rise on neutral volume — the AD-16 property v10's <see cref="ActivityMass"/> lacks.
     /// <para>
-    /// It matches the <c>ChannelActivityMass</c> delegate shape so a v11 composition passes it where v9/v10
-    /// pass <see cref="ActivityMass"/>. <b>No shipped formula consumes it yet</b> (spec 158 ships no v11):
-    /// it exists so the spec-158 input-only characterization and the eventual v11 share ONE definition
-    /// instead of drifting copies. <see cref="ActivityMass"/> is untouched — v9/v10 keep their exact
-    /// arithmetic.
+    /// It matches the <c>ChannelActivityMass</c> delegate shape, and <c>RadarScoreFormulaV11</c> passes it
+    /// where v9/v10 pass <see cref="ActivityMass"/> — the spec-158 input-only characterization and v11 share
+    /// this ONE definition instead of drifting copies. <see cref="ActivityMass"/> is untouched — v9/v10 keep
+    /// their exact arithmetic.
     /// </para>
     /// </summary>
     public static double DirectionalActivityMass(
@@ -505,9 +504,14 @@ public static class ScoreSignalMath
     /// <see cref="AttentionComponent"/>. This term narrows the breadth CHANNEL only.</item>
     /// </list>
     /// <para>
-    /// Matches the <c>BreadthChannelReach</c> delegate shape. <b>No shipped formula consumes it yet</b>;
-    /// spec 157's v11 must call this helper rather than add a second positive-reach implementation, and the
-    /// spec-158 audit characterizes exactly this rule.
+    /// Matches the <c>BreadthChannelReach</c> delegate shape. <b>No shipped formula consumes it, and that is
+    /// now a DECISION rather than a pending state</b>: spec 158 measured this rule as structurally zero in
+    /// the current collector mix (spec 70 makes every news signal Neutral; first-party RSS is not a
+    /// third-party publisher), so spec 157 §3 as amended has <c>radar-formula-v11</c> REJECT breadth channels
+    /// outright instead of narrowing them through this term. The helper stays because the spec-158 audit
+    /// measures through it, and because positive-only breadth becomes viable again — as
+    /// <c>radar-formula-v12</c>, under AD-6 — if the collector mix ever produces Positive third-party
+    /// signals. See <c>docs/158-channel-feasibility-findings.md</c>.
     /// </para>
     /// </summary>
     public static double PositiveAttentionReach(

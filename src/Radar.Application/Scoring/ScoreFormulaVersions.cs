@@ -31,6 +31,18 @@ public static class ScoreFormulaVersions
     public const string V10 = "radar-formula-v10";
 
     /// <summary>
+    /// The channel-composition formula whose collector-channel SATURATION is computed over
+    /// <b>directional-only</b> activity (spec 157, binding under AD-16's "neutral volume must never amplify a
+    /// directional read"): a Neutral signal changes a collector channel's score by exactly 0, where under
+    /// <see cref="V10"/> it still raised the channel's saturation and thereby amplified a directional read.
+    /// v11 additionally REJECTS a breadth channel at startup (spec 158 measured positive-only breadth as
+    /// structurally zero, and unfiltered breadth would let a Neutral news item raise the score — see
+    /// <c>docs/158-channel-feasibility-findings.md</c>). Opt-in per strategy; v8, v9 and v10 are all untouched
+    /// and remain available as the controls that make the change measurable.
+    /// </summary>
+    public const string V11 = "radar-formula-v11";
+
+    /// <summary>
     /// The <b>CONTROL</b> (spec 154): a channel formula whose collector channels score the plain saturated
     /// <b>COUNT</b> of the signals they consumed — no direction, no notedness, no quality weighting. It exists
     /// to be BEATEN, not to be run as a candidate strategy.
@@ -52,11 +64,11 @@ public static class ScoreFormulaVersions
     /// formulas" and the factory's dispatch could disagree at runtime.
     /// </summary>
     public static IReadOnlyList<string> All { get; } =
-        Array.AsReadOnly(new[] { V8, V9, V10, BaselineActivityV1 });
+        Array.AsReadOnly(new[] { V8, V9, V10, V11, BaselineActivityV1 });
 
     /// <summary>
     /// The formulas that COMPOSE their score from a <see cref="ScoringChannelSet"/> — currently
-    /// <see cref="V9"/>, <see cref="V10"/> and <see cref="BaselineActivityV1"/>.
+    /// <see cref="V9"/>, <see cref="V10"/>, <see cref="V11"/> and <see cref="BaselineActivityV1"/>.
     /// <para>
     /// ONE predicate, deliberately, because three separate places have to agree about it: the "this formula
     /// needs channels" rule, the "this formula must not declare channels" rule (both in
@@ -70,7 +82,21 @@ public static class ScoreFormulaVersions
         Canonicalize(name) is { } canonical
         && (string.Equals(canonical, V9, StringComparison.Ordinal)
             || string.Equals(canonical, V10, StringComparison.Ordinal)
+            || string.Equals(canonical, V11, StringComparison.Ordinal)
             || string.Equals(canonical, BaselineActivityV1, StringComparison.Ordinal));
+
+    /// <summary>
+    /// True when <paramref name="name"/> canonicalises onto <see cref="V11"/>, the composite formula whose
+    /// configuration contract REJECTS a breadth channel (spec 157 §3, amended after spec 158's measurement).
+    /// ONE predicate, for the same reason <see cref="ConsumesChannels"/> is one: the config-boundary rule in
+    /// <see cref="ScoringStrategySet"/> and the constructor guard in <c>RadarScoreFormulaV11</c> must agree
+    /// about which formula refuses breadth, or a budget the validator permitted would explode later.
+    /// (<see cref="BaselineActivityV1"/> ALSO refuses breadth, in its own constructor and for its own reason —
+    /// tier-weighted reach is a quality weighting a "no quality weighting" control must not contain; that
+    /// refusal predates this predicate and deliberately stays where it is.)
+    /// </summary>
+    public static bool RejectsBreadthChannels(string? name) =>
+        Canonicalize(name) is { } canonical && string.Equals(canonical, V11, StringComparison.Ordinal);
 
     /// <summary>
     /// The comma-separated channel-composition tokens, for fail-fast messages. Rendered FROM
