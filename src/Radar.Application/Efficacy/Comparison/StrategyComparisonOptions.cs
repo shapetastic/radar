@@ -26,7 +26,8 @@ public sealed class StrategyComparisonOptions
     public StrategyComparisonOptions(
         int forwardHorizonDays,
         double holdOutFraction,
-        int minimumObservations)
+        int minimumObservations,
+        int exitToleranceDays)
     {
         if (forwardHorizonDays < 1)
         {
@@ -59,9 +60,24 @@ public sealed class StrategyComparisonOptions
                     + "forbids.");
         }
 
+        if (exitToleranceDays < 0 || exitToleranceDays >= forwardHorizonDays)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(exitToleranceDays),
+                exitToleranceDays,
+                "Radar:Efficacy:Comparison:ExitToleranceDays must be at least 0 and strictly less than "
+                    + "ForwardHorizonDays (which is "
+                    + forwardHorizonDays.ToString(CultureInfo.InvariantCulture)
+                    + " here): it is how many calendar days short of D+h the last bar may fall and still count "
+                    + "as covering the horizon, so a tolerance at or above the horizon makes the check vacuous "
+                    + "— every bar after D would qualify, and a four-day return would again be reported as an "
+                    + "h-day one.");
+        }
+
         ForwardHorizonDays = forwardHorizonDays;
         HoldOutFraction = holdOutFraction;
         MinimumObservations = minimumObservations;
+        ExitToleranceDays = exitToleranceDays;
     }
 
     /// <summary>
@@ -83,8 +99,34 @@ public sealed class StrategyComparisonOptions
     public int MinimumObservations { get; }
 
     /// <summary>
-    /// The defaults the composition root uses when <c>Radar:Efficacy:Comparison</c> omits a key: a 21-calendar-day
-    /// forward horizon (≈ one trading month), a 30% chronological hold-out, and 20 observations per window.
+    /// How many CALENDAR days short of <c>D+h</c> the latest bar in the forward window may fall and still count
+    /// as covering the horizon. An observation whose exit bar falls further short than this is
+    /// <c>PartialWindow</c> — excluded from the correlation, never relabelled as a full-horizon return (spec
+    /// 152). A tolerance is needed at all only because markets close at weekends and holidays, so the last bar
+    /// inside <c>(D, D+h]</c> is usually a few days before the bound itself.
+    /// <para>
+    /// <b>The default of 4 is measured, not guessed.</b> Over the whole live price store as of 2026-07-27
+    /// (<c>data/prices/</c>: 43 tickers, 2025-07-03 → 2026-07-27, 11,153 bars) the gap between consecutive bars
+    /// was 1 day 77.94%, 2 days 1.16%, 3 days 18.10%, 4 days 2.80% — a MAXIMUM observed gap of 4 calendar days.
+    /// Over the 15,334 genuinely-complete 21-day windows in that store (every ticker × every as-of date D whose
+    /// <c>D+21</c> still lies within that ticker's bars) the shortfall <c>(D+h) − exitBar.Date</c> was 0 days
+    /// 68.57%, 1 day 15.14%, 2 days 14.30%, 3 days 1.98% — a MAXIMUM shortfall of 3 days, exactly what a
+    /// maximum gap of 4 implies. The share of those genuinely-complete windows a tolerance would wrongly
+    /// discard: 1 ⇒ 16.284%, 2 ⇒ 1.983%, 3 ⇒ 0.000%, 4 ⇒ 0.000%.
+    /// </para>
+    /// <para>
+    /// So 4 = the observed maximum shortfall (3) plus one day of headroom for an unscheduled closure (a storm
+    /// or systems halt, which US markets have had), discarding <b>0%</b> of the 15,334 measured complete
+    /// windows, while the worst case it still admits covers 17 of 21 days ≈ 81% of the horizon. Re-derive it by
+    /// re-running the same two distributions over <c>data/prices/</c> if the store grows materially.
+    /// </para>
     /// </summary>
-    public static StrategyComparisonOptions Default { get; } = new(21, 0.30, 20);
+    public int ExitToleranceDays { get; }
+
+    /// <summary>
+    /// The defaults the composition root uses when <c>Radar:Efficacy:Comparison</c> omits a key: a 21-calendar-day
+    /// forward horizon (≈ one trading month), a 30% chronological hold-out, 20 observations per window, and a
+    /// 4-calendar-day exit tolerance (see <see cref="ExitToleranceDays"/> for the measurement behind it).
+    /// </summary>
+    public static StrategyComparisonOptions Default { get; } = new(21, 0.30, 20, 4);
 }

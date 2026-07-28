@@ -670,6 +670,24 @@ Do not hand back broken code.
     *through this slice* — spec 148 moved both afterwards, for reasons of its own.
   - **Out of scope, recorded not built**: auto-promoting the winner, a new price collector, live/streaming
     comparison, and any portfolio/return simulation or trading P&L.
+  - ⚠ **AMENDED BY SPEC 152 — a PARTIAL forward window is now its own outcome, and every number the leaderboard
+    had printed was mislabelled.** `ForwardReturn` picked the latest bar inside `(D, D+h]` and never checked how
+    far it got, so four days of price in a 21-day window produced a four-day return **reported as a 21-day
+    forward return** and pooled with complete ones; `observationsWithoutForwardPrice` caught only the
+    fully-missing case. Now: `ForwardReturnUnavailableReason.PartialWindow` (appended last) when
+    `exit.Date < D.AddDays(h − exitToleranceDays)`, checked after `SingleForwardBar` and **before** the
+    price check (coverage is the more informative classification); `TryCompute`'s tolerance parameter is
+    **required, with no default**, because a silent default is how this slipped through once. The default is
+    **4 calendar days, measured not guessed** over `data/prices/` (43 tickers, 11,153 bars, 2025-07-03→2026-07-27):
+    max gap between bars 4 days, max shortfall **3** days over **15,334** genuinely-complete 21-day windows,
+    discarding **0.000 %** of them (a tolerance of 1 would discard 16.284 %), worst admitted case still covering
+    17/21 ≈ 81 % of the horizon. `ObservationsWithPartialWindow` is rendered as its **own** CSV and markdown
+    column and `ObservationsWithoutForwardPrice` keeps its **exact** pre-152 definition — "no price at all" and
+    "some price but not the horizon" are different facts. The entry rule `bar.Date > asOf` is untouched and
+    asserted with poison bars, including on the `PartialWindow` branch. **Honest consequence, and it IS the
+    deliverable:** with ~1 month of price history almost every observation becomes `PartialWindow`, so the
+    leaderboard correctly reports "No strategy could be ranked" at h=21 until roughly 2026-08-17. That is the
+    right answer, not a regression.
 - **The fingerprint is COMPLETE, and replay records the provenance it writes (spec 148).** Two closures, one
   slice, from the `radar-architecture-reviewer` sweep of `main` @ `b9b3f65`. **The CURRENT pins are AI-OFF
   `radar-scoring-fp-0c46e07b94db` and AI-ON `radar-scoring-fp-28226897f97b`** — every "the pins do not move"

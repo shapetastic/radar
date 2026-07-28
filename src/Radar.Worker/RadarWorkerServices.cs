@@ -658,7 +658,8 @@ internal static class RadarWorkerServices
             return new StrategyComparisonOptions(
                 comparison.ForwardHorizonDays,
                 comparison.HoldOutFraction,
-                comparison.MinimumObservations);
+                comparison.MinimumObservations,
+                comparison.ExitToleranceDays);
         }
         catch (ArgumentOutOfRangeException ex)
         {
