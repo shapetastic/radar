@@ -73,6 +73,27 @@ row 2 of §2 cannot be guaranteed without changing this.
 window.** Breadth then means *breadth of substantive positive coverage* rather than volume of mentions,
 which is what makes row 2 of §2 provable rather than hoped for.
 
+**The exact mechanics, fixed 2026-07-28 — implement this, not a paraphrase of the sentence above.** Two
+readings of "publishers that carried a Positive signal" are possible (binary inclusion vs. accumulating mass
+per Positive signal) and they differ materially for a publisher carrying one Positive among many Neutral.
+The rule is:
+
+1. **Filter first**: pass **only `Positive` signals** — from **both** the post-collapse and the pre-collapse
+   sets — into the **existing** reach calculation. The filter is applied to the inputs; the reach terms
+   themselves (third-party publisher test, tier weights, collapsed-publisher credit, media-count) are
+   **unchanged** and simply see a smaller input set.
+2. **Publisher inclusion stays BINARY and DISTINCT**: a publisher qualifies if it carries **at least one**
+   Positive signal, and qualifying publishers are counted **once** each, exactly as distinct-publisher reach
+   has always worked. A publisher does **not** earn extra reach for carrying several Positive signals.
+3. **Neutral and Negative signals contribute NEITHER publisher reach NOR the media-count term.** A Neutral
+   `MediaAttention` signal adds nothing even when the same publisher already qualifies via some other
+   Positive signal.
+4. **`AttentionScore` is unchanged and stays over the FULL gated set** — see the boxed note below; this
+   filter applies to the breadth channel only.
+
+Spec 158 §4 measures precisely this rule and extracts it as the shared helper; **v11 must call that helper
+rather than add a second positive-reach implementation.**
+
 ⚠️ **POSITIVE, not merely "directional" — an earlier draft said directional and that was wrong.**
 "Directional" includes Negative, so broad *negative* coverage would have raised breadth and therefore raised
 `OpportunityScore`. A score whose name is Opportunity rising because a company is widely reported to be in
