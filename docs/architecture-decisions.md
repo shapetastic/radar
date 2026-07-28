@@ -1171,9 +1171,11 @@ of the price-validation boundary; no scoring math change.*
 > arms were compared — the leaderboard already renders that count ("a leader chosen from many needs a
 > stronger effect than one chosen from few"), and the claim must carry it.
 >
-> This amendment deliberately costs nothing to hold: no strategy is currently close to any bar, every arm
-> sits near ρ −0.1 with intervals straddling zero, and spec 152 established that the numbers published
-> before 2026-07-28 were measuring 4-to-11-day reactions labelled as 21-day returns. Lifting the suspension
+> This amendment costs little to hold, and the reason needs no strong empirical claim: spec 152 established
+> that every number published before 2026-07-28 was measuring 4-to-11-day reactions labelled as 21-day
+> returns, so there is no standing result the suspension withdraws. (The ρ ≈ −0.1 cluster often quoted
+> covered the five *composite* arms on the pre-152 replay only; the three baselines added by spec 154 have
+> no history at all, so no statement about "every arm" is available and none is needed here.) Lifting the suspension
 > requires accepting an outcome variable and a comparison method — see the parked
 > `docs/next/deferred/155-paired-date-blocked-strategy-comparison.md` for the latter's open problems
 > (dependence across overlapping windows defeats both a naïve parametric interval and a sign test).

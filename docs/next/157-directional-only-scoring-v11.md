@@ -49,9 +49,16 @@ a Neutral news item adds a publisher, raises breadth and can raise Opportunity �
 `AttentionScore` and so deepening the notedness discount. The net direction is **not fixed**, which is why
 row 2 of §2 cannot be guaranteed without changing this.
 
-**Decision: reach counts only publishers that carried at least one DIRECTIONAL signal for that company in
-the window.** Breadth then means *breadth of substantive coverage* rather than volume of mentions, which is
-what makes row 2 of §2 provable rather than hoped for.
+**Decision: reach counts only publishers that carried at least one POSITIVE signal for that company in the
+window.** Breadth then means *breadth of substantive positive coverage* rather than volume of mentions,
+which is what makes row 2 of §2 provable rather than hoped for.
+
+⚠️ **POSITIVE, not merely "directional" — an earlier draft said directional and that was wrong.**
+"Directional" includes Negative, so broad *negative* coverage would have raised breadth and therefore raised
+`OpportunityScore`. A score whose name is Opportunity rising because a company is widely reported to be in
+trouble is indefensible, and deterioration already has its own home: the (v8-meaning) `TrajectoryScore` v10
+and v11 retain. Assert the negative case explicitly — adding a publisher that carried only Negative signals
+must not raise Opportunity.
 
 Keep breadth's shape (`reach/(reach + S_c)`), its budget semantics and the never-renormalise rule unchanged
 — only the population entering `reach` narrows. Expect lower absolute breadth scores; that is intended, and
@@ -74,6 +81,13 @@ untouched and stays available as the control.**
 **v11 bundles the two AD-16 corrections** (§1 and §3). Attributing the effect between them would need a
 third arm; that is deliberately not built, so the hand-back must say the comparison attributes to the
 corrections *collectively*, never to either individually.
+
+**v11 gets its own `CompositionRevision` and its own golden guard**, mirroring
+`RadarScoreFormulaV10CompositionGuardTests`: the revision constant declared beside the composition, and one
+test pinning revision + full output + the `ScoringConfigVersion` a v11 strategy stamps, **together in one
+file**. Without it the next in-place change to v11 is invisible — precisely the spec-149 hole spec 153
+built this mechanism to close. The alternative (requiring every subsequent composition change to mint v12)
+is explicitly rejected: it would make the versioning ratchet do a guard's job.
 
 ### 5. v8, v9 and v10 must be byte-identical afterwards — asserted, not argued
 
@@ -98,14 +112,24 @@ still shipped and still the control. v11 gets its own metamorphic test asserting
 
 ### 7. Live arms, and the matched comparator
 
+**Predeclared here, not delegated** — leaving the arm or its budget to the implementer would let it be
+chosen while looking at data, which is the breach AD-16's pre-commitment clause exists to prevent.
+
 Add to `scripts/run-profiles/default.json`, under **new names** (spec 141 — never an edit; the five
 composite arms and three baselines are mid-accrual and **must not be renamed, edited or re-stamped**):
 
-- one **v11** arm, and
-- one **v10** arm with an *identical* channel budget as the matched control.
+| Name | Formula | Channels |
+|---|---|---|
+| `filings-led-v11` | `radar-formula-v11` | insider `sec-form4` 0.50 / institutional `sec-13dg` 0.30 / breadth 0.20 |
+| `filings-led-v10-control` | `radar-formula-v10` | **identical to the above** |
 
-Mirror an existing arm's budget so the only difference between the pair is the formula. State the resulting
-per-run cost (43 companies × N strategies) in the hand-back.
+Saturations mirror `filings-led-v2` (2 / 3 / 3) so the **only** difference between the pair is the formula.
+
+**Filings-led, not narrative-led, and the reason is AD-16.** Narrative-led is budgeted on `newssearch` and
+press — which under AD-16 *is* the attention Radar means to predict, so scoring on it confounds the input
+with the outcome. Filings are the slow structured sources the stealth thesis rests on.
+
+State the resulting per-run cost (43 companies × N strategies) in the hand-back.
 
 ### 8. Precommit the AD-16 outcome BEFORE the first live snapshot is inspected
 
@@ -113,11 +137,26 @@ AD-16 requires the outcome variable and horizon to be declared before results ar
 while leaving them open would breach the AD this spec exists to serve. **No evaluator need be implemented** —
 this is a declaration, recorded as an AD-16 amendment, fixing at minimum:
 
-- the exact **attention metric** (proposed default: the change in `AttentionScore` from D to D+h, using the
-  same stored snapshots the efficacy join already reads);
-- the **horizon** h, declared in calendar days;
-- **eligible observations** — minimum companies per as-of date, and the spec-152 `PartialWindow` treatment;
-- the **failure criterion**: what result would count as the thesis failing.
+⚠️ **The metric MUST be a forward FLOW, not a difference of stocks.** An earlier draft proposed
+`AttentionScore(D+h) − AttentionScore(D)`; that is wrong and must not be used. `AttentionScore` is a
+**rolling 60-day stock**, so two readings h days apart overlap heavily and their difference mixes new
+arrivals with old events ageing out, saturation curvature and `[0,100]` int rounding. A company can receive
+substantial new attention and still show a **negative** delta. Measure what arrives:
+
+- the exact **attention metric** — a count over `(D, D+h]` of newly-arrived attention: new `MediaAttention`
+  signals, and/or **new distinct third-party publishers** not previously seen for that company. Prefer the
+  publisher count: it is closer to "the market noticed" than raw article volume, and it resists a single
+  outlet repeating itself;
+- the **horizon** h, in calendar days, and note it need not equal the price horizon — attention is expected
+  to arrive sooner than a re-rating;
+- **eligible observations** — minimum companies per as-of date, plus the spec-152 `PartialWindow` treatment
+  applied to the attention window exactly as it is to price;
+- a **persistence comparator** — the attention-side equivalent of AD-15's baselines, and it is **not
+  optional**. Attention is strongly autocorrelated: already-covered companies keep being covered. A score
+  that predicts future attention merely by tracking current attention has discovered nothing. So the
+  declared outcome must be measured **against** a baseline that predicts forward attention from
+  attention-at-D alone, and Radar must beat it;
+- the **failure criterion**: what result counts as the thesis failing, declared now.
 
 Propose concrete values, mark them as requiring maintainer sign-off, and land the amendment **in this
 slice** — it is the thing that makes the accruing series interpretable later.
@@ -157,10 +196,16 @@ amplification materially moves live rankings. **Thesis-consistent, not empirical
 - [ ] A v11 collector channel's score is **exactly** invariant to Neutral additions — metamorphic, not
       approximate.
 - [ ] Neutral additions never **increase** `OpportunityScore`, including via a neutral-only publisher.
-- [ ] Breadth reach counts only publishers carrying directional evidence; shape, budget semantics and the
+- [ ] Breadth reach counts only publishers carrying **Positive** evidence; a publisher carrying only
+      Negative signals does **not** raise Opportunity — asserted. Shape, budget semantics and the
       never-renormalise rule are unchanged.
 - [ ] `radar-formula-v11` exists as its own version, wired into `All` / factory / `ConsumesChannels`; v10 is
       untouched and still dispatchable.
+- [ ] v11 carries its own `CompositionRevision` and a golden guard pinning revision + output + stamp
+      together in one file.
+- [ ] The precommitted attention outcome is a forward **flow** over `(D, D+h]` — never a difference of
+      `AttentionScore` stocks — and declares a persistence comparator Radar must beat.
+- [ ] The live pair is exactly `filings-led-v11` and `filings-led-v10-control`, identical budgets.
 - [ ] v8, v9 and v10 byte-identical, proven by the three existing golden pins passing **unmodified**.
 - [ ] An all-neutral channel stays distinguishable from an absent one; the evidence trail is unchanged.
 - [ ] `default.json` gains a v11 arm **and** a matched v10 arm with an identical budget, under new names,

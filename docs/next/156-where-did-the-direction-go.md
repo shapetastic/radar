@@ -55,9 +55,12 @@ Much of the neutrality is **deliberate design**, and the audit must classify it 
 - **10b5-1 planned transactions are forced Neutral** (`HttpSecForm4Reader.cs:286`): a planned sale is not a
   discretionary signal.
 
-⚠️ **Under AD-16, Neutral MediaAttention is CORRECT, not a gap.** News is the attention arriving — the thing
-the stealth thesis exists to *predict*, not an input to the prediction. A recommendation that makes news
-directional works against the accepted thesis and must be argued explicitly, at length, if proposed at all.
+⚠️ **Neutral MediaAttention is THESIS-CONSISTENT and implemented as designed — which is not the same as
+empirically validated.** Under AD-16 news is the attention *arriving*, i.e. the thing the stealth thesis
+exists to predict rather than an input to the prediction; that makes its neutrality coherent with the
+accepted thesis, and nothing more. It has not been shown to be the right choice by measurement. A
+recommendation that makes news directional works against the accepted thesis and must be argued explicitly,
+at length, if proposed at all.
 
 ## Design
 
@@ -72,19 +75,30 @@ For each signal, the question is *why* it carries the direction it does. Group i
 - **Unknown / unresolvable** — the reason was never persisted (see §2). This bucket is a first-class
   outcome, not a rounding error.
 
-**SOURCE and REASON need SEPARATE Unknown buckets and SEPARATE denominators.** They are different failures
-and conflating them would hide both. A signal may have a known source but an unrecoverable reason (every
-historical Form 4 — see §2), or an unresolvable source entirely: **89.5 % of accrued signals have evidence
-that does not resolve on disk** (spec 142's measurement, cause diagnosed in spec 145, healed forward only).
-So report at least:
+### THREE INDEPENDENT DIMENSIONS — do not make one conditional on another
 
-- **Source-attribution coverage** — of N signals, how many resolve to a source at all; the rest are
-  `Unknown source` and cannot be classified by any rule.
-- **Reason-attribution coverage** — *of those with a known source*, how many carry a recoverable reason.
+An earlier draft treated reason-recovery as conditional on source-recovery. **It is not.**
+`FileSignalStore.Serialize` persists `Reason` on the **signal record itself** (`:470-484`), beside
+`Direction` and `Type` — so the extraction rule that fired is recoverable for essentially **every** signal,
+including the 89.5 % whose *evidence* does not resolve on disk. Audit these separately, each with its own
+denominator:
 
-**Every figure carries the denominator it was computed over**, and the two denominators are different. A
-percentage over an unstated base is exactly the kind of number specs 152 and 153 were written to stop
-producing, and here there are two bases to confuse.
+1. **Evidence source** — does the signal's `EvidenceId` resolve to a stored raw item? Only ~**10.5 %** do
+   (spec 142's measurement; cause diagnosed in spec 145; healed forward only). An unresolvable source is a
+   provenance gap.
+2. **Persisted signal / extraction reason** — the `Reason` on the signal (for keyword extraction, the
+   matched phrase). Expected to be near-total coverage, and it is what makes the by-design vs by-default
+   split answerable at all.
+3. **Upstream producer / classification reason** — the branch the *collector* took before synthesizing its
+   phrase: Form 4's 10b5-1 flag and its `NeutralExcluded`-vs-mixed distinction. **Not persisted** (§2), so
+   permanently Unknown for accrued data.
+
+Dimension 2 being recoverable where dimension 1 is not is the single most useful fact for this audit — it
+means most of the corpus *can* be explained at rule level even though its evidence is unresolvable.
+
+**Every figure carries the denominator it was computed over**, and these are three different denominators.
+A percentage over an unstated base is exactly the kind of number specs 152 and 153 were written to stop
+producing, and here there are three bases to confuse.
 
 ### 2. The reason for a Form 4 classification is NOT recoverable from the store — report it as Unknown
 
