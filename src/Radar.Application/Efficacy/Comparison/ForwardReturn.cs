@@ -86,12 +86,14 @@ public static class ForwardReturn
     /// window (weekends and holidays mean the last bar is rarely on the bound itself). REQUIRED — there is
     /// deliberately no default, so no caller can accidentally accept a four-day return as an h-day one.
     /// <para>
-    /// Only non-negativity is checked here. The composite invariant
-    /// <c>exitToleranceDays &lt; horizonDays</c> is enforced by <see cref="StrategyComparisonOptions"/>, the
-    /// only production call path, because that is where both numbers are resolved from config together. A
-    /// direct caller passing a tolerance at or above the horizon gets a VACUOUS check — the minimum exit date
-    /// falls at or before D, so every bar in the window qualifies and nothing is ever classified
-    /// <see cref="ForwardReturnUnavailableReason.PartialWindow"/>.
+    /// Must be non-negative AND strictly less than <paramref name="horizonDays"/>, enforced HERE rather than
+    /// only in <see cref="StrategyComparisonOptions"/>: a tolerance at or above the horizon puts the minimum
+    /// exit date at or before D, so every bar in the window qualifies and the coverage check becomes VACUOUS —
+    /// partial windows would once again be reported as full-horizon returns, which is the exact defect spec 152
+    /// exists to remove. This method is public, so relying on one caller to hold the invariant would leave the
+    /// guarantee a convention; the same reasoning that made the tolerance a required parameter applies to its
+    /// range. <see cref="StrategyComparisonOptions"/> keeps its own check because it fails at config-binding
+    /// time with a key-named message, long before any observation is computed.
     /// </para>
     /// </param>
     public static ForwardReturnResult TryCompute(
@@ -100,6 +102,12 @@ public static class ForwardReturn
         ArgumentNullException.ThrowIfNull(bars);
         ArgumentOutOfRangeException.ThrowIfLessThan(horizonDays, 1);
         ArgumentOutOfRangeException.ThrowIfNegative(exitToleranceDays);
+
+        // Without this the coverage rule below is vacuous: `minimumExitDate` would fall at or before `asOf`,
+        // every admitted bar would satisfy it, and a partial window would be reported as a full-horizon return
+        // again. Checked at the boundary because the method is public — the invariant cannot depend on the one
+        // production caller that happens to hold it today.
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(exitToleranceDays, horizonDays);
 
         var exitBound = asOf.AddDays(horizonDays);
 

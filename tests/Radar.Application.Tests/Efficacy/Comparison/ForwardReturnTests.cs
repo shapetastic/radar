@@ -320,4 +320,28 @@ public sealed class ForwardReturnTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ForwardReturn.TryCompute([], new DateOnly(2026, 1, 5), horizonDays: 21, exitToleranceDays: -1));
     }
+
+    [Fact]
+    public void TryCompute_RejectsAToleranceThatWouldMakeTheCoverageCheckVacuous()
+    {
+        var asOf = new DateOnly(2026, 1, 5);
+
+        // A tolerance AT the horizon puts the minimum exit date on `asOf` itself, so every admitted bar
+        // qualifies and nothing could ever be PartialWindow again. Refused at the boundary rather than left to
+        // the one production caller that resolves both numbers together.
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ForwardReturn.TryCompute([], asOf, horizonDays: 21, exitToleranceDays: 21));
+
+        // And beyond it, where the minimum exit date would fall BEFORE the as-of date.
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ForwardReturn.TryCompute([], asOf, horizonDays: 21, exitToleranceDays: 22));
+
+        // The largest legal tolerance is h-1, and it still computes: the boundary is strict, not off by one.
+        // h-1 puts the minimum exit date one day after D, so with the two-distinct-bar rule the tightest
+        // window it can admit is entry at D+1 and exit at D+2.
+        PriceBar[] bars = [Bar(2026, 1, 6, 100m), Bar(2026, 1, 7, 110m)];
+        var atTheLimit = ForwardReturn.TryCompute(bars, asOf, horizonDays: 21, exitToleranceDays: 20);
+        Assert.True(atTheLimit.IsDefined);
+        Assert.Equal(ForwardReturnUnavailableReason.None, atTheLimit.Reason);
+    }
 }
