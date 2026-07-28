@@ -156,3 +156,4 @@ secrets.json
 /data/ai-debug/
 /data/fcc-cache/
 /.playwright-mcp
+/data/replays/backtest-infer-on/strategies
