@@ -52,6 +52,9 @@ public sealed class StrategyComparisonHarnessTests
         Assert.Equal(40, row.OutOfSample.Coverage.Observations);
         Assert.Equal(0, row.ObservationsWithoutForwardPrice);
 
+        // The fixture's daily bars span every as-of date plus the horizon, so no window is partial either.
+        Assert.Equal(0, row.ObservationsWithPartialWindow);
+
         Assert.Equal(4, row.InSample.Coverage.DistinctCompanies);
         Assert.Equal(4, row.OutOfSample.Coverage.DistinctCompanies);
         Assert.Equal(20, row.InSample.Coverage.DistinctAsOfDates);
@@ -254,6 +257,117 @@ public sealed class StrategyComparisonHarnessTests
         Assert.Equal(0, row.ObservationsWithoutForwardPrice);
 
         // Every company-day is still scored exactly once — the shadow series adds no observation either.
+        Assert.Equal(80, row.InSample.Coverage.Observations);
+        Assert.Equal(4, row.InSample.Coverage.DistinctCompanies);
+    }
+
+    /// <summary>
+    /// Drops every bar after <paramref name="lastBarDayIndex"/>, so an as-of date late enough that
+    /// <c>D + horizon</c> lands past the truncation gets a forward window that stops short of the horizon —
+    /// exactly the shape spec 152 must classify as <c>PartialWindow</c> instead of a full-horizon return.
+    /// </summary>
+    private static StrategyScoreSeries TruncateBarsAfter(StrategyScoreSeries strategy, int lastBarDayIndex)
+    {
+        var lastBar = ComparisonFixtures.AsOf(lastBarDayIndex);
+        return new StrategyScoreSeries(
+            strategy.StrategyName,
+            [.. strategy.Companies.Select(c => new CompanyEfficacySeries(
+                c.CompanyId,
+                c.CompanyName,
+                c.Ticker,
+                c.Points,
+                [.. c.PriceBars.Where(b => b.Date <= lastBar)]))]);
+    }
+
+    [Fact]
+    public void Compare_CountsAPartialForwardWindowSeparatelyAndKeepsItOutOfTheCorrelation()
+    {
+        // Bars stop at day 40, so with a 21-day horizon the as-of dates from day 24 on have a window that
+        // reaches only day 40 — a shortfall of 5+ days against a tolerance of 4. Before spec 152 those were
+        // computed as 16-to-20-day returns and reported as 21-day ones.
+        var partiallyPriced = TruncateBarsAfter(
+            ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout), lastBarDayIndex: 40);
+
+        var leaderboard = Harness.Compare([partiallyPriced], ComparisonFixtures.Options());
+        var row = Assert.Single(leaderboard.Rows);
+
+        // Days 24..29 × 4 companies = 24 company-days short of the horizon…
+        Assert.Equal(24, row.ObservationsWithPartialWindow);
+
+        // …and NOT counted as missing price: that column keeps its exact pre-152 definition (no bar at all, a
+        // single bar, or a non-positive entry price). "No price" and "not the horizon" are different facts.
+        Assert.Equal(0, row.ObservationsWithoutForwardPrice);
+
+        // Excluded from the metric, not relabelled: days 0..23 are the only usable dates, split 16 / 8.
+        Assert.Equal(64, row.InSample.Coverage.Observations);
+        Assert.Equal(32, row.OutOfSample.Coverage.Observations);
+        Assert.Equal(16, row.InSample.Coverage.DistinctAsOfDates);
+        Assert.Equal(8, row.OutOfSample.Coverage.DistinctAsOfDates);
+        Assert.Equal(24, leaderboard.Windows.TotalAsOfDates);
+
+        // The proof it is EXCLUDED rather than merely counted: the same series scored only over the dates whose
+        // windows are complete produces the identical metric, differing solely in the partial tally.
+        var completeDatesOnly = TruncateBarsAfter(
+            ComparisonFixtures.Strategy(
+                "aligned", ComparisonFixtures.AlignedThroughout, dateIndexes: Enumerable.Range(0, 24)),
+            lastBarDayIndex: 40);
+        var withoutThePartials = Assert.Single(
+            Harness.Compare([completeDatesOnly], ComparisonFixtures.Options()).Rows);
+
+        Assert.Equal(0, withoutThePartials.ObservationsWithPartialWindow);
+        Assert.Equal(row.InSample.Correlation.Rho, withoutThePartials.InSample.Correlation.Rho, 12);
+        Assert.Equal(row.OutOfSample.Correlation.Rho, withoutThePartials.OutOfSample.Correlation.Rho, 12);
+        Assert.Equal(row.InSample.Coverage, withoutThePartials.InSample.Coverage);
+        Assert.Equal(row.OutOfSample.Coverage, withoutThePartials.OutOfSample.Coverage);
+    }
+
+    [Fact]
+    public void Compare_KeepsTheMissingPriceAndPartialWindowTalliesSeparate()
+    {
+        // All three outcomes at once: company 0 has no price at all (missing), companies 1-3 have price that
+        // stops at day 40 (usable up to day 23, partial from day 24). Two counts, two meanings, no overlap.
+        var full = ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout);
+        var truncated = TruncateBarsAfter(full, lastBarDayIndex: 40);
+        var mixed = new StrategyScoreSeries(
+            truncated.StrategyName,
+            [.. truncated.Companies.Select((c, i) => i == 0
+                ? new CompanyEfficacySeries(c.CompanyId, c.CompanyName, c.Ticker, c.Points, [])
+                : c)]);
+
+        var row = Assert.Single(Harness.Compare([mixed], ComparisonFixtures.Options()).Rows);
+
+        Assert.Equal(ComparisonFixtures.AsOfDateCount, row.ObservationsWithoutForwardPrice);   // 30 company-days
+        Assert.Equal(18, row.ObservationsWithPartialWindow);                                   // 6 dates × 3
+        Assert.Equal(48, row.InSample.Coverage.Observations);                                   // 16 dates × 3
+        Assert.Equal(24, row.OutOfSample.Coverage.Observations);                                // 8 dates × 3
+        Assert.Equal(3, row.InSample.Coverage.DistinctCompanies);
+    }
+
+    [Fact]
+    public void Compare_DoesNotCountACompanyDayAsPartialWhenAnotherSeriesCoveredTheWholeHorizon()
+    {
+        // The same de-dupe rule the missing-price tally uses, for the same reason: a (company, as-of) key that
+        // some occurrence DID cover to the horizon is not lost coverage, so it must not be reported as partial.
+        // A strategy carrying one company id in two series with different bars is the only way the two
+        // occurrences of one key can disagree — and it is legal.
+        var full = ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout);
+        var company0 = full.Companies[0];
+        var truncatedShadow = new CompanyEfficacySeries(
+            company0.CompanyId,
+            company0.CompanyName,
+            company0.Ticker,
+            company0.Points,
+            [.. company0.PriceBars.Where(b => b.Date <= ComparisonFixtures.AsOf(40))]);
+
+        var withATruncatedShadow = new StrategyScoreSeries(
+            full.StrategyName, [.. full.Companies, truncatedShadow]);
+
+        var row = Assert.Single(Harness.Compare([withATruncatedShadow], ComparisonFixtures.Options()).Rows);
+
+        Assert.Equal(0, row.ObservationsWithPartialWindow);
+        Assert.Equal(0, row.ObservationsWithoutForwardPrice);
+
+        // …and the shadow adds no observation either — every company-day is still scored exactly once.
         Assert.Equal(80, row.InSample.Coverage.Observations);
         Assert.Equal(4, row.InSample.Coverage.DistinctCompanies);
     }

@@ -675,6 +675,11 @@ public sealed class RadarWorkerServicesTests
         Assert.Equal(0.30, options.HoldOutFraction);
         Assert.Equal(20, options.MinimumObservations);
 
+        // Spec 152: pinned here like its three siblings, because this is the ONLY place the key is proven to
+        // reach Application. Dropping it from BuildStrategyComparisonOptions would otherwise leave the live
+        // leaderboard on a hard-coded tolerance with every Application-level test still green.
+        Assert.Equal(4, options.ExitToleranceDays);
+
         // With no replay label it reads the LIVE forward series through the existing per-strategy factory.
         var selector = provider.GetRequiredService<IStrategyScoreSnapshotStoreSelector>();
         Assert.IsType<LiveStrategyScoreSnapshotStoreSelector>(selector);
@@ -700,7 +705,11 @@ public sealed class RadarWorkerServicesTests
             ("Radar:Efficacy:Comparison:ReplayLabel", "  20260101-20260726-1d  "),
             ("Radar:Efficacy:Comparison:ForwardHorizonDays", "10"),
             ("Radar:Efficacy:Comparison:HoldOutFraction", "0.5"),
-            ("Radar:Efficacy:Comparison:MinimumObservations", "7"));
+            ("Radar:Efficacy:Comparison:MinimumObservations", "7"),
+
+            // 2 is valid against this test's horizon of 10 AND differs from the default of 4, so the assertion
+            // below cannot pass vacuously on a knob that never left config.
+            ("Radar:Efficacy:Comparison:ExitToleranceDays", "2"));
 
         var selector = provider.GetRequiredService<IStrategyScoreSnapshotStoreSelector>();
         Assert.IsType<ReplayLabelStrategyScoreSnapshotStoreSelector>(selector);
@@ -716,6 +725,7 @@ public sealed class RadarWorkerServicesTests
         Assert.Equal(10, options.ForwardHorizonDays);
         Assert.Equal(0.5, options.HoldOutFraction);
         Assert.Equal(7, options.MinimumObservations);
+        Assert.Equal(2, options.ExitToleranceDays);
     }
 
     [Fact]
@@ -749,6 +759,10 @@ public sealed class RadarWorkerServicesTests
     [InlineData("Radar:Efficacy:Comparison:ForwardHorizonDays", "0", "ForwardHorizonDays")]
     [InlineData("Radar:Efficacy:Comparison:HoldOutFraction", "1", "HoldOutFraction")]
     [InlineData("Radar:Efficacy:Comparison:MinimumObservations", "2", "MinimumObservations")]
+
+    // 21 == the default ForwardHorizonDays this theory leaves in place, so the coverage check would be vacuous
+    // (every bar after D would qualify) — the exact condition StrategyComparisonOptions refuses.
+    [InlineData("Radar:Efficacy:Comparison:ExitToleranceDays", "21", "ExitToleranceDays")]
     public void EfficacyComparisonMisconfigured_FailsFastNamingTheKey(string key, string value, string named)
     {
         var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(

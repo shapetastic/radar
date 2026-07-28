@@ -37,8 +37,16 @@ internal static class ComparisonFixtures
     /// <summary>Daily price slope per company: strictly decreasing, so forward return is ordered by index.</summary>
     private static readonly decimal[] Slopes = [0.5m, 0.25m, 0m, -0.2m];
 
-    public static StrategyComparisonOptions Options(int minimumObservations = 20) =>
-        new(HorizonDays, HoldOutFraction, minimumObservations);
+    /// <summary>
+    /// The exit tolerance these fixtures run at: the PRODUCTION default (spec 152), because <see cref="Bars"/>
+    /// is a daily series that comfortably spans every as-of date plus the horizon, so the shortfall is always 0
+    /// and the fixtures are genuinely complete windows rather than partial ones tolerated by a loose knob.
+    /// </summary>
+    public const int ExitToleranceDays = 4;
+
+    public static StrategyComparisonOptions Options(
+        int minimumObservations = 20, int exitToleranceDays = ExitToleranceDays) =>
+        new(HorizonDays, HoldOutFraction, minimumObservations, exitToleranceDays);
 
     public static DateOnly AsOf(int dateIndex) => FirstAsOf.AddDays(dateIndex);
 

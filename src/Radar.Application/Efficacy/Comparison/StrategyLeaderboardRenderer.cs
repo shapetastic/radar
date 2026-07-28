@@ -29,7 +29,8 @@ public sealed class StrategyLeaderboardRenderer
         "status,rank,strategy,strategiesCompared,strategiesConsidered,"
             + "inSampleRho,inSampleLower95,inSampleUpper95,inSampleObservations,inSampleCompanies,inSampleDates,"
             + "outOfSampleRho,outOfSampleLower95,outOfSampleUpper95,outOfSampleObservations,"
-            + "outOfSampleCompanies,outOfSampleDates,observationsWithoutForwardPrice,dropReason,metricReason";
+            + "outOfSampleCompanies,outOfSampleDates,observationsWithoutForwardPrice,"
+            + "observationsWithPartialWindow,dropReason,metricReason";
 
     public string RenderCsv(StrategyLeaderboard leaderboard)
     {
@@ -48,6 +49,7 @@ public sealed class StrategyLeaderboardRenderer
             AppendMetric(sb, row.InSample);
             AppendMetric(sb, row.OutOfSample);
             sb.Append(Int(row.ObservationsWithoutForwardPrice)).Append(',');
+            sb.Append(Int(row.ObservationsWithPartialWindow)).Append(',');
             sb.Append(',');                                   // dropReason: empty for a ranked strategy
             sb.Append(MetricReasonToken(row.OutOfSample.Correlation.Reason)).Append('\n');
         }
@@ -62,6 +64,7 @@ public sealed class StrategyLeaderboardRenderer
             sb.Append(",,,").Append(Int(drop.InSampleObservations)).Append(",,,");
             sb.Append(",,,").Append(Int(drop.OutOfSampleObservations)).Append(",,,");
             sb.Append(',');                                   // observationsWithoutForwardPrice: not ranked
+            sb.Append(',');                                   // observationsWithPartialWindow: not ranked
             sb.Append(DropReasonToken(drop.Reason)).Append(',');
             sb.Append(MetricReasonToken(drop.MetricReason)).Append('\n');
         }
@@ -84,6 +87,8 @@ public sealed class StrategyLeaderboardRenderer
         sb.Append(CultureInfo.InvariantCulture, $"- **Strategies compared (ranked): {leaderboard.StrategiesCompared}.** A leader chosen from many needs a stronger effect than one chosen from few.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Strategies considered: {leaderboard.StrategiesConsidered}; dropped: {leaderboard.DroppedStrategies.Count} (each named below).\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Forward horizon: {o.ForwardHorizonDays} calendar day(s) — a score at D is judged only against price over (D, D+{o.ForwardHorizonDays}]. Price at or before D is never read.\n");
+        sb.Append(CultureInfo.InvariantCulture, $"- Exit tolerance: {o.ExitToleranceDays} calendar day(s). An observation counts only when its LATEST bar inside (D, D+{o.ForwardHorizonDays}] falls on or after D+{o.ForwardHorizonDays - o.ExitToleranceDays}. One that falls further short is a PARTIAL forward window: it is excluded from the correlation rather than reported as a full {o.ForwardHorizonDays}-day return. The tolerance exists because markets close at weekends and holidays, so the last bar is rarely on the bound itself.\n");
+        sb.Append("- \"Observations without a forward price\" and \"observations with a partial forward window\" are counted separately and mean different things: no price at all in the window, versus some price that does not reach the horizon.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Hold-out: the chronologically latest {Percent(o.HoldOutFraction)} of as-of dates. Ranking uses the in-sample window only; the headline number is out-of-sample.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Minimum observations per window: {o.MinimumObservations}.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- As-of dates: {w.TotalAsOfDates} total = {w.InSampleAsOfDates} in-sample ({Range(w.InSampleStart, w.InSampleEnd)}) + {w.OutOfSampleAsOfDates} out-of-sample ({Range(w.OutOfSampleStart, w.OutOfSampleEnd)}). The two sets are disjoint by construction.\n");
@@ -109,11 +114,11 @@ public sealed class StrategyLeaderboardRenderer
         }
         else
         {
-            sb.Append("| rank | strategy | in-sample rho | in-sample 95% CI | in-sample obs (companies × dates) | out-of-sample rho | out-of-sample 95% CI | out-of-sample obs (companies × dates) | observations without a forward price |\n");
-            sb.Append("| ---: | --- | ---: | --- | --- | ---: | --- | --- | ---: |\n");
+            sb.Append("| rank | strategy | in-sample rho | in-sample 95% CI | in-sample obs (companies × dates) | out-of-sample rho | out-of-sample 95% CI | out-of-sample obs (companies × dates) | observations without a forward price | observations with a partial forward window |\n");
+            sb.Append("| ---: | --- | ---: | --- | --- | ---: | --- | --- | ---: | ---: |\n");
             foreach (var row in leaderboard.Rows)
             {
-                sb.Append(CultureInfo.InvariantCulture, $"| {row.Rank} | {Md(row.StrategyName)} | {Rho(row.InSample.Correlation.Rho)} | {Rho(row.InSample.Correlation.LowerBound)} to {Rho(row.InSample.Correlation.UpperBound)} | {Coverage(row.InSample.Coverage)} | {Rho(row.OutOfSample.Correlation.Rho)} | {Rho(row.OutOfSample.Correlation.LowerBound)} to {Rho(row.OutOfSample.Correlation.UpperBound)} | {Coverage(row.OutOfSample.Coverage)} | {row.ObservationsWithoutForwardPrice} |\n");
+                sb.Append(CultureInfo.InvariantCulture, $"| {row.Rank} | {Md(row.StrategyName)} | {Rho(row.InSample.Correlation.Rho)} | {Rho(row.InSample.Correlation.LowerBound)} to {Rho(row.InSample.Correlation.UpperBound)} | {Coverage(row.InSample.Coverage)} | {Rho(row.OutOfSample.Correlation.Rho)} | {Rho(row.OutOfSample.Correlation.LowerBound)} to {Rho(row.OutOfSample.Correlation.UpperBound)} | {Coverage(row.OutOfSample.Coverage)} | {row.ObservationsWithoutForwardPrice} | {row.ObservationsWithPartialWindow} |\n");
             }
 
             sb.Append('\n');

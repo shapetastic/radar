@@ -667,6 +667,20 @@ public sealed class StrategyComparisonWorkerOptions
     public int MinimumObservations { get; init; } = 20;
 
     /// <summary>
+    /// How many CALENDAR days short of <c>D+h</c> the last bar in the forward window may fall and still count as
+    /// covering the horizon; an observation that falls further short is a PARTIAL window, excluded from the
+    /// correlation instead of being reported as a full-horizon return (spec 152). Defaults to 4. Must be at
+    /// least 0 and strictly less than <see cref="ForwardHorizonDays"/>.
+    /// <para>
+    /// The default is measured over <c>data/prices/</c> as of 2026-07-27 (43 tickers, 11,153 bars): the maximum
+    /// gap between consecutive bars is 4 calendar days and the maximum shortfall over the 15,334
+    /// genuinely-complete 21-day windows is 3 days, so 4 = that maximum plus one day of headroom for an
+    /// unscheduled closure and discards 0% of those complete windows (a tolerance of 1 would discard 16.3%).
+    /// </para>
+    /// </summary>
+    public int ExitToleranceDays { get; init; } = 4;
+
+    /// <summary>
     /// Optional: compare a spec-139 REPLAY run's per-strategy series (the label under
     /// <c>Radar:ReplayDirectory</c>) instead of the live forward series. Blank (the default) reads the live
     /// forward series. A replay run replaces the pipeline run and never renders efficacy, so using this means

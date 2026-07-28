@@ -96,7 +96,10 @@ public sealed class StrategyComparisonReportGeneratorTests
             .With("mirror", secondaryStore);
 
         var artifacts = new RecordingEfficacyArtifactStore();
-        var options = new StrategyComparisonOptions(21, 1.0 / 3.0, minimumObservations);
+        // The production exit tolerance (spec 152): the fixture's price bars are daily and span every as-of date
+        // plus the horizon, so every window is genuinely complete and nothing is admitted by a loose knob.
+        var options = new StrategyComparisonOptions(
+            21, 1.0 / 3.0, minimumObservations, ComparisonFixtures.ExitToleranceDays);
 
         var generator = new StrategyComparisonReportGenerator(
             strategies,

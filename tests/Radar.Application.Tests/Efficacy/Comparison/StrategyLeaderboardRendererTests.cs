@@ -82,6 +82,78 @@ public sealed class StrategyLeaderboardRendererTests
     }
 
     [Fact]
+    public void RenderCsv_CarriesThePartialWindowCountAsItsOwnColumnInEveryRowShape()
+    {
+        var csv = Renderer.RenderCsv(FourStrategiesTwoDropped());
+        var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Split(',');
+
+        // A distinct column, immediately after the missing-price one — never a widening of it.
+        var missingIndex = Array.IndexOf(header, "observationsWithoutForwardPrice");
+        var partialIndex = Array.IndexOf(header, "observationsWithPartialWindow");
+        Assert.True(missingIndex >= 0);
+        Assert.Equal(missingIndex + 1, partialIndex);
+
+        // Both ranked and dropped rows carry the field — the dropped ones as an EMPTY value — so every row has
+        // the same column count and the file stays parseable.
+        foreach (var line in lines)
+        {
+            Assert.Equal(header.Length, line.Split(',').Length);
+        }
+
+        var ranked = lines.Where(l => l.StartsWith("ranked,", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, ranked.Count);
+        Assert.All(ranked, l => Assert.Equal("0", l.Split(',')[partialIndex]));
+
+        var dropped = lines.Where(l => l.StartsWith("dropped,", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, dropped.Count);
+        Assert.All(dropped, l => Assert.Equal(string.Empty, l.Split(',')[partialIndex]));
+    }
+
+    [Fact]
+    public void RenderMarkdown_GivesThePartialWindowCountItsOwnAlignedColumn()
+    {
+        var markdown = Renderer.RenderMarkdown(FourStrategiesTwoDropped());
+        var lines = markdown.Split('\n');
+
+        var headerIndex = Array.FindIndex(
+            lines, l => l.StartsWith("| rank | strategy |", StringComparison.Ordinal));
+        Assert.True(headerIndex >= 0);
+
+        var headerCells = SplitRow(lines[headerIndex]);
+        Assert.Contains("observations without a forward price", headerCells);
+        Assert.Contains("observations with a partial forward window", headerCells);
+
+        // Header, separator and every body row must agree on the column count — an alignment row one marker
+        // short silently stops rendering as a table.
+        Assert.Equal(headerCells.Length, SplitRow(lines[headerIndex + 1]).Length);
+        for (var i = headerIndex + 2; i < lines.Length && lines[i].StartsWith("| ", StringComparison.Ordinal); i++)
+        {
+            Assert.Equal(headerCells.Length, SplitRow(lines[i]).Length);
+        }
+    }
+
+    [Fact]
+    public void RenderMarkdown_StatesTheExitToleranceAndWhatAPartialWindowMeans()
+    {
+        var markdown = Renderer.RenderMarkdown(FourStrategiesTwoDropped());
+
+        Assert.Contains("Exit tolerance: 4 calendar day(s).", markdown, StringComparison.Ordinal);
+        Assert.Contains("falls on or after D+17", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "excluded from the correlation rather than reported as a full 21-day return",
+            markdown,
+            StringComparison.Ordinal);
+        Assert.Contains("markets close at weekends and holidays", markdown, StringComparison.Ordinal);
+
+        // …and that the two counts are not the same fact.
+        Assert.Contains(
+            "no price at all in the window, versus some price that does not reach the horizon",
+            markdown,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RenderMarkdown_ReportsTheOutOfSampleHeadlineWithItsDispersionAndCoverage()
     {
         var leaderboard = Harness.Compare(
@@ -186,6 +258,13 @@ public sealed class StrategyLeaderboardRendererTests
         Assert.Contains("\"momentum, v2 |\"\"x\"\"\"", csv, StringComparison.Ordinal);
         Assert.Contains("momentum, v2 \\|\"x\"", Renderer.RenderMarkdown(awkward), StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The cells of one markdown table row, ignoring the leading and trailing pipe. Cell VALUES never contain an
+    /// unescaped <c>|</c> (the renderer escapes it), so a plain split is exact here.
+    /// </summary>
+    private static string[] SplitRow(string line) =>
+        [.. line.Trim().Trim('|').Split('|', StringSplitOptions.None).Select(c => c.Trim())];
 
     private static int CountUnquotedCommas(string line)
     {

@@ -41,7 +41,8 @@ public sealed class StrategyComparisonHarness
     private sealed record StrategyObservations(
         string StrategyName,
         IReadOnlyList<Observation> Usable,
-        int WithoutForwardPrice);
+        int WithoutForwardPrice,
+        int PartialWindow);
 
     public StrategyLeaderboard Compare(
         IReadOnlyList<StrategyScoreSeries> strategies, StrategyComparisonOptions options)
@@ -53,7 +54,7 @@ public sealed class StrategyComparisonHarness
         foreach (var strategy in strategies)
         {
             ArgumentNullException.ThrowIfNull(strategy);
-            perStrategy.Add(BuildObservations(strategy, options.ForwardHorizonDays));
+            perStrategy.Add(BuildObservations(strategy, options));
         }
 
         var windows = SplitDates(perStrategy, options.HoldOutFraction);
@@ -64,7 +65,13 @@ public sealed class StrategyComparisonHarness
 
         // Ranking candidates are accumulated with their in-sample ρ, then ordered — the ordering is applied
         // here and nowhere else, so an out-of-sample-ranked leaderboard is not expressible through this API.
-        var candidates = new List<(double InSampleRho, string Name, StrategyWindowMetric In, StrategyWindowMetric Out, int Unusable)>();
+        var candidates = new List<(
+            double InSampleRho,
+            string Name,
+            StrategyWindowMetric In,
+            StrategyWindowMetric Out,
+            int Unusable,
+            int Partial)>();
 
         foreach (var strategy in perStrategy)
         {
@@ -128,7 +135,8 @@ public sealed class StrategyComparisonHarness
                 strategy.StrategyName,
                 inMetric,
                 outMetric,
-                strategy.WithoutForwardPrice));
+                strategy.WithoutForwardPrice,
+                strategy.PartialWindow));
         }
 
         // Best in-sample first; ties broken by name (Ordinal) so the order is total and deterministic.
@@ -141,7 +149,7 @@ public sealed class StrategyComparisonHarness
         for (var i = 0; i < candidates.Count; i++)
         {
             var c = candidates[i];
-            rows.Add(new StrategyLeaderboardRow(i + 1, c.Name, c.In, c.Out, c.Unusable));
+            rows.Add(new StrategyLeaderboardRow(i + 1, c.Name, c.In, c.Out, c.Unusable, c.Partial));
         }
 
         // Dropped strategies in a stable, name-ordered sequence (their input order is not meaningful).
@@ -175,21 +183,38 @@ public sealed class StrategyComparisonHarness
     /// strategy may legally carry the same company id in two series with different bars, and then it can, so
     /// the exclusion is load-bearing rather than defensive.
     /// </para>
+    /// <para>
+    /// <b>A partial forward window is its own tally, on the same key (spec 152).</b> An observation whose
+    /// latest bar falls more than <c>ExitToleranceDays</c> short of <c>D+h</c> is not a full-horizon return, so
+    /// it is excluded from the usable set — but it is NOT "no forward price", and
+    /// <c>WithoutForwardPrice</c> keeps its exact pre-152 definition (<c>NoForwardBar</c> /
+    /// <c>SingleForwardBar</c> / <c>NonPositiveEntryPrice</c>) so that column's meaning does not silently
+    /// change. Partials therefore get their own set, de-duped on the SAME (company, as-of) key and excluded
+    /// against the usable keys for the SAME reason: a key some occurrence DID cover to the horizon is not lost
+    /// coverage. The two sets are independent, and a key can appear in both only in the pathological case the
+    /// paragraph above describes — one company id carried in two series with different bars.
+    /// </para>
     /// </summary>
-    private static StrategyObservations BuildObservations(StrategyScoreSeries strategy, int horizonDays)
+    private static StrategyObservations BuildObservations(
+        StrategyScoreSeries strategy, StrategyComparisonOptions options)
     {
         var byKey = new Dictionary<(Guid CompanyId, DateOnly AsOf), Observation>();
         var withoutForwardPrice = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
+        var partialWindow = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
 
         foreach (var company in strategy.Companies)
         {
             foreach (var point in company.Points)
             {
                 var asOf = point.AsOfDate ?? point.ScoreDate;
-                var forward = ForwardReturn.TryCompute(company.PriceBars, asOf, horizonDays);
+                var forward = ForwardReturn.TryCompute(
+                    company.PriceBars, asOf, options.ForwardHorizonDays, options.ExitToleranceDays);
                 if (!forward.IsDefined)
                 {
-                    withoutForwardPrice.Add((company.CompanyId, asOf));
+                    var target = forward.Reason == ForwardReturnUnavailableReason.PartialWindow
+                        ? partialWindow
+                        : withoutForwardPrice;
+                    target.Add((company.CompanyId, asOf));
                     continue;
                 }
 
@@ -199,6 +224,7 @@ public sealed class StrategyComparisonHarness
         }
 
         withoutForwardPrice.ExceptWith(byKey.Keys);
+        partialWindow.ExceptWith(byKey.Keys);
 
         var usable = byKey.Values.ToList();
         usable.Sort(static (a, b) =>
@@ -207,7 +233,8 @@ public sealed class StrategyComparisonHarness
             return byDate != 0 ? byDate : a.CompanyId.CompareTo(b.CompanyId);
         });
 
-        return new StrategyObservations(strategy.StrategyName, usable, withoutForwardPrice.Count);
+        return new StrategyObservations(
+            strategy.StrategyName, usable, withoutForwardPrice.Count, partialWindow.Count);
     }
 
     private static StrategyWindowMetric Metric(

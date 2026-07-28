@@ -50,13 +50,20 @@ public sealed record StrategyWindowMetric(
 /// observation is, de-duped the same way — so it is directly comparable with the coverage counts beside it
 /// rather than inflated by same-day re-runs that the usable side would have collapsed.
 /// </para>
+/// <para>
+/// <see cref="ObservationsWithPartialWindow"/> is counted on that same company-day unit and is DISTINCT from
+/// <see cref="ObservationsWithoutForwardPrice"/> (spec 152): "no price at all" and "some price but not the
+/// horizon you asked for" are different facts about the data and must never be conflated. Conflating them was
+/// the defect — a partial window used to be counted as a success, so neither column could reveal it.
+/// </para>
 /// </summary>
 public sealed record StrategyLeaderboardRow(
     int Rank,
     string StrategyName,
     StrategyWindowMetric InSample,
     StrategyWindowMetric OutOfSample,
-    int ObservationsWithoutForwardPrice);
+    int ObservationsWithoutForwardPrice,
+    int ObservationsWithPartialWindow);
 
 /// <summary>
 /// The chronological hold-out split, reported so a reader can verify it rather than trust it. The two date
