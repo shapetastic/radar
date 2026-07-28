@@ -154,6 +154,9 @@ title+body hash alone), so no evidence id moves and no `AddIfNewAsync` decision 
 
 ## Acceptance criteria
 
+- [ ] **All THREE coverage dimensions are reported independently, each with its own denominator**:
+      evidence-source resolution, persisted signal/extraction `Reason`, and the upstream producer/
+      classification branch. No dimension may be presented as conditional on another.
 - [ ] A table over the live store classifies signals by direction **and reason**, with
       design / default / **Unknown** buckets and an explicit denominator for each.
 - [ ] The Form 4 reason gap is reported as Unknown, with the persistence gap named — not estimated or

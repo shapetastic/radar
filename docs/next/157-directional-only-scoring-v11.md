@@ -42,7 +42,7 @@ reader.
 
 The middle row is the one that costs work — see §3. Do not claim the top row's guarantee for the composite.
 
-### 3. Breadth counts DIRECTIONAL publishers only — the maintainer's decision, 2026-07-28
+### 3. Breadth counts POSITIVE-carrying publishers only — the maintainer's decision, 2026-07-28
 
 Today the breadth channel's tier-weighted distinct-publisher reach is computed over the whole gated set, so
 a Neutral news item adds a publisher, raises breadth and can raise Opportunity — while also raising
@@ -137,36 +137,31 @@ AD-16 requires the outcome variable and horizon to be declared before results ar
 while leaving them open would breach the AD this spec exists to serve. **No evaluator need be implemented** —
 this is a declaration, recorded as an AD-16 amendment, fixing at minimum:
 
-⚠️ **The metric MUST be a forward FLOW, not a difference of stocks.** An earlier draft proposed
-`AttentionScore(D+h) − AttentionScore(D)`; that is wrong and must not be used. `AttentionScore` is a
-**rolling 60-day stock**, so two readings h days apart overlap heavily and their difference mixes new
-arrivals with old events ageing out, saturation curvature and `[0,100]` int rounding. A company can receive
-substantial new attention and still show a **negative** delta. Measure what arrives:
+**This is ALREADY DONE — do not re-open it, do not propose alternatives, and do not treat any of it as a
+default.** The precommitment is recorded and accepted as the **AMENDMENT · 2026-07-28** to AD-16 in
+`docs/architecture-decisions.md`, which fixes all seven values: the primary metric (distinct third-party
+publishers with a resolving `MediaAttention` signal in `(D, D+h]`), the deliberate **non-use of publisher
+novelty** (89.5 % of accrued evidence is unresolvable, so novelty would measure the gap rather than the
+market), `h = 21` days with the spec-152 four-day tolerance, the **first eligible as-of date of 2026-08-01**,
+the missing-data rule, the mandatory `baseline-attention-persistence` comparator, and the failure criterion.
 
-- the exact **attention metric** — a count over `(D, D+h]` of newly-arrived attention: new `MediaAttention`
-  signals, and/or **new distinct third-party publishers** not previously seen for that company. Prefer the
-  publisher count: it is closer to "the market noticed" than raw article volume, and it resists a single
-  outlet repeating itself;
-- the **horizon** h, in calendar days, and note it need not equal the price horizon — attention is expected
-  to arrive sooner than a re-rating;
-- **eligible observations** — minimum companies per as-of date, plus the spec-152 `PartialWindow` treatment
-  applied to the attention window exactly as it is to price;
-- a **persistence comparator** — the attention-side equivalent of AD-15's baselines, and it is **not
-  optional**. Attention is strongly autocorrelated: already-covered companies keep being covered. A score
-  that predicts future attention merely by tracking current attention has discovered nothing. So the
-  declared outcome must be measured **against** a baseline that predicts forward attention from
-  attention-at-D alone, and Radar must beat it;
-- the **failure criterion**: what result counts as the thesis failing, declared now.
+⚠️ Recorded so it is not re-derived: an earlier draft proposed `AttentionScore(D+h) − AttentionScore(D)`.
+That is **wrong and must not be used** — `AttentionScore` is a rolling 60-day *stock*, so two readings h days
+apart overlap heavily and their difference mixes new arrivals with old events ageing out, saturation
+curvature and `[0,100]` rounding. A company can receive substantial new attention and show a **negative**
+delta.
 
-Propose concrete values, mark them as requiring maintainer sign-off, and land the amendment **in this
-slice** — it is the thing that makes the accruing series interpretable later.
+**This slice implements no evaluator.** Its only obligation here is not to contradict the amendment: the
+live arms must begin accruing on or before the first eligible as-of date so the declared window is
+populated when the evaluator is eventually built.
 
 ## Hypotheses, labelled as such
 
 Recorded so they are not read as findings. **Measured:** the 87.6 % Neutral share, and v10's current
 amplification. **Hypotheses, not yet characterised:** that neutral volume tracks company size; that the
 amplification materially moves live rankings. **Thesis-consistent, not empirical:** that Neutral
-`MediaAttention` is correct because news is the attention AD-16 wants to predict.
+`MediaAttention`'s neutrality is coherent with AD-16 — news being the attention the thesis means to predict
+rather than an input to it — which is a statement about design consistency, not a measured result.
 
 ## Files (verify against the tree before planning)
 

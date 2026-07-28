@@ -1314,6 +1314,49 @@ window (of 32 companies with an active `sec-form4` channel, 13 all-Neutral and 1
 more patient score computed over evidence that carries no direction will accumulate nothing more reliably.
 Fixing directional extraction is therefore prior to any further tuning of what consumes it.
 
+### AMENDMENT · 2026-07-28 — THE PRECOMMITTED OUTCOME, fixed here in concrete terms
+
+AD-16 requires the outcome and horizon to be declared **before results are seen**. This amendment *is* that
+declaration. Every value below is fixed; none is a default for an implementer to choose, and none may be
+changed after a v11 snapshot has been inspected except by a further recorded amendment that invalidates
+comparisons across it.
+
+**1 · Primary attention metric.** The count of **distinct third-party publishers with at least one
+`MediaAttention` signal for that company whose evidence resolves, observed in `(D, D+h]`**. Distinct
+publishers rather than article count, because one outlet syndicating itself is not the market noticing.
+
+**2 · Publisher novelty: NOT USED, deliberately.** No "new publisher" test and no historical lookback.
+**89.5 % of accrued evidence does not resolve on disk** (spec 142), so a publisher would appear novel
+whenever its earlier evidence is simply missing — novelty would measure the gap, not the market. The metric
+is therefore a pure forward count within the window, requiring no history at all.
+
+**3 · Horizon h = 21 calendar days**, and the spec-152 exit tolerance of **4 days** applies unchanged. Equal
+to the price horizon on purpose: it reuses the existing `PartialWindow` machinery and avoids maintaining a
+second calendar. Attention is *expected* to arrive sooner than a re-rating; that is a hypothesis this metric
+can test, not a reason to pre-shorten the window.
+
+**4 · First eligible as-of date: the first on or after 2026-08-01.** Spec 145 made evidence identity
+content-derived going forward, so evidence collected after it resolves by construction — starting here
+keeps the metric clear of the unresolvable accrued cohort rather than correcting for it.
+
+**5 · Missing data.** An observation whose forward attention window does not extend to `D + 21` (within the
+4-day tolerance) of the latest collection date is **dropped and counted** under a named reason, exactly as
+spec 152 treats a partial price window. Publishers whose evidence does not resolve are **excluded from the
+count, not imputed**; an observation in which no signal resolves is dropped under its own named reason.
+
+**6 · Persistence comparator: `baseline-attention-persistence`.** Companies ranked at D by their stored
+`AttentionScore` alone, correlated against the same forward publisher count. This is the attention-side
+equivalent of AD-15's baselines and it is **mandatory**: attention is strongly autocorrelated, so predicting
+future attention from current attention is nearly free, and a Radar score that merely reproduces it has
+discovered nothing.
+
+**7 · Primary statistic and failure criterion.** Spearman ρ between a strategy's `OpportunityScore` at D and
+the forward publisher count over `(D, D+h]`. **The thesis, as operationalised, FAILS if — over at least 20
+eligible as-of dates — the primary arm's ρ does not exceed `baseline-attention-persistence`'s ρ.** This is
+declared as a *necessary* condition and deliberately makes no significance claim: the inference machinery
+for that is parked (`docs/next/deferred/155-…`), and AD-15's suspension governs any positive claim
+regardless of what this number shows.
+
 **Status.** **Accepted · 2026-07-28** — accepted by the maintainer on the day it was proposed, and **binding
 from this point**: the stealth thesis is what Radar tests, and the consequences listed above (long window,
 notedness discount load-bearing, no neutral amplification, attention-arrival as the primary outcome,
