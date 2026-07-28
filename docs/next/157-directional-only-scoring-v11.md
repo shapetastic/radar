@@ -64,6 +64,15 @@ Keep breadth's shape (`reach/(reach + S_c)`), its budget semantics and the never
 — only the population entering `reach` narrows. Expect lower absolute breadth scores; that is intended, and
 re-tuning saturation constants to compensate is out of scope (§ Out of scope).
 
+⚠️ **THIS NARROWS THE BREADTH CHANNEL ONLY. The `AttentionScore` COMPONENT IS NOT TOUCHED** and keeps its
+v8 meaning over the whole gated set, exactly as v10 retains it. The two both derive from publisher reach and
+are easy to conflate, but they are different things: breadth is a *budgeted channel* competing for weight,
+`AttentionScore` is a *diagnostic component* that also feeds the notedness discount. Narrowing both would
+additionally corrupt AD-16's secondary comparator `baseline-attention-score`, which reads this component and
+must remain "all attention so far" — turning it into "positive-only attention persistence", a weaker
+predictor and an easier one to beat. Assert that `AttentionScore` is unchanged between a v10 and a v11
+snapshot over the same signals.
+
 ### 4. This is `radar-formula-v11`, NOT a `CompositionRevision` bump
 
 An earlier draft proposed bumping v10 `rev1 → rev2`. That is now wrong for two independent reasons:
@@ -142,8 +151,11 @@ default.** The precommitment is recorded and accepted as the **AMENDMENT · 2026
 `docs/architecture-decisions.md`, which fixes all seven values: the primary metric (distinct third-party
 publishers with a resolving `MediaAttention` signal in `(D, D+h]`), the deliberate **non-use of publisher
 novelty** (89.5 % of accrued evidence is unresolvable, so novelty would measure the gap rather than the
-market), `h = 21` days with the spec-152 four-day tolerance, the **first eligible as-of date of 2026-08-01**,
-the missing-data rule, the mandatory `baseline-attention-persistence` comparator, and the failure criterion.
+market), `h = 21` days with **complete attention-collection coverage and no price-market tolerance**, the
+**first eligible as-of date of 2026-08-22**, the valid-zero and missing-data rules, the two read-side
+comparators (**primary**: the trailing 21-day distinct-publisher count; **secondary, reported not screened**:
+the `AttentionScore` from the paired `filings-led-v11` snapshot), and the date-blocked descriptive failure
+screen.
 
 ⚠️ Recorded so it is not re-derived: an earlier draft proposed `AttentionScore(D+h) − AttentionScore(D)`.
 That is **wrong and must not be used** — `AttentionScore` is a rolling 60-day *stock*, so two readings h days
@@ -196,10 +208,12 @@ rather than an input to it — which is a statement about design consistency, no
       never-renormalise rule are unchanged.
 - [ ] `radar-formula-v11` exists as its own version, wired into `All` / factory / `ConsumesChannels`; v10 is
       untouched and still dispatchable.
+- [ ] The `AttentionScore` **component** is byte-identical between a v10 and a v11 snapshot over the same
+      signals — §3 narrows the breadth channel only, and AD-16's secondary comparator depends on it.
 - [ ] v11 carries its own `CompositionRevision` and a golden guard pinning revision + output + stamp
       together in one file.
 - [ ] The precommitted attention outcome is a forward **flow** over `(D, D+h]` — never a difference of
-      `AttentionScore` stocks — and declares a persistence comparator Radar must beat.
+      `AttentionScore` stocks — and preserves a complete-window zero as a valid outcome.
 - [ ] The live pair is exactly `filings-led-v11` and `filings-led-v10-control`, identical budgets.
 - [ ] v8, v9 and v10 byte-identical, proven by the three existing golden pins passing **unmodified**.
 - [ ] An all-neutral channel stays distinguishable from an absent one; the evidence trail is unchanged.

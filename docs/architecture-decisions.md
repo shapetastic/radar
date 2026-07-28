@@ -1330,32 +1330,81 @@ publishers rather than article count, because one outlet syndicating itself is n
 whenever its earlier evidence is simply missing — novelty would measure the gap, not the market. The metric
 is therefore a pure forward count within the window, requiring no history at all.
 
-**3 · Horizon h = 21 calendar days**, and the spec-152 exit tolerance of **4 days** applies unchanged. Equal
-to the price horizon on purpose: it reuses the existing `PartialWindow` machinery and avoids maintaining a
-second calendar. Attention is *expected* to arrive sooner than a re-rating; that is a hypothesis this metric
+**3 · Horizon h = 21 calendar days, with NO exit tolerance.** Equal to the price horizon on purpose, but
+spec 152's four-day PRICE tolerance does not transfer: that tolerance exists because markets close at
+weekends and holidays and a nearby trading bar still represents price near the target. An attention window
+ending early is simply missing possible events. The outcome therefore requires collection coverage through
+`D + 21` in full. Attention is *expected* to arrive sooner than a re-rating; that is a hypothesis this metric
 can test, not a reason to pre-shorten the window.
 
-**4 · First eligible as-of date: the first on or after 2026-08-01.** Spec 145 made evidence identity
-content-derived going forward, so evidence collected after it resolves by construction — starting here
-keeps the metric clear of the unresolvable accrued cohort rather than correcting for it.
+**4 · First eligible as-of date: the first on or after 2026-08-22.** Spec 145 made evidence identity
+content-derived going forward, so evidence collected after it resolves by construction, which puts the
+usable cohort at **2026-08-01** onward. The comparator in §6 reads a **trailing** 21-day window, so the
+earliest `D` whose *lookback* also sits wholly inside that cohort is `2026-08-01 + 21 = 2026-08-22`.
+Adopting a trailing comparator costs three weeks of eligibility, and that cost is taken deliberately rather
+than by letting the comparator read into the unresolvable accrued cohort.
 
-**5 · Missing data.** An observation whose forward attention window does not extend to `D + 21` (within the
-4-day tolerance) of the latest collection date is **dropped and counted** under a named reason, exactly as
-spec 152 treats a partial price window. Publishers whose evidence does not resolve are **excluded from the
-count, not imputed**; an observation in which no signal resolves is dropped under its own named reason.
+**5 · Missing data and the valid zero.** Eligibility depends on recorded successful coverage by every
+collector enabled to produce third-party `MediaAttention` throughout **both** the comparator's trailing
+window `(D − 21, D]` **and** the outcome window `(D, D + 21]` — the comparator is a publisher count on the
+same construction as the outcome, so a gap corrupts it identically. A sufficiently recent *global*
+collection date is not proof of coverage: collectors fail individually, and an aggregate run timestamp says
+nothing about whether the news collectors succeeded on a given day. A gap or an unavailable coverage record
+is dropped and counted as `IncompleteAttentionCollection`.
 
-**6 · Persistence comparator: `baseline-attention-persistence`.** Companies ranked at D by their stored
-`AttentionScore` alone, correlated against the same forward publisher count. This is the attention-side
-equivalent of AD-15's baselines and it is **mandatory**: attention is strongly autocorrelated, so predicting
-future attention from current attention is nearly free, and a Radar score that merely reproduces it has
-discovered nothing.
+> **Implementation dependency, named so it is not discovered late.** This coverage test needs a store the
+> efficacy path does not currently read. It is satisfiable from existing data — `PipelineRunRecord` carries
+> `Collectors`, `SourcesFailed` and `CollectionWarnings`, and records are persisted per run under
+> `data/runs/{yyyy}/…` — but the evaluator must read run records alongside snapshots and prices. Per-day
+> granularity holds while collection runs daily; a change to that cadence would need this rule revisited.
 
-**7 · Primary statistic and failure criterion.** Spearman ρ between a strategy's `OpportunityScore` at D and
-the forward publisher count over `(D, D+h]`. **The thesis, as operationalised, FAILS if — over at least 20
-eligible as-of dates — the primary arm's ρ does not exceed `baseline-attention-persistence`'s ρ.** This is
-declared as a *necessary* condition and deliberately makes no significance claim: the inference machinery
-for that is parked (`docs/next/deferred/155-…`), and AD-15's suspension governs any positive claim
-regardless of what this number shows.
+Within a complete window, **the absence of any `MediaAttention` signal is a valid outcome of zero
+and must remain in the sample**. It is the central negative case, not missing data. If one or more
+`MediaAttention` signals exist but any required evidence fails to resolve, the company-date is dropped and
+counted as `UnresolvedOutcomeEvidence` rather than treated as a lower publisher count. When all relevant evidence
+resolves, the outcome is the distinct-publisher count, including zero.
+
+**6 · Persistence comparators — read-side, not configured scoring arms.** Both are mandatory to compute;
+only the primary drives the screen. Attention is strongly autocorrelated, so predicting future attention
+from current attention is nearly free, and a Radar score that merely reproduces it has discovered nothing.
+
+- **PRIMARY — `baseline-attention-persistence`: the trailing distinct-publisher count over `(D − 21, D]`,
+  built by exactly the same construction as the outcome** (distinct third-party publishers with a resolving
+  `MediaAttention` signal). Same units, same units of failure, no quantisation — it answers "recently
+  covered companies keep being covered" in the outcome's own terms, which makes it the hardest honest
+  baseline available and the one the screen must clear.
+- **SECONDARY — `baseline-attention-score`: the stored `AttentionScore` from that same row's
+  `filings-led-v11` snapshot.** Retained and **reported**, never screened on. It is a `[0,100]` clamped
+  integer, so it is coarse and tie-prone against an unbounded count outcome; beating a quantised predictor
+  is a weaker result than beating the primary, and reporting both makes that difference visible rather than
+  letting a soft baseline flatter the arm.
+
+⚠️ **`AttentionScore` here keeps its v8 meaning over the whole gated set.** Spec 157 §3 narrows the *breadth
+channel's* reach to positive-carrying publishers; that is a channel-budget change and does **not** touch the
+`AttentionScore` component. Narrowing both would silently turn this secondary comparator into
+"positive-only attention persistence" — a different and weaker predictor, and an easier one to beat.
+
+**7 · Primary statistic and failure screen.** The primary arm is **`filings-led-v11`**. Comparison is paired
+on exactly the same eligible companies at each as-of date:
+
+1. require at least **20 companies** with a usable forward outcome on that date;
+2. compute the cross-sectional Spearman ρ of `filings-led-v11.OpportunityScore` against the forward
+   publisher count;
+3. over those same companies, compute the cross-sectional Spearman ρ of the **primary** comparator
+   `baseline-attention-persistence` (the trailing publisher count) against that same outcome, and — reported
+   alongside, never screened on — the same for the secondary `baseline-attention-score`;
+4. form the paired daily difference `δ(D) = ρ_v11(D) − ρ_persistence(D)` against the **primary** comparator.
+
+A date whose outcome or either predictor is constant is excluded under a named degeneracy and does not count
+toward the minimum. The precommitted descriptive screen is the **median `δ(D)` over at least 20 eligible
+dates**. A median `<= 0` records a **MISS** for the operationalised thesis at its declared horizon; it may
+not be rescued by changing the outcome or horizon after inspection. A median `> 0` clears only this necessary
+screen.
+
+The 20 daily windows overlap and are not independent. This screen therefore makes **no significance,
+confidence or efficacy claim in either direction**. A valid dependence-aware comparison remains parked in
+`docs/next/deferred/155-…`, and AD-15's suspension governs every positive claim regardless of what this
+screen shows.
 
 **Status.** **Accepted · 2026-07-28** — accepted by the maintainer on the day it was proposed, and **binding
 from this point**: the stealth thesis is what Radar tests, and the consequences listed above (long window,
