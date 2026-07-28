@@ -15,6 +15,14 @@ The deliverable is a **measured audit and a written recommendation**, not a form
 smallest fix the audit unambiguously justifies (see §4). If the finding is "the neutrality is correct and
 the collector mix is the constraint", that is a complete and successful outcome — say so and stop.
 
+> ### ⚠️ What this audit does and does NOT establish
+>
+> It establishes **data provenance and extraction coverage**: what Radar collected, what direction it
+> assigned, and how much of that is explainable. It establishes **nothing whatsoever about business
+> efficacy** — not whether the signals predict anything, not whether a strategy works. No number produced
+> here may be cited in support of a strategy claim, and AD-15's positive-claim suspension (amended
+> 2026-07-28) is unaffected by anything this audit finds.
+
 ## ⚠️ A hypothesis this spec previously carried was WRONG — do not re-derive it
 
 An earlier draft claimed `HttpSecForm4Reader` and `KeywordSignalExtractor` were two independent
@@ -64,9 +72,19 @@ For each signal, the question is *why* it carries the direction it does. Group i
 - **Unknown / unresolvable** — the reason was never persisted (see §2). This bucket is a first-class
   outcome, not a rounding error.
 
-**Every figure carries its denominator.** "How many signals could be attributed at all" is as important as
-the split, and a percentage over an unstated base is exactly the kind of number specs 152 and 153 were
-written to stop producing.
+**SOURCE and REASON need SEPARATE Unknown buckets and SEPARATE denominators.** They are different failures
+and conflating them would hide both. A signal may have a known source but an unrecoverable reason (every
+historical Form 4 — see §2), or an unresolvable source entirely: **89.5 % of accrued signals have evidence
+that does not resolve on disk** (spec 142's measurement, cause diagnosed in spec 145, healed forward only).
+So report at least:
+
+- **Source-attribution coverage** — of N signals, how many resolve to a source at all; the rest are
+  `Unknown source` and cannot be classified by any rule.
+- **Reason-attribution coverage** — *of those with a known source*, how many carry a recoverable reason.
+
+**Every figure carries the denominator it was computed over**, and the two denominators are different. A
+percentage over an unstated base is exactly the kind of number specs 152 and 153 were written to stop
+producing, and here there are two bases to confuse.
 
 ### 2. The reason for a Form 4 classification is NOT recoverable from the store — report it as Unknown
 

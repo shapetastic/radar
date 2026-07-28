@@ -1153,6 +1153,31 @@ of the price-validation boundary; no scoring math change.*
 > A composite strategy may only be described as adding value if it beats **every** baseline
 > **out-of-sample**, on an honest N, by more than the spread between the baselines themselves.
 
+> ### ⚠️ AMENDMENT · 2026-07-28 — POSITIVE EFFICACY CLAIMS ARE SUSPENDED
+>
+> **No strategy may be described as adding value until (a) the primary outcome variable required by AD-16 is
+> accepted, and (b) a valid comparison method is accepted.** Until both exist, the leaderboard ranks and
+> reports; it does not license a claim, and neither does any number computed from it.
+>
+> The reason is that the rule quoted above **is not a test of difference**. "Beats … by more than the spread
+> between the baselines" compares each strategy's *marginal* Spearman ρ, computed over observations the
+> renderer itself labels "pooled across companies and dates and therefore not independent … dispersion, not
+> significance". A gap between two such numbers carries no uncertainty estimate of its own, and the
+> baseline spread is a heuristic stand-in for one — it has no coverage guarantee and it *shrinks* when the
+> baselines agree, which is exactly when it should not.
+>
+> Additionally, and independently: with several composite arms configured, reporting whichever one beats the
+> baselines is **selection**, not evidence. Any claim made once this suspension lifts must state how many
+> arms were compared — the leaderboard already renders that count ("a leader chosen from many needs a
+> stronger effect than one chosen from few"), and the claim must carry it.
+>
+> This amendment deliberately costs nothing to hold: no strategy is currently close to any bar, every arm
+> sits near ρ −0.1 with intervals straddling zero, and spec 152 established that the numbers published
+> before 2026-07-28 were measuring 4-to-11-day reactions labelled as 21-day returns. Lifting the suspension
+> requires accepting an outcome variable and a comparison method — see the parked
+> `docs/next/deferred/155-paired-date-blocked-strategy-comparison.md` for the latter's open problems
+> (dependence across overlapping windows defeats both a naïve parametric interval and a sign test).
+
 Radar therefore ships a small, deliberate **control group** of *dumb baseline* strategies (spec 154),
 declared in `scripts/run-profiles/default.json` and scored through the **normal** seam — same
 `ScoringEngine`, same stores, same `ScoringConfigVersion` fingerprints, same spec-140 leaderboard. There is
