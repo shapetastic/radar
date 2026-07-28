@@ -1,104 +1,134 @@
-# Task: Where did the direction go? Measure the 87.6 % Neutral corpus before tuning anything that consumes it
+# Task: Audit WHY each signal has the direction it has — with honest Unknown buckets and denominators
 
 > **Radar scores trajectory, and 87.6 % of its 49,793 signals carry no trajectory.** Positive 8.1 %,
 > Negative 4.3 %. Spec 153 measured the consequence: of 32 companies with an active `sec-form4` channel,
 > **13 were all-Neutral and 18 net-negative — 31 of 32 lost their entire channel contribution** under v10,
 > `sec-13dg` was dark for all 43, and `newssearch` was all-Neutral for all 43.
 >
-> Every open measurement question — the paired comparison (155), benchmark adjustment, the attention-arrival
-> outcome — is downstream of evidence that mostly has no direction in it. **A slower, more patient score
-> computed over directionless evidence will accumulate nothing, more reliably.**
+> Under the now-accepted **AD-16**, a stealth thesis needs directional evidence to accumulate a slope from.
+> A slower, more patient score computed over directionless evidence will accumulate nothing, more reliably.
+> **Before tuning anything that consumes direction, find out where the direction went.**
 
 ## This is an INVESTIGATION spec
 
-The deliverable is a **measured breakdown and a written recommendation**, not a formula. Ship at most the
-smallest fix the measurement unambiguously justifies. If the finding is "the neutrality is correct and the
-collector mix is wrong", that is a complete and successful outcome — say so and stop.
+The deliverable is a **measured audit and a written recommendation**, not a formula. Ship at most the
+smallest fix the audit unambiguously justifies (see §4). If the finding is "the neutrality is correct and
+the collector mix is the constraint", that is a complete and successful outcome — say so and stop.
 
-## What is already known (verify each; do not re-derive from scratch)
+## ⚠️ A hypothesis this spec previously carried was WRONG — do not re-derive it
 
-Much of the neutrality is **deliberate design, not extractor failure**, and the spec must not treat it as a
-defect to be fixed:
+An earlier draft claimed `HttpSecForm4Reader` and `KeywordSignalExtractor` were two independent
+signal-producing paths, and that a keyword-emitted Neutral was diluting the reader's directional read.
+**There is no second path.** The pipeline is strictly linear and deterministic:
 
-- **`NewsArticle` evidence emits exactly one Neutral signal** (`KeywordSignalExtractor.cs:21`). With
-  MediaAttention at ~15.3 k signals this is a large share of the corpus **by construction**.
+1. `HttpSecForm4Reader` classifies the filing's transaction codes → `SecForm4Filing.Direction`
+   (`P` → Positive, `S` → Negative, mixed same-filing buy+sell → Neutral deliberately, any 10b5-1 planned
+   transaction → Neutral).
+2. `SecForm4Collector.MapToEvidence` (`SecForm4Collector.cs:146`) synthesizes **exactly one** fixed phrase
+   from that `Direction` into the evidence Title/RawText.
+3. `KeywordSignalExtractor` (`KeywordSignalExtractor.cs:194`) maps that phrase **back** to one signal — its
+   own comment states "the extractor only maps phrase -> direction".
+
+So the ~9.0 k Neutral `InsiderBuying` signals are **the reader genuinely classifying those filings Neutral**,
+not an artefact. That is a fact about the filings (or about the classification rules), and it is what this
+audit must explain. The same one-phrase pattern holds for 13D/13G (spec 100) and GovernmentContract.
+
+## What is already known — verify, but do not treat as defects
+
+Much of the neutrality is **deliberate design**, and the audit must classify it as such rather than as loss:
+
+- **`NewsArticle` evidence emits exactly one Neutral signal** (`KeywordSignalExtractor.cs:21`). MediaAttention
+  is ~15.3 k signals — a large share of the corpus **by construction**.
 - **13G and amendments are Neutral by design** (spec 99), specifically so passive stakes "never misfire
   bullish". InstitutionalOwnership is ~12.8 k signals.
-- Several `CapitalRaise` and `ExecutiveHire` phrases are Neutral on the explicit grounds that the code
+- **Several `CapitalRaise`/`ExecutiveHire` phrases are Neutral** on the explicit grounds that the filing
   reveals no directional read (`KeywordSignalExtractor.cs:111-156`) — a convertible note may be accretive or
-  a death spiral, and the filing does not say which.
+  a death spiral.
+- **10b5-1 planned transactions are forced Neutral** (`HttpSecForm4Reader.cs:286`): a planned sale is not a
+  discretionary signal.
 
-⚠️ **Under AD-16 (proposed), Neutral MediaAttention is not merely acceptable — it is CORRECT.** News is the
-attention arriving; it is the thing the stealth thesis wants to *predict*, not an input to the prediction.
-A recommendation that makes news directional would work against the thesis and must be argued explicitly if
-proposed at all.
+⚠️ **Under AD-16, Neutral MediaAttention is CORRECT, not a gap.** News is the attention arriving — the thing
+the stealth thesis exists to *predict*, not an input to the prediction. A recommendation that makes news
+directional works against the accepted thesis and must be argued explicitly, at length, if proposed at all.
 
-## The specific hypothesis to test first
+## Design
 
-**Two independent paths produce insider signals, and the directionless one may be swamping the directional
-one.**
+### 1. Audit the REASON, not just the direction — and admit where the reason is gone
 
-- `HttpSecForm4Reader` reads the Form 4 XML and **does** classify direction: transaction code `P` →
-  `Positive`, `S` → `Negative`, a mixed same-filing buy+sell → `Neutral` deliberately (not net-signed), and
-  **any 10b5-1 planned transaction → `Neutral`** because a planned sale is not a discretionary signal
-  (`HttpSecForm4Reader.cs:286-341`).
-- `KeywordSignalExtractor` separately matches a routine-insider phrase and emits **Neutral `InsiderBuying`**
-  (spec 153 quotes it: "matched phrase 'insider stock transaction (routine)'").
+For each signal, the question is *why* it carries the direction it does. Group into at least:
 
-If both fire on the same filings, the Neutral copies dilute preponderance in the same channel the
-directional ones are trying to move — and `sec-form4`'s 9.0 k `InsiderBuying` signals being overwhelmingly
-Neutral would be an artefact of the keyword path, not a fact about insiders.
+- **Directional** — and by which rule/branch.
+- **Neutral by design** — with the citation (spec 99, the 10b5-1 rule, the news rule, the
+  no-directional-read `CapitalRaise` phrases).
+- **Neutral by default** — matched a rule that simply has no directional reading.
+- **Unknown / unresolvable** — the reason was never persisted (see §2). This bucket is a first-class
+  outcome, not a rounding error.
 
-**Measure it, do not assume it.** Report the `InsiderBuying` population split by which path produced it, and
-the direction distribution within each. The 10b5-1 share is a genuine confound and must be reported
-separately: if most insider activity in this universe is planned-sale, the neutrality is **honest** and the
-finding is about the universe, not the code.
+**Every figure carries its denominator.** "How many signals could be attributed at all" is as important as
+the split, and a percentage over an unstated base is exactly the kind of number specs 152 and 153 were
+written to stop producing.
 
-## What to produce
+### 2. The reason for a Form 4 classification is NOT recoverable from the store — report it as Unknown
 
-A written finding in `docs/`, backed by a table over the live store, covering at minimum:
+`HttpSecForm4Reader` computes `Is10b5Plan` (`:253`, returned at `:362`) and distinguishes
+`NeutralExcluded` codes from a mixed buy+sell, **but `SecForm4Collector` persists only `insiderDirection`
+and `insiderNetValue`** (`:63`, `:182`, `:189`). The plan flag and the reason branch never reach disk.
 
-1. **Neutral signals by `SignalType` × source × producing rule/path**, so "neutral by design" and "neutral by
-   default" are separated with numbers. This is the core deliverable.
-2. **The insider split above**, including the 10b5-1 share.
-3. **Which sources could carry direction and do not** — and for each, whether that is a design decision
-   (cite it), a data limitation, or an unfilled gap.
-4. **A recommendation**, which may legitimately be "collect different evidence rather than extract harder".
-   Radar's directional reads come from a narrow base; if 13G is neutral by design and news is neutral by
-   design and planned sales are neutral by design, then the honest conclusion may be that the current
-   collector mix cannot support a directional thesis — which is a finding about **[[radar-collector-expansion-direction]]**,
-   not about the extractor.
+So: the **direction** of every historical insider signal IS recoverable (`insiderDirection` is persisted);
+the **reason** is not. Under this spec's read-only/no-refetch constraint, historical reason attribution must
+be reported as **Unknown** — not estimated, not inferred from the phrase, and not backfilled by re-fetching
+filings. Do not attempt to reconstruct it.
+
+### 3. Classify each directionless source
+
+For every source producing predominantly Neutral signals, state which it is: a **design decision** (cite
+it), a **data limitation** (the source genuinely does not carry valence), or an **unfilled gap** (direction
+is available and simply not read). Only the third is a defect.
+
+### 4. The one prospective fix this audit may justify
+
+If — and only if — the audit shows the missing reason is what blocks the analysis, persist it going forward:
+a reason/classification token on Form 4 evidence metadata (e.g. `insider10b5Plan`, or better a single
+`insiderClassificationReason`), so the same audit becomes answerable next time.
+
+Constraints on that fix: **forward only** (AD-8/AD-1 — no backfill, no rewrite); additive metadata; and it
+must not become an evidence-identity or `ContentHash` input (spec 145: identity is the normalized
+title+body hash alone), so no evidence id moves and no `AddIfNewAsync` decision changes.
+
+## Files (verify against the tree before planning)
+
+`HttpSecForm4Reader.cs`, `SecForm4Collector.cs`, `KeywordSignalExtractor.cs`, the durable stores
+(`FileSignalStore` / `FileRawEvidenceStore`) for the read side, and `docs/` for the written finding.
 
 ## Constraints
 
-- **Read-only over the live store by default.** No backfill, no rewrite, no re-extraction of accrued
-  evidence — the standing rule since spec 142/145 is heal forward only, and 89.5 % of signals have
-  unresolvable evidence that must not be retro-healed.
-- **No scoring change, no fingerprint input, no pin move** unless the measurement justifies one, and then it
-  is a separate slice with its own `RuleSetVersion` decision (a rule-STRUCTURE change bumps
-  `KeywordSignalExtractor.RuleSetVersion`; a magnitude change does not).
+- **Read-only over the live store.** No backfill, no rewrite, no re-extraction, no re-fetching of filings.
+  Heal forward only (specs 142/145); 89.5 % of signals have unresolvable evidence that must not be
+  retro-healed.
 - **Do not "fix" neutrality by making uncertain things directional.** Spec 99 made 13G Neutral so it would
-  never misfire bullish; that reasoning still holds. A Neutral that honestly reflects "the code does not say"
-  is correct behaviour and must survive this slice.
+  never misfire bullish; a Neutral that honestly reflects "the filing does not say" is CORRECT behaviour and
+  must survive this slice.
+- **No scoring change, no fingerprint input, no pin move.** A rule-STRUCTURE change would bump
+  `KeywordSignalExtractor.RuleSetVersion` — out of scope here.
 - Price is never an input (AD-14).
 
 ## Out of scope (record, do not build)
 
-- **Re-extracting or backfilling accrued signals.**
-- **Changing v10's neutral amplification** — settled by AD-16 and its own slice; this spec only supplies the
-  evidence for how much it matters.
+- **Re-extracting or backfilling accrued signals**, and any refetch of historical filings.
+- **Changing v10's neutral amplification** — its own spec, already required by AD-16.
 - **Adding a collector.** If the recommendation is "collect differently", that is the *next* spec, and per
   [[radar-collector-expansion-direction]] it must be efficacy-motivated rather than added on enthusiasm.
-- Any AI/LLM re-read of historical filings to recover direction — a large, separate, and expensive question.
+- **Any AI/LLM re-read of historical filings** to recover direction — large, separate, expensive.
 
 ## Acceptance criteria
 
-- [ ] A table over the live store splits Neutral signals by type × source × producing path, distinguishing
-      **neutral-by-design** (with the citation) from **neutral-by-default**.
-- [ ] The `InsiderBuying` two-path hypothesis is measured and answered either way, with the 10b5-1 share
-      reported separately.
-- [ ] Each directionless source is classified as design decision / data limitation / gap.
-- [ ] A written recommendation lands in `docs/`, explicitly allowed to conclude that the collector mix — not
-      the extractor — is the constraint.
+- [ ] A table over the live store classifies signals by direction **and reason**, with
+      design / default / **Unknown** buckets and an explicit denominator for each.
+- [ ] The Form 4 reason gap is reported as Unknown, with the persistence gap named — not estimated or
+      inferred.
+- [ ] Each directionless source is classified as design decision / data limitation / unfilled gap.
+- [ ] The written finding lands in `docs/` and is explicitly permitted to conclude that the collector mix,
+      not the extractor, is the constraint.
+- [ ] Any prospective metadata fix is additive, forward-only, and moves no evidence id.
 - [ ] Nothing in the accrued store is modified.
 - [ ] `dotnet build Radar.sln -c Release` / `dotnet test Radar.sln -c Release` green.
