@@ -1308,11 +1308,13 @@ actually collects (Form 4 clusters, 13D/G positions building, contract awards ac
   its claim requires.
 
 **Known prerequisite, recorded because it blocks the whole thesis.** A stealth score needs directional
-evidence to accumulate a slope from, and Radar currently produces almost none: **87.6 % of 49,793 signals
-are Neutral**, and spec 153 measured **no net-positive directional filing signal at all** across the accrued
-window (of 32 companies with an active `sec-form4` channel, 13 all-Neutral and 18 net-negative). A slower,
-more patient score computed over evidence that carries no direction will accumulate nothing more reliably.
-Fixing directional extraction is therefore prior to any further tuning of what consumes it.
+evidence to accumulate a slope from, and Radar currently produces little: **87.6 % of 49,793 signals are
+Neutral**, and spec 153 measured almost no usable direction in the ownership/insider channels (of 32
+companies with an active `sec-form4` channel, 13 all-Neutral, 18 net-negative and 1 marginally net-positive;
+`sec-13dg` was dark in spec 158's pinned window). Spec 158 did find sparse direction in `sec-edgar` — 13/43
+companies net-positive among the resolvable inputs — which is why the amended arm uses that source alone.
+A slower, more patient score computed over evidence that carries no direction will accumulate nothing more
+reliably; collector/extraction coverage remains prior to tuning what consumes it.
 
 ### AMENDMENT · 2026-07-28 — THE PRECOMMITTED OUTCOME, fixed here in concrete terms
 
@@ -1337,12 +1339,19 @@ ending early is simply missing possible events. The outcome therefore requires c
 `D + 21` in full. Attention is *expected* to arrive sooner than a re-rating; that is a hypothesis this metric
 can test, not a reason to pre-shorten the window.
 
-**4 · First eligible as-of date: the first on or after 2026-08-22.** Spec 145 made evidence identity
-content-derived going forward, so evidence collected after it resolves by construction, which puts the
-usable cohort at **2026-08-01** onward. The comparator in §6 reads a **trailing** 21-day window, so the
-earliest `D` whose *lookback* also sits wholly inside that cohort is `2026-08-01 + 21 = 2026-08-22`.
-Adopting a trailing comparator costs three weeks of eligibility, and that cost is taken deliberately rather
-than by letting the comparator read into the unresolvable accrued cohort.
+**4 · First eligible primary-screen as-of date: the first on or after 2026-09-26.** The original date was
+2026-08-22, chosen only to keep the comparator's trailing 21-day window inside the resolvable attention
+cohort. Spec 158 then measured that the *predictor* had dropped **14,089 of 17,616** in-window signals (80 %)
+because its 60-day scoring window still reached into pre-spec-145 evidence. That is not a lower bound on
+score quality: newly resolvable Positive or Negative evidence can move preponderance and ties either way.
+
+The first full-collection run after spec 145 merged ended at
+`2026-07-27T08:04:44.9959802Z` (`PipelineRunRecord`
+`17bf7a17-8bb6-46c8-90fe-e96dc5d4b3be`). A 60-day scoring window is wholly post-fix after
+`2026-09-25T08:04:44.9959802Z`; **2026-09-26** is the first unambiguous calendar-day eligibility boundary.
+This is later than the comparator's 2026-08-22 boundary and therefore governs. The arms may accrue before
+then, but transitional snapshots do not enter the primary screen. Amended before any v11 snapshot or
+forward outcome existed; metric and horizon are unchanged.
 
 **5 · Missing data and the valid zero.** Eligibility depends on recorded successful coverage by every
 collector enabled to produce third-party `MediaAttention` throughout **both** the comparator's trailing
@@ -1379,22 +1388,28 @@ from current attention is nearly free, and a Radar score that merely reproduces 
   is a weaker result than beating the primary, and reporting both makes that difference visible rather than
   letting a soft baseline flatter the arm.
 
-⚠️ **`AttentionScore` here keeps its v8 meaning over the whole gated set.** Spec 157 §3 narrows the *breadth
-channel's* reach to positive-carrying publishers; that is a channel-budget change and does **not** touch the
-`AttentionScore` component. Narrowing both would silently turn this secondary comparator into
-"positive-only attention persistence" — a different and weaker predictor, and an easier one to beat.
+⚠️ **`AttentionScore` here keeps its v8 meaning over the whole gated set.** Spec 157 §3 now rejects breadth
+as a v11 strategy channel; it does **not** narrow this diagnostic component. Changing `AttentionScore` would
+silently turn the secondary comparator into "positive-only attention persistence" — a different and weaker
+predictor, and an easier one to beat.
 
 **7 · Primary statistic and failure screen.** The primary arm is **`disclosure-led-v11`**
-(`sec-edgar` 0.60 / `RssPressReleaseCollector` 0.40, both S 3; no breadth channel).
+(one `sec-edgar` channel at 1.00, S 3; no breadth channel), paired with an identical
+`disclosure-led-v10-control` budget.
 
 > **AMENDED 2026-07-28 — the primary arm was `filings-led-v11` and is now `disclosure-led-v11`.** Spec 158
 > measured the original budget (`sec-form4` .50 / `sec-13dg` .30 / breadth .20) at a **constant integer 0
-> across all 43 companies**, which the degeneracy rule below would have *excluded* — so it could never have
-> cleared or failed this screen. The replacement is spec 158's measured option B, chosen on rank resolution
-> (17/43 non-zero, 10 distinct integers, largest tie-group 26). Amended **before any v11 snapshot existed**,
-> so no outcome informed it and the pre-commitment is intact; §6's secondary comparator now reads the
-> `disclosure-led-v11` snapshot. Everything else in this amendment — metric, novelty rule, horizon, first
-> eligible date, missing-data rules, comparators, statistic and failure threshold — is **unchanged**.
+> across all 43 companies**, which the degeneracy rule below would have excluded — so it could never have
+> cleared or failed this screen. Its initial design suggestion B (`sec-edgar` .60 / RSS .40) had slightly
+> better rank resolution, but a post-merge input-only audit found RSS configured for only **26/43** companies
+> versus `sec-edgar` for **43/43**. The missing 17 would conflate no configured source with a valid quiet
+> window. The adopted arm is therefore spec 158's measured option A: 13/43 non-zero, 9 distinct integers,
+> largest tie-group 30 — strictly smaller and uniformly observable at the source-configuration level.
+>
+> Amended **before any v11 snapshot or forward outcome existed**, so the pre-commitment is intact; §6's
+> secondary comparator reads the `disclosure-led-v11` snapshot. Metric, novelty rule, horizon, missing-data
+> rules, comparators, statistic and failure threshold are unchanged; §4 separately moves the first eligible
+> date to exclude the known predictor-resolution transition.
 
 Comparison is paired on exactly the same eligible companies at each as-of date:
 

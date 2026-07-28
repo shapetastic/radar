@@ -1,5 +1,10 @@
 # Spec 158 findings — channel feasibility characterization (INPUT ONLY)
 
+> **POST-MERGE DESIGN NOTE · 2026-07-28.** The measurements below are unchanged, but subsequent inspection of
+> `data/companies.json` found RSS configured for only **26/43** companies (`sec-edgar`: 43/43). Suggested
+> option B would therefore mix valid quiet with missing source configuration. Spec 157 and AD-16 adopt the
+> already-measured option A (`sec-edgar` 1.00, S 3) instead. No v11 snapshot or forward outcome was inspected.
+
 **Measured 2026-07-28 against the live durable store, at the PINNED as-of instant — never the audit
 execution time.**
 

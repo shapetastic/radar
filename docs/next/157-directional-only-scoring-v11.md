@@ -1,20 +1,22 @@
 # Task: `radar-formula-v11` — neutral volume must not raise a score, and put it in the live run
 
-> ## ✅ UNPAUSED 2026-07-28 — spec 158 reported; both blockers resolved by amendment
+> ## ✅ UNPAUSED 2026-07-28 — spec 158 reported; post-review observability amendment applied
 >
-> This spec was paused pending measurement. Spec 158 (PR #161, merged) answered both doubts, and **both came
-> back against the original design**:
+> This spec was paused pending measurement. Spec 158 (PR #161, merged) answered both original doubts against
+> the original design, and a post-merge input-only review closed one further observability gap:
 >
 > 1. **The predeclared budget was unrankable.** `sec-form4` .50 / `sec-13dg` .30 / breadth .20 scored a
 >    **constant integer 0 across all 43 companies** — `sec-13dg` had zero in-window signals at all. AD-16 §7
->    *excludes* a date whose predictor is constant, so that arm could never have cleared or failed the
->    screen. **§7 amended** to spec 158's measured option B.
+>    excludes a date whose predictor is constant, so that arm could never have cleared or failed the screen.
 > 2. **Positive-only breadth was structurally zero** (`Var(positive reach) = 0`, one distinct value). Spec 70
 >    makes every news signal Neutral and first-party RSS is not a publisher, so nothing can qualify. **§3
 >    amended** — v11 rejects breadth channels outright.
+> 3. **The initially suggested replacement B was not uniformly observable.** Only **26/43** seeded companies
+>    have an RSS feed; 17 have none. Its 0.40 press share would therefore mix valid quiet with missing source
+>    configuration. **§7 adopts measured option A instead:** one `sec-edgar` channel, observable for 43/43.
 >
-> Both amendments were made **before any v11 snapshot existed**, so no outcome informed them and AD-16's
-> pre-commitment is intact. AD-16 §7 was amended in the same commit to keep the primary arm's name in step.
+> Every amendment was made **before any v11 snapshot existed** and without reading a forward outcome, so
+> AD-16's pre-commitment is intact. AD-16 §§4/7 are amended in step.
 
 > **AD-16 (accepted 2026-07-28) makes this binding:** *"Neutral volume must never amplify a directional
 > read … under this thesis heavy routine volume is the **noticed** company Radar is trying to avoid."*
@@ -107,19 +109,21 @@ snapshot over the same signals.
 
 An earlier draft proposed bumping v10 `rev1 → rev2`. That is now wrong for two independent reasons:
 
-- **§3 changes what a component measures** (the population entering breadth reach), which is a structural
-  change under AD-6, not a spec-149-style in-place adjustment.
-- **A revision bump destroys the control.** Bumping in place means there is no rev1 left to run, so a live
-  comparison would confound "is v11 better" with "did neutral-invariance help". A new class keeps v10
-  dispatchable alongside v11 — exactly as v8 and v9 were kept when v10 shipped.
+- **Directional-only collector saturation is a structural formula change** under AD-6, not a
+  spec-149-style in-place adjustment. Separately, §3 makes rejection of a breadth channel part of v11's
+  configuration contract so a legal configuration cannot violate §2.
+- **A revision bump destroys the control.** Bumping in place means there is no rev1 left to run. A new class
+  keeps v10 dispatchable alongside v11 — exactly as v8 and v9 were kept when v10 shipped.
 
 So: add `ScoreFormulaVersions.V11` to `All` (in version order), dispatch it in `RadarScoreFormulaFactory`
 with the same ctor args v10 receives, and add it to `ScoreFormulaVersions.ConsumesChannels`. **v10 is
 untouched and stays available as the control.**
 
-**v11 bundles the two AD-16 corrections** (§1 and §3). Attributing the effect between them would need a
-third arm; that is deliberately not built, so the hand-back must say the comparison attributes to the
-corrections *collectively*, never to either individually.
+**The live matched comparison isolates the collector-saturation change in §1.** Both configured arms have
+an identical collector-only budget and neither declares breadth, so breadth rejection cannot contribute to
+their score difference. No third arm is needed for attribution: any v11-v10 ranking difference in this pair
+is attributable to directional-only rather than all-signal collector saturation. State exactly that in the
+hand-back; do not attribute the observed difference to the two amendments collectively.
 
 **v11 gets its own `CompositionRevision` and its own golden guard**, mirroring
 `RadarScoreFormulaV10CompositionGuardTests`: the revision constant declared beside the composition, and one
@@ -157,47 +161,47 @@ chosen while looking at data, which is the breach AD-16's pre-commitment clause 
 Add to `scripts/run-profiles/default.json`, under **new names** (spec 141 — never an edit; the five
 composite arms and three baselines are mid-accrual and **must not be renamed, edited or re-stamped**):
 
-> **AMENDED 2026-07-28 after spec 158.** The previously predeclared pair (`filings-led-v11` /
-> `filings-led-v10-control`, insider `sec-form4` .50 / institutional `sec-13dg` .30 / breadth .20) was
-> measured to score a **constant integer 0 for all 43 companies** — `sec-13dg` had **zero in-window signals
-> at all**, `sec-form4` exactly one marginally net-positive company, and breadth structurally zero (§3).
-> A constant predictor is not merely weak: AD-16 §7 **excludes** a date whose predictor is constant, so that
-> arm could never have cleared *or* failed the screen. It is withdrawn.
+> **AMENDED 2026-07-28 after spec 158 and the post-merge observability review.** The previously predeclared
+> pair (`filings-led-v11` / `filings-led-v10-control`, insider `sec-form4` .50 / institutional `sec-13dg`
+> .30 / breadth .20) was measured to score a **constant integer 0 for all 43 companies**. A constant
+> predictor is not merely weak: AD-16 §7 excludes the date, so that arm could never have cleared or failed
+> the screen. It is withdrawn.
+>
+> Spec 158 initially suggested option B (`sec-edgar` .60 / RSS .40), but a post-merge seed-coverage audit
+> found that only **26/43** companies have an RSS feed while all **43/43** have `sec-edgar`. B therefore mixed
+> a valid zero with an unobserved source for 17 companies. No forward outcome or v11 snapshot was inspected.
+> The observable, strictly smaller option A is adopted instead.
 
 | Name | Formula | Channels |
 |---|---|---|
-| `disclosure-led-v11` | `radar-formula-v11` | `filings` = `sec-edgar` **0.60**, S 3 / `press` = `RssPressReleaseCollector` **0.40**, S 3 |
+| `disclosure-led-v11` | `radar-formula-v11` | `filings` = `sec-edgar` **1.00**, S 3 |
 | `disclosure-led-v10-control` | `radar-formula-v10` | **identical to the above** |
 
-This is spec 158's measured option **B**, chosen over A (`sec-edgar` 1.00) and C
-(`RssPressReleaseCollector` .60 / `sec-form4` .40) on **rank resolution**, which is what a Spearman screen
-actually consumes:
+The fixed-window input-only distributions remain useful context:
 
 | Option | companies > 0 | distinct integers | largest tie-group | variance |
 |---|---:|---:|---:|---:|
-| A | 13 / 43 | 9 | 30 | 30.39 |
-| **B — adopted** | **17 / 43** | **10** | **26** | 13.92 |
-| C | 7 / 43 | 6 | 36 | 7.05 |
+| **A — adopted** (`sec-edgar` 1.00) | **13 / 43** | **9** | **30** | 30.39 |
+| B (`sec-edgar` .60 / RSS .40) | 17 / 43 | 10 | 26 | 13.92 |
+| C (RSS .60 / `sec-form4` .40) | 7 / 43 | 6 | 36 | 7.05 |
 
-B has the **lowest variance of the three and is still the right choice**: Spearman ranks, so tie structure
-dominates and raw spread is nearly irrelevant. B ties fewest companies and yields most distinct ranks.
+Raw variance is not the choice criterion for a Spearman screen, and B has slightly better tie resolution.
+But that small gain does not justify making 0.40 of the score depend on whether Radar happens to have an RSS
+feed. Option A is the fewest-channel/fewest-collector candidate, has uniform configured source coverage, and
+keeps the construct on regulated company disclosure rather than self-favourable press-release syndication.
+`newssearch` remains excluded because third-party pickup is the outcome.
 
-**Renamed `disclosure-led` because that is what it now is.** `sec-edgar` filings plus first-party press
-releases are the company's *own* disclosure; under AD-16 that is the input, and third-party pickup is the
-outcome. `newssearch` stays excluded for exactly that reason. Calling it `filings-led` would misdescribe a
-budget that is 40 % press releases.
+⚠️ **The weak point, stated because the whole budget rests on it:** `sec-edgar`'s legacy collector
+attribution is spec-151 **inferred by elimination** and is **reasoned, not ground-truth validated** — 151's
+validation cohort was 337 `newssearch` / 2 `sec-form4` / 2 RSS. If that elimination rule is wrong, the pinned
+measurement is mis-populated. The live arm accrues on forward recorded attribution; re-check the mapping once
+that cohort is large enough, without changing this budget after results are visible.
 
-⚠️ **The weak point, stated because 0.60 of the budget rests on it:** `sec-edgar`'s collector attribution is
-spec-151 **inferred by elimination** and is **reasoned, not ground-truth validated** — 151's validation
-cohort was 337 `newssearch` / 2 `sec-form4` / 2 RSS. If that elimination rule is wrong, this arm's dominant
-channel is mis-populated. Re-check it when forward recorded attribution has accrued.
-
-⚠️ **These numbers are a LOWER BOUND, measured at close to the worst possible moment.** Spec 158's funnel
-dropped **14,089 of 17,616** in-window signals (80 %) as evidence-unresolvable, because spec 145 merged
-**2026-07-26** — two days before the pinned as-of — so the 60-day window is ~97 % legacy evidence that
-cannot resolve by construction. By roughly **2026-09-24** the whole window is post-145 and should resolve
-almost fully. That an arm ranks 17/43 at ~20 % resolution is a point in its favour, not against it. Re-run
-the spec-158 audit then as a cheap re-check; **do not** re-tune this budget to the transient numbers.
+⚠️ **The pinned measurement is coverage-limited, not a lower bound on score or rank quality.** Spec 158
+dropped **14,089 of 17,616** in-window signals (80 %) as evidence-unresolvable. Resolving more signals can
+add Positive or Negative mass, move preponderance in either direction, and create or remove ties; improvement
+is not monotone. The arm may start accruing immediately, but AD-16 §4 excludes primary-screen dates until a
+complete 60-day scoring window is post-spec-145. Do not re-tune the budget to this transitional measurement.
 
 State the resulting per-run cost (43 companies × N strategies) in the hand-back.
 
@@ -213,7 +217,7 @@ default.** The precommitment is recorded and accepted as the **AMENDMENT · 2026
 publishers with a resolving `MediaAttention` signal in `(D, D+h]`), the deliberate **non-use of publisher
 novelty** (89.5 % of accrued evidence is unresolvable, so novelty would measure the gap rather than the
 market), `h = 21` days with **complete attention-collection coverage and no price-market tolerance**, the
-**first eligible as-of date of 2026-08-22**, the valid-zero and missing-data rules, the two read-side
+**first eligible primary-screen as-of date of 2026-09-26**, the valid-zero and missing-data rules, the two read-side
 comparators (**primary**: the trailing 21-day distinct-publisher count; **secondary, reported not screened**:
 the `AttentionScore` from the paired `disclosure-led-v11` snapshot), and the date-blocked descriptive failure
 screen.
@@ -264,28 +268,27 @@ rather than an input to it — which is a statement about design consistency, no
 - [ ] A v11 collector channel's score is **exactly** invariant to Neutral additions — metamorphic, not
       approximate.
 - [ ] Neutral additions never **increase** `OpportunityScore`, including via a neutral-only publisher.
-- [ ] Breadth reach counts only publishers carrying **Positive** evidence; a publisher carrying only
-      Negative signals does **not** raise Opportunity — asserted. Shape, budget semantics and the
-      never-renormalise rule are unchanged.
+- [ ] A v11 strategy declaring any breadth channel fails startup with a message citing spec 158; no legal v11
+      configuration can silently spend weight on breadth.
 - [ ] `radar-formula-v11` exists as its own version, wired into `All` / factory / `ConsumesChannels`; v10 is
       untouched and still dispatchable.
 - [ ] The `AttentionScore` **component** is byte-identical between a v10 and a v11 snapshot over the same
-      signals — §3 narrows the breadth channel only, and AD-16's secondary comparator depends on it.
+      signals. Breadth is rejected as a strategy channel; the diagnostic remains full-set attention because
+      AD-16's secondary comparator depends on it.
 - [ ] v11 carries its own `CompositionRevision` and a golden guard pinning revision + output + stamp
       together in one file.
 - [ ] The precommitted attention outcome is a forward **flow** over `(D, D+h]` — never a difference of
       `AttentionScore` stocks — and preserves a complete-window zero as a valid outcome.
 - [ ] The live pair is exactly `disclosure-led-v11` and `disclosure-led-v10-control`, identical budgets
-      (`sec-edgar` 0.60 / `RssPressReleaseCollector` 0.40, both S 3), and NEITHER declares a breadth channel.
-- [ ] `radar-formula-v11` REJECTS a breadth channel at startup, citing the spec-158 finding.
-- [ ] v11 calls the existing `ScoreSignalMath` / `ScoringChannelComposition` helpers spec 158 extracted; no
-      second directional-activity or positive-reach implementation is added.
+      (one `sec-edgar` channel at 1.00, S 3), and neither declares a breadth channel.
+- [ ] v11 calls the existing `ScoreSignalMath.DirectionalActivityMass` and shared composition seam extracted
+      by spec 158; the retained `PositiveAttentionReach` helper is not used by a shipped v11 arm.
 - [ ] v8, v9 and v10 byte-identical, proven by the three existing golden pins passing **unmodified**.
 - [ ] An all-neutral channel stays distinguishable from an absent one; the evidence trail is unchanged.
 - [ ] `default.json` gains a v11 arm **and** a matched v10 arm with an identical budget, under new names,
       disturbing no existing strategy.
 - [ ] The AD-16 outcome precommitment (metric, horizon, eligible observations, failure criterion) is
       recorded as an amendment in this slice.
-- [ ] The hand-back states the new per-run scoring cost, and attributes any v11-vs-v10 difference to the
-      corrections collectively rather than to either individually.
+- [ ] The hand-back states the new per-run scoring cost and attributes any v11-vs-v10 difference specifically
+      to directional-only versus all-signal collector saturation; the identical arms contain no breadth.
 - [ ] `dotnet build Radar.sln -c Release` / `dotnet test Radar.sln -c Release` green.
