@@ -1207,3 +1207,87 @@ ranked *against* price, never scored *from* it), AD-9 (no advice language: a lea
 research statistic, not a recommendation), and spec 141's immutable-by-convention rule (re-tuning a
 baseline's saturation constants means a NEW NAME, e.g. `baseline-activity-only` →
 `baseline-activity-only-v2`, not an in-place edit).
+
+---
+
+## AD-16 — Radar tests a STEALTH thesis: evidence accumulates before attention arrives
+
+> **Status: PROPOSED · 2026-07-28.** Written before the next scoring change deliberately, because the two
+> candidate theses imply *opposite* fixes to `radar-formula-v10` and the choice must not be made implicitly
+> by whoever edits it next.
+
+**Decision.** Radar's hypothesis is that a company's business trajectory improves, and evidence of it
+accumulates in slow structured sources, **before broad attention arrives** — and that the interval between
+those two events is where the research value lies. Radar is therefore **deliberately not a reaction
+detector**, and "the score should move the day the news lands" is explicitly **rejected** as a design goal.
+
+Each consequence below is binding on future work:
+
+- **A same-day spike is a coincident indicator wearing a leading indicator's clothes.** By the time there is
+  a burst of coverage and a good print, the market is reading the same wire Radar is. A score that peaks
+  then is scoring highest exactly when its information is *least* private.
+- **The long scoring window and flat recency curve are the design, not a defect.** `ScoringWindowDays` 60 and
+  `RecencyFloor` 0.5 exist to accumulate quiet evidence. Shortening them to chase reactivity requires
+  superseding this AD, not a config edit.
+- **`SignalVelocity` is the shape of the thesis** — a rising *rate* while the absolute level is still low is
+  what "something is happening that nobody has written about yet" looks like in this data.
+- **The notedness discount is load-bearing, not a tweak.** Stealth means deliberately penalising the
+  well-covered name. The three `filings-led*` arms (full / half / no discount) are the experiment that tests
+  whether Radar's founding assumption is true, and they matter *more* under this AD, not less.
+- **Neutral volume must never amplify a directional read.** This settles the open v10 question against
+  amplification: under a reactivity thesis, heavy routine activity could be argued to signal a live
+  situation; under THIS thesis heavy routine volume is the *noticed* company Radar is trying to avoid, and
+  it correlates with size. `RadarScoreFormulaV10`'s conditional amplification therefore contradicts this AD
+  and must be corrected under AD-6 / `CompositionRevision`.
+- **The primary outcome variable is ATTENTION ARRIVING LATER, not next-week price.** If a high score today
+  predicts coverage, publisher breadth and volume arriving later — with any re-rating following *that* —
+  the thesis holds even where raw return is noisy. This is also the only formulation that is testable in
+  weeks rather than quarters, because attention is observable long before fundamentals move.
+- **Price stays validation-only (AD-14) and must be benchmark-adjusted.** A raw share return conflates "this
+  company improved" with "the market went up"; under a thesis about *re-rating*, the market component is
+  pure contamination.
+
+**Pre-commitment — the anti-unfalsifiability clause.** A stealth thesis fails in one characteristic way:
+every disappointing result is rescued with "the market has not noticed yet", and the tool quietly becomes a
+belief system. Therefore the horizon and the outcome variable are **declared before results are seen**, and
+a miss at the declared horizon **is a miss** — not evidence that the horizon was too short. Any change to a
+declared horizon or outcome variable is an amendment to this AD, recorded with its reason, and invalidates
+comparisons across the change.
+
+**Why.** Two reasons; the second is decisive.
+
+First, it is what the product claims to be — "surfaces public companies whose business trajectory may be
+improving **before the market notices**".
+
+Second, and more importantly, **the reactive thesis is not one Radar could execute even if it were correct.**
+Radar is a batch job that runs once daily over RSS feeds and SEC filings. Post-announcement reaction is the
+most heavily competed information in markets, priced in milliseconds by infrastructure built for exactly
+that race. A daily batch job does not lose that race narrowly — it is not in it. Meanwhile the sources Radar
+actually collects (Form 4 clusters, 13D/G positions building, contract awards accruing) are structurally
+*slow* information that rewards patience. Stealth is the only thesis where the instrument matches the claim.
+
+**What this does NOT license.**
+
+- It does not make short-horizon measurement forbidden. Measuring reaction at h=1..5 is a legitimate
+  **development feedback loop** and is encouraged — provided a short-horizon number is never quoted as
+  evidence for the thesis. Reporting both, distinctly labelled, is the required form (the same separation
+  spec 152 made between "no price" and "some price, but not the horizon asked for").
+- It does not assert the thesis is true. It fixes what Radar is *testing*, so that a negative result is
+  interpretable. AD-15 still governs whether any strategy may be described as adding value.
+- It does not change the product's category: Radar remains a research-triage assistant, not a trading
+  system (AD-9). **Open question, deliberately left open:** whether rank correlation with forward price is
+  even the right success criterion for a triage tool, or whether shortlist precision and analyst time saved
+  are closer to the real bar. Price is the ground truth Radar happens to have, not self-evidently the one
+  its claim requires.
+
+**Known prerequisite, recorded because it blocks the whole thesis.** A stealth score needs directional
+evidence to accumulate a slope from, and Radar currently produces almost none: **87.6 % of 49,793 signals
+are Neutral**, and spec 153 measured **no net-positive directional filing signal at all** across the accrued
+window (of 32 companies with an active `sec-form4` channel, 13 all-Neutral and 18 net-negative). A slower,
+more patient score computed over evidence that carries no direction will accumulate nothing more reliably.
+Fixing directional extraction is therefore prior to any further tuning of what consumes it.
+
+**Status.** Proposed · 2026-07-28 — awaiting the maintainer's acceptance; **not yet binding**. Cross-references
+AD-6 (formula structure is code), AD-9 (no advice language), AD-14 (price is validation-only), AD-15 (a
+composite must beat every baseline out-of-sample), and spec 153's `CompositionRevision` mechanism, which is
+how the v10 correction this AD implies must be made visible.
