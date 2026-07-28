@@ -123,6 +123,17 @@ namespace Radar.Application.Scoring;
 /// contribution per current-window signal, in input order, each naming the channel(s) that consumed it —
 /// so evidence → signal → channel → score is traceable end to end — and never from
 /// <see cref="ScoringInput.PreviousSignals"/>.</para>
+///
+/// <para><b>SPEC 153: THIS FORMULA'S BEHAVIOUR IS UNCHANGED, AND THAT IS ASSERTED RATHER THAN ARGUED.</b>
+/// Spec 153 adds <c>radar-formula-v10</c>, whose collector channel contributes exactly 0 when it carries no
+/// directional mass rather than the <c>0.5</c> floor described above — so v9 becomes the CONTROL that makes
+/// the change measurable, exactly as v8 remained when v9 shipped. To avoid a THIRD copy of the machinery, the
+/// channel loop moved into the shared <see cref="ScoringChannelComposition"/> and the four v8-meaning
+/// component blocks into <see cref="ScoreSignalMath"/>; this class keeps its own <c>ComponentJson</c> shape
+/// (the same 13 channel properties, same names, same order), its own explanation, and its own direction
+/// factor. Same components, same explanation, same <c>ComponentJson</c> byte for byte, same contributions,
+/// same fingerprint — <c>RadarScoreFormulaV9OutputStabilityTests</c> pins the whole of it from values captured
+/// on the pre-153 sources.</para>
 /// </summary>
 public sealed class RadarScoreFormulaV9 : IScoreFormula
 {
@@ -132,8 +143,20 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
     private const double DirectionNeutral = 0.5;
     private const double DirectionSpan = 0.5;
 
-    // v8's structural trajectory band, reused unchanged for the (v8-meaning) TrajectoryScore component.
-    private const double TrajectoryBand = 10.0;
+    // (1 + preponderance)/2 maps the ratio [-1,1] onto [0,1]. A channel with no directional mass sits at
+    // EXACTLY 0.5 — neutral, neither rewarded nor punished. Otherwise the corroboration smoother k keeps the
+    // ratio strictly inside (-1,1), so a positive channel approaches (never reaches) its full saturated share
+    // as its corroborated positive mass grows, and a negative one approaches (never reaches) zero — the same
+    // damped-but-not-zeroed shape v6 gave Trajectory, so a single loud signal cannot swing a channel to an
+    // extreme.
+    //
+    // ⚠ THIS EXPRESSION IS THE WHOLE OF WHAT radar-formula-v10 CHANGES (spec 153). "Neither rewarded nor
+    // punished" is true relative to a MIXED channel and false relative to an INACTIVE one, which contributes
+    // 0: an all-Neutral channel scores saturation·0.5, RISING WITH ACTIVITY, so volume alone produces score —
+    // and 87.6% of the live store's signals are Neutral. v9 keeps this shape deliberately, as the control the
+    // comparison needs. Do not "fix" it here; that is what v10 is for.
+    private static readonly CollectorChannelScore DirectionFactor =
+        (saturation, preponderance) => saturation * (DirectionNeutral + DirectionSpan * preponderance);
 
     private readonly ScoringWeights _weights;
     private readonly IAttentionSourceWeights _sourceWeights;
@@ -197,159 +220,16 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
             signals, input.WindowStartUtc, input.WindowEndUtc, _weights.RecencyFloor);
         var quality = ScoreSignalMath.QualityFactors(signals, _weights);
 
-        // The collector behind each signal's evidence, WITH how that answer was obtained (spec 146 recorded
-        // it; spec 151 added the seam and the opt-in legacy inference). Unattributed evidence is consumed by
-        // NO collector channel and contributes 0 — which is exactly what the standing "never backfill accrued
-        // history" rule implies, and remains the default answer for every pre-spec-146 record unless an
-        // operator explicitly turns the inference on.
-        var attributionOf = new CollectorAttribution[signals.Count];
-        for (var i = 0; i < signals.Count; i++)
-        {
-            attributionOf[i] = _attribution.Resolve(signals[i].Evidence);
-        }
-
-        var enabled = new HashSet<string>(input.EnabledCollectors, StringComparer.Ordinal);
-
         // ---- The channels ----
-        var breakdown = new List<ChannelBreakdown>(_channels.Channels.Count);
-        // Per-signal channel attribution, for the contribution reasons (provenance: signal → channel). Filled
-        // as each channel selects, so a signal consumed by more than one channel names all of them.
-        var channelsPerSignal = new List<string>?[signals.Count];
+        // THE SHARED PASS (spec 153): channel selection, collector-attribution resolution and tally, the
+        // ran/not-run split, activity → saturation → preponderance, the per-signal channel attribution and the
+        // weighted composite sum all live in ScoringChannelComposition, which radar-formula-v10 reuses. The
+        // ONLY thing this formula contributes to that pass is its own DirectionFactor — see the ⚠ note on it.
+        var composition = ScoringChannelComposition.Compose(
+            input, recency, quality, _channels, _weights, _sourceWeights, _attribution, DirectionFactor);
 
-        foreach (var channel in _channels.Channels)
-        {
-            double channelScore;
-            // "Nothing to measure" — the state the no-renormalisation rule is about. It is NOT the same as
-            // "scored 0": a collector channel whose signals are uniformly negative also scores 0, and that is
-            // a measurement, not an absence. So it is recorded per kind at the source rather than inferred
-            // from the score.
-            bool dark;
-
-            // The current-window signals this channel consumed, in input order. Filled by BOTH branches so
-            // the attribution tally below has exactly one definition of "this channel's signals" — the same
-            // set SignalCount reports and the same set each branch attributes in the contribution reasons.
-            var consumedIndices = new List<int>();
-
-            if (channel.Kind == ScoringChannelKind.Breadth)
-            {
-                // Breadth is cross-source by construction: it reads the whole gated set regardless of which
-                // collector retrieved what, and it is POSITIVE — more genuine (tier-weighted,
-                // distinct-publisher) reach earns more of its share.
-                var reach = ScoreSignalMath.AttentionReach(
-                    signals, input.PreCollapseSignals, _weights, _sourceWeights);
-                channelScore = Saturate(reach, channel.Saturation);
-                dark = reach <= 0;
-
-                // Attribution: the signals that actually FED the reach term (a third-party publisher, or a
-                // MediaAttention signal), not simply every signal in the window — so a contribution reason
-                // naming this channel is true of that signal. Publishers credited only from the pre-collapse
-                // set have no current-window signal to attribute to, by construction.
-                for (var i = 0; i < signals.Count; i++)
-                {
-                    if (ScoreSignalMath.ContributesToReach(signals[i]))
-                    {
-                        consumedIndices.Add(i);
-                        (channelsPerSignal[i] ??= []).Add(channel.Name);
-                    }
-                }
-            }
-            else
-            {
-                for (var i = 0; i < signals.Count; i++)
-                {
-                    // Consumes() matches the collector NAME exactly and is false for a null name, so an
-                    // unattributed signal selects into no collector channel regardless of how attribution was
-                    // resolved (spec 151 changes which signals HAVE a name, never what a channel means).
-                    if (channel.Consumes(attributionOf[i].CollectorName))
-                    {
-                        consumedIndices.Add(i);
-                        (channelsPerSignal[i] ??= []).Add(channel.Name);
-                    }
-                }
-
-                dark = consumedIndices.Count == 0;
-
-                // Sub-slices in the SAME input order, so the shared primitives see exactly the shape they see
-                // for a whole window — the channel changes the SET, never the math.
-                var subSignals = consumedIndices.Select(i => signals[i]).ToList();
-                var subRecency = consumedIndices.Select(i => recency[i]).ToList();
-                var subQuality = consumedIndices.Select(i => quality[i]).ToList();
-
-                var activity = ScoreSignalMath.ActivityMass(subSignals, subRecency, subQuality);
-                var saturation = Saturate(activity, channel.Saturation);
-
-                // (1 + preponderance)/2 maps the ratio [-1,1] onto [0,1]. A channel with no directional mass
-                // sits at EXACTLY 0.5 — neutral, neither rewarded nor punished. Otherwise the corroboration
-                // smoother k keeps the ratio strictly inside (-1,1), so a positive channel approaches (never
-                // reaches) its full saturated share as its corroborated positive mass grows, and a negative
-                // one approaches (never reaches) zero — the same damped-but-not-zeroed shape v6 gave
-                // Trajectory, so a single loud signal cannot swing a channel to an extreme.
-                var mass = ScoreSignalMath.DirectionalMasses(subSignals, subRecency, subQuality);
-                var preponderance = ScoreSignalMath.Preponderance(
-                    mass, _weights.TrajectoryCorroborationK, band: 1.0);
-                var directionFactor = DirectionNeutral + DirectionSpan * preponderance;
-
-                channelScore = saturation * directionFactor;
-            }
-
-            // "Ran and found nothing" vs "did not run" (spec 146). A 0 is a 0 either way — Radar scores
-            // evidence and absence of evidence is not evidence — but which it was must be recoverable after
-            // the fact, so it is recorded rather than inferred.
-            var ran = channel.Collectors.Where(enabled.Contains).ToArray();
-            var notRun = channel.Collectors.Where(c => !enabled.Contains(c)).ToArray();
-
-            // ATTRIBUTION PROVENANCE (spec 151): how much of this channel's mass rests on a collector the
-            // producing collector RECORDED, versus one Radar re-derived afterwards. Recorded in the snapshot
-            // so that any artifact built on inferred attribution — a replayed series, a strategy leaderboard —
-            // can state the fraction rather than imply it is all first-hand.
-            var recordedSignals = 0;
-            var inferredSignals = 0;
-            var unattributedSignals = 0;
-            foreach (var i in consumedIndices)
-            {
-                switch (attributionOf[i].Source)
-                {
-                    case CollectorAttributionSource.Recorded:
-                        recordedSignals++;
-                        break;
-                    case CollectorAttributionSource.Inferred:
-                        inferredSignals++;
-                        break;
-                    default:
-                        unattributedSignals++;
-                        break;
-                }
-            }
-
-            breakdown.Add(new ChannelBreakdown(
-                Name: channel.Name,
-                Kind: ScoringChannelSet.KindToken(channel.Kind),
-                Weight: channel.Weight,
-                Saturation: channel.Saturation,
-                Score: channelScore,
-                WeightedContribution: channel.Weight * channelScore,
-                SignalCount: consumedIndices.Count,
-                Dark: dark,
-                Collectors: channel.Collectors,
-                CollectorsRan: ran,
-                CollectorsNotRun: notRun,
-                RecordedSignals: recordedSignals,
-                InferredSignals: inferredSignals,
-                UnattributedSignals: unattributedSignals));
-        }
-
-        // THE COMPOSITE. Summed over the DECLARED channels — never over "the channels that fired" — so a dark
-        // channel costs the strategy its whole share. DO NOT renormalise by the surviving weights: that is the
-        // obvious-looking fix, and it would erase exactly the penalty this formula exists to create. The clamp
-        // is a defensive range guarantee only: the weights are validated to sum to 1 and every channel score is
-        // in [0,1], so the sum is already in [0,1].
-        var composite = 0.0;
-        foreach (var channel in breakdown)
-        {
-            composite += channel.WeightedContribution;
-        }
-
-        composite = Math.Clamp(composite, 0.0, 1.0);
+        var breakdown = composition.Channels.Select(ToBreakdown).ToList();
+        var composite = composition.Composite;
 
         // ---- The four v8-meaning components, over the strategy's gated set ----
         // Empty window short-circuits to zeros exactly as v8 does, so a v9 strategy's "nothing to score"
@@ -361,30 +241,19 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
 
         if (signals.Count > 0)
         {
-            var mass = ScoreSignalMath.DirectionalMasses(signals, recency);
-            var tRaw = ScoreSignalMath.Preponderance(
-                mass, _weights.TrajectoryCorroborationK, TrajectoryBand);
-            trajectoryScore = ScoreSignalMath.Clamp0To100(
-                _weights.TrajectoryNeutral + _weights.TrajectoryScale * tRaw);
+            // Spec 153: these four blocks were VERBATIM COPIES of v8's (the architecture audit's M3) and are
+            // now the shared ScoreSignalMath primitives both formulas call — so v8, v9 and v10 cannot drift on
+            // what Trajectory / Attention / EvidenceConfidence / SignalVelocity mean.
+            trajectoryScore = ScoreSignalMath.TrajectoryScore(signals, recency, _weights);
 
             var reach = ScoreSignalMath.AttentionReach(
                 signals, input.PreCollapseSignals, _weights, _sourceWeights);
-            attentionScore = ScoreSignalMath.Clamp0To100(
-                100 * reach / (reach + _weights.AttentionHalfSaturation));
+            attentionScore = ScoreSignalMath.AttentionComponent(reach, _weights);
 
-            var bestConf = signals.Max(s => (double)s.Signal.Confidence);
-            var bestQualWeight = signals.Max(s => ScoreSignalMath.QualityWeight(_weights, s.Evidence.Quality));
-            var distinctTypes = signals.Select(s => s.Evidence.SourceType).Distinct().Count();
-            var divFactor = Math.Min(1, distinctTypes / _weights.DiversityTarget);
-            evidenceConfidenceScore = ScoreSignalMath.Clamp0To100(
-                100 * bestConf
-                    * (_weights.EcQualityBase + _weights.EcQualitySpan * bestQualWeight)
-                    * (_weights.EcDiversityBase + _weights.EcDiversitySpan * divFactor));
+            evidenceConfidenceScore = ScoreSignalMath.EvidenceConfidenceScore(signals, _weights);
 
-            var actNow = signals.Sum(s => s.Signal.Strength);
-            var actPrev = input.PreviousSignals.Sum(s => s.Strength);
-            var ratio = (actNow + _weights.VelocitySmoothing) / (actPrev + _weights.VelocitySmoothing);
-            signalVelocityScore = ScoreSignalMath.Clamp0To100(_weights.VelocitySteady * ratio);
+            signalVelocityScore = ScoreSignalMath.SignalVelocityScore(
+                signals, input.PreviousSignals, _weights);
         }
 
         // ---- The notedness discount (spec 149) ----
@@ -424,30 +293,11 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
         // The per-signal WEIGHT keeps v8's shape — the channel weight and saturation are AGGREGATE transforms
         // over a channel's signals, exactly as v8's consensus shaping and following discount are aggregate
         // transforms over its signals — and the channel attribution (with its share) is carried in the reason,
-        // which is what makes evidence → signal → channel → score traceable.
-        var contributions = new List<ScoreContribution>(signals.Count);
-        for (var i = 0; i < signals.Count; i++)
-        {
-            var signal = signals[i].Signal;
-            var w = (double)signal.Confidence * recency[i];
-            var weight = (int)Math.Round(
-                ScoreSignalMath.DirectionSign(signal.Direction) * signal.Strength * w,
-                MidpointRounding.AwayFromZero);
-
-            contributions.Add(new ScoreContribution(
-                SignalId: signal.Id,
-                EvidenceId: signals[i].Evidence.Id,
-                ContributionReason:
-                    $"{signal.Type} ({signal.Direction}), strength {signal.Strength}, "
-                        + $"confidence {signal.Confidence:0.00} — {DescribeAttribution(channelsPerSignal[i], attributionOf[i])}",
-                ContributionWeight: weight));
-        }
+        // which is what makes evidence → signal → channel → score traceable. Shared with v10 since spec 153.
+        var contributions = ScoringChannelComposition.BuildContributions(signals, recency, composition);
 
         var windowDays = (int)Math.Round(windowLength.TotalDays, MidpointRounding.AwayFromZero);
-        var channelSummary = string.Join(
-            ", ",
-            breakdown.Select(c =>
-                $"{c.Name} {c.Score:0.000}×{c.Weight:0.00}{(c.Dark ? " (dark)" : string.Empty)}"));
+        var channelSummary = ScoringChannelComposition.DescribeChannels(composition.Channels);
         // The discount is named in the explanation ONLY when it actually moved the number (spec 149). Two
         // reasons, and they point the same way. (1) Honesty: "Opportunity 33 (composite 0.412 = …)" reads as
         // an arithmetic error unless the transform between the two is stated, and a score Radar cannot explain
@@ -484,32 +334,30 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
         return new ScoreComputation(components, explanation, componentJson, contributions);
     }
 
-    /// <summary>The half-saturation shape <c>x/(x+S)</c>, in <c>[0,1)</c> for non-negative <c>x</c>.</summary>
-    private static double Saturate(double raw, double halfSaturation) => raw / (raw + halfSaturation);
-
-    private static string DescribeAttribution(
-        IReadOnlyList<string>? channels, CollectorAttribution attribution)
-    {
-        // Spec 151: an INFERRED collector is named as such, in the persisted contribution reason, so the
-        // provenance chain itself says which of its links is a re-derivation. Appended only when the
-        // attribution actually was inferred — with the default recorded-only resolver this is always empty and
-        // every reason below is byte-identical to pre-151.
-        var inferred = attribution.Source == CollectorAttributionSource.Inferred
-            ? " (collector attribution inferred)"
-            : string.Empty;
-
-        if (channels is { Count: > 0 })
-        {
-            return $"channel {string.Join(" + ", channels)}{inferred}";
-        }
-
-        // Explicitly distinguishes the two reasons a signal fed no collector channel, because they mean very
-        // different things: legacy evidence that predates collector recording (never backfilled, by rule)
-        // versus a collector this strategy simply did not budget for.
-        return attribution.CollectorName is null
-            ? "no channel (evidence has no recorded collector)"
-            : $"no channel (collector {attribution.CollectorName} is not budgeted by this strategy){inferred}";
-    }
+    /// <summary>
+    /// Projects the shared <see cref="ChannelComputation"/> onto THIS formula's persisted channel shape
+    /// (spec 153). The projection is deliberately not shared: v9's <c>ComponentJson</c> must stay
+    /// byte-identical at exactly these 13 properties in exactly this order, while
+    /// <c>radar-formula-v10</c>'s adds the directional read — so each formula owns its own serialization
+    /// contract and only the COMPUTATION is common. Note that
+    /// <see cref="ChannelComputation.Direction"/> is deliberately NOT projected here: v9 recorded no such
+    /// field before spec 153 and adding one would move every v9 snapshot's ComponentJson.
+    /// </summary>
+    private static ChannelBreakdown ToBreakdown(ChannelComputation computed) => new(
+        Name: computed.Channel.Name,
+        Kind: ScoringChannelSet.KindToken(computed.Channel.Kind),
+        Weight: computed.Channel.Weight,
+        Saturation: computed.Channel.Saturation,
+        Score: computed.Score,
+        WeightedContribution: computed.WeightedContribution,
+        SignalCount: computed.SignalCount,
+        Dark: computed.Dark,
+        Collectors: computed.Channel.Collectors,
+        CollectorsRan: computed.CollectorsRan,
+        CollectorsNotRun: computed.CollectorsNotRun,
+        RecordedSignals: computed.RecordedSignals,
+        InferredSignals: computed.InferredSignals,
+        UnattributedSignals: computed.UnattributedSignals);
 
     /// <summary>
     /// One channel's audited share, serialized into <c>ComponentJson</c>: what it measured, what it was

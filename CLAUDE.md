@@ -934,6 +934,101 @@ Do not hand back broken code.
   - **Out of scope, recorded not built**: backfilling missing *evidence* (spec 142's 89.5 % unresolvable
     cohort — a different problem, still healed forward only), auto-running the replay or promoting its output,
     and changing what a v9 channel means.
+- **`radar-formula-v10`: neutral evidence establishes COVERAGE but contributes no DIRECTIONAL opportunity
+  (spec 153).** v9's collector channel scored `saturation × (0.5 + 0.5·preponderance)`, so a channel with no
+  directional mass sat at exactly **0.5**. The code called that "neither rewarded nor punished" — true against
+  a *mixed* channel, false against an **inactive** one, which contributes 0: an all-Neutral channel scored
+  `saturation × 0.5`, **rising with activity**, so volume alone produced score. Measured on the live store,
+  **87.6 % of 49,793 signals are Neutral** (Positive 8.1 %, Negative 4.3 %), and it landed hardest on exactly
+  the strategies built to test the thesis — `filings-led`'s `sec-form4` channel sees routine Form 4s extracted
+  as Neutral `InsiderBuying`, and its `sec-13dg` channel sees passive 13Gs that spec 99 made Neutral **by
+  design**, so that strategy was substantially ranking **filing volume** (larger companies file more).
+  Corroborating symptom: five deliberately-different strategies backtested 2026-07-28 came in at in-sample
+  Spearman ρ −0.0849 / −0.0969 / −0.0999 / −0.1000 / −0.1009 — a spread of **0.016**, which is what one common
+  factor dominating all five looks like. Rules:
+  - **The composition, in symbols: `channelScore = saturation × max(0, preponderance)`.** Range `[0,1)`, so
+    the composite range contract, the `[0,1]` clamp and the **NEVER-RENORMALISE** rule are all untouched.
+  - **All-neutral vs balanced: DECIDED, and they score the SAME.** No directional mass at all ⇒ preponderance
+    exactly 0 ⇒ **exactly 0**; balanced positive/negative mass ⇒ preponderance exactly 0 ⇒ **also exactly 0**.
+    Both mean "no net evidence that this trajectory is improving", and Opportunity answers exactly that
+    question. **They differ in the EVIDENCE TRAIL, not in the score**: each v10 channel breakdown records the
+    preponderance, the total directional mass and a `DirectionState` token (`none` / `balanced` / `positive` /
+    `negative`) — provenance only, never a score input. Net-**negative** mass also **floors at 0**: v10's
+    Opportunity measures improvement, deterioration is reported by the (v8-meaning) `TrajectoryScore` v10
+    keeps, and a negative channel share would *subtract* from other channels' genuine findings and break the
+    `[0,1]` share semantics.
+  - **Neutral evidence is NOT discarded — this removes a directional CONTRIBUTION, not the evidence.** A
+    Neutral signal still counts as activity in its channel's saturation (so **neutral coverage AMPLIFIES a
+    genuine directional read** — asserted), still counts in EvidenceConfidence and SignalVelocity, still
+    counts in `SignalCount`, still keeps the channel out of `Dark`, and still emits its own contribution
+    naming the channel. An all-neutral channel (`Score 0`, `Dark false`, `SignalCount > 0`) is therefore
+    distinguishable from an absent one (`Score 0`, `Dark true`, `SignalCount 0`) — same score, different
+    record. `Dark` is more load-bearing in v10 than it was in v9, precisely because the score no longer
+    separates them.
+  - **The breadth channel is UNCHANGED, and the tension is recorded rather than hidden.** Still
+    `reach/(reach + S_c)`, with the spec-149 notedness discount applied exactly as v9 applies it — once, to
+    the composed score, via `ScoreSignalMath.NotednessDiscount`. **Honest caveat, documented on the class:** a
+    breadth channel still earns share from pure coverage, which is *adjacent* to the "volume alone produces
+    score" problem this formula exists to fix. Kept deliberately because breadth is an explicitly
+    strategy-**budgeted** measure of NOTICE (not of improvement — a strategy that does not want to pay for
+    notice simply does not declare it, unlike v9's un-opt-out-able 0.5 floor) and is already damped by the
+    notedness discount; spec 153's *measured* target is the directional factor on collector channels.
+    Re-tuning or removing breadth needs its own evidence.
+  - ⚠ **v10 SCORES ARE ON A LOWER ABSOLUTE SCALE than v9's** — removing a 0.5 floor from every collector
+    channel lowers essentially everything. **v9 and v10 absolute scores are NOT comparable; only rankings
+    are.** Same fixture, same budget: Opportunity **22** under v9, **9** under v10 (the all-Neutral channel
+    0.353 → 0.000; the mixed channel 0.438 → 0.128). That is the intended consequence, not a calibration
+    defect — re-tuning weights/saturations to compensate is explicitly out of scope (measure first).
+  - **v8 is untouched. v9 is BYTE-IDENTICAL, and that is measured.** Both stay available as the controls that
+    make the change measurable, exactly as v8 remained when v9 shipped. Asserted by two golden pins: the
+    existing `ScoringOutputStabilityTests` (v8) and the NEW `RadarScoreFormulaV9OutputStabilityTests`, whose
+    values were **captured from the pre-153 sources before any production file was touched** and which both
+    pass **unmodified** afterwards. `ScoringConfigFingerprintTests` is untouched and all four spec-148 pins
+    stand. Recorded but deliberately NOT fixed (spec §3): v8's all-neutral company lands at
+    `TrajectoryNeutral = 50` rather than 0 — the same class of property, but v8 is the established baseline,
+    so fixing it is a separate decision with its own `radar-formula-vN`.
+  - **`CompositionRevision` closes the hole spec 149 exposed.** `IScoreFormula` gains an additive **default
+    interface member** `string CompositionRevision => string.Empty`; `FormulaIdentity.Of` is the ONE
+    definition of the composed identity (`Version` when blank, else `{Version}@{CompositionRevision}`), and
+    **all three** of `ScoringEngine`'s uses route through it — the hashed `formulaVersion` field,
+    `EffectiveScoringConfig.FormulaVersion`, and the `ScoringVersion` stamp. Storing the *composed* value is
+    what keeps the scoring-config store's recompute-from-stored self-verification true (it rehashes the
+    persisted `FormulaVersion`). v8 and v9 do not override it, so their stamps, persisted records and every
+    pinned fingerprint are byte-identical. `RadarScoreFormulaV10.CompositionRevision` is a const (`"rev1"`)
+    declared next to the composition with its obligation stated, and
+    `RadarScoreFormulaV10CompositionGuardTests` pins the revision, v10's full output and the
+    `ScoringConfigVersion` a v10 strategy stamps at the code-default weights and 30-day window over that
+    file's own 3-channel budget (`radar-scoring-fp-d89b8bc81815` — budget-dependent, like every channel
+    strategy's stamp) **together in one file**: change v10's composition and it fails, and the
+    only green fixes are revert, or bump the revision and update all three pins — which re-stamps and
+    therefore trips `StrategyIdentityGuard` on the next run. **Relationship to AD-6:** a genuinely NEW
+    structure still earns `radar-formula-v11`; the revision only makes a spec-149-style in-place adjustment
+    impossible to make invisibly.
+  - **Reuse over copy, and it was the bulk of the slice.** v9 held VERBATIM copies of v8's Trajectory /
+    Attention / EvidenceConfidence / SignalVelocity blocks (the architecture audit's **M3**, deferred by spec
+    148) and a third copy was not acceptable: all four moved into `ScoreSignalMath` (plus v9's private
+    `Saturate`), with v8 AND v9 routed through them and every expression shape and accumulation order
+    preserved verbatim — `100·reach/(reach+S)` is deliberately **not** expressed via `Saturate`, because
+    `(100·reach)/(reach+S) ≠ 100·(reach/(reach+S))` in IEEE-754. The whole channel loop (selection,
+    collector-attribution resolution + tally, ran/not-run split, activity→saturation→preponderance, per-signal
+    channel attribution, composite sum, the contribution builder and the explanation's channel summary) moved
+    into **`ScoringChannelComposition`**, parameterised by a `CollectorChannelScore
+    (saturation, preponderance) -> channelScore` delegate — **the ONLY behavioural difference between v9 and
+    v10**. Each formula still projects the shared per-channel result into its OWN `ComponentJson` record
+    (v9's stays byte-identical at 13 channel properties; v10's appends `Preponderance` / `DirectionalMass` /
+    `DirectionState`, which are `null` for a breadth channel because breadth never consults direction) and
+    writes its own explanation naming its own version.
+  - **Wiring**: `ScoreFormulaVersions.V10` appended to `All`; `RadarScoreFormulaFactory` dispatches it with
+    the same ctor args v9 gets; and `ScoringStrategySet`'s two channel rules were generalised off a hard-coded
+    `V9` onto **one predicate, `ScoreFormulaVersions.ConsumesChannels`**, which the factory dispatch reads too,
+    so the validator and the dispatch cannot drift. A v10 strategy with no channels fails fast exactly as a v9
+    one does; `ScoringStrategyFactory`'s registered-collector guard keys off `Channels`, so it was already
+    formula-agnostic (confirmed by test, not assumed); and `Radar:Strategies[i].Formula = "radar-formula-v10"`
+    binds, validates and starts identically to v9.
+  - **Out of scope, recorded not built**: changing v8; re-tuning channel weights/saturations to compensate for
+    the lower scale; the efficacy horizon / outcome variable (spec 152 and the open question after it); and
+    migrating any existing strategy onto v10 — it is opt-in, and a strategy that changes formula should get a
+    NEW NAME (spec 141's immutable-by-convention rule).
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,
@@ -977,7 +1072,15 @@ When implementing a spec that replaces existing functionality:
    `RadarScoreFormulaFactory` — that list is the closed set of shippable formulas, so config can only pick
    between structures the maintainer wrote, never define one. **Which** formula a strategy runs is now a
    per-strategy config choice (`Radar:Strategies[i].Formula`, default `radar-formula-v8`); *writing* one is
-   still code.
+   still code. **Spec 153 added `radar-formula-v10` to `ScoreFormulaVersions.All`** (now
+   `{ v8, v9, v10 }`, in version order) and to `RadarScoreFormulaFactory`'s dispatch; whether a formula takes
+   a `Channels` budget is answered by the single predicate `ScoreFormulaVersions.ConsumesChannels`
+   (`v9`, `v10`), which both `ScoringStrategySet`'s rules and the factory read. **And an in-place change to
+   an EXISTING formula's composition now has a mechanism**: `IScoreFormula.CompositionRevision` (default
+   empty ⇒ nothing changes for v8/v9), composed by `FormulaIdentity.Of` into the hashed + persisted +
+   stamped identity. Bump it in the same change that alters a composition — it re-stamps and trips
+   `StrategyIdentityGuard`. It is NOT a substitute for AD-6: a genuinely new structure still earns a new
+   `radar-formula-vN` class.
 7. A scoring-affecting **extractor rule-STRUCTURE** change (the `KeywordSignalExtractor` phrase→direction/strength
    table shape) bumps `KeywordSignalExtractor.RuleSetVersion` (parallel to `_formula.Version`) — it is folded into
    the `ScoringConfigVersion` fingerprint via `SignalSourceDescriptor` (spec 95, AD-10 amended). The
