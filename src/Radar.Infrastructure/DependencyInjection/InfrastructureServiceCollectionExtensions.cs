@@ -295,15 +295,18 @@ public static class InfrastructureServiceCollectionExtensions
     /// hashes as a no-op — so the byte-identical default holds. Values are matched by EXACT enum member name
     /// (case-insensitively); numeric and unknown values are rejected rather than quietly accepted as a
     /// nonexistent type.</item>
-    /// <item><c>Formula</c> (spec 146) names the <c>radar-formula-vN</c> that strategy scores with — one of
+    /// <item><c>Formula</c> names the formula that strategy scores with — one of
     /// <see cref="ScoreFormulaVersions.All"/>, which since spec 153 also carries
-    /// <see cref="ScoreFormulaVersions.V10"/>.
+    /// <see cref="ScoreFormulaVersions.V10"/> and since spec 154 the baseline CONTROL
+    /// <see cref="ScoreFormulaVersions.BaselineActivityV1"/> (deliberately NOT numbered into the
+    /// <c>radar-formula-vN</c> composite lineage — see its own remarks).
     /// <b>Omitted ⇒ <see cref="ScoreFormulaVersions.V8"/></b>, i.e. byte-identical to before the key existed,
     /// with the pinned default fingerprints unmoved.</item>
     /// <item><c>Channels</c> (spec 146) declares that strategy's weighted channel budget — required by, and
     /// only meaningful to, the channel-composition formulas
-    /// (<see cref="ScoreFormulaVersions.ConsumesChannels"/>: <see cref="ScoreFormulaVersions.V9"/> and
-    /// <see cref="ScoreFormulaVersions.V10"/>). Each entry needs a <c>Name</c>, a
+    /// (<see cref="ScoreFormulaVersions.ConsumesChannels"/>: <see cref="ScoreFormulaVersions.V9"/>,
+    /// <see cref="ScoreFormulaVersions.V10"/> and
+    /// <see cref="ScoreFormulaVersions.BaselineActivityV1"/>). Each entry needs a <c>Name</c>, a
     /// <c>Weight</c> and a <c>Saturation</c>; <c>Kind</c> is <c>"collector"</c> (the default) or
     /// <c>"breadth"</c>, and a collector channel additionally needs a <c>Collectors</c> array of registered
     /// <c>IEvidenceCollector.CollectorName</c>s. Weights must each lie in <c>[0,1]</c> and <b>sum to

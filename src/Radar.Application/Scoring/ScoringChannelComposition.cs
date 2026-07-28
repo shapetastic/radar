@@ -3,16 +3,49 @@ using Radar.Application.Collectors;
 namespace Radar.Application.Scoring;
 
 /// <summary>
+/// How ONE collector channel measures its raw ACTIVITY over the signals it consumed — the <c>x</c> that
+/// <see cref="ScoringChannelComposition"/> then saturates as <c>x/(x+S_c)</c>. Its shape deliberately mirrors
+/// <see cref="ScoreSignalMath.ActivityMass"/>, which <c>radar-formula-v9</c> and <c>radar-formula-v10</c> both
+/// pass here as a method group.
+/// <para>
+/// <b>It exists so a CONTROL formula can measure something deliberately dumber than the composite does</b>
+/// (spec 154). <c>radar-baseline-activity-v1</c> passes a plain <b>signal COUNT</b> — no strength, no
+/// confidence, no recency, no evidence quality — because a baseline that quietly weighted its inputs the same
+/// way the composite does would not be a baseline. Everything else about the channel pass (selection,
+/// attribution, provenance, saturation, the composite sum, the contribution chain) stays shared.
+/// </para>
+/// <para>
+/// The parameters are the channel's SUB-SLICES, in the window's input order: only the SET changes, never the
+/// alignment, so an implementation may index all three interchangeably.
+/// </para>
+/// </summary>
+/// <param name="signals">The current-window signals this channel consumed, in input order.</param>
+/// <param name="recency">Their recency factors, aligned with <paramref name="signals"/>.</param>
+/// <param name="qualityFactors">Their evidence-quality factors, aligned with <paramref name="signals"/>.</param>
+/// <returns>The channel's raw, non-negative activity magnitude.</returns>
+public delegate double ChannelActivityMass(
+    IReadOnlyList<ScoringSignal> signals,
+    IReadOnlyList<double> recency,
+    IReadOnlyList<double> qualityFactors);
+
+/// <summary>
 /// How a collector channel turns its two measured quantities — the saturated ACTIVITY on that channel and the
 /// corroboration-smoothed directional PREPONDERANCE of its signals — into that channel's share of the
-/// composite. <b>This delegate is the ONLY behavioural difference between <c>radar-formula-v9</c> and
-/// <c>radar-formula-v10</c>.</b>
+/// composite.
 /// <list type="bullet">
 /// <item><c>radar-formula-v9</c>: <c>saturation · (0.5 + 0.5·preponderance)</c> — a channel with no
 /// directional mass keeps HALF its saturated share, so activity alone produces score.</item>
 /// <item><c>radar-formula-v10</c>: <c>saturation · max(0, preponderance)</c> — no directional mass ⇒ exactly
 /// 0 (spec 153).</item>
+/// <item><c>radar-baseline-activity-v1</c>: <c>saturation</c>, verbatim — direction is not consulted at all
+/// (spec 154).</item>
 /// </list>
+/// <para>
+/// <b>Corrected by spec 154:</b> this delegate used to be documented as "the ONLY behavioural difference
+/// between <c>radar-formula-v9</c> and <c>radar-formula-v10</c>", and of those two it still is. It is no
+/// longer the only axis the shared pass is parameterised on: <see cref="ChannelActivityMass"/> is the second,
+/// and the statement is corrected here rather than left to rot.
+/// </para>
 /// <para>
 /// It returns the whole channel score rather than a multiplier, deliberately: a formula's arithmetic shape is
 /// part of its identity (IEEE-754 is not associative — see <see cref="ScoreSignalMath"/>), so each formula
@@ -128,18 +161,20 @@ public sealed record ChannelComposition(
     IReadOnlyList<IReadOnlyList<string>?> ChannelsPerSignal);
 
 /// <summary>
-/// THE ONE channel-composition pass shared by every channel formula (<c>radar-formula-v9</c> and, since spec
-/// 153, <c>radar-formula-v10</c>): channel selection, collector-attribution resolution and tally, the
-/// ran/not-run split, the activity → saturation → preponderance computation, the per-signal channel
-/// attribution the contribution reasons carry, and the weighted composite sum.
+/// THE ONE channel-composition pass shared by every channel formula (<c>radar-formula-v9</c>,
+/// <c>radar-formula-v10</c> since spec 153, and the <c>radar-baseline-activity-v1</c> control since spec 154):
+/// channel selection, collector-attribution resolution and tally, the ran/not-run split, the activity →
+/// saturation → preponderance computation, the per-signal channel attribution the contribution reasons carry,
+/// and the weighted composite sum.
 /// <para>
-/// EXTRACTED FROM <see cref="RadarScoreFormulaV9"/>, NOT COPIED (CLAUDE.md reuse-over-copy). v10 differs from
-/// v9 in EXACTLY ONE expression — the collector <see cref="CollectorChannelScore"/> — so pasting ~150 lines of
-/// selection/attribution/provenance logic to change one multiplication would guarantee the two drift on the
-/// next attribution or provenance fix, and would make it impossible to argue that v9 is byte-identical
-/// afterwards. What is deliberately NOT shared: the <c>ComponentJson</c> record shapes (v9's must stay
-/// byte-identical at 13 channel properties while v10's adds the directional read) and the explanation prefix
-/// (each formula names its own version).
+/// EXTRACTED FROM <see cref="RadarScoreFormulaV9"/>, NOT COPIED (CLAUDE.md reuse-over-copy). Each channel
+/// formula differs from the others in a HANDFUL OF EXPRESSIONS — the collector
+/// <see cref="CollectorChannelScore"/> and, since spec 154, the <see cref="ChannelActivityMass"/> — so pasting
+/// ~150 lines of selection/attribution/provenance logic to change one multiplication would guarantee they
+/// drift on the next attribution or provenance fix, and would make it impossible to argue that v9 and v10 are
+/// byte-identical afterwards. What is deliberately NOT shared: the <c>ComponentJson</c> record shapes (v9's
+/// must stay byte-identical at 13 channel properties while v10's adds the directional read) and the
+/// explanation prefix (each formula names its own version).
 /// </para>
 /// <para>
 /// <b>FLOATING-POINT EXACTNESS IS PART OF THE CONTRACT</b>, exactly as it is for
@@ -161,8 +196,16 @@ public static class ScoringChannelComposition
     /// <param name="weights">The strategy's resolved magnitudes.</param>
     /// <param name="sourceWeights">The shared publisher tier map (breadth channel input).</param>
     /// <param name="attributionResolver">The single collector-attribution seam (spec 151).</param>
+    /// <param name="activityMass">
+    /// How the formula measures a collector channel's raw activity (spec 154). <b>REQUIRED, with no default
+    /// value, deliberately</b>: a silent default is exactly how spec 152's partial-window mislabelling slipped
+    /// through once, and here it would let a new formula quietly inherit the composite's own weighting while
+    /// claiming to measure something simpler. v9 and v10 pass
+    /// <see cref="ScoreSignalMath.ActivityMass"/> explicitly at their call sites.
+    /// </param>
     /// <param name="collectorScore">
-    /// The formula's collector direction factor — the ONE thing v9 and v10 disagree about.
+    /// The formula's collector direction factor — the ONE thing v9 and v10 disagree about, and the axis on
+    /// which the spec-154 control opts out of direction entirely.
     /// </param>
     public static ChannelComposition Compose(
         ScoringInput input,
@@ -172,6 +215,7 @@ public static class ScoringChannelComposition
         ScoringWeights weights,
         IAttentionSourceWeights sourceWeights,
         ICollectorAttributionResolver attributionResolver,
+        ChannelActivityMass activityMass,
         CollectorChannelScore collectorScore)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -181,6 +225,7 @@ public static class ScoringChannelComposition
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
         ArgumentNullException.ThrowIfNull(attributionResolver);
+        ArgumentNullException.ThrowIfNull(activityMass);
         ArgumentNullException.ThrowIfNull(collectorScore);
 
         var signals = input.Signals;
@@ -270,7 +315,9 @@ public static class ScoringChannelComposition
                 // ACTIVITY counts Neutral/Mixed signals too — something DID happen on that channel — while
                 // the directional masses below do not. That split is what lets neutral coverage AMPLIFY a
                 // genuine directional read (more activity ⇒ higher saturation) without ever creating one.
-                var activity = ScoreSignalMath.ActivityMass(subSignals, subRecency, subQuality);
+                // HOW activity is measured is the formula's own choice (spec 154): v9/v10 pass
+                // ScoreSignalMath.ActivityMass, the baseline control passes a plain signal count.
+                var activity = activityMass(subSignals, subRecency, subQuality);
                 var saturation = ScoreSignalMath.Saturate(activity, channel.Saturation);
 
                 var mass = ScoreSignalMath.DirectionalMasses(subSignals, subRecency, subQuality);

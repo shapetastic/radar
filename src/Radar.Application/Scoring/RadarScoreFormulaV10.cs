@@ -193,9 +193,20 @@ public sealed class RadarScoreFormulaV10 : IScoreFormula
         // ---- The channels ----
         // The SHARED pass: selection, collector attribution + tally, the ran/not-run split, activity →
         // saturation → preponderance, per-signal channel attribution and the weighted composite. This formula
-        // contributes exactly one thing to it — DirectionFactor — which IS the whole of spec 153.
+        // contributes exactly one thing to it — DirectionFactor — which IS the whole of spec 153. (Spec 154
+        // made the ACTIVITY measure a parameter too; v10 passes the same ScoreSignalMath.ActivityMass the
+        // shared pass used to call directly, so this formula's composition is unchanged and its
+        // CompositionRevision correctly does NOT move.)
         var composition = ScoringChannelComposition.Compose(
-            input, recency, quality, _channels, _weights, _sourceWeights, _attribution, DirectionFactor);
+            input,
+            recency,
+            quality,
+            _channels,
+            _weights,
+            _sourceWeights,
+            _attribution,
+            ScoreSignalMath.ActivityMass,
+            DirectionFactor);
 
         var breakdown = composition.Channels.Select(ToBreakdown).ToList();
         var composite = composition.Composite;

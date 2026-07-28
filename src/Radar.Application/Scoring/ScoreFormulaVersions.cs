@@ -31,15 +31,32 @@ public static class ScoreFormulaVersions
     public const string V10 = "radar-formula-v10";
 
     /// <summary>
-    /// Every shippable formula token, in version order (for fail-fast messages and tests). Genuinely
-    /// read-only — the closed set of shippable structures must not be mutable through a downcast, or the
-    /// config validator's "known formulas" and the factory's dispatch could disagree at runtime.
+    /// The <b>CONTROL</b> (spec 154): a channel formula whose collector channels score the plain saturated
+    /// <b>COUNT</b> of the signals they consumed — no direction, no notedness, no quality weighting. It exists
+    /// to be BEATEN, not to be run as a candidate strategy.
+    /// <para>
+    /// <b>It is deliberately NOT <c>radar-formula-v11</c>.</b> The <c>radar-formula-vN</c> sequence is the
+    /// lineage of Radar's COMPOSITE — each version a considered evolution of the previous one (AD-6) — and this
+    /// is not an evolution of anything: it is the embarrassingly simple heuristic the composite has to
+    /// out-perform before it can be described as adding value (AD-15). Numbering it in that sequence would say
+    /// the opposite of what it is, and spec 154's §3 requires that a baseline's NAME says what it is wherever
+    /// it appears — in a leaderboard, in a fingerprint record, in a snapshot's <c>ComponentJson</c>.
+    /// </para>
     /// </summary>
-    public static IReadOnlyList<string> All { get; } = Array.AsReadOnly(new[] { V8, V9, V10 });
+    public const string BaselineActivityV1 = "radar-baseline-activity-v1";
+
+    /// <summary>
+    /// Every shippable formula token: the <c>radar-formula-vN</c> composite lineage in version order, then the
+    /// baseline CONTROLS (spec 154), which are not part of that lineage. Genuinely read-only — the closed set
+    /// of shippable structures must not be mutable through a downcast, or the config validator's "known
+    /// formulas" and the factory's dispatch could disagree at runtime.
+    /// </summary>
+    public static IReadOnlyList<string> All { get; } =
+        Array.AsReadOnly(new[] { V8, V9, V10, BaselineActivityV1 });
 
     /// <summary>
     /// The formulas that COMPOSE their score from a <see cref="ScoringChannelSet"/> — currently
-    /// <see cref="V9"/> and <see cref="V10"/>.
+    /// <see cref="V9"/>, <see cref="V10"/> and <see cref="BaselineActivityV1"/>.
     /// <para>
     /// ONE predicate, deliberately, because three separate places have to agree about it: the "this formula
     /// needs channels" rule, the "this formula must not declare channels" rule (both in
@@ -52,7 +69,8 @@ public static class ScoreFormulaVersions
     public static bool ConsumesChannels(string? name) =>
         Canonicalize(name) is { } canonical
         && (string.Equals(canonical, V9, StringComparison.Ordinal)
-            || string.Equals(canonical, V10, StringComparison.Ordinal));
+            || string.Equals(canonical, V10, StringComparison.Ordinal)
+            || string.Equals(canonical, BaselineActivityV1, StringComparison.Ordinal));
 
     /// <summary>
     /// The comma-separated channel-composition tokens, for fail-fast messages. Rendered FROM
