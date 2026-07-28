@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Spec 158: the INPUT-ONLY channel-feasibility characterization entry point. A small console that
+       composes the PRODUCTION durable stores and scoring primitives (Radar.Application +
+       Radar.Infrastructure — NEVER Radar.Worker; nothing references Worker) and reports which channels can
+       carry usable variation at a pinned as-of instant. STRICTLY READ-ONLY over the data root: it only ever
+       reads files, and it computes no forward outcome of any kind (no price, no attention after the as-of,
+       no efficacy statistic). Launched by scripts/audit-channel-feasibility.ps1, which formats/guards output
+       but contains no scoring math. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Radar.Application\Radar.Application.csproj" />
+    <ProjectReference Include="..\Radar.Domain\Radar.Domain.csproj" />
+    <ProjectReference Include="..\Radar.Infrastructure\Radar.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

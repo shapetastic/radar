@@ -237,7 +237,11 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
             _sourceWeights,
             _attribution,
             ScoreSignalMath.ActivityMass,
-            DirectionFactor);
+            DirectionFactor,
+            // Spec 158 made the breadth REACH a parameter too (so the prospective v11 can narrow it to
+            // positive-only); v9 passes the same ScoreSignalMath.AttentionReach the shared pass used to call
+            // directly, so its arithmetic — and therefore its last bit — is unchanged.
+            ScoreSignalMath.AttentionReach);
 
         var breakdown = composition.Channels.Select(ToBreakdown).ToList();
         var composite = composition.Composite;
