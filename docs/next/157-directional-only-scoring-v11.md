@@ -1,5 +1,25 @@
 # Task: `radar-formula-v11` — neutral volume must not raise a score, and put it in the live run
 
+> ## ⛔ PAUSED 2026-07-28 — do NOT implement until spec 158 reports
+>
+> Two things this spec predeclares are in doubt, and both are measurable from **inputs alone, today**:
+>
+> 1. **The §7 budget may not produce a usable ranking.** Spec 153 measured that of 32 companies with an
+>    active `sec-form4` channel, **1** was net-positive on the live window; spec 156 found
+>    `InstitutionalOwnership` is **98.79 %** Neutral by design (spec 99). Under `max(0, preponderance)` a
+>    net-negative channel scores 0, and under the never-renormalise rule its weight is simply lost — so
+>    0.80 of the predeclared budget may be dead.
+> 2. **§3 may zero out breadth entirely — and that is a doubt about §3 itself, not just the budget.**
+>    Narrowing reach to publishers carrying a **Positive** signal looked like a safe tightening, but
+>    `NewsArticle` evidence always becomes **Neutral** `MediaAttention` (spec 70), so no news publisher can
+>    ever qualify, and RSS is **first-party**, so it is not a third-party publisher. §3-narrowed breadth may
+>    therefore be structurally zero for every company.
+>
+> `docs/next/158-channel-feasibility-characterization.md` measures both, **input-only** — no forward
+> outcome, so AD-16's pre-commitment is not consumed. When it reports, amend **§3 if breadth is unusable**,
+> and **§7 and AD-16 §7 together** to the smallest viable matched pair. Changing the arm before any v11
+> result exists is legitimate; changing it after would not be.
+
 > **AD-16 (accepted 2026-07-28) makes this binding:** *"Neutral volume must never amplify a directional
 > read … under this thesis heavy routine volume is the **noticed** company Radar is trying to avoid."*
 >
