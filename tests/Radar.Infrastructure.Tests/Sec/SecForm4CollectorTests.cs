@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
+using Radar.Application.Evidence;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
@@ -44,7 +45,8 @@ public sealed class SecForm4CollectorTests
         DateTimeOffset? acceptance = null,
         bool hasCluster = false,
         bool is10b5Plan = false,
-        string? ticker = "MRCY") =>
+        string? ticker = "MRCY",
+        string? classificationReason = null) =>
         new(
             Accession: accession,
             FilingDate: filingDate,
@@ -57,7 +59,19 @@ public sealed class SecForm4CollectorTests
             NetValue: netValue,
             Shares: shares,
             HasCluster: hasCluster,
-            Is10b5Plan: is10b5Plan);
+            Is10b5Plan: is10b5Plan,
+            // Default mirrors the reader's own branch resolution so existing tests stay honest fixtures:
+            // a Neutral filing with NetValue > 0 is the mixed buy+sell branch (netValue = max(buy, sell)),
+            // while Neutral with NetValue == 0 is the no-discretionary-transactions branch.
+            ClassificationReason: classificationReason ?? (is10b5Plan
+                ? SecForm4ClassificationReasons.Plan10b51
+                : direction == SignalDirection.Positive
+                    ? SecForm4ClassificationReasons.DiscretionaryBuy
+                    : direction == SignalDirection.Negative
+                        ? SecForm4ClassificationReasons.DiscretionarySale
+                        : netValue > 0m
+                            ? SecForm4ClassificationReasons.MixedBuySell
+                            : SecForm4ClassificationReasons.NoDiscretionaryTransactions));
 
     private static SecForm4Collector CreateCollector(
         FakeSecForm4Reader reader, SecForm4CollectorOptions? options = null) =>
@@ -97,6 +111,8 @@ public sealed class SecForm4CollectorTests
         Assert.Equal("4", item.Metadata["form"]);
         Assert.Equal("50000", item.Metadata["insiderNetValue"]);
         Assert.Equal("Positive", item.Metadata["insiderDirection"]);
+        Assert.Equal(
+            SecForm4ClassificationReasons.DiscretionaryBuy, item.Metadata["insiderClassificationReason"]);
         Assert.Equal(["MRCY"], item.CompanyHints);
     }
 
@@ -279,6 +295,69 @@ public sealed class SecForm4CollectorTests
         var names = result.Evidence.Select(e => e.SourceName).ToList();
 
         Assert.Equal(["Mercury — Form 4", "Aehr — Form 4"], names);
+    }
+
+    // --- Spec 156: the insiderClassificationReason metadata key (forward-only fix) ---
+
+    [Theory]
+    [InlineData(SecForm4ClassificationReasons.Plan10b51)]
+    [InlineData(SecForm4ClassificationReasons.DiscretionaryBuy)]
+    [InlineData(SecForm4ClassificationReasons.DiscretionarySale)]
+    [InlineData(SecForm4ClassificationReasons.MixedBuySell)]
+    [InlineData(SecForm4ClassificationReasons.NoDiscretionaryTransactions)]
+    public async Task CollectAsync_WritesInsiderClassificationReasonMetadata_WithFilingToken(string token)
+    {
+        const string url = "https://data.sec.gov/submissions/CIK.json";
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000d"), MrcyId, "Mercury — Form 4", url);
+        var reader = new FakeSecForm4Reader
+        {
+            [url] = [Filing("acc-reason", SignalDirection.Neutral, 0m, classificationReason: token)],
+        };
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var item = Assert.Single(result.Evidence);
+
+        Assert.Equal(token, item.Metadata["insiderClassificationReason"]);
+        // Additive metadata only — the token must never leak into the searchable text, or it would move the
+        // spec-145 evidence identity (the normalized title+body hash alone).
+        Assert.DoesNotContain(token, item.Title, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(token, item.RawText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task CollectAsync_ClassificationReasonMetadata_DoesNotMoveEvidenceIdentity()
+    {
+        // Spec 145: evidence identity is EvidenceIdentity.ForContentHash over the normalized Title+RawText
+        // hash ALONE — the metadata bag is deliberately excluded. Map the same collected Title/RawText with
+        // and without the new insiderClassificationReason key through the real mapper and assert the
+        // ContentHash AND the evidence id are byte-identical, so no AddIfNewAsync decision can change.
+        const string url = "https://data.sec.gov/submissions/CIK.json";
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000e"), MrcyId, "Mercury — Form 4", url);
+        var reader = new FakeSecForm4Reader
+        {
+            [url] = [Filing("acc-id", SignalDirection.Positive, 50_000m)],
+        };
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var collected = Assert.Single(result.Evidence);
+        Assert.True(collected.Metadata.ContainsKey("insiderClassificationReason"));
+
+        // The same evidence, as a pre-156 collector would have produced it: identical Title/RawText, no key.
+        var legacyMetadata = collected.Metadata
+            .Where(kv => kv.Key != "insiderClassificationReason")
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+        var legacy = collected with { Metadata = legacyMetadata };
+
+        var mapper = new CollectedEvidenceMapper(
+            new EvidenceNormalizer(), NullLogger<CollectedEvidenceMapper>.Instance);
+        var withKey = mapper.ToEvidenceItem(collected);
+        var withoutKey = mapper.ToEvidenceItem(legacy);
+
+        Assert.Equal(withoutKey.ContentHash, withKey.ContentHash);
+        Assert.Equal(withoutKey.Id, withKey.Id);
+        Assert.Equal(EvidenceIdentity.ForContentHash(withKey.ContentHash), withKey.Id);
     }
 
     private sealed class FakeSecForm4Reader : ISecForm4Reader

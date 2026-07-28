@@ -180,6 +180,12 @@ internal sealed class SecForm4Collector : IEvidenceCollector
             ["filingDate"] = filing.FilingDate,
             // Debug/traceability only — NOT read by the extractor (direction rides the fixed phrase).
             [MetadataMarkerKey] = filing.Direction.ToString(),
+            // Spec 156: the reader's classification branch (10b5-1 plan / discretionary buy / discretionary
+            // sale / mixed / no-discretionary), persisted so WHY a filing was classified is answerable from
+            // the store going forward — the audit found it permanently Unknown for all accrued evidence.
+            // ADDITIVE metadata only, never Title/RawText: evidence identity is the normalized title+body
+            // hash alone (spec 145), so ContentHash, the evidence id and AddIfNewAsync decisions are unmoved.
+            ["insiderClassificationReason"] = filing.ClassificationReason,
         };
 
         // The extractor's materiality key: written ONLY when the discretionary $ value is positive, so a

@@ -8,6 +8,9 @@ namespace Radar.Infrastructure.Sec;
 /// per the deterministic transaction-code table (the 10b5-1 plan override forces every transaction Neutral);
 /// the collector synthesizes an advice-free evidence phrase from these real fields and never fabricates
 /// filing body text. <see cref="IndexUrl"/> is the stable filing landing page (provenance).
+/// <see cref="ClassificationReason"/> is the stable <see cref="SecForm4ClassificationReasons"/> token
+/// naming the classification branch taken (spec 156) — persisted as additive evidence metadata so the
+/// WHY of an insider classification is recoverable from the store going forward.
 /// </summary>
 internal sealed record SecForm4Filing(
     string Accession,
@@ -21,4 +24,5 @@ internal sealed record SecForm4Filing(
     decimal NetValue,
     decimal Shares,
     bool HasCluster,
-    bool Is10b5Plan);
+    bool Is10b5Plan,
+    string ClassificationReason);

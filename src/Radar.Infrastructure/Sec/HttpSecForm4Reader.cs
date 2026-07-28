@@ -347,6 +347,32 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
         var hasCluster = distinctOwnerCount >= 2
             && (direction == SignalDirection.Positive || direction == SignalDirection.Negative);
 
+        // The branch taken, as a stable token (spec 156). The 10b5-1 plan is checked FIRST: a plan forces
+        // every transaction skipped above, so buy/sell aggregates are both 0 and it would otherwise be
+        // indistinguishable from the no-discretionary-transactions bucket — losing the very distinction
+        // the audit found unrecoverable from the accrued store.
+        string classificationReason;
+        if (is10b5Plan)
+        {
+            classificationReason = SecForm4ClassificationReasons.Plan10b51;
+        }
+        else if (buyValue > 0m && sellValue == 0m)
+        {
+            classificationReason = SecForm4ClassificationReasons.DiscretionaryBuy;
+        }
+        else if (sellValue > 0m && buyValue == 0m)
+        {
+            classificationReason = SecForm4ClassificationReasons.DiscretionarySale;
+        }
+        else if (buyValue > 0m && sellValue > 0m)
+        {
+            classificationReason = SecForm4ClassificationReasons.MixedBuySell;
+        }
+        else
+        {
+            classificationReason = SecForm4ClassificationReasons.NoDiscretionaryTransactions;
+        }
+
         return new SecForm4Filing(
             Accession: row.Accession,
             FilingDate: row.FilingDate,
@@ -359,7 +385,8 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
             NetValue: netValue,
             Shares: shareCount,
             HasCluster: hasCluster,
-            Is10b5Plan: is10b5Plan);
+            Is10b5Plan: is10b5Plan,
+            ClassificationReason: classificationReason);
     }
 
     /// <summary>
