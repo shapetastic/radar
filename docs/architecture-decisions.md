@@ -1374,7 +1374,7 @@ from current attention is nearly free, and a Radar score that merely reproduces 
   covered companies keep being covered" in the outcome's own terms, which makes it the hardest honest
   baseline available and the one the screen must clear.
 - **SECONDARY — `baseline-attention-score`: the stored `AttentionScore` from that same row's
-  `filings-led-v11` snapshot.** Retained and **reported**, never screened on. It is a `[0,100]` clamped
+  `disclosure-led-v11` snapshot.** Retained and **reported**, never screened on. It is a `[0,100]` clamped
   integer, so it is coarse and tie-prone against an unbounded count outcome; beating a quantised predictor
   is a weaker result than beating the primary, and reporting both makes that difference visible rather than
   letting a soft baseline flatter the arm.
@@ -1384,11 +1384,22 @@ channel's* reach to positive-carrying publishers; that is a channel-budget chang
 `AttentionScore` component. Narrowing both would silently turn this secondary comparator into
 "positive-only attention persistence" — a different and weaker predictor, and an easier one to beat.
 
-**7 · Primary statistic and failure screen.** The primary arm is **`filings-led-v11`**. Comparison is paired
-on exactly the same eligible companies at each as-of date:
+**7 · Primary statistic and failure screen.** The primary arm is **`disclosure-led-v11`**
+(`sec-edgar` 0.60 / `RssPressReleaseCollector` 0.40, both S 3; no breadth channel).
+
+> **AMENDED 2026-07-28 — the primary arm was `filings-led-v11` and is now `disclosure-led-v11`.** Spec 158
+> measured the original budget (`sec-form4` .50 / `sec-13dg` .30 / breadth .20) at a **constant integer 0
+> across all 43 companies**, which the degeneracy rule below would have *excluded* — so it could never have
+> cleared or failed this screen. The replacement is spec 158's measured option B, chosen on rank resolution
+> (17/43 non-zero, 10 distinct integers, largest tie-group 26). Amended **before any v11 snapshot existed**,
+> so no outcome informed it and the pre-commitment is intact; §6's secondary comparator now reads the
+> `disclosure-led-v11` snapshot. Everything else in this amendment — metric, novelty rule, horizon, first
+> eligible date, missing-data rules, comparators, statistic and failure threshold — is **unchanged**.
+
+Comparison is paired on exactly the same eligible companies at each as-of date:
 
 1. require at least **20 companies** with a usable forward outcome on that date;
-2. compute the cross-sectional Spearman ρ of `filings-led-v11.OpportunityScore` against the forward
+2. compute the cross-sectional Spearman ρ of `disclosure-led-v11.OpportunityScore` against the forward
    publisher count;
 3. over those same companies, compute the cross-sectional Spearman ρ of the **primary** comparator
    `baseline-attention-persistence` (the trailing publisher count) against that same outcome, and — reported

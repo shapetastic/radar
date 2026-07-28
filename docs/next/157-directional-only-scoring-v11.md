@@ -1,24 +1,20 @@
 # Task: `radar-formula-v11` — neutral volume must not raise a score, and put it in the live run
 
-> ## ⛔ PAUSED 2026-07-28 — do NOT implement until spec 158 reports
+> ## ✅ UNPAUSED 2026-07-28 — spec 158 reported; both blockers resolved by amendment
 >
-> Two things this spec predeclares are in doubt, and both are measurable from **inputs alone, today**:
+> This spec was paused pending measurement. Spec 158 (PR #161, merged) answered both doubts, and **both came
+> back against the original design**:
 >
-> 1. **The §7 budget may not produce a usable ranking.** Spec 153 measured that of 32 companies with an
->    active `sec-form4` channel, **1** was net-positive on the live window; spec 156 found
->    `InstitutionalOwnership` is **98.79 %** Neutral by design (spec 99). Under `max(0, preponderance)` a
->    net-negative channel scores 0, and under the never-renormalise rule its weight is simply lost — so
->    0.80 of the predeclared budget may be dead.
-> 2. **§3 may zero out breadth entirely — and that is a doubt about §3 itself, not just the budget.**
->    Narrowing reach to publishers carrying a **Positive** signal looked like a safe tightening, but
->    `NewsArticle` evidence always becomes **Neutral** `MediaAttention` (spec 70), so no news publisher can
->    ever qualify, and RSS is **first-party**, so it is not a third-party publisher. §3-narrowed breadth may
->    therefore be structurally zero for every company.
+> 1. **The predeclared budget was unrankable.** `sec-form4` .50 / `sec-13dg` .30 / breadth .20 scored a
+>    **constant integer 0 across all 43 companies** — `sec-13dg` had zero in-window signals at all. AD-16 §7
+>    *excludes* a date whose predictor is constant, so that arm could never have cleared or failed the
+>    screen. **§7 amended** to spec 158's measured option B.
+> 2. **Positive-only breadth was structurally zero** (`Var(positive reach) = 0`, one distinct value). Spec 70
+>    makes every news signal Neutral and first-party RSS is not a publisher, so nothing can qualify. **§3
+>    amended** — v11 rejects breadth channels outright.
 >
-> `docs/next/158-channel-feasibility-characterization.md` measures both, **input-only** — no forward
-> outcome, so AD-16's pre-commitment is not consumed. When it reports, amend **§3 if breadth is unusable**,
-> and **§7 and AD-16 §7 together** to the smallest viable matched pair. Changing the arm before any v11
-> result exists is legitimate; changing it after would not be.
+> Both amendments were made **before any v11 snapshot existed**, so no outcome informed them and AD-16's
+> pre-commitment is intact. AD-16 §7 was amended in the same commit to keep the primary arm's name in step.
 
 > **AD-16 (accepted 2026-07-28) makes this binding:** *"Neutral volume must never amplify a directional
 > read … under this thesis heavy routine volume is the **noticed** company Radar is trying to avoid."*
@@ -62,50 +58,43 @@ reader.
 
 The middle row is the one that costs work — see §3. Do not claim the top row's guarantee for the composite.
 
-### 3. Breadth counts POSITIVE-carrying publishers only — the maintainer's decision, 2026-07-28
+### 3. A v11 strategy declares COLLECTOR CHANNELS ONLY — breadth is rejected at startup
 
-Today the breadth channel's tier-weighted distinct-publisher reach is computed over the whole gated set, so
-a Neutral news item adds a publisher, raises breadth and can raise Opportunity — while also raising
-`AttentionScore` and so deepening the notedness discount. The net direction is **not fixed**, which is why
-row 2 of §2 cannot be guaranteed without changing this.
+> **AMENDED 2026-07-28 after spec 158 measured it. The previous decision — "reach counts only publishers
+> carrying a Positive signal" — is WITHDRAWN, because it is structurally zero.** Spec 158 measured
+> `Var(positive reach) = 0`, one distinct reach value (`0`), for all 43 companies: spec 70 makes every
+> `NewsArticle` signal Neutral, and first-party RSS is not a third-party publisher, so **no publisher can
+> ever qualify**. The rule was not a tightening; it was an off switch. The mechanics that were fixed for it
+> are recorded in `docs/158-channel-feasibility-findings.md` and implemented as
+> `ScoreSignalMath.PositiveAttentionReach`; that helper stays (158 measured through it) but **no shipped
+> strategy declares a channel that uses it.**
 
-**Decision: reach counts only publishers that carried at least one POSITIVE signal for that company in the
-window.** Breadth then means *breadth of substantive positive coverage* rather than volume of mentions,
-which is what makes row 2 of §2 provable rather than hoped for.
+Breadth is now cornered, and both ways out are closed:
 
-**The exact mechanics, fixed 2026-07-28 — implement this, not a paraphrase of the sentence above.** Two
-readings of "publishers that carried a Positive signal" are possible (binary inclusion vs. accumulating mass
-per Positive signal) and they differ materially for a publisher carrying one Positive among many Neutral.
-The rule is:
+- **Positive-filtered** ⇒ structurally zero, measured. A declared breadth weight would be silently lost
+  under the never-renormalise rule — the "dead budget" failure this whole slice exists to avoid.
+- **Unfiltered** ⇒ a Neutral news item raises reach, raises breadth and can raise `OpportunityScore`, which
+  breaks row 2 of §2 and contradicts AD-16.
 
-1. **Filter first**: pass **only `Positive` signals** — from **both** the post-collapse and the pre-collapse
-   sets — into the **existing** reach calculation. The filter is applied to the inputs; the reach terms
-   themselves (third-party publisher test, tier weights, collapsed-publisher credit, media-count) are
-   **unchanged** and simply see a smaller input set.
-2. **Publisher inclusion stays BINARY and DISTINCT**: a publisher qualifies if it carries **at least one**
-   Positive signal, and qualifying publishers are counted **once** each, exactly as distinct-publisher reach
-   has always worked. A publisher does **not** earn extra reach for carrying several Positive signals.
-3. **Neutral and Negative signals contribute NEITHER publisher reach NOR the media-count term.** A Neutral
-   `MediaAttention` signal adds nothing even when the same publisher already qualifies via some other
-   Positive signal.
-4. **`AttentionScore` is unchanged and stays over the FULL gated set** — see the boxed note below; this
-   filter applies to the breadth channel only.
+**Decision: `radar-formula-v11` REJECTS a breadth channel at startup**, with a message citing this finding
+and pointing at `docs/158-channel-feasibility-findings.md`. Fail-fast, not fail-silent — a legal-but-useless
+breadth channel would reintroduce exactly the dead-weight problem in a form nobody notices. If the collector
+mix later produces Positive third-party signals, positive-only breadth becomes viable again and earns
+`radar-formula-v12` under AD-6; it does not get retrofitted into v11.
 
-Spec 158 §4 measures precisely this rule and extracts it as the shared helper; **v11 must call that helper
-rather than add a second positive-reach implementation.**
+**This STRENGTHENS §2's contract rather than weakening it.** With no breadth channel, a Neutral addition
+touches no collector channel (§1) and can only deepen the notedness discount — so row 2's "never increases"
+holds *by construction* instead of resting on a filter.
 
-⚠️ **POSITIVE, not merely "directional" — an earlier draft said directional and that was wrong.**
-"Directional" includes Negative, so broad *negative* coverage would have raised breadth and therefore raised
-`OpportunityScore`. A score whose name is Opportunity rising because a company is widely reported to be in
-trouble is indefensible, and deterioration already has its own home: the (v8-meaning) `TrajectoryScore` v10
-and v11 retain. Assert the negative case explicitly — adding a publisher that carried only Negative signals
-must not raise Opportunity.
+**The withdrawn rule, recorded so it is not reinvented.** It was: filter to `Positive` on both the
+post-collapse and pre-collapse inputs before the existing reach terms; binary and distinct publisher
+inclusion; Neutral *and* Negative excluded from publisher reach and the media-count term. That rule is
+correct as specified and is implemented and tested as `ScoreSignalMath.PositiveAttentionReach` — it simply
+has no qualifying inputs in this collector mix. Two things it also settled remain true and are worth keeping
+in view: broad **Negative** coverage must never raise a score named Opportunity (deterioration belongs to
+the v8-meaning `TrajectoryScore` that v10 and v11 retain), and the filter never applied to `AttentionScore`.
 
-Keep breadth's shape (`reach/(reach + S_c)`), its budget semantics and the never-renormalise rule unchanged
-— only the population entering `reach` narrows. Expect lower absolute breadth scores; that is intended, and
-re-tuning saturation constants to compensate is out of scope (§ Out of scope).
-
-⚠️ **THIS NARROWS THE BREADTH CHANNEL ONLY. The `AttentionScore` COMPONENT IS NOT TOUCHED** and keeps its
+⚠️ **THE `AttentionScore` COMPONENT IS NOT TOUCHED BY ANY OF THIS** and keeps its
 v8 meaning over the whole gated set, exactly as v10 retains it. The two both derive from publisher reach and
 are easy to conflate, but they are different things: breadth is a *budgeted channel* competing for weight,
 `AttentionScore` is a *diagnostic component* that also feeds the notedness discount. Narrowing both would
@@ -168,16 +157,47 @@ chosen while looking at data, which is the breach AD-16's pre-commitment clause 
 Add to `scripts/run-profiles/default.json`, under **new names** (spec 141 — never an edit; the five
 composite arms and three baselines are mid-accrual and **must not be renamed, edited or re-stamped**):
 
+> **AMENDED 2026-07-28 after spec 158.** The previously predeclared pair (`filings-led-v11` /
+> `filings-led-v10-control`, insider `sec-form4` .50 / institutional `sec-13dg` .30 / breadth .20) was
+> measured to score a **constant integer 0 for all 43 companies** — `sec-13dg` had **zero in-window signals
+> at all**, `sec-form4` exactly one marginally net-positive company, and breadth structurally zero (§3).
+> A constant predictor is not merely weak: AD-16 §7 **excludes** a date whose predictor is constant, so that
+> arm could never have cleared *or* failed the screen. It is withdrawn.
+
 | Name | Formula | Channels |
 |---|---|---|
-| `filings-led-v11` | `radar-formula-v11` | insider `sec-form4` 0.50 / institutional `sec-13dg` 0.30 / breadth 0.20 |
-| `filings-led-v10-control` | `radar-formula-v10` | **identical to the above** |
+| `disclosure-led-v11` | `radar-formula-v11` | `filings` = `sec-edgar` **0.60**, S 3 / `press` = `RssPressReleaseCollector` **0.40**, S 3 |
+| `disclosure-led-v10-control` | `radar-formula-v10` | **identical to the above** |
 
-Saturations mirror `filings-led-v2` (2 / 3 / 3) so the **only** difference between the pair is the formula.
+This is spec 158's measured option **B**, chosen over A (`sec-edgar` 1.00) and C
+(`RssPressReleaseCollector` .60 / `sec-form4` .40) on **rank resolution**, which is what a Spearman screen
+actually consumes:
 
-**Filings-led, not narrative-led, and the reason is AD-16.** Narrative-led is budgeted on `newssearch` and
-press — which under AD-16 *is* the attention Radar means to predict, so scoring on it confounds the input
-with the outcome. Filings are the slow structured sources the stealth thesis rests on.
+| Option | companies > 0 | distinct integers | largest tie-group | variance |
+|---|---:|---:|---:|---:|
+| A | 13 / 43 | 9 | 30 | 30.39 |
+| **B — adopted** | **17 / 43** | **10** | **26** | 13.92 |
+| C | 7 / 43 | 6 | 36 | 7.05 |
+
+B has the **lowest variance of the three and is still the right choice**: Spearman ranks, so tie structure
+dominates and raw spread is nearly irrelevant. B ties fewest companies and yields most distinct ranks.
+
+**Renamed `disclosure-led` because that is what it now is.** `sec-edgar` filings plus first-party press
+releases are the company's *own* disclosure; under AD-16 that is the input, and third-party pickup is the
+outcome. `newssearch` stays excluded for exactly that reason. Calling it `filings-led` would misdescribe a
+budget that is 40 % press releases.
+
+⚠️ **The weak point, stated because 0.60 of the budget rests on it:** `sec-edgar`'s collector attribution is
+spec-151 **inferred by elimination** and is **reasoned, not ground-truth validated** — 151's validation
+cohort was 337 `newssearch` / 2 `sec-form4` / 2 RSS. If that elimination rule is wrong, this arm's dominant
+channel is mis-populated. Re-check it when forward recorded attribution has accrued.
+
+⚠️ **These numbers are a LOWER BOUND, measured at close to the worst possible moment.** Spec 158's funnel
+dropped **14,089 of 17,616** in-window signals (80 %) as evidence-unresolvable, because spec 145 merged
+**2026-07-26** — two days before the pinned as-of — so the 60-day window is ~97 % legacy evidence that
+cannot resolve by construction. By roughly **2026-09-24** the whole window is post-145 and should resolve
+almost fully. That an arm ranks 17/43 at ~20 % resolution is a point in its favour, not against it. Re-run
+the spec-158 audit then as a cheap re-check; **do not** re-tune this budget to the transient numbers.
 
 State the resulting per-run cost (43 companies × N strategies) in the hand-back.
 
@@ -195,7 +215,7 @@ novelty** (89.5 % of accrued evidence is unresolvable, so novelty would measure 
 market), `h = 21` days with **complete attention-collection coverage and no price-market tolerance**, the
 **first eligible as-of date of 2026-08-22**, the valid-zero and missing-data rules, the two read-side
 comparators (**primary**: the trailing 21-day distinct-publisher count; **secondary, reported not screened**:
-the `AttentionScore` from the paired `filings-led-v11` snapshot), and the date-blocked descriptive failure
+the `AttentionScore` from the paired `disclosure-led-v11` snapshot), and the date-blocked descriptive failure
 screen.
 
 ⚠️ Recorded so it is not re-derived: an earlier draft proposed `AttentionScore(D+h) − AttentionScore(D)`.
@@ -255,7 +275,11 @@ rather than an input to it — which is a statement about design consistency, no
       together in one file.
 - [ ] The precommitted attention outcome is a forward **flow** over `(D, D+h]` — never a difference of
       `AttentionScore` stocks — and preserves a complete-window zero as a valid outcome.
-- [ ] The live pair is exactly `filings-led-v11` and `filings-led-v10-control`, identical budgets.
+- [ ] The live pair is exactly `disclosure-led-v11` and `disclosure-led-v10-control`, identical budgets
+      (`sec-edgar` 0.60 / `RssPressReleaseCollector` 0.40, both S 3), and NEITHER declares a breadth channel.
+- [ ] `radar-formula-v11` REJECTS a breadth channel at startup, citing the spec-158 finding.
+- [ ] v11 calls the existing `ScoreSignalMath` / `ScoringChannelComposition` helpers spec 158 extracted; no
+      second directional-activity or positive-reach implementation is added.
 - [ ] v8, v9 and v10 byte-identical, proven by the three existing golden pins passing **unmodified**.
 - [ ] An all-neutral channel stays distinguishable from an absent one; the evidence trail is unchanged.
 - [ ] `default.json` gains a v11 arm **and** a matched v10 arm with an identical budget, under new names,
