@@ -60,6 +60,14 @@ internal sealed class UsaSpendingContractCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "usaspending";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "usaSpendingFeedUrl";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -213,7 +221,7 @@ internal sealed class UsaSpendingContractCollector : IEvidenceCollector
             // federal contract award is an official primary record, so it declares a High baseline (above
             // the press-release Medium) — reinforcing the source-diversity/confidence story like SEC filings.
             ["quality"] = "High",
-            ["usaSpendingFeedUrl"] = feed.Url,
+            [MetadataMarkerKey] = feed.Url,
             ["awardId"] = award.AwardId,
             ["generatedInternalId"] = award.GeneratedInternalId,
             ["recipientId"] = award.RecipientId,

@@ -1,3 +1,5 @@
+using Radar.Application.Collectors;
+
 namespace Radar.Application.Scoring;
 
 /// <summary>
@@ -20,11 +22,20 @@ namespace Radar.Application.Scoring;
 public sealed class RadarScoreFormulaFactory : IScoreFormulaFactory
 {
     private readonly IAttentionSourceWeights _sourceWeights;
+    private readonly ICollectorAttributionResolver _attributionResolver;
 
-    public RadarScoreFormulaFactory(IAttentionSourceWeights sourceWeights)
+    /// <param name="attributionResolver">
+    /// How <c>radar-formula-v9</c> establishes the collector behind each signal's evidence (spec 151).
+    /// Strategy-independent — it is a property of the DATA, not of a strategy's hypothesis — so it is
+    /// resolved once here and handed to every v9 formula this factory builds. Optional and defaulting to the
+    /// recorded-only resolver, i.e. pre-151 behaviour.
+    /// </param>
+    public RadarScoreFormulaFactory(
+        IAttentionSourceWeights sourceWeights, ICollectorAttributionResolver? attributionResolver = null)
     {
         ArgumentNullException.ThrowIfNull(sourceWeights);
         _sourceWeights = sourceWeights;
+        _attributionResolver = attributionResolver ?? RecordedOnlyCollectorAttributionResolver.Instance;
     }
 
     /// <inheritdoc />
@@ -46,7 +57,8 @@ public sealed class RadarScoreFormulaFactory : IScoreFormulaFactory
         return formula switch
         {
             ScoreFormulaVersions.V9 =>
-                new RadarScoreFormulaV9(definition.Weights, _sourceWeights, definition.Channels),
+                new RadarScoreFormulaV9(
+                    definition.Weights, _sourceWeights, definition.Channels, _attributionResolver),
             _ => new RadarScoreFormulaV8(definition.Weights, _sourceWeights),
         };
     }

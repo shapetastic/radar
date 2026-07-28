@@ -17,8 +17,9 @@ namespace Radar.Application.Scoring;
 /// </description></item>
 /// <item><description>
 /// <b>Provenance</b> (<see cref="CollectionProvenance"/>) — <c>collectors=&lt;csv&gt;;</c>, plus a
-/// <c>collection=none-this-pass;</c> marker when this pass ran no collector (spec 147). Recorded on every
-/// snapshot, hashed into nothing (spec 141).
+/// <c>collection=none-this-pass;</c> marker when this pass ran no collector (spec 147), plus an
+/// <c>attribution=inferred-legacy;</c> marker when this pass re-derives collector attribution for
+/// pre-spec-146 evidence (spec 151). Recorded on every snapshot, hashed into nothing (spec 141).
 /// </description></item>
 /// </list>
 /// <para>
@@ -42,6 +43,14 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
     /// </summary>
     internal const string NoCollectionThisPassSegment = "collection=none-this-pass;";
 
+    /// <summary>
+    /// The marker segment appended when this pass re-derives collector attribution for evidence that predates
+    /// spec 146's recording (spec 151). Provenance, like every other segment here: hashed into nothing, but
+    /// stamped on every snapshot the inference could have touched, so a series scored over reconstructed
+    /// attribution is never mistaken for one scored over first-hand attribution.
+    /// </summary>
+    internal const string InferredLegacyAttributionSegment = "attribution=inferred-legacy;";
+
     private readonly string _identityDescriptor;
     private readonly string _collectionProvenance;
     private readonly IReadOnlyList<string> _enabledCollectors;
@@ -49,7 +58,8 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
     public SignalSourceDescriptor(
         EnabledCollectorVocabulary collectors,
         IDirectionalFilingSignalSource? aiFilingSource = null,
-        CollectionPassOptions? collectionPass = null)
+        CollectionPassOptions? collectionPass = null,
+        CollectorAttributionOptions? attribution = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
 
@@ -78,11 +88,25 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // deliberately deferred; the marker is what keeps this record honest in the meantime, because it says
         // "configured vocabulary, nothing collected here" rather than claiming a collection.
         // A Collected pass renders exactly what it always did, byte for byte, and never carries a second segment.
-        _collectionProvenance = (collectionPass?.Kind ?? CollectionPassKind.Collected) switch
+        var provenance = (collectionPass?.Kind ?? CollectionPassKind.Collected) switch
         {
             CollectionPassKind.NoCollectionThisPass => $"collectors={csv};{NoCollectionThisPassSegment}",
             _ => $"collectors={csv};",
         };
+
+        // SPEC 151: a THIRD orthogonal fact — whether this pass re-derived collector attribution for evidence
+        // that predates spec 146's recording. Appended as its own trailing segment for the same reason the
+        // spec-147 marker is a segment rather than a different CSV: a reader that only knows `collectors=`
+        // (and `collection=`) keeps working, and the collector set stays in exactly one place. It is appended
+        // ONLY when the inference is enabled, so every pre-151 composition renders a byte-identical string.
+        // Recording it is not decoration: an inference is not a recorded fact, and a snapshot that cannot say
+        // which it rests on invites a backtest to treat a reconstruction as first-hand provenance.
+        if (attribution?.InferLegacyAttribution == true)
+        {
+            provenance += InferredLegacyAttributionSegment;
+        }
+
+        _collectionProvenance = provenance;
 
         // STRATEGY IDENTITY (spec 141): the extractor rule-set identity, plus the AI directional-filing
         // magnitudes when that path is registered (fixed field ordering, AD-3, reusing the shared
@@ -91,7 +115,9 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // change what hypothesis the strategy scores. The ai= segment stays here because it carries per-signal
         // magnitudes and the reading model, which change signal DIRECTION (spec 119) — genuinely different
         // scorings that must never share a fingerprint. The spec-147 pass kind is likewise absent: it is
-        // provenance, not identity.
+        // provenance, not identity. So is the spec-151 attribution mode — it changes WHICH DATA a v9 channel
+        // can see, not what hypothesis the strategy scores, and folding it in would re-stamp every v8
+        // strategy in the process for a setting that cannot touch them.
         var descriptor = $"rules={KeywordSignalExtractor.RuleSetVersion};";
         if (aiFilingSource is not null)
         {

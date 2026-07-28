@@ -236,6 +236,83 @@ public sealed class SignalSourceDescriptorTests
             aiFilingSource: null,
             new CollectionPassOptions { Kind = CollectionPassKind.NoCollectionThisPass });
 
+    // ---- spec 151: the attribution mode is a THIRD fact, and it never touches identity either ----------
+
+    private static SignalSourceDescriptor InferringDescriptor(
+        CollectionPassKind kind, params string[] names) =>
+        new(
+            Vocabulary(names),
+            aiFilingSource: null,
+            new CollectionPassOptions { Kind = kind },
+            new CollectorAttributionOptions { InferLegacyAttribution = true });
+
+    [Fact]
+    public void InferenceOff_RendersExactlyThePre151ProvenanceString()
+    {
+        // THE byte-identical criterion for every deployment that does not opt in: omitting the options, or
+        // stating them with inference off, must render the string spec 147 rendered — no third segment.
+        const string expected = "collectors=rss,sec-edgar;";
+
+        Assert.Equal(expected, Build("sec-edgar", "rss").CollectionProvenance());
+        Assert.Equal(
+            expected,
+            new SignalSourceDescriptor(
+                    Vocabulary("sec-edgar", "rss"),
+                    aiFilingSource: null,
+                    collectionPass: null,
+                    new CollectorAttributionOptions())
+                .CollectionProvenance());
+        Assert.Equal(
+            expected,
+            new SignalSourceDescriptor(
+                    Vocabulary("sec-edgar", "rss"),
+                    aiFilingSource: null,
+                    collectionPass: null,
+                    new CollectorAttributionOptions { InferLegacyAttribution = false })
+                .CollectionProvenance());
+    }
+
+    [Fact]
+    public void InferenceOn_MarksTheProvenance_AsATrailingSegment()
+    {
+        // A series scored over re-derived attribution must never read as one scored over first-hand
+        // attribution. The marker trails the existing segments so a reader that only knows `collectors=`
+        // (and `collection=`) is unaffected.
+        Assert.Equal(
+            "collectors=rss,sec-edgar;attribution=inferred-legacy;",
+            InferringDescriptor(CollectionPassKind.Collected, "sec-edgar", "rss").CollectionProvenance());
+    }
+
+    [Fact]
+    public void InferenceOn_ComposesWithTheNoCollectionMarker()
+    {
+        // The two markers are orthogonal facts (did this pass collect? does this pass infer?) and a standalone
+        // score pass re-scoring accrued history is exactly where both are true at once.
+        Assert.Equal(
+            "collectors=rss,sec-edgar;collection=none-this-pass;attribution=inferred-legacy;",
+            InferringDescriptor(CollectionPassKind.NoCollectionThisPass, "sec-edgar", "rss")
+                .CollectionProvenance());
+    }
+
+    [Fact]
+    public void AttributionMode_DoesNotTouchIdentity_NorTheEnabledCollectorNames()
+    {
+        // The spec-151 no-fingerprint-move criterion at its source: attribution is DATA, not scoring
+        // configuration. It changes which evidence a v9 channel can see, not what hypothesis the strategy
+        // scores — and folding it in would re-stamp every v8 strategy in the process for a setting that
+        // cannot affect them.
+        var recordedOnly = Build("rss", "sec-edgar");
+        var inferring = InferringDescriptor(CollectionPassKind.Collected, "rss", "sec-edgar");
+
+        Assert.Equal(recordedOnly.CanonicalDescriptor(), inferring.CanonicalDescriptor());
+        Assert.DoesNotContain("attribution=", recordedOnly.CanonicalDescriptor(), StringComparison.Ordinal);
+        Assert.DoesNotContain("attribution=", inferring.CanonicalDescriptor(), StringComparison.Ordinal);
+        Assert.Equal(recordedOnly.EnabledCollectors(), inferring.EnabledCollectors());
+
+        // …and it IS recorded, so the two are not merely equal everywhere.
+        Assert.NotEqual(recordedOnly.CollectionProvenance(), inferring.CollectionProvenance());
+    }
+
     [Fact]
     public void NullAiSource_YieldsRulesOnlyIdentity_NoAiSegment()
     {

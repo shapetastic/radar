@@ -59,6 +59,14 @@ internal sealed class TrademarkActivityCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "trademarks";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "trademarkFeedUrl";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -179,7 +187,7 @@ internal sealed class TrademarkActivityCollector : IEvidenceCollector
             // Declared baseline evidence quality (AD-7), read by CollectedEvidenceMapper.ParseQuality. USPTO
             // trademark filings are an authoritative public record — on par with the SEC/USASpending High.
             ["quality"] = "High",
-            ["trademarkFeedUrl"] = feed.Url,
+            [MetadataMarkerKey] = feed.Url,
             ["owner"] = owner,
             // The filing count is the accrued trademark history slice B will read.
             ["filingCount"] = count.ToString(CultureInfo.InvariantCulture),

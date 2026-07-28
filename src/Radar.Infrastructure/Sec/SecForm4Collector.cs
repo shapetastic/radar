@@ -54,6 +54,14 @@ internal sealed class SecForm4Collector : IEvidenceCollector
     /// </summary>
     public const string Name = "sec-form4";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "insiderDirection";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -171,7 +179,7 @@ internal sealed class SecForm4Collector : IEvidenceCollector
             ["form"] = "4",
             ["filingDate"] = filing.FilingDate,
             // Debug/traceability only — NOT read by the extractor (direction rides the fixed phrase).
-            ["insiderDirection"] = filing.Direction.ToString(),
+            [MetadataMarkerKey] = filing.Direction.ToString(),
         };
 
         // The extractor's materiality key: written ONLY when the discretionary $ value is positive, so a

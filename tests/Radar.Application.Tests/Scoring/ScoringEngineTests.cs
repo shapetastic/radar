@@ -753,6 +753,93 @@ public sealed class ScoringEngineTests
     }
 
     [Fact]
+    public async Task AttributionModeToggle_SameScoringConfigVersion_DifferentCollectionProvenance_IdenticalScores()
+    {
+        // THE spec-151 no-fingerprint-move criterion, end to end through the engine and under the REAL
+        // SignalSourceDescriptor — deliberately mirroring the spec-141 collector-toggle test above, because it
+        // is the same claim about a different fact: collector ATTRIBUTION is data, not scoring configuration.
+        // Two engines differing ONLY in Radar:Scoring:InferLegacyCollectorAttribution must
+        //   * stamp the SAME ScoringConfigVersion (so the four pinned fingerprint pairs do not move, and
+        //     StrategyIdentityGuard does not trip on an operator flipping the setting),
+        //   * stamp DIFFERENT CollectionProvenance (a series scored over re-derived attribution must say so),
+        //   * and produce byte-identical scores here — this is a v8 strategy, which never reads attribution at
+        //     all, so the setting is inert for it.
+        var companyId = Guid.NewGuid();
+
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash("attribution-toggle-hash")
+            .WithSourceType(EvidenceSourceType.Filing)
+            .WithQuality(EvidenceQuality.High)
+            .Build();
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithType(SignalType.CustomerWin)
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(WindowEnd.AddDays(-2))
+            .Build();
+
+        static ISignalSourceDescriptor DescriptorWith(bool infer) =>
+            new SignalSourceDescriptor(
+                EnabledCollectorVocabulary.FromCollectors(
+                    new[] { "sec-edgar", "sec-form4" }.Select(n => (IEvidenceCollector)new NamedFakeCollector(n))),
+                aiFilingSource: null,
+                collectionPass: null,
+                new CollectorAttributionOptions { InferLegacyAttribution = infer });
+
+        var recordedOnlyHarness = new Harness(
+            new RadarScoreFormulaV8(new ScoringWeights(), Weights),
+            sourceDescriptor: DescriptorWith(infer: false));
+        var inferringHarness = new Harness(
+            new RadarScoreFormulaV8(new ScoringWeights(), Weights),
+            sourceDescriptor: DescriptorWith(infer: true));
+
+        await recordedOnlyHarness.SeedExistingAsync(signal, evidence);
+        await inferringHarness.SeedExistingAsync(signal, evidence);
+
+        var recordedOnly =
+            await recordedOnlyHarness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+        var inferring =
+            await inferringHarness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // Identity: unmoved.
+        Assert.Equal(recordedOnly.Snapshot.ScoringConfigVersion, inferring.Snapshot.ScoringConfigVersion);
+        Assert.Equal(
+            recordedOnlyHarness.Engine.EffectiveConfig.Fingerprint,
+            inferringHarness.Engine.EffectiveConfig.Fingerprint);
+        Assert.DoesNotContain(
+            "attribution=",
+            inferringHarness.Engine.EffectiveConfig.SignalSourceDescriptor,
+            StringComparison.Ordinal);
+
+        // Provenance: recorded, and different.
+        Assert.Equal("collectors=sec-edgar,sec-form4;", recordedOnly.Snapshot.CollectionProvenance);
+        Assert.Equal(
+            "collectors=sec-edgar,sec-form4;attribution=inferred-legacy;",
+            inferring.Snapshot.CollectionProvenance);
+
+        // Scores: byte-identical, component for component.
+        Assert.Equal(recordedOnly.Snapshot.TrajectoryScore, inferring.Snapshot.TrajectoryScore);
+        Assert.Equal(recordedOnly.Snapshot.OpportunityScore, inferring.Snapshot.OpportunityScore);
+        Assert.Equal(recordedOnly.Snapshot.AttentionScore, inferring.Snapshot.AttentionScore);
+        Assert.Equal(
+            recordedOnly.Snapshot.EvidenceConfidenceScore, inferring.Snapshot.EvidenceConfidenceScore);
+        Assert.Equal(recordedOnly.Snapshot.SignalVelocityScore, inferring.Snapshot.SignalVelocityScore);
+        Assert.Equal(recordedOnly.Snapshot.Explanation, inferring.Snapshot.Explanation);
+        Assert.Equal(recordedOnly.Snapshot.ComponentJson, inferring.Snapshot.ComponentJson);
+        Assert.Equal(recordedOnly.Snapshot.ScoringVersion, inferring.Snapshot.ScoringVersion);
+
+        // Provenance chain: identical contributing signal/evidence, weight and reason.
+        Assert.Equal(
+            recordedOnly.Links.Select(l =>
+                (l.SignalId, l.EvidenceId, l.ContributionReason, l.ContributionWeight)),
+            inferring.Links.Select(l => (l.SignalId, l.EvidenceId, l.ContributionReason, l.ContributionWeight)));
+        Assert.NotEmpty(recordedOnly.Links);
+    }
+
+    [Fact]
     public async Task Versioning_ChangedWeight_StampsDifferentScoringConfigVersion()
     {
         var companyId = Guid.NewGuid();

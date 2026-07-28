@@ -43,6 +43,14 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "LocalFileEvidenceCollector";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "sourceFile";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -155,7 +163,7 @@ public sealed class LocalFileEvidenceCollector : IEvidenceCollector
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["sourceFile"] = fileName,
+            [MetadataMarkerKey] = fileName,
         };
         if (!string.IsNullOrWhiteSpace(doc.Quality))
         {

@@ -73,6 +73,14 @@ internal sealed class HiringBoardCollector : IEvidenceCollector
     /// </summary>
     public const string Name = "hiring-ats";
 
+    /// <summary>
+    /// The metadata key ONLY this collector writes — the spec-151 discriminator
+    /// <c>LegacyCollectorAttributionInference</c> re-derives collector attribution from, for evidence
+    /// collected before spec 146 began recording the producing collector. Renaming or dropping it
+    /// un-attributes this collector's accrued history.
+    /// </summary>
+    internal const string MetadataMarkerKey = "hiringFeedUrl";
+
     /// <inheritdoc />
     public string CollectorName => Name;
 
@@ -204,7 +212,7 @@ internal sealed class HiringBoardCollector : IEvidenceCollector
             // company's own careers page is primary but unaudited — below the SEC/USASpending High,
             // matching the news Medium.
             ["quality"] = "Medium",
-            ["hiringFeedUrl"] = feed.Url,
+            [MetadataMarkerKey] = feed.Url,
             ["platform"] = platform,
             ["board"] = target.BoardToken,
             // The three counts are the accrued hiring history slice B will read.
