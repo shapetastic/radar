@@ -225,8 +225,19 @@ public sealed class RadarScoreFormulaV9 : IScoreFormula
         // ran/not-run split, activity → saturation → preponderance, the per-signal channel attribution and the
         // weighted composite sum all live in ScoringChannelComposition, which radar-formula-v10 reuses. The
         // ONLY thing this formula contributes to that pass is its own DirectionFactor — see the ⚠ note on it.
+        // Spec 154 made the ACTIVITY measure a parameter too (so a control formula can measure something
+        // deliberately dumber); v9 passes the same ScoreSignalMath.ActivityMass the shared pass used to call
+        // directly, so its arithmetic — and therefore its last bit — is unchanged.
         var composition = ScoringChannelComposition.Compose(
-            input, recency, quality, _channels, _weights, _sourceWeights, _attribution, DirectionFactor);
+            input,
+            recency,
+            quality,
+            _channels,
+            _weights,
+            _sourceWeights,
+            _attribution,
+            ScoreSignalMath.ActivityMass,
+            DirectionFactor);
 
         var breakdown = composition.Channels.Select(ToBreakdown).ToList();
         var composite = composition.Composite;

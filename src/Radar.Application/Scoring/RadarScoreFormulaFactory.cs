@@ -25,8 +25,9 @@ public sealed class RadarScoreFormulaFactory : IScoreFormulaFactory
     private readonly ICollectorAttributionResolver _attributionResolver;
 
     /// <param name="attributionResolver">
-    /// How a channel formula (<c>radar-formula-v9</c>/<c>v10</c>) establishes the collector behind each
-    /// signal's evidence (spec 151).
+    /// How a channel formula (any of <see cref="ScoreFormulaVersions.ConsumesChannels"/> — since spec 154 that
+    /// includes the <see cref="ScoreFormulaVersions.BaselineActivityV1"/> control) establishes the collector
+    /// behind each signal's evidence (spec 151).
     /// Strategy-independent — it is a property of the DATA, not of a strategy's hypothesis — so it is
     /// resolved once here and handed to every channel formula this factory builds. Optional and defaulting to the
     /// recorded-only resolver, i.e. pre-151 behaviour.
@@ -66,6 +67,11 @@ public sealed class RadarScoreFormulaFactory : IScoreFormulaFactory
                     definition.Weights, _sourceWeights, definition.Channels, _attributionResolver),
             ScoreFormulaVersions.V10 =>
                 new RadarScoreFormulaV10(
+                    definition.Weights, _sourceWeights, definition.Channels, _attributionResolver),
+            // Spec 154's CONTROL. Same constructor contract as the composite channel formulas, so it is one
+            // more arm here and needs no special-casing anywhere downstream — a baseline is just a strategy.
+            ScoreFormulaVersions.BaselineActivityV1 =>
+                new RadarBaselineActivityFormulaV1(
                     definition.Weights, _sourceWeights, definition.Channels, _attributionResolver),
             _ => new RadarScoreFormulaV8(definition.Weights, _sourceWeights),
         };

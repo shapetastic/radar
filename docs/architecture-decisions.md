@@ -1143,3 +1143,67 @@ a performance/advice claim (no "return/outperform/buy"). This amendment records 
 exists and is bounded: **price (and score history) may be READ for validation/visualisation but must never
 flow back into scoring** — doing so still requires superseding AD-14. *Accepted · 2026-07-06 — the read side
 of the price-validation boundary; no scoring math change.*
+
+---
+
+## AD-15 — A composite strategy adds value only if it beats **every** baseline out-of-sample
+
+**Decision.** The standard the project holds itself to, verbatim:
+
+> A composite strategy may only be described as adding value if it beats **every** baseline
+> **out-of-sample**, on an honest N, by more than the spread between the baselines themselves.
+
+Radar therefore ships a small, deliberate **control group** of *dumb baseline* strategies (spec 154),
+declared in `scripts/run-profiles/default.json` and scored through the **normal** seam — same
+`ScoringEngine`, same stores, same `ScoringConfigVersion` fingerprints, same spec-140 leaderboard. There is
+**no special-casing** of a baseline anywhere in the harness, the leaderboard or the renderers: a baseline is
+just a strategy.
+
+- **Every baseline is prefixed `baseline-`**, so nobody reads one as a candidate strategy in a report or a
+  leaderboard. They exist to be **beaten**.
+- The three shipped controls: **`baseline-earnings-only`** (does the latest guidance read alone track price? —
+  config-only, `radar-formula-v8` over `SignalTypes: ["GuidanceChange"]`), **`baseline-activity-only`** (is the
+  score just "something happened"? — one collector channel over every enabled collector, scored as the
+  saturated plain COUNT of in-window signals), and **`baseline-media-only`** (is Radar just tracking press
+  coverage? — the same formula over the press/news collectors only).
+- **A baseline winning is a FINDING ABOUT RADAR, not a recommendation.** If "count the signals" or "how much
+  media covered it" tracks price as well as the composite does, the composite is expensive decoration — that
+  is a cheap thing to find out and an expensive thing to assume. Nothing is auto-tuned or auto-promoted on the
+  strength of which arm wins; the leaderboard ranks, a human decides (spec 140).
+- **Keep the set small and deliberate.** Each added strategy scores every company on every run and adds a
+  ranked table to the weekly report, and every extra arm makes a chance winner more likely — the exact trap
+  spec 140's out-of-sample hold-out exists to resist. This is a control group, not a sweep.
+- **`baseline-following-tier` is DEFERRED, not approximated.** "Is the score just 'small company'?" is a real
+  question, but a tier-only score traces back to **no contributing evidence** — the curated `FollowingTier` is
+  a *company attribute*, not evidence — which violates the provenance invariant that a score without evidence
+  is invalid. Such snapshots would carry zero score-evidence links and would be dropped from the weekly report
+  by the spec-53 exclusion anyway. The same question is answerable **read-side**, by relating the existing
+  strategies' ranks to the curated tier, without minting evidence-less snapshots. Implementing it by some
+  proxy would be **worse than not having it**: it would look like a control while testing something else.
+- **This rule depends on spec 152's partial-window honesty.** Until enough price history has accrued, the
+  leaderboard correctly reports "No strategy could be ranked" at the 21-day horizon, and **none of these
+  baselines mean anything before then**. A "beats the baseline" claim made on partial-window returns is a
+  claim about missing data.
+
+**Why.** Nothing Radar produced answered whether the composite adds anything over a trivial heuristic. The
+**2026-07-28** replay backtest ranked five deliberately-different strategies and they came in at in-sample
+Spearman ρ −0.0849 / −0.0969 / −0.0999 / −0.1000 / −0.1009 — a spread of **0.016**. That is not a ranking; it
+is what one common factor dominating all five looks like. When everything correlates with everything, the
+useful comparison is not strategy-vs-strategy but **strategy vs. embarrassingly simple baseline**, and the
+"by more than the spread between the baselines themselves" clause is what stops a 0.016 gap being reported as
+a result. Requiring **out-of-sample** is not decoration either: spec 140 computes the ranking in-sample inside
+the harness and hands the caller an already-ordered list precisely so an in-sample leaderboard is not
+expressible.
+
+Because a baseline's definition is what every such claim is measured against, `radar-baseline-activity-v1`
+carries an `IScoreFormula.CompositionRevision` and a composition-guard test (spec 153's mechanism): a silent
+drift in what "baseline" means would retroactively and invisibly invalidate every "beats the baseline"
+statement made against it. The control formula is deliberately **not** numbered into the `radar-formula-vN`
+lineage — that sequence is the lineage of Radar's *composite* (AD-6), and a control is not an evolution of it.
+
+**Status.** Accepted · 2026-07-28 (spec 154). Cross-references AD-6 (formula structure is code), AD-10 as
+amended (identity/fingerprint), AD-14 (price is validation-only and never a scoring input — a baseline is
+ranked *against* price, never scored *from* it), AD-9 (no advice language: a leaderboard position is a
+research statistic, not a recommendation), and spec 141's immutable-by-convention rule (re-tuning a
+baseline's saturation constants means a NEW NAME, e.g. `baseline-activity-only` →
+`baseline-activity-only-v2`, not an in-place edit).

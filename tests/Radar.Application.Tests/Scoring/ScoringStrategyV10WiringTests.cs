@@ -107,20 +107,30 @@ public sealed class ScoringStrategyV10WiringTests
     [Fact]
     public void ShippableFormulas_IncludeV10_InVersionOrder_AndOnlyTheChannelOnesConsumeChannels()
     {
+        // The radar-formula-vN composite lineage in version order, then the spec-154 baseline CONTROL, which
+        // is deliberately outside that lineage (see ScoreFormulaVersions.BaselineActivityV1).
         Assert.Equal(
-            [ScoreFormulaVersions.V8, ScoreFormulaVersions.V9, ScoreFormulaVersions.V10],
+            [
+                ScoreFormulaVersions.V8,
+                ScoreFormulaVersions.V9,
+                ScoreFormulaVersions.V10,
+                ScoreFormulaVersions.BaselineActivityV1,
+            ],
             ScoreFormulaVersions.All);
 
         Assert.False(ScoreFormulaVersions.ConsumesChannels(ScoreFormulaVersions.V8));
         Assert.True(ScoreFormulaVersions.ConsumesChannels(ScoreFormulaVersions.V9));
         Assert.True(ScoreFormulaVersions.ConsumesChannels(ScoreFormulaVersions.V10));
+        Assert.True(ScoreFormulaVersions.ConsumesChannels(ScoreFormulaVersions.BaselineActivityV1));
         Assert.False(ScoreFormulaVersions.ConsumesChannels("radar-formula-v42"));
         Assert.False(ScoreFormulaVersions.ConsumesChannels(null));
 
         // The fail-fast message list is rendered FROM All through the same predicate the rules use, so a
         // message can never name a different set from the one enforced.
         Assert.Equal(
-            $"{ScoreFormulaVersions.V9}, {ScoreFormulaVersions.V10}", ScoreFormulaVersions.ChannelFormulaList);
+            $"{ScoreFormulaVersions.V9}, {ScoreFormulaVersions.V10}, "
+                + $"{ScoreFormulaVersions.BaselineActivityV1}",
+            ScoreFormulaVersions.ChannelFormulaList);
     }
 
     // ---------------------------------------------------------------------------------------------------
