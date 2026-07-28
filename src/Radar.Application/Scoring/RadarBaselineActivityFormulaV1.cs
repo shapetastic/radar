@@ -205,7 +205,11 @@ public sealed class RadarBaselineActivityFormulaV1 : IScoreFormula
             _sourceWeights,
             _attribution,
             SignalCount,
-            Saturation);
+            Saturation,
+            // Spec 158 made the breadth REACH a parameter too; the baseline passes the same
+            // ScoreSignalMath.AttentionReach the shared pass used to call directly, so its arithmetic is
+            // unchanged (the control stays exactly as dumb as it was declared to be — no dumber).
+            ScoreSignalMath.AttentionReach);
 
         var breakdown = composition.Channels.Select(ToBreakdown).ToList();
         var composite = composition.Composite;

@@ -458,6 +458,92 @@ public static class ScoreSignalMath
     }
 
     /// <summary>
+    /// PROSPECTIVE <c>radar-formula-v11</c> PRIMITIVE (spec 158 §4, normatively fixed by spec 157 §1):
+    /// a collector channel's DIRECTIONAL-ONLY activity — exactly
+    /// <c>DirectionalMasses(signals, recency, qualityFactors).Total</c>, i.e. the
+    /// <c>strength · confidence · recency · quality</c> mass summed over Positive and Negative signals only.
+    /// Neutral/Mixed signals contribute <b>exactly zero</b>, so a channel's saturation built on this term
+    /// cannot rise on neutral volume — the AD-16 property v10's <see cref="ActivityMass"/> lacks.
+    /// <para>
+    /// It matches the <c>ChannelActivityMass</c> delegate shape so a v11 composition passes it where v9/v10
+    /// pass <see cref="ActivityMass"/>. <b>No shipped formula consumes it yet</b> (spec 158 ships no v11):
+    /// it exists so the spec-158 input-only characterization and the eventual v11 share ONE definition
+    /// instead of drifting copies. <see cref="ActivityMass"/> is untouched — v9/v10 keep their exact
+    /// arithmetic.
+    /// </para>
+    /// </summary>
+    public static double DirectionalActivityMass(
+        IReadOnlyList<ScoringSignal> signals,
+        IReadOnlyList<double> recency,
+        IReadOnlyList<double> qualityFactors)
+    {
+        ArgumentNullException.ThrowIfNull(signals);
+        ArgumentNullException.ThrowIfNull(recency);
+        ArgumentNullException.ThrowIfNull(qualityFactors);
+
+        return DirectionalMasses(signals, recency, qualityFactors).Total;
+    }
+
+    /// <summary>
+    /// PROSPECTIVE <c>radar-formula-v11</c> PRIMITIVE (spec 158 §4; the exact mechanics fixed by spec 157
+    /// §3): the POSITIVE-ONLY breadth reach. Applies <c>Direction == Positive</c> to BOTH the post-collapse
+    /// and the pre-collapse input sets and then evaluates the <b>existing, unchanged</b>
+    /// <see cref="AttentionReach"/> term over the narrowed inputs — the third-party-publisher test, the tier
+    /// weights, the collapsed-publisher credit and the media-count term are all the same expressions, simply
+    /// seeing a smaller input set.
+    /// <list type="bullet">
+    /// <item><b>Publisher inclusion stays BINARY and DISTINCT</b>: a publisher qualifies on at least ONE
+    /// Positive signal and is counted once — several Positive signals earn no extra reach (inherited from
+    /// <see cref="DistinctThirdPartyPublishers"/>' set semantics, not re-implemented).</item>
+    /// <item><b>Negative is excluded alongside Neutral</b>, from the media-count term as well as from
+    /// publisher reach: only Positive signals pass the filter. Broad NEGATIVE coverage must never raise a
+    /// score named Opportunity — deterioration is Trajectory's job (spec 157 §3).</item>
+    /// <item>A Neutral <see cref="SignalType.MediaAttention"/> signal contributes zero here even when the
+    /// same publisher separately qualifies via a Positive signal.</item>
+    /// <item><b><c>AttentionScore</c> is NOT filtered</b> — the attention COMPONENT (and the notedness
+    /// discount it feeds) stays over the full gated set via <see cref="AttentionReach"/> /
+    /// <see cref="AttentionComponent"/>. This term narrows the breadth CHANNEL only.</item>
+    /// </list>
+    /// <para>
+    /// Matches the <c>BreadthChannelReach</c> delegate shape. <b>No shipped formula consumes it yet</b>;
+    /// spec 157's v11 must call this helper rather than add a second positive-reach implementation, and the
+    /// spec-158 audit characterizes exactly this rule.
+    /// </para>
+    /// </summary>
+    public static double PositiveAttentionReach(
+        IReadOnlyList<ScoringSignal> signals,
+        IReadOnlyList<ScoringSignal> preCollapseSignals,
+        ScoringWeights weights,
+        IAttentionSourceWeights sourceWeights)
+    {
+        ArgumentNullException.ThrowIfNull(signals);
+        ArgumentNullException.ThrowIfNull(preCollapseSignals);
+        ArgumentNullException.ThrowIfNull(weights);
+        ArgumentNullException.ThrowIfNull(sourceWeights);
+
+        return AttentionReach(
+            FilterPositive(signals), FilterPositive(preCollapseSignals), weights, sourceWeights);
+    }
+
+    /// <summary>
+    /// The §3 input filter: Positive signals only. Neutral, Mixed AND Negative are excluded — the filter is
+    /// applied to the INPUTS, so every downstream reach term sees a smaller set rather than a changed rule.
+    /// </summary>
+    private static IReadOnlyList<ScoringSignal> FilterPositive(IReadOnlyList<ScoringSignal> signals)
+    {
+        var positive = new List<ScoringSignal>(signals.Count);
+        for (var i = 0; i < signals.Count; i++)
+        {
+            if (signals[i].Signal.Direction == SignalDirection.Positive)
+            {
+                positive.Add(signals[i]);
+            }
+        }
+
+        return positive;
+    }
+
+    /// <summary>
     /// The curated-following discount magnitude for a tier (spec 117). Reads the four config-tunable
     /// <see cref="ScoringWeights"/> magnitudes; <see cref="FollowingTier.Small"/> — and any unmapped value —
     /// falls through to the Small discount, the fail-safe "no extra discount" default.

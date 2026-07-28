@@ -61,6 +61,33 @@ public delegate double ChannelActivityMass(
 public delegate double CollectorChannelScore(double saturation, double preponderance);
 
 /// <summary>
+/// How a BREADTH channel measures its raw REACH over the strategy's gated window — the <c>x</c> that
+/// <see cref="ScoringChannelComposition"/> then saturates as <c>x/(x+S_c)</c> (spec 158 §4).
+/// <list type="bullet">
+/// <item><c>radar-formula-v9</c> / <c>radar-formula-v10</c> / <c>radar-baseline-activity-v1</c> pass the
+/// existing <see cref="ScoreSignalMath.AttentionReach"/> explicitly — the same static method the shared pass
+/// used to call directly, so their arithmetic (and therefore their last bit) is unchanged.</item>
+/// <item>The prospective <c>radar-formula-v11</c> (spec 157 §3) passes
+/// <see cref="ScoreSignalMath.PositiveAttentionReach"/>, the positive-only narrowing of the same term.</item>
+/// </list>
+/// <para>
+/// <b>REQUIRED, with no default value, deliberately</b> — the same reasoning as
+/// <see cref="ChannelActivityMass"/>: a silent default would let a new formula quietly inherit the full-set
+/// reach while claiming to measure positive-only breadth (or vice versa).
+/// </para>
+/// </summary>
+/// <param name="signals">The current-window (post-collapse) signals, in input order.</param>
+/// <param name="preCollapseSignals">The same window BEFORE the spec-109 media collapse (breadth-only input).</param>
+/// <param name="weights">The strategy's resolved magnitudes.</param>
+/// <param name="sourceWeights">The shared publisher tier map.</param>
+/// <returns>The channel's raw, non-negative reach magnitude.</returns>
+public delegate double BreadthChannelReach(
+    IReadOnlyList<ScoringSignal> signals,
+    IReadOnlyList<ScoringSignal> preCollapseSignals,
+    ScoringWeights weights,
+    IAttentionSourceWeights sourceWeights);
+
+/// <summary>
 /// The four states a collector channel's directional mass can be in — <b>provenance only, never a score
 /// input</b> (spec 153). They exist because <c>radar-formula-v10</c> maps two genuinely different situations
 /// onto the same 0: a channel with NO directional mass at all and a channel whose positive and negative mass
@@ -207,6 +234,12 @@ public static class ScoringChannelComposition
     /// The formula's collector direction factor — the ONE thing v9 and v10 disagree about, and the axis on
     /// which the spec-154 control opts out of direction entirely.
     /// </param>
+    /// <param name="breadthReach">
+    /// How the formula measures a BREADTH channel's raw reach (spec 158 §4). <b>REQUIRED, no default</b> —
+    /// see <see cref="BreadthChannelReach"/>. v9, v10 and the baseline control pass
+    /// <see cref="ScoreSignalMath.AttentionReach"/> explicitly at their call sites, which is byte-identical
+    /// to the direct call this pass previously made.
+    /// </param>
     public static ChannelComposition Compose(
         ScoringInput input,
         IReadOnlyList<double> recency,
@@ -216,7 +249,8 @@ public static class ScoringChannelComposition
         IAttentionSourceWeights sourceWeights,
         ICollectorAttributionResolver attributionResolver,
         ChannelActivityMass activityMass,
-        CollectorChannelScore collectorScore)
+        CollectorChannelScore collectorScore,
+        BreadthChannelReach breadthReach)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(recency);
@@ -227,6 +261,7 @@ public static class ScoringChannelComposition
         ArgumentNullException.ThrowIfNull(attributionResolver);
         ArgumentNullException.ThrowIfNull(activityMass);
         ArgumentNullException.ThrowIfNull(collectorScore);
+        ArgumentNullException.ThrowIfNull(breadthReach);
 
         var signals = input.Signals;
 
@@ -268,8 +303,11 @@ public static class ScoringChannelComposition
             {
                 // Breadth is cross-source by construction: it reads the whole gated set regardless of which
                 // collector retrieved what, and it is POSITIVE — more genuine (tier-weighted,
-                // distinct-publisher) reach earns more of its share.
-                var reach = ScoreSignalMath.AttentionReach(
+                // distinct-publisher) reach earns more of its share. HOW reach is measured is the formula's
+                // own choice (spec 158 §4): v9/v10/baseline pass ScoreSignalMath.AttentionReach — the exact
+                // call this pass previously made inline — and the prospective v11 passes the positive-only
+                // PositiveAttentionReach.
+                var reach = breadthReach(
                     signals, input.PreCollapseSignals, weights, sourceWeights);
                 channelScore = ScoreSignalMath.Saturate(reach, channel.Saturation);
                 dark = reach <= 0;
@@ -325,7 +363,8 @@ public static class ScoringChannelComposition
                     mass, weights.TrajectoryCorroborationK, band: 1.0);
 
                 channelScore = collectorScore(saturation, preponderance);
-                direction = new ChannelDirection(preponderance, mass.Total, StateOf(mass, preponderance));
+                direction = new ChannelDirection(
+                    preponderance, mass.Total, DirectionStateOf(mass, preponderance));
             }
 
             // "Ran and found nothing" vs "did not run" (spec 146). A 0 is a 0 either way — Radar scores
@@ -446,7 +485,12 @@ public static class ScoringChannelComposition
         return contributions;
     }
 
-    private static string StateOf(DirectionalMass mass, double preponderance)
+    /// <summary>
+    /// The ONE mapping from a channel's directional read onto its <see cref="ChannelDirectionState"/> token.
+    /// Public (spec 158) so the input-only channel-feasibility audit classifies a channel's preponderance
+    /// sign with exactly this rule rather than a second copy; provenance only, never a score input.
+    /// </summary>
+    public static string DirectionStateOf(DirectionalMass mass, double preponderance)
     {
         // Preponderance is exactly 0 both when there is NO directional mass and when the two masses cancel,
         // which is precisely the pair spec 153 decided to score identically and record differently.
