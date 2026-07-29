@@ -1739,6 +1739,871 @@
           "url": "query=Select Water Solutions&ticker=WTTR"
         }
       ]
+    },
+    {
+      "id": "144fcbb9-ac1c-44c4-b8d8-5310d6b99ca6",
+      "name": "Middlesex Water Company",
+      "legalName": "MIDDLESEX WATER CO",
+      "ticker": "MSEX",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Utilities",
+      "industry": "Utilities—Regulated Water",
+      "followingTier": "small",
+      "aliases": ["Middlesex Water", "Middlesex"],
+      "themes": ["regulated water utility", "rate base growth", "New Jersey water infrastructure"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Middlesex Water Company — News Releases (IR)",
+          "url": "https://investors.middlesexwater.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Middlesex Water Company — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000066004.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Middlesex Water Company — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000066004.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Middlesex Water Company — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000066004.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Middlesex Water Company — News attention (Google News)",
+          "url": "query=Middlesex Water&ticker=MSEX"
+        }
+      ]
+    },
+    {
+      "id": "49a2ea06-4359-4c39-9be1-b797b01fd736",
+      "name": "York Water Company",
+      "legalName": "YORK WATER CO",
+      "ticker": "YORW",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Utilities",
+      "industry": "Utilities—Regulated Water",
+      "followingTier": "small",
+      "aliases": ["York Water", "The York Water Company"],
+      "themes": ["regulated water utility", "Pennsylvania water", "dividend consistency"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "York Water Company — News Releases (site feed)",
+          "url": "https://www.yorkwater.com/feed/"
+        },
+        {
+          "type": "sec",
+          "name": "York Water Company — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000108985.json"
+        },
+        {
+          "type": "secform4",
+          "name": "York Water Company — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000108985.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "York Water Company — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000108985.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "York Water Company — News attention (Google News)",
+          "url": "query=York Water&ticker=YORW"
+        }
+      ]
+    },
+    {
+      "id": "61d2751f-cd3c-4c29-b521-c16dfade89b6",
+      "name": "Otter Tail Corporation",
+      "legalName": "Otter Tail Corp",
+      "ticker": "OTTR",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Utilities",
+      "industry": "Utilities—Diversified",
+      "followingTier": "mid",
+      "aliases": ["Otter Tail", "Otter Tail Power"],
+      "themes": ["diversified utility", "electric utility", "plastics manufacturing"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Otter Tail Corporation — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001466593.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Otter Tail Corporation — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001466593.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Otter Tail Corporation — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001466593.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Otter Tail Corporation — News attention (Google News)",
+          "url": "query=Otter Tail&ticker=OTTR"
+        }
+      ]
+    },
+    {
+      "id": "7d1fab7e-b7d8-4d1c-a516-ffd3d854b6a3",
+      "name": "AdvanSix Inc.",
+      "legalName": "AdvanSix Inc.",
+      "ticker": "ASIX",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Basic Materials",
+      "industry": "Chemicals",
+      "followingTier": "small",
+      "aliases": ["AdvanSix"],
+      "themes": ["nylon chemistry", "ammonium sulfate", "chemical intermediates"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "AdvanSix Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001673985.json"
+        },
+        {
+          "type": "secform4",
+          "name": "AdvanSix Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001673985.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "AdvanSix Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001673985.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "AdvanSix Inc. — News attention (Google News)",
+          "url": "query=AdvanSix&ticker=ASIX"
+        }
+      ]
+    },
+    {
+      "id": "1779a777-6a36-4d63-8d8b-7c5fe1ac860b",
+      "name": "Innospec Inc.",
+      "legalName": "INNOSPEC INC.",
+      "ticker": "IOSP",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Basic Materials",
+      "industry": "Specialty Chemicals",
+      "followingTier": "mid",
+      "aliases": ["Innospec"],
+      "themes": ["specialty chemicals", "fuel additives", "performance chemicals"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Innospec Inc. — News Releases (IR)",
+          "url": "https://investors.innospec.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Innospec Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001054905.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Innospec Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001054905.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Innospec Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001054905.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Innospec Inc. — News attention (Google News)",
+          "url": "query=Innospec&ticker=IOSP"
+        }
+      ]
+    },
+    {
+      "id": "12bfa645-648b-44f6-a27b-4c0e3790774a",
+      "name": "Quaker Houghton",
+      "legalName": "QUAKER CHEMICAL CORP",
+      "ticker": "KWR",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Basic Materials",
+      "industry": "Specialty Chemicals",
+      "followingTier": "mid",
+      "aliases": ["Quaker Houghton", "Quaker Chemical"],
+      "themes": ["industrial process fluids", "metalworking fluids", "specialty chemicals"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Quaker Houghton — News Releases (IR)",
+          "url": "https://investors.quakerhoughton.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Quaker Houghton — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000081362.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Quaker Houghton — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000081362.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Quaker Houghton — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000081362.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Quaker Houghton — News attention (Google News)",
+          "url": "query=Quaker Houghton&ticker=KWR"
+        }
+      ]
+    },
+    {
+      "id": "e2563263-d3da-43d2-8fd3-0bce6f3c802c",
+      "name": "Kodiak Gas Services, Inc.",
+      "legalName": "Kodiak Gas Services, Inc.",
+      "ticker": "KGS",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Energy",
+      "industry": "Oil & Gas Equipment & Services",
+      "followingTier": "mid",
+      "aliases": ["Kodiak Gas Services", "Kodiak"],
+      "themes": ["gas compression", "Permian infrastructure", "contract compression"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Kodiak Gas Services, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001767042.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Kodiak Gas Services, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001767042.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Kodiak Gas Services, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001767042.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Kodiak Gas Services, Inc. — News attention (Google News)",
+          "url": "query=Kodiak Gas"
+        }
+      ]
+    },
+    {
+      "id": "5d745025-9e06-4182-a9d7-bfb02f5b9eb2",
+      "name": "Liberty Energy Inc.",
+      "legalName": "Liberty Energy Inc.",
+      "ticker": "LBRT",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Energy",
+      "industry": "Oil & Gas Equipment & Services",
+      "followingTier": "mid",
+      "aliases": ["Liberty Energy", "Liberty"],
+      "themes": ["hydraulic fracturing", "oilfield services", "power generation services"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Liberty Energy Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001694028.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Liberty Energy Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001694028.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Liberty Energy Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001694028.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Liberty Energy Inc. — News attention (Google News)",
+          "url": "query=Liberty Energy&ticker=LBRT"
+        }
+      ]
+    },
+    {
+      "id": "c35fa86d-93a0-4fce-96fd-0b2ee026d717",
+      "name": "ProPetro Holding Corp.",
+      "legalName": "ProPetro Holding Corp.",
+      "ticker": "PUMP",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Energy",
+      "industry": "Oil & Gas Equipment & Services",
+      "followingTier": "small",
+      "aliases": ["ProPetro", "ProPetro Holding"],
+      "themes": ["pressure pumping", "Permian oilfield services", "electric frac fleets"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "ProPetro Holding Corp. — News Releases (IR)",
+          "url": "https://ir.propetroservices.com/news-events/press-releases/rss"
+        },
+        {
+          "type": "sec",
+          "name": "ProPetro Holding Corp. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001680247.json"
+        },
+        {
+          "type": "secform4",
+          "name": "ProPetro Holding Corp. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001680247.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "ProPetro Holding Corp. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001680247.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "ProPetro Holding Corp. — News attention (Google News)",
+          "url": "query=ProPetro"
+        }
+      ]
+    },
+    {
+      "id": "921c789b-bef5-4559-a169-34062a5124d6",
+      "name": "Cass Information Systems, Inc.",
+      "legalName": "CASS INFORMATION SYSTEMS INC",
+      "ticker": "CASS",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Specialty Business Services",
+      "followingTier": "small",
+      "aliases": ["Cass Information Systems", "Cass"],
+      "themes": ["freight audit and payment", "utility expense management", "payment processing"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Cass Information Systems, Inc. — News Releases (IR)",
+          "url": "https://ir.cassinfo.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Cass Information Systems, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000708781.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Cass Information Systems, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000708781.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Cass Information Systems, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000708781.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Cass Information Systems, Inc. — News attention (Google News)",
+          "url": "query=Cass Information Systems"
+        }
+      ]
+    },
+    {
+      "id": "165fb627-a751-4250-ba7f-52354fda18f3",
+      "name": "The Bancorp, Inc.",
+      "legalName": "Bancorp, Inc.",
+      "ticker": "TBBK",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Banks—Regional",
+      "followingTier": "mid",
+      "aliases": ["The Bancorp", "Bancorp Bank"],
+      "themes": ["fintech partner banking", "banking-as-a-service", "specialty lending"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "The Bancorp, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001295401.json"
+        },
+        {
+          "type": "secform4",
+          "name": "The Bancorp, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001295401.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "The Bancorp, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001295401.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "The Bancorp, Inc. — News attention (Google News)",
+          "url": "query=The Bancorp&ticker=TBBK"
+        }
+      ]
+    },
+    {
+      "id": "1a9007ca-1108-49e9-81cc-e561ce7001ca",
+      "name": "Palomar Holdings, Inc.",
+      "legalName": "Palomar Holdings, Inc.",
+      "ticker": "PLMR",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Insurance—Specialty",
+      "followingTier": "mid",
+      "aliases": ["Palomar", "Palomar Holdings"],
+      "themes": ["specialty insurance", "earthquake insurance", "fronting"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Palomar Holdings, Inc. — News Releases (IR)",
+          "url": "https://ir.palomarspecialty.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Palomar Holdings, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001761312.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Palomar Holdings, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001761312.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Palomar Holdings, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001761312.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Palomar Holdings, Inc. — News attention (Google News)",
+          "url": "query=Palomar Holdings&ticker=PLMR"
+        }
+      ]
+    },
+    {
+      "id": "3d5bd844-a041-4d89-ba31-c631b14218c4",
+      "name": "iRadimed Corporation",
+      "legalName": "IRADIMED CORP",
+      "ticker": "IRMD",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Devices",
+      "followingTier": "small",
+      "aliases": ["iRadimed", "IRADIMED"],
+      "themes": ["MRI-compatible medical devices", "infusion pumps", "patient monitoring"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "iRadimed Corporation — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001325618.json"
+        },
+        {
+          "type": "secform4",
+          "name": "iRadimed Corporation — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001325618.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "iRadimed Corporation — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001325618.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "iRadimed Corporation — News attention (Google News)",
+          "url": "query=iRadimed&ticker=IRMD"
+        }
+      ]
+    },
+    {
+      "id": "2ee5285d-e8bc-4707-9989-1335d5bcdf1d",
+      "name": "Merit Medical Systems, Inc.",
+      "legalName": "MERIT MEDICAL SYSTEMS INC",
+      "ticker": "MMSI",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Instruments & Supplies",
+      "followingTier": "mid",
+      "aliases": ["Merit Medical", "Merit"],
+      "themes": ["interventional medical devices", "cardiovascular devices", "medical consumables"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Merit Medical Systems, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000856982.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Merit Medical Systems, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000856982.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Merit Medical Systems, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000856982.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Merit Medical Systems, Inc. — News attention (Google News)",
+          "url": "query=Merit Medical&ticker=MMSI"
+        }
+      ]
+    },
+    {
+      "id": "19104e71-b27d-423e-b41e-95f9e157adaf",
+      "name": "ANI Pharmaceuticals, Inc.",
+      "legalName": "ANI PHARMACEUTICALS INC",
+      "ticker": "ANIP",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Drug Manufacturers—Specialty & Generic",
+      "followingTier": "mid",
+      "aliases": ["ANI Pharmaceuticals", "ANI"],
+      "themes": ["specialty generics", "rare disease", "Cortrophin"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "ANI Pharmaceuticals, Inc. — News Releases (IR)",
+          "url": "https://anipharmaceuticals.gcs-web.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "ANI Pharmaceuticals, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001023024.json"
+        },
+        {
+          "type": "secform4",
+          "name": "ANI Pharmaceuticals, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001023024.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "ANI Pharmaceuticals, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001023024.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "ANI Pharmaceuticals, Inc. — News attention (Google News)",
+          "url": "query=ANI Pharmaceuticals"
+        }
+      ]
+    },
+    {
+      "id": "d7be07a1-ee7b-42ca-b6ee-3d37e721cbc9",
+      "name": "Digi International Inc.",
+      "legalName": "DIGI INTERNATIONAL INC",
+      "ticker": "DGII",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Communication Equipment",
+      "followingTier": "small",
+      "aliases": ["Digi International", "Digi"],
+      "themes": ["industrial IoT", "embedded connectivity", "device networking"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Digi International Inc. — News Releases (IR)",
+          "url": "https://digi.gcs-web.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Digi International Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000854775.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Digi International Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000854775.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Digi International Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000854775.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Digi International Inc. — News attention (Google News)",
+          "url": "query=Digi International&ticker=DGII"
+        }
+      ]
+    },
+    {
+      "id": "05788145-fa1f-4d53-a395-a5cfd323b90c",
+      "name": "Clearfield, Inc.",
+      "legalName": "Clearfield, Inc.",
+      "ticker": "CLFD",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Communication Equipment",
+      "followingTier": "small",
+      "aliases": ["Clearfield", "Clearfield Inc"],
+      "themes": ["fiber connectivity", "fiber to the home", "broadband buildout"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Clearfield, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000796505.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Clearfield, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000796505.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Clearfield, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000796505.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Clearfield, Inc. — News attention (Google News)",
+          "url": "query=Clearfield, Inc&ticker=CLFD"
+        }
+      ]
+    },
+    {
+      "id": "35469c13-fe5f-43ac-b85f-a2cdc088c363",
+      "name": "ePlus inc.",
+      "legalName": "EPLUS INC",
+      "ticker": "PLUS",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Information Technology Services",
+      "followingTier": "small",
+      "aliases": ["ePlus", "ePlus inc"],
+      "themes": ["IT solutions", "technology financing", "security and cloud services"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "ePlus inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001022408.json"
+        },
+        {
+          "type": "secform4",
+          "name": "ePlus inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001022408.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "ePlus inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001022408.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "ePlus inc. — News attention (Google News)",
+          "url": "query=ePlus"
+        }
+      ]
+    },
+    {
+      "id": "d5162bec-15ec-4ebd-a0a9-83836806a671",
+      "name": "J&J Snack Foods Corp.",
+      "legalName": "J&J SNACK FOODS CORP",
+      "ticker": "JJSF",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Defensive",
+      "industry": "Packaged Foods",
+      "followingTier": "mid",
+      "aliases": ["J&J Snack Foods", "J and J Snack Foods"],
+      "themes": ["snack foods", "soft pretzels", "frozen beverages"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "J&J Snack Foods Corp. — News Releases (IR)",
+          "url": "https://investors.jjsnack.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "J&J Snack Foods Corp. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000785956.json"
+        },
+        {
+          "type": "secform4",
+          "name": "J&J Snack Foods Corp. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000785956.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "J&J Snack Foods Corp. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000785956.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "J&J Snack Foods Corp. — News attention (Google News)",
+          "url": "query=JJSF"
+        }
+      ]
+    },
+    {
+      "id": "49ea8a7a-6177-49bd-b4a5-8a62a32d73c6",
+      "name": "Cal-Maine Foods, Inc.",
+      "legalName": "CAL-MAINE FOODS INC",
+      "ticker": "CALM",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Defensive",
+      "industry": "Farm Products",
+      "followingTier": "mid",
+      "aliases": ["Cal-Maine", "Cal-Maine Foods"],
+      "themes": ["shell eggs", "egg production", "cage-free transition"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Cal-Maine Foods, Inc. — News Releases (IR)",
+          "url": "https://calmainefoods.gcs-web.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Cal-Maine Foods, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000016160.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Cal-Maine Foods, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000016160.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Cal-Maine Foods, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000016160.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Cal-Maine Foods, Inc. — News attention (Google News)",
+          "url": "query=Cal-Maine"
+        }
+      ]
+    },
+    {
+      "id": "87e5897a-63f2-45f6-aaf3-055fa3989177",
+      "name": "Winmark Corporation",
+      "legalName": "WINMARK CORP",
+      "ticker": "WINA",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Specialty Retail",
+      "followingTier": "small",
+      "aliases": ["Winmark", "Winmark Corporation"],
+      "themes": ["resale franchising", "Play It Again Sports", "Plato's Closet"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Winmark Corporation — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000908315.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Winmark Corporation — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000908315.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Winmark Corporation — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000908315.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Winmark Corporation — News attention (Google News)",
+          "url": "query=Winmark&ticker=WINA"
+        }
+      ]
+    },
+    {
+      "id": "64bc31e8-854a-4917-904b-f5b150d547a6",
+      "name": "Monro, Inc.",
+      "legalName": "MONRO, INC.",
+      "ticker": "MNRO",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Auto Parts",
+      "followingTier": "small",
+      "aliases": ["Monro", "Monro Auto Service"],
+      "themes": ["auto service", "tire retail", "automotive aftermarket"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Monro, Inc. — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000876427.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Monro, Inc. — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000876427.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Monro, Inc. — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000876427.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Monro, Inc. — News attention (Google News)",
+          "url": "query=Monro, Inc&ticker=MNRO"
+        }
+      ]
+    },
+    {
+      "id": "2ae19c6c-09ae-4897-a1a8-8e525243a3b5",
+      "name": "IDT Corporation",
+      "legalName": "IDT CORP",
+      "ticker": "IDT",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Telecom Services",
+      "followingTier": "small",
+      "aliases": ["IDT Corporation", "IDT Corp"],
+      "themes": ["fintech", "NRS point-of-sale", "BOSS Money remittances"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "IDT Corporation — News Releases (site feed)",
+          "url": "https://www.idt.net/feed/"
+        },
+        {
+          "type": "sec",
+          "name": "IDT Corporation — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001005731.json"
+        },
+        {
+          "type": "secform4",
+          "name": "IDT Corporation — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001005731.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "IDT Corporation — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001005731.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "IDT Corporation — News attention (Google News)",
+          "url": "query=IDT Corp"
+        }
+      ]
     }
   ]
 }
