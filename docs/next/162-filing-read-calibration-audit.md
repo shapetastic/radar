@@ -6,7 +6,7 @@
 > measurement underneath it. **A 30-filing blinded pilot was run 2026-07-29 before this spec was written**
 > — summary labels committed at `docs/162-calibration-pilot-labels.csv`.
 >
-> **Amended twice before dispatch (2026-07-29).** Round 1 fixed: model-scoped cohort (active scope
+> **Amended three times before dispatch (2026-07-29).** Round 1 fixed: model-scoped cohort (active scope
 > `openai-deepseek-ai-deepseek-v4-flash-8f94f2dbe65fcb93` = 145 directional + 153 no-signal; 5 stale
 > legacy-root files duplicate active accessions, two with conflicting outcomes), the singular
 > `data/evidence/raw/filing/**` recovery path, production-reader reuse, agreement-vs-calibration naming,
