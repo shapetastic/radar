@@ -30,8 +30,13 @@ Fix:
   independent of which labels exist, so `-EmitSample` is stable at any time by construction.
 - The calibration table then **cross-checks recorded membership against the derived set exactly**: a row
   claiming `calibration-sample` that is not in the derived set ⇒ FAIL naming the accession; a derived
-  member with no adjudicated label ⇒ listed as missing and the table renders INCOMPLETE (never silently
-  smaller). The claim in the JSONL becomes a checked assertion, not an input.
+  member with no adjudicated label ⇒ missing. The claim in the JSONL becomes a checked assertion, not an
+  input.
+- **Final mode additionally requires FULL directional coverage**: the labeled directional accession set
+  must equal the complete 145-row directional worksheet set exactly. The observed-label tables (agreement
+  curve, clean-rate, comparability-item frequency, materiality cross-tab) are population claims over the
+  cohort — without this rule, final mode could compute them from the 33-row sample alone and still pass.
+  `-Interim` permits missing labels, but then EVERY affected table carries an `INCOMPLETE (n/145)` header.
 
 ### 2. [P1] No-signal sampling and the extension rule: validate membership, compute from adjudication
 
@@ -39,29 +44,42 @@ The false-negative section accepts whatever labeled no-signal rows exist and com
 second reader's raw direction, and never emits an extension decision.
 
 Fix:
-- Validate the labeled no-signal set is **exactly the first 60 — or exactly the first 90 when extended —
-  by SHA-256(accession) hex order over the 153**; anything else (wrong members, gaps, extras) ⇒ FAIL
-  listing the difference.
+- Validate the labeled no-signal set is **exactly the first 60 — or exactly the first 90 — by
+  SHA-256(accession) hex order over the 153**; anything else (wrong members, gaps, extras) ⇒ FAIL listing
+  the difference.
 - A "miss" is counted **only from human adjudication** (`finalDirection` directional on a no-signal row);
-  reader-flagged candidates without adjudication ⇒ the section renders INCOMPLETE with the pending list,
-  never a rate.
-- Emit an explicit, machine-readable **extension decision block**: `EXTENSION: NOT-TRIGGERED (0 confirmed
-  misses, Wilson upper X% ≤ 10%)` or `EXTENSION: TRIGGERED — label the next 30 by hash order, report at
-  N=90 (one-shot; trigger is not re-evaluated at 90)`, with the numbers shown.
+  reader-flagged candidates without adjudication ⇒ INCOMPLETE with the pending list, never a rate.
+- **The trigger is ALWAYS computed on rows 1–60 only** (the original precommitted sample), never on all
+  90 — the extension is extra observation, not a second chance at the trigger. The state machine is
+  enforced in final mode:
+  - **At N=60 with the trigger fired** ⇒ final mode FAILS with `next 30 required` (a final report cannot
+    be written from a triggered-but-unextended state).
+  - **At N=90** ⇒ the analyzer must PROVE the trigger fired on the first 60 (recomputed from their
+    adjudicated outcomes); a 90-row set whose first-60 trigger did NOT fire is an unplanned extension that
+    violates the precommitment ⇒ FAIL.
+- Emit an explicit, machine-readable **extension decision block** with the numbers:
+  `EXTENSION: NOT-TRIGGERED (0 confirmed misses in rows 1–60, Wilson upper X% ≤ 10%)` /
+  `EXTENSION: TRIGGERED (…) — label the next 30 by hash order, report at N=90 (one-shot)`.
 
 ### 3. [P1] Provenance: recompute and verify, don't compare claims to each other
 
 The analyzer only checks that non-empty `promptHash` values agree with one another — a missing or
 uniformly wrong hash passes — and `modelInputHash` is never checked against the manifest.
 
-Fix — the analyzer gains `-ManifestPath` and `-PromptTemplatePath` (defaults to the repo paths) and, for
-the FINAL report (a distinct `-Interim` switch may relax completeness, never correctness):
-- Recompute the prompt template's hash; **every** label's `promptHash` must equal it (missing ⇒ fail,
+Fix — the precommitted protocol values are PINNED in a committed **study-contract file**
+(`scripts/calibration-audit/study-contract.json`: labeler provider/model, protocol version, expected
+prompt hash), because a CLI parameter an operator can pass is a protocol violation an operator can make
+validate. The analyzer gains `-ManifestPath` and `-PromptTemplatePath` (defaults to the repo paths); the
+contract values are **NOT overrideable in final mode** — tests inject alternatives through an internal
+seam (e.g. a dot-sourced override function), never a production switch. For the FINAL report (`-Interim`
+may relax completeness, never correctness):
+- Recompute the prompt template's hash; it must equal the contract's expected hash (template drift and
+  contract drift are both caught), and **every** label's `promptHash` must equal it (missing ⇒ fail,
   naming rows).
 - **Every** label's `modelInputHash` must equal the manifest row for its accession (missing manifest row,
   missing label hash, or mismatch ⇒ fail, naming rows).
-- **Every** label's `labeler.provider/model` and `protocol.version` must equal the precommitted values
-  (passed as parameters with the spec-162 defaults) ⇒ fail on any deviation.
+- **Every** label's `labeler.provider/model` and `protocol.version` must equal the contract ⇒ fail on any
+  deviation.
 
 ### 4. [P1] `ExhibitArchiver.NeedsFetch`: verify stored artifacts against the manifest, not just existence
 
@@ -83,6 +101,15 @@ the manifest row.
 archived and exits 0 — and Phase B could consume it. Fix: below-tripwire bodies return a typed failure
 outcome (`short-body`), carry empty hashes (so they refetch next run, the existing failure semantics),
 count in the failed tally, and the summary/exit code reflect them like any other failure.
+
+## The ONE incomplete-vs-fail rule (applies everywhere above)
+
+- **`-Interim` mode**: incompleteness (missing labels, unadjudicated rows, pending sample members) renders
+  the affected sections with `INCOMPLETE` headers and explicit missing-accession lists. Correctness
+  violations (membership mismatches, provenance mismatches, precommitment violations) still FAIL — interim
+  relaxes *completeness only*.
+- **Final mode**: ANY incompleteness or correctness violation ⇒ **nonzero exit and NO final report
+  artifact is written** (a partial final report on disk is indistinguishable from a real one later).
 
 ## Tests
 
@@ -108,10 +135,18 @@ count in the failed tally, and the summary/exit code reflect them like any other
 
 ## Acceptance criteria
 
-- [ ] All five fixes implemented as specified, with the tests above.
-- [ ] `analyze-labels.ps1` final-report mode fails on: non-derived sample membership, missing derived
-      members, wrong no-signal membership/count, unadjudicated miss candidates, any provenance
-      mismatch (prompt hash, model-input hash, labeler, protocol version).
+- [ ] All five fixes implemented as specified, with the tests above, plus: final mode requires the full
+      145-row directional label set (asserted); N=60-triggered final fails with `next 30 required`; an
+      N=90 set whose first-60 trigger did not fire fails as an unplanned extension; the trigger test
+      proves rows 61–90 never enter the trigger computation; contract values are not overrideable via any
+      production switch.
+- [ ] `scripts/calibration-audit/study-contract.json` committed with the spec-162 precommitted values
+      (labeler `anthropic:claude-fable-5`, protocol `cal-v2`, the prompt template's hash).
+- [ ] `analyze-labels.ps1` final-report mode: nonzero exit and NO report artifact on any of — incomplete
+      directional coverage, non-derived sample membership, missing derived members, wrong no-signal
+      membership/count/state, unadjudicated miss candidates, any provenance mismatch (prompt hash vs
+      contract AND vs labels, model-input hash, labeler, protocol version). `-Interim` renders INCOMPLETE
+      sections but still fails on correctness violations.
 - [ ] `Radar.CalibrationAudit` rerun over the existing `data/calibration-audit/` output is a no-op
       (asserted by test with a valid manifest fixture; verified live by the operator post-merge).
 - [ ] `dotnet build Radar.sln -c Release` / `dotnet test Radar.sln -c Release --no-build` green; no
