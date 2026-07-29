@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Radar.CalibrationAudit\Radar.CalibrationAudit.csproj" />
     <ProjectReference Include="..\..\src\Radar.ChannelFeasibilityAudit\Radar.ChannelFeasibilityAudit.csproj" />
     <ProjectReference Include="..\..\src\Radar.Infrastructure\Radar.Infrastructure.csproj" />
     <ProjectReference Include="..\..\tests\Radar.TestSupport\Radar.TestSupport.csproj" />

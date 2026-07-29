@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Spec 162 (Phase A): READ-ONLY research console for the AI filing-read calibration audit. It resolves
+       the model-scoped analyzed-filing cache cohort through the PRODUCTION FileAnalyzedFilingCache scoping
+       logic, seals the model answers into a worksheet CSV, recovers CIKs from the persisted raw filing
+       evidence, and archives per-filing exhibit text (full normalized text + the EXACT truncated model
+       input) through the PRODUCTION HttpSecEarningsReleaseReader (index-table parse, EX-99.1 selection,
+       shared normalizer, shared SecRequestPacer pacing) — via InternalsVisibleTo, never reflection or
+       copied parsing. NO SCORING CHANGE, NO FINGERPRINT INPUT, NO PIN MOVE: it references Domain +
+       Application + Infrastructure (NEVER Radar.Worker), registers no collector, no score store, no
+       pipeline, and writes ONLY under its own output root (default data/calibration-audit/). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Radar.Application\Radar.Application.csproj" />
+    <ProjectReference Include="..\Radar.Domain\Radar.Domain.csproj" />
+    <ProjectReference Include="..\Radar.Infrastructure\Radar.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The audit's own internals (the ExhibitArchiver, whose signature carries an Infrastructure-internal
+         reader type) are testable from the existing Infrastructure test project. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Radar.Infrastructure.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>
