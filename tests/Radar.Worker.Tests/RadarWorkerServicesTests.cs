@@ -795,6 +795,36 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void AiComparabilityConfidenceCap_BindsFromRadarAi_AndFoldsIntoDirectionalDescriptor()
+    {
+        // Spec 160: the comparability cap is bound from Radar:Ai:ComparabilityConfidenceCap — directly beside
+        // MinConfidence/Strength/Novelty, NOT under the diagnostics-only Radar:Ai:Filings block — and folded
+        // into the directional descriptor by value (cmpcap=), so tuning it re-stamps ScoringConfigVersion.
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Ai:ComparabilityConfidenceCap", "0.7"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+        Assert.Equal(0.7m, provider.GetRequiredService<DirectionalFilingSignalOptions>().ComparabilityConfidenceCap);
+        Assert.EndsWith(
+            ";cmpscan=cmpscan-v1;cmpcap=0.7",
+            provider.GetRequiredService<IDirectionalFilingSignalSource>().ScoringDescriptor(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AiComparabilityConfidenceCap_Unset_DefaultsTo065()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+        Assert.Equal(0.65m, provider.GetRequiredService<DirectionalFilingSignalOptions>().ComparabilityConfidenceCap);
+    }
+
+    [Fact]
     public void AiProviderAnthropic_StillResolves_WithConfiguredKey()
     {
         // Regression (spec 119): the Anthropic path is unaffected by the OpenAI-compatible key resolution — it

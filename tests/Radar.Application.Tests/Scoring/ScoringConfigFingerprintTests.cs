@@ -192,9 +192,12 @@ public sealed class ScoringConfigFingerprintTests
     // Strength/Novelty/MinConfidence == 8/6/0.6 (spec-112 Strength 6→8 recalibration) plus the spec-119
     // earnings-read model identity — scripts/run-profiles/default.json now configures the DeepInfra
     // OpenAI-compatible provider with deepseek-ai/DeepSeek-V4-Flash, and the Worker composes the identity as
-    // "{provider}:{effective model}".
+    // "{provider}:{effective model}" — plus (spec 160, appended LAST so the existing prefix stays byte-stable)
+    // the comparability-scan structure identity (cmpscan=cmpscan-v1) and the comparability confidence cap by
+    // value (cmpcap, default 0.65, G29 like minconf): the cap bounds the confidence of emitted signals, a
+    // comparability input exactly like MinConfidence and the reading model.
     private const string AiDirectionalDescriptor =
-        "directional-filing:str=8;nov=6;minconf=0.6;model=openai:deepseek-ai/DeepSeek-V4-Flash";
+        "directional-filing:str=8;nov=6;minconf=0.6;model=openai:deepseek-ai/DeepSeek-V4-Flash;cmpscan=cmpscan-v1;cmpcap=0.65";
 
     // The AI-ON signal-source descriptor (spec 106): the AI-OFF SourceDescriptor with the directional-filing
     // descriptor appended as an ESCAPED ai=… segment. Built through the real DescriptorEscaping (not a hand-written
@@ -224,8 +227,9 @@ public sealed class ScoringConfigFingerprintTests
         //
         // ⚠ NOT the live stamp any more — see the AI-OFF pin above. Since spec 148 the window is hashed, and
         // the live baseline runs at Radar:ScoringWindowDays = 60, where the AI-ON value is
-        // radar-scoring-fp-4da4b5ff6ec9 (recorded in default.json's comment). This pin is the unit-level
-        // change-detector at the code default; that one is the operator-facing live record.
+        // radar-scoring-fp-5ffa8c9e25f0 since spec 160 (recorded in default.json's comment and asserted by
+        // Compute_LiveWindowAiOnStamps_ArePinned below). This pin is the unit-level change-detector at the
+        // code default; that one is the operator-facing live record.
         //
         // A CHANGE-DETECTOR, NOT AN INVARIANT — see the AI-OFF pin above for why a deliberate move is normal.
         // This particular value is the sharpest evidence for that position: the spec-141 value it replaces had
@@ -250,9 +254,48 @@ public sealed class ScoringConfigFingerprintTests
         // THE MOVE IS THE DELIVERABLE; scoring math is byte-identical, with no _formula.Version or
         // RuleSetVersion bump. → SPEC 146 deliberately did NOT move it: see the
         // AI-OFF pin above for why the per-strategy Formula/Channels addition folds in here as a no-op.
+        // → SPEC 160 (radar-scoring-fp-28226897f97b → the value below): the comparability-aware confidence
+        // cap on the AI filing read folded TWO new fields into the directional descriptor, appended after
+        // model= — cmpscan=cmpscan-v1 (the deterministic comparability scan's rule-STRUCTURE identity,
+        // parallel to RuleSetVersion) and cmpcap=0.65 (the cap magnitude by value, G29). The cap bounds the
+        // persisted confidence of directional GuidanceChange signals when the release itself declares
+        // comparability breaks (the CASS 2026-07-29 0.90 misread), so an AI-ON run with the cap and one
+        // without must never share a ScoringConfigVersion. AI-OFF pins do NOT move (the descriptor is folded
+        // only when the AI source is registered — asserted by the AI-OFF pin above staying put). No
+        // _formula.Version bump, no KeywordSignalExtractor.RuleSetVersion bump; cmpscan-v1 is its own
+        // parallel structure token.
         Assert.Equal(
-            "radar-scoring-fp-28226897f97b",
+            "radar-scoring-fp-ebd7d11a58d0",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
+    }
+
+    [Fact]
+    public void Compute_ChangedComparabilityCap_ChangesFingerprint()
+    {
+        // Spec 160: the comparability confidence cap is folded by value (cmpcap=) — tuning it re-stamps the
+        // fingerprint automatically, so runs under different caps are never falsely comparable (AD-10).
+        var changed = SourceDescriptor
+            + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptor.Replace("cmpcap=0.65", "cmpcap=0.5", StringComparison.Ordinal))};";
+
+        Assert.NotEqual(
+            DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),
+            DefaultFingerprint(sourceDescriptor: changed));
+    }
+
+    [Fact]
+    public void Compute_LiveWindowAiOnStamps_ArePinned()
+    {
+        // The OPERATOR-FACING live stamps at the two windows real runs use (spec 148 broke pin == live stamp:
+        // the window is hashed, the unit pins above are computed at the 30-day CODE default the Worker never
+        // uses). Recomputed here for spec 160 (the cmpscan/cmpcap descriptor fields) so the values recorded in
+        // scripts/run-profiles/default.json's comment are asserted rather than transcribed: 60 days is the
+        // live baseline (Radar:ScoringWindowDays=60), 120 days is -Profile long-window.
+        Assert.Equal(
+            "radar-scoring-fp-5ffa8c9e25f0",
+            DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
+        Assert.Equal(
+            "radar-scoring-fp-19fecdb64e3a",
+            DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
     [Fact]
@@ -275,7 +318,8 @@ public sealed class ScoringConfigFingerprintTests
         // 2026-07-21 A/B: llama3.1 read EOSE Improving 0.90 where DeepSeek-V4-Flash read the same release
         // Mixed 0.85). Two runs on different models must therefore never share a ScoringConfigVersion —
         // otherwise the efficacy line would be drawn as continuous across a real change.
-        const string previousModel = "directional-filing:str=8;nov=6;minconf=0.6;model=ollama:llama3.1";
+        const string previousModel =
+            "directional-filing:str=8;nov=6;minconf=0.6;model=ollama:llama3.1;cmpscan=cmpscan-v1;cmpcap=0.65";
 
         Assert.NotEqual(
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),

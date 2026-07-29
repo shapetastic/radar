@@ -1440,3 +1440,32 @@ Cross-references
 AD-6 (formula structure is code), AD-9 (no advice language), AD-14 (price is validation-only), AD-15 (a
 composite must beat every baseline out-of-sample), and spec 153's `CompositionRevision` mechanism, which is
 how the v10 correction this AD implies must be made visible.
+
+### AMENDMENT · 2026-07-29 — §4's first eligible primary-screen date moves for the spec-160 comparability cap
+
+Spec 160 adds a deterministic comparability scan and confidence cap to the AI directional filing read: when
+an earnings release itself declares comparability breaks ("litigation settlement", "discontinued
+operations", …), the persisted confidence of the `GuidanceChange` signal is bounded by
+`min(readConfidence, ComparabilityConfidenceCap)` (default 0.65). Those signals attach to `sec-edgar`
+evidence — **exactly the collector `disclosure-led-v11`'s single channel consumes** — so spec 160 changes
+the §7 primary arm's *input regime*.
+
+The transition is not instantaneous, and that is why the boundary must move. Spec 160's cache rule heals
+forward: a cached read with a **null** comparability policy (written pre-160) remains a cache HIT and keeps
+replaying its **uncapped** confidence for as long as its filing stays in the scoring window. A 60-day
+scoring window therefore mixes capped and uncapped reads until **(first post-160 baseline run date) + 60
+days** — later than the current 2026-09-26 boundary for any merge after 2026-07-27. Screening across that
+seam would compare v11 snapshots computed under two different confidence regimes as if they were one.
+
+**§4 is amended as follows.** The first eligible primary-screen as-of date becomes **the later of
+2026-09-26 and (first post-160 baseline run date + 60 days)**. The concrete date is left for the operator to
+record here after that first run completes (expected ≈ 2026-09-28/29 for a ~2026-07-30 merge, exactly as §4
+recorded the spec-145 run's timestamp after the fact). The arms may accrue before then; transitional
+snapshots do not enter the primary screen. Metric (§1), novelty rule (§2), horizon (§3), missing-data rules
+(§5), comparators (§6), statistic and failure screen (§7) are all unchanged.
+
+Amended **before any v11 primary-screen outcome existed** — moving a precommitted boundary is itself a
+precommitment-integrity act and must be written down before the data exists, which is now. For the avoidance
+of doubt, this amendment does **not** correct any accrued signal: the CASS 0.90 read that motivated spec 160
+stands untouched (heal forward, specs 142/145) and ages out of the 60-day window naturally after as-of
+≈ 2026-09-21.

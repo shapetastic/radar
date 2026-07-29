@@ -38,6 +38,12 @@ public enum FilingReadOutcome
 /// <param name="Rationale">The model's (already advice-scrubbed) rationale; null when no model call happened.</param>
 /// <param name="Outcome">How the attempt resolved.</param>
 /// <param name="AsOfUtc">The pipeline's asOfUtc the attempt ran under (UTC, deterministic — never wall clock).</param>
+/// <param name="ComparabilityMarkers">What the spec-160 comparability scan matched (both groups); null for
+/// legacy records and for <see cref="FilingReadOutcome.EmptyBodySkipped"/>, where no scan ran. Additive,
+/// diagnostic-only, never a fingerprint input.</param>
+/// <param name="CappedConfidence">The confidence actually persisted after the spec-160 comparability cap bound
+/// the read (i.e. reduced <see cref="Confidence"/>); null when no cap was applied. <see cref="Confidence"/>
+/// stays the model's RAW self-reported value so the diagnostic preserves what the model said.</param>
 public sealed record FilingReadDebugRecord(
     string Accession,
     Guid EvidenceId,
@@ -47,7 +53,9 @@ public sealed record FilingReadDebugRecord(
     decimal? Confidence,
     string? Rationale,
     FilingReadOutcome Outcome,
-    DateTimeOffset AsOfUtc);
+    DateTimeOffset AsOfUtc,
+    ComparabilityMarkers? ComparabilityMarkers = null,
+    decimal? CappedConfidence = null);
 
 /// <summary>
 /// Opt-in application seam for persisting AI filing-read diagnostics (spec 115). This is an AD-14 read-side

@@ -11,6 +11,27 @@ public sealed class DirectionalFilingSignalOptions
     /// <summary>Gate: an AI confidence below this yields no directional signal. In [0,1]. Default 0.6.</summary>
     public decimal MinConfidence { get; init; } = 0.6m;
 
+    /// <summary>
+    /// Comparability confidence cap (spec 160): when the deterministic <see cref="EarningsComparabilityScan"/>
+    /// finds cap-triggering markers in the release body (the release DECLARES its own comparability breaks —
+    /// "litigation settlement", "discontinued operations", …), the persisted confidence of the AI read is
+    /// <c>min(readConfidence, cap)</c>. In [0,1]; validated at registration beside <see cref="MinConfidence"/>.
+    /// <b>1.0 is the exact off-switch</b> — <c>min(conf, 1.0)</c> is the identity, so a composition that sets
+    /// 1.0 is byte-identical to pre-spec-160 behaviour. Default 0.65: keeps a capped read above the default
+    /// <see cref="MinConfidence"/> 0.6 (dampen, don't veto — the CASS quarter genuinely improved; the right
+    /// output is a weaker positive, not silence) while cutting its scoring weight ~28%. A cap set below the
+    /// gate (operator's choice) suppresses capped signals entirely — the gate applies AFTER the cap.
+    /// <para>
+    /// A scoring-affecting magnitude exactly like <see cref="MinConfidence"/>: folded into the scoring
+    /// fingerprint by value (the descriptor's <c>cmpcap=</c> field, InvariantCulture G29) alongside the scan's
+    /// structure identity (<c>cmpscan=</c>), so tuning it re-stamps <c>ScoringConfigVersion</c> automatically
+    /// with no <c>_formula.Version</c> / <c>RuleSetVersion</c> bump. It is also part of the per-record cache
+    /// POLICY (<see cref="EarningsComparabilityScan.Policy"/>): a cached read produced under a different cap is
+    /// a cache MISS and is re-analyzed under the current policy.
+    /// </para>
+    /// </summary>
+    public decimal ComparabilityConfidenceCap { get; init; } = 0.65m;
+
     /// <summary>Cost cap: analyze at most this many filings per run. Must be &gt; 0. Default 5.</summary>
     public int MaxFilingsPerRun { get; init; } = 5;
 

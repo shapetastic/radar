@@ -28,18 +28,33 @@ public enum AnalyzedFilingOutcome
 /// deserialize to 0, so they auto-invalidate on read with no manual file deletion.
 /// </para>
 /// </summary>
+/// <para>
+/// <see cref="ComparabilityPolicy"/> + <see cref="ComparabilityMarkers"/> (spec 160, trailing + nullable) record
+/// the deterministic comparability-scan POLICY the entry was produced under (canonically
+/// <c>"cmpscan-v1;cap=&lt;G29&gt;"</c>) and what the scan matched. <c>null</c> policy = written pre-160 ("not
+/// scanned" — never a false claim of a clean scan); empty marker lists under a non-null policy = scanned CLEAN.
+/// The lookup rule lives in <c>DirectionalFilingSignalSource</c>, not here: a null-policy record is a HIT (heal
+/// forward — the accrued cache is never mass-invalidated), while a non-null policy that differs from the current
+/// policy string is a MISS (re-analyzed under the current policy, bounded like any miss). Deliberately NOT a
+/// <see cref="CurrentCacheVersion"/> bump — the null-policy hit rule IS the migration story.
+/// </para>
 /// <param name="Accession">The dashed SEC accession this result was analyzed from (the cache key).</param>
 /// <param name="Outcome">Whether a directional signal was produced or the read confirmed no directional signal.</param>
 /// <param name="Signal">The replayable signal when <see cref="AnalyzedFilingOutcome.DirectionalSignalProduced"/>; else null.</param>
 /// <param name="ObservedAtUtc">The observed filing date captured at first analysis (UTC); null when no signal.</param>
 /// <param name="CacheVersion">The cache-schema version this entry was written under; a mismatch with
 /// <see cref="CurrentCacheVersion"/> is a miss (absent in legacy JSON → 0 → auto-invalidated).</param>
+/// <param name="ComparabilityPolicy">The comparability-scan policy string this entry was produced under (spec
+/// 160); null = written pre-160, not scanned.</param>
+/// <param name="ComparabilityMarkers">What the comparability scan matched (both groups); null = not scanned.</param>
 public sealed record AnalyzedFilingRecord(
     string Accession,
     AnalyzedFilingOutcome Outcome,
     ExtractedSignal? Signal,
     DateTimeOffset? ObservedAtUtc,
-    int CacheVersion)
+    int CacheVersion,
+    string? ComparabilityPolicy = null,
+    ComparabilityMarkers? ComparabilityMarkers = null)
 {
     /// <summary>
     /// The current cache-schema version stamped on every write. Deliberately non-zero so a legacy file with no

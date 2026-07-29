@@ -92,6 +92,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
     private readonly ILogger<DirectionalFilingSignalSource> _logger;
     private readonly IFilingReadDebugSink? _debugSink;
     private readonly string _scoringDescriptor;
+    private readonly string _comparabilityPolicy;
 
     public DirectionalFilingSignalSource(
         ISecEarningsReleaseReader reader,
@@ -129,12 +130,21 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         // not, so they stay excluded on their own merits rather than by that analogy.
         // InvariantCulture keeps the string culture-independent; "G29" is the decimal round-trip format ("R" is
         // documented only for the floating-point types, not decimal), so the MinConfidence contribution is
-        // injective across [0,1]. Field order is FIXED (str, nov, minconf, model — model appended LAST so the
-        // pre-spec-119 prefix is unchanged) and the model value is escaped with the shared DescriptorEscaping so
-        // a model id containing a reserved delimiter cannot collide with a different descriptor (AD-3).
+        // injective across [0,1]. Field order is FIXED (str, nov, minconf, model, then — spec 160, appended
+        // AFTER model per spec 119's new-fields-LAST precedent so the existing prefix stays byte-stable —
+        // cmpscan (the comparability-scan rule-STRUCTURE identity) and cmpcap (the cap magnitude by value,
+        // G29 like minconf: the cap bounds the confidence of emitted signals, so it is a comparability input
+        // exactly like MinConfidence and the reading model). The model value is escaped with the shared
+        // DescriptorEscaping so a model id containing a reserved delimiter cannot collide with a different
+        // descriptor (AD-3).
         _scoringDescriptor = string.Create(
             CultureInfo.InvariantCulture,
-            $"directional-filing:str={_options.Strength};nov={_options.Novelty};minconf={_options.MinConfidence.ToString("G29", CultureInfo.InvariantCulture)};model={DescriptorEscaping.Escape(_options.ModelIdentity?.Trim() ?? string.Empty)}");
+            $"directional-filing:str={_options.Strength};nov={_options.Novelty};minconf={_options.MinConfidence.ToString("G29", CultureInfo.InvariantCulture)};model={DescriptorEscaping.Escape(_options.ModelIdentity?.Trim() ?? string.Empty)};cmpscan={EarningsComparabilityScan.Version};cmpcap={_options.ComparabilityConfidenceCap.ToString("G29", CultureInfo.InvariantCulture)}");
+
+        // The comparability POLICY every cache record written by this source is stamped with (spec 160):
+        // scanner structure version + cap magnitude, composed once so the stamp and the pass-1 lookup
+        // comparison cannot drift.
+        _comparabilityPolicy = EarningsComparabilityScan.Policy(_options.ComparabilityConfidenceCap);
     }
 
     /// <inheritdoc />
@@ -176,6 +186,26 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 var cached = await _cache.TryGetAsync(accession, ct).ConfigureAwait(false);
                 if (cached is null)
                 {
+                    misses.Add((evidence, read.Value.Cik, accession));
+                    continue;
+                }
+
+                // Comparability-policy rule (spec 160). A record with a NULL policy is a HIT (heal forward:
+                // it was written pre-160 and the accrued cache is never mass-invalidated — legacy reads age out
+                // of the scoring window naturally). A record whose policy is non-null but differs from the
+                // current policy string (the operator tuned the cap, or the scanner version bumped) is a MISS:
+                // it is re-fetched and re-analyzed under the current policy, bounded like any miss by
+                // MaxFilingsPerRun and the 429 breaker in pass 2. This applies to BOTH outcomes — a read
+                // suppressed under an old lower cap must be re-analyzed (and may now emit) when the cap rises.
+                if (cached.ComparabilityPolicy is not null
+                    && !string.Equals(cached.ComparabilityPolicy, _comparabilityPolicy, StringComparison.Ordinal))
+                {
+                    _logger.LogDebug(
+                        "Analyzed-filing cache record for accession {Accession} was produced under comparability "
+                            + "policy '{Stored}' (current '{Current}'); treating as a cache miss (re-analyze).",
+                        accession,
+                        cached.ComparabilityPolicy,
+                        _comparabilityPolicy);
                     misses.Add((evidence, read.Value.Cik, accession));
                     continue;
                 }
@@ -233,7 +263,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
             try
             {
-                var (outcome, signal, cacheable) = await AnalyzeFilingAsync(evidence, cik, accession, asOfUtc, ct)
+                var (outcome, signal, cacheable, markers) = await AnalyzeFilingAsync(evidence, cik, accession, asOfUtc, ct)
                     .ConfigureAwait(false);
 
                 if (outcome == SecEarningsReleaseReadOutcome.Success)
@@ -256,20 +286,26 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                                 AnalyzedFilingOutcome.DirectionalSignalProduced,
                                 signal,
                                 evidence.PublishedAtUtc ?? evidence.CollectedAtUtc,
-                                AnalyzedFilingRecord.CurrentCacheVersion),
+                                AnalyzedFilingRecord.CurrentCacheVersion,
+                                _comparabilityPolicy,
+                                markers),
                             ct).ConfigureAwait(false);
                     }
                     else
                     {
                         // Read OK on real content but no directional signal (Mixed/Unknown/below-confidence) —
-                        // cache it so we never re-fetch this filing.
+                        // cache it so we never re-fetch this filing. The comparability policy + markers are
+                        // recorded on this outcome too (spec 160): a no-signal verdict reached under an old
+                        // policy must become a miss when the policy changes.
                         await _cache.PutAsync(
                             new AnalyzedFilingRecord(
                                 accession,
                                 AnalyzedFilingOutcome.NoDirectionalSignal,
                                 null,
                                 null,
-                                AnalyzedFilingRecord.CurrentCacheVersion),
+                                AnalyzedFilingRecord.CurrentCacheVersion,
+                                _comparabilityPolicy,
+                                markers),
                             ct).ConfigureAwait(false);
                     }
                 }
@@ -329,7 +365,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
     /// (including the empty-body skip) emits one guarded, best-effort debug record stamped with
     /// <paramref name="asOfUtc"/>; a fetch failure emits nothing (no analysis happened).
     /// </summary>
-    private async Task<(SecEarningsReleaseReadOutcome Outcome, ExtractedSignal? Signal, bool Cacheable)> AnalyzeFilingAsync(
+    private async Task<(SecEarningsReleaseReadOutcome Outcome, ExtractedSignal? Signal, bool Cacheable, ComparabilityMarkers? Markers)> AnalyzeFilingAsync(
         EvidenceItem evidence, string cik, string accession, DateTimeOffset asOfUtc, CancellationToken ct)
     {
         var read = await _reader.ReadAsync(cik, accession, ct).ConfigureAwait(false);
@@ -341,7 +377,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 cik,
                 accession,
                 read.Outcome);
-            return (read.Outcome, null, Cacheable: false);
+            return (read.Outcome, null, Cacheable: false, Markers: null);
         }
 
         // Empty/short-body guard (spec 114): a structurally-successful fetch whose stripped body is implausibly
@@ -360,25 +396,52 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 MinPlausibleBodyLength);
             await TryRecordReadDebugAsync(
                 accession, evidence, read.PlainText, trimmedBodyLength,
-                sentiment: null, FilingReadOutcome.EmptyBodySkipped, asOfUtc, ct).ConfigureAwait(false);
-            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: false);
+                sentiment: null, FilingReadOutcome.EmptyBodySkipped, asOfUtc,
+                markers: null, cappedConfidence: null, ct).ConfigureAwait(false);
+            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: false, Markers: null);
         }
+
+        // Comparability scan (spec 160): deterministic, on the FULL stripped body — deliberately BEFORE the
+        // analyzer's own MaxInputLength truncation, so a marker past the truncation point still counts.
+        var markers = EarningsComparabilityScan.Scan(read.PlainText);
 
         var sentiment = await _analyzer.AnalyzeAsync(read.PlainText, ct).ConfigureAwait(false);
 
+        // Comparability cap (spec 160): when the release itself declares a comparability break, the persisted
+        // confidence is bounded by min(readConfidence, cap) — the model's read is kept; only the weight Radar
+        // assigns it is bounded. The cap is a CEILING, not a floor: a read already at or below the cap is
+        // untouched, and then (mirroring the spec-149 explanation rule) the Reason is only annotated when the
+        // cap actually moved the number — which also makes cap = 1.0 the exact off-switch (min(conf, 1.0) is
+        // the identity, so behaviour is byte-identical to pre-160).
+        var confidence = sentiment.Confidence;
+        decimal? cappedConfidence = null;
+        if (markers.CapTriggering.Count > 0 && _options.ComparabilityConfidenceCap < confidence)
+        {
+            confidence = _options.ComparabilityConfidenceCap;
+            cappedConfidence = confidence;
+            _logger.LogDebug(
+                "Directional read for evidence {EvidenceId} capped {Raw} -> {Capped} (comparability markers: {Markers}).",
+                evidence.Id,
+                sentiment.Confidence,
+                confidence,
+                string.Join(", ", markers.CapTriggering));
+        }
+
         // Confidence gate (CLAUDE.md): a low-confidence read produces no directional signal — the
-        // deterministic Neutral GuidanceChange (spec 57) stands.
-        if (sentiment.Confidence < _options.MinConfidence)
+        // deterministic Neutral GuidanceChange (spec 57) stands. Applied to the CAPPED value (spec 160: the
+        // gate comes AFTER the cap, so a cap configured below MinConfidence suppresses capped signals).
+        if (confidence < _options.MinConfidence)
         {
             _logger.LogDebug(
                 "Directional read for evidence {EvidenceId} was below MinConfidence ({Confidence} < {Min}); no signal.",
                 evidence.Id,
-                sentiment.Confidence,
+                confidence,
                 _options.MinConfidence);
             await TryRecordReadDebugAsync(
                 accession, evidence, read.PlainText, trimmedBodyLength,
-                sentiment, FilingReadOutcome.BelowConfidence, asOfUtc, ct).ConfigureAwait(false);
-            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true);
+                sentiment, FilingReadOutcome.BelowConfidence, asOfUtc,
+                markers, cappedConfidence, ct).ConfigureAwait(false);
+            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true, Markers: markers);
         }
 
         var direction = sentiment.Direction switch
@@ -395,18 +458,30 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 sentiment.Direction);
             await TryRecordReadDebugAsync(
                 accession, evidence, read.PlainText, trimmedBodyLength,
-                sentiment, FilingReadOutcome.NoDirectionalRead, asOfUtc, ct).ConfigureAwait(false);
-            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true);
+                sentiment, FilingReadOutcome.NoDirectionalRead, asOfUtc,
+                markers, cappedConfidence, ct).ConfigureAwait(false);
+            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true, Markers: markers);
         }
 
         await TryRecordReadDebugAsync(
             accession, evidence, read.PlainText, trimmedBodyLength,
-            sentiment, FilingReadOutcome.DirectionalSignalProduced, asOfUtc, ct).ConfigureAwait(false);
+            sentiment, FilingReadOutcome.DirectionalSignalProduced, asOfUtc,
+            markers, cappedConfidence, ct).ConfigureAwait(false);
 
         // The SupportingExcerpt must be a verbatim slice of the evidence (the mapper enforces
         // excerpt-in-evidence). The evidence Title is wholly contained in the composed searchable text, so
         // it is a stable, guaranteed-present excerpt. The advice-scrubbed AI rationale (spec 74) rides the
-        // Reason field (not provenance-checked) to surface the AI basis for audit/report.
+        // Reason field (not provenance-checked) to surface the AI basis for audit/report. A capped signal's
+        // Reason additionally names the cap-triggering markers (and ONLY those — diagnostic-only matches are
+        // recorded, never surfaced as a cap), so the weekly report's "Why noticed" shows the cap the same way
+        // it shows everything else.
+        var reason = cappedConfidence is null
+            ? sentiment.Rationale
+            : sentiment.Rationale
+                + " (comparability cap: matched "
+                + string.Join(", ", markers.CapTriggering.Select(m => "'" + m + "'"))
+                + ")";
+
         return (
             SecEarningsReleaseReadOutcome.Success,
             new ExtractedSignal(
@@ -415,10 +490,11 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 Direction: direction,
                 Strength: _options.Strength,
                 Novelty: _options.Novelty,
-                Confidence: sentiment.Confidence,
+                Confidence: confidence,
                 SupportingExcerpt: evidence.Title,
-                Reason: sentiment.Rationale),
-            Cacheable: true);
+                Reason: reason),
+            Cacheable: true,
+            Markers: markers);
     }
 
     /// <summary>
@@ -436,6 +512,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         FilingSentiment? sentiment,
         FilingReadOutcome outcome,
         DateTimeOffset asOfUtc,
+        ComparabilityMarkers? markers,
+        decimal? cappedConfidence,
         CancellationToken ct)
     {
         if (_debugSink is null)
@@ -455,7 +533,9 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                     sentiment?.Confidence,
                     sentiment?.Rationale,
                     outcome,
-                    asOfUtc),
+                    asOfUtc,
+                    markers,
+                    cappedConfidence),
                 ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
