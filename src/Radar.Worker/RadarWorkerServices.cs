@@ -613,6 +613,10 @@ internal static class RadarWorkerServices
             services.AddDirectionalFilingSignals(new DirectionalFilingSignalOptions
             {
                 MinConfidence = options.Ai.MinConfidence,
+                // Spec 160: the comparability confidence cap — a scoring-affecting magnitude beside
+                // MinConfidence (folded into the fingerprint by value via the cmpcap= descriptor field), never
+                // part of the diagnostics-only Radar:Ai:Filings block.
+                ComparabilityConfidenceCap = options.Ai.ComparabilityConfidenceCap,
                 MaxFilingsPerRun = options.Ai.MaxFilingsPerRun,
                 MaxConsecutiveRateLimited = options.Ai.MaxConsecutiveRateLimited,
                 Strength = options.Ai.Strength,

@@ -1877,7 +1877,8 @@ public static class InfrastructureServiceCollectionExtensions
     /// specifics stay behind the injected interfaces (AD-5).
     /// <para>
     /// Fails fast when <paramref name="options"/> is null, when
-    /// <see cref="DirectionalFilingSignalOptions.MinConfidence"/> is outside [0,1], when
+    /// <see cref="DirectionalFilingSignalOptions.MinConfidence"/> or (spec 160)
+    /// <see cref="DirectionalFilingSignalOptions.ComparabilityConfidenceCap"/> is outside [0,1], when
     /// <see cref="DirectionalFilingSignalOptions.MaxFilingsPerRun"/> is zero/negative, when
     /// <see cref="DirectionalFilingSignalOptions.MaxConsecutiveRateLimited"/> is negative, or when
     /// <see cref="DirectionalFilingSignalOptions.Strength"/> / <see cref="DirectionalFilingSignalOptions.Novelty"/>
@@ -1901,6 +1902,14 @@ public static class InfrastructureServiceCollectionExtensions
             throw new InvalidOperationException(
                 "Radar directional filing signals require a confidence gate in [0,1]; configure "
                     + "Radar:Ai:MinConfidence (default 0.6) — a value outside [0,1] can never gate a signal.");
+        }
+
+        if (options.ComparabilityConfidenceCap is < 0m or > 1m)
+        {
+            throw new InvalidOperationException(
+                "Radar directional filing signals require a comparability confidence cap in [0,1]; configure "
+                    + "Radar:Ai:ComparabilityConfidenceCap (default 0.65; 1.0 is the exact off-switch) — a value "
+                    + "outside [0,1] can never bound a read's confidence.");
         }
 
         if (options.MaxFilingsPerRun <= 0)

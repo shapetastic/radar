@@ -515,6 +515,20 @@ public sealed class AiWorkerOptions
     public decimal MinConfidence { get; init; } = 0.6m;
 
     /// <summary>
+    /// Comparability confidence cap for directional filing signals (spec 160): when the deterministic
+    /// comparability scan finds cap-triggering markers in the release body (the release declares its own
+    /// comparability breaks — "litigation settlement", "discontinued operations", …), the persisted confidence
+    /// of the AI read is <c>min(readConfidence, cap)</c>, applied BEFORE the <see cref="MinConfidence"/> gate.
+    /// In [0,1]; 1.0 is the exact off-switch (byte-identical to pre-spec-160 behaviour). A scoring-affecting
+    /// magnitude like <see cref="MinConfidence"/>/<see cref="Strength"/>/<see cref="Novelty"/> — deliberately
+    /// HERE beside them, never under the diagnostics-only <see cref="Filings"/> block — folded into the scoring
+    /// fingerprint by value, so tuning it re-stamps <c>ScoringConfigVersion</c> automatically. Only read when a
+    /// provider is configured. Defaults to 0.65 (keeps a capped read above the default 0.6 gate: dampen, don't
+    /// veto — while cutting its scoring weight ~28%).
+    /// </summary>
+    public decimal ComparabilityConfidenceCap { get; init; } = 0.65m;
+
+    /// <summary>
     /// Cost cap on the directional filing enrichment: the source reads/analyzes at most this many
     /// earnings-8-K filings per run. Must be positive. Only read when a provider is configured. Defaults to 5.
     /// </summary>

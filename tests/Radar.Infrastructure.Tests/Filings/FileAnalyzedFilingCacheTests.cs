@@ -85,6 +85,59 @@ public sealed class FileAnalyzedFilingCacheTests
     }
 
     [Fact]
+    public async Task ComparabilityPolicyAndMarkers_RoundTrip_AndLegacyFileReadsAsNull()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var cache = CreateCache(dir);
+            // Spec 160: the comparability policy + both marker groups round-trip on the record...
+            var record = new AnalyzedFilingRecord(
+                Accession,
+                AnalyzedFilingOutcome.NoDirectionalSignal,
+                null,
+                null,
+                AnalyzedFilingRecord.CurrentCacheVersion,
+                ComparabilityPolicy: "cmpscan-v1;cap=0.65",
+                ComparabilityMarkers: new ComparabilityMarkers(
+                    ["litigation settlement"], ["continuing operations"]));
+
+            await cache.PutAsync(record, CancellationToken.None);
+            var read = await cache.TryGetAsync(Accession, CancellationToken.None);
+
+            Assert.NotNull(read);
+            Assert.Equal("cmpscan-v1;cap=0.65", read!.ComparabilityPolicy);
+            Assert.NotNull(read.ComparabilityMarkers);
+            Assert.Equal(["litigation settlement"], read.ComparabilityMarkers!.CapTriggering);
+            Assert.Equal(["continuing operations"], read.ComparabilityMarkers.DiagnosticOnly);
+
+            // ...and a pre-160 file (current cacheVersion, no comparability properties) deserializes to NULL
+            // policy/markers — "not scanned", which the source treats as a HIT (heal forward). NOT a
+            // CurrentCacheVersion bump: the null-policy hit rule IS the migration story.
+            var legacyJson = $$"""
+                {
+                  "accession": "{{Accession}}",
+                  "outcome": "NoDirectionalSignal",
+                  "signal": null,
+                  "observedAtUtc": null,
+                  "cacheVersion": {{AnalyzedFilingRecord.CurrentCacheVersion}}
+                }
+                """;
+            var path = Path.Combine(dir, Accession.ToLowerInvariant() + ".json");
+            await File.WriteAllTextAsync(path, legacyJson, CancellationToken.None);
+
+            var legacy = await cache.TryGetAsync(Accession, CancellationToken.None);
+            Assert.NotNull(legacy); // still a structurally valid HIT at the cache layer...
+            Assert.Null(legacy!.ComparabilityPolicy);   // ...recorded honestly as "not scanned",
+            Assert.Null(legacy.ComparabilityMarkers);   // never a false claim of a clean scan.
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task TryGet_UnknownAccession_ReturnsNull()
     {
         var dir = NewTempDir();

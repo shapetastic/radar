@@ -106,22 +106,36 @@ public sealed class DirectionalFilingSignalSourceTests
     [Fact]
     public void ScoringDescriptor_EncodesPerSignalMagnitudes_InCanonicalForm()
     {
-        // Fixed field order (AD-3): str, nov, minconf, then the spec-119 model identity LAST. An unsupplied
-        // model identity hashes as an empty model= field rather than omitting the field, so the grammar is
-        // constant.
+        // Fixed field order (AD-3): str, nov, minconf, the spec-119 model identity, then the spec-160
+        // comparability fields LAST (cmpscan = the scan's rule-STRUCTURE identity, cmpcap = the cap magnitude
+        // by value, G29 like minconf) — new fields are always appended so the existing prefix stays
+        // byte-stable. An unsupplied model identity hashes as an empty model= field rather than omitting the
+        // field, so the grammar is constant.
         Assert.Equal(
-            "directional-filing:str=8;nov=6;minconf=0.6;model=",
+            "directional-filing:str=8;nov=6;minconf=0.6;model=;cmpscan=cmpscan-v1;cmpcap=0.65",
             ScoringDescriptorFor(new DirectionalFilingSignalOptions()));
 
         Assert.Equal(
-            "directional-filing:str=9;nov=4;minconf=0.75;model=openai:deepseek-ai/DeepSeek-V4-Flash",
+            "directional-filing:str=9;nov=4;minconf=0.75;model=openai:deepseek-ai/DeepSeek-V4-Flash;cmpscan=cmpscan-v1;cmpcap=0.5",
             ScoringDescriptorFor(new DirectionalFilingSignalOptions
             {
                 Strength = 9,
                 Novelty = 4,
                 MinConfidence = 0.75m,
                 ModelIdentity = "openai:deepseek-ai/DeepSeek-V4-Flash",
+                ComparabilityConfidenceCap = 0.5m,
             }));
+    }
+
+    [Fact]
+    public void ScoringDescriptor_ChangesWhenComparabilityCapChanges()
+    {
+        // Spec 160: the comparability cap bounds the confidence of emitted signals, so it is a comparability
+        // input exactly like MinConfidence — two options differing only in the cap must produce different
+        // descriptors (and hence different ScoringConfigVersions).
+        Assert.NotEqual(
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { ComparabilityConfidenceCap = 0.65m }),
+            ScoringDescriptorFor(new DirectionalFilingSignalOptions { ComparabilityConfidenceCap = 0.5m }));
     }
 
     [Fact]
@@ -148,7 +162,7 @@ public sealed class DirectionalFilingSignalSourceTests
         // A reserved delimiter inside the identity is percent-escaped so it cannot forge an extra descriptor
         // field (injectivity, AD-3).
         Assert.Equal(
-            "directional-filing:str=8;nov=6;minconf=0.6;model=a%3Db%3Bc%2Cd%25e",
+            "directional-filing:str=8;nov=6;minconf=0.6;model=a%3Db%3Bc%2Cd%25e;cmpscan=cmpscan-v1;cmpcap=0.65",
             ScoringDescriptorFor(new DirectionalFilingSignalOptions { ModelIdentity = "a=b;c,d%e" }));
     }
 
@@ -1089,6 +1103,414 @@ public sealed class DirectionalFilingSignalSourceTests
         var result = await CreateSource(reader, analyzer).ProduceAsync([evidence], AsOf, CancellationToken.None);
 
         Assert.Single(result);
+    }
+
+    // ---- spec 160: comparability-aware confidence cap ------------------------------------------------------
+
+    /// <summary>The current comparability policy string at the default cap (0.65).</summary>
+    private static readonly string CurrentDefaultPolicy = EarningsComparabilityScan.Policy(0.65m);
+
+    [Fact]
+    public async Task ComparabilityCap_CassShapedFixture_CapsConfidence_NamesCapMarkers_AndCachesPolicy()
+    {
+        // The CASS 2026-07-29 failure class at excerpt level: a bullish headline GAAP doubling whose own body
+        // declares the comparison dirty (prior-year securities loss, a bad-debt recovery that is a litigation
+        // settlement payment, continuing-operations presentation). The analyzer stub reads it Positive 0.90;
+        // the deterministic scan must bound the persisted confidence to the default cap 0.65.
+        var evidence = EarningsFiling();
+        var body = PlausibleBody(
+            "Record net income of $10.6 million, up from $5.2 million a year ago. The prior-year quarter "
+                + "included a $3.6 million securities loss, and the current quarter benefited from a bad debt "
+                + "recovery representing the second annual payment of a litigation settlement. Results from "
+                + "continuing operations improved.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Record net income doubled."));
+        var cache = new FakeAnalyzedFilingCache();
+        var sink = new SpyFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, cache: cache, debugSink: sink)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal(0.65m, produced.Signal.Confidence);
+        // The Reason names the cap-triggering markers in scanner table order — and ONLY those: the
+        // diagnostic-only "continuing operations" is recorded, never surfaced as a cap.
+        Assert.Equal(
+            "Record net income doubled. (comparability cap: matched 'litigation settlement', "
+                + "'securities loss', 'bad debt recovery')",
+            produced.Signal.Reason);
+        Assert.DoesNotContain("continuing operations", produced.Signal.Reason, StringComparison.Ordinal);
+
+        // The cache record carries the policy + both marker groups (the policy-mismatch miss rule needs them).
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(AnalyzedFilingOutcome.DirectionalSignalProduced, entry.Outcome);
+        Assert.Equal("cmpscan-v1;cap=0.65", entry.ComparabilityPolicy);
+        Assert.Equal(CurrentDefaultPolicy, entry.ComparabilityPolicy);
+        Assert.NotNull(entry.ComparabilityMarkers);
+        Assert.Equal(
+            new[] { "litigation settlement", "securities loss", "bad debt recovery" },
+            entry.ComparabilityMarkers!.CapTriggering);
+        Assert.Equal(new[] { "continuing operations" }, entry.ComparabilityMarkers.DiagnosticOnly);
+
+        // The debug record preserves the model's RAW confidence and reports the capped value separately.
+        var record = Assert.Single(sink.Records);
+        Assert.Equal(FilingReadOutcome.DirectionalSignalProduced, record.Outcome);
+        Assert.Equal(0.9m, record.Confidence);
+        Assert.Equal(0.65m, record.CappedConfidence);
+        Assert.NotNull(record.ComparabilityMarkers);
+        Assert.Equal(
+            new[] { "litigation settlement", "securities loss", "bad debt recovery" },
+            record.ComparabilityMarkers!.CapTriggering);
+    }
+
+    [Fact]
+    public async Task ComparabilityCap_DiagnosticOnlyMatches_DoNotCap_ButAreRecorded()
+    {
+        // Text whose ONLY matches are diagnostic-group phrases: the confidence is unchanged, the reason is
+        // unannotated, and the matches are recorded in the diagnostic list (measurable but inert).
+        var evidence = EarningsFiling();
+        var body = PlausibleBody(
+            "Following the sale of its legacy product line to a distributor, revenue from continuing "
+                + "operations grew 12% on strong demand.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue grew 12%."));
+        var cache = new FakeAnalyzedFilingCache();
+
+        var result = await CreateSource(reader, analyzer, cache: cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal(0.9m, produced.Signal.Confidence);
+        Assert.Equal("Revenue grew 12%.", produced.Signal.Reason);
+
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(CurrentDefaultPolicy, entry.ComparabilityPolicy);
+        Assert.NotNull(entry.ComparabilityMarkers);
+        Assert.Empty(entry.ComparabilityMarkers!.CapTriggering);
+        Assert.Equal(
+            new[] { "continuing operations", "sale of its" },
+            entry.ComparabilityMarkers.DiagnosticOnly);
+    }
+
+    [Fact]
+    public async Task ComparabilityCap_CleanFixture_ConfidenceUnchanged_PolicyRecordsScannedClean()
+    {
+        // AGYS-shaped: no marker in the body at all. 0.90 stays 0.90 and the cache policy is NON-null with
+        // both lists empty — "scanned clean" is distinct from "not scanned" (null policy, pre-160).
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(
+                PlausibleBody("Revenue rose 40% and the company raised guidance."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose 40%; guidance raised."));
+        var cache = new FakeAnalyzedFilingCache();
+        var sink = new SpyFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, cache: cache, debugSink: sink)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal(0.9m, produced.Signal.Confidence);
+        Assert.Equal("Revenue rose 40%; guidance raised.", produced.Signal.Reason);
+
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(CurrentDefaultPolicy, entry.ComparabilityPolicy);
+        Assert.NotNull(entry.ComparabilityMarkers);
+        Assert.Empty(entry.ComparabilityMarkers!.CapTriggering);
+        Assert.Empty(entry.ComparabilityMarkers.DiagnosticOnly);
+
+        var record = Assert.Single(sink.Records);
+        Assert.Null(record.CappedConfidence); // no cap applied.
+        Assert.NotNull(record.ComparabilityMarkers); // ...but the clean scan IS recorded.
+    }
+
+    [Fact]
+    public async Task ComparabilityCap_CapBelowGate_SuppressesSignal_AndCachesNoSignalWithPolicy()
+    {
+        // A cap configured BELOW MinConfidence (operator's choice) suppresses capped signals entirely: the
+        // gate applies AFTER the cap, so the capped 0.5 fails the default 0.6 gate — the existing
+        // no-directional-signal path (cached NoDirectionalSignal, debug record emitted).
+        var evidence = EarningsFiling();
+        var body = PlausibleBody("Net income rose sharply, aided by a one-time gain on sale of a facility.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Net income rose sharply."));
+        var options = new DirectionalFilingSignalOptions { ComparabilityConfidenceCap = 0.5m };
+        var cache = new FakeAnalyzedFilingCache();
+        var sink = new SpyFilingReadDebugSink();
+
+        var result = await CreateSource(reader, analyzer, options, cache, sink)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(AnalyzedFilingOutcome.NoDirectionalSignal, entry.Outcome);
+        Assert.Null(entry.Signal);
+        Assert.Equal(EarningsComparabilityScan.Policy(0.5m), entry.ComparabilityPolicy);
+        Assert.NotNull(entry.ComparabilityMarkers);
+        Assert.Equal(new[] { "one-time", "gain on sale" }, entry.ComparabilityMarkers!.CapTriggering);
+
+        var record = Assert.Single(sink.Records);
+        Assert.Equal(FilingReadOutcome.BelowConfidence, record.Outcome);
+        Assert.Equal(0.9m, record.Confidence);       // the model's raw read...
+        Assert.Equal(0.5m, record.CappedConfidence); // ...capped below the gate.
+    }
+
+    [Fact]
+    public async Task ComparabilityCap_OffSwitchAtOne_IsByteIdenticalToPre160()
+    {
+        // 1.0 is the exact off-switch: min(conf, 1.0) is the identity, so even with cap-triggering markers in
+        // the body the FULL signal is byte-identical to pre-spec-160 behaviour — no capped confidence, no
+        // reason annotation, nothing else moved.
+        var evidence = EarningsFiling();
+        var body = PlausibleBody(
+            "Net income doubled, including an impairment reversal and a litigation settlement recovery.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Net income doubled."));
+        var options = new DirectionalFilingSignalOptions { ComparabilityConfidenceCap = 1.0m };
+        var cache = new FakeAnalyzedFilingCache();
+
+        var result = await CreateSource(reader, analyzer, options, cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        // The full pre-160 signal, field for field.
+        Assert.Equal(evidence.SourceName, produced.Signal.CompanyMention);
+        Assert.Equal("GuidanceChange", produced.Signal.SignalType);
+        Assert.Equal("Positive", produced.Signal.Direction);
+        Assert.Equal(8, produced.Signal.Strength);
+        Assert.Equal(6, produced.Signal.Novelty);
+        Assert.Equal(0.9m, produced.Signal.Confidence);
+        Assert.Equal(evidence.Title, produced.Signal.SupportingExcerpt);
+        Assert.Equal("Net income doubled.", produced.Signal.Reason);
+
+        // The scan outcome is still recorded on the cache record (provenance), it just never caps.
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(EarningsComparabilityScan.Policy(1.0m), entry.ComparabilityPolicy);
+        Assert.NotNull(entry.ComparabilityMarkers);
+        Assert.Equal(new[] { "impairment", "litigation settlement" }, entry.ComparabilityMarkers!.CapTriggering);
+    }
+
+    [Fact]
+    public async Task ComparabilityCap_IsACeilingNotAFloor_ReadBelowCapStaysUnchanged()
+    {
+        // Gate ordering, part 1: read 0.62 with markers and cap 0.65 stays 0.62 — min(0.62, 0.65) = 0.62.
+        // The cap did not move the number, so the reason is deliberately unannotated (the spec-149 rule:
+        // name a transform only when it changed the result).
+        var evidence = EarningsFiling();
+        var body = PlausibleBody("Earnings improved despite a divestiture completed during the quarter.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.62m, "Earnings improved."));
+
+        var result = await CreateSource(reader, analyzer)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal(0.62m, produced.Signal.Confidence);
+        Assert.Equal("Earnings improved.", produced.Signal.Reason);
+    }
+
+    [Fact]
+    public async Task ComparabilityCap_GateAppliesAfterCap_CappedReadBelowRaisedGateIsSuppressed()
+    {
+        // Gate ordering, part 2: read 0.90, markers, cap 0.65, gate raised to 0.7 — the CAPPED value fails the
+        // gate, so the signal is suppressed even though the raw read cleared it.
+        var evidence = EarningsFiling();
+        var body = PlausibleBody("Record profit included a non-recurring legal settlement gain.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Record profit."));
+        var options = new DirectionalFilingSignalOptions { MinConfidence = 0.7m };
+        var cache = new FakeAnalyzedFilingCache();
+
+        var result = await CreateSource(reader, analyzer, options, cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(AnalyzedFilingOutcome.NoDirectionalSignal, entry.Outcome);
+    }
+
+    [Fact]
+    public async Task ComparabilityCap_MarkerBeyondAnalyzerTruncationPoint_StillCaps()
+    {
+        // The scan runs on the FULL stripped body, BEFORE the analyzer's MaxInputLength truncation (default
+        // 12000): a cap-triggering marker placed past that point must still cap.
+        var evidence = EarningsFiling();
+        var body = PlausibleBody("Revenue rose 40% and the company raised guidance.")
+            + new string('x', 13000)
+            + " The quarter also reflected a litigation settlement.";
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(body, "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose 40%."));
+
+        var result = await CreateSource(reader, analyzer)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal(0.65m, produced.Signal.Confidence);
+        Assert.Contains("comparability cap: matched 'litigation settlement'", produced.Signal.Reason, StringComparison.Ordinal);
+    }
+
+    // ---- spec 160: cache policy rules — the full outcome × cause matrix ------------------------------------
+
+    /// <summary>A cached no-signal record stamped with <paramref name="policy"/> (null = pre-160 legacy).</summary>
+    private static AnalyzedFilingRecord CachedNoSignalRecord(string accession, string? policy) =>
+        new(
+            accession,
+            AnalyzedFilingOutcome.NoDirectionalSignal,
+            null,
+            null,
+            AnalyzedFilingRecord.CurrentCacheVersion,
+            policy,
+            policy is null ? null : new ComparabilityMarkers([], []));
+
+    [Fact]
+    public async Task CachePolicy_NullPolicyRecord_IsAHit_ReplaysUnchanged()
+    {
+        // Heal forward: a pre-160 record (null policy) is a HIT — the accrued cache is never mass-invalidated.
+        // The replayed signal is the stored one, untouched (no retro-capping of legacy reads).
+        var accession = "0001049521-26-000011";
+        var evidence = EarningsFiling(accession: accession);
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries[accession] = CachedSignalRecord(accession); // ComparabilityPolicy defaults to null.
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("irrelevant"), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "n/a"));
+
+        var result = await CreateSource(reader, analyzer, cache: cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal(0, reader.ReadCount);   // no re-fetch...
+        Assert.Equal(0, analyzer.AnalyzeCount);
+        Assert.Equal(0.9m, produced.Signal.Confidence); // ...and the stored signal replays unchanged.
+        Assert.Equal("cached rationale", produced.Signal.Reason);
+    }
+
+    [Fact]
+    public async Task CachePolicy_MatchingPolicyRecord_IsAHit()
+    {
+        var accession = "0001049521-26-000011";
+        var evidence = EarningsFiling(accession: accession);
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries[accession] = CachedSignalRecord(accession) with
+        {
+            ComparabilityPolicy = CurrentDefaultPolicy,
+            ComparabilityMarkers = new ComparabilityMarkers([], []),
+        };
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("irrelevant"), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "n/a"));
+
+        var result = await CreateSource(reader, analyzer, cache: cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Single(result);
+        Assert.Equal(0, reader.ReadCount); // a matching policy replays with no fetch.
+    }
+
+    public static TheoryData<string, string> PolicyMismatchCauses() => new()
+    {
+        // Cause: the operator tuned the cap (same scanner version, different cap magnitude).
+        { "cap change", "cmpscan-v1;cap=0.5" },
+        // Cause: the scanner rule tables changed (a cmpscan version bump, same cap magnitude).
+        { "scanner-version change", "cmpscan-v0;cap=0.65" },
+    };
+
+    [Theory]
+    [MemberData(nameof(PolicyMismatchCauses))]
+    public async Task CachePolicy_MismatchedProducedSignalRecord_IsAMiss_ReanalyzedUnderCurrentPolicy(
+        string cause, string storedPolicy)
+    {
+        // Outcome × cause matrix, DirectionalSignalProduced rows: a produced-signal record whose non-null
+        // policy differs from the current one must be re-fetched and re-analyzed under the current policy.
+        Assert.NotEqual(CurrentDefaultPolicy, storedPolicy); // guard the fixture itself.
+        var accession = "0001049521-26-000011";
+        var evidence = EarningsFiling(accession: accession);
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries[accession] = CachedSignalRecord(accession) with
+        {
+            ComparabilityPolicy = storedPolicy,
+            ComparabilityMarkers = new ComparabilityMarkers(["litigation settlement"], []),
+        };
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(
+                PlausibleBody("Strong results included a litigation settlement recovery."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Strong results."));
+
+        var result = await CreateSource(reader, analyzer, cache: cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);      // re-fetched (a genuine pass-2 miss for cause: {cause})...
+        Assert.Equal(1, analyzer.AnalyzeCount); // ...and re-analyzed,
+        var produced = Assert.Single(result);
+        Assert.Equal(0.65m, produced.Signal.Confidence); // under the CURRENT policy (default cap 0.65).
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(CurrentDefaultPolicy, entry.ComparabilityPolicy); // the record is re-stamped.
+        Assert.NotNull(cause); // (theory label; keeps the cause visible in test output)
+    }
+
+    [Theory]
+    [MemberData(nameof(PolicyMismatchCauses))]
+    public async Task CachePolicy_MismatchedNoSignalRecord_IsAMiss_AndMayNowEmit(string cause, string storedPolicy)
+    {
+        // Outcome × cause matrix, NoDirectionalSignal rows — the cells a produced-signal-only suite would
+        // silently miss: a read SUPPRESSED under an old policy (e.g. a lower cap) must be re-analyzed when the
+        // policy changes, and may now emit under the current one.
+        Assert.NotEqual(CurrentDefaultPolicy, storedPolicy);
+        var accession = "0001049521-26-000011";
+        var evidence = EarningsFiling(accession: accession);
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries[accession] = CachedNoSignalRecord(accession, storedPolicy);
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(
+                PlausibleBody("Strong results included a litigation settlement recovery."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Strong results."));
+
+        var result = await CreateSource(reader, analyzer, cache: cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);      // the stale no-signal verdict did NOT replay...
+        Assert.Equal(1, analyzer.AnalyzeCount);
+        var produced = Assert.Single(result);   // ...and the filing now emits under the current policy
+        Assert.Equal(0.65m, produced.Signal.Confidence); // (capped at the current default 0.65).
+        var entry = Assert.Single(cache.Entries.Values);
+        Assert.Equal(AnalyzedFilingOutcome.DirectionalSignalProduced, entry.Outcome);
+        Assert.Equal(CurrentDefaultPolicy, entry.ComparabilityPolicy);
+        Assert.NotNull(cause);
+    }
+
+    [Fact]
+    public async Task CachePolicy_NullPolicyNoSignalRecord_IsAHit_NothingRefetched()
+    {
+        // The legacy no-signal cell of the heal-forward rule: a pre-160 confirmed no-signal replays as
+        // "nothing" with no fetch — legacy verdicts are honoured, not retro-scanned.
+        var accession = "0001049521-26-000011";
+        var evidence = EarningsFiling(accession: accession);
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries[accession] = CachedNoSignalRecord(accession, policy: null);
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("irrelevant"), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "n/a"));
+
+        var result = await CreateSource(reader, analyzer, cache: cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        Assert.Equal(0, reader.ReadCount);
+        Assert.Equal(0, analyzer.AnalyzeCount);
     }
 
     private sealed class SpyFilingReadDebugSink : IFilingReadDebugSink

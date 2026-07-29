@@ -94,6 +94,20 @@ public sealed class AddDirectionalFilingSignalsTests
     }
 
     [Theory]
+    [InlineData(-0.1)]
+    [InlineData(1.1)]
+    public void AddDirectionalFilingSignals_ComparabilityCapOutOfRange_FailsFast(double cap)
+    {
+        // Spec 160: the comparability cap is validated in [0,1] at registration, beside MinConfidence. 1.0 is
+        // the legal off-switch; anything outside the range is a configuration error.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddDirectionalFilingSignals(
+                new DirectionalFilingSignalOptions { ComparabilityConfidenceCap = (decimal)cap }));
+
+        Assert.Contains("Radar:Ai:ComparabilityConfidenceCap", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     public void AddDirectionalFilingSignals_NonPositiveMaxFilingsPerRun_FailsFast(int maxFilingsPerRun)
