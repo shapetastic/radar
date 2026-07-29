@@ -20,7 +20,11 @@
 > only; (4) the no-signal minimum rises to 60 because 0/30 has a Wilson 95% upper bound of ~11.4% — above
 > the 10% threshold, so the old rule extended on every possible outcome (and every-5th-of-153 selected 31
 > rows, not 30). Bins are now exact half-open intervals with hash-ordered sampling, and labels carry full
-> provenance.
+> provenance. **Round 3 fixed the last statistical blocker**: the calibration estimate is now computed on a
+> PROBABILITY SAMPLE selected irrespective of agreement (the round-2 queue adjudicated every disagreement
+> but only 5 agreements per bin — over-representing failures and biasing estimated accuracy downward, which
+> Wilson intervals cannot repair), the second-reader model and exact prompt template are precommitted
+> before Phase B, and the no-signal extension is explicitly one-shot.
 
 ## Pilot findings (n=30) — pilot DESCRIPTIONS, not population estimates
 
@@ -86,8 +90,11 @@ Joins `labels.jsonl` to the sealed worksheet and emits, with honest Ns and Wilso
 headline rate:
 
 - **Inter-model agreement curve** (named exactly that) — reader-confidence bins × skeptic agreement.
-- **Calibration table (adjudicated rows only)** — bins × human-adjudicated correctness; empty bins render
-  "no adjudicated labels", never interpolated.
+- **Calibration table (calibration probability sample ONLY)** — bins × human-adjudicated correctness,
+  computed exclusively over the `calibration-sample` rows (selected irrespective of agreement, below);
+  disagreement/doubt-queued adjudications are NEVER pooled into these rates — conditioning on a set that
+  contains every failure but only a slice of successes biases accuracy downward, and Wilson intervals do
+  not repair selection bias. Empty bins render "no adjudicated labels", never interpolated.
 - Clean-rate, comparability-item frequency (the cmpscan-v2 evidence table), materiality ×
   constant-strength cross-tab, false-negative table, **input-path stability table** (pilot vs relabel
   direction/clean deltas), and the adjudication queue.
@@ -106,14 +113,20 @@ unambiguously.)
               attempt: 1|2|..., replacedLabelOfAttempt?: n },
   label: { direction, directionConfidence, comparisonClean, comparabilityItems[], material, keyFacts[] },
   adjudication: { status: pending|confirmed|overturned|n/a,
+                  selectionReason: calibration-sample|disagreement|doubt,
                   blindCall?: { direction, comparisonClean },   // recorded BEFORE unblinding
                   finalDirection?, note? } }
 ```
 
 The sealed model answer is joined from the worksheet at analysis time, never stored in the label file.
-`promptHash` is the hash of the exact labeling prompt template, so a template edit mid-study is visible;
-`labeler` pins the provider/model identity per batch so silent model-version drift across batches is
-detectable. Retries record which attempt they replaced.
+`selectionReason` records WHY a row entered the adjudication queue; `calibration-sample` takes precedence
+when a row qualifies both ways (a disagreeing row inside the probability sample is still a sample row —
+that is the point of sampling irrespective of agreement). **The labeling prompt template is committed in
+Phase A** (`scripts/calibration-audit/labeling-prompt.md`) and `promptHash` is its hash, so a mid-study
+template edit is visible; **the second reader is precommitted for the whole study: `anthropic:claude-fable-5`
+(the `radar-skeptic-reviewer` agent), a different model family from the DeepSeek reader** — recording
+`labeler` per batch detects drift, precommitting prevents it, and changing the labeler mid-study is a
+protocol-version bump that restarts the affected labels. Retries record which attempt they replaced.
 
 `docs/162-calibration-pilot-labels.csv` is a **lossy legacy summary** of the pilot (schema `pilot-flat`):
 preserves accession/direction/confidence/agreement/clean/materiality + one-line KeyItem; drops structured
@@ -127,11 +140,16 @@ Phase-B relabels.
   (judge on FFO/AFFO). **≤5 concurrent agents** (the pilot's 20-at-once drew a 529 wave).
 - **Adjudication makes ground truth**, and is itself two-step blinded: the adjudicator first records their
   own `blindCall` from the exhibit text alone, THEN unblinds both model answers and records the final
-  verdict — both steps persisted in the JSONL. Queue: ALL disagreements, ALL labels with
-  identification/parity/truncation doubts, and a deterministic sample of AGREEMENTS —
-  **min(5, bin size) per confidence bin, ordered by SHA-256(accession) hex ascending within the bin**
-  (deterministic without tracking CIK-prefix order, which plain accession sort does). Expected total
-  ~25–40 rows.
+  verdict — both steps persisted in the JSONL.
+- **The queue has two separately-analyzed parts, and only one feeds calibration**:
+  1. **Calibration probability sample** — `min(10, bin size)` rows per confidence bin, selected by
+     SHA-256(accession) hex ascending within the bin, **irrespective of agreement status**. This sample
+     ALONE produces the calibration rates and their Wilson intervals. (Deterministic without tracking
+     CIK-prefix order, which plain accession sort does.)
+  2. **Error-diagnosis set** — ALL remaining disagreements and ALL labels with
+     identification/parity/truncation doubts, adjudicated for failure-mode analysis and reported
+     separately; NEVER pooled into the calibration rates.
+  Expected total ~45–60 rows.
 
 ## Phase B — the study itself (executed in-session with agents after Phase A merges; NOT run-next work)
 
@@ -140,9 +158,11 @@ Deterministic, precommitted:
 - **Directional cohort: all 145 active-scope directional reads** = the 30 pilot filings RELABELED under
   canonical model input + the 115 unlabeled, ordered by SHA-256(accession) hex, batches of ≤5.
 - **No-signal sample: minimum 60 of 153**, selected as the first 60 by SHA-256(accession) hex order.
-  **Extension rule**: if adjudication confirms ≥1 genuinely-directional missed print, or the Wilson 95%
-  upper bound on the miss rate exceeds 10%, extend by the next 30 in hash order before writing
-  conclusions. (At 0/60 the upper bound is ~6.0%, so a fully-clean result does NOT auto-extend — the rule
+  **Extension rule, ONE-SHOT**: if adjudication confirms ≥1 genuinely-directional missed print, or the
+  Wilson 95% upper bound on the miss rate exceeds 10%, extend by exactly the next 30 in hash order and
+  **report the final result at N=90 — the trigger is evaluated once, never re-applied to the extended
+  set** (otherwise a single confirmed miss would demand extension forever). (At 0/60 the upper bound is
+  ~6.0%, so a fully-clean result does NOT auto-extend — the rule
   can actually pass, unlike the 30-row version whose 0-miss bound of ~11.4% extended on every outcome.)
 - **Completion gate**: `docs/162-findings-filing-read-calibration.md` (both curves with honest Ns +
   Wilson intervals, false-negative table with the threshold applied, input-path stability table, decisions
@@ -175,24 +195,30 @@ Deterministic, precommitted:
       `InternalsVisibleTo("Radar.CalibrationAudit")` (no reflection, no copied parsing), dual
       full/model-input exhibit outputs with hashes and truncated flags in the manifest, singular
       `raw/filing` CIK recovery with unrecoverables listed.
-- [ ] `analyze-labels.ps1`: inter-model agreement curve (named as such), adjudicated-calibration table,
-      Wilson intervals, exact half-open bins as specified, hash-ordered per-bin agreement sampling with
-      min(5, bin size), input-path stability table.
+- [ ] `analyze-labels.ps1`: inter-model agreement curve (named as such), calibration table computed over
+      the `calibration-sample` rows ONLY (min(10, bin size) per bin, hash-ordered, agreement-blind),
+      error-diagnosis set reported separately, Wilson intervals, exact half-open bins as specified,
+      input-path stability table.
 - [ ] Canonical `labels.jsonl` schema with the provenance block (protocol version, labeler
-      provider/model, prompt hash, timestamp, attempt/replacement); pilot CSV declared lossy-legacy with
-      dropped fields named.
+      provider/model, prompt hash, timestamp, attempt/replacement) and `selectionReason`
+      (`calibration-sample` precedence); pilot CSV declared lossy-legacy with dropped fields named.
+- [ ] **The labeling prompt template committed** at `scripts/calibration-audit/labeling-prompt.md` (the
+      `promptHash` source) and the second reader precommitted in the protocol section as
+      `anthropic:claude-fable-5` (`radar-skeptic-reviewer`).
 - [ ] Protocol section verbatim in the findings-doc skeleton (blinding on model-input text, ≤5
-      concurrency, REIT note, two-step blinded adjudication).
+      concurrency, REIT note, two-step blinded adjudication, two-part queue).
 - [ ] `dotnet build Radar.sln -c Release` / `dotnet test Radar.sln -c Release --no-build` green; no
       behavioural change to existing production projects.
 
 ## Acceptance criteria — Phase B (the study; blocks promotion of this spec to docs/)
 
-- [ ] **145 directional labels** (30 relabels + 115 new) and **minimum 60 no-signal labels plus any
-      required extension**, produced under the protocol on canonical model-input text, committed as
-      `docs/162-calibration-labels-full.jsonl` with full provenance blocks.
-- [ ] Adjudication queue (disagreements + doubts + per-bin agreement sample) resolved via the two-step
-      blinded flow and recorded in the JSONL.
+- [ ] **145 directional labels** (30 relabels + 115 new) and **no-signal labels at N=60, or N=90 if the
+      one-shot extension triggered**, produced under the protocol on canonical model-input text by the
+      precommitted labeler, committed as `docs/162-calibration-labels-full.jsonl` with full provenance
+      blocks.
+- [ ] Both queue parts resolved via the two-step blinded flow and recorded with `selectionReason`: the
+      calibration probability sample (feeding the calibration table) and the error-diagnosis set
+      (reported separately, never pooled).
 - [ ] `docs/162-findings-filing-read-calibration.md` committed with both curves (honest Ns, Wilson
-      intervals), the false-negative table with the precommitted threshold applied, the input-path
-      stability table, and the decisions section.
+      intervals — calibration from the probability sample only), the false-negative table with the
+      one-shot threshold applied, the input-path stability table, and the decisions section.
