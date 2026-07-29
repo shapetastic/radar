@@ -134,7 +134,17 @@ $ErrorActionPreference = 'Stop'
 # Defaults resolved here, not in the param block: $PSScriptRoot is not reliably populated during
 # parameter-default evaluation under Windows PowerShell 5.1.
 if ([string]::IsNullOrEmpty($PilotCsvPath)) {
-    $PilotCsvPath = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs\162-calibration-pilot-labels.csv'
+    # Repo root = two levels above this script (scripts/calibration-audit/ -> repo). When the script runs
+    # from a SHALLOW directory the second Split-Path yields an EMPTY string ('/tmp/<sandbox>' on Linux —
+    # exactly where the CI test sandbox lives — or 'C:\<dir>' on Windows), and Join-Path throws
+    # "Cannot bind argument to parameter 'Path' because it is an empty string" before anything is emitted.
+    # No repo root to find => leave the path empty; the pilot-table section renders "not found" instead.
+    # Child path is composed with Join-Path (never a '\' literal, which is a filename character on Linux).
+    $scriptParent = Split-Path -Parent $PSScriptRoot
+    $repoRoot = if ([string]::IsNullOrEmpty($scriptParent)) { '' } else { Split-Path -Parent $scriptParent }
+    if (-not [string]::IsNullOrEmpty($repoRoot)) {
+        $PilotCsvPath = Join-Path $repoRoot (Join-Path 'docs' '162-calibration-pilot-labels.csv')
+    }
 }
 if ([string]::IsNullOrEmpty($ManifestPath)) {
     $ManifestPath = Join-Path (Split-Path -Parent $WorksheetPath) 'exhibit-manifest.csv'
@@ -897,8 +907,10 @@ Add-Line ''
 # -- Section: input-path stability (pilot vs relabel) --
 Add-Line '## Input-path stability table (pilot vs canonical-input relabel)'
 Add-Line ''
-if (-not (Test-Path -LiteralPath $PilotCsvPath)) {
-    Add-Line ('Pilot CSV not found at {0}; table skipped.' -f $PilotCsvPath)
+if ([string]::IsNullOrEmpty($PilotCsvPath) -or -not (Test-Path -LiteralPath $PilotCsvPath)) {
+    # Empty path = the default could not resolve a repo root (shallow script directory); Test-Path
+    # -LiteralPath '' would itself throw under $ErrorActionPreference = 'Stop', so check emptiness first.
+    Add-Line ('Pilot CSV not found at {0}; table skipped.' -f $(if ([string]::IsNullOrEmpty($PilotCsvPath)) { '(no repo root resolvable from the script directory; pass -PilotCsvPath)' } else { $PilotCsvPath }))
 } else {
     $pilot = @(Import-Csv -LiteralPath $PilotCsvPath)
     Add-Line 'The 30 pilot filings were labeled from non-parity inputs (wire reproductions / ad-hoc stripping);'
