@@ -41,7 +41,8 @@ public sealed record ExhibitManifestRow(
 /// MaxInputLength in force in <c>exhibit-manifest.csv</c>.
 /// <para>
 /// RE-RUNNABLE: an accession whose manifest row already carries a full-text hash, whose exhibit files both
-/// exist, and whose body is not suspiciously short is SKIPPED (no SEC request). The short-body tripwire is
+/// exist, and whose STORED full-text file's trimmed body is not suspiciously short is SKIPPED (no SEC
+/// request). The short-body tripwire is
 /// <see cref="ShortBodyTripwireLength"/> = 200 trimmed characters — the same "a real earnings release is
 /// never a few bytes" threshold the production <c>DirectionalFilingSignalSource.MinPlausibleBodyLength</c>
 /// applies (spec 114; that const is private, so the VALUE is restated here and documented rather than
@@ -163,9 +164,13 @@ internal sealed class ExhibitArchiver
             return true;
         }
 
-        if (existing.FullTextLength < ShortBodyTripwireLength)
+        // The production guard is on TRIMMED body length, so the tripwire measures the actual stored file
+        // rather than the manifest's untrimmed FullTextLength — a mostly-whitespace body (or a file that no
+        // longer matches its manifest row) must refetch, not skip.
+        var storedTrimmedLength = File.ReadAllText(fullPath).AsSpan().Trim().Length;
+        if (storedTrimmedLength < ShortBodyTripwireLength)
         {
-            reason = $"stored body suspiciously short ({existing.FullTextLength} < {ShortBodyTripwireLength} chars tripwire)";
+            reason = $"stored body suspiciously short ({storedTrimmedLength} < {ShortBodyTripwireLength} trimmed chars tripwire)";
             return true;
         }
 

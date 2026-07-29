@@ -38,14 +38,14 @@ public sealed class ExhibitManifestTests : IDisposable
         Truncated: fullTextLength > 12000, MaxInputLength: 12000,
         Outcome: "success", FetchedAtUtc: "2026-07-29T00:00:00.0000000Z");
 
-    private (string FullPath, string ModelInputPath) WriteExhibits(string accession)
+    private (string FullPath, string ModelInputPath) WriteExhibits(string accession, string? fullText = null)
     {
         var fullPath = ExhibitArchiver.FullTextPath(_root, "cat", accession);
         var modelInputPath = ExhibitArchiver.ModelInputPath(_root, "cat", accession);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(modelInputPath)!);
-        File.WriteAllText(fullPath, new string('x', 9000));
-        File.WriteAllText(modelInputPath, new string('x', 9000));
+        File.WriteAllText(fullPath, fullText ?? new string('x', 9000));
+        File.WriteAllText(modelInputPath, fullText ?? new string('x', 9000));
         return (fullPath, modelInputPath);
     }
 
@@ -61,13 +61,25 @@ public sealed class ExhibitManifestTests : IDisposable
     [Theory]
     [InlineData(0)]
     [InlineData(199)] // One below the tripwire.
-    public void SuspiciouslyShortStoredBody_ForcesRefetch(int fullTextLength)
+    public void SuspiciouslyShortStoredBody_ForcesRefetch(int storedBodyLength)
     {
         const string accession = "0000018230-25-000013";
-        var (fullPath, modelInputPath) = WriteExhibits(accession);
+        var (fullPath, modelInputPath) = WriteExhibits(accession, new string('x', storedBodyLength));
+
+        // The manifest row claims a plausible length — the STORED FILE is what decides.
+        Assert.True(ExhibitArchiver.NeedsFetch(
+            SuccessRow(accession), fullPath, modelInputPath, out var reason));
+        Assert.Contains("suspiciously short", reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MostlyWhitespaceStoredBody_ForcesRefetch_EvenWhenUntrimmedLengthIsLong()
+    {
+        const string accession = "0000018230-25-000013";
+        var (fullPath, modelInputPath) = WriteExhibits(accession, new string(' ', 9000) + "shell");
 
         Assert.True(ExhibitArchiver.NeedsFetch(
-            SuccessRow(accession, fullTextLength), fullPath, modelInputPath, out var reason));
+            SuccessRow(accession), fullPath, modelInputPath, out var reason));
         Assert.Contains("suspiciously short", reason, StringComparison.Ordinal);
     }
 

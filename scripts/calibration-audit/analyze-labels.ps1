@@ -276,6 +276,14 @@ foreach ($row in $directionalRows) {
     })
 }
 
+# Out-of-range confidence maps to Bin = $null (Get-ConfidenceBin) and would otherwise vanish from every
+# bin/sample table silently — report it as a protocol warning, never drop it quietly.
+$outOfRangeRows = @($joined | Where-Object { $null -eq $_.Bin })
+if ($outOfRangeRows.Count -gt 0) {
+    $protocolWarnings += ('model confidence outside [0,1] on {0} joined row(s), excluded from every bin and sample table: {1}' -f `
+        $outOfRangeRows.Count, (($outOfRangeRows | ForEach-Object { '{0} (confidence {1})' -f $_.Accession, $_.ModelConfidence }) -join ', '))
+}
+
 # --- calibration probability sample (selection is a pure function of the joined set) -------------------
 
 # min(10, bin size) per confidence bin, SHA-256(accession) hex ASCENDING within the bin, IRRESPECTIVE of

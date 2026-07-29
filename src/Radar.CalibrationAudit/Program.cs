@@ -135,6 +135,9 @@ using var loggerFactory = LoggerFactory.Create(builder =>
 {
     builder.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
     builder.SetMinimumLevel(LogLevel.Warning);
+    // The audit's own category emits per-fetch progress at Information (a paced fetch run is long); the
+    // Warning floor above keeps HttpClient/DI plumbing quiet.
+    builder.AddFilter("CalibrationAudit", LogLevel.Information);
 });
 var logger = loggerFactory.CreateLogger("CalibrationAudit");
 
