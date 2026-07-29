@@ -71,6 +71,30 @@ public sealed class ExhibitArchiverShortBodyTests : IDisposable
     }
 
     [Fact]
+    public async Task ShortBodyOverInputCap_RecordsTruncatedFlag_OnTheFailureRow()
+    {
+        // A long, mostly-whitespace body: raw length exceeds the input cap (so the stored model-input
+        // file IS truncated) while the trimmed length sits below the tripwire. The failure row must
+        // record the truncation that actually happened to the archived artifact, not hard-code false.
+        const string accession = "0000018230-25-000013";
+        const int maxInputLength = 12000;
+        var whitespaceHeavyText = new string(' ', maxInputLength + 999) + "x";
+        var archiver = new ExhibitArchiver(
+            new StubReader(SecEarningsReleaseReadResult.Success(whitespaceHeavyText, "EX-99.1", "ex991.htm")),
+            maxInputLength,
+            NullLogger.Instance);
+
+        var row = await archiver.FetchAsync(
+            _root, accession, "cat", "18230", new FakeTimeProvider(), CancellationToken.None);
+
+        Assert.Equal("failed:short-body", row.Outcome);
+        Assert.True(row.Truncated);
+        Assert.Equal(maxInputLength, row.ModelInputLength);
+        var modelInputPath = ExhibitArchiver.ModelInputPath(_root, "cat", accession);
+        Assert.Equal(maxInputLength, File.ReadAllText(modelInputPath).Length);
+    }
+
+    [Fact]
     public async Task PlausibleFetchedBody_StaysSuccess_AndItsRowVerifiesAsNoOp()
     {
         const string accession = "0000018230-25-000013";

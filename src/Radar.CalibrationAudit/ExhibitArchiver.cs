@@ -284,7 +284,7 @@ internal sealed class ExhibitArchiver
                 exhibitUrl,
                 FullTextSha256: string.Empty, fullText.Length,
                 ModelInputSha256: string.Empty, modelInput.Length,
-                Truncated: false, MaxInputLength: _maxInputLength,
+                truncated, MaxInputLength: _maxInputLength,
                 Outcome: "failed:short-body", FetchedAtUtc: fetchedAt);
         }
 
