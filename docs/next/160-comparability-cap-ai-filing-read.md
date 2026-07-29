@@ -231,9 +231,13 @@ precommitment-integrity act — it must be written down BEFORE the data exists, 
   confidence).
 - **Gate ordering**: read 0.62, markers, cap 0.65 ⇒ stays 0.62 (ceiling, not floor); read 0.90, cap 0.65,
   gate 0.7 ⇒ suppressed (gate after cap).
-- **Cache policy rules**: null-policy record ⇒ HIT, replays unchanged (heal forward); non-null mismatched
-  policy (different cap OR different scan version) ⇒ MISS, re-analyzed under the current policy; matching
-  policy ⇒ HIT.
+- **Cache policy rules — the full outcome × cause matrix, not just the produced-signal path**: null-policy
+  record ⇒ HIT, replays unchanged (heal forward); matching policy ⇒ HIT; non-null mismatched policy ⇒ MISS,
+  re-analyzed under the current policy — asserted for **all four** combinations: a cached
+  `DirectionalSignalProduced` record and a cached `NoDirectionalSignal` record, each invalidated by a cap
+  change AND by a scanner-version change. The `NoDirectionalSignal` × cap-change cell is the one a
+  produced-signal-only test suite would silently miss: a read suppressed under an old lower cap must be
+  re-analyzed (and may now emit) when the cap rises.
 - **Descriptor**: pinned string asserts field order `str;nov;minconf;model;cmpscan;cmpcap`; two options
   differing only in cap produce different descriptors; AI-OFF composition's fingerprint unchanged.
 - **Fingerprint pins**: all three AI-ON pins updated with a lineage note; AI-OFF pins asserted unmoved.
@@ -274,7 +278,8 @@ precommitment-integrity act — it must be written down BEFORE the data exists, 
       asserted byte-identical to pre-160.
 - [ ] Cap applied before the gate from cap-triggering markers only; `Reason` names them; cache and debug
       records carry policy + both marker lists (trailing nullable, null = pre-160).
-- [ ] Cache: null policy ⇒ hit (asserted replay-unchanged); non-null mismatch ⇒ miss; no
+- [ ] Cache: null policy ⇒ hit (asserted replay-unchanged); non-null mismatch ⇒ miss, asserted over the full
+      {DirectionalSignalProduced, NoDirectionalSignal} × {cap change, scanner-version change} matrix; no
       `CurrentCacheVersion` bump.
 - [ ] Descriptor extended `;cmpscan=…;cmpcap=…` after `model=`; all three AI-ON pins recomputed with lineage
       notes; AI-OFF pins unmoved; `default.json` `_comment` updated including the StrategyIdentityGuard
