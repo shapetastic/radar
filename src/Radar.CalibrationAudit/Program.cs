@@ -36,9 +36,12 @@ using Radar.Infrastructure.Sec;
 //
 // SEC access: exhibit fetches REQUIRE the RADAR_SEC_UA environment variable (a compliant "Name email" SEC
 // User-Agent; fails fast when missing). All traffic goes through the production reader's typed HttpClient,
-// paced by the shared SecRequestPacer, strictly sequentially. Re-runnable: accessions already archived in
-// exhibit-manifest.csv are skipped; a suspiciously short stored body (< 200 trimmed chars, mirroring the
-// production spec-114 MinPlausibleBodyLength) forces a refetch.
+// paced by the shared SecRequestPacer, strictly sequentially. Re-runnable AND verified (spec 163): an
+// accession is skipped only when its stored artifacts VERIFY against the manifest — stored full-text and
+// model-input SHA-256s match the recorded hashes, the stored model-input char length matches, and the
+// row's recorded maxInputLength equals the --max-input-length in force; a suspiciously short stored body
+// (< 200 trimmed chars, mirroring the production spec-114 MinPlausibleBodyLength) forces a refetch, and a
+// short FETCHED body is a typed failure (failed:short-body, counted in the failed tally + exit code).
 
 const string DefaultModelIdentity = "openai:deepseek-ai/DeepSeek-V4-Flash";
 const string DefaultExpectedScope = "openai-deepseek-ai-deepseek-v4-flash-8f94f2dbe65fcb93";
@@ -254,7 +257,7 @@ if (!skipFetch)
         var modelInputPath = ExhibitArchiver.ModelInputPath(outputRoot, ticker, row.Accession);
 
         if (!ExhibitArchiver.NeedsFetch(
-                manifest.GetValueOrDefault(row.Accession), fullPath, modelInputPath, out var reason))
+                manifest.GetValueOrDefault(row.Accession), fullPath, modelInputPath, maxInputLength, out var reason))
         {
             skipped++;
             continue;
