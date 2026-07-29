@@ -26,6 +26,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>Radar.Infrastructure.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Spec 162: the read-only calibration-audit research console consumes the internal SEC
+         earnings-release reader + URL helpers directly (production parse/selection/normalizer/pacing,
+         never reflection or copied parsing). Non-behavioural: an attribute addition only. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Radar.CalibrationAudit</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>
