@@ -1,0 +1,31 @@
+﻿Accession,Ticker,Batch,DsDirection,DsConf,SkDirection,SkConf,Agree,Clean,Materiality,KeyItem
+0000018230-25-000013,CAT,pilot,Negative,0.95,Deteriorating,0.85,yes,true,high,restructuring items judged immaterial at scale
+0001104659-26-086127,TR,pilot,Negative,0.85,Deteriorating,0.75,yes,false,moderate,seasonal timing + cocoa costs
+0001421517-25-000076,ERII,pilot,Negative,0.90,Deteriorating,0.60,yes,false,low,megaproject timing dominates; pre-communicated cadence
+0001558370-25-000885,TR,pilot,Negative,0.85,Mixed,0.60,NO,false,moderate,$11.0M one-time DTA write-off; ex-item +14%
+0000708781-26-000028,CASS,pilot,Positive,0.90,Improving,0.85,yes,false,moderate,$1.8M settlement recovery + TEM perimeter
+0000018230-26-000017,CAT,pilot,Positive,0.95,Improving,0.75,yes,false,high,$51M tax swing; dealer restock
+0000908315-26-000004,WINA,pilot,Positive,0.75,Mixed,0.70,NO,false,moderate,$2.2M prior-year one-off inflates base; EPS fell
+0000046250-25-000056,HWKN,pilot,Positive,0.85,Mixed,0.70,NO,false,moderate,acquisition distorts all lines; EPS -7%
+0000105132-25-000013,WDFC,pilot,Positive,0.90,Improving,0.85,yes,false,moderate,$11.9M tax release; +92% headline vs +15% real
+0000805928-26-000091,AXGN,pilot,Positive,0.65,Improving,0.60,yes,false,moderate,$16.8M debt-extinguishment in H1
+0000046250-25-000024,HWKN,batch2,Positive,0.95,Improving,0.85,yes,false,moderate,LIFO swing + $7.7M env charge non-repeat + acquisitions
+0000056978-26-000018,KLIC,batch2,Positive,0.85,Improving,0.90,yes,false,high,prior-year $39.8M impairment; improvement survives ex-items
+0000057131-25-000016,LZB,batch2,Positive,0.95,Improving,0.75,yes,true,moderate,items immaterial; in-line quarter in weak cycle
+0000080420-25-000057,POWL,batch2,Positive,0.95,Improving,0.85,yes,true,high,clean; but book-to-bill <1.0
+0000105132-25-000023,WDFC,batch2,Positive,0.90,Improving,0.70,yes,false,moderate,same $11.9M tax release in YTD
+0000108985-26-000040,YORW,batch2,Positive,0.90,Improving,0.80,yes,false,moderate,rate increase + tax lever unquantified
+0000200406-25-000170,JNJ,batch2,Positive,0.95,Improving,0.60,yes,false,moderate,GAAP +18.7% but adjusted EPS -1.8%; FX-assisted raise
+0000320193-25-000055,AAPL,batch2,Positive,0.95,Improving,0.75,yes,false,moderate,buyback-flattered EPS; China/Wearables down
+0000700923-25-000021,MYRG,batch2,Positive,0.85,Improving,0.85,yes,false,moderate,one-offs both directions; LTM still deteriorated
+0000708781-26-000020,CASS,batch2,Positive,0.85,Improving,0.65,yes,false,moderate,$2.0M recovery in prior-year base; GAAP +2.2% only
+0000805928-25-000010,AXGN,batch2,Positive,0.90,Improving,0.90,yes,true,high,genuinely clean; every axis improving
+0000854775-26-000004,DGII,batch2,Positive,0.92,Improving,0.75,yes,false,high,Jolt acquisition inflates; non-GAAP recast
+0000856982-26-000007,MMSI,batch2,Positive,0.85,Improving,0.90,yes,false,moderate,organic +7% vs reported +12%
+0000874238-25-000119,STRL,batch2,Positive,0.95,Improving,0.90,yes,false,high,RHB deconsolidation: 21% adj vs 5.4% GAAP growth
+0000921582-25-000022,IMAX,batch2,Positive,0.90,Improving,0.70,yes,true,moderate,NCI swing turns +52% consolidated into -30% attributable
+0000950170-25-029071,TMDX,batch2,Positive,0.92,Improving,0.85,yes,false,high,prior-year $27.2M IPR&D flatters swing
+0000950170-25-057490,GTY,batch2,Positive,0.85,Improving,0.70,yes,false,moderate,AFFO +3.5% while GAAP fell; 6 items
+0000950170-25-074348,AGYS,batch2,Positive,0.95,Improving,0.75,yes,false,high,Book4Time inflates subs growth; prior $65.5M tax benefit
+0000950170-25-102370,DEA,batch2,Positive,0.75,Improving,0.55,yes,false,low,Core FFO +3% vs 9% dilution; in-line quarter
+0001022408-26-000017,PLUS,batch2,Positive,0.92,Improving,0.90,yes,false,high,financing divestiture recast; gross-vs-net mix in +24.6%
