@@ -1,117 +1,170 @@
-# Task: AI filing-read calibration audit — blinded second-reader protocol, harness, and the full-cohort run
+# Task: AI filing-read calibration audit — blinded second-reader protocol, harness, and the full-cohort study
 
 > **RESEARCH SPEC (spec-156/158 genre): read-side only, no scoring change, no fingerprint input, no pin
 > move.** Motivated by the external plausibility review (2026-07-29): the reader's self-reported confidence
-> has never been empirically calibrated — "a model saying 0.90 should eventually mean approximately 90%
-> correct in this class, not merely that the model sounded confident." Spec 160 (the comparability cap) is
-> containment; this is the measurement underneath it. **A 30-filing blinded pilot was run 2026-07-29 before
-> this spec was written, and its findings are the evidence base for the protocol below** — seed labels
-> committed at `docs/162-calibration-pilot-labels.csv`.
+> has never been empirically calibrated. Spec 160 (the comparability cap) is containment; this is the
+> measurement underneath it. **A 30-filing blinded pilot was run 2026-07-29 before this spec was written**
+> — summary labels committed at `docs/162-calibration-pilot-labels.csv`.
+>
+> **Amended 2026-07-29 before dispatch** after review, which found the draft could have produced a
+> convincing-looking but invalid calibration: (1) the cohort must be read from the MODEL-SCOPED cache
+> segment, not the directory root — verified: the active scope
+> `openai-deepseek-ai-deepseek-v4-flash-8f94f2dbe65fcb93` holds 145 directional + 153 no-signal records,
+> the legacy root holds 5 stale files duplicating active accessions, **two with conflicting outcomes** —
+> so the remaining directional cohort is **115**, not 119; (2) the no-signal CIK-recovery path is
+> `data/evidence/raw/filing/**` (singular — the drafted plural path matches nothing); (3) exhibit
+> selection/normalization must REUSE the production reader, not a regex reimplementation; (4) the headline
+> curve is renamed to what it measures (inter-model agreement) and true calibration is defined against
+> human-adjudicated labels sampled in every confidence bin; (5) study execution is now split into an
+> explicitly-accepted Phase B rather than dangling outside acceptance; (6) one canonical label schema is
+> declared and the pilot CSV is marked as a lossy legacy view; (7) sampling, uncertainty and the
+> false-negative threshold are precommitted.
 
-## Pilot findings (n=30: 10 stratified incl. all 4 Negative reads + 20 population-representative Positives)
+## Pilot findings (n=30) — pilot DESCRIPTIONS, not population estimates
 
-Protocol: each filing was labeled by a **blinded** `radar-skeptic-reviewer` agent (different model family
-from the DeepSeek reader, adversarial prompt) given ONLY company + CIK + accession + the release text —
-never the cached model answer. Batch 2 used pre-fetched local exhibits (see Harness), which cut agents from
-6–18 web calls to exactly 1 file read.
+The pilot deliberately oversampled (all 4 Negative reads in the corpus, the CASS control, a
+confidence-spread of Positives) and then added 20 population-representative Positives, so its rates
+describe the labeled set, not the population; the full study produces the population numbers. With that
+caveat:
 
-1. **Direction is never inverted, but 10% of directional reads should have been Mixed** (3/30, all
-   dirty-comparison prints read at face value: a one-time DTA write-off masquerading as deterioration, a
-   prior-year one-off inflating a growth base, an acquisition distorting every line). The reader's failure
-   mode is precisely characterized: it does not hallucinate direction; **it over-commits on
-   comparability-broken headlines.**
-2. **Confidence is systematically inflated**: reader mean 0.885 vs blinded-skeptic mean 0.762 (gap +0.124);
-   the reader was the more confident party in 26/30. The reader clusters at 0.85–0.95 regardless of print
-   quality; the skeptic grades 0.55–0.90. Notably the three disagreements sat at reader confidence
-   0.75–0.85, NOT 0.95 — its highest-confidence reads all agreed, so confidence is not *meaningless*, just
-   uncalibrated and compressed.
-3. **Clean YoY comparisons are the exception: 5/30 (17%).** Dirty comparisons are the population norm, not a
-   tail — validating spec 160's cap design and its expected high fire-rate.
-4. **A cmpscan-v2 marker gap is now evidenced: acquisitions.** Multiple filings' dominant comparability item
-   (HWKN ×2, DGII, AGYS, MMSI, STRL, PLUS) was acquisition/deconsolidation perimeter change — matched by NO
-   `cmpscan-v1` phrase. Candidate v2 markers with evidence behind them: `acquisition`, `pro forma`,
-   `deconsolidation`, `constant currency`/`organic` divergence language. (Do NOT change the table in this
-   spec — that is a `cmpscan-v2` slice; this spec produces the measurement it needs.)
-5. **Materiality is not encoded anywhere in Radar**: the skeptic graded low/moderate/high (e.g. ERII's
-   strength-8 Negative was graded *low* — a pre-communicated, seasonally-smallest-quarter timing effect),
-   while every AI read carries constant Strength 8. Confirms the review's "strength encodes event category,
-   not economic materiality."
+1. **Direction was never inverted; 3/30 directional reads should have been Mixed** — all three
+   dirty-comparison prints read at face value. The failure mode is precisely characterized: the reader does
+   not hallucinate direction; it over-commits on comparability-broken headlines.
+2. **Confidence ran hot and compressed**: reader mean 0.885 vs blinded-skeptic mean 0.762 (higher in
+   26/30), clustering at 0.85–0.95 regardless of print quality. The three disagreements sat at reader
+   confidence 0.75–0.85 — its 0.95s all agreed — so the ordering carries some signal; the scale does not.
+3. **Clean YoY comparisons were the exception: 5/30.**
+4. **An evidenced `cmpscan-v2` gap: acquisitions/perimeter changes** (HWKN ×2, DGII, AGYS, MMSI, STRL,
+   PLUS) — matched by no `cmpscan-v1` phrase. Candidate v2 markers now with evidence: `acquisition`,
+   `pro forma`, `deconsolidation`. (Not changed here — that is a cmpscan-v2 slice fed by this study.)
+5. **Materiality is unencoded**: skeptic graded low/moderate/high (ERII's strength-8 Negative graded *low*
+   — pre-communicated timing in a seasonally tiny quarter) while every AI read carries constant Strength 8.
 
-## What this spec builds
+**Pilot method caveats, recorded**: the first 10 labels were produced from wire/IR reproductions after SEC
+403'd the agents' fetcher (verbatim copies, but not the EDGAR bytes); the 20 batch-2 exhibits were
+pre-fetched with an ad-hoc tag-stripper, NOT the production normalizer — so pilot labels carry a small
+input-parity caveat the full study eliminates. Neither affects the committed numbers' arithmetic; both are
+why the harness below exists.
 
-### 1. Harness scripts (`scripts/calibration-audit/`) — PowerShell, no .NET changes
+## What this spec builds — Phase A (dispatchable via run-next)
 
-- **`build-worksheet.ps1`**: joins `data/filings-cache/*.json` to `data/companies.json` (feed-name → CIK,
-  read both as UTF-8 — an ANSI read silently breaks the em-dash join; learned in the pilot) producing
-  `worksheet.csv`: accession, outcome, company, ticker, CIK, observedAt, model direction/confidence/reason
-  (the SEALED columns). For `NoDirectionalSignal` records (no `companyMention`), recover the CIK by grepping
-  the accession in `data/evidence/raw/filings/**` (the index `SourceUrl` carries it) — records whose CIK
-  cannot be recovered are listed, not silently dropped.
-- **`fetch-exhibits.ps1`**: for each worksheet row, fetch `index.json` from
-  `www.sec.gov/Archives/edgar/data/{cik}/{accession-nodashes}/`, pick the EX-99.1 (`ex.?99|99d1|991` on
-  `.htm`, with a **manual-override column** for the non-standard names the pilot hit — `fy25q3pressrelease.htm`,
-  `exhibit99_1-*.htm`, `imax-*epr.htm`), fetch it, strip tags, write `exhibits/{ticker}-{accession}.txt`.
-  **Paced ~2.5 req/s sequential, UA from `RADAR_SEC_UA`** (fail loudly if unset). Re-runnable: skips files
-  that already exist and are >3,000 chars; a shorter file is refetched (the pilot caught a transient
-  "SEC.gov maintenance" interstitial saved as a 674-char exhibit — size is the tripwire).
-- **`analyze-labels.ps1`**: joins labels to sealed answers and emits the findings tables: direction
-  confusion matrix (reader × skeptic, per class), reliability bins (reader confidence bucket → agreement
-  rate), clean-rate, materiality × constant-strength cross-tab, and the adjudication queue (all
-  disagreements + any label whose notes flag identification doubt).
+### 1. `Radar.CalibrationAudit` — a small read-only console, `Radar.ChannelFeasibilityAudit` pattern
 
-### 2. The labeling protocol (documented in the spec + script headers; executed by agents, not by run-next)
+Reuse over copy is the point of building this in .NET rather than PowerShell — three production seams the
+draft harness had reimplemented (wrongly) are consumed directly:
 
-- **Blinding is structural**: the labeling agent receives ONLY company, CIK, accession and the LOCAL
-  pre-fetched exhibit path; it is instructed to read no other local file (repo files contain the sealed
-  answers) and use no web. Local exhibits are the load-bearing fix: in the pilot's web round, SEC 403'd the
-  agents' fetcher and one agent had to *infer* which release an accession mapped to — an identification risk
-  the local file eliminates.
-- **Label schema (JSON per filing)**: `direction` (Improving/Deteriorating/Mixed/Unknown),
-  `directionConfidence` [0,1], `comparisonClean` (bool), `comparabilityItems` (name + amount each),
-  `material` (high/moderate/low), `keyFacts`. Same schema as the committed pilot rows.
-- **Second-opinion honesty rule, stated in the findings doc**: skeptic labels are an independent second AI
-  opinion, NOT ground truth. Agreement is evidence; disagreement is a queue for **human adjudication** (the
-  maintainer), and only adjudicated rows may be described as ground truth. REIT filings get the pilot's REIT
-  framing note (judge on FFO/AFFO, not GAAP) — without it a REIT label is systematically wrong.
-- **Concurrency cap: ≤5 labeling agents at a time.** The pilot's 20-at-once fan-out drew API-overload
-  failures (7/20 died on 529s and needed retries); batches of 4–5 completed cleanly in ~1 min each.
+- **Cohort**: resolve the cache through the real model-scoped path logic (`FileAnalyzedFilingCache`'s
+  scoping — the same `provider:model` identity the Worker config produces), pinning the exact scope segment
+  in the output. Legacy-root files are EXCLUDED and listed with a `legacy-scope` reason (including the two
+  outcome-conflicting accessions, named). Duplicate accessions inside the worksheet are an error, not a
+  dedupe.
+- **Exhibit text**: fetch through `ISecEarningsReleaseReader` (`HttpSecEarningsReleaseReader`) — the
+  production index-table parse, the production EX-99.1-preferred/largest-EX-99.* selection, the shared
+  normalizer — so the skeptic reads the SAME normalized text the DeepSeek reader judged, by construction.
+  Per exhibit, record: selected filename, exhibit type, URL, normalized-content hash, normalized length,
+  and the analyzer `MaxInputLength` in force (so input-truncation-explainable misreads are distinguishable
+  at adjudication). Requires `RADAR_SEC_UA`; paced by the existing `SecRequestPacer`; re-runnable
+  (skip-if-present keyed on content hash presence, refetch on the short-body tripwire).
+- **No-signal CIK recovery**: from `data/evidence/raw/filing/**` (singular), matching the accession in the
+  persisted index `SourceUrl`. Unrecoverable accessions are listed, never silently dropped.
 
-### 3. The full-cohort run and findings doc
+Outputs: `worksheet.csv` (sealed model columns clearly marked), `exhibits/{ticker}-{accession}.txt`,
+`exhibit-manifest.csv` (the parity record above).
 
-- Cohort: all remaining directional reads (149 − 30 already labeled = 119) **plus** a 30-filing sample of
-  the 154 `NoDirectionalSignal` records (false-negative check: did the reader miss genuinely directional
-  prints?). ~150 labels total, ≈50k tokens each.
-- Output: `docs/162-findings-filing-read-calibration.md` — the confusion matrix, the reliability curve
-  (stated per confidence bin with honest Ns), clean-rate, materiality distribution, the adjudicated
-  disagreement set, and a **decisions section** feeding: (a) whether/how to remap reader confidence
-  (a config magnitude → would move the AI-ON pins; its own slice), (b) the `cmpscan-v2` marker table,
-  (c) the structured-comparison-extraction requirements (which failure classes it must fix), and
-  (d) evidence-relative materiality (which denominators the labels show mattering).
-- The complete label set is committed beside it (`docs/162-calibration-labels-full.csv`), pilot rows
-  included, so the curve is recomputable.
+The console lives beside `src/Radar.ChannelFeasibilityAudit` with the same read-only discipline: nothing
+under the production projects changes; no store is written.
+
+### 2. `scripts/calibration-audit/analyze-labels.ps1`
+
+Joins `labels.jsonl` to the sealed worksheet and emits, with honest Ns:
+
+- **Inter-model agreement curve** — reader-confidence bins × skeptic agreement. **Named exactly that**:
+  two models agreeing is not evidence a 0.90 read was 90% correct.
+- **Calibration table (adjudicated rows only)** — reader-confidence bins × human-adjudicated correctness.
+  Empty bins render as "no adjudicated labels", never interpolated.
+- Clean-rate, comparability-item frequency (the cmpscan-v2 evidence table), materiality ×
+  constant-strength cross-tab, false-negative table for the no-signal sample, and the adjudication queue.
+- Wilson 95% intervals on every headline rate.
+
+### 3. Canonical label schema — ONE definition, and the pilot CSV's relationship to it stated
+
+`labels.jsonl`, one JSON object per filing:
+`{ accession, ticker, cik, batch, exhibitContentHash, label: { direction, directionConfidence,
+comparisonClean, comparabilityItems[], material, keyFacts[] }, adjudication: { status:
+pending|confirmed|overturned|n/a, adjudicatedDirection?, note? } }` — the sealed model answer is joined
+from the worksheet at analysis time, never stored in the label file (blinding survives the file format).
+
+`docs/162-calibration-pilot-labels.csv` is declared a **lossy legacy summary** of the pilot
+(schema `pilot-flat`): it preserves accession/direction/confidence/agreement/clean/materiality plus a
+one-line KeyItem, and drops the structured `comparabilityItems` amounts and `keyFacts` (preserved in the
+session transcript). Pilot rows join the study by accession; they are append-only and are NOT relabeled —
+except any pilot row later adjudicated, whose adjudication is recorded in `labels.jsonl` like every other.
+
+### 4. Protocol (documented in the spec + script headers)
+
+- **Blinding is structural**: labeling agents receive ONLY company, CIK, accession and the LOCAL exhibit
+  path; no other local file (repo files contain sealed answers), no web. REIT filings carry the REIT
+  framing note (judge on FFO/AFFO). ≤5 concurrent agents (the pilot's 20-at-once drew a 529 wave).
+- **Adjudication makes ground truth**; labels alone are a second AI opinion. The queue is: ALL
+  disagreements, ALL labels with identification/parity doubts, **and a deterministic stratified sample of
+  AGREEMENTS — 5 per reader-confidence bin** (bins ≤0.6, 0.7, 0.8, 0.9, ≥0.95; first 5 by ascending
+  accession in each bin) — because a calibration claim requires adjudicated rows in every bin, not just
+  where the models fought. Adjudication is the maintainer's; expected total ~25–35 rows.
+
+## Phase B — the study itself (executed in-session with agents after Phase A merges; NOT run-next work)
+
+Deterministic, precommitted:
+
+- **Directional cohort**: all 115 unlabeled active-scope directional reads (145 − 30), ordered by
+  accession, batches of ≤5.
+- **No-signal sample**: 30 of 153, selected as every 5th record of the accession-ordered list starting at
+  index 0 (deterministic, no RNG — AD-3 discipline). **Extension rule, precommitted**: if adjudication
+  confirms ≥1 genuinely-directional missed print, or the Wilson 95% upper bound on the miss rate exceeds
+  10%, extend by a further 30 (the next offset) before writing conclusions.
+- **Completion gate**: `docs/162-findings-filing-read-calibration.md` (findings + both curves + decisions
+  section feeding the confidence-remap / cmpscan-v2 / structured-extraction specs) and
+  `docs/162-calibration-labels-full.jsonl` committed; adjudication queue resolved by the maintainer.
+  **Until that commit lands, spec 162 is NOT done** — Phase A merging is scaffolding, not completion, and
+  the spec is promoted to `docs/` only with Phase B's artifacts.
 
 ## Constraints
 
-- **Read-side only.** No file under `src/` changes; no scoring behaviour, descriptor, fingerprint or store
-  is touched. The pins do not move.
-- SEC discipline: all EDGAR traffic goes through `fetch-exhibits.ps1` (paced, real UA, sequential); labeling
-  agents make zero SEC requests.
-- Labels never flow back into scoring by side door: the findings doc informs SPECS, not runtime values.
-- `docs/162-calibration-pilot-labels.csv` is append-only seed data — the full run appends, never rewrites.
+- Read-side only: no production project changes, no scoring behaviour, descriptor, fingerprint or store
+  touched. The pins do not move.
+- All EDGAR traffic goes through the console (paced, `RADAR_SEC_UA`, sequential); labeling agents make zero
+  SEC requests.
+- Labels never flow into runtime values by side door: findings inform SPECS.
+- `docs/162-calibration-pilot-labels.csv` is append-only.
 
 ## Out of scope, recorded not built
 
-- The confidence remap itself (needs the full curve first; fingerprint-moving; own spec).
-- `cmpscan-v2` (needs this measurement; own spec).
-- Structured financial-comparison extraction (the deep fix; own arc, requirements come from these findings).
-- Labeling the entire no-signal cohort (sampled at 30 here; extend only if the false-negative rate is
-  non-trivial).
+- The confidence remap (needs the adjudicated curve; fingerprint-moving; own spec).
+- `cmpscan-v2` (fed by the comparability-item frequency table; own spec).
+- Structured financial-comparison extraction (requirements come from these findings; own arc).
+- Labeling the entire no-signal cohort (sampled at 30 + the precommitted extension rule).
 
-## Acceptance criteria
+## Acceptance criteria — Phase A (the run-next PR)
 
-- [ ] Three harness scripts as specified, re-runnable, paced, UA-gated; worksheet covers directional AND
-      no-signal records with recovered CIKs (unrecoverable ones listed).
-- [ ] Protocol documented (blinding, schema, second-opinion honesty rule, REIT note, ≤5 concurrency).
-- [ ] Pilot labels committed at `docs/162-calibration-pilot-labels.csv` (already done pre-spec; verify).
-- [ ] Findings doc skeleton created with the pilot's five findings as its opening section.
-- [ ] No change under `src/`; `dotnet build` / `dotnet test` untouched and green.
+- [ ] `Radar.CalibrationAudit` console: model-scoped cohort (scope segment pinned; legacy root excluded and
+      listed; the two outcome-conflicting accessions named), production reader/normalizer reuse, exhibit
+      manifest with filename/type/URL/content-hash/length/MaxInputLength, singular `raw/filing` CIK
+      recovery with unrecoverables listed.
+- [ ] `analyze-labels.ps1` emitting the inter-model agreement curve (named as such), the
+      adjudicated-calibration table, Wilson intervals, and the queue including the per-bin agreement
+      sample.
+- [ ] Canonical `labels.jsonl` schema documented; pilot CSV declared lossy-legacy with the exact dropped
+      fields named.
+- [ ] Protocol section verbatim in the findings-doc skeleton (blinding, ≤5 concurrency, REIT note,
+      adjudication-makes-ground-truth).
+- [ ] `dotnet build Radar.sln -c Release` / `dotnet test Radar.sln -c Release --no-build` green; nothing
+      under existing production projects changed.
+
+## Acceptance criteria — Phase B (the study; blocks promotion of this spec to docs/)
+
+- [ ] 115 directional + 30 no-signal labels produced under the protocol, committed as
+      `docs/162-calibration-labels-full.jsonl`.
+- [ ] Adjudication queue (disagreements + doubts + per-bin agreement sample) resolved by the maintainer and
+      recorded in the JSONL.
+- [ ] `docs/162-findings-filing-read-calibration.md` committed with both curves (honest Ns, Wilson
+      intervals), the false-negative table with the precommitted threshold applied, and the decisions
+      section.
