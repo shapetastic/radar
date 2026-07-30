@@ -40,13 +40,17 @@ public sealed record ExhibitManifestRow(
 /// <see cref="ModelInputTruncation"/>), recording both SHA-256 hashes, lengths, the truncated flag and the
 /// MaxInputLength in force in <c>exhibit-manifest.csv</c>.
 /// <para>
-/// RE-RUNNABLE: an accession whose manifest row already carries a full-text hash, whose exhibit files both
-/// exist, and whose STORED full-text file's trimmed body is not suspiciously short is SKIPPED (no SEC
-/// request). The short-body tripwire is
+/// RE-RUNNABLE, VERIFIED (spec 163): an accession is SKIPPED (no SEC request) only when its manifest row
+/// is successful, both exhibit files exist, the STORED full-text file's trimmed body is not suspiciously
+/// short, the stored files' SHA-256 hashes match the manifest's recorded hashes, the stored model-input
+/// length matches, and the manifest row's recorded <c>MaxInputLength</c> equals the cap in force this run
+/// — existence alone is not trusted, so a corrupted stored file or a rerun under a different input cap
+/// refetches instead of silently preserving a wrong study input. The short-body tripwire is
 /// <see cref="ShortBodyTripwireLength"/> = 200 trimmed characters — the same "a real earnings release is
 /// never a few bytes" threshold the production <c>DirectionalFilingSignalSource.MinPlausibleBodyLength</c>
 /// applies (spec 114; that const is private, so the VALUE is restated here and documented rather than
-/// referenced). A tripwired or failed row is refetched on the next run.
+/// referenced). A tripwired or failed row is refetched on the next run; a below-tripwire FETCH is itself a
+/// typed failure (<c>failed:short-body</c>) with empty hashes, never a warned success.
 /// </para>
 /// </summary>
 internal sealed class ExhibitArchiver
@@ -146,11 +150,22 @@ internal sealed class ExhibitArchiver
     }
 
     /// <summary>
-    /// True when the accession needs (re)fetching: no successful manifest row, a missing exhibit file, or a
-    /// suspiciously short stored body (the tripwire).
+    /// True when the accession needs (re)fetching: no successful manifest row, a missing exhibit file, a
+    /// suspiciously short stored body (the tripwire), a stored file whose SHA-256 no longer matches the
+    /// manifest's recorded hash, a stored model input whose character length differs from the recorded
+    /// value, or a manifest row recorded under a different <c>MaxInputLength</c> than
+    /// <paramref name="currentMaxInputLength"/> (spec 163 — stored artifacts are VERIFIED against the
+    /// manifest, never trusted on existence). The stored-file hashes are computed over the files' RAW
+    /// BYTES: <see cref="FetchAsync"/> records <c>SHA-256(UTF-8(text))</c> and writes with
+    /// <see cref="File.WriteAllTextAsync(string, string?, CancellationToken)"/> (UTF-8, no BOM), so raw
+    /// bytes reproduce the recorded hash exactly and an untouched valid row stays a no-op skip.
     /// </summary>
     public static bool NeedsFetch(
-        ExhibitManifestRow? existing, string fullPath, string modelInputPath, out string reason)
+        ExhibitManifestRow? existing,
+        string fullPath,
+        string modelInputPath,
+        int currentMaxInputLength,
+        out string reason)
     {
         if (existing is null || !existing.IsSuccess || string.IsNullOrEmpty(existing.FullTextSha256))
         {
@@ -171,6 +186,35 @@ internal sealed class ExhibitArchiver
         if (storedTrimmedLength < ShortBodyTripwireLength)
         {
             reason = $"stored body suspiciously short ({storedTrimmedLength} < {ShortBodyTripwireLength} trimmed chars tripwire)";
+            return true;
+        }
+
+        // Verify the stored artifacts against the manifest (raw-byte hashes — see the XML doc above).
+        var storedFullSha = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(fullPath)));
+        if (!string.Equals(storedFullSha, existing.FullTextSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = $"stored full-text hash {storedFullSha} != manifest fullTextSha256 {existing.FullTextSha256}";
+            return true;
+        }
+
+        var storedModelInputSha = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(modelInputPath)));
+        if (!string.Equals(storedModelInputSha, existing.ModelInputSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = $"stored model-input hash {storedModelInputSha} != manifest modelInputSha256 {existing.ModelInputSha256}";
+            return true;
+        }
+
+        // The manifest records the model input's CHAR count (string length), not its byte count.
+        var storedModelInputLength = File.ReadAllText(modelInputPath).Length;
+        if (storedModelInputLength != existing.ModelInputLength)
+        {
+            reason = $"stored model-input length {storedModelInputLength} != manifest modelInputLength {existing.ModelInputLength}";
+            return true;
+        }
+
+        if (existing.MaxInputLength != currentMaxInputLength)
+        {
+            reason = $"manifest maxInputLength {existing.MaxInputLength} != current --max-input-length {currentMaxInputLength} (the stored model input reproduces a different cap)";
             return true;
         }
 
@@ -222,13 +266,26 @@ internal sealed class ExhibitArchiver
         await File.WriteAllTextAsync(fullPath, fullText, ct).ConfigureAwait(false);
         await File.WriteAllTextAsync(modelInputPath, modelInput, ct).ConfigureAwait(false);
 
+        // Spec 163: a below-tripwire body is a typed FAILURE, not a warned success — Phase B must never
+        // consume a degenerate fetch (block page / empty shell). The two files stay on disk as evidence of
+        // what came back; the row carries EMPTY hashes so NeedsFetch refetches it next run (the existing
+        // failure semantics), and it counts in the console's failed tally / nonzero exit like any failure.
         var trimmedLength = fullText.AsSpan().Trim().Length;
         if (trimmedLength < ShortBodyTripwireLength)
         {
             _logger.LogWarning(
                 "Exhibit body for {Accession} is suspiciously short ({Length} trimmed chars < {Tripwire}); "
-                    + "recorded, but it will be refetched on the next run.",
+                    + "recorded as typed failure 'failed:short-body' (files kept as evidence; refetched next run).",
                 accession, trimmedLength, ShortBodyTripwireLength);
+            return new ExhibitManifestRow(
+                accession, ticker, cik,
+                read.DocumentFileName ?? string.Empty,
+                read.DocumentType ?? string.Empty,
+                exhibitUrl,
+                FullTextSha256: string.Empty, fullText.Length,
+                ModelInputSha256: string.Empty, modelInput.Length,
+                truncated, MaxInputLength: _maxInputLength,
+                Outcome: "failed:short-body", FetchedAtUtc: fetchedAt);
         }
 
         return new ExhibitManifestRow(

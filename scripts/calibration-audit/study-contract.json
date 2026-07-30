@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Spec 163 - the PINNED study contract for the spec-162 calibration study (protocol cal-v2).",
+    "analyze-labels.ps1 loads this file from its own directory (never a CLI parameter): a precommitted",
+    "protocol value an operator could override is a protocol violation an operator could make validate.",
+    "promptTemplateSha256 is the SHA-256 of scripts/calibration-audit/labeling-prompt.md under the",
+    "canonicalization named by hashCanonicalization: decode the file's bytes as UTF-8, replace every",
+    "CRLF (\\r\\n) with LF (\\n), re-encode as UTF-8, hash those bytes. The repo has core.autocrlf",
+    "checkouts, so the on-disk template is CRLF on Windows and LF on CI - the LF-normalized hash is the",
+    "one value both agree on, and every Phase-B label's protocol.promptHash must record it.",
+    "Changing the labeler or materially editing the template mid-study is a protocol-version bump",
+    "(cal-v2 -> cal-v3) that RESTARTS the affected labels - update this contract in the same change."
+  ],
+  "protocolVersion": "cal-v2",
+  "labeler": { "provider": "anthropic", "model": "claude-fable-5" },
+  "promptTemplateSha256": "3745cc4a2c63476fb355a39e14ec53b163a75e2c6b278bfbcccd806e1f18a286",
+  "hashCanonicalization": "utf8-crlf-to-lf"
+}
