@@ -1,11 +1,26 @@
 # Findings: AI filing-read calibration audit (spec 162)
 
-**Status: Phase B COMPLETE (2026-07-31).** The full study ran under protocol `cal-v2`: 145 directional
-labels (30 pilot relabels + 115 new), 90 no-signal labels (precommitted 60 + the one-shot extension,
-which TRIGGERED), and a 77-row adjudication queue resolved through the two-step blinded flow. The full
-label set is committed at `docs/162-calibration-labels-full.jsonl`; the analyzer's final-mode report
-(validated against the pinned study contract — exit 0, all provenance checks green) is reproducible via
-`scripts/calibration-audit/analyze-labels.ps1` from that file plus the sealed worksheet.
+**Status: Phase B COMPLETE (2026-07-31).** The study ran in full under protocol `cal-v2`: 145
+directional labels (30 pilot relabels + 115 new), 90 no-signal labels (precommitted 60 + the one-shot
+extension, which TRIGGERED), and a 77-row adjudication queue processed through the two-step blinded
+flow. The full label set is committed at `docs/162-calibration-labels-full.jsonl`; the analyzer's
+final-mode run (exit 0, all provenance checks green against the pinned study contract) reproduces from
+committed artifacts alone — see the reproduce line at the end.
+
+**What "adjudicated" means in this document — read this before the rates.** The queue was processed by
+`claude-fable-5` agents under the two-step blinded flow (blindCall persisted from the exhibit text
+alone, then unblinding both model answers), and **the maintainer reviewed and RATIFIED these verdicts
+on 2026-07-31, explicitly waiving per-row human adjudication** — that ratification is the "adjudication
+queue resolved by the maintainer" the completion gate requires, and any row can still be individually
+overridden from the JSONL without re-running the study. Two independence facts, stated precisely: the
+adjudicator IS a different model family from the DeepSeek reader under test (so the calibration rates
+are not the reader grading itself), but the adjudicator is the SAME family as the second reader — so
+where the two readers disagree, a verdict is Fable agreeing with Fable's label more often than an
+independent referee might. The residual caveat: adjudicated rates here are ratified same-family
+verdicts, not independent human ground truth. Mitigation, for what it is worth: the blind step is
+persisted per row, verdicts cite reported numbers, and in the 9-row directional error-diagnosis set the
+adjudicator sided WITH the DeepSeek reader against the Fable second reader 3 times — the verdicts are
+not a rubber stamp of either reader.
 
 Read-side only: no scoring change, no fingerprint input, no pin move. Labels never flow into runtime
 values by side door — these findings inform SPECS (the confidence remap, `cmpscan-v2`, structured
@@ -19,15 +34,11 @@ study contract's pin); every label's `modelInputHash` verified against the exhib
 was structural throughout: labelers received only company/CIK/accession/model-input path, ≤5 concurrent,
 zero SEC requests.
 
-**Recorded protocol deviation (stated, not hidden):** adjudication was executed by
-`anthropic:claude-fable-5` agents under the two-step blinded flow (blindCall recorded from the exhibit
-text alone, then unblinding both model answers), i.e. the same model family as the second reader rather
-than a human. The maintainer resolves the queue by ratifying or overriding these verdicts (the
-`blindCall` + `finalDirection` + note for every row is in the committed JSONL, so any row can be
-re-adjudicated without re-running the study). Mitigation: the blind step is persisted, verdicts cite
-reported numbers, and in 5 of the 9 directional error-diagnosis adjudications the adjudicator's blind
-call MATCHED the model against the second reader or vice versa — the verdicts are not a rubber stamp of
-either reader.
+**Recorded protocol deviation and its resolution:** the spec's protocol language says "adjudication
+makes ground truth" with maintainer resolution of the queue. Adjudication was executed by agents (see
+the "what adjudicated means" paragraph above) and the maintainer resolved the queue by RATIFICATION on
+2026-07-31 rather than per-row human verdicts. Where this document says "adjudicated" or "confirmed",
+read "agent-adjudicated under the two-step blinded flow, ratified in bulk by the maintainer".
 
 ---
 
@@ -108,9 +119,10 @@ confidence — the pilot's "ordering carries signal" finding holds on the full c
 
 ## Calibration table (calibration probability sample only)
 
-Human-adjudicated correctness over the 33 derived `calibration-sample` rows exclusively (min(10, bin
-size) per bin, hash-ordered, agreement-blind). A row is correct iff `finalDirection` equals the sealed
-model direction. Disagreement-queued adjudications are never pooled here.
+Adjudicated correctness (ratified agent verdicts — see the status section) over the 33 derived
+`calibration-sample` rows exclusively (min(10, bin size) per bin, hash-ordered, agreement-blind). A row
+is correct iff `finalDirection` equals the sealed model direction. Disagreement-queued adjudications
+are never pooled here.
 
 | reader-confidence bin | adjudicated n | model correct | accuracy (Wilson 95%) |
 | --- | --- | --- | --- |
@@ -121,12 +133,15 @@ model direction. Disagreement-queued adjudications are never pooled here.
 | [0.90,0.95) | 10 | 9 | 9/10 = 90.0% (59.6%–98.2%) |
 | [0.95,1.00] | 10 | 10 | 10/10 = 100.0% (72.2%–100.0%) |
 
-**Reading (honest Ns: the sub-0.90 bins are small, and the [0.80,0.90) estimate is the load-bearing
-one):**
+**Reading (honest Ns: every bin holds ≤10 adjudicated rows, so the intervals are wide and the
+[0.80,0.90) estimate is the load-bearing one):**
 
-1. **The scale runs hot below 0.90 and is honest above it.** A 0.80–0.89 self-reported confidence was
-   right half the time (5/10) — a coin flip — while 0.90–0.95 delivered 90% and 0.95+ went 10/10.
-   The reader's ORDERING is real; its absolute values below 0.90 are not.
+1. **The scale runs hot below 0.90; observed accuracy was higher above 0.90 in this small sample.** A
+   0.80–0.89 self-reported confidence was right half the time (5/10, interval 23.7–76.3%) — consistent
+   with a coin flip — while 0.90–0.95 delivered 9/10 (59.6–98.2%) and 0.95+ went 10/10 (72.2–100%).
+   Ten observations per bin cannot certify the upper bins as calibrated (the 0.95 bin's lower bound is
+   72%); what they DO support is the ordering — accuracy rises with stated confidence — and that the
+   sub-0.90 mass is unreliable.
 2. **Every one of the 8 sample errors degraded to Mixed or Neutral — zero inversions.** No adjudicated
    row anywhere in the study found the model reading Positive where the truth was Negative or vice
    versa. The failure mode is over-commitment on materially two-sided or comparability-broken prints,
@@ -151,20 +166,23 @@ in rows 1–60; Wilson upper 47.6% vs the 10% threshold — and the ≥1-confirm
 Per the one-shot rule the next 30 were labeled and the final result is reported at N=90; rows 61–90
 never entered the trigger.
 
-**Confirmed misses: 33/90 = 36.7% (Wilson 95%: 27.4%–47.0%).** Every miss is a human-adjudicated
-`finalDirection` of Positive (22) or Negative (11) on a filing the production reader analyzed and
-produced NO directional signal from. Labeled materiality of the missed prints: 13 high, 20 moderate,
-0 low. The full 33-row table (accession, ticker, blinded label, finalDirection, materiality, hash-order
-position) is in the analyzer report; representative misses: CAT's −21% adjusted-EPS quarter (twice —
-both 2025 CAT prints in the sample were missed), AEHR's +33%-revenue swing-to-profit with 160–200%
-growth guidance, CALM's −73% FY EPS collapse, IMAX's +48% EBITDA quarter, and MRCY's record-bookings
-quarter (book-to-bill 1.48).
+**Confirmed misses: 33/90 = 36.7% (Wilson 95%: 27.4%–47.0%).** This is the **false-omission rate** —
+P(genuinely directional | reader emitted no signal) — NOT a false-negative rate over all directional
+prints. Every miss is an adjudicated (ratified, see above) `finalDirection` of Positive (22) or
+Negative (11) on a filing the production reader analyzed and produced NO directional signal from.
+Labeled materiality of the missed prints: 13 high, 20 moderate, 0 low. The full 33-row table
+(accession, ticker, blinded label, finalDirection, materiality, hash-order position) is in the analyzer
+report; representative misses: CAT's −21% adjusted-EPS quarter (twice — both 2025 CAT prints in the
+sample were missed), AEHR's +33%-revenue swing-to-profit with 160–200% growth guidance, CALM's −73% FY
+EPS collapse, IMAX's +48% EBITDA quarter, and MRCY's record-bookings quarter (book-to-bill 1.48).
 
-**This is the study's biggest finding.** The false-negative rate is roughly 4× the directional error
-rate at the reader's median confidence: the production reader's precision on what it DOES emit is
-decent (and its ≥0.95 reads are excellent), but its RECALL is poor — for every ~4 directional signals
-it produces, it silently discards ~3 genuinely-directional prints, a third of them high-materiality.
-The no-signal outcome cannot be read as "nothing here"; it is closer to a coin-weighted "maybe".
+**This is the study's biggest finding, and here is the arithmetic done properly.** Extrapolating the
+36.7% false-omission rate to all 153 no-signal filings implies ≈ 56 missed directional prints (Wilson
+interval: 42–72). Against the 145 directional signals the reader DID produce, that is ≈ 1.5 missed
+prints per 4 produced — and implied recall is at most **145 / (145 + 56) ≈ 72%** (interval ≈ 67–78%),
+"at most" because it credits every produced signal as correct, which the calibration table shows is
+generous below 0.90 confidence. Recall, not precision, is the reader's weak axis, and a third of the
+missed prints are high-materiality. The no-signal outcome cannot be read as "nothing here".
 
 ## Input-path stability table (pilot vs canonical-input relabel)
 
@@ -180,8 +198,12 @@ the model actually read.
 
 Clean YoY comparison rate over the 145 directional labels: **38/145 = 26.2% (Wilson 95%:
 19.7%–33.9%)** — the pilot's 5/30 was not an artifact; roughly three of four directional prints carry
-at least one comparability-breaking item (127/145 carry ≥1). Categorized frequency (a filing counts
-once per category; full per-item strings with amounts are in the JSONL and analyzer report):
+at least one comparability-breaking item (127/145 carry ≥1). **The categorized table below is
+REGEX-CODED EXPLORATORY ANALYSIS, not analyzer output**: the analyzer counts exact free-text items; the
+categories are assigned by the committed taxonomy in
+`scripts/calibration-audit/categorize-comparability.ps1`, and the full per-item mapping is committed at
+`docs/162-comparability-item-mapping.csv` (497 items coded; 230 items across 106 filings match no
+category — the taxonomy covers the big clusters, not the long tail). A filing counts once per category:
 
 | category | filings (of 145) |
 | --- | --- |
@@ -212,8 +234,11 @@ independently:
 | high | 60 |
 
 Materiality varies over the full low/moderate/high range while the encoded strength never moves — and
-13 of the 33 MISSED prints were high-materiality. Constant strength encodes no information; the
-signal-strength channel is available and unused.
+13 of the 33 MISSED prints were graded high-materiality. What this establishes: constant Strength 8
+encodes no information (supported). What it does NOT establish: that the labeled materiality grades are
+RELIABLE — each grade is a single second-reader label, materiality was not part of the adjudication
+call, and no inter-rater measurement exists for it. Any spec that encodes materiality needs its own
+validation first.
 
 ## Decisions
 
@@ -228,20 +253,35 @@ Findings inform SPECS; the maintainer decides. What this evidence supports:
 2. **`cmpscan-v2` (own spec, fed by the frequency table).** Add the acquisitions/perimeter cluster
    first (79/145), then discrete-tax (32/145). The 6 Positive→Mixed adjudicated overturns all sat on
    prints these phrases would have flagged.
-3. **The false-negative rate needs its own spec, and it is the priority.** 36.7% (27.4%–47.0%) of
-   no-signal filings were genuinely-directional, a third high-materiality, including repeat misses on
-   the same companies (CAT ×2, CYRX ×3, SHOO ×2, FLO ×2, LBRT ×2, MRCY ×2, BELFB ×2). Candidate
-   directions for the spec: a second-pass read of no-signal filings, prompt changes that force an
-   explicit direction-with-confidence instead of allowing silent no-signal, or a cheaper
-   recall-oriented pre-screen. Until then, no-signal outcomes must not be treated as evidence of
-   absence anywhere downstream.
-4. **Encode materiality (feeds the structured-extraction arc).** Constant Strength 8 wastes a real
-   channel; the labelers graded materiality reliably from the same text.
+3. **The false-omission rate needs its own spec, and it is the priority.** 36.7% (27.4%–47.0%) of
+   sampled no-signal filings were genuinely-directional (implied recall at most ≈ 72%), a third of the
+   misses high-materiality, including repeat misses on the same companies (CAT ×2, CYRX ×3, SHOO ×2,
+   FLO ×2, LBRT ×2, MRCY ×2, BELFB ×2). Candidate directions for the spec: a second-pass read of
+   no-signal filings, prompt changes that force an explicit direction-with-confidence instead of
+   allowing silent no-signal, or a cheaper recall-oriented pre-screen. Until then, no-signal outcomes
+   must not be treated as evidence of absence anywhere downstream.
+4. **Encode materiality (feeds the structured-extraction arc) — after validating the grades.** Constant
+   Strength 8 wastes a real channel, but the study measured only that materiality labels VARY, not that
+   they are reliable (single-rater, never adjudicated); the encoding spec must include an inter-rater
+   or adjudication pass for materiality itself.
 5. **Input parity is load-bearing (already enforced by specs 162/163 harness).** 13% direction /
    27% clean label drift from input provenance alone: never label from non-canonical text again.
 
 ---
 
-*Reproduce: `powershell -File scripts/calibration-audit/analyze-labels.ps1 -LabelsPath
-docs/162-calibration-labels-full.jsonl -WorksheetPath data/calibration-audit/worksheet.csv` (final
-mode; exits 0 with all provenance checks green as of 2026-07-31).*
+*Reproduce from a clean checkout (all inputs committed):*
+
+```
+powershell -File scripts/calibration-audit/analyze-labels.ps1 `
+  -LabelsPath docs/162-calibration-labels-full.jsonl `
+  -WorksheetPath docs/162-study-worksheet.csv `
+  -ManifestPath docs/162-exhibit-manifest.csv
+```
+
+*(Final mode; exits 0 with all provenance checks green as of 2026-07-31.
+`docs/162-study-worksheet.csv` is the sealed worksheet with ONLY the `cacheFile` column made
+repo-relative — every other field is byte-identical to the sealed original, whose sha256 is
+`6f248c36aaa308484af07a5970fd93945f5434360fce5a4be93cb48e04917f12`; the sealed model answers the
+agreement/calibration tables join against are its `direction`/`confidence`/`outcome` columns.
+`docs/162-exhibit-manifest.csv` is the exhibit manifest verbatim. The category table reproduces via
+`scripts/calibration-audit/categorize-comparability.ps1` with the same two inputs.)*
