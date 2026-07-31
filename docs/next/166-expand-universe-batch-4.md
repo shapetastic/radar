@@ -19,11 +19,15 @@ potential") brushes the AD-16 attention outcome itself. Price action was still n
 holds), but "no price selection" is not "neutral". Consequences, recorded here so they bind:
 
 - The batch carries **no candidate/control bucket labels** — none would be honest.
-- Any efficacy/leaderboard analysis that segments by cohort must report this batch **separately** from the
-  spec-125/159 waves (wave membership is documented here and derivable from the seed-entry additions), and
-  pooled results that include it must carry an "includes an event-enriched cohort" note. The existing
-  wave-date gating in the efficacy join already keys entry dates; this paragraph is the provenance for WHY
-  this wave differs.
+- **AD-16 §7 is AMENDED (2026-07-31, committed with this spec) to exclude this cohort from the binding
+  primary screen** — separate reporting alone would not have changed §7's "same eligible companies at each
+  date" rule, so these eight names would otherwise have entered the screen as their outcomes accrued. The
+  exclusion is machine-readable at **`docs/cohorts/event-enriched-2026-07.json`** (the evaluator reads the
+  file, never git history; the minimum-20 eligibility count is taken AFTER the exclusion). The cohort may
+  appear only in a separately labelled exploratory rerun reported beside the primary result.
+- Any other efficacy/leaderboard analysis that segments by cohort must likewise report this batch
+  **separately** from the spec-125/159 waves, and pooled results that include it must carry an "includes an
+  event-enriched cohort" note.
 - Cross-sectional validation passing *because* of this cohort proves enrichment, not discrimination — the
   discrimination claim rests on the earlier neutral waves.
 
@@ -180,7 +184,8 @@ where verified above; all other collectors omitted. All 66 existing entries byte
 
 ## Expected operational consequences (record, don't fix)
 
-Per-run cost 660 → **740 scorings**; sources ~300 → ~325; temporary DeepInfra 8-K backlog over ~1–2 runs
+Per-run cost 660 → **740 scorings**; source feeds ≈ 302 active → **≈ 334 active** (8 × 4 SEC/newssearch
+feeds = 32, plus any RSS that passes verification; ≈ 355 total seeded); temporary DeepInfra 8-K backlog over ~1–2 runs
 (bounded by `Ai:MaxFilingsPerRun`); 1-year price backfill per new ticker on first run; first rankable
 observations ≈ 21 days after first snapshots (≈ **2026-08-21+** if merged promptly). If the spec-161
 filtered-collect affordance has merged, a `-Companies` collect pass can backfill the eight cheaply before
@@ -192,8 +197,9 @@ the next scheduled full run.
       grounding recorded in the PR body; all-three SEC feeds + `newssearch` tokens exactly as tabled; RSS
       only where the no-UA verification passed, with per-ticker verdicts recorded; filing cadence confirmed
       per name.
-- [ ] The event-enriched-cohort classification is preserved verbatim in this spec (it is the provenance
-      future efficacy segmentation cites); no candidate/control labels anywhere.
+- [ ] The event-enriched-cohort classification is preserved verbatim in this spec; no candidate/control
+      labels anywhere; `docs/cohorts/event-enriched-2026-07.json` and the AD-16 §7 amendment (both already
+      committed) list exactly this batch's eight tickers — assert the seed additions match the cohort file.
 - [ ] Collision/regression tests extended (FR/CARS no-ticker, BKE phrase, JJSF pin untouched); universe
       tests at 74; all 66 existing entries byte-untouched; file valid JSON.
 - [ ] No fingerprint moves; `dotnet build Radar.sln -c Release` and

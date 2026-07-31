@@ -41,11 +41,17 @@ Estimated time: ~1–2 hours code + one console run.
   shadow pass is a new mode, not a new project. It reads each archived **model-input** text (after verifying
   its SHA-256 + length against the manifest — spec-163 discipline; mismatch ⇒ fail naming the file, never
   read a tampered study input) and calls the model through the production plumbing.
-- **Production analyzer reuse via an internal seam, byte-identical by default.** `ChatFilingAnalyzer` (or
-  the narrowest seam the implementer verifies is equivalent — verify, don't assume) gains an internal
-  instruction-override hook whose default is the EXACT current prompt text, so production behaviour is
-  byte-identical when the hook is unused (asserted by test). The console composes it with the forced-choice
-  instruction. No copied prompt-assembly or response-parsing logic.
+- **Production analyzer reuse via an internal seam, byte-identical by default — and the shadow instruction
+  REPLACES the production one, never appends to it.** The production prompt explicitly permits and
+  instructs `Unknown` for ambiguous text; appending "no abstain" would send the model contradictory
+  instructions and measure the contradiction, not the prompt. `ChatFilingAnalyzer` (or the narrowest seam
+  the implementer verifies is equivalent — verify, don't assume) gains an internal instruction-override
+  hook whose default is the EXACT current prompt text, so production behaviour is byte-identical when the
+  hook is unused (asserted by test); when the console sets it, the committed shadow prompt is the COMPLETE
+  system instruction sent. **The recorded hash covers exactly the instruction bytes sent to the model** —
+  asserted by a test that the assembled instruction equals the committed `shadow-prompt.md` content under
+  the LF canonicalization, so the hash in each record is a hash of what actually ran. No copied
+  prompt-assembly or response-parsing logic.
 - **The forced-choice prompt is committed** at `scripts/calibration-audit/shadow-prompt.md` (version
   `cal-shadow-v1`), and every shadow record carries its LF-normalized SHA-256 (the spec-163 canonicalization)
   plus the model identity — same provenance discipline as the study labels. Content: same task framing as the
@@ -64,9 +70,11 @@ Estimated time: ~1–2 hours code + one console run.
   `Neutral` ↔ `Neutral`. No other equivalence is permitted (in particular, `Mixed` never counts as agreeing
   with a directional label in the STRICT recovery rate).
 - **Call/parse status is recorded per accession, separately from the result**: `ok` | `call-failed` |
-  `parse-failed` (with the error and the raw response when present). A failed row is retried once; a
-  still-failed row is EXCLUDED from every rate, listed by accession with its status, and counted in its own
-  summary line — an infrastructure failure must never be counted as a `Neutral` (or any other) read.
+  `parse-failed` (with the error and the raw response when present). An infrastructure failure must never
+  be counted as a `Neutral` (or any other) read. Failed rows are re-runnable (the skip rule skips only `ok`
+  records), and — see the decision block — **the precommitted decision is not evaluable until every LABELED
+  row has an `ok` record**: the frozen criteria are absolute counts over fixed denominators (33/57/145),
+  and excluding failures would silently change what 17/33 means or conceal instability behind missingness.
 - **Outputs land ONLY under `{output-root}/shadow/`** — one JSON per accession (accession, cohort, forced
   direction, confidence, model's brief rationale, raw response, prompt hash, model identity, timestamp) plus
   a `shadow-summary.csv`. Re-runnable: skip an accession whose shadow record already exists (a `--fresh` flag
@@ -97,19 +105,31 @@ spec 162's status section; filings cluster within tickers so intervals are somew
 4. **Precommitted decision block — the rule is FROZEN HERE, before any read runs.** The reviewer's point
    stands: an "acceptable" cost chosen after seeing the results is the tuning failure these specs exist to
    prevent. The rule:
-   - **Primary evaluation, at forced-confidence ≥ 0.80 exactly:** the forced-choice approach is SUPPORTED
-     iff ALL of — strict recovery ≥ 50% (≥ 17 of the 33 provisional misses recovered with the agreeing
-     direction), false-alarm rate ≤ 15% (≤ 9 of the 57 provisional non-misses read directional), ZERO
-     inversions on the directional cohort (a sealed Positive forced to Deteriorating or vice versa at
-     ≥ 0.80 disqualifies outright), and flips-to-nondirectional on the directional cohort ≤ 10% (≤ 15/145).
-   - **One-shot fallback (162's extension-rule pattern):** if the primary fails at 0.80, evaluate the SAME
-     four criteria once at ≥ 0.90. No further threshold shopping — the trigger is evaluated at most twice,
-     at these two precommitted points.
+   - **Completeness gate first**: the decision is evaluable ONLY when all 235 labeled rows (90 no-signal +
+     145 directional) have status `ok`. Otherwise the block emits
+     `SHADOW: INCONCLUSIVE (n rows unresolved: …accessions…)` and the remedy is to rerun the failures —
+     never to decide on a subset. The frozen criteria below are absolute counts over the FIXED denominators
+     33 / 57 / 145; excluding failures would silently redefine them or hide instability as missingness.
+     (The 63 unlabeled rows are outside the decision and may carry failures without blocking it.)
+   - **Threshold semantics, defined once (τ is the evaluation threshold):** a forced read counts as
+     DIRECTIONAL at τ iff its direction is `Improving` or `Deteriorating` AND its confidence ≥ τ; any other
+     result — `Mixed`, `Neutral`, or a directional read with confidence < τ — counts as NONDIRECTIONAL at
+     τ. On the no-signal cohort: strict recovery = directional-at-τ with direction agreeing with the
+     adjudicated `finalDirection`; false alarm = directional-at-τ on a provisional non-miss. On the
+     directional cohort: INVERSION = directional-at-τ with the direction OPPOSITE the sealed one
+     (below-threshold opposite reads are flips, not inversions); FLIP = any nondirectional-at-τ result on a
+     sealed-directional row.
+   - **Primary evaluation, at τ = 0.80 exactly:** the forced-choice approach is SUPPORTED iff ALL of —
+     strict recovery ≥ 50% (≥ 17 of 33), false alarms ≤ 15% (≤ 9 of 57, counting 9 as within the bound),
+     ZERO inversions (one disqualifies outright), and flips ≤ 10% (≤ 15 of 145, counting 15 as within).
+   - **One-shot fallback (162's extension-rule pattern):** if the primary fails at τ = 0.80, evaluate the
+     SAME four criteria once at τ = 0.90. No further threshold shopping — the rule is evaluated at most
+     twice, at these two precommitted points.
    - **Outcome is machine-readable**: `SHADOW: SUPPORTED (τ=0.80|0.90, …numbers…)` /
-     `SHADOW: NOT-SUPPORTED (…numbers at both τ…)`. SUPPORTED ⇒ the production recall spec may proceed
-     citing this rule; NOT-SUPPORTED ⇒ the misses need a different mechanism (second model / pre-screen —
-     their own specs). **Every other number in the report — the full threshold sweep included — is
-     DESCRIPTIVE ONLY and grounds no production recommendation.**
+     `SHADOW: NOT-SUPPORTED (…numbers at both τ…)` / `SHADOW: INCONCLUSIVE (…)`. SUPPORTED ⇒ the production
+     recall spec may proceed citing this rule; NOT-SUPPORTED ⇒ the misses need a different mechanism
+     (second model / pre-screen — their own specs). **Every other number in the report — the full threshold
+     sweep included — is DESCRIPTIVE ONLY and grounds no production recommendation.**
 
 ### 3. Findings doc — `docs/164-findings-shadow-no-signal-second-pass.md`
 
@@ -129,9 +149,14 @@ reference labels, ticker clustering.
   fixture labels (including: a miss recovered with the WRONG direction counts in the loose rate but not the
   strict one); unlabeled rows never enter any accuracy rate; re-run skip semantics.
 - Contract: a fixture response with direction `Neutral` round-trips as `Neutral` (never `Unknown`/0); an
-  unparseable response yields `parse-failed`, is excluded from every rate and listed; the vocabulary map is
-  applied exactly (shadow `Mixed` vs label `Positive` is NOT a strict recovery); the precommitted decision
-  block renders both SUPPORTED and NOT-SUPPORTED forms with their numbers from fixtures.
+  unparseable response yields `parse-failed` and is listed; the vocabulary map is applied exactly (shadow
+  `Mixed` vs label `Positive` is NOT a strict recovery); the assembled shadow instruction equals the
+  committed `shadow-prompt.md` bytes (LF-canonicalized) and its hash is what the records carry.
+- Decision block: a single failed labeled row ⇒ `SHADOW: INCONCLUSIVE` naming it (never a decision on a
+  subset); an unlabeled-row failure does NOT block the decision; threshold semantics fixtures — an
+  opposite-direction read at confidence < τ counts as a FLIP not an inversion, an opposite-direction read
+  at ≥ τ disqualifies, a directional read below τ is nondirectional-at-τ; all three outcome forms
+  (SUPPORTED / NOT-SUPPORTED / INCONCLUSIVE) render with their numbers from fixtures.
 
 ## Constraints
 

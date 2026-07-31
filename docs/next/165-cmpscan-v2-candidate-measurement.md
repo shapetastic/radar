@@ -32,7 +32,7 @@ fabricate false positives. First step of this task: give the generator a cohort 
 `-Cohort directional|all-labeled`, default `directional` so the spec-162 artifact reproduces byte-identical)
 and generate `docs/165-comparability-item-mapping-all235.csv` over ALL 235 labeled filings (no-signal labels
 carry `comparabilityItems` too). The spec-162 artifact and its 145-row numbers are NOT touched. All
-concept-reference metrics below use the 235-row mapping; the 63 never-labeled filings contribute hit rates
+concept-reference metrics below use the 235-filing reference; the 63 never-labeled filings contribute hit rates
 only.
 
 ## Assignment
@@ -63,9 +63,10 @@ StrictMode, fail loudly):
 - **Hash-verify every exhibit** against `docs/162-exhibit-manifest.csv` (`fullTextSha256`) before reading;
   mismatch ⇒ fail naming the file.
 - Per candidate, over ALL 298 filings: filings hit + hit rate. Over the 235 LABELED filings, against the
-  concept reference derived from the regenerated 235-row mapping (a filing "has the concept" iff any of its
-  items mapped to the candidate's target category): **precision, recall, F1 at the filing level**, with
-  Wilson intervals and honest Ns. Additionally, against the **ANY-BREAK reference** (a filing "has a break"
+  concept reference derived from the regenerated 235-filing mapping (the mapping stays one row per
+  comparability ITEM; the reference is per FILING — a filing "has the concept" iff any of its items mapped
+  to the candidate's target category): **precision, recall, F1 at the filing level**, with Wilson intervals
+  and honest Ns. Additionally, against the **ANY-BREAK reference** (a filing "has a break"
   iff its label records `comparisonClean = false`): precision only — a candidate whose hits routinely land
   on clean-labeled filings is noise regardless of concept.
 - **False positives and false negatives are LISTED, not just counted** (accession + the matched line's
@@ -89,7 +90,7 @@ Committed with: the per-candidate table (hit rate / precision / recall / F1 / an
 v1-overlap), the FP/FN example listings, and a decisions section applying the **precommitted promotion
 rule, frozen here before the run**: a primary (literal) candidate is RECOMMENDED for the production
 cmpscan-v2 spec iff **concept precision ≥ 0.80 AND concept recall ≥ 0.30 AND it fires on ≥ 5 labeled
-filings where v1 did not fire** (novel coverage — all three over the 235-row reference). Candidates failing
+filings where v1 did not fire** (novel coverage — all three over the 235-filing reference). Candidates failing
 the rule are NOT recommended, full stop; the findings may note a narrower exploratory variant as "re-measure
 in a future round", but no production recommendation may cite exploratory rows or post-hoc thresholds —
 every number outside the rule is descriptive. Standing caveats stated: the concept reference is derived

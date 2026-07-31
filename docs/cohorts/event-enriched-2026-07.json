@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "AD-16 amendment 2026-07-31 + spec 166: the batch-4 event-enriched exploratory cohort.",
+    "excludeFromPrimaryScreen: these companies NEVER enter the AD-16 section-7 binding primary screen's",
+    "eligible set (the minimum-20 count is taken AFTER this exclusion); they may appear only in a",
+    "separately labelled exploratory rerun reported beside the primary result. The evaluator reads THIS",
+    "file - git history is not an evaluator input. Membership is append-only for this cohort; a company",
+    "leaves it only via a new AD-16 amendment."
+  ],
+  "cohort": "event-enriched-2026-07",
+  "declaredBy": "spec 166 / AD-16 amendment 2026-07-31",
+  "excludeFromPrimaryScreen": true,
+  "companies": [
+    { "ticker": "PSTL", "cik": "0001759774" },
+    { "ticker": "FR", "cik": "0000921825" },
+    { "ticker": "CCOI", "cik": "0001158324" },
+    { "ticker": "ATNI", "cik": "0000879585" },
+    { "ticker": "CARS", "cik": "0001683606" },
+    { "ticker": "MHO", "cik": "0000799292" },
+    { "ticker": "THRM", "cik": "0000903129" },
+    { "ticker": "BKE", "cik": "0000885245" }
+  ]
+}

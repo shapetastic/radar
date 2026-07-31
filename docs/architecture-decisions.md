@@ -1469,3 +1469,26 @@ precommitment-integrity act and must be written down before the data exists, whi
 of doubt, this amendment does **not** correct any accrued signal: the CASS 0.90 read that motivated spec 160
 stands untouched (heal forward, specs 142/145) and ages out of the 60-day window naturally after as-of
 ≈ 2026-09-21.
+
+### AMENDMENT · 2026-07-31 — §7's eligible set excludes the spec-166 event-enriched cohort
+
+Universe batch 4 (spec 166, eight companies) is an **event-enriched exploratory cohort**: several names were
+proposed partly because of known 2026 events — current manifestations of the very predictor Radar scores,
+in one case brushing the attention outcome itself. §7 pairs "exactly the same eligible companies at each
+as-of date", so without this amendment those names would enter the binding primary screen as they accrue
+usable forward outcomes, and a screen that clears *because* of them would prove enrichment, not
+discrimination. Reporting the cohort separately (spec 166's own text) does not change §7; this amendment
+does.
+
+**§7 is amended as follows.** The eligible company set at every as-of date **excludes** the members of any
+cohort declared `"excludeFromPrimaryScreen": true` in a committed cohort file under `docs/cohorts/`. The
+first such file is **`docs/cohorts/event-enriched-2026-07.json`** (machine-readable — the evaluator reads
+the file, never git history), listing the eight spec-166 tickers with their CIKs. These companies may
+appear **only** in a separately labelled exploratory rerun of the same statistic, reported beside — never
+pooled into — the primary result. Everything else in §7 (minimum-20 rule, metric, comparators, degeneracy
+rule, MISS semantics) is unchanged; the minimum-20 count is taken **after** the exclusion.
+
+Amended **before any batch-4 company holds a single snapshot or forward outcome** — the cohort exists only
+as a pending spec — so the precommitment is intact. Future universe additions must either satisfy neutral
+selection (sector fill + filing cadence, price and events unconsulted — the spec-125/159 standard) or ship
+with their own `docs/cohorts/` exclusion file in the same PR that seeds them.
