@@ -22,8 +22,18 @@ stock-compensation lines). Measure, then decide.
 Inputs all exist and are hash-pinned: 298 archived **full** normalized exhibit texts
 (`data/calibration-audit/exhibits-full/`, verified against `docs/162-exhibit-manifest.csv` —
 `cmpscan-v1` scans the full body, so candidates are measured on the full text, not the truncated model
-input), the committed per-item concept mapping (`docs/162-comparability-item-mapping.csv`), and the labels
-(`docs/162-calibration-labels-full.jsonl`, 235 labeled filings).
+input) and the labels (`docs/162-calibration-labels-full.jsonl`, 235 labeled filings).
+
+⚠ **The committed concept mapping does NOT cover the reference population — regenerate it first.**
+`docs/162-comparability-item-mapping.csv` holds ONLY the 145 production-directional filings
+(`categorize-comparability.ps1` filters `outcome -eq 'DirectionalSignalProduced'`); using it as the
+reference over all 235 labeled filings would silently treat every no-signal filing as concept-negative and
+fabricate false positives. First step of this task: give the generator a cohort switch (e.g.
+`-Cohort directional|all-labeled`, default `directional` so the spec-162 artifact reproduces byte-identical)
+and generate `docs/165-comparability-item-mapping-all235.csv` over ALL 235 labeled filings (no-signal labels
+carry `comparabilityItems` too). The spec-162 artifact and its 145-row numbers are NOT touched. All
+concept-reference metrics below use the 235-row mapping; the 63 never-labeled filings contribute hit rates
+only.
 
 ## Assignment
 
@@ -39,36 +49,52 @@ Estimated time: ~1–2 hours.
 Deterministic PowerShell 5.1-compatible script (the `analyze-labels.ps1` conventions: byte-level UTF-8 reads,
 StrictMode, fail loudly):
 
-- **The candidate table is committed IN the script** (one place to edit and re-run): each row = candidate id,
-  regex, target concept (`acquisition-divestiture-perimeter` | `discrete-tax`), and a one-line rationale.
-  Seed set: the nine phrases above, plus near-variants worth testing side-by-side (e.g. `acquisition of` vs
-  `acquisition`, `same.store` with both hyphen forms, `completed acquisition|recent acquisition`). Matching
-  is case-insensitive over the full normalized exhibit text.
+- **The candidate list is FROZEN in this spec, with production semantics, before any measurement runs**
+  (the reviewer's precommitment point — a list edited after seeing results is tuning). The PRIMARY rows are
+  **literal case-insensitive substring matches** — `cmpscan-v1`'s own matching semantics, so a promoted
+  candidate behaves in production exactly as measured. The frozen primary list:
+  `acquisition` · `acquisitions` · `completed acquisition` · `recent acquisition` · `pro forma` ·
+  `deconsolidation` · `divestiture` · `divestitures` · `held for sale` · `same-store` · `same store` →
+  target concept `acquisition-divestiture-perimeter`; `discrete tax` · `tax benefit` · `valuation
+  allowance` · `uncertain tax position` → target concept `discrete-tax`. The script implements exactly this
+  table (id, literal, concept, one-line rationale). **Regex variants are permitted only as clearly-marked
+  EXPLORATORY rows** (e.g. word-boundary-anchored forms) — reported in a separate table section, never
+  eligible for the promotion rule below.
 - **Hash-verify every exhibit** against `docs/162-exhibit-manifest.csv` (`fullTextSha256`) before reading;
   mismatch ⇒ fail naming the file.
 - Per candidate, over ALL 298 filings: filings hit + hit rate. Over the 235 LABELED filings, against the
-  concept reference derived from the committed mapping CSV (a filing "has the concept" iff any of its items
-  mapped to the candidate's target category): **precision, recall, F1 at the filing level**, with Wilson
-  intervals and honest Ns.
+  concept reference derived from the regenerated 235-row mapping (a filing "has the concept" iff any of its
+  items mapped to the candidate's target category): **precision, recall, F1 at the filing level**, with
+  Wilson intervals and honest Ns. Additionally, against the **ANY-BREAK reference** (a filing "has a break"
+  iff its label records `comparisonClean = false`): precision only — a candidate whose hits routinely land
+  on clean-labeled filings is noise regardless of concept.
 - **False positives and false negatives are LISTED, not just counted** (accession + the matched line's
   ±80-char context for FPs; the label item the rule missed for FNs) — the review's point: a "false positive"
   may be a label omission, and only examples let a human tell. Cap the listing at 15 per candidate with the
   overflow counted.
-- **`cmpscan-v1` baseline row**: the same measurement for the existing 15 cap-triggering phrases as a set
-  (hit rate + concept precision/recall where a concept applies), so v2 candidates are judged against what the
-  scanner already catches, and overlap (candidate fires ∧ v1 already fired) is reported — a candidate that
-  only fires where v1 already capped adds nothing.
+- **`cmpscan-v1` baseline row — hit rate, overlap and ANY-BREAK precision ONLY.** v1's 15 cap-triggering
+  phrases legitimately detect impairments, litigation, settlements and asset-sale effects — concepts the
+  two candidate references do NOT cover — so scoring v1 against the acquisition/tax references would count
+  its legitimate hits as false positives and make the baseline artificially poor. v1 gets: hit rate over the
+  298, precision against the ANY-BREAK reference (`comparisonClean = false` covers every break kind, so it
+  IS a valid v1 target), and the per-candidate overlap column (candidate fires ∧ v1 already fired) — a
+  candidate that only fires where v1 already capped adds nothing. **No concept precision/recall is reported
+  for v1.**
 - Emits `docs/165-cmpscan-candidate-hits.csv` (candidate × accession hit matrix, long form) and prints the
   summary tables.
 
 ### 2. Findings doc — `docs/165-findings-cmpscan-v2-candidates.md`
 
-Committed with: the per-candidate table (hit rate / precision / recall / F1 / v1-overlap), the FP/FN example
-listings, and a decisions section recommending which candidates clear the bar for the production cmpscan-v2
-spec (out of scope here), which need narrowing (with the tested narrower variant beside them), and which are
-rejected with the example that killed them. Standing caveats stated: the concept reference is derived from
-EXPLORATORY ratified labels (spec 162 status), the mapping taxonomy is regex-coded with 246/497 items
-uncategorized, and 63 of the 298 filings have no labels at all (they contribute hit rates only).
+Committed with: the per-candidate table (hit rate / precision / recall / F1 / any-break precision /
+v1-overlap), the FP/FN example listings, and a decisions section applying the **precommitted promotion
+rule, frozen here before the run**: a primary (literal) candidate is RECOMMENDED for the production
+cmpscan-v2 spec iff **concept precision ≥ 0.80 AND concept recall ≥ 0.30 AND it fires on ≥ 5 labeled
+filings where v1 did not fire** (novel coverage — all three over the 235-row reference). Candidates failing
+the rule are NOT recommended, full stop; the findings may note a narrower exploratory variant as "re-measure
+in a future round", but no production recommendation may cite exploratory rows or post-hoc thresholds —
+every number outside the rule is descriptive. Standing caveats stated: the concept reference is derived
+from EXPLORATORY ratified labels (spec 162 status), the taxonomy is regex-coded with a long uncategorized
+tail, and 63 of the 298 filings have no labels at all (hit rates only).
 
 ## Tests
 
@@ -80,7 +106,11 @@ mapping):
   no phrase hit ⇒ FN listed).
 - Tampered exhibit (hash mismatch) fails naming the file.
 - Unlabeled filings contribute to hit rate but never to precision/recall.
-- The v1 baseline row and overlap column render.
+- The v1 baseline row renders hit rate / any-break precision / overlap and NO concept precision/recall.
+- The generator's cohort switch: default output byte-identical to the committed spec-162 artifact; `all-labeled`
+  includes fixture no-signal rows.
+- Any-break precision computed against `comparisonClean = false` (a hit on a clean-labeled fixture filing
+  lowers it).
 
 ## Constraints
 
@@ -99,10 +129,14 @@ mapping):
 
 ## Acceptance criteria
 
-- [ ] `measure-cmpscan-candidates.ps1` with the committed candidate table, manifest hash verification,
-      per-candidate hit/precision/recall/F1 + Wilson, FP/FN example listings, v1 baseline + overlap, and the
-      hit-matrix CSV.
+- [ ] `docs/165-comparability-item-mapping-all235.csv` regenerated over all 235 labeled filings via the
+      generator's cohort switch; the spec-162 145-row artifact byte-untouched (default cohort asserted).
+- [ ] `measure-cmpscan-candidates.ps1` implementing EXACTLY the frozen literal candidate list (regex rows
+      exploratory-only), manifest hash verification, per-candidate hit/precision/recall/F1 + any-break
+      precision + Wilson, FP/FN example listings, v1 baseline (hit rate / any-break precision / overlap
+      only), and the hit-matrix CSV.
 - [ ] Measurement executed over the 298 exhibits; `docs/165-findings-cmpscan-v2-candidates.md` +
-      `docs/165-cmpscan-candidate-hits.csv` committed with the decisions section and caveats.
+      `docs/165-cmpscan-candidate-hits.csv` committed with the PRECOMMITTED promotion rule applied verbatim
+      and the caveats.
 - [ ] No production file touched; no pin move; `dotnet build Radar.sln -c Release` /
       `dotnet test Radar.sln -c Release --no-build` green (new script tests included).

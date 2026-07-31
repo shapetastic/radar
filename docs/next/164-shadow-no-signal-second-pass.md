@@ -52,6 +52,21 @@ Estimated time: ~1–2 hours code + one console run.
   production read, but the model MUST return a direction (`Improving`/`Deteriorating`/`Mixed`/`Neutral` — the
   wider vocabulary is deliberate, it is what the calibration study judged) and a confidence in [0,1]; no
   abstain path.
+- ⚠ **The shadow response gets its OWN contract — the production one cannot carry it.** Production's
+  `FilingSentiment`/`FilingDirection` supports only `Unknown`/`Improving`/`Deteriorating`/`Mixed`
+  (`Radar.Domain/Filings/FilingSentiment.cs`), and `ChatFilingAnalyzer`'s validation degrades an
+  unrecognised direction to `Unknown`/confidence 0 — a shadow `Neutral` fed through it would silently
+  become `Unknown/0` and every rate below would be garbage. Define a console-local `ShadowFilingSentiment`
+  (direction ∈ the four shadow tokens, confidence, rationale, raw response) parsed by the console — reuse
+  the production plumbing up to the chat call, never its response-validation path for the shadow vocabulary.
+  **The vocabulary mapping is defined ONCE, in the analyzer script, and stated in the findings doc:**
+  shadow `Improving` ↔ worksheet/label `Positive`, `Deteriorating` ↔ `Negative`, `Mixed` ↔ `Mixed`,
+  `Neutral` ↔ `Neutral`. No other equivalence is permitted (in particular, `Mixed` never counts as agreeing
+  with a directional label in the STRICT recovery rate).
+- **Call/parse status is recorded per accession, separately from the result**: `ok` | `call-failed` |
+  `parse-failed` (with the error and the raw response when present). A failed row is retried once; a
+  still-failed row is EXCLUDED from every rate, listed by accession with its status, and counted in its own
+  summary line — an infrastructure failure must never be counted as a `Neutral` (or any other) read.
 - **Outputs land ONLY under `{output-root}/shadow/`** — one JSON per accession (accession, cohort, forced
   direction, confidence, model's brief rationale, raw response, prompt hash, model identity, timestamp) plus
   a `shadow-summary.csv`. Re-runnable: skip an accession whose shadow record already exists (a `--fresh` flag
@@ -79,8 +94,22 @@ spec 162's status section; filings cluster within tickers so intervals are somew
    the directional cohort is disqualifying evidence, and inversions are worse than abstentions.
 3. **Unlabeled distribution** — the 63 no-signal rows outside the labeled 90: direction/confidence
    distribution only, explicitly marked "no reference labels; distribution, not accuracy".
-4. **Decision block** — machine-readable: recovery rate, false-alarm rate, stability, and the trade-off at
-   each confidence threshold (e.g. "at ≥0.80: recovers X/33, false-alarms Y/57, flips Z/145").
+4. **Precommitted decision block — the rule is FROZEN HERE, before any read runs.** The reviewer's point
+   stands: an "acceptable" cost chosen after seeing the results is the tuning failure these specs exist to
+   prevent. The rule:
+   - **Primary evaluation, at forced-confidence ≥ 0.80 exactly:** the forced-choice approach is SUPPORTED
+     iff ALL of — strict recovery ≥ 50% (≥ 17 of the 33 provisional misses recovered with the agreeing
+     direction), false-alarm rate ≤ 15% (≤ 9 of the 57 provisional non-misses read directional), ZERO
+     inversions on the directional cohort (a sealed Positive forced to Deteriorating or vice versa at
+     ≥ 0.80 disqualifies outright), and flips-to-nondirectional on the directional cohort ≤ 10% (≤ 15/145).
+   - **One-shot fallback (162's extension-rule pattern):** if the primary fails at 0.80, evaluate the SAME
+     four criteria once at ≥ 0.90. No further threshold shopping — the trigger is evaluated at most twice,
+     at these two precommitted points.
+   - **Outcome is machine-readable**: `SHADOW: SUPPORTED (τ=0.80|0.90, …numbers…)` /
+     `SHADOW: NOT-SUPPORTED (…numbers at both τ…)`. SUPPORTED ⇒ the production recall spec may proceed
+     citing this rule; NOT-SUPPORTED ⇒ the misses need a different mechanism (second model / pre-screen —
+     their own specs). **Every other number in the report — the full threshold sweep included — is
+     DESCRIPTIVE ONLY and grounds no production recommendation.**
 
 ### 3. Findings doc — `docs/164-findings-shadow-no-signal-second-pass.md`
 
@@ -99,6 +128,10 @@ reference labels, ticker clustering.
 - Analyzer script: recovery/false-alarm/stability tables computed correctly from fixture shadow records +
   fixture labels (including: a miss recovered with the WRONG direction counts in the loose rate but not the
   strict one); unlabeled rows never enter any accuracy rate; re-run skip semantics.
+- Contract: a fixture response with direction `Neutral` round-trips as `Neutral` (never `Unknown`/0); an
+  unparseable response yields `parse-failed`, is excluded from every rate and listed; the vocabulary map is
+  applied exactly (shadow `Mixed` vs label `Positive` is NOT a strict recovery); the precommitted decision
+  block renders both SUPPORTED and NOT-SUPPORTED forms with their numbers from fixtures.
 
 ## Constraints
 
