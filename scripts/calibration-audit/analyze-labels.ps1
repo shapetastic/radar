@@ -45,7 +45,10 @@
       2. Calibration probability sample - derived from the COMPLETE directional worksheet alone:
          min(10, bin size) rows per sealed-reader-confidence bin, selected by SHA-256(accession) hex
          ASCENDING within the bin, IRRESPECTIVE of agreement status or which labels exist.
-      3. Calibration table - bins x human-adjudicated correctness, computed EXCLUSIVELY over the DERIVED
+      3. Calibration table - bins x adjudicated correctness (adjudication = the resolved
+         adjudication.finalDirection verdicts; HOW they were resolved - blinded human vs ratified agent
+         rereads - is a property of the study run, recorded in the findings doc, not of this script),
+         computed EXCLUSIVELY over the DERIVED
          sample members (a label CLAIMING selectionReason "calibration-sample" outside the derived set is
          a correctness FAILURE - the claim is a checked assertion, not an input). Disagreement/doubt-queued
          adjudications are NEVER pooled into these rates. Empty bins render "no adjudicated labels",
@@ -53,9 +56,10 @@
       4. Error-diagnosis set - ALL remaining disagreements + ALL doubt-flagged labels, reported separately.
       5. Clean-rate, comparability-item frequency (the cmpscan-v2 evidence table), materiality x
          constant-strength cross-tab.
-      6. False-negative section - the no-signal cohort's precommitted sample (first 60 by
+      6. False-omission section - the no-signal cohort's precommitted sample (first 60 by
          SHA-256(accession) hex order, one-shot extension to 90), membership-validated; a "miss" counts
-         ONLY from human adjudication (finalDirection directional); the extension trigger is ALWAYS
+         ONLY from adjudication (finalDirection directional); the reported rate is the FALSE-OMISSION
+         rate P(directional | reader emitted no signal), not a recall; the extension trigger is ALWAYS
          computed on rows 1-60 and an explicit EXTENSION decision block is emitted.
       7. Input-path stability table - pilot labels vs canonical-input relabels (direction/clean deltas).
       8. Adjudication queue listing with selectionReason.
@@ -556,7 +560,7 @@ $labeledExtension = @($extensionRows | Where-Object { $labeledNoSignalSet.Contai
 $extensionMissing = @($extensionRows | Where-Object { -not $labeledNoSignalSet.ContainsKey($_.accession) } | ForEach-Object { $_.accession })
 $outsidePrefix = @($labeledNoSignal | Where-Object { $positionByAccession[$_.accession] -gt $first90Count } | ForEach-Object { $_.accession })
 
-# Miss accounting over the labeled no-signal rows. A "miss" is ONLY a human adjudication:
+# Miss accounting over the labeled no-signal rows. A "miss" is ONLY an adjudicated verdict:
 # adjudication.finalDirection directional on a no-signal row. A reader-flagged candidate (blinded label
 # direction directional) WITHOUT a finalDirection is pending - never a rate. Rows whose blinded label is
 # not directional need no adjudication and count as non-misses.
@@ -713,7 +717,7 @@ Add-Line ''
 Add-Line ('## Inter-model agreement curve{0}' -f $coverageTag)
 Add-Line ''
 Add-Line 'Reader-confidence bins x skeptic-agreement rate. AGREEMENT IS NOT CALIBRATION: two models can'
-Add-Line 'agree and both be wrong - human-adjudicated correctness lives in the calibration table below.'
+Add-Line 'agree and both be wrong - adjudicated correctness lives in the calibration table below.'
 if ($coverageIncomplete) {
     Add-Line ''
     Add-Line ('INCOMPLETE: {0} directional worksheet rows have no effective label yet: {1}' -f $directionalMissing.Count, ($directionalMissing -join ', '))
@@ -742,7 +746,7 @@ $calibTag = ''
 if ($calibMissing.Count -gt 0) { $calibTag = (' - INCOMPLETE ({0}/{1} sample members adjudicated)' -f $sampleAdjudicated, $sampleTotal) }
 Add-Line ('## Calibration table (derived probability sample ONLY){0}' -f $calibTag)
 Add-Line ''
-Add-Line 'Human-adjudicated correctness over the DERIVED sample members exclusively (membership is computed'
+Add-Line 'Adjudicated correctness over the DERIVED sample members exclusively (membership is computed'
 Add-Line 'from the sealed worksheet, above; a recorded "calibration-sample" claim outside the derived set is'
 Add-Line 'a correctness failure). Disagreement/doubt-queued adjudications are NEVER pooled into these rates.'
 Add-Line 'A row is correct iff adjudication.finalDirection equals the sealed model direction; sample members'
@@ -863,7 +867,7 @@ Add-Line ''
 $nsTag = ''
 $nsIncompleteItems = @($incompleteness | Where-Object { $_ -like 'no-signal*' })
 if ($nsIncompleteItems.Count -gt 0) { $nsTag = ' - INCOMPLETE' }
-Add-Line ('## False-negative section (no-signal cohort){0}' -f $nsTag)
+Add-Line ('## False-omission section (no-signal cohort){0}' -f $nsTag)
 Add-Line ''
 if ($K -eq 0) {
     Add-Line 'No no-signal rows in the worksheet.'
@@ -871,7 +875,8 @@ if ($K -eq 0) {
     Add-Line ('Precommitted sample (spec 162): the first {0} of {1} no-signal rows by SHA-256(accession) hex' -f $first60Count, $K)
     Add-Line ('order; one-shot extension to {0} iff the rows-1-{1} trigger fires (>= 1 confirmed miss, or the' -f $first90Count, $first60Count)
     Add-Line 'Wilson 95% upper bound of the rows-1-60 miss rate exceeds 10%). Membership is validated against'
-    Add-Line 'that prefix exactly; a "miss" counts ONLY from human adjudication (finalDirection directional).'
+    Add-Line 'that prefix exactly; a "miss" counts ONLY from adjudication (finalDirection directional).'
+    Add-Line 'The rate below is the FALSE-OMISSION rate, P(directional | reader emitted no signal).'
     Add-Line ''
     Add-Line ('Labeled no-signal rows: {0} (precommitted sample {1}; extension rows labeled: {2}).' -f $labeledNoSignal.Count, $first60Count, $labeledExtension.Count)
     foreach ($item in $nsIncompleteItems) {
