@@ -28,11 +28,16 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 # THE taxonomy. Case-insensitive regexes; edit here and re-run to re-code.
+# Review-narrowed (2026-07-31): 'asset-sale-gains-losses' previously matched bare 'gain on|loss on',
+# sweeping in debt-extinguishment gains, business-combination remeasurements and project losses - it now
+# requires an actual sale/disposal/disposition/divestiture context. 'discrete-tax' previously matched
+# 'tax rate', sweeping ordinary effective-rate changes into a category the findings interpret as
+# discrete/one-time tax evidence - 'rate' is out, and the category is renamed to say what it matches.
 $Categories = [ordered]@{
     'acquisition-divestiture-perimeter' = 'acqui|divest|perimeter|deconsolidat|held.for.sale|carve|spin|merger|buy.?in|purchase of'
-    'one-time-tax'                      = 'tax (benefit|release|swing|item|valuation|position|rate)|discrete tax|deferred tax'
+    'discrete-tax'                      = 'discrete tax|tax discrete|one.?time tax|tax (benefit|release|swing|item|position)|uncertain tax|valuation allowance|deferred tax'
     'impairment-restructuring'          = 'impair|restructur|severance|closure|wind.down|abandon'
-    'asset-sale-gains-losses'           = 'gain on|loss on|sale of (building|assets|property|licen|intangible)|disposition'
+    'asset-sale-gains-losses'           = '(gain|loss)\w* on [\w\s,.$-]*(sale|sales|disposal|disposition|divestiture)|sale of (building|assets|property|licen|intangible)|(gain|loss)\w* on (a )?(sale|disposal|disposition)|property disposition'
     'fx-currency'                       = 'currency|FX|foreign exchange|translation'
     'insurance-weather-litigation'      = 'insurance|storm|hurricane|weather|fire|litigation|legal settle'
     'accounting-change-recast'          = 'recast|reclassif|restate|accounting change|revised.*definition|adopt'

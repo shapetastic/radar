@@ -1,11 +1,16 @@
 # Findings: AI filing-read calibration audit (spec 162)
 
-**Status: Phase B COMPLETE (2026-07-31).** The study ran in full under protocol `cal-v2`: 145
-directional labels (30 pilot relabels + 115 new), 90 no-signal labels (precommitted 60 + the one-shot
-extension, which TRIGGERED), and a 77-row adjudication queue processed through the two-step blinded
-flow. The full label set is committed at `docs/162-calibration-labels-full.jsonl`; the analyzer's
-final-mode run (exit 0, all provenance checks green against the pinned study contract) reproduces from
-committed artifacts alone — see the reproduce line at the end.
+**Status: Phase B COMPLETE — WITH PROTOCOL DEVIATION; calibration results are EXPLORATORY.** The
+LABELING ran in full under protocol `cal-v2` (145 directional labels — 30 pilot relabels + 115 new —
+and 90 no-signal labels: precommitted 60 + the one-shot extension, which TRIGGERED; blinding,
+concurrency, ordering, and provenance all as precommitted). The ADJUDICATION step deviated from the
+protocol: `cal-v2` requires human-adjudicated ground truth with maintainer resolution of the queue,
+and the 77 rows were instead adjudicated by agents and ratified in bulk (next paragraph). The
+inter-model agreement results are protocol-clean; **the calibration table, the miss counts, and every
+"adjudicated" number are exploratory** — directionally informative, not established calibration. The
+full label set is committed at `docs/162-calibration-labels-full.jsonl`; the analyzer's final-mode run
+(exit 0, all provenance checks green against the pinned study contract) reproduces from committed
+artifacts alone — see the reproduce line at the end.
 
 **What "adjudicated" means in this document — read this before the rates.** The queue was processed by
 `claude-fable-5` agents under the two-step blinded flow (blindCall persisted from the exhibit text
@@ -159,7 +164,7 @@ gains (ATEX's $33.9M license-exchange gain), acquisition-inflated growth masking
 misreads** ("record full-year revenue" on a year-over-year decline; a "raised outlook" the release never
 states). Full verdicts with numbers are in the committed JSONL and the analyzer report.
 
-## False-negative table (no-signal cohort, one-shot threshold applied)
+## False-omission table (no-signal cohort, one-shot threshold applied)
 
 Precommitted first 60 of 153 by SHA-256(accession) hex order; **the trigger FIRED** (21 confirmed misses
 in rows 1–60; Wilson upper 47.6% vs the 10% threshold — and the ≥1-confirmed-miss arm fired on its own).
@@ -202,17 +207,20 @@ at least one comparability-breaking item (127/145 carry ≥1). **The categorized
 REGEX-CODED EXPLORATORY ANALYSIS, not analyzer output**: the analyzer counts exact free-text items; the
 categories are assigned by the committed taxonomy in
 `scripts/calibration-audit/categorize-comparability.ps1`, and the full per-item mapping is committed at
-`docs/162-comparability-item-mapping.csv` (497 items coded; 230 items across 106 filings match no
-category — the taxonomy covers the big clusters, not the long tail). A filing counts once per category:
+`docs/162-comparability-item-mapping.csv` (497 items coded; 246 items across 108 filings match no
+category — the taxonomy covers the big clusters, not the long tail). Review-narrowed 2026-07-31: the
+asset-sale regex now requires a sale/disposal context (bare `gain on`/`loss on` had swept in
+debt-extinguishment gains and a business-combination remeasurement), and bare effective-tax-rate
+changes no longer count as discrete-tax. A filing counts once per category:
 
 | category | filings (of 145) |
 | --- | --- |
 | acquisition / divestiture / perimeter change | 79 |
-| one-time tax items (discrete releases, swings, valuation allowances) | 32 |
 | impairment / restructuring / severance / closures | 30 |
+| discrete tax items (releases, swings, valuation allowances — not bare rate changes) | 25 |
 | FX / currency translation | 25 |
-| gains/losses on asset sales / dispositions | 23 |
 | insurance / weather / litigation one-offs | 19 |
+| gains/losses on asset sales / dispositions | 18 |
 | accounting changes / recasts / reclassifications | 16 |
 | LIFO / inventory adjustments | 6 |
 
@@ -244,15 +252,18 @@ validation first.
 
 Findings inform SPECS; the maintainer decides. What this evidence supports:
 
-1. **Confidence remap (own spec; fingerprint-moving).** The adjudicated curve gives the remap its
-   shape: sub-0.90 self-reported confidence ≈ 50% directional accuracy (vs the 0.6 `MinConfidence`
-   gate currently treating 0.65+ as actionable), 0.90–0.95 ≈ 90%, ≥0.95 ≈ 100% on this sample. A
-   piecewise remap (or a raised gate) should discount the 0.80–0.90 mass hardest — that bin holds 39
-   of 145 live reads (27%). Every error is an over-commit to Mixed-territory, never an inversion, so
-   a remap (not a rejection) is the right instrument.
+1. **Confidence remap (own spec; fingerprint-moving) — as a HYPOTHESIS, not established
+   calibration.** The exploratory curve suggests the remap's shape: sub-0.90 self-reported confidence
+   ≈ 50% directional accuracy (vs the 0.6 `MinConfidence` gate currently treating 0.65+ as
+   actionable), 0.90–0.95 ≈ 90%, ≥0.95 = 10/10 on this sample — but these rates rest on ratified
+   same-family verdicts over ≤10-row bins, so the spec should treat the shape as a hypothesis to
+   confirm (e.g. human adjudication of just the 33 sample rows, or the next study round) before
+   hard-coding a remap. What IS solid enough to act on now: the sub-0.90 mass is unreliable, and
+   every observed error over-commits toward Mixed rather than inverting — so a remap/discount, not a
+   rejection, is the right instrument.
 2. **`cmpscan-v2` (own spec, fed by the frequency table).** Add the acquisitions/perimeter cluster
-   first (79/145), then discrete-tax (32/145). The 6 Positive→Mixed adjudicated overturns all sat on
-   prints these phrases would have flagged.
+   first (79/145), then discrete-tax (25/145, narrowed taxonomy). The 6 Positive→Mixed adjudicated
+   overturns all sat on prints these phrases would have flagged.
 3. **The false-omission rate needs its own spec, and it is the priority.** 36.7% (27.4%–47.0%) of
    sampled no-signal filings were genuinely-directional (implied recall at most ≈ 72%), a third of the
    misses high-materiality, including repeat misses on the same companies (CAT ×2, CYRX ×3, SHOO ×2,
