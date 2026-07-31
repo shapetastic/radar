@@ -186,7 +186,11 @@ EPS collapse, IMAX's +48% EBITDA quarter, and MRCY's record-bookings quarter (bo
 interval: 42–72). Against the 145 directional signals the reader DID produce, that is ≈ 1.5 missed
 prints per 4 produced — and implied recall is at most **145 / (145 + 56) ≈ 72%** (interval ≈ 67–78%),
 "at most" because it credits every produced signal as correct, which the calibration table shows is
-generous below 0.90 confidence. Recall, not precision, is the reader's weak axis, and a third of the
+generous below 0.90 confidence. One statistical caveat: the Wilson intervals treat the 90 filings as
+independent, but they cluster within 44 tickers (repeated filings per company), so the intervals are
+somewhat too narrow — the central result does not rest on that, since the 33 misses span 26 distinct
+tickers and 26 of the 44 sampled companies had at least one miss. Recall, not precision, is the
+reader's weak axis, and a third of the
 missed prints are high-materiality. The no-signal outcome cannot be read as "nothing here".
 
 ## Input-path stability table (pilot vs canonical-input relabel)
@@ -261,9 +265,13 @@ Findings inform SPECS; the maintainer decides. What this evidence supports:
    hard-coding a remap. What IS solid enough to act on now: the sub-0.90 mass is unreliable, and
    every observed error over-commits toward Mixed rather than inverting — so a remap/discount, not a
    rejection, is the right instrument.
-2. **`cmpscan-v2` (own spec, fed by the frequency table).** Add the acquisitions/perimeter cluster
-   first (79/145), then discrete-tax (25/145, narrowed taxonomy). The 6 Positive→Mixed adjudicated
-   overturns all sat on prints these phrases would have flagged.
+2. **`cmpscan-v2` (own spec, fed by the frequency table) — EVALUATE the candidates first.** The
+   79/145 and 25/145 counts come from regexes over Fable's curated `comparabilityItems` strings, not
+   over raw filing text — they establish candidate CONCEPTS (acquisitions/perimeter first, then
+   discrete-tax), not the precision of any phrase on filings. The `cmpscan-v2` spec must measure each
+   candidate rule's raw-input hit rate (and false-positive rate) against the archived exhibits before
+   adding it to the production scanner. The 6 Positive→Mixed adjudicated overturns all sat on prints
+   where these concepts were present.
 3. **The false-omission rate needs its own spec, and it is the priority.** 36.7% (27.4%–47.0%) of
    sampled no-signal filings were genuinely-directional (implied recall at most ≈ 72%), a third of the
    misses high-materiality, including repeat misses on the same companies (CAT ×2, CYRX ×3, SHOO ×2,
