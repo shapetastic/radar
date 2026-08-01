@@ -2604,6 +2604,301 @@
           "url": "query=IDT Corp"
         }
       ]
+    },
+    {
+      "id": "a578dc83-8653-4f0a-9dea-aef2e596f88d",
+      "name": "Postal Realty Trust",
+      "legalName": "Postal Realty Trust, Inc.",
+      "ticker": "PSTL",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Real Estate",
+      "industry": "REIT—Office",
+      "followingTier": "small",
+      "aliases": ["Postal Realty", "Postal Realty Trust"],
+      "themes": ["USPS-leased properties", "net lease REIT", "postal logistics real estate"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Postal Realty Trust — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001759774.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Postal Realty Trust — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001759774.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Postal Realty Trust — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001759774.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Postal Realty Trust — News attention (Google News)",
+          "url": "query=Postal Realty&ticker=PSTL"
+        }
+      ]
+    },
+    {
+      "id": "34af94fc-564d-48eb-ae0c-3c9755367a52",
+      "name": "First Industrial Realty",
+      "legalName": "FIRST INDUSTRIAL REALTY TRUST INC",
+      "ticker": "FR",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Real Estate",
+      "industry": "REIT—Industrial",
+      "followingTier": "mid",
+      "aliases": ["First Industrial", "First Industrial Realty"],
+      "themes": ["industrial REIT", "logistics real estate", "warehouse development"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "First Industrial Realty — News Releases (IR)",
+          "url": "https://investor.firstindustrial.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "First Industrial Realty — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000921825.json"
+        },
+        {
+          "type": "secform4",
+          "name": "First Industrial Realty — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000921825.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "First Industrial Realty — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000921825.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "First Industrial Realty — News attention (Google News)",
+          "url": "query=First Industrial Realty"
+        }
+      ]
+    },
+    {
+      "id": "ddf97f1b-a85e-4898-8f65-bd85522563ac",
+      "name": "Cogent Communications",
+      "legalName": "COGENT COMMUNICATIONS HOLDINGS, INC.",
+      "ticker": "CCOI",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Telecom Services",
+      "followingTier": "mid",
+      "aliases": ["Cogent", "Cogent Communications"],
+      "themes": ["internet transit", "fiber network", "data center leasing", "IPv4 leasing"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Cogent Communications — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001158324.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Cogent Communications — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001158324.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Cogent Communications — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001158324.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Cogent Communications — News attention (Google News)",
+          "url": "query=Cogent Communications&ticker=CCOI"
+        }
+      ]
+    },
+    {
+      "id": "c4930d12-d390-4d53-94b1-43652ca66b24",
+      "name": "ATN International",
+      "legalName": "ATN International, Inc.",
+      "ticker": "ATNI",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Telecom Services",
+      "followingTier": "small",
+      "aliases": ["ATN International", "ATN"],
+      "themes": ["rural broadband", "international telecom", "tower infrastructure"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "ATN International — News Releases (IR)",
+          "url": "https://ir.atni.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "ATN International — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000879585.json"
+        },
+        {
+          "type": "secform4",
+          "name": "ATN International — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000879585.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "ATN International — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000879585.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "ATN International — News attention (Google News)",
+          "url": "query=ATN International&ticker=ATNI"
+        }
+      ]
+    },
+    {
+      "id": "6431f98c-2c88-4874-ac92-03f91ea0c630",
+      "name": "Cars.com",
+      "legalName": "Cars.com Inc.",
+      "ticker": "CARS",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Internet Content & Information",
+      "followingTier": "small",
+      "aliases": ["Cars.com", "Cars Commerce"],
+      "themes": ["auto marketplace", "dealer software", "digital advertising"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Cars.com — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001683606.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Cars.com — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001683606.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Cars.com — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001683606.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Cars.com — News attention (Google News)",
+          "url": "query=Cars.com"
+        }
+      ]
+    },
+    {
+      "id": "6028b485-fb23-46ca-9ae9-224e6b00cd0d",
+      "name": "M/I Homes",
+      "legalName": "M/I HOMES, INC.",
+      "ticker": "MHO",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Residential Construction",
+      "followingTier": "mid",
+      "aliases": ["M/I Homes", "M/I"],
+      "themes": ["homebuilding", "orders and backlog", "housing cycle"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "M/I Homes — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000799292.json"
+        },
+        {
+          "type": "secform4",
+          "name": "M/I Homes — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000799292.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "M/I Homes — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000799292.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "M/I Homes — News attention (Google News)",
+          "url": "query=M/I Homes&ticker=MHO"
+        }
+      ]
+    },
+    {
+      "id": "3b3f2901-e463-45f0-96f3-0ee28c0466cd",
+      "name": "Gentherm",
+      "legalName": "Gentherm Inc",
+      "ticker": "THRM",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Auto Parts",
+      "followingTier": "small",
+      "aliases": ["Gentherm"],
+      "themes": ["thermal management", "automotive seating comfort", "medical thermal devices"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Gentherm — News Releases (IR)",
+          "url": "https://gentherm.gcs-web.com/rss/news-releases.xml"
+        },
+        {
+          "type": "sec",
+          "name": "Gentherm — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000903129.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Gentherm — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000903129.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Gentherm — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000903129.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Gentherm — News attention (Google News)",
+          "url": "query=Gentherm&ticker=THRM"
+        }
+      ]
+    },
+    {
+      "id": "e1394f1d-5901-4924-956d-c0affb508cee",
+      "name": "The Buckle",
+      "legalName": "BUCKLE INC",
+      "ticker": "BKE",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Apparel Retail",
+      "followingTier": "small",
+      "aliases": ["Buckle", "The Buckle"],
+      "themes": ["apparel retail", "denim", "mall retail"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "The Buckle — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000885245.json"
+        },
+        {
+          "type": "secform4",
+          "name": "The Buckle — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000885245.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "The Buckle — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000885245.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "The Buckle — News attention (Google News)",
+          "url": "query=The Buckle&ticker=BKE"
+        }
+      ]
     }
   ]
 }
