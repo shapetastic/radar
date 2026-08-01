@@ -47,11 +47,14 @@ Estimated time: ~1 hour.
 
 ### 2. Legend line for stored provenance
 
-- Under the report's existing header caveats (beside the notedness line), add ONE line, e.g.:
-  `> "GuidanceChange" in evidence lines denotes the earnings-trajectory-as-reported read (deterministic or
-  AI); the type name is historical and does not imply the company issued or changed guidance.`
+- Under the report's existing header caveats (beside the notedness line), add ONE line:
+  `> "GuidanceChange" in evidence lines is a historical earnings-release type. It may represent a
+  deterministic Neutral filing marker or an AI earnings-trajectory read; it does not by itself mean the
+  company issued or changed guidance.`
 - Exact wording at the implementer's discretion, but it must (a) be advice-free, (b) state that the token
-  does not imply a guidance event, and (c) not claim the read is AI-only.
+  does not by itself imply a guidance event, and (c) describe the two producers accurately — the
+  deterministic spec-57 Neutral signal is an earnings-FILING marker, NOT a trajectory read; do not describe
+  both forms as "trajectory reads" (review finding, 2026-08-01).
 
 ### 3. Nothing else
 
