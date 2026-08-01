@@ -76,10 +76,13 @@ public sealed class ProductionCompanySeedTests
     [InlineData("CARS")] // spec-166: "cars", "used cars", "cars recalled".
     public async Task ProductionSeed_CollidingTickers_HaveNoTickerTokenInNewsSearchFeed(string ticker)
     {
-        var url = await GetNewsSearchUrlAsync(ticker);
+        var urls = await GetNewsSearchUrlsAsync(ticker);
 
-        Assert.DoesNotContain("ticker=", url, StringComparison.OrdinalIgnoreCase);
-        Assert.StartsWith("query=", url, StringComparison.Ordinal);
+        Assert.All(urls, url =>
+        {
+            Assert.DoesNotContain("ticker=", url, StringComparison.OrdinalIgnoreCase);
+            Assert.StartsWith("query=", url, StringComparison.Ordinal);
+        });
     }
 
     [Theory]
@@ -89,9 +92,9 @@ public sealed class ProductionCompanySeedTests
     public async Task ProductionSeed_DistinctiveTicker_KeepsTheTickerToken(string ticker)
     {
         // Honesty control for the theory above: a distinctive ticker still carries the token.
-        var url = await GetNewsSearchUrlAsync(ticker);
+        var urls = await GetNewsSearchUrlsAsync(ticker);
 
-        Assert.Contains($"&ticker={ticker}", url, StringComparison.Ordinal);
+        Assert.All(urls, url => Assert.Contains($"&ticker={ticker}", url, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -105,7 +108,7 @@ public sealed class ProductionCompanySeedTests
     [Fact]
     public async Task ProductionSeed_Jjsf_NewsSearchUrlIsExactlyQueryEqualsTicker()
     {
-        var url = await GetNewsSearchUrlAsync("JJSF");
+        var url = Assert.Single(await GetNewsSearchUrlsAsync("JJSF"));
 
         Assert.Equal("query=JJSF", url);
     }
@@ -120,9 +123,28 @@ public sealed class ProductionCompanySeedTests
     [Fact]
     public async Task ProductionSeed_Bke_NewsSearchUrlUsesTheDisambiguatedPhrase()
     {
-        var url = await GetNewsSearchUrlAsync("BKE");
+        var url = Assert.Single(await GetNewsSearchUrlsAsync("BKE"));
 
         Assert.Equal("query=The Buckle&ticker=BKE", url);
+    }
+
+    /// <summary>
+    /// CARS carries TWO newssearch feeds (post-spec-166 review fix). <c>NewsAttentionCollector.IsRelevant</c>
+    /// consults only the feed's own query phrase (plus the optional ticker token) — never the seed aliases —
+    /// and Cars.com titles its releases under both the site brand "Cars.com" and the parent brand
+    /// "Cars Commerce". With the colliding <c>CARS</c> ticker deliberately omitted (a common plural noun),
+    /// a single-phrase feed would silently drop every "Cars Commerce"-styled headline and undercount
+    /// Attention — and that gap is unhealable, because evidence is never backfilled. Neither phrase may
+    /// gain a <c>ticker=</c> token.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_Cars_CarriesBothBrandNewsSearchFeeds()
+    {
+        var urls = await GetNewsSearchUrlsAsync("CARS");
+
+        Assert.Equal(
+            ["query=Cars Commerce", "query=Cars.com"],
+            urls.OrderBy(u => u, StringComparer.Ordinal).ToList());
     }
 
     /// <summary>
@@ -185,10 +207,11 @@ public sealed class ProductionCompanySeedTests
 
         foreach (var company in seed.Companies)
         {
-            var feed = seed.SourceFeeds.SingleOrDefault(
-                f => f.CompanyId == company.Id
-                    && string.Equals(f.FeedType, "newssearch", StringComparison.OrdinalIgnoreCase));
-            Assert.NotNull(feed);
+            var feeds = seed.SourceFeeds
+                .Where(f => f.CompanyId == company.Id
+                    && string.Equals(f.FeedType, "newssearch", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            Assert.NotEmpty(feeds);
 
             var ticker = company.Ticker ?? string.Empty;
             if (exempt.Contains(ticker))
@@ -196,10 +219,10 @@ public sealed class ProductionCompanySeedTests
                 continue;
             }
 
-            Assert.Contains(
+            Assert.All(feeds, feed => Assert.Contains(
                 $"&ticker={ticker}",
-                feed!.Url,
-                StringComparison.Ordinal);
+                feed.Url,
+                StringComparison.Ordinal));
         }
     }
 
@@ -232,17 +255,19 @@ public sealed class ProductionCompanySeedTests
         Assert.False(patentsByTicker.ContainsKey("MRCY"), "MRCY's patents feed was dropped by spec 134.");
     }
 
-    private static async Task<string> GetNewsSearchUrlAsync(string ticker)
+    private static async Task<IReadOnlyList<string>> GetNewsSearchUrlsAsync(string ticker)
     {
         var seed = await LoadProductionSeedAsync();
         var company = Assert.Single(
             seed.Companies,
             c => string.Equals(c.Ticker, ticker, StringComparison.OrdinalIgnoreCase));
-        var feed = Assert.Single(
-            seed.SourceFeeds,
-            f => f.CompanyId == company.Id
-                && string.Equals(f.FeedType, "newssearch", StringComparison.OrdinalIgnoreCase));
-        return feed.Url;
+        var urls = seed.SourceFeeds
+            .Where(f => f.CompanyId == company.Id
+                && string.Equals(f.FeedType, "newssearch", StringComparison.OrdinalIgnoreCase))
+            .Select(f => f.Url)
+            .ToList();
+        Assert.NotEmpty(urls);
+        return urls;
     }
 
     private static Task<CompanySeedData> LoadProductionSeedAsync()

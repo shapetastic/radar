@@ -2787,6 +2787,11 @@
           "type": "newssearch",
           "name": "Cars.com — News attention (Google News)",
           "url": "query=Cars.com"
+        },
+        {
+          "type": "newssearch",
+          "name": "Cars.com — News attention (Google News, parent brand Cars Commerce)",
+          "url": "query=Cars Commerce"
         }
       ]
     },
