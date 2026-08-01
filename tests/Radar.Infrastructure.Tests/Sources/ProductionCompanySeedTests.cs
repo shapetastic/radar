@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.EntityResolution;
 using Radar.Infrastructure.Sources;
@@ -7,14 +9,24 @@ namespace Radar.Infrastructure.Tests.Sources;
 /// <summary>
 /// Guardrails over the SHIPPED watch universe (<c>data/companies.json</c>) — the curated, diversified efficacy
 /// sample. These assertions pin two things a well-meaning later edit could silently undo: the universe size
-/// (spec 125 expanded it 29 -> 43; spec 159 expanded it 43 -> 66) and the ticker-collision rule for the
-/// tickers that are substrings of common headline words. The universe is NOT a scoring input, so nothing here
-/// touches the fingerprint.
+/// (spec 125 expanded it 29 -> 43; spec 159 expanded it 43 -> 66; spec 166 expanded it 66 -> 74) and the
+/// ticker-collision rule for the tickers that are substrings of common headline words. The universe is NOT a
+/// scoring input, so nothing here touches the fingerprint.
 /// </summary>
 public sealed class ProductionCompanySeedTests
 {
-    /// <summary>Universe size after the spec-159 cross-sectional-power batch (43 existing + 23 added).</summary>
-    private const int ExpectedCompanyCount = 66;
+    /// <summary>
+    /// Universe size after the spec-166 batch-4 expansion (66 existing + 8 added: PSTL, FR, CCOI, ATNI, CARS,
+    /// MHO, THRM, BKE — the event-enriched exploratory cohort recorded in
+    /// <c>docs/cohorts/event-enriched-2026-07.json</c>). Spec 159 had taken it 43 -> 66.
+    /// </summary>
+    private const int ExpectedCompanyCount = 74;
+
+    /// <summary>
+    /// The AD-16 §7 exclusion-cohort file (under <c>docs/cohorts/</c>) naming the spec-166 batch-4 companies.
+    /// The seed is pinned against it so the exclusion cohort and the shipped universe cannot drift apart.
+    /// </summary>
+    private const string EventEnrichedCohortFile = "event-enriched-2026-07.json";
 
     /// <summary>
     /// <c>NewsAttentionCollector.IsRelevant</c> matches the ticker with an unanchored, case-insensitive
@@ -25,9 +37,14 @@ public sealed class ProductionCompanySeedTests
     /// as V/Visa). False-positive media evidence inflates Attention, and radar-formula-v8 credits collapsed
     /// distinct-publisher breadth into the reach term, so junk headlines would distort the notedness discount
     /// the 117->124 calibration arc settled.
+    /// <para>
+    /// Spec 166 added two more: <c>FR</c> is a near-universal bigram ("<b>fr</b>om", "<b>fr</b>ee",
+    /// "<b>Fr</b>iday", "<b>Fr</b>ance") and <c>CARS</c> is a common plural noun ("used <b>cars</b>",
+    /// "<b>cars</b> recalled").
+    /// </para>
     /// </summary>
     private static readonly string[] TickersWithoutTickerToken =
-        ["DEA", "SHOO", "ATEX", "SHEN", "KGS", "PUMP", "CASS", "ANIP", "PLUS", "CALM", "IDT"];
+        ["DEA", "SHOO", "ATEX", "SHEN", "KGS", "PUMP", "CASS", "ANIP", "PLUS", "CALM", "IDT", "FR", "CARS"];
 
     [Fact]
     public async Task ProductionSeed_ContainsTheExpectedUniverseSize()
@@ -55,6 +72,8 @@ public sealed class ProductionCompanySeedTests
     [InlineData("PLUS")]
     [InlineData("CALM")]
     [InlineData("IDT")]
+    [InlineData("FR")] // spec-166: "from", "free", "Friday", "France" — a near-universal bigram.
+    [InlineData("CARS")] // spec-166: "cars", "used cars", "cars recalled".
     public async Task ProductionSeed_CollidingTickers_HaveNoTickerTokenInNewsSearchFeed(string ticker)
     {
         var url = await GetNewsSearchUrlAsync(ticker);
@@ -66,6 +85,7 @@ public sealed class ProductionCompanySeedTests
     [Theory]
     [InlineData("HWKN")]
     [InlineData("DGII")] // spec-159 newcomer: distinctive tickers from the batch keep the token too.
+    [InlineData("CCOI")] // spec-166 newcomer: same honesty control for batch 4.
     public async Task ProductionSeed_DistinctiveTicker_KeepsTheTickerToken(string ticker)
     {
         // Honesty control for the theory above: a distinctive ticker still carries the token.
@@ -88,6 +108,65 @@ public sealed class ProductionCompanySeedTests
         var url = await GetNewsSearchUrlAsync("JJSF");
 
         Assert.Equal("query=JJSF", url);
+    }
+
+    /// <summary>
+    /// BKE's query phrase must stay EXACTLY <c>The Buckle</c> (spec 166). <c>NewsAttentionCollector.IsRelevant</c>
+    /// is an unanchored case-insensitive <c>Contains</c>, so the bare phrase "Buckle" would match "buckle up",
+    /// "buckle under pressure" and every other idiomatic use — false-positive media evidence that inflates
+    /// Attention and, via the reach term, distorts the notedness discount. The distinctive <c>BKE</c> ticker
+    /// token stays, because it is what carries the finance-styled headlines.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_Bke_NewsSearchUrlUsesTheDisambiguatedPhrase()
+    {
+        var url = await GetNewsSearchUrlAsync("BKE");
+
+        Assert.Equal("query=The Buckle&ticker=BKE", url);
+    }
+
+    /// <summary>
+    /// The spec-166 batch-4 names form the AD-16 §7 event-enriched EXCLUSION cohort, declared machine-readably
+    /// in <c>docs/cohorts/event-enriched-2026-07.json</c> (the efficacy evaluator reads that file, never git
+    /// history). If the seed and the cohort file drift — a ticker renamed here, a CIK corrected there — the
+    /// evaluator would silently include an excluded company in the binding primary screen, or exclude one that
+    /// was never enriched. This pins the cohort -> seed direction: each of the eight cohort tickers resolves to
+    /// exactly one seed company whose <c>sec</c> feed url carries the cohort file's CIK. The reverse direction
+    /// is not expressible — nothing in the seed marks a company as event-enriched — so a ninth enriched name
+    /// added to the seed without updating the cohort file would go undetected here.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_MatchesTheEventEnrichedCohortFile()
+    {
+        var cohortPath = Path.Combine(LocateRepoRoot(), "docs", "cohorts", EventEnrichedCohortFile);
+        Assert.True(File.Exists(cohortPath), $"Expected the AD-16 exclusion cohort at {cohortPath}.");
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(cohortPath));
+        var cohort = document.RootElement.GetProperty("companies")
+            .EnumerateArray()
+            .Select(e => (
+                Ticker: e.GetProperty("ticker").GetString() ?? string.Empty,
+                Cik: e.GetProperty("cik").GetString() ?? string.Empty))
+            .ToList();
+
+        Assert.Equal(8, cohort.Count);
+        Assert.Equal(8, cohort.Select(c => c.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+
+        var seed = await LoadProductionSeedAsync();
+
+        foreach (var (ticker, cik) in cohort)
+        {
+            var company = Assert.Single(
+                seed.Companies,
+                c => string.Equals(c.Ticker, ticker, StringComparison.OrdinalIgnoreCase));
+
+            var secFeed = Assert.Single(
+                seed.SourceFeeds,
+                f => f.CompanyId == company.Id
+                    && string.Equals(f.FeedType, "sec", StringComparison.OrdinalIgnoreCase));
+
+            Assert.Equal($"https://data.sec.gov/submissions/CIK{cik}.json", secFeed.Url);
+        }
     }
 
     [Fact]
