@@ -51,6 +51,19 @@
 #   * it writes the LIVE score series, so it may not be back-dated. Scoring a historical instant is -Replay.
 # -Mode and -Replay are mutually exclusive and this script says so rather than letting the Worker fail later.
 #
+# COMPANY FILTER (spec 161): -Companies "CASS,IDT" restricts the pass to the named watch-universe tickers,
+# threaded as --Radar:Companies:0=CASS --Radar:Companies:1=IDT. Use it to backfill newly onboarded companies or
+# re-check one company's feeds on demand without paying for a full ~300-source run. Rules:
+#   * it REQUIRES -Mode collect. Filtering is collection-only: a filtered SCORING run would overwrite the
+#     date-keyed weekly report with a one-company report and mint sparse as-of dates into the strategy-vs-price
+#     efficacy join. Filter the gathering, never the measuring - scoring stays whole-universe on the next
+#     full/score run. The Worker's own config guard would catch it too; failing here is just earlier and cheaper.
+#   * tickers are matched against data/companies.json case-insensitively; an unknown ticker FAILS the run
+#     naming the token, so a typo can never silently collect nothing.
+#   * the run record stamps the canonical ticker list, and the price-efficacy render + strategy leaderboard are
+#     SKIPPED for the filtered pass (they read the seeded universe, which is partial here).
+#   * omit -Companies for the normal whole-universe run - the off-switch is absence.
+#
 # Examples:
 #   powershell -File scripts/run-radar.ps1                       # baseline run -> data\
 #   powershell -File scripts/run-radar.ps1 -Profile low-media    # experiment  -> data\experiments\low-media\
@@ -58,6 +71,7 @@
 #   powershell -File scripts/run-radar.ps1 -Mode collect          # collect only; score later, as often as you like
 #   powershell -File scripts/run-radar.ps1 -Mode score            # score the accrued store; no collector runs (see the -Mode score caveats above)
 #   powershell -File scripts/run-radar.ps1 -Replay -ReplayFrom 2026-05-01 -ReplayTo 2026-07-25 -ReplayStep 1d
+#   powershell -File scripts/run-radar.ps1 -Mode collect -Companies "CASS,IDT"   # collect for two companies only
 
 [CmdletBinding()]
 param(
@@ -66,6 +80,7 @@ param(
     [string]$SecUserAgent  = $(if ($env:RADAR_SEC_UA) { $env:RADAR_SEC_UA } else { "Radar Research your-contact-email@example.com" }),  # SEC EDGAR needs a real name+email: pass -SecUserAgent or set $env:RADAR_SEC_UA. NOT committed (public repo).
     [ValidateSet("full", "collect", "score")]
     [string]$Mode          = "full",    # which pass to run (spec 144); 'full' is the combined collect+score run
+    [string]$Companies     = "",        # spec 161: comma-separated tickers to restrict COLLECTION to; requires -Mode collect. Blank = whole universe
     [switch]$Replay,                    # run a read-only historical as-of replay INSTEAD of the pipeline
     [string]$ReplayFrom    = "",        # first as-of instant, UTC (e.g. 2026-05-01); required with -Replay
     [string]$ReplayTo      = "",        # upper bound of the as-of series, UTC; required with -Replay
@@ -149,6 +164,21 @@ if ($Replay -and $Mode -ne "full") {
 }
 $merged["Radar:RunMode"] = $Mode
 
+# --- optional: company filter (spec 161) restricting WHICH companies this pass collects for ---
+# Collection-only by design: reject anything but -Mode collect HERE with a one-line message, rather than
+# letting the Worker's equivalent config guard surface after a build. Blank entries are dropped so a trailing
+# comma is not an error; a list that is all blanks is treated as no filter at all (nothing is threaded).
+$companyTickers = @()
+if (-not [string]::IsNullOrWhiteSpace($Companies)) {
+    $companyTickers = @($Companies -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+}
+if ($companyTickers.Count -gt 0) {
+    if ($Mode -ne "collect") {
+        throw "-Companies requires -Mode collect. Filtering is collection-only: a filtered scoring run would overwrite the date-keyed weekly report with a one-company report and mint sparse as-of dates into the strategy-vs-price efficacy join. Filter the gathering, never the measuring - scoring stays whole-universe on the next full/score run."
+    }
+    for ($i = 0; $i -lt $companyTickers.Count; $i++) { $merged["Radar:Companies:$i"] = $companyTickers[$i] }
+}
+
 # --- optional: historical as-of replay (spec 139) instead of a pipeline run ---
 # Fail here rather than at the Worker so the missing bound is obvious before a build happens. From/To are
 # passed through verbatim; the Worker parses them as UTC and fails fast on anything unparseable.
@@ -175,6 +205,9 @@ if ($Mode -eq "score") {
     if ($merged["Radar:Prices:Enabled"] -eq 'true') {
         Write-Host "NOTE: Radar:Prices:Enabled is true, so this score pass WILL fetch daily price history per ticker (AD-14 reference data, outside the pipeline). If you repeat this pass often, run it under a -Profile whose JSON sets `"Prices`": { `"Enabled`": false }." -ForegroundColor DarkYellow
     }
+}
+if ($companyTickers.Count -gt 0) {
+    Write-Host "COMPANY FILTER: $($companyTickers -join ',') - this is a PARTIAL collection pass over $($companyTickers.Count) named companies, NOT the full watch universe. Scoring stays whole-universe on the next full/score run; the price-efficacy render and strategy leaderboard are skipped for this pass." -ForegroundColor Yellow
 }
 if ($Replay) {
     Write-Host "REPLAY MODE: as-of $ReplayFrom .. $ReplayTo step $ReplayStep -> $(Join-Path $outRoot 'replays') (read-only; the pipeline, price, report and efficacy steps do NOT run)" -ForegroundColor Yellow

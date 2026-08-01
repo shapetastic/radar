@@ -33,4 +33,11 @@ public sealed record PipelineRunRecord(
     // on-disk run JSON (written before this slice) still deserializes (null == single-strategy/unrecorded);
     // observational only, never evidence/signal/scoring input, and RecentRunSummary does not read it.
     IReadOnlyList<string>? Strategies = null,
-    string? PrimaryStrategy = null);
+    string? PrimaryStrategy = null,
+    // The resolved, canonicalised Radar:Companies ticker filter this run collected for (spec 161), or null
+    // when the run covered the whole watch universe. Trailing + optional so every existing on-disk run JSON
+    // still deserializes and reads correctly as UNFILTERED. Run provenance only — a partial pass must never
+    // be mistakable for a full one — and never an evidence/signal/scoring input: the company universe is not
+    // a fingerprint input (AD-10), and the filter is collect-only by guard, so a scored run always carries
+    // null here.
+    IReadOnlyList<string>? CompanyFilter = null);

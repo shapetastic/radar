@@ -251,6 +251,60 @@ public sealed class WorkerTests
     }
 
     [Fact]
+    public async Task CompanyFilteredRun_SkipsTheEfficacyRenderAndTheStrategyLeaderboard()
+    {
+        // Spec 161: both generators join through ICompanyRepository, which under a filter holds only the
+        // named companies — recomputing them here would overwrite whole-universe artifacts (including
+        // data/efficacy/strategy-leaderboard.{csv,md}) with a partial view. The pipeline itself still runs:
+        // the point of a filtered pass is to COLLECT.
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true, Mode = RadarRunMode.Collect },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: new RecordingEfficacyGenerator(callLog),
+            replayRunner: null,
+            strategyComparisonGenerator: new RecordingStrategyComparisonGenerator(callLog),
+            companyFilter: CompanyFilter.FromTickers(["CASS"]));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run"], callLog);
+    }
+
+    [Fact]
+    public async Task NoCompanyFilter_StillRunsTheEfficacyRenderAndTheStrategyLeaderboard()
+    {
+        // The unfiltered control for the test above: absence of a filter changes nothing, in any mode.
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true, Mode = RadarRunMode.Collect },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: new RecordingEfficacyGenerator(callLog),
+            replayRunner: null,
+            strategyComparisonGenerator: new RecordingStrategyComparisonGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run", "efficacy", "comparison"], callLog);
+    }
+
+    [Fact]
     public async Task ReplayRun_SkipsTheStrategyComparisonToo()
     {
         // A replay REPLACES the run (spec 139): it must not render efficacy and must not rank strategies.

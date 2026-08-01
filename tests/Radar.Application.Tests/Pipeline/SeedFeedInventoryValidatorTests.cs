@@ -165,4 +165,10 @@ public sealed class SeedFeedInventoryValidatorTests
 
         Assert.False(report.HasWarnings);
     }
+
+    // The spec-161 checkpoint — that this validator reconciles a FILTERED declared inventory against a
+    // FILTERED collection context — composes this validator with the Infrastructure decorator, so it lives
+    // beside that decorator in
+    // Radar.Infrastructure.Tests/Sources/FilteredCompanySeedSourceTests.ReconcilesCleanWithTheCollectionHealthValidator.
+    // The validator's OWN rules (relative shrinkage, ordering, case-insensitivity, empty seed) stay here.
 }

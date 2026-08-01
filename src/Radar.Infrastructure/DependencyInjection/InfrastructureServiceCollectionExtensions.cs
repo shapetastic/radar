@@ -2033,6 +2033,88 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Applies the <c>Radar:Companies</c> ticker filter (spec 161) by DECORATING the already-registered
+    /// <see cref="ICompanySeedSource"/> with <see cref="FilteredCompanySeedSource"/>, and registers the
+    /// resolved <see cref="CompanyFilter"/> so the run record and the collect-pass summary can state it.
+    /// <para>
+    /// Must be called AFTER a seed source is registered (e.g. <see cref="AddLocalFileCompanySeed"/>) — it
+    /// captures that registration and wraps it, mirroring the
+    /// <see cref="AddDurableRadarSignalHistory"/> precedent of repointing an interface at a composed instance
+    /// rather than adding a parallel one. Call it ONLY when the configured list is non-empty: when it is not
+    /// called, nothing new is registered and the graph is byte-identical to a deployment that never heard of
+    /// the key.
+    /// </para>
+    /// <para>
+    /// The decoration deliberately covers EVERY consumer of the seed source — the universe seeder AND
+    /// <see cref="SeedFeedInventoryValidator"/> — so collection-health reconciles the FILTERED declared
+    /// inventory against the FILTERED collection context and a partial pass emits no spurious
+    /// feeds-lost warnings.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddCompanySeedFilter(
+        this IServiceCollection services, CompanyFilter filter)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(filter);
+
+        // Non-keyed only: reading ImplementationType off a KEYED descriptor throws, and the RemoveAll below
+        // is not keyed-aware either. Recorded limitation, not a latent bug — Radar registers no keyed
+        // ICompanySeedSource anywhere; if one is ever added, both halves of this must learn about keys
+        // together (capture per key, remove per key), or a keyed seed source would silently escape the filter.
+        var inner = services.LastOrDefault(
+            d => d.ServiceType == typeof(ICompanySeedSource) && !d.IsKeyedService)
+            ?? throw new InvalidOperationException(
+                "AddCompanySeedFilter requires an ICompanySeedSource to already be registered (call it after "
+                    + "AddLocalFileCompanySeed) — there is nothing to filter otherwise.");
+
+        services.RemoveAll<ICompanySeedSource>();
+        services.AddSingleton(filter);
+        services.AddSingleton<ICompanySeedSource>(sp => new FilteredCompanySeedSource(
+            CreateFromDescriptor<ICompanySeedSource>(sp, inner),
+            filter,
+            sp.GetRequiredService<ILogger<FilteredCompanySeedSource>>()));
+        return services;
+    }
+
+    /// <summary>
+    /// Materialises the service a captured <see cref="ServiceDescriptor"/> describes, so a decorator can wrap
+    /// the registration it replaced without naming the concrete inner type.
+    /// <para>
+    /// <b>Constraint under which this is valid, recorded rather than assumed.</b> The
+    /// <c>ImplementationType</c> branch re-creates the inner service via
+    /// <see cref="ActivatorUtilities.CreateInstance(IServiceProvider, Type, object[])"/>, which honours
+    /// NEITHER the original descriptor's lifetime NOR container disposal — the instance's own lifetime
+    /// becomes that of whatever registration wraps it, and an <see cref="IDisposable"/> inner service would
+    /// never be disposed by the container. That is harmless for the ONE caller
+    /// (<see cref="AddCompanySeedFilter"/> wrapping the singleton, non-disposable
+    /// <see cref="LocalFileCompanySeedSource"/> inside a singleton), and this helper must not be reused for a
+    /// scoped/transient or disposable service without first fixing both.
+    /// </para>
+    /// </summary>
+    private static T CreateFromDescriptor<T>(IServiceProvider provider, ServiceDescriptor descriptor)
+        where T : class
+    {
+        if (descriptor.ImplementationInstance is T instance)
+        {
+            return instance;
+        }
+
+        if (descriptor.ImplementationFactory is not null)
+        {
+            return (T)descriptor.ImplementationFactory(provider);
+        }
+
+        if (descriptor.ImplementationType is not null)
+        {
+            return (T)ActivatorUtilities.CreateInstance(provider, descriptor.ImplementationType);
+        }
+
+        throw new InvalidOperationException(
+            $"The registered {typeof(T).Name} descriptor carries no instance, factory or implementation type "
+                + "and cannot be decorated.");
+    }
+
+    /// <summary>
     /// Registers the insert-only file raw-evidence store that mirrors each newly-stored
     /// <see cref="Radar.Domain.Evidence.EvidenceItem"/> to
     /// <c>{rootDirectory}/{sourceType}/{yyyy}/{MM}/{contentHash}.json</c> (AD-8). The pipeline runner

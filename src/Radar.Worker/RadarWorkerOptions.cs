@@ -24,6 +24,24 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public ScoreWorkerOptions Score { get; init; } = new();
 
+    /// <summary>
+    /// OPTIONAL ticker filter restricting a <b>collection</b> pass to a subset of the watch universe (spec
+    /// 161). Empty (the default) means NO filter — the whole universe, byte-identical to a deployment that
+    /// never heard of this key; the off-switch is absence.
+    /// <para>
+    /// <b>COLLECT-ONLY, by guard.</b> A non-empty list with <see cref="RunMode"/> anything other than
+    /// <c>"collect"</c> fails fast at startup: a filtered SCORING run would overwrite the date-keyed weekly
+    /// report with a one-company report and mint sparse as-of dates into the strategy-vs-price efficacy join.
+    /// Filter the gathering, never the measuring — scoring stays whole-universe on the next full/score run.
+    /// </para>
+    /// <para>
+    /// Tokens are matched against the seed's tickers case-insensitively and whitespace-trimmed, and duplicates
+    /// collapse. A blank token, or one matching no seed company, FAILS FAST naming the token — a typo that
+    /// silently filtered to nothing would be a run that "worked" and collected nothing.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Companies { get; init; } = [];
+
     /// <summary>Which evidence collectors to run, additively. Each kind is one of: "rss", "localfile", "sec", "secform4", "sec13dg", "usaspending", "news", "newssearch", "hiringats", "patents", "fda", "trademarks". Not read in <c>"score"</c> <see cref="RunMode"/> — that pass registers no collector at all.</summary>
     public IReadOnlyList<string> Collectors { get; init; } = ["rss"];
 

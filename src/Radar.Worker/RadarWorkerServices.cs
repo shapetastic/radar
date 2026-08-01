@@ -2,6 +2,7 @@ using System.Globalization;
 
 using Radar.Application.Collectors;
 using Radar.Application.Efficacy.Comparison;
+using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -39,6 +40,10 @@ internal static class RadarWorkerServices
         // spec-139 Radar:Replay:Enabled switch and fails fast on an unknown mode or on the one contradictory
         // combination (a live collect/score pass asked for alongside a read-only replay).
         var runMode = RadarRunModes.Resolve(options.RunMode, options.Replay.Enabled);
+
+        // The optional Radar:Companies collection filter (spec 161), resolved beside the mode it is
+        // reconciled against. Null == no filter == byte-identical to a deployment that never heard of the key.
+        var companyFilter = ResolveCompanyFilter(options, runMode);
 
         // Fail fast with a clear message: a non-positive interval would otherwise throw an opaque
         // ArgumentOutOfRangeException from PeriodicTimer when the worker starts looping.
@@ -288,6 +293,15 @@ internal static class RadarWorkerServices
         }
 
         services.AddLocalFileCompanySeed(options.CompanySeedFilePath);
+
+        // Spec 161: apply the Radar:Companies filter at the ONE choke point everything downstream reads — the
+        // seed source — by decorating the registration above. Registered ONLY when a filter is configured, so
+        // an unfiltered deployment resolves the undecorated seed source and registers nothing new.
+        if (companyFilter is not null)
+        {
+            services.AddCompanySeedFilter(companyFilter);
+        }
+
         services.AddFileRawEvidenceStore(options.EvidenceRawDirectory);
         services.AddFileSignalStore(options.SignalsDirectory);
         // Spec 142: the composed app reads accrued history. Repoints ISignalRepository /
@@ -329,6 +343,42 @@ internal static class RadarWorkerServices
 
         services.AddHostedService<Worker>();
         return services;
+    }
+
+    /// <summary>
+    /// Resolves the optional <c>Radar:Companies</c> collection filter (spec 161) and reconciles it with the
+    /// run mode, here beside <see cref="RadarRunModes.Resolve"/> — the one place mode conflicts are settled —
+    /// and mirroring the existing <c>Radar:RunMode</c> + <c>Radar:Replay:Enabled</c> conflict guard.
+    /// <para>
+    /// An absent/empty list ⇒ <c>null</c> ⇒ no filter, and nothing filter-related is registered anywhere: the
+    /// off-switch is absence, so every existing deployment composes a byte-identical graph. A NON-EMPTY list
+    /// outside <c>collect</c> mode FAILS FAST naming both keys — the filter restricts what is GATHERED, and a
+    /// filtered scoring pass would clobber whole-universe outputs.
+    /// </para>
+    /// </summary>
+    private static CompanyFilter? ResolveCompanyFilter(RadarWorkerOptions options, RadarRunMode runMode)
+    {
+        if (options.Companies is null || options.Companies.Count == 0)
+        {
+            return null;
+        }
+
+        if (runMode != RadarRunMode.Collect)
+        {
+            throw new InvalidOperationException(
+                $"{CompanyFilter.ConfigKey} restricts collection to a subset of the watch universe and is "
+                    + $"therefore COLLECT-ONLY, but Radar:RunMode is '{RadarRunModes.Token(runMode)}'. A "
+                    + "filtered scoring run would overwrite the date-keyed weekly report with a one-company "
+                    + "report and mint sparse as-of dates into the strategy-vs-price efficacy join (dates "
+                    + "where most of the universe has no observation). Set Radar:RunMode=collect to gather "
+                    + "evidence for the named companies — scoring stays whole-universe on the next "
+                    + $"full/score run — or clear {CompanyFilter.ConfigKey}.");
+        }
+
+        // Canonicalisation + the blank/duplicate rules live on CompanyFilter, so Radar.Application owns them
+        // and no IConfiguration crosses the layer boundary. Whether each ticker NAMES a seed company is
+        // checked by the seed-source decorator, which is the first place the seed is known.
+        return CompanyFilter.FromTickers(options.Companies);
     }
 
     /// <summary>

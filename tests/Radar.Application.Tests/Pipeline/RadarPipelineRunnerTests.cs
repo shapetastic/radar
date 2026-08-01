@@ -517,6 +517,20 @@ public sealed class RadarPipelineRunnerTests
         }
 
         /// <summary>
+        /// Spec 161: the SAME collect-only runner, told which companies the pass was restricted to. The
+        /// filter itself is applied at the seed source; here it is provenance only, so this differs from
+        /// <see cref="CollectOnlyRunner"/> in exactly one constructor argument.
+        /// </summary>
+        public CollectOnlyPipelineRunner FilteredCollectOnlyRunner(CompanyFilter filter) =>
+            new(
+                CollectionPass,
+                StrategyFactory,
+                ScoringConfigStore,
+                RunStore,
+                NullLogger<CollectOnlyPipelineRunner>.Instance,
+                filter);
+
+        /// <summary>
         /// A standalone score runner over the SAME graph, at the supplied as-of instant (null ⇒ now from the
         /// harness clock). Built on demand so a test can choose the instant.
         /// </summary>
@@ -2530,6 +2544,38 @@ public sealed class RadarPipelineRunnerTests
         Assert.Null(run.ReportId);
         Assert.Null(run.Strategies);
         Assert.Null(run.PrimaryStrategy);
+
+        // Spec 161: an UNFILTERED run stamps null — the same value every run record written before the field
+        // existed deserializes to, so "no companyFilter recorded" and "whole universe" read identically.
+        Assert.Null(run.CompanyFilter);
+    }
+
+    /// <summary>
+    /// Spec 161: a company-FILTERED collect pass stamps the canonical ticker list on the run record, so a
+    /// partial pass is never mistakable for a full one. Provenance only — nothing else about the pass changes
+    /// (the filter itself is applied at the seed source).
+    /// </summary>
+    [Fact]
+    public async Task FilteredCollectPass_StampsTheCanonicalCompanyFilterOnTheRunRecord()
+    {
+        var h = new Harness(
+            new FakeEvidenceCollector([BuildCollected()]),
+            new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary")),
+            new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        // Canonicalisation (trim + upper + de-dupe, configured order) happens in CompanyFilter; the run
+        // record must carry that canonical form, not the raw configured tokens.
+        var filter = CompanyFilter.FromTickers([" cass ", "IDT", "Cass"]);
+
+        var result = await h.FilteredCollectOnlyRunner(filter).RunAsync(default);
+
+        Assert.Equal(1, result.EvidenceNew);
+
+        var run = Assert.Single(h.RunStore.Written);
+        Assert.Equal(["CASS", "IDT"], run.CompanyFilter);
+        Assert.Equal(0, run.CompaniesScored);
+        Assert.Null(run.Strategies);
     }
 
     /// <summary>
