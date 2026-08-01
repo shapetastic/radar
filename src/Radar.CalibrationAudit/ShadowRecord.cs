@@ -130,6 +130,10 @@ public static class ShadowRecordStore
         {
             return null;
         }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     public static void Write(string outputRoot, ShadowRecord record)
