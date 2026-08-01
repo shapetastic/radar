@@ -7,13 +7,14 @@
 > interacts with the AD-16 primary-screen boundary. Documented now; implemented later.
 >
 > **Revision history.** r2 (2026-08-01): 5×P1 review — `GuidanceAction` replaced the tri-state basis, the
-> family supersede and cache epoch were specified, fingerprint scope corrected to all-pins. r3 (2026-08-01,
-> this version): second review round **NARROWED the scope** — r2's action-derived direction was a new,
-> unvalidated scoring behaviour (the spec-162 audit never measured action-classification accuracy), its
-> confidence semantics were incoherent (`FilingSentiment.Confidence` describes the trajectory, not the
-> action), and the family supersede winner was undefined. This version completes the TAXONOMY repair only:
-> **no signal changes direction, strength, or confidence relative to today.** Action-derived
-> `GuidanceChange` is a separately-specced promotion, gated on a shadow audit.
+> family supersede and cache epoch were specified, fingerprint scope corrected to all-pins. r3: second
+> round **narrowed the scope to taxonomy-only** — action-derived direction deferred behind a shadow audit.
+> r4 (2026-08-01, this version): third round — **the r3 family type-precedence rule is WITHDRAWN** (it
+> could flip a multi-phrase filing's direction, e.g. record-revenue + cuts-guidance, contradicting
+> taxonomy-only); the family now preserves TODAY'S winner and retypes it. The invariance claim is restated
+> as code-level (a changed prompt can move live model output — the contract version and cache epoch exist
+> to absorb exactly that), and the diagnostic `GuidanceAction` moves OFF the scored `Signal` schema into
+> the cache + read-debug records, with a new `AnalysisFailed` debug outcome.
 
 ## Overview
 
@@ -26,14 +27,17 @@ nor outlook; the weekly report's #2 company (MSEX) was labelled with a guidance 
 After this spec:
 
 1. **Every AI directional read emits `EarningsTrajectory`** — same direction, same confidence, same gate,
-   same spec-160 cap as today. The only change is the honest type name.
+   same spec-160 cap. **Code-level guarantee: given the same trajectory result from the analyzer, every
+   downstream scored field is unchanged.** (A changed system instruction can move the live model's
+   trajectory answer itself — no fixture can promise otherwise; that possibility is exactly what the new
+   `contract=` fingerprint segment and the cache-epoch bump account for.)
 2. **`GuidanceAction` is recorded DIAGNOSTICALLY**: the analyzer additionally classifies the explicit
    guidance event (`Raised` | `Cut` | `Withdrawn` | `Introduced` | `Reaffirmed` | `None`), persisted on the
-   signal and the cache record, **consumed by nothing that scores**. It exists to be audited.
+   **cache record and the read-debug record — NOT on the scored `Signal` schema** — and consumed by nothing
+   that scores. It exists to be audited.
 3. **Literal `GuidanceChange` survives only in the deterministic extractor**, for phrases whose wording
    states an actual guidance/outlook action.
-4. **Exactly one scored earnings signal per filing**, secured by an earnings-signal FAMILY with a
-   predeclared total order through both suppression and supersede.
+4. **Exactly one scored earnings signal per filing — the SAME one today's code selects, retyped.**
 
 ## Assignment
 
@@ -45,52 +49,65 @@ Estimated time: ~2–3 hours.
 
 ### 1. Analyzer contract — diagnostic `GuidanceAction` + an explicit authoritative/failure seam
 
-- The typed analyzer result gains a required `GuidanceAction` field (closed set above). The system
-  instruction defines it: an action requires an EXPLICIT statement about forward guidance; outlook
-  commentary, vision statements, and "we remain confident" language are `None`. The trajectory
-  classification and its confidence are UNCHANGED — `FilingSentiment.Confidence` continues to describe the
-  trajectory read, which is the only thing scored, so its semantics stay coherent (review r3-P1-2).
+- The typed analyzer result gains a required `GuidanceAction` field (closed set above, validated as part of
+  the structured output). The system instruction defines it: an action requires an EXPLICIT statement about
+  forward guidance; outlook commentary, vision statements, and "we remain confident" language are `None`.
+  The trajectory classification and its confidence are UNCHANGED — `FilingSentiment.Confidence` continues
+  to describe the trajectory read, the only thing scored.
 - **Explicit authoritative/failure state (review r2-P2).** Today malformed analyzer output degrades to
   `FilingSentiment.Unknown`, indistinguishable from a legitimate authoritative Unknown, and is cached as
   no-signal. The successor result carries an explicit marker (e.g. `IsAuthoritative`): malformed or missing
-  fields ⇒ FAILED read — never cached, retried later; a genuine low-confidence/Unknown read remains
-  cacheable no-signal exactly as today.
+  fields ⇒ FAILED read — never cached, retried later — while a genuine low-confidence/Unknown read remains
+  cacheable no-signal exactly as today. **The read-debug sink gains a matching `AnalysisFailed` outcome**
+  (review r4-P2) so a malformed action/direction is represented honestly rather than recorded as a
+  no-signal conclusion.
 
-### 2. Signal typing — rename only, no behaviour change
+### 2. Signal typing — rename only
 
 - `DirectionalFilingSignalSource` emits **`EarningsTrajectory`** with the trajectory direction and
-  confidence — byte-equivalent decision-making to today; only the type token differs. `SignalType` (Domain)
-  gains the `EarningsTrajectory` member.
+  confidence; `SignalType` (Domain) gains the `EarningsTrajectory` member. Given the same analyzer result,
+  the emitted signal differs from today's ONLY in the type token (pinned by the rename-only guard test).
 - The deterministic spec-57 Neutral 8-K marker moves to `EarningsTrajectory` (it marks an earnings FILING).
 - **`GuidanceAction` changes NOTHING scored.** No mapping table, no action-derived direction, no
-  `GuidanceActionConfidence`. The conflict print (Improving results + guidance cut) scores exactly as
-  today (the prompt already forces Mixed ⇒ typically below the gate ⇒ no signal). Surfacing cuts as
-  first-class signals is the promotion spec's business (below), if the shadow audit earns it.
+  `GuidanceActionConfidence`. Surfacing guidance cuts as first-class signals is the promotion spec's
+  business (below), if the shadow audit earns it.
 
-### 3. Diagnostic persistence — named properties, not a metadata bag (review r3-P2)
+### 3. Diagnostic persistence — cache + debug records, NOT the scored schema (review r4-P2)
 
-- `Signal`, `ExtractedSignal`, and the `FileSignalStore` persisted record have NO metadata field — the spec
-  names the real shape: a **trailing, nullable `GuidanceAction` property** (`string?`, the enum token) on
-  all three, omitted from the persisted JSON when null (the `summary` precedent — existing files stay
-  byte-identical). Legacy null semantics: "not recorded (pre-168)", never defaulted. Round-trip test
-  required (value present, value null, legacy file without the property).
-- `AnalyzedFilingRecord` gains the same trailing nullable field, under the `CurrentCacheVersion` bump below.
+- `Signal`, `ExtractedSignal`, and the signal file are **untouched** — the scored path structurally cannot
+  consume a field it does not carry, which is a stronger guarantee than any reflection guard.
+- `AnalyzedFilingRecord` gains a **trailing nullable `GuidanceAction`** (`string?`, the closed-set token,
+  validated on write; omitted from JSON when null so existing files stay byte-identical; legacy null =
+  "not recorded (pre-168)", never defaulted). This is the corpus the shadow audit will read — the spec-164
+  audit pattern already works off the cache scope.
+- `FilingReadDebugRecord` gains the same field — it is specifically where the model's complete conclusion
+  is recorded — plus the `AnalysisFailed` outcome above. Round-trip tests for both records (present / null
+  / legacy file without the property).
 
-### 4. The earnings-signal FAMILY — one winner, predeclared total order (review r3-P1-3)
+### 4. The earnings-signal FAMILY — today's winner, retyped (review r4-P1; supersedes r3's order)
 
-- `EarningsSignalTypes = { GuidanceChange, EarningsTrajectory }`, defined ONCE (Application layer); both the
+- `EarningsSignalTypes = { GuidanceChange, EarningsTrajectory }`, defined ONCE (Application layer); the
   `CollectionPass` suppression and the supersede (rename `GuidanceChangeSupersede` →
   `EarningsSignalSupersede`) key on family membership.
-- Today's `Beats` only orders directional-over-neutral, then time/ID — with two family types that no longer
-  picks a unique winner. **Predeclared total order** (first difference wins):
-  1. Directional beats Neutral (unchanged).
-  2. Among directional: **`GuidanceChange` beats `EarningsTrajectory`** — explicit guidance wording is the
-     more specific fact. Legacy `GuidanceChange` rows without action metadata rank as `GuidanceChange` by
-     their token; no metadata inspection is needed.
-  3. The existing time/ID tiebreak (unchanged, order-independent).
-- Asserted: for every pairing of deterministic and AI earnings signals on one filing — including
-  `GuidanceChange (Negative)` vs `EarningsTrajectory (Positive)` — exactly one survives, and which one is
-  pinned by test, not left to input order.
+- ⚠ **The r3 type-precedence rule (`GuidanceChange` beats `EarningsTrajectory`) is WITHDRAWN — it was a
+  scoring change in disguise.** Concrete case: a filing containing both "record revenue" and "cuts
+  guidance". Today both phrases share the single `GuidanceChange` type slot and the extractor's
+  first-match-per-type keeps "record revenue" ⇒ Positive survives. Under repartition + type precedence the
+  filing would flip to `GuidanceChange (Negative)` — a direction change, contradicting this spec's hard
+  constraint. Whether the cut SHOULD win is a legitimate question **for the promotion spec**, decided on
+  measurement, not smuggled in through an ordering rule.
+- **Taxonomy-preserving selection instead:**
+  - **Extractor:** the family shares ONE emission slot with today's semantics generalised — rules are
+    evaluated in table order and the FIRST matching earnings-family rule wins the family slot (byte-for-byte
+    today's outcome, since today every family rule shares the one `GuidanceChange` slot). The emitted
+    signal then carries its winning rule's (possibly repartitioned) type. Non-family types unchanged.
+  - **Suppression + supersede:** keep today's ordering semantics exactly, widened to the family:
+    directional beats Neutral, then the existing time/ID tiebreak — **no type precedence**. The
+    AI-over-deterministic priority that today's suppression implements is preserved verbatim, keyed on the
+    family instead of the literal type.
+- Pinned by test: the record-revenue + cuts-guidance fixture selects the SAME winner pre- and post-168
+  (only its type token differs), and every deterministic/AI × directional/neutral pairing keeps exactly one
+  survivor, order-independent.
 
 ### 5. Extractor repartition + phrase audit — this is what moves the AI-OFF pins
 
@@ -142,24 +159,26 @@ Estimated time: ~2–3 hours.
 ## Follow-up specs — recorded, NOT built here
 
 - **Shadow audit of `GuidanceAction`** (spec-164 pattern): measure action-classification precision/recall
-  against a labeled corpus using the diagnostically-persisted values; no live signals.
-- **Promotion spec**, only if the audit supports it: action-derived `GuidanceChange` direction, a separate
-  `GuidanceActionConfidence`, and the open cap-policy question (should the spec-160 comparability cap weaken
-  a genuine guidance cut merely because the reported quarter contains one-offs? — arguably not, but that is
-  a measured decision for that spec, not this one).
+  against a labeled corpus using the diagnostically-persisted cache/debug values; no live signals.
+- **Promotion spec**, only if the audit supports it: action-derived `GuidanceChange` direction (including
+  whether an explicit cut should out-rank a positive results read — the family-order question r4 removed
+  from this spec), a separate `GuidanceActionConfidence`, and the open cap-policy question (should the
+  spec-160 comparability cap weaken a genuine guidance cut merely because the reported quarter contains
+  one-offs?).
 
 ## Tests
 
-- Rename-only guard: for a fixture corpus, post-168 emitted signals differ from pre-168 ONLY in the type
-  token (direction, strength, confidence, gate and cap outcomes byte-equivalent).
-- Diagnostic field: round-trips (present / null / legacy file); consumed by nothing in `Scoring/` (guarded
-  by reflection or compile-scope assertion).
-- Authoritative seam: malformed ⇒ FAILED, not cached, retried; authoritative Unknown ⇒ cached no-signal.
-- Family total order: every directional/neutral × type pairing pinned to its predeclared winner,
-  order-independent.
+- Rename-only guard (code-level): **given the same analyzer result**, post-168 emitted signals differ from
+  pre-168 ONLY in the type token (direction, strength, confidence, gate and cap outcomes byte-equivalent).
+- Family selection: the record-revenue + cuts-guidance fixture keeps today's winner (retyped); every
+  deterministic/AI × directional/neutral pairing keeps exactly one survivor, order-independent; the
+  extractor's one-per-family slot reproduces today's outcome on multi-phrase bodies.
+- Diagnostic fields: cache + debug records round-trip (present / null / legacy); `Signal`/`ExtractedSignal`
+  and the signal file are byte-unchanged (asserted, not assumed).
+- Authoritative seam: malformed ⇒ FAILED read, not cached, retried, debug outcome `AnalysisFailed`;
+  authoritative Unknown ⇒ cached no-signal with today's debug outcome.
 - Extractor: each repartitioned phrase pinned; the tightened "raises full-year" decision pinned; the
-  guidance-action wording rule asserted against the final table (no `GuidanceChange` phrase without
-  guidance/outlook wording).
+  guidance-action wording rule asserted against the final table.
 - Identity: AI-OFF and AI-ON pins move once each per window; `contract=` segment pinned fingerprint-moving;
   `baseline-earnings-only-v2` stamps fresh; reflection guard passes.
 - Cache: pre-168 record is a MISS; post-168 round-trips.
@@ -171,8 +190,9 @@ Estimated time: ~2–3 hours.
   persistence, append-only stores, and the advice-language ban all hold.
 - No change to cmpscan semantics; the cap applies to the trajectory confidence exactly as today.
 - Constant Strength 8 untouched (spec 162: materiality encoding needs its own validation pass).
-- **No signal's scored direction, strength, or confidence changes.** That is the r3 review's core
-  constraint and the rename-only guard test enforces it.
+- **Given the same analyzer result, no signal's scored direction, strength, or confidence changes, and the
+  per-filing family winner is today's.** (Live model output may drift because the prompt changed — that is
+  a model-behaviour epoch, absorbed by `contract=` + the cache-version bump, not a code-path change.)
 
 ## AD-16 boundary (review r2-P1 + r3 refinement)
 
@@ -195,11 +215,13 @@ Whichever applies:
 
 ## Acceptance criteria
 
-- [ ] Every AI read emits `EarningsTrajectory`; rename-only guard passes (no scored field changes).
-- [ ] `GuidanceAction` diagnostic-only: named trailing nullable property on `Signal` / `ExtractedSignal` /
-      signal file / cache record; round-trips; consumed by nothing that scores.
-- [ ] Authoritative/failure seam: malformed ⇒ not cached, retried.
-- [ ] Family + predeclared total order enforced through suppression AND supersede; every pairing pinned.
+- [ ] Every AI read emits `EarningsTrajectory`; rename-only guard passes at code level (same analyzer
+      result ⇒ same scored fields).
+- [ ] `GuidanceAction` diagnostic-only on the cache + read-debug records (closed-set validated, trailing
+      nullable, null-omitted); `Signal`/`ExtractedSignal`/signal file byte-unchanged.
+- [ ] Authoritative/failure seam with the `AnalysisFailed` debug outcome: malformed ⇒ not cached, retried.
+- [ ] Family selection preserves today's winner (retyped) — the record-revenue + cuts-guidance fixture is
+      pinned; no type precedence anywhere.
 - [ ] Extractor repartitioned under the guidance-action wording rule; ambiguous phrases resolved
       explicitly; `RuleSetVersion` bumped; ALL pins updated once; operator acknowledge documented.
 - [ ] `contract=earnings-read-v2` appended and pinned; `CurrentCacheVersion` bumped; no reprocessing.
