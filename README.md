@@ -9,6 +9,8 @@ trading bot or recommendation engine**.
 - Product vision & pipeline: [`docs/radar-full-pipeline-spec.md`](docs/radar-full-pipeline-spec.md)
 - Domain & persistence schema: [`docs/radar-schema-spec.md`](docs/radar-schema-spec.md)
 - Principles & allowed output language: [`.claude/agents/radar-philosophy.md`](.claude/agents/radar-philosophy.md)
+- **Reading the output** — reports, scores, labels, formulas, and the known ways to misread them:
+  [`docs/reading-radar-output.md`](docs/reading-radar-output.md)
 
 This README documents the **development workflow** — a spec-driven, agent-assisted pipeline that
 turns small implementation specs into reviewed, CI-verified pull requests, mostly unattended.
