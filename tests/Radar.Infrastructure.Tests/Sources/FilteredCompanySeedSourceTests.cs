@@ -85,7 +85,7 @@ public sealed class FilteredCompanySeedSourceTests
     }
 
     [Fact]
-    public async Task NoExcludedCompanysFeedSurvives()
+    public async Task NoExcludedCompanyFeedSurvives()
     {
         // The load-bearing consistency rule: a feed surviving its excluded company would collect evidence
         // that resolves to a company the repository does not hold.

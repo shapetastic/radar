@@ -60,6 +60,8 @@
 #     full/score run. The Worker's own config guard would catch it too; failing here is just earlier and cheaper.
 #   * tickers are matched against data/companies.json case-insensitively; an unknown ticker FAILS the run
 #     naming the token, so a typo can never silently collect nothing.
+#   * an empty entry (a leading, doubled, or trailing comma) FAILS too, rather than being dropped - a silently
+#     discarded token would quietly change which universe the pass collected. Whitespace around a ticker is fine.
 #   * the run record stamps the canonical ticker list, and the price-efficacy render + strategy leaderboard are
 #     SKIPPED for the filtered pass (they read the seeded universe, which is partial here).
 #   * omit -Companies for the normal whole-universe run - the off-switch is absence.
@@ -166,11 +168,16 @@ $merged["Radar:RunMode"] = $Mode
 
 # --- optional: company filter (spec 161) restricting WHICH companies this pass collects for ---
 # Collection-only by design: reject anything but -Mode collect HERE with a one-line message, rather than
-# letting the Worker's equivalent config guard surface after a build. Blank entries are dropped so a trailing
-# comma is not an error; a list that is all blanks is treated as no filter at all (nothing is threaded).
+# letting the Worker's equivalent config guard surface after a build. A blank entry (a doubled or trailing
+# comma) FAILS rather than being dropped, mirroring CompanyFilter's never-fail-open contract: a silently
+# dropped token is how a typo becomes a run that "worked" and collected a different universe than the one
+# asked for. The off-switch is ABSENCE, so an omitted/blank -Companies still means the whole universe.
 $companyTickers = @()
 if (-not [string]::IsNullOrWhiteSpace($Companies)) {
-    $companyTickers = @($Companies -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+    $companyTickers = @($Companies -split ',' | ForEach-Object { $_.Trim() })
+    if ($companyTickers -contains '') {
+        throw "-Companies entries must not be empty or whitespace (check for a leading, doubled, or trailing comma in '$Companies'); each entry is a ticker symbol from the company seed, e.g. -Companies 'CASS,IDT'. Omit -Companies entirely to collect for the whole watch universe."
+    }
 }
 if ($companyTickers.Count -gt 0) {
     if ($Mode -ne "collect") {
