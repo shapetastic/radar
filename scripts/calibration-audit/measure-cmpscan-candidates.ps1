@@ -44,9 +44,16 @@
     (and is run standalone by a maintainer against absolute paths), so a dot-sourced sibling would break that
     seam. Do not "fix" this into a shared module.
 
-    DETERMINISM: no timestamps, no Get-Date, no randomness, no hashtable-enumeration-order dependence (every
-    key set is explicitly sorted). Every number is formatted through InvariantCulture. Same inputs => byte-
-    identical stdout, -OutFile and -OutCsv.
+    DETERMINISM - of CONTENT, and only per-host of BYTES. No timestamps, no Get-Date, no randomness, no
+    hashtable-enumeration-order dependence (every key set is sorted ORDINALLY via Sort-Ordinal, never with the
+    culture-aware comparer), and every number is formatted through InvariantCulture. So the same inputs yield
+    the same lines, in the same order, carrying the same values, on any host and under any locale.
+    BYTE-identity holds only when comparing artifacts produced by the SAME host: the report is joined with
+    [Environment]::NewLine and both -OutFile and -OutCsv are written through the host's own emitters, so
+    Windows PowerShell 5.1 writes CRLF with a UTF-8 BOM while pwsh 7 writes the platform newline BOM-less.
+    (Quoting is NOT a difference - measured on both: pwsh 7's Export-Csv -UseQuotes defaults to Always, so
+    5.1 and 7 both quote every field.) Do not diff 5.1 output against pwsh 7 output byte-for-byte - diff the
+    content, or regenerate both sides on one host.
 
 .PARAMETER ExhibitsDir
     Directory holding the archived full exhibit texts.
@@ -203,8 +210,9 @@ function Format-Ratio {
 
 function Sort-Ordinal {
     # ORDINAL string sort. Sort-Object uses the culture-aware comparer, which can order strings containing
-    # '-' differently by machine locale; every ordering in this script is ordinal so the artifacts are
-    # byte-identical anywhere.
+    # '-' differently by machine locale; every ordering in this script is ordinal so the artifacts' CONTENT
+    # and row order are host- and locale-independent. (Byte-identity across hosts is a separate matter, and
+    # does NOT hold - see DETERMINISM in the help above.)
     param([string[]]$Values)
     $copy = [string[]]@($Values)
     if ($copy.Length -gt 1) { [array]::Sort($copy, [System.StringComparer]::Ordinal) }
@@ -364,7 +372,7 @@ foreach ($row in $mappingRows) {
 }
 if ($mappingOutsideLabels.Count -gt 0) {
     throw ("Mapping '{0}' holds {1} accession(s) that are not in '{2}' (e.g. {3}). The concept reference must be derived from the SAME labeled population it is scored over." -f `
-        $MappingPath, $mappingOutsideLabels.Count, $LabelsPath, (Sort-Ordinal -Values @($mappingOutsideLabels))[0])
+        $MappingPath, $mappingOutsideLabels.Count, $LabelsPath, (@(Sort-Ordinal -Values @($mappingOutsideLabels))[0]))
 }
 
 # COHORT-COVERAGE GUARD (spec 165's central correctness risk): the spec-162 mapping covers only the 145
@@ -603,7 +611,7 @@ Add-Line ('  - ANY-BREAK reference (`label.comparisonClean = false`): {0} break 
     $breakCount, $cleanCount, $unrecordedCount)
 if ($itemCountMismatches.Count -gt 0) {
     Add-Line ('- NOTE: {0} labeled filing(s) whose recorded item count differs from their mapping row count (reported, not fatal): {1}.' -f `
-        $itemCountMismatches.Count, (($itemCountMismatches | Sort-Object) -join '; '))
+        $itemCountMismatches.Count, ((Sort-Ordinal -Values @($itemCountMismatches)) -join '; '))
 }
 Add-Line ''
 
