@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.EntityResolution;
 using Radar.Application.Scoring;
 
 namespace Radar.Application.Pipeline;
@@ -20,6 +21,12 @@ namespace Radar.Application.Pipeline;
 /// strategy edited in place must cost no collection. A collect pass does not score, but the run it feeds will,
 /// and failing at the start of the collect pass is the cheapest place to find out.
 /// </para>
+/// <para>
+/// The optional <see cref="EntityResolution.CompanyFilter"/> (spec 161, <c>Radar:Companies</c>) is PROVENANCE
+/// here, not behaviour: the filter is applied at the seed source, so this runner only records which companies
+/// the pass was restricted to — on the run record and in its summary log — so a partial pass is never
+/// mistakable for a full one. It is <c>null</c> (unregistered) for every unfiltered run.
+/// </para>
 /// </summary>
 public sealed class CollectOnlyPipelineRunner : IRadarPipeline
 {
@@ -28,13 +35,15 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
     private readonly IScoringConfigStore _scoringConfigStore;
     private readonly IPipelineRunStore _runStore;
     private readonly ILogger<CollectOnlyPipelineRunner> _logger;
+    private readonly CompanyFilter? _companyFilter;
 
     public CollectOnlyPipelineRunner(
         ICollectionPass collectionPass,
         IScoringStrategyFactory scoringStrategies,
         IScoringConfigStore scoringConfigStore,
         IPipelineRunStore runStore,
-        ILogger<CollectOnlyPipelineRunner> logger)
+        ILogger<CollectOnlyPipelineRunner> logger,
+        CompanyFilter? companyFilter = null)
     {
         ArgumentNullException.ThrowIfNull(collectionPass);
         ArgumentNullException.ThrowIfNull(scoringStrategies);
@@ -47,6 +56,7 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
         _scoringConfigStore = scoringConfigStore;
         _runStore = runStore;
         _logger = logger;
+        _companyFilter = companyFilter;
     }
 
     public async Task<RadarPipelineResult> RunAsync(CancellationToken ct)
@@ -72,6 +82,19 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
             collection.SignalsNeedingReview,
             collection.Collection.SourcesFailed,
             collection.Collection.SourcesChecked);
+
+        // Spec 161: state the filter in the collection summary, so a partial pass reads as a partial pass in
+        // the log as well as in the run record. Only the RETAINED companies are known here (the seed's total
+        // is stated by the seed-source decorator's own line, above this one in the same run).
+        if (_companyFilter is not null)
+        {
+            _logger.LogInformation(
+                "This was a FILTERED collect pass: companies={Companies} — evidence was gathered for these "
+                    + "{CompanyCount} named companies only, NOT the full watch universe. Scoring stays "
+                    + "whole-universe on the next full/score run.",
+                _companyFilter.Describe(),
+                _companyFilter.Tickers.Count);
+        }
 
         var pipelineResult = new RadarPipelineResult(
             EvidenceCollected: collection.EvidenceCollected,
@@ -106,7 +129,10 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
             // No strategy scored this pass. Left null (the "unrecorded" value old run JSON also carries)
             // rather than listing the configured strategies, which would claim a scoring that never happened.
             Strategies: null,
-            PrimaryStrategy: null);
+            PrimaryStrategy: null,
+            // Spec 161: null for an unfiltered run (every existing record reads that way too), the canonical
+            // ticker list when Radar:Companies restricted this pass. Provenance only.
+            CompanyFilter: _companyFilter?.Tickers);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

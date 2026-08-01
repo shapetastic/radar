@@ -34,6 +34,13 @@ namespace Radar.Worker;
 /// deliberately runs NONE of the other steps — no price acquisition (AD-14), no pipeline, no report, no
 /// efficacy render. When disabled the dependency is <c>null</c> and the worker behaves exactly as before.
 /// </para>
+/// <para>
+/// When a company filter is active (<c>Radar:Companies</c>, spec 161 — <c>collect</c> mode only), the
+/// efficacy step is SKIPPED. Both the per-company render and the strategy leaderboard read the seeded company
+/// universe, which under a filter holds only the named companies, so recomputing them would overwrite
+/// whole-universe artifacts with a partial view. Unfiltered runs are unaffected in every mode: the dependency
+/// is <c>null</c> and the step runs exactly as before.
+/// </para>
 /// </summary>
 public sealed class Worker : BackgroundService
 {
@@ -47,6 +54,7 @@ public sealed class Worker : BackgroundService
     private readonly IEfficacyReportGenerator? _efficacyReportGenerator;
     private readonly IReplayRunner? _replayRunner;
     private readonly IStrategyComparisonReportGenerator? _strategyComparisonGenerator;
+    private readonly CompanyFilter? _companyFilter;
 
     public Worker(
         ICompanyUniverseSeeder seeder,
@@ -58,7 +66,8 @@ public sealed class Worker : BackgroundService
         IPriceHistoryAcquirer? priceHistoryAcquirer = null,
         IEfficacyReportGenerator? efficacyReportGenerator = null,
         IReplayRunner? replayRunner = null,
-        IStrategyComparisonReportGenerator? strategyComparisonGenerator = null)
+        IStrategyComparisonReportGenerator? strategyComparisonGenerator = null,
+        CompanyFilter? companyFilter = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -77,6 +86,7 @@ public sealed class Worker : BackgroundService
         _efficacyReportGenerator = efficacyReportGenerator;
         _replayRunner = replayRunner;
         _strategyComparisonGenerator = strategyComparisonGenerator;
+        _companyFilter = companyFilter;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -163,6 +173,28 @@ public sealed class Worker : BackgroundService
     // efficacy artifacts — it never enters the evidence → signal → score path.
     private async Task RunEfficacyReportAsync(CancellationToken ct)
     {
+        if (_efficacyReportGenerator is null && _strategyComparisonGenerator is null)
+        {
+            return;
+        }
+
+        // Spec 161: a company-FILTERED pass must not recompute whole-universe artifacts. Both generators join
+        // through ICompanyRepository, which under a filter holds only the named companies, so running them
+        // here would overwrite data/efficacy/*.svg|csv and strategy-leaderboard.{csv,md} with a partial view —
+        // exactly the clobbering the collect-only guard exists to prevent. Skipped LOUDLY (one line), and only
+        // when a filter is active: unfiltered behaviour in every mode is unchanged.
+        if (_companyFilter is not null)
+        {
+            _logger.LogInformation(
+                "Skipping the price-efficacy render and the strategy leaderboard: this run is a "
+                    + "company-FILTERED collect pass (Radar:Companies = {Companies}). Both read the seeded "
+                    + "company universe, so recomputing them from {CompanyCount} companies would overwrite "
+                    + "whole-universe artifacts with a partial view. Run an unfiltered pass to refresh them.",
+                _companyFilter.Describe(),
+                _companyFilter.Tickers.Count);
+            return;
+        }
+
         if (_efficacyReportGenerator is not null)
         {
             await _efficacyReportGenerator.GenerateAsync(ct).ConfigureAwait(false);

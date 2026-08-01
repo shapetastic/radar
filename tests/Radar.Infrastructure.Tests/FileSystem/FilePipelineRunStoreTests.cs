@@ -115,11 +115,13 @@ public sealed class FilePipelineRunStoreTests : IDisposable
     public async Task ReadRecentAsync_JsonWithoutTrailingOptionalFields_DeserializesToNull()
     {
         // Back-compat for EVERY trailing optional field added to PipelineRunRecord over time: an on-disk run
-        // file written before spec 98 has no collectionWarnings field, and one written before spec 137 has no
-        // strategies/primaryStrategy fields. All of them must still deserialize, each absent field taking its
-        // trailing-optional null default. Asserting them explicitly is the regression guard: a future
-        // reordering, a required-modifier slip, or a [JsonRequired] would otherwise break old run files
-        // silently.
+        // file written before spec 98 has no collectionWarnings field, one written before spec 137 has no
+        // strategies/primaryStrategy fields, and one written before spec 161 has no companyFilter field. All
+        // of them must still deserialize, each absent field taking its trailing-optional null default.
+        // Asserting them explicitly is the regression guard: a future reordering, a required-modifier slip,
+        // or a [JsonRequired] would otherwise break old run files silently.
+        //
+        // Keep this enumeration COMPLETE — every trailing optional field added to the record belongs here.
         const string legacyJson = """
             {
               "id": "11111111-1111-1111-1111-111111111111",
@@ -146,6 +148,9 @@ public sealed class FilePipelineRunStoreTests : IDisposable
         Assert.Null(record.CollectionWarnings);
         Assert.Null(record.Strategies);
         Assert.Null(record.PrimaryStrategy);
+        // Spec 161: null == the run covered the whole watch universe, which is exactly what a pre-161 run
+        // did — so an old record reads correctly rather than merely parsing.
+        Assert.Null(record.CompanyFilter);
     }
 
     [Fact]
