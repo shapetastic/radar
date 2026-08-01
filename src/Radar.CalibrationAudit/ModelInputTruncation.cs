@@ -1,13 +1,16 @@
+using Radar.Infrastructure.Filings;
+
 namespace Radar.CalibrationAudit;
 
 /// <summary>
 /// The EXACT model-input truncation <c>ChatFilingAnalyzer</c> applies before its model call (spec 162):
-/// the LEADING <c>MaxInputLength</c>-character substring, applied FIRST, using the identical expression
-/// shape (<c>text.Length &gt; max ? text[..max] : text</c>). Parity with the production analyzer is not
-/// assumed — it is asserted by <c>ModelInputTruncationParityTests</c>, which runs the real
+/// the LEADING <c>MaxInputLength</c>-character substring, applied FIRST. Since spec 164 this DELEGATES to
+/// the shared <see cref="FilingAnalyzerPrompt.Truncate"/> — the one definition the production analyzer
+/// itself now truncates through — instead of restating the expression, so the two cannot drift. Parity with
+/// the production analyzer is still not assumed: <c>ModelInputTruncationParityTests</c> runs the real
 /// <c>ChatFilingAnalyzer</c> against a capturing fake <c>IChatClient</c> and compares the captured user
-/// message byte-for-byte against this method's output. If the analyzer's truncation ever changes shape,
-/// that test fails and this helper must be updated in the same change.
+/// message byte-for-byte against this method's output, so a change to the analyzer's truncation shape still
+/// fails loudly.
 /// </summary>
 public static class ModelInputTruncation
 {
@@ -28,8 +31,8 @@ public static class ModelInputTruncation
                     + "non-positive cap, so no model-input text exists to reproduce.");
         }
 
-        // The exact ChatFilingAnalyzer expression: truncate FIRST, leading substring of MaxInputLength.
+        // The exact ChatFilingAnalyzer truncation, via the shared definition it now routes through.
         var truncated = text.Length > maxInputLength;
-        return (truncated ? text[..maxInputLength] : text, truncated);
+        return (FilingAnalyzerPrompt.Truncate(text, maxInputLength), truncated);
     }
 }

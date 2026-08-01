@@ -89,13 +89,9 @@ internal sealed class ChatFilingAnalyzer : IFilingAnalyzer
             return FilingSentiment.Unknown;
         }
 
-        var text = earningsReleaseText.Length > max ? earningsReleaseText[..max] : earningsReleaseText;
-
-        var messages = new[]
-        {
-            new ChatMessage(ChatRole.System, SystemInstruction),
-            new ChatMessage(ChatRole.User, text),
-        };
+        // The SHARED prompt assembly (spec 164). No instruction argument is passed, so the default is
+        // SystemInstruction itself and the assembled prompt is byte-identical to the pre-extraction one.
+        var messages = FilingAnalyzerPrompt.Build(earningsReleaseText, max);
 
         try
         {

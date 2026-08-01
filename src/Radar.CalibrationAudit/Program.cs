@@ -1,12 +1,14 @@
 using System.Globalization;
 using System.Text;
 
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 
 using Radar.Application.Filings;
 using Radar.CalibrationAudit;
+using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.Sec;
@@ -34,6 +36,28 @@ using Radar.Infrastructure.Sec;
 //   --skip-fetch               build the cohort + worksheet only; no SEC traffic (RADAR_SEC_UA not needed).
 //   --max-fetches <n>          cap NEW exhibit fetches this run (re-run to continue; default unlimited).
 //
+// SHADOW-READ MODE (spec 164) — a SECOND mode on this console, not a second project:
+//
+// Usage: Radar.CalibrationAudit --shadow-read --exhibit-root <path> --output-root <path> [options]
+//   --shadow-read              run the forced-choice shadow pass instead of the Phase A cohort/exhibit run.
+//                              Reads the ARCHIVED model inputs and calls the model; issues ZERO SEC requests
+//                              (RADAR_SEC_UA is not needed) and never touches the analyzed-filing cache.
+//   --exhibit-root <path>      READ-ONLY study artifact root: worksheet.csv, exhibit-manifest.csv,
+//                              legacy-exclusions.csv and exhibits-model-input/. Required in shadow mode.
+//   --output-root <path>       where the pass writes. It writes exactly one directory: {output-root}/shadow/
+//                              (one JSON per accession + shadow-summary.csv + shadow-summary.txt). Required in
+//                              shadow mode, and it MUST be outside --exhibit-root.
+//   --shadow-prompt <path>     the committed forced-choice instruction (default: the shadow-prompt.md copied
+//                              beside this executable from scripts/calibration-audit/). Its LF-normalized
+//                              SHA-256 — over the exact instruction bytes sent — is stamped on every record.
+//   --model-identity <id>      "{provider}:{model}" of the reader under test; ALSO selects the client
+//                              (default "openai:deepseek-ai/DeepSeek-V4-Flash", the spec-119 baseline).
+//   --ai-base-url <url>        OpenAI-compatible base URL (default https://api.deepinfra.com/v1/openai).
+//   --api-key-env <NAME>       env var holding the API key (default DEEPINFRA_API_KEY). The key VALUE is
+//                              never printed, logged or recorded — only the variable NAME may appear.
+//   --fresh                    overwrite existing shadow records (default: skip 'ok' records, retry failures).
+//   --max-reads <n>            cap NEW model reads this run (re-run to continue; default unlimited).
+//
 // SEC access: exhibit fetches REQUIRE the RADAR_SEC_UA environment variable (a compliant "Name email" SEC
 // User-Agent; fails fast when missing). All traffic goes through the production reader's typed HttpClient,
 // paced by the shared SecRequestPacer, strictly sequentially. Re-runnable AND verified (spec 163): an
@@ -57,10 +81,45 @@ var maxInputLength = new FilingAnalyzerOptions().MaxInputLength; // The producti
 var skipFetch = false;
 var maxFetches = int.MaxValue;
 
+// Spec 164 shadow-read mode.
+var shadowRead = false;
+string? exhibitRootArg = null;
+string? shadowPromptArg = null;
+var aiBaseUrl = "https://api.deepinfra.com/v1/openai";
+var apiKeyEnvVar = "DEEPINFRA_API_KEY";
+var fresh = false;
+var maxReads = int.MaxValue;
+
 for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
     {
+        case "--shadow-read":
+            shadowRead = true;
+            break;
+        case "--exhibit-root" when i + 1 < args.Length:
+            exhibitRootArg = args[++i];
+            break;
+        case "--shadow-prompt" when i + 1 < args.Length:
+            shadowPromptArg = args[++i];
+            break;
+        case "--ai-base-url" when i + 1 < args.Length:
+            aiBaseUrl = args[++i];
+            break;
+        case "--api-key-env" when i + 1 < args.Length:
+            apiKeyEnvVar = args[++i];
+            break;
+        case "--fresh":
+            fresh = true;
+            break;
+        case "--max-reads" when i + 1 < args.Length:
+            if (!int.TryParse(args[++i], NumberStyles.Integer, CultureInfo.InvariantCulture, out maxReads))
+            {
+                Console.Error.WriteLine("--max-reads must be an integer.");
+                return 2;
+            }
+
+            break;
         case "--data-root" when i + 1 < args.Length:
             dataRoot = args[++i];
             break;
@@ -101,12 +160,118 @@ for (var i = 0; i < args.Length; i++)
     }
 }
 
+// ==========================================================================================================
+// SHADOW-READ MODE (spec 164). A completely separate path: it needs neither --data-root nor the
+// analyzed-filing cache (cohort membership comes from the SEALED worksheet), registers no collector, no SEC
+// reader and no cache, and issues zero SEC requests.
+// ==========================================================================================================
+if (shadowRead)
+{
+    if (string.IsNullOrWhiteSpace(exhibitRootArg) || string.IsNullOrWhiteSpace(outputRootArg))
+    {
+        Console.Error.WriteLine(
+            "Usage: Radar.CalibrationAudit --shadow-read --exhibit-root <path> --output-root <path> "
+                + "[--shadow-prompt <path>] [--model-identity <provider:model>] [--ai-base-url <url>] "
+                + "[--api-key-env <NAME>] [--fresh] [--max-reads <n>]");
+        return 2;
+    }
+
+    var identityParts = modelIdentity.Split(':', 2);
+    if (identityParts.Length != 2 || string.IsNullOrWhiteSpace(identityParts[0]) || string.IsNullOrWhiteSpace(identityParts[1]))
+    {
+        Console.Error.WriteLine(
+            $"--model-identity '{modelIdentity}' must be '{{provider}}:{{model}}' (e.g. "
+                + "'openai:deepseek-ai/DeepSeek-V4-Flash'): in shadow mode it BOTH selects the client and is "
+                + "stamped on every record as the reader under test.");
+        return 2;
+    }
+
+    var apiKey = Environment.GetEnvironmentVariable(apiKeyEnvVar);
+    if (string.IsNullOrWhiteSpace(apiKey))
+    {
+        // The variable NAME only — the key value is never printed, logged or recorded.
+        Console.Error.WriteLine(
+            $"Environment variable '{apiKeyEnvVar}' is not set (or is blank). The shadow pass calls the "
+                + "production AI seam and needs the provider key; set it (or pass --api-key-env <NAME>). The "
+                + "value is never printed, logged or written to any artifact.");
+        return 2;
+    }
+
+    var promptPath = shadowPromptArg
+        ?? Path.Combine(AppContext.BaseDirectory, ShadowPrompt.FileName);
+
+    ShadowPromptText prompt;
+    try
+    {
+        prompt = ShadowPrompt.Load(promptPath);
+    }
+    catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 2;
+    }
+
+    using var shadowLoggerFactory = LoggerFactory.Create(builder =>
+    {
+        builder.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
+        builder.SetMinimumLevel(LogLevel.Warning);
+        builder.AddFilter("CalibrationAudit", LogLevel.Information);
+    });
+    var shadowLogger = shadowLoggerFactory.CreateLogger("CalibrationAudit");
+
+    // The PRODUCTION AI composition (AddRadarAi) and nothing else — no cache, no analyzer, no SEC reader.
+    var shadowServices = ShadowReadRunner.BuildShadowServices(new AiClientOptions
+    {
+        Provider = identityParts[0],
+        Model = identityParts[1],
+        OpenAiBaseUrl = aiBaseUrl,
+        OpenAiApiKey = apiKey,
+    });
+    await using var shadowProvider = shadowServices.BuildServiceProvider();
+
+    var runner = new ShadowReadRunner(
+        shadowProvider.GetRequiredService<IChatClient>(), prompt, modelIdentity, shadowLogger);
+
+    ShadowReadSummary shadowSummary;
+    try
+    {
+        shadowSummary = await runner.RunAsync(
+            new ShadowReadOptions
+            {
+                ExhibitRoot = exhibitRootArg,
+                OutputRoot = outputRootArg,
+                Fresh = fresh,
+                MaxReads = maxReads,
+            },
+            TimeProvider.System,
+            CancellationToken.None).ConfigureAwait(false);
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or DirectoryNotFoundException or FileNotFoundException)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 1;
+    }
+
+    File.WriteAllText(
+        Path.Combine(ShadowRecordStore.RootFor(Path.GetFullPath(outputRootArg)), "shadow-summary.txt"),
+        shadowSummary.Text);
+    Console.Out.Write(shadowSummary.Text);
+
+    // Failures are re-runnable, and the precommitted decision block is not evaluable until every LABELED row
+    // is 'ok' — so a run with failures exits nonzero to make that visible.
+    return shadowSummary.CallFailed > 0 || shadowSummary.ParseFailed > 0 ? 1 : 0;
+}
+
 if (string.IsNullOrWhiteSpace(dataRoot))
 {
     Console.Error.WriteLine(
         "Usage: Radar.CalibrationAudit --data-root <path> [--cache-root <path>] [--output-root <path>] "
             + "[--model-identity <provider:model>] [--expected-scope <segment>] [--max-input-length <n>] "
-            + "[--skip-fetch] [--max-fetches <n>]");
+            + "[--skip-fetch] [--max-fetches <n>]"
+            + Environment.NewLine
+            + "   or: Radar.CalibrationAudit --shadow-read --exhibit-root <path> --output-root <path> "
+            + "[--shadow-prompt <path>] [--model-identity <provider:model>] [--ai-base-url <url>] "
+            + "[--api-key-env <NAME>] [--fresh] [--max-reads <n>]");
     return 2;
 }
 
