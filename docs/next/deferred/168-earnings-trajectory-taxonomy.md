@@ -150,8 +150,13 @@ Estimated time: ~2–3 hours.
 
 ### 9. Report and policy
 
-- Spec 167's display mapping becomes an identity mapping for the new member; the legend stays (it correctly
-  describes the historical token on accrued rows).
+- **Spec 167's compatibility mapping is explicitly RETIRED** (review r5 — "becomes an identity mapping" was
+  ambiguous). Required rendering, tested for BOTH enum members:
+  - `EarningsTrajectory` renders as `EarningsTrajectory`.
+  - A genuine post-168 `GuidanceChange` renders as **`GuidanceChange`** — the 167 relabel must NOT reach it,
+    or the one signal that now really means a guidance action would be displayed as something else.
+  - Historical stored evidence-link reasons render verbatim (unchanged rule).
+  - The historical-token legend line stays (it describes accrued rows).
 - **Corroboration floor: the family is ONE axis.** `WeeklyReportActionPolicyV1`'s distinct-positive-types
   count treats `{GuidanceChange, EarningsTrajectory}` as a single type — two earnings signals must not
   self-corroborate. Decided here, tested explicitly.
@@ -183,6 +188,8 @@ Estimated time: ~2–3 hours.
   `baseline-earnings-only-v2` stamps fresh; reflection guard passes.
 - Cache: pre-168 record is a MISS; post-168 round-trips.
 - Policy: corroboration floor counts the family once.
+- Renderer: `EarningsTrajectory` renders as itself AND a post-168 `GuidanceChange` renders as
+  `GuidanceChange` (the 167 mapping retired), with stored reasons verbatim and the legend present.
 
 ## Constraints
 
@@ -215,8 +222,9 @@ Whichever applies:
 
 ## Acceptance criteria
 
-- [ ] Every AI read emits `EarningsTrajectory`; rename-only guard passes at code level (same analyzer
-      result ⇒ same scored fields).
+- [ ] Every emitted AI directional signal has type `EarningsTrajectory` (Mixed/Unknown/below-gate reads
+      emit nothing, as today); rename-only guard passes at code level (same analyzer result ⇒ same scored
+      fields).
 - [ ] `GuidanceAction` diagnostic-only on the cache + read-debug records (closed-set validated, trailing
       nullable, null-omitted); `Signal`/`ExtractedSignal`/signal file byte-unchanged.
 - [ ] Authoritative/failure seam with the `AnalysisFailed` debug outcome: malformed ⇒ not cached, retried.
@@ -227,5 +235,7 @@ Whichever applies:
 - [ ] `contract=earnings-read-v2` appended and pinned; `CurrentCacheVersion` bumped; no reprocessing.
 - [ ] `baseline-earnings-only-v2` added; old series intact.
 - [ ] Corroboration floor counts the family once.
+- [ ] Renderer: the 167 compatibility mapping retired — both enum members render as themselves (tested);
+      stored reasons verbatim; legend retained.
 - [ ] AD-16 handled per the rule above; ledger updated.
 - [ ] `dotnet build Radar.sln -c Release` and `dotnet test Radar.sln -c Release --no-build` pass.
