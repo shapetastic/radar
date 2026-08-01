@@ -19,6 +19,21 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
+    <!-- Spec 164 (shadow-read mode): the PROVIDER-NEUTRAL Microsoft.Extensions.AI abstractions only
+         (IChatClient + the typed GetResponseAsync structured-output extension). NO provider SDK here —
+         Anthropic/OpenAI/OllamaSharp stay behind Radar.Infrastructure's ChatClientFactory (AD-5); this console
+         only resolves the IChatClient that the production AddRadarAi registration built. -->
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.5.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Spec 164: the COMMITTED forced-choice shadow instruction travels with the executable so the console
+         has a default that is byte-identical to the repo copy (the shadow-prompt argument overrides it). Its
+         LF-normalized SHA-256 is stamped on every shadow record, so a CRLF/LF checkout difference cannot
+         move the recorded hash. -->
+    <Content Include="..\..\scripts\calibration-audit\shadow-prompt.md"
+             Link="shadow-prompt.md"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
