@@ -21,6 +21,11 @@ public sealed class MarkdownWeeklyReportStrategySectionTests
     // The exact pre-spec-150 rendering of MarkdownWeeklyReportGoldenModel.Create(). Lines are joined with
     // '\n' (the renderer's only line ending) and the two trailing empty entries reproduce its trailing
     // blank line, so this is the literal byte sequence — not an approximation of it.
+    // AMENDED BY SPEC 167: the header now carries one additional legend line (the "GuidanceChange"
+    // gloss, directly under the notedness caveat). That line is part of EVERY report, so it belongs in
+    // this pin too; spec 167's own before/after guard lives in
+    // MarkdownWeeklyReportEarningsTrajectoryRelabelTests, whose pre-167 pin was captured from the
+    // unmodified renderer. Everything else here is byte-unchanged.
     private static readonly string PreSpec150Golden = string.Join("\n",
     [
         "# Radar Weekly — 2026-06-01 to 2026-06-08",
@@ -32,6 +37,9 @@ public sealed class MarkdownWeeklyReportStrategySectionTests
         "> Human review required.",
         "> Notedness (measured Attention + curated following tier) discounts a company's Opportunity so "
             + "already-followed names surface lower — a research signal, not a valuation.",
+        "> \"GuidanceChange\" in evidence lines is a historical earnings-release signal type — either a "
+            + "deterministic Neutral earnings-filing marker or an AI earnings-trajectory read; it does "
+            + "not by itself mean the company issued or changed guidance.",
         "",
         "## Highest opportunity",
         "",

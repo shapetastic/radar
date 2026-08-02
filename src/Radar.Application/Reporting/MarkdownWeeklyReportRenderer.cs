@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
+using Radar.Domain.Signals;
 
 /// <summary>
 /// Pure, deterministic renderer that turns a fully-assembled <see cref="WeeklyReportModel"/> into
@@ -43,6 +44,17 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             [RadarReportAction.ThesisImproving] = "Thesis improving",
             [RadarReportAction.ThesisDeteriorating] = "Thesis deteriorating",
         };
+
+    // Spec 167: display-only relabel of the stored GuidanceChange signal type. The stored token is a
+    // taxonomy misnomer (spec-75 lineage): the AI filing reader classifies the business trajectory AS
+    // REPORTED and is never asked whether guidance changed, and the deterministic spec-57 earnings-8-K
+    // signal carries the same member for a plain earnings FILING — so printing "GuidanceChange" reads
+    // as a guidance event that never happened. This is the ONE renderer-owned mapping site: every place
+    // the renderer itself stringifies a SignalType routes through it. It must NEVER be applied to stored
+    // provenance text (evidence-link reasons authored at scoring time render byte-verbatim) — the legend
+    // line in AppendDisclaimers explains the literal token where it appears inside that stored text.
+    private static string DisplaySignalType(SignalType type) =>
+        type == SignalType.GuidanceChange ? "EarningsTrajectory" : type.ToString();
 
     // Short, purely descriptive gloss of the curated following tier (AD-9: a research statistic — how
     // covered the name already is — never a valuation or an advice word).
@@ -157,6 +169,14 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append("> Human review required.").Append(Lf);
         sb.Append("> Notedness (measured Attention + curated following tier) discounts a company's ")
             .Append("Opportunity so already-followed names surface lower — a research signal, not a valuation.")
+            .Append(Lf);
+        // Spec 167: the literal "GuidanceChange" token still appears inside STORED evidence-line
+        // provenance text (authored at scoring time and rendered byte-verbatim), so the legend explains
+        // it rather than rewriting it. Producer-neutral on purpose: the deterministic spec-57 form is an
+        // earnings-FILING marker, not a trajectory read.
+        sb.Append("> \"GuidanceChange\" in evidence lines is a historical earnings-release signal type ")
+            .Append("— either a deterministic Neutral earnings-filing marker or an AI earnings-trajectory ")
+            .Append("read; it does not by itself mean the company issued or changed guidance.")
             .Append(Lf);
         sb.Append(Lf);
     }
@@ -295,7 +315,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         foreach (var signal in entry.Signals)
         {
             sb.Append("  - ")
-                .Append(signal.Type.ToString())
+                .Append(DisplaySignalType(signal.Type))
                 .Append(" (")
                 .Append(signal.Direction.ToString())
                 .Append(')');
