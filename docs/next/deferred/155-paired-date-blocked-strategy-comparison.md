@@ -1,115 +1,188 @@
-# Task: Compare strategies PAIRWISE and date-blocked — the current rule does not establish lift
+# Task: Compare strategies pairwise on purged, date-blocked observations
 
-> **AD-15's decision rule is not a test of difference, and it can license a confident claim from noise.**
-> The rule as shipped by spec 154 reads:
+> **AD-15's original decision rule is not a test of difference, and daily date blocks alone do not repair it.**
 >
-> > A composite strategy may only be described as adding value if it beats **every** baseline
-> > **out-of-sample**, on an honest N, by more than the spread between the baselines themselves.
->
-> "Beats … by more than the spread" compares each strategy's **marginal** Spearman ρ, each computed over
-> observations that `StrategyLeaderboardRenderer.cs:95` itself admits are "pooled across companies and dates
-> and are therefore not independent, so the interval is optimistically narrow — treat it as dispersion, not
-> significance."
->
-> Comparing two such numbers and declaring the gap meaningful is exactly the inference that caveat forbids.
-> A gap between two marginal ρ values carries **no** uncertainty estimate of its own, and the "spread between
-> the baselines" is a heuristic stand-in for one — it is not a standard error, it has no coverage guarantee,
-> and it shrinks when the baselines happen to agree, which is precisely when it should not.
+> The shipped rule compares each strategy's marginal Spearman rho and treats the spread between baselines as
+> if it were uncertainty on the difference. It is not. The strategies can have different support, and their
+> estimates are correlated. Further, adjacent daily blocks reuse most of the same 21-day forward path, so a
+> closed-form interval or sign test over every daily delta would still be anti-conservative.
 
-## Why this matters now rather than later
+This slice replaces that rule with a deterministic comparison on common support and a predeclared purge that
+prevents mechanical forward-window overlap. It is intentionally slower to mature than the daily leaderboard.
+At the current horizon, the first six usable blocks plus their outcomes require about four months of forward
+accrual. That is the cost of making a claim the current data can support.
 
-The 2026-07-28 backtest ranked five strategies at ρ −0.0849 / −0.0969 / −0.0999 / −0.1000 / −0.1009. Under
-the shipped rule a strategy landing at −0.06 would "beat every baseline by more than the spread (0.016)" and
-could be described as adding value. Nothing in the current pipeline would object — and the five strategies
-share nearly all their observations, so the differences are between highly correlated quantities where a
-pooled marginal interval is at its most misleading.
+## Why this matters
 
-The strategies also **do not share support**: `filings-led-v2` scored 0 in-sample observations on the live
-leaderboard while `default` scored 182. Comparing ρ over different (company, date) sets is comparing
-different questions, not two answers to one.
+The 2026-07-28 backtest ranked five strategies at rho -0.0849 / -0.0969 / -0.0999 / -0.1000 / -0.1009.
+Under the original rule, a strategy at -0.06 could appear to clear the baseline-spread threshold even though
+no uncertainty on the paired difference had been calculated.
+
+The strategies also did not share support: `filings-led-v2` had zero in-sample observations while `default`
+had 182. Comparing marginal correlations over different (company, date) sets compares different questions,
+not two answers to one question.
 
 ## Design
 
-### 1. Pair on the intersection, block by date
+### 1. Pair on common support, then form one delta per date
 
-For a pair of strategies A and B, restrict to the (company, as-of date) observations present in **both**,
-with the same forward return attached to each — the return depends only on the company and the date, never on
-the strategy, so a paired observation differs **only** in the score. An intersection that is materially
-smaller than either strategy's own support is itself a finding and must be reported, not silently used.
+For a descriptive pair of strategies A and B, intersect their admitted observations by
+`(CompanyId, AsOfInstant)`. Attach the same already-computed outcome to both scores; an observation may enter
+only when both strategies and the common outcome are defined.
 
-Then **block by as-of date**: within each date d, compute each strategy's rank statistic over the companies
-scored that date, and form the per-date difference `δ(d) = stat_A(d) − stat_B(d)`. The `δ` series is the
-paired sample the comparison is actually about.
+An AD-15 claim is stronger: construct one **joint intersection** across the predeclared primary composite and
+every predeclared baseline. All primary-versus-baseline deltas must then use the same companies, dates and
+outcomes. Pairwise intersections may still be rendered as diagnostics, but they cannot support “beats every
+baseline” because each comparison could otherwise answer over a different period or company set.
 
-Blocking by date removes the largest shared nuisance factor — a market-wide move on date d lifts every
-company's forward return at once, which is the dominant source of the correlation between observations.
-**State plainly what it does NOT remove:** overlapping forward windows mean adjacent dates still share price
-path, so the `δ` series is not fully independent either. Say so in the rendered output, as spec 152 said what
-its tolerance did and did not cover.
+For every candidate as-of date `d` in the joint intersection:
 
-### 2. Report an interval on the DIFFERENCE, and make "no difference" expressible
+1. take the companies present for the primary and every baseline on `d`;
+2. require the configured minimum number of companies;
+3. compute each strategy's cross-sectional Spearman rho against the same outcome ranks; and
+4. for each baseline B record `delta_B(d) = rho_primary(d) - rho_B(d)`.
 
-The headline must be `δ̄` (mean or median paired difference) **with an interval**, plus the number of blocks
-it rests on. Determinism is mandatory (AD-3) so a bootstrap is out, exactly as in spec 140 — use a
-closed-form paired interval, and where the distributional assumption is uncomfortable report a sign test on
-the `δ` series alongside it, which assumes almost nothing.
+The result must disclose every strategy's marginal support, pairwise-intersection support, joint support,
+candidate-date count, every dropped date and its reason, and the admitted block count. A materially smaller
+intersection is a result, not a log message.
 
-**Every degeneracy gets a name, never a NaN:** too few blocks, an empty intersection, a constant `δ`, and a
-block with too few companies to rank. Spec 140 already established this pattern and its vocabulary
-(`DroppedStrategies` with a machine-readable reason) — reuse it rather than inventing a second one.
+Date blocking removes the contemporaneous cross-company nuisance: a market-wide move on `d` affects every
+company in that block. It does **not** by itself make adjacent dates independent.
 
-### 3. Amend AD-15 to require it
+### 2. A claim needs a fixed forward boundary, not a moving 70/30 split
 
-The rule becomes, in substance: *a composite may be described as adding value only if, against **every**
-baseline, the paired date-blocked difference favours it and the interval on that difference excludes zero.*
-Record the amendment in `docs/architecture-decisions.md` under AD-15 itself — amend, do not append a
-contradicting AD-17 — and state that the superseded "more than the spread between the baselines" formulation
-was **not a test of difference**, so no claim may be carried over from it.
+The existing global 70/30 date split can remain on the marginal price leaderboard as a descriptive backtest.
+It is not a claim boundary: the cutoff moves whenever another date accrues, causing yesterday's holdout dates
+to migrate into training.
 
-### 4. Do not delete the marginal ρ
+The paired claim path must instead receive an immutable `FirstEligibleAsOf` recorded before its outcomes
+exist. Dates before it may be rendered as development data but never enter the claim interval. A missing
+boundary yields `NoPrecommittedEvaluationBoundary` and makes the result exploratory. For AD-16 the evaluator
+must take the boundary from the accepted decision; neither spec 155 nor an implementation may derive a more
+favourable cutoff from observed deltas.
 
-The existing per-strategy ρ stays: it answers "did this strategy track price at all", which is a different
-and still-useful question from "did it beat that one". The leaderboard should carry both, distinctly
-labelled, with the paired comparison identified as **the** basis for an AD-15 claim.
+### 3. Purge overlapping outcome windows before inference
 
-## Files (verify against the tree before planning)
+Inference uses a deterministic subset of candidate dates at or after `FirstEligibleAsOf`. Sort dates
+ascending and greedily admit the earliest candidate whose nominal outcome interval
+`(d, d + ForwardHorizonDays]` does not overlap the last admitted interval. With the current 21-calendar-day
+horizon, admitted dates are therefore at least 21 calendar days apart. A date skipped by this rule is counted
+as `OverlappingOutcomeWindow`, not silently discarded.
 
-`StrategyComparisonHarness.cs` (`BuildObservations`, the per-strategy loop), `RankCorrelation.cs` (the
-Fisher-z interval lives here; the paired interval belongs beside it), `StrategyLeaderboard.cs` (result
-fields), `StrategyLeaderboardRenderer.cs` + the CSV renderer, `StrategyComparisonOptions.cs` (any new
-minimum-blocks threshold), `docs/architecture-decisions.md`, and their tests.
+The price return builder never selects an exit after `d + ForwardHorizonDays`; its tolerance permits an
+earlier nearby trading bar, not a later one. Consequently the nominal purge is conservative across weekends
+and market closures. Preserve actual entry and exit dates in price observations and prove that no admitted
+block's observed price interval overlaps the next admitted block. An outcome without price bars supplies its
+own exact interval endpoints to the shared purge helper.
+
+The earliest eligible candidate wins deterministically; there is no search over weekday, phase or offset for
+the most favourable result. Changing the horizon changes the purge distance automatically.
+
+This removes the known mechanical overlap. It does not prove that macro regimes or company effects 21 days
+apart are independent. Render that limitation beside the interval.
+
+### 4. Use an exact, deterministic interval for each paired median
+
+For each baseline, the estimand is the median of its admitted `delta_B(d)` blocks. Under the predeclared
+model that the purged blocks are independent draws from a stable distribution, sort the `n` deltas and
+report the exact two-sided 95% order-statistic interval for the population median:
+
+- choose the largest integer `k >= 1` for which
+  `1 - 2 * BinomialCdf(k - 1; n, 0.5) >= 0.95`; and
+- return `[delta_(k), delta_(n-k+1)]`, using one-based order statistics.
+
+This is deterministic, assumes no parametric shape, and makes no difference expressible. It is not
+assumption-free: purging removes the known overlap but cannot prove independence or stationarity across
+market regimes. State that next to every interval. Ties make the order-statistic interval conservative and
+remain data. With fewer blocks than can support a finite 95% interval (six at the current confidence level),
+return `InsufficientPurgedBlocks`; do not weaken the confidence level or publish a NaN. Report the exact
+two-sided sign-test p-value as a diagnostic only; it must use the same purged blocks, omit zero differences
+only from that diagnostic's effective N, and never substitute for the interval gate.
+
+Name every other degeneracy: `EmptyIntersection`, `TooFewCompanies`, `ConstantPrimary`,
+`ConstantBaseline`, `ConstantOutcome`, `NoEligibleBlocks`, and
+`NoPrecommittedEvaluationBoundary`. Reuse the existing machine-readable drop-reason pattern rather than
+encoding failure in logs.
+
+Keep the interval implementation in a small outcome-agnostic statistics helper so the AD-16 attention
+evaluator can reuse it without importing the price harness.
+
+### 5. Amend AD-15 narrowly
+
+Amend AD-15 in place. The superseded “more than the spread between baselines” wording was not a test of
+difference and licenses no carried-over claim.
+
+A **predeclared primary composite** may be described as adding value only when, against every predeclared
+baseline on the joint out-of-sample support:
+
+- the purged median paired difference is positive;
+- the exact 95% interval's lower bound is strictly greater than zero; and
+- the boundary, support, block-count and strategy-selection disclosures are present.
+
+Requiring the primary to clear every fixed baseline is an intersection-union claim; it does not require a
+Bonferroni correction merely because there are several fixed baselines. Choosing the best of several
+composite arms after seeing their results is different. Only the arm named primary before its outcomes exist
+may use this gate. Other arms remain exploratory until a separately accepted multiplicity rule exists.
+
+For AD-16, this machinery is confirmatory only after its already-precommitted descriptive screen has been
+calculated. It must not change AD-16's outcome, horizon, comparator, cohort, eligibility rule or failure rule.
+Its confirmatory baseline family is `baseline-attention-persistence` plus the three fixed configured
+`baseline-*` scoring arms, all ranked against the AD-16 publisher-count outcome on the same joint support.
+The secondary `AttentionScore` and matched v10 control remain diagnostics because AD-16 explicitly does not
+screen on the former and the latter isolates formula behaviour rather than representing a dumb baseline.
+
+### 6. Retain the marginal leaderboard
+
+Keep the existing per-strategy marginal rho. It answers whether a strategy tracked its outcome at all, which
+is different from whether it beat a comparator. Label it descriptive. The paired, purged comparison is the
+only result that can support the amended AD-15 claim.
+
+## Files (verify against the tree before implementation)
+
+- `src/Radar.Application/Efficacy/Comparison/StrategyComparisonHarness.cs`
+- `src/Radar.Application/Efficacy/Comparison/ForwardReturn.cs`
+- `src/Radar.Application/Efficacy/Comparison/RankCorrelation.cs`
+- `src/Radar.Application/Efficacy/Comparison/StrategyComparisonOptions.cs`
+- `src/Radar.Application/Efficacy/Comparison/StrategyLeaderboard.cs`
+- `src/Radar.Application/Efficacy/Comparison/StrategyLeaderboardRenderer.cs`
+- the CSV renderer/artifact writer and their tests
+- `docs/architecture-decisions.md`
 
 ## Constraints
 
 - **No look-ahead regression.** The entry rule `bar.Date > asOf` and spec 152's `PartialWindow` rule are
-  untouched; this slice changes only how already-admitted observations are *compared*.
-- **Deterministic — no bootstrap, no sampling** (AD-3). Two runs over identical data must agree exactly.
-- **No scoring change, no fingerprint input, no pin move.** Read side only (AD-14); price stays
-  validation-only.
-- **Nothing may be ranked on an intersection it does not disclose.** The block count and the intersection
-  size are result *fields*, like spec 140's `StrategiesCompared`/`DroppedStrategies`, not log lines.
-- No advice vocabulary in any rendered output (AD-9).
+  untouched; this slice changes only how admitted observations are compared.
+- **Deterministic: no bootstrap, sampling or offset search** (AD-3).
+- **No scoring change, fingerprint input or pin move.** Read side only (AD-14); price remains validation-only.
+- Do not pool companies across dates for the paired inference.
+- Do not call daily date blocks independent; only the purged subset enters the interval.
+- No advice vocabulary in rendered output (AD-9).
 
-## Out of scope (record, do not build)
+## Out of scope
 
-- **Changing the outcome variable** — benchmark adjustment and the attention-arrival measure are their own
-  specs, downstream of AD-16.
-- **Multiple-comparison correction across many strategies.** Real, and it interacts with this; but decide it
-  once there is more than one honest comparison to correct.
-- **Auto-promoting or auto-retiring a strategy** on the result. Radar ranks; a human decides (spec 140).
-- Non-overlapping observation selection (one per company-week) — still deferred from spec 152.
+- Changing either outcome variable.
+- Automatically promoting or retiring a strategy; Radar reports and a human decides (spec 140).
+- A general multiple-comparison procedure for selecting among several composite arms.
+- Modelling residual dependence after mechanical forward-window overlap has been purged.
 
 ## Acceptance criteria
 
-- [ ] A strategy pair is compared on the **intersection** of their (company, as-of date) support, with the
-      intersection size and per-strategy support reported.
-- [ ] The comparison is **blocked by as-of date**, and the headline is a paired difference with a
-      deterministic interval and its block count.
-- [ ] Every degeneracy is named and counted, never NaN; a comparison that cannot be made says so.
-- [ ] The rendered output states what date-blocking does **not** remove (overlapping forward windows).
-- [ ] AD-15 is amended in place to require the paired test, recording that the previous formulation was not
-      a test of difference.
-- [ ] The marginal per-strategy ρ is retained and distinctly labelled.
-- [ ] A fixture proves the point: two strategies whose marginal ρ gap exceeds the baseline spread but whose
-      paired difference interval **includes zero** must NOT qualify under the amended rule.
-- [ ] `dotnet build Radar.sln -c Release` / `dotnet test Radar.sln -c Release` green.
+- [ ] A claim family uses one joint intersection of the primary and every baseline; each marginal, pairwise
+      and joint support is a result field.
+- [ ] Per-date rhos use exactly the same companies and outcome, and every dropped date has a stable reason.
+- [ ] A missing immutable `FirstEligibleAsOf` prevents a claim; the moving 70/30 split stays descriptive.
+- [ ] Inference admits dates greedily in ascending order with non-overlapping nominal and observed outcome
+      intervals; skipped dates are counted as `OverlappingOutcomeWindow`.
+- [ ] The headline for each baseline is the purged median paired difference with its exact two-sided 95%
+      order-statistic interval and purged-block count.
+- [ ] Fewer than six admitted blocks at 95% yields `InsufficientPurgedBlocks`; confidence is not relaxed.
+- [ ] The sign-test diagnostic uses only the same purged blocks and handles zero deltas explicitly.
+- [ ] Renderers disclose that purging removes known window overlap but not all serial or regime dependence.
+- [ ] AD-15 is amended in place and permits a claim only for a predeclared primary clearing every fixed
+      baseline on joint support; no prior baseline-spread result carries over.
+- [ ] Marginal per-strategy rho remains present and distinctly labelled descriptive.
+- [ ] A fixture where the marginal-rho gap exceeds baseline spread but the exact paired interval includes
+      zero does not qualify.
+- [ ] A fixture with dense daily dates proves that changing unadmitted overlapping dates cannot change the
+      interval, while changing an admitted date can.
+- [ ] `dotnet build Radar.sln -c Release` and `dotnet test Radar.sln -c Release` are green.

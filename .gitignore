@@ -157,3 +157,5 @@ secrets.json
 /data/fcc-cache/
 /.playwright-mcp
 /data/replays/backtest-infer-on/strategies
+/data/calibration-audit
+/data/calibration-audit-164/shadow
