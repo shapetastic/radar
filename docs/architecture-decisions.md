@@ -1250,12 +1250,31 @@ clause names. If a different boundary is ever genuinely needed, declare a new on
 treat everything before it as development data. Dates before the boundary still render — as development
 data that can never enter the claim interval.
 
-**The second half of this precommitment is NOT yet made.** The gate also requires a predeclared primary
-composite (`PairedPrimaryStrategy`), and per the intersection-union paragraph above, naming it *after*
-seeing which arm beats the baselines is **selection, not evidence**. Until it is declared — prospectively,
-under the same before-the-outcomes rule as this boundary — the paired result stays exploratory regardless
-of how many blocks accrue. Six purged blocks at h=21 from 2026-09-29 mature ≈ **2027-02-02**, so there is
-time; there is no excuse for using it to look first.
+#### DECLARATION · 2026-08-03 — the predeclared primary composite is **`disclosure-led-v11`**
+
+`Radar:Efficacy:Comparison:PairedPrimaryStrategy = disclosure-led-v11`, declared in the same act, on the
+same date, under the same rule as the boundary above: **before any eligible outcome exists.** Per the
+intersection-union paragraph above, only the arm named primary *before its outcomes exist* may use this
+gate; every other configured arm remains exploratory until a separately accepted multiplicity rule exists.
+Naming it later, once the deltas are visible, would be **selection, not evidence** — the failure the
+paragraph exists to forbid.
+
+It is `disclosure-led-v11` because that arm is **already AD-16's precommitted primary** (spec 157). One
+hypothesis is therefore judged against two independent outcomes — forward price here, publisher-count
+arrival there — on one shared calendar, instead of two arms being judged against two outcomes and the
+flattering pairing reported.
+
+**Recorded risk, stated now so it cannot be discovered later and treated as a reason to switch.**
+`disclosure-led-v11` is the youngest series (created 2026-07-28), and spec 158 measured its *predecessor*
+budget (`form4` .50 / `13dg` .30 / breadth .20) as a **constant integer 0 across all 43 companies**. The
+shipped budget is the measured option A (`sec-edgar` 1.00, S 3), but if it still produces a constant
+predictor those dates drop under `ConstantPrimaryPredictor` and the arm may simply never accrue six purged
+blocks. **That is a legitimate outcome, not a defect to repair:** a precommitment that cannot fail is not a
+precommitment. If it happens, the honest response is to report that the arm could not be evaluated — not to
+swap the primary and re-run.
+
+Six purged blocks at h=21 from 2026-09-29 mature ≈ **2027-02-02**. Both halves of the precommitment are now
+fixed; nothing about this claim family may be chosen after that date's data starts arriving.
 
 Radar therefore ships a small, deliberate **control group** of *dumb baseline* strategies (spec 154),
 declared in `scripts/run-profiles/default.json` and scored through the **normal** seam — same
