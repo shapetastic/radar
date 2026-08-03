@@ -41,6 +41,20 @@ public enum AttentionCheckpointDisqualification
 
     /// <summary>The run's collection-health reconciliation reported the attention collector's feed inventory as incomplete.</summary>
     CollectionHealthMismatch,
+
+    /// <summary>
+    /// The row carries an issue token outside <see cref="CollectionCoverageIssues.All"/>. The vocabulary is
+    /// CLOSED because these tokens are read as a coverage PROOF: a token this evaluator cannot interpret
+    /// means some collector recorded a problem whose meaning is unknown here, and reading it as "not one of
+    /// the four known failures" would certify the very window it was warning about.
+    /// </summary>
+    UnrecognizedCoverageIssue,
+
+    /// <summary>
+    /// The row's counts cannot describe a real observation (negative, or more feeds succeeding than were
+    /// ever expected). A row built wrong asserts nothing trustworthy — including the emptiness of its issue set.
+    /// </summary>
+    InvalidCoverageCounts,
 }
 
 /// <summary>The chain-level verdict for an interval.</summary>
@@ -237,7 +251,27 @@ public sealed class AttentionCoverageEvaluator
             return AttentionCheckpointDisqualification.CompanyNotInCollectionPass;
         }
 
-        // (3)–(5) in AD-16's order, checked against BOTH the issue tokens and the counts. The tokens are
+        // (3) SCHEMA VALIDITY, before any content is read. The four checks below interpret a row by asking
+        // which KNOWN failures it reports; that question is only meaningful once the row is known to be
+        // expressible in the contract. A row carrying an unrecognised token, or counts that cannot describe
+        // a real observation, is rejected outright rather than being read as "none of the four" — which is
+        // exactly how an invented token would otherwise certify the window it was warning about.
+        //
+        // This is the mirror of the defensive count checks below: those catch a collector that FORGOT a
+        // token, these catch one that INVENTED a state this evaluator has never heard of.
+        if (coverage.Issues.Any(i => !CollectionCoverageIssues.All.Contains(i, StringComparer.Ordinal)))
+        {
+            return AttentionCheckpointDisqualification.UnrecognizedCoverageIssue;
+        }
+
+        if (coverage.ExpectedFeedCount < 0
+            || coverage.SuccessfulFeedCount < 0
+            || coverage.SuccessfulFeedCount > coverage.ExpectedFeedCount)
+        {
+            return AttentionCheckpointDisqualification.InvalidCoverageCounts;
+        }
+
+        // (4)–(6) in AD-16's order, checked against BOTH the issue tokens and the counts. The tokens are
         // authoritative, but a defensive count check means a future collector that forgets a token still
         // fails closed rather than certifying a window it did not observe.
         if (coverage.ExpectedFeedCount == 0
