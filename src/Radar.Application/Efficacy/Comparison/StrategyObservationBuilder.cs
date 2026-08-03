@@ -1,0 +1,120 @@
+namespace Radar.Application.Efficacy.Comparison;
+
+/// <summary>
+/// One usable (company, as-of) observation of a strategy: its opportunity score and the forward return it is
+/// judged against, PLUS the observed entry/exit bar dates of that return's price window.
+/// <para>
+/// The entry/exit dates were always computed (<see cref="ForwardReturnResult"/> carries them) but the
+/// marginal harness's private observation dropped them; spec 155's paired path needs them to prove that no
+/// admitted block's OBSERVED price interval overlaps the next admitted block's, so they ride on the shared
+/// observation instead of being recomputed.
+/// </para>
+/// </summary>
+public readonly record struct StrategyObservation(
+    DateOnly AsOf,
+    Guid CompanyId,
+    double Score,
+    double ForwardReturn,
+    DateOnly EntryDate,
+    DateOnly ExitDate);
+
+/// <summary>
+/// One strategy's whole usable observation set, with the two per-company-day exclusion tallies (spec 152's
+/// split: "no price at all" vs "some price but not the horizon").
+/// </summary>
+public sealed record StrategyObservationSet(
+    string StrategyName,
+    IReadOnlyList<StrategyObservation> Usable,
+    int WithoutForwardPrice,
+    int PartialWindow);
+
+/// <summary>
+/// THE observation builder — extracted from <see cref="StrategyComparisonHarness"/> (spec 155,
+/// reuse-over-copy) so the marginal leaderboard and the paired comparison consume the SAME admission rules:
+/// same forward-return computation, same last-occurrence-wins de-dup, same exclusion tallies, same
+/// deterministic (as-of, company) ordering. Two copies would drift, and a drifted copy here would make the
+/// paired deltas answer over a different observation set than the leaderboard beside them.
+/// <para>
+/// Projects one strategy's joined series into (as-of date, company, score, forward return) observations,
+/// counting — never hiding — the ones for which no forward price pair exists.
+/// </para>
+/// <para>
+/// A company/as-of pair can appear more than once (two runs on the same day both stamp a snapshot). The
+/// LAST occurrence in the store's deterministic ascending-by-CreatedAtUtc order wins, so a same-day re-run
+/// replaces rather than double-counts its earlier self.
+/// </para>
+/// <para>
+/// <b>The unusable count is de-duped on the SAME key, for the same reason.</b> It is reported next to a
+/// de-duped observation count, so counting raw points there would make the two sides of "how much of this
+/// series was usable?" incommensurable — three snapshots of one company-day with no forward price would
+/// read as three lost observations when the usable side would only ever have yielded one. It counts
+/// company-days with NO usable observation: a key excluded here after any occurrence succeeded is not
+/// lost coverage. Definedness cannot differ between occurrences of one key WITHIN one company's series —
+/// the forward return is a function of that series' bars, the as-of date and the horizon alone — but a
+/// strategy may legally carry the same company id in two series with different bars, and then it can, so
+/// the exclusion is load-bearing rather than defensive.
+/// </para>
+/// <para>
+/// <b>A partial forward window is its own tally, on the same key (spec 152).</b> An observation whose
+/// latest bar falls more than the exit tolerance short of <c>D+h</c> is not a full-horizon return, so
+/// it is excluded from the usable set — but it is NOT "no forward price", and
+/// <c>WithoutForwardPrice</c> keeps its exact pre-152 definition (<c>NoForwardBar</c> /
+/// <c>SingleForwardBar</c> / <c>NonPositiveEntryPrice</c>) so that column's meaning does not silently
+/// change. Partials therefore get their own set, de-duped on the SAME (company, as-of) key and excluded
+/// against the usable keys for the SAME reason: a key some occurrence DID cover to the horizon is not lost
+/// coverage. The two sets are independent, and a key can appear in both only in the pathological case the
+/// paragraph above describes — one company id carried in two series with different bars.
+/// </para>
+/// </summary>
+public static class StrategyObservationBuilder
+{
+    public static StrategyObservationSet Build(
+        StrategyScoreSeries strategy, int forwardHorizonDays, int exitToleranceDays)
+    {
+        ArgumentNullException.ThrowIfNull(strategy);
+
+        var byKey = new Dictionary<(Guid CompanyId, DateOnly AsOf), StrategyObservation>();
+        var withoutForwardPrice = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
+        var partialWindow = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
+
+        foreach (var company in strategy.Companies)
+        {
+            foreach (var point in company.Points)
+            {
+                var asOf = point.AsOfDate ?? point.ScoreDate;
+                var forward = ForwardReturn.TryCompute(
+                    company.PriceBars, asOf, forwardHorizonDays, exitToleranceDays);
+                if (!forward.IsDefined)
+                {
+                    var target = forward.Reason == ForwardReturnUnavailableReason.PartialWindow
+                        ? partialWindow
+                        : withoutForwardPrice;
+                    target.Add((company.CompanyId, asOf));
+                    continue;
+                }
+
+                byKey[(company.CompanyId, asOf)] = new StrategyObservation(
+                    asOf,
+                    company.CompanyId,
+                    point.OpportunityScore,
+                    forward.Value,
+                    // Non-null whenever IsDefined — the forward-return contract, not an assumption.
+                    forward.EntryDate!.Value,
+                    forward.ExitDate!.Value);
+            }
+        }
+
+        withoutForwardPrice.ExceptWith(byKey.Keys);
+        partialWindow.ExceptWith(byKey.Keys);
+
+        var usable = byKey.Values.ToList();
+        usable.Sort(static (a, b) =>
+        {
+            var byDate = a.AsOf.CompareTo(b.AsOf);
+            return byDate != 0 ? byDate : a.CompanyId.CompareTo(b.CompanyId);
+        });
+
+        return new StrategyObservationSet(
+            strategy.StrategyName, usable, withoutForwardPrice.Count, partialWindow.Count);
+    }
+}

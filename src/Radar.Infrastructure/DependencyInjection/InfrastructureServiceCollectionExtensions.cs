@@ -2367,15 +2367,30 @@ public static class InfrastructureServiceCollectionExtensions
     /// already registered <see cref="AddRadarStrategyComparisonOverReplay"/>'s replay-scoped selector keeps it.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// <paramref name="pairedOptions"/> (spec 155) additionally enables the paired, purged comparison inside
+    /// the same generator: the pure <see cref="PairedComparisonHarness"/> + <see cref="PairedComparisonRenderer"/>
+    /// run over the SAME already-built series the leaderboard consumed and write one extra artifact pair.
+    /// <c>null</c> composes the pre-155 leaderboard-only shape.
+    /// </remarks>
     public static IServiceCollection AddRadarStrategyComparison(
-        this IServiceCollection services, StrategyComparisonOptions options)
+        this IServiceCollection services,
+        StrategyComparisonOptions options,
+        PairedComparisonOptions? pairedOptions = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         services.AddSingleton(options);
+        if (pairedOptions is not null)
+        {
+            services.AddSingleton(pairedOptions);
+        }
+
         services.TryAddSingleton<IStrategyScoreSnapshotStoreSelector, LiveStrategyScoreSnapshotStoreSelector>();
         services.AddSingleton<StrategyComparisonHarness>();
         services.AddSingleton<StrategyLeaderboardRenderer>();
+        services.AddSingleton<PairedComparisonHarness>();
+        services.AddSingleton<PairedComparisonRenderer>();
         services.AddSingleton<IStrategyComparisonReportGenerator, StrategyComparisonReportGenerator>();
         return services;
     }
@@ -2442,7 +2457,8 @@ public static class InfrastructureServiceCollectionExtensions
         this IServiceCollection services,
         StrategyComparisonOptions options,
         string replayRootDirectory,
-        string replayLabel)
+        string replayLabel,
+        PairedComparisonOptions? pairedOptions = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(replayRootDirectory);
@@ -2458,7 +2474,7 @@ public static class InfrastructureServiceCollectionExtensions
                 sp.GetRequiredService<IReplayScoreSnapshotFileStoreFactory>(),
                 replayLabel));
 
-        return services.AddRadarStrategyComparison(options);
+        return services.AddRadarStrategyComparison(options, pairedOptions);
     }
 
     /// <summary>

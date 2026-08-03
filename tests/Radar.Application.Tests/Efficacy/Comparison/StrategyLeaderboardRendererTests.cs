@@ -212,6 +212,19 @@ public sealed class StrategyLeaderboardRendererTests
     }
 
     [Fact]
+    public void RenderMarkdown_LabelsTheMarginalRankingDescriptiveAndPointsAtThePairedArtifact()
+    {
+        // Spec 155: the marginal leaderboard stays, but it is DESCRIPTIVE — it answers whether a strategy
+        // tracked its outcome at all, not whether it beat a comparator, and it cannot support the amended
+        // AD-15 claim. The label points at the artifact that can.
+        var markdown = Renderer.RenderMarkdown(FourStrategiesTwoDropped());
+
+        Assert.Contains(StrategyLeaderboardRenderer.DescriptiveScope, markdown, StringComparison.Ordinal);
+        Assert.Contains("Descriptive only", markdown, StringComparison.Ordinal);
+        Assert.Contains("strategy-paired-comparison.md", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Render_IsCultureInvariantAndByteStable()
     {
         var leaderboard = FourStrategiesTwoDropped();

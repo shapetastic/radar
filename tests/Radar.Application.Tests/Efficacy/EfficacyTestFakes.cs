@@ -102,6 +102,8 @@ internal sealed class RecordingEfficacyArtifactStore : IEfficacyArtifactStore
 
     public List<(string Csv, string Markdown)> Leaderboards { get; } = [];
 
+    public List<(string Csv, string Markdown)> PairedComparisons { get; } = [];
+
     public Task<EfficacyArtifactPaths> WriteAsync(
         string ticker, string svg, string csv, CancellationToken ct)
     {
@@ -115,6 +117,14 @@ internal sealed class RecordingEfficacyArtifactStore : IEfficacyArtifactStore
         Leaderboards.Add((csv, markdown));
         return Task.FromResult(new StrategyLeaderboardPaths(
             "strategy-leaderboard.csv", "strategy-leaderboard.md"));
+    }
+
+    public Task<PairedComparisonPaths> WritePairedComparisonAsync(
+        string csv, string markdown, CancellationToken ct)
+    {
+        PairedComparisons.Add((csv, markdown));
+        return Task.FromResult(new PairedComparisonPaths(
+            "strategy-paired-comparison.csv", "strategy-paired-comparison.md"));
     }
 }
 

@@ -25,6 +25,17 @@ public sealed class StrategyLeaderboardRenderer
         "Research statistic: which strategy's scores tracked subsequent price movement more closely. "
             + "Not a recommendation, not a projection, not financial advice. Radar ranks; a human decides.";
 
+    /// <summary>
+    /// The spec-155 scope label: this marginal ranking is DESCRIPTIVE. Marginal rhos are computed over each
+    /// strategy's own support and their spread is not an uncertainty estimate of any difference, so nothing
+    /// here can support the amended AD-15 claim — only the paired, purged comparison can.
+    /// </summary>
+    public const string DescriptiveScope =
+        "Descriptive only: this marginal ranking answers whether a strategy tracked its outcome at all, not "
+            + "whether it beat any comparator, and its moving chronological split is a descriptive backtest, "
+            + "not a claim boundary. The paired, purged comparison (strategy-paired-comparison.md) is the "
+            + "only result that can support the amended AD-15 claim.";
+
     private const string CsvHeader =
         "status,rank,strategy,strategiesCompared,strategiesConsidered,"
             + "inSampleRho,inSampleLower95,inSampleUpper95,inSampleObservations,inSampleCompanies,inSampleDates,"
@@ -82,6 +93,7 @@ public sealed class StrategyLeaderboardRenderer
 
         sb.Append("# Strategy vs price — efficacy leaderboard\n\n");
         sb.Append(Framing).Append("\n\n");
+        sb.Append(DescriptiveScope).Append("\n\n");
 
         sb.Append("## How to read this\n\n");
         sb.Append(CultureInfo.InvariantCulture, $"- **Strategies compared (ranked): {leaderboard.StrategiesCompared}.** A leader chosen from many needs a stronger effect than one chosen from few.\n");

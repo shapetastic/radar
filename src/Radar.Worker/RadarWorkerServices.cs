@@ -265,15 +265,20 @@ internal static class RadarWorkerServices
             if (options.Efficacy.Comparison.Enabled)
             {
                 var comparisonOptions = BuildStrategyComparisonOptions(options.Efficacy.Comparison);
+                // Spec 155: the paired, purged comparison rides the same registration. Its knobs are parsed
+                // and validated HERE (the config→Application boundary); whether it runs, skips or writes an
+                // exploratory artifact is decided at run time from the configured strategy set.
+                var pairedOptions = BuildPairedComparisonOptions(
+                    options.Efficacy.Comparison, comparisonOptions);
                 var replayLabel = options.Efficacy.Comparison.ReplayLabel?.Trim();
                 if (!string.IsNullOrEmpty(replayLabel))
                 {
                     services.AddRadarStrategyComparisonOverReplay(
-                        comparisonOptions, options.ReplayDirectory, replayLabel);
+                        comparisonOptions, options.ReplayDirectory, replayLabel, pairedOptions);
                 }
                 else
                 {
-                    services.AddRadarStrategyComparison(comparisonOptions);
+                    services.AddRadarStrategyComparison(comparisonOptions, pairedOptions);
                 }
             }
 
@@ -732,6 +737,53 @@ internal static class RadarWorkerServices
                 comparison.HoldOutFraction,
                 comparison.MinimumObservations,
                 comparison.ExitToleranceDays);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            throw new InvalidOperationException(
+                "Radar:Efficacy:Comparison is misconfigured: " + ex.Message, ex);
+        }
+    }
+
+    /// <summary>
+    /// Turns the bound <c>Radar:Efficacy:Comparison:Paired*</c> values into validated
+    /// <see cref="PairedComparisonOptions"/> (spec 155) — same fail-fast posture as
+    /// <see cref="BuildStrategyComparisonOptions"/>, every failure naming the offending key.
+    /// <para>
+    /// The claim boundary is parsed through the SAME strict invariant UTC parser the replay bounds use
+    /// (<see cref="ParseUtcInstant"/>) and must be a WHOLE UTC calendar day: an intraday boundary would make
+    /// eligibility depend on the daily job's schedule, the exact ambiguity AD-16's 2026-08-03 amendment
+    /// pinned its own boundary to a whole day to avoid. The boundary is never derived from data — blank
+    /// means none, and none means no claim.
+    /// </para>
+    /// </summary>
+    private static PairedComparisonOptions BuildPairedComparisonOptions(
+        StrategyComparisonWorkerOptions comparison, StrategyComparisonOptions comparisonOptions)
+    {
+        DateOnly? firstEligibleAsOf = null;
+        var rawBoundary = comparison.PairedFirstEligibleAsOfUtc?.Trim();
+        if (!string.IsNullOrEmpty(rawBoundary))
+        {
+            var parsed = ParseUtcInstant(
+                rawBoundary, "Radar:Efficacy:Comparison:PairedFirstEligibleAsOfUtc");
+            if (parsed.UtcDateTime.TimeOfDay != TimeSpan.Zero)
+            {
+                throw new InvalidOperationException(
+                    $"Radar:Efficacy:Comparison:PairedFirstEligibleAsOfUtc is '{rawBoundary}', which is not a "
+                        + "whole UTC calendar day; supply a date such as \"2026-09-29\". An intraday claim "
+                        + "boundary would make eligibility depend on the daily job's exact schedule.");
+            }
+
+            firstEligibleAsOf = DateOnly.FromDateTime(parsed.UtcDateTime);
+        }
+
+        try
+        {
+            return new PairedComparisonOptions(
+                comparison.PairedPrimaryStrategy,
+                firstEligibleAsOf,
+                comparison.PairedMinimumCompaniesPerDate,
+                comparisonOptions);
         }
         catch (ArgumentOutOfRangeException ex)
         {
