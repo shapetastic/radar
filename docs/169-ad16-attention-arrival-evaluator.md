@@ -152,6 +152,13 @@ third-party publisher. A relevant signal with missing evidence drops the company
 is `UnresolvedComparatorProvenance` or `UnresolvedOutcomeProvenance`. None is silently omitted from the
 count.
 
+> **Amended during PR review (2026-08-03) — RECORDED attribution only.** As written, this paragraph is
+> narrower than the Constraints section's "No inferred success" below. An article is admitted only when the
+> collector stamp spec 146 records is present; spec 151's *inferred* attribution is
+> `Unresolved*Provenance` exactly like missing attribution. Otherwise the primary metric would move with
+> `Radar:Scoring:InferLegacyCollectorAttribution`, a scoring-only flag, and a precommitted screen cannot
+> depend on a knob. See the AD-16 amendment in `docs/architecture-decisions.md`.
+
 Canonicalise publisher names only by trimming, collapsing internal whitespace and comparing
 case-insensitively. Do not add a hand-maintained Reuters/Reuters.com-style entity map after seeing outcomes.
 Distinct URLs or articles from the same canonical publisher count once. Do not test novelty against history.

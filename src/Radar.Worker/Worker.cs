@@ -1,4 +1,5 @@
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -25,7 +26,10 @@ namespace Radar.Worker;
 /// read side): it READS score history + price and writes only efficacy artifacts. When disabled the dependency
 /// is <c>null</c> and the step is skipped. The optional
 /// <see cref="IStrategyComparisonReportGenerator"/> (spec 140, <c>Radar:Efficacy:Comparison:Enabled</c>) runs
-/// in the same step, immediately after it, with the same read-only posture.
+/// in the same step, immediately after it, with the same read-only posture — followed by the
+/// <see cref="IAttentionArrivalScreenGenerator"/> (spec 169, <c>Radar:Efficacy:AttentionArrival:Enabled</c>),
+/// AD-16's precommitted attention-arrival screen, which reads score history + run records + durable
+/// signals/evidence and writes only its own artifacts.
 /// </para>
 /// <para>
 /// When the opt-in historical as-of replay is enabled (<c>Radar:Replay:Enabled</c>), the optional
@@ -54,6 +58,7 @@ public sealed class Worker : BackgroundService
     private readonly IEfficacyReportGenerator? _efficacyReportGenerator;
     private readonly IReplayRunner? _replayRunner;
     private readonly IStrategyComparisonReportGenerator? _strategyComparisonGenerator;
+    private readonly IAttentionArrivalScreenGenerator? _attentionArrivalGenerator;
     private readonly CompanyFilter? _companyFilter;
 
     public Worker(
@@ -67,7 +72,8 @@ public sealed class Worker : BackgroundService
         IEfficacyReportGenerator? efficacyReportGenerator = null,
         IReplayRunner? replayRunner = null,
         IStrategyComparisonReportGenerator? strategyComparisonGenerator = null,
-        CompanyFilter? companyFilter = null)
+        CompanyFilter? companyFilter = null,
+        IAttentionArrivalScreenGenerator? attentionArrivalGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -86,6 +92,7 @@ public sealed class Worker : BackgroundService
         _efficacyReportGenerator = efficacyReportGenerator;
         _replayRunner = replayRunner;
         _strategyComparisonGenerator = strategyComparisonGenerator;
+        _attentionArrivalGenerator = attentionArrivalGenerator;
         _companyFilter = companyFilter;
     }
 
@@ -173,7 +180,9 @@ public sealed class Worker : BackgroundService
     // efficacy artifacts — it never enters the evidence → signal → score path.
     private async Task RunEfficacyReportAsync(CancellationToken ct)
     {
-        if (_efficacyReportGenerator is null && _strategyComparisonGenerator is null)
+        if (_efficacyReportGenerator is null
+            && _strategyComparisonGenerator is null
+            && _attentionArrivalGenerator is null)
         {
             return;
         }
@@ -186,10 +195,11 @@ public sealed class Worker : BackgroundService
         if (_companyFilter is not null)
         {
             _logger.LogInformation(
-                "Skipping the price-efficacy render and the strategy leaderboard: this run is a "
-                    + "company-FILTERED collect pass (Radar:Companies = {Companies}). Both read the seeded "
-                    + "company universe, so recomputing them from {CompanyCount} companies would overwrite "
-                    + "whole-universe artifacts with a partial view. Run an unfiltered pass to refresh them.",
+                "Skipping the price-efficacy render, the strategy leaderboard and the attention-arrival "
+                    + "screen: this run is a company-FILTERED collect pass (Radar:Companies = {Companies}). "
+                    + "All three read the seeded company universe, so recomputing them from {CompanyCount} "
+                    + "companies would overwrite whole-universe artifacts with a partial view. Run an "
+                    + "unfiltered pass to refresh them.",
                 _companyFilter.Describe(),
                 _companyFilter.Tickers.Count);
             return;
@@ -207,6 +217,16 @@ public sealed class Worker : BackgroundService
         if (_strategyComparisonGenerator is not null)
         {
             await _strategyComparisonGenerator.GenerateAsync(ct).ConfigureAwait(false);
+        }
+
+        // Spec 169's AD-16 attention-arrival screen: the same read-only posture, immediately after the
+        // leaderboard and still OUTSIDE IRadarPipeline. It runs after the pipeline so the run record and
+        // snapshots this run just persisted are visible to it. Skipped (dependency null) unless
+        // Radar:Efficacy:Enabled AND Radar:Efficacy:AttentionArrival:Enabled — and never in a replay run,
+        // which replaces the pipeline entirely and returns before this method is reached.
+        if (_attentionArrivalGenerator is not null)
+        {
+            await _attentionArrivalGenerator.GenerateAsync(ct).ConfigureAwait(false);
         }
     }
 }

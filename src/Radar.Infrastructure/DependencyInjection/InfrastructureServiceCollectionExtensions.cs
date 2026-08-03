@@ -7,6 +7,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Ai;
 using Radar.Application.Collectors;
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
@@ -2376,6 +2377,51 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<StrategyComparisonHarness>();
         services.AddSingleton<StrategyLeaderboardRenderer>();
         services.AddSingleton<IStrategyComparisonReportGenerator, StrategyComparisonReportGenerator>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the opt-in <b>AD-16 attention-arrival screen</b> (spec 169): the pure
+    /// <see cref="AttentionCoverageEvaluator"/> + <see cref="AttentionPublisherCountBuilder"/> +
+    /// <see cref="AttentionArrivalScreenEvaluator"/> + <see cref="AttentionArrivalRenderer"/>, the
+    /// <see cref="IExcludedCohortStore"/> that reads the committed cohort declarations, and the
+    /// <see cref="IAttentionArrivalArtifactStore"/> that writes the three artifacts.
+    /// <para>
+    /// READ-ONLY and downstream of scoring: it reads companies, run records, each arm's persisted snapshot
+    /// series (through the SAME <see cref="IStrategyScoreSnapshotStoreSelector"/> seam spec 140 uses), durable
+    /// signals and evidence. It creates, amends or deletes no score, signal, evidence or review; no scoring
+    /// input, formula version, rule-set version or fingerprint is touched; and it promotes nothing. Price is
+    /// never read (AD-14 is irrelevant here — the outcome is attention, not return).
+    /// </para>
+    /// <para>
+    /// The selector is registered with <c>TryAdd</c> exactly as
+    /// <see cref="AddRadarStrategyComparison"/> does, so a graph that has both keeps one consistent choice of
+    /// series.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarAttentionArrivalScreen(
+        this IServiceCollection services,
+        AttentionArrivalOptions options,
+        string cohortsDirectory,
+        string efficacyDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(cohortsDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(efficacyDirectory);
+
+        services.AddSingleton(options);
+        services.AddSingleton(new FileExcludedCohortStoreOptions { RootDirectory = cohortsDirectory });
+        services.AddSingleton<IExcludedCohortStore, FileExcludedCohortStore>();
+        services.AddSingleton(
+            new FileAttentionArrivalArtifactStoreOptions { RootDirectory = efficacyDirectory });
+        services.AddSingleton<IAttentionArrivalArtifactStore, FileAttentionArrivalArtifactStore>();
+
+        services.TryAddSingleton<IStrategyScoreSnapshotStoreSelector, LiveStrategyScoreSnapshotStoreSelector>();
+        services.AddSingleton<AttentionCoverageEvaluator>();
+        services.AddSingleton<AttentionPublisherCountBuilder>();
+        services.AddSingleton<AttentionArrivalScreenEvaluator>();
+        services.AddSingleton<AttentionArrivalRenderer>();
+        services.AddSingleton<IAttentionArrivalScreenGenerator, AttentionArrivalScreenGenerator>();
         return services;
     }
 

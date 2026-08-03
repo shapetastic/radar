@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 
+using Radar.Application.Collectors;
 using Radar.Application.Pipeline;
 using Radar.Infrastructure.FileSystem;
 
@@ -274,5 +275,168 @@ public sealed class FilePipelineRunStoreTests : IDisposable
             "02",
             $"run-{BaseInstant.UtcDateTime:yyyyMMddTHHmmssfffZ}-{id}.json");
         Assert.Equal(expectedPath, path);
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Spec 169: the time-bounded read and the trailing-optional CollectorRuns field.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ReadBetweenAsync_ReturnsEveryRecordInTheInclusiveRange_AscendingByCreatedAtThenId()
+    {
+        var store = CreateStore();
+
+        var early = RecordAt(BaseInstant.AddDays(-2), Guid.Parse("11111111-1111-1111-1111-111111111111"));
+        var lowIdAtBoundary = RecordAt(BaseInstant, Guid.Parse("22222222-2222-2222-2222-222222222222"));
+        var highIdAtBoundary = RecordAt(BaseInstant, Guid.Parse("33333333-3333-3333-3333-333333333333"));
+        var late = RecordAt(BaseInstant.AddDays(2), Guid.Parse("44444444-4444-4444-4444-444444444444"));
+
+        foreach (var record in new[] { late, highIdAtBoundary, lowIdAtBoundary, early })
+        {
+            await store.WriteAsync(record, CancellationToken.None);
+        }
+
+        // BOTH bounds are inclusive: the boundary records are in.
+        var read = await store.ReadBetweenAsync(
+            BaseInstant, BaseInstant.AddDays(2), CancellationToken.None);
+
+        Assert.Equal(
+            [lowIdAtBoundary.Id, highIdAtBoundary.Id, late.Id],
+            read.Select(r => r.Id));
+    }
+
+    [Fact]
+    public async Task ReadBetweenAsync_IsNotTruncated_SoAbsenceIsDistinguishableFromAMissedRead()
+    {
+        var store = CreateStore();
+
+        // More records than any plausible "recent N" cap, all inside the range: the coverage chain must be
+        // able to tell "no run happened here" from "the read stopped before reaching it".
+        for (var i = 0; i < 40; i++)
+        {
+            await store.WriteAsync(RecordAt(BaseInstant.AddHours(i)), CancellationToken.None);
+        }
+
+        var read = await store.ReadBetweenAsync(
+            BaseInstant, BaseInstant.AddHours(39), CancellationToken.None);
+
+        Assert.Equal(40, read.Count);
+    }
+
+    [Fact]
+    public async Task ReadBetweenAsync_InvertedRange_ReturnsEmpty()
+    {
+        var store = CreateStore();
+        await store.WriteAsync(RecordAt(BaseInstant), CancellationToken.None);
+
+        Assert.Empty(await store.ReadBetweenAsync(
+            BaseInstant.AddDays(1), BaseInstant, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReadBetweenAsync_MissingDirectory_ReturnsEmpty()
+    {
+        var store = CreateStore(Path.Combine(_tempDir, "does-not-exist"));
+
+        Assert.Empty(await store.ReadBetweenAsync(
+            BaseInstant.AddDays(-1), BaseInstant.AddDays(1), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReadBetweenAsync_MalformedFile_IsSkippedNotThrown()
+    {
+        var store = CreateStore();
+        var good = RecordAt(BaseInstant);
+        await store.WriteAsync(good, CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "broken.json"), "{ not json");
+
+        var read = await store.ReadBetweenAsync(
+            BaseInstant.AddDays(-1), BaseInstant.AddDays(1), CancellationToken.None);
+
+        Assert.Equal(good.Id, Assert.Single(read).Id);
+    }
+
+    [Fact]
+    public async Task CollectorRuns_RoundTripWithTheirPerCompanyCoverage()
+    {
+        var store = CreateStore();
+        var companyId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+
+        var record = RecordAt(BaseInstant) with
+        {
+            CollectorRuns =
+            [
+                new CollectorRunRecord(
+                    CollectorName: "newssearch",
+                    SourcesChecked: 2,
+                    SourcesSucceeded: 1,
+                    SourcesFailed: 1,
+                    ItemsCollected: 7,
+                    Failures: [new SourceFailure("feed", "query=x", "HTTP 500")],
+                    CompanyCoverage:
+                    [
+                        new CollectorCompanyCoverage(
+                            companyId, 2, 1, HitEffectiveResultLimit: true,
+                            Issues:
+                            [
+                                CollectionCoverageIssues.ResultLimitReached,
+                                CollectionCoverageIssues.SourceFailure,
+                            ]),
+                    ]),
+            ],
+        };
+
+        await store.WriteAsync(record, CancellationToken.None);
+
+        var read = Assert.Single(await store.ReadRecentAsync(10, CancellationToken.None));
+        var collectorRun = Assert.Single(read.CollectorRuns!);
+        Assert.Equal("newssearch", collectorRun.CollectorName);
+        Assert.Equal(1, collectorRun.SourcesFailed);
+        Assert.Equal("HTTP 500", Assert.Single(collectorRun.Failures).Reason);
+
+        var coverage = Assert.Single(collectorRun.CompanyCoverage!);
+        Assert.Equal(companyId, coverage.CompanyId);
+        Assert.Equal(2, coverage.ExpectedFeedCount);
+        Assert.Equal(1, coverage.SuccessfulFeedCount);
+        Assert.True(coverage.HitEffectiveResultLimit);
+        Assert.Equal(
+            [CollectionCoverageIssues.ResultLimitReached, CollectionCoverageIssues.SourceFailure],
+            coverage.Issues);
+    }
+
+    [Fact]
+    public async Task LegacyRunJsonWithoutCollectorRuns_StillDeserializes_AndReadsAsUnproven()
+    {
+        // A byte-for-byte plausible pre-spec-169 run record: no collectorRuns property at all. It must still
+        // load, and CollectorRuns must be NULL — which the coverage evaluator reads as UNPROVEN, never as a
+        // clean checkpoint.
+        var directory = Path.Combine(_tempDir, "2026", "02");
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "run-legacy.json"),
+            """
+            {
+              "id": "55555555-5555-5555-5555-555555555555",
+              "createdAtUtc": "2026-02-08T12:00:00+00:00",
+              "collectors": [ "newssearch" ],
+              "evidenceCollected": 1,
+              "evidenceNew": 1,
+              "signalsExtracted": 1,
+              "signalsValid": 1,
+              "signalsApproved": 1,
+              "signalsNeedingReview": 0,
+              "companiesScored": 1,
+              "sourcesChecked": 1,
+              "sourcesFailed": 0,
+              "reportId": null
+            }
+            """);
+
+        var read = Assert.Single(await CreateStore().ReadRecentAsync(10, CancellationToken.None));
+
+        Assert.Equal(Guid.Parse("55555555-5555-5555-5555-555555555555"), read.Id);
+        Assert.Null(read.CollectorRuns);
+        Assert.Null(read.CompanyFilter);
+        Assert.Equal(["newssearch"], read.Collectors);
     }
 }

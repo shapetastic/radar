@@ -21,4 +21,19 @@ public interface IPipelineRunStore
     /// descending (AD-3 determinism). A non-positive <paramref name="count"/> returns an empty list.
     /// </summary>
     Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct);
+
+    /// <summary>
+    /// Returns EVERY run record whose <see cref="PipelineRunRecord.CreatedAtUtc"/> falls in the INCLUSIVE
+    /// range <c>[startInclusiveUtc, endInclusiveUtc]</c>, ordered by <c>CreatedAtUtc</c> ascending then
+    /// <see cref="PipelineRunRecord.Id"/> ascending (AD-3 determinism). An inverted range returns an empty
+    /// list. Malformed/unreadable files are skipped and logged, never thrown; cancellation propagates.
+    /// <para>
+    /// <b>Bounded by TIME, not by count, deliberately (spec 169).</b> The AD-16 coverage chain has to be able
+    /// to tell "no run happened in this window" from "the run happened but I only asked for the newest N and
+    /// it fell off the end". <see cref="ReadRecentAsync"/> cannot make that distinction, so mistaking its
+    /// truncation for absence would silently drop company-dates that were in fact fully covered.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<PipelineRunRecord>> ReadBetweenAsync(
+        DateTimeOffset startInclusiveUtc, DateTimeOffset endInclusiveUtc, CancellationToken ct);
 }

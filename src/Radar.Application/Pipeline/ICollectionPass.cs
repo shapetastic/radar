@@ -36,6 +36,11 @@ public interface ICollectionPass
 /// <see cref="CollectionPass"/>: the run instant must not precede the collection that produced this run's
 /// evidence, or freshly collected evidence falls outside the scoring window.
 /// </para>
+/// <para>
+/// <see cref="CollectorRuns"/> (spec 169) is the per-COLLECTOR provenance the run record persists. It is
+/// built inside the collector loop, BEFORE <see cref="CollectionResultMerger.Merge"/> discards collector
+/// identity, and is therefore the only place the fact can be captured at all.
+/// </para>
 /// </summary>
 public sealed record CollectionPassResult(
     DateTimeOffset AsOfUtc,
@@ -48,4 +53,7 @@ public sealed record CollectionPassResult(
     CollectionSummary Collection,
     CollectionHealthReport Health,
     IReadOnlyList<string> Collectors,
-    IReadOnlyList<Company> Companies);
+    IReadOnlyList<Company> Companies,
+    // Per-collector run provenance in the same stable collector order as Collectors (spec 169). Non-null;
+    // it can only be empty if no collector ran, which the pass's constructor already forbids.
+    IReadOnlyList<CollectorRunRecord> CollectorRuns);

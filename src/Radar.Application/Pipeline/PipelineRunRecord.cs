@@ -40,4 +40,15 @@ public sealed record PipelineRunRecord(
     // be mistakable for a full one — and never an evidence/signal/scoring input: the company universe is not
     // a fingerprint input (AD-10), and the filter is collect-only by guard, so a scored run always carries
     // null here.
-    IReadOnlyList<string>? CompanyFilter = null);
+    IReadOnlyList<string>? CompanyFilter = null,
+    // Per-COLLECTOR run provenance (spec 169 / AD-16's 2026-08-03 amendment): one row per collector that ran,
+    // in stable collector order, carrying that collector's own UNMERGED summary plus — for the collectors
+    // that record it — per-company coverage. Trailing + optional so every existing on-disk run JSON still
+    // deserializes and reads correctly as "not recorded". Observational only: never an evidence, signal,
+    // score, fingerprint or strategy-comparability input, and RecentRunSummary does not read it.
+    //
+    // FOR COVERAGE PURPOSES NULL MEANS UNPROVEN, NEVER SUCCESS, and it is never inferred or backfilled for
+    // records written before this contract existed (heal forward — specs 142/145). The AD-16 evaluator reads
+    // these rows as the proof that an attention observation window was actually observed; treating an absent
+    // record as a clean one would let a missed collection read as a valid publisher count of zero.
+    IReadOnlyList<CollectorRunRecord>? CollectorRuns = null);

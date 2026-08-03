@@ -459,6 +459,187 @@ public sealed class NewsAttentionCollectorTests
             () => CreateCollector(reader).CollectAsync(context, cts.Token));
     }
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 169 / AD-16: per-company collection COVERAGE. This is what turns a publisher count of zero into
+    // a valid zero rather than an unobserved window, so each rule is asserted individually.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task CollectorName_EqualsTheFeedTypeItSelects_WhichIsWhatTheHealthStampJoinsOn()
+    {
+        // CollectionPass stamps CollectionHealthMismatch onto a collector's coverage rows by matching the
+        // collector's NAME against CollectionHealthWarning.FeedType — the only join available, since
+        // IEvidenceCollector declares no feed type. If the two ever diverged, a lost-feed warning would stop
+        // marking newssearch coverage and the AD-16 evaluator would silently OVER-certify a window. Pinned
+        // here: this collector selects "newssearch" feeds and is named "newssearch".
+        Assert.Equal("newssearch", NewsAttentionCollector.Name);
+
+        var typed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-000000000001"), MrcyId, "Mercury — News", MrcyToken,
+            feedType: NewsAttentionCollector.Name);
+        var otherType = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-000000000002"), MrcyId, "Mercury — RSS", MrcyToken,
+            feedType: "rss");
+
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] = [Article("https://ok.example/1", "Mercury Systems update - Reuters")],
+        };
+        var context = new CollectionContext(
+            [Company(MrcyId, "Mercury Systems", "MRCY")], [typed, otherType]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        // Exactly one feed was checked: the one whose FeedType matches this collector's name.
+        Assert.Equal(1, result.Summary.SourcesChecked);
+        Assert.Equal(1, Assert.Single(result.CompanyCoverage!).ExpectedFeedCount);
+    }
+
+    [Fact]
+    public async Task CollectAsync_RecordsCoverageForEveryCompany_IncludingOnesWithNoFeed()
+    {
+        var feed = Feed(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000001"), MrcyId, "Mercury — News", MrcyToken);
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] = [Article("https://ok.example/1", "Mercury Systems update - Reuters")],
+        };
+
+        // RKLB is in the universe but has NO newssearch feed configured.
+        var context = new CollectionContext(
+            [Company(MrcyId, "Mercury Systems", "MRCY"), Company(RklbId, "Rocket Lab", "RKLB")],
+            [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        var coverage = Assert.IsAssignableFrom<IReadOnlyList<CollectorCompanyCoverage>>(result.CompanyCoverage);
+        Assert.Equal(2, coverage.Count);
+
+        // Ordered by CompanyId (AD-3), so two runs record byte-identical coverage.
+        Assert.Equal(coverage.OrderBy(c => c.CompanyId).Select(c => c.CompanyId), coverage.Select(c => c.CompanyId));
+
+        var mrcy = Assert.Single(coverage, c => c.CompanyId == MrcyId);
+        Assert.Equal(1, mrcy.ExpectedFeedCount);
+        Assert.Equal(1, mrcy.SuccessfulFeedCount);
+        Assert.False(mrcy.HitEffectiveResultLimit);
+        Assert.Empty(mrcy.Issues);
+
+        // A company Radar never asked about is RECORDED as MissingFeed, never silently absent — an absent row
+        // and a clean row must not be the same thing.
+        var rklb = Assert.Single(coverage, c => c.CompanyId == RklbId);
+        Assert.Equal(0, rklb.ExpectedFeedCount);
+        Assert.Equal([CollectionCoverageIssues.MissingFeed], rklb.Issues);
+    }
+
+    [Fact]
+    public async Task CollectAsync_FeedFailure_RecordsSourceFailureCoverage()
+    {
+        var feed = Feed(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002"), MrcyId, "Mercury — News", MrcyToken);
+        var reader = new FakeNewsSearchReader();
+        reader.SetFailure(MrcyPhrase, NewsSearchReadOutcome.HttpError, "HTTP 500");
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        var coverage = Assert.Single(result.CompanyCoverage!);
+        Assert.Equal(1, coverage.ExpectedFeedCount);
+        Assert.Equal(0, coverage.SuccessfulFeedCount);
+        Assert.Equal([CollectionCoverageIssues.SourceFailure], coverage.Issues);
+    }
+
+    [Fact]
+    public async Task CollectAsync_MalformedFeedToken_CountsAsASourceFailureForCoverage()
+    {
+        var feed = Feed(
+            Guid.Parse("bbbbbbbb-0000-0000-0000-000000000003"), MrcyId, "Mercury — News", "not-a-token");
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(new FakeNewsSearchReader())
+            .CollectAsync(context, CancellationToken.None);
+
+        var coverage = Assert.Single(result.CompanyCoverage!);
+        Assert.Equal(1, coverage.ExpectedFeedCount);
+        Assert.Equal(0, coverage.SuccessfulFeedCount);
+        Assert.Equal([CollectionCoverageIssues.SourceFailure], coverage.Issues);
+    }
+
+    [Fact]
+    public async Task CollectAsync_RawResultCountAtTheLimit_IsCensored_EvenWhenRelevanceFilteringKeepsFewer()
+    {
+        var feed = Feed(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000004"), MrcyId, "Mercury — News", MrcyToken);
+
+        // THREE raw articles == MaxRecordsPerCompany, but only ONE survives the client-side relevance filter.
+        // Equality with the EFFECTIVE limit is what censoring means: the source stopped at the ceiling Radar
+        // asked for, so anything beyond it is unobserved regardless of how many items were kept.
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] =
+            [
+                Article("https://ok.example/1", "Mercury Systems wins a contract - Reuters"),
+                Article("https://ok.example/2", "Something entirely unrelated - Reuters"),
+                Article("https://ok.example/3", "Another unrelated headline - Reuters"),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+        var collector = CreateCollector(
+            reader,
+            new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, MaxRecordsPerCompany = 3 });
+
+        var result = await collector.CollectAsync(context, CancellationToken.None);
+
+        Assert.Single(result.Evidence); // only one relevant article was kept …
+        var coverage = Assert.Single(result.CompanyCoverage!);
+        Assert.True(coverage.HitEffectiveResultLimit); // … and the window is STILL not provably complete.
+        Assert.Equal(1, coverage.SuccessfulFeedCount);
+        Assert.Equal([CollectionCoverageIssues.ResultLimitReached], coverage.Issues);
+    }
+
+    [Fact]
+    public async Task CollectAsync_RawResultCountBelowTheLimit_IsNotCensored()
+    {
+        var feed = Feed(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000005"), MrcyId, "Mercury — News", MrcyToken);
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] = [Article("https://ok.example/1", "Mercury Systems wins a contract - Reuters")],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+        var collector = CreateCollector(
+            reader,
+            new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, MaxRecordsPerCompany = 3 });
+
+        var coverage = Assert.Single(
+            (await collector.CollectAsync(context, CancellationToken.None)).CompanyCoverage!);
+        Assert.False(coverage.HitEffectiveResultLimit);
+        Assert.Empty(coverage.Issues);
+    }
+
+    [Fact]
+    public async Task CollectAsync_CensoringUsesTheEFFECTIVEClampedLimit_NotTheUnclampedConfigValue()
+    {
+        var feed = Feed(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000006"), MrcyId, "Mercury — News", MrcyToken);
+
+        // A configured 0 clamps UP to the API minimum of 1 — which is what BuildQuery sends — so a single
+        // returned article REACHES the effective limit. Testing against the unclamped 0 would call every
+        // non-empty result censored, and testing against a hard-coded 100 would call none of them censored.
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] = [Article("https://ok.example/1", "Mercury Systems wins a contract - Reuters")],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+        var collector = CreateCollector(
+            reader,
+            new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, MaxRecordsPerCompany = 0 });
+
+        var result = await collector.CollectAsync(context, CancellationToken.None);
+
+        Assert.Equal(1, reader.LastQuery!.MaxRecords);
+        Assert.True(Assert.Single(result.CompanyCoverage!).HitEffectiveResultLimit);
+    }
+
     private static void AssertNoAdviceLanguage(CollectedEvidence item)
     {
         string[] banned = ["buy", "sell", "guaranteed upside", "safe bet"];

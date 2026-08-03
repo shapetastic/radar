@@ -160,7 +160,15 @@ public sealed class CollectionPass : ICollectionPass
         // collectors are untouched. The stamp goes in the free-form metadata bag, which is NOT an input to
         // evidence identity (spec 145: the normalized title+body hash alone) nor to ContentHash, so no
         // evidence id moves, no AddIfNewAsync dedupe decision changes, and no scoring fingerprint moves.
+        //
+        // PER-COLLECTOR RUN PROVENANCE IS ALSO CAPTURED HERE, AND ONLY HERE (spec 169), for exactly the same
+        // structural reason: the merge sums every collector's summary into one aggregate, so "which collector
+        // failed, for which company, and could its result have been truncated" has to be recorded before it.
+        // AD-16's 2026-08-03 amendment turns on this being a real per-collector/per-company fact rather than
+        // an aggregate — an aggregate SourcesFailed cannot separate two failed RSS feeds from one failed
+        // newssearch feed. Observational only: hashed into nothing, scored by nothing.
         var results = new List<CollectionResult>(_collectors.Count);
+        var collectorRuns = new List<CollectorRunRecord>(_collectors.Count);
         foreach (var collector in _collectors)
         {
             ct.ThrowIfCancellationRequested();
@@ -170,6 +178,8 @@ public sealed class CollectionPass : ICollectionPass
                 Evidence = [.. result.Evidence.Select(
                     e => CollectionProvenanceMetadata.Stamp(e, collector.CollectorName))],
             });
+
+            collectorRuns.Add(BuildCollectorRunRecord(collector.CollectorName, result, health));
         }
 
         var collected = CollectionResultMerger.Merge(results);
@@ -336,7 +346,58 @@ public sealed class CollectionPass : ICollectionPass
             Collection: collected.Summary,
             Health: health,
             Collectors: CollectorNames,
-            Companies: companies);
+            Companies: companies,
+            CollectorRuns: collectorRuns);
+    }
+
+    /// <summary>
+    /// Projects one collector's UNMERGED <see cref="CollectionResult"/> into the durable
+    /// <see cref="CollectorRunRecord"/> the run log persists (spec 169), amending its per-company coverage
+    /// with the run-level collection-health finding the collector itself cannot see.
+    /// <para>
+    /// The health report is reconciled over the whole <see cref="CollectionContext"/> (spec 98), one entry per
+    /// FEED TYPE — a collector is handed the context, not the reconciliation — so
+    /// <see cref="CollectionCoverageIssues.CollectionHealthMismatch"/> can only be stamped here. It is applied
+    /// to EVERY company row of the affected collector, because a feed lost between seed and collection is a
+    /// statement about the inventory this collector was given, and Radar cannot tell which company's feed went
+    /// missing. Over-marking is the safe direction: it costs coverage, it never invents it.
+    /// </para>
+    /// <para>
+    /// The feed-type match is the collector's own <c>CollectorName</c> against
+    /// <see cref="CollectionHealthWarning.FeedType"/>, case-insensitively, mirroring how the validator groups
+    /// feed types. That is exact for <c>newssearch</c> — the one collector this contract currently matters
+    /// for, whose provenance name IS its feed type — and simply never matches for collectors whose name and
+    /// feed type differ, which leaves their (already <c>null</c>) coverage untouched.
+    /// </para>
+    /// </summary>
+    private static CollectorRunRecord BuildCollectorRunRecord(
+        string collectorName, CollectionResult result, CollectionHealthReport health)
+    {
+        var summary = result.Summary;
+        var coverage = result.CompanyCoverage;
+
+        if (coverage is { Count: > 0 }
+            && health.Warnings.Any(w => string.Equals(
+                w.FeedType, collectorName, StringComparison.OrdinalIgnoreCase)))
+        {
+            coverage =
+            [
+                .. coverage.Select(c => c with
+                {
+                    Issues = CollectionCoverageIssues.Canonicalize(
+                        [.. c.Issues, CollectionCoverageIssues.CollectionHealthMismatch]),
+                }),
+            ];
+        }
+
+        return new CollectorRunRecord(
+            CollectorName: collectorName,
+            SourcesChecked: summary.SourcesChecked,
+            SourcesSucceeded: summary.SourcesSucceeded,
+            SourcesFailed: summary.SourcesFailed,
+            ItemsCollected: summary.ItemsCollected,
+            Failures: summary.Failures,
+            CompanyCoverage: coverage);
     }
 
     /// <summary>

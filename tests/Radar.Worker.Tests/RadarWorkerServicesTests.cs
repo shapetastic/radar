@@ -8,6 +8,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Evidence;
 using Radar.Application.Signals;
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
@@ -15,6 +16,7 @@ using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Filings;
 using Radar.Infrastructure.FileSystem;
 
@@ -738,11 +740,44 @@ public sealed class RadarWorkerServicesTests
 
         Assert.Null(provider.GetService<IStrategyComparisonReportGenerator>());
         Assert.Null(provider.GetService<StrategyComparisonOptions>());
-        Assert.Null(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
+
+        // Spec 169: IStrategyScoreSnapshotStoreSelector is a SHARED read seam — the attention-arrival screen
+        // (enabled by default inside the efficacy gate) reads each arm's persisted series through the very
+        // same selector. So it is still registered here; only the comparison's own types are gone.
+        Assert.NotNull(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
 
         // The per-company efficacy artifacts are unaffected.
         Assert.NotNull(provider.GetService<IEfficacyReportGenerator>());
         Assert.NotNull(provider.GetService<EfficacyDatasetBuilder>());
+    }
+
+    [Fact]
+    public void AttentionArrivalCohortsDirectory_IsConfigurable()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            ("Radar:Efficacy:AttentionArrival:CohortsDirectory", @"C:\radar\docs\cohorts"));
+
+        Assert.Equal(
+            @"C:\radar\docs\cohorts",
+            provider.GetRequiredService<FileExcludedCohortStoreOptions>().RootDirectory);
+    }
+
+    [Fact]
+    public void EfficacyComparisonAndAttentionArrivalBothDisabled_RegisterNoSharedSelector()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            ("Radar:Efficacy:Comparison:Enabled", "false"),
+            ("Radar:Efficacy:AttentionArrival:Enabled", "false"));
+
+        // With BOTH consumers off nothing registers the shared selector — the off-switch is still absence.
+        Assert.Null(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
+        Assert.Null(provider.GetService<IAttentionArrivalScreenGenerator>());
+        Assert.Null(provider.GetService<IExcludedCohortStore>());
+        Assert.Null(provider.GetService<IAttentionArrivalArtifactStore>());
     }
 
     [Fact]
@@ -753,6 +788,42 @@ public sealed class RadarWorkerServicesTests
         Assert.Null(provider.GetService<IStrategyComparisonReportGenerator>());
         Assert.Null(provider.GetService<StrategyComparisonOptions>());
         Assert.Null(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
+
+        // Spec 169 rides the same already-opt-in Radar:Efficacy gate: with efficacy off, nothing
+        // attention-arrival-related is registered and Worker's optional generator stays null.
+        Assert.Null(provider.GetService<IAttentionArrivalScreenGenerator>());
+        Assert.Null(provider.GetService<IExcludedCohortStore>());
+        Assert.Null(provider.GetService<IAttentionArrivalArtifactStore>());
+    }
+
+    [Fact]
+    public void EfficacyEnabled_RegistersTheAttentionArrivalScreenByDefault()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"));
+
+        Assert.NotNull(provider.GetService<IAttentionArrivalScreenGenerator>());
+        Assert.NotNull(provider.GetService<IExcludedCohortStore>());
+        Assert.NotNull(provider.GetService<IAttentionArrivalArtifactStore>());
+        Assert.NotNull(provider.GetService<AttentionArrivalRenderer>());
+        Assert.NotNull(provider.GetService<AttentionArrivalScreenEvaluator>());
+
+        // The composition root resolves the collector names from RadarCollectorNames, so the screen guards
+        // against the RIGHT collector set: newssearch supplies coverage, GDELT ("news") does not.
+        // The cohorts root the binding exclusion is read from. run-radar.ps1 overrides this with an ABSOLUTE
+        // path (dotnet run's working directory is src/Radar.Worker/, where the relative default would not
+        // exist and would suppress the primary screen on every run) — this pins the key the script overrides.
+        Assert.Equal(
+            "docs/cohorts",
+            provider.GetRequiredService<FileExcludedCohortStoreOptions>().RootDirectory);
+
+        var options = provider.GetRequiredService<AttentionArrivalOptions>();
+        Assert.Equal(RadarCollectorNames.NewsSearch, options.AttentionCollector);
+        Assert.Equal(
+            new[] { RadarCollectorNames.GdeltNews, RadarCollectorNames.NewsSearch }.OrderBy(
+                n => n, StringComparer.Ordinal),
+            options.ThirdPartyAttentionCollectors);
     }
 
     [Theory]

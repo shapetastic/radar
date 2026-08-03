@@ -40,6 +40,16 @@ public sealed class WeeklyReportBuilderTests
 
         public Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<PipelineRunRecord>>(records.Take(Math.Max(0, count)).ToList());
+
+        // Spec 169's time-bounded read: inclusive bounds, ascending CreatedAtUtc then Id (AD-3). The weekly
+        // report never calls it; it is implemented so the fake still satisfies the interface.
+        public Task<IReadOnlyList<PipelineRunRecord>> ReadBetweenAsync(
+            DateTimeOffset startInclusiveUtc, DateTimeOffset endInclusiveUtc, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<PipelineRunRecord>>(records
+                .Where(r => r.CreatedAtUtc >= startInclusiveUtc && r.CreatedAtUtc <= endInclusiveUtc)
+                .OrderBy(r => r.CreatedAtUtc)
+                .ThenBy(r => r.Id)
+                .ToList());
     }
 
     // A minimal in-test IScoreSnapshotFileStore that serves the previous snapshot from a pre-seeded

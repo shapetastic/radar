@@ -662,6 +662,37 @@ public sealed class EfficacyWorkerOptions
     /// consulted when <see cref="Enabled"/> — the comparison is part of the efficacy read side.
     /// </summary>
     public StrategyComparisonWorkerOptions Comparison { get; init; } = new();
+
+    /// <summary>
+    /// AD-16 attention-arrival screen configuration (bound from "Radar:Efficacy:AttentionArrival"; spec 169).
+    /// Only consulted when <see cref="Enabled"/>, mirroring <see cref="Comparison"/>.
+    /// </summary>
+    public AttentionArrivalWorkerOptions AttentionArrival { get; init; } = new();
+}
+
+/// <summary>
+/// AD-16 attention-arrival screen configuration (bound from "Radar:Efficacy:AttentionArrival"; spec 169).
+/// ENABLED by default <b>within</b> the already-opt-in <c>Radar:Efficacy</c> gate, mirroring
+/// <see cref="StrategyComparisonWorkerOptions"/>: with too little history it writes an honest <c>Pending</c>
+/// artifact rather than an error, and it never touches an existing artifact.
+/// <para>
+/// Note what is deliberately NOT here: the horizon, the minimum company/date counts, the failure threshold and
+/// the first eligible date. Those are AD-16 PRECOMMITMENTS and live as code constants in
+/// <c>AttentionArrivalScreen</c> — a declared threshold an operator can tune between runs is not declared at
+/// all.
+/// </para>
+/// </summary>
+public sealed class AttentionArrivalWorkerOptions
+{
+    /// <summary>Whether to evaluate and write the attention-arrival screen when efficacy reporting is enabled. Defaults to true.</summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// Directory holding the committed cohort declarations AD-16's 2026-07-31 amendment reads (the evaluator
+    /// reads the file, never git history). Defaults to <c>docs/cohorts</c>. A missing directory suppresses the
+    /// primary status rather than silently including every company.
+    /// </summary>
+    public string CohortsDirectory { get; init; } = "docs/cohorts";
 }
 
 /// <summary>
