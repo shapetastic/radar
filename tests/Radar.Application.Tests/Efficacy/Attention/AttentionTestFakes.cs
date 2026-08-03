@@ -61,6 +61,22 @@ internal static class AttentionTestFakes
             .Build();
     }
 
+    /// <summary>
+    /// A stand-in for spec 151's opt-in <c>InferringCollectorAttributionResolver</c> (which is Infrastructure
+    /// -internal): a RECORDED stamp always wins, and evidence carrying none is INFERRED onto
+    /// <paramref name="inferredCollector"/> rather than left unattributed.
+    /// </summary>
+    public sealed class InferringResolver(string inferredCollector = NewsSearch) : ICollectorAttributionResolver
+    {
+        public CollectorAttribution Resolve(EvidenceItem? evidence)
+        {
+            var recorded = CollectionProvenanceMetadata.Read(evidence);
+            return recorded is not null
+                ? CollectorAttribution.Recorded(recorded)
+                : CollectorAttribution.Inferred(inferredCollector);
+        }
+    }
+
     public static Signal MediaAttentionSignal(
         Guid companyId,
         Guid evidenceId,

@@ -91,10 +91,10 @@ public enum AttentionCompanyExclusionReason
     /// <summary>An outcome article carried no real third-party publisher.</summary>
     MissingOutcomePublisher,
 
-    /// <summary>A comparator article's collector attribution was missing or unsupported.</summary>
+    /// <summary>A comparator article's collector attribution was missing, inferred or unsupported.</summary>
     UnresolvedComparatorProvenance,
 
-    /// <summary>An outcome article's collector attribution was missing or unsupported.</summary>
+    /// <summary>An outcome article's collector attribution was missing, inferred or unsupported.</summary>
     UnresolvedOutcomeProvenance,
 }
 

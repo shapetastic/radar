@@ -19,18 +19,22 @@ public sealed class AttentionPublisherCountBuilderTests
     private static readonly DateTimeOffset WindowEnd = new(2026, 10, 22, 8, 0, 0, TimeSpan.Zero);
 
     private static AttentionPublisherCountBuilder Create(
-        FakeSignalRepository signals, FakeEvidenceRepository evidence) =>
+        FakeSignalRepository signals,
+        FakeEvidenceRepository evidence,
+        ICollectorAttributionResolver? attribution = null) =>
         new(
             signals,
             evidence,
-            new RecordedOnlyCollectorAttributionResolver(),
+            attribution ?? new RecordedOnlyCollectorAttributionResolver(),
             AttentionTestFakes.Options());
 
     private static Task<AttentionPublisherCountResult> BuildAsync(
         FakeSignalRepository signals,
         FakeEvidenceRepository evidence,
-        AttentionWindow window = AttentionWindow.Outcome) =>
-        Create(signals, evidence).BuildAsync(CompanyId, WindowStart, WindowEnd, window, CancellationToken.None);
+        AttentionWindow window = AttentionWindow.Outcome,
+        ICollectorAttributionResolver? attribution = null) =>
+        Create(signals, evidence, attribution)
+            .BuildAsync(CompanyId, WindowStart, WindowEnd, window, CancellationToken.None);
 
     [Fact]
     public async Task NoRelevantSignals_IsAValidIntegerZero_NotAFailure()
@@ -211,6 +215,49 @@ public sealed class AttentionPublisherCountBuilderTests
         Assert.Equal(
             AttentionPublisherCountFailure.UnresolvedOutcomeProvenance,
             (await BuildAsync(signals, evidence)).Failure);
+    }
+
+    [Theory]
+    [InlineData(AttentionWindow.Comparator, AttentionPublisherCountFailure.UnresolvedComparatorProvenance)]
+    [InlineData(AttentionWindow.Outcome, AttentionPublisherCountFailure.UnresolvedOutcomeProvenance)]
+    public async Task InferredCollectorAttribution_IsAlsoAProvenanceFailure_EvenForTheSupportedCollector(
+        AttentionWindow window, AttentionPublisherCountFailure expected)
+    {
+        // AD-16 §5's "no inferred success": spec 151 re-DERIVES a collector for legacy evidence, and a
+        // derivation cannot prove that this article's collection was complete. Only a RECORDED stamp can.
+        var evidenceId = Guid.Parse("dddddddd-0000-0000-0000-000000000007");
+        var evidence = new FakeEvidenceRepository()
+            .With(AttentionTestFakes.NewsEvidence(evidenceId, "Reuters", collector: null));
+        var signals = new FakeSignalRepository().With(
+            AttentionTestFakes.MediaAttentionSignal(CompanyId, evidenceId, WindowStart.AddDays(1)));
+
+        var result = await BuildAsync(
+            signals, evidence, window, new AttentionTestFakes.InferringResolver());
+
+        Assert.False(result.IsDefined);
+        Assert.Equal(expected, result.Failure);
+    }
+
+    [Fact]
+    public async Task TheMetric_IsInvariantToWhichAttributionResolverIsComposed()
+    {
+        // The screen is PRECOMMITTED, so its primary metric must not move when an operator flips the
+        // scoring-only Radar:Scoring:InferLegacyCollectorAttribution flag between runs.
+        var recordedId = Guid.Parse("dddddddd-0000-0000-0000-000000000008");
+        var legacyId = Guid.Parse("dddddddd-0000-0000-0000-000000000009");
+        var evidence = new FakeEvidenceRepository().With(
+            AttentionTestFakes.NewsEvidence(recordedId, "Reuters"),
+            AttentionTestFakes.NewsEvidence(legacyId, "Bloomberg", collector: null));
+        var signals = new FakeSignalRepository().With(
+            AttentionTestFakes.MediaAttentionSignal(CompanyId, recordedId, WindowStart.AddDays(1)),
+            AttentionTestFakes.MediaAttentionSignal(CompanyId, legacyId, WindowStart.AddDays(2)));
+
+        var recordedOnly = await BuildAsync(signals, evidence);
+        var inferring = await BuildAsync(
+            signals, evidence, attribution: new AttentionTestFakes.InferringResolver());
+
+        Assert.Equal(recordedOnly, inferring);
+        Assert.Equal(AttentionPublisherCountFailure.UnresolvedOutcomeProvenance, recordedOnly.Failure);
     }
 
     [Fact]

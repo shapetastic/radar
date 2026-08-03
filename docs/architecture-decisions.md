@@ -1572,6 +1572,16 @@ indexes the whole web, and every rendered artifact must say so. If an enabled co
 `newssearch` can emit third-party `MediaAttention`, the evaluation fails with `UnsupportedAttentionCollector`
 rather than silently mixing in signals whose coverage cannot be proved.
 
+Per article, only a **RECORDED** collector stamp (spec 146) admits it to the publisher count. Spec 151's
+**inferred** attribution is treated exactly like missing attribution — `Unresolved*Provenance` — because it
+re-derives which collector retrieved an article and a derivation cannot prove that article's collection was
+complete. This is the per-article reading of the same rule §5 states per record — attribution that is
+"never inferred or backfilled", where an unproven value means UNPROVEN, never success — and of spec 169's
+"No inferred success" constraint. It also keeps the precommitted metric **invariant to
+`Radar:Scoring:InferLegacyCollectorAttribution`**, a scoring-only flag an operator can flip between runs;
+a metric that moves with such a knob is the unfalsifiability this AD exists to prevent. The check is on the
+attribution's *source*, structurally, not on which resolver happens to be composed.
+
 **Unchanged by this amendment:** the metric (§1), the publisher-novelty rule (§2 — still not used), the
 21-day horizon with no exit tolerance (§3), the missing-data/valid-zero rule (§5's substance), both
 comparators (§6), and the primary statistic, degeneracy rule, minimum-20 rule and median-δ failure screen

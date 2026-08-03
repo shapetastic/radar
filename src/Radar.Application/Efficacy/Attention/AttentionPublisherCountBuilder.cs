@@ -37,10 +37,18 @@ public enum AttentionPublisherCountFailure
     /// <summary>An outcome article's real metadata publisher was blank. The feed-name fallback is NOT a third-party publisher.</summary>
     MissingOutcomePublisher,
 
-    /// <summary>A comparator article carried missing or unsupported collector attribution, so its coverage cannot be proved.</summary>
+    /// <summary>
+    /// A comparator article carried missing, inferred or unsupported collector attribution, so its coverage
+    /// cannot be proved. Spec 151's INFERRED attribution counts as unresolved here — AD-16 §5 admits only
+    /// recorded coverage, "never inferred or backfilled".
+    /// </summary>
     UnresolvedComparatorProvenance,
 
-    /// <summary>An outcome article carried missing or unsupported collector attribution, so its coverage cannot be proved.</summary>
+    /// <summary>
+    /// An outcome article carried missing, inferred or unsupported collector attribution, so its coverage
+    /// cannot be proved. Spec 151's INFERRED attribution counts as unresolved here — AD-16 §5 admits only
+    /// recorded coverage, "never inferred or backfilled".
+    /// </summary>
     UnresolvedOutcomeProvenance,
 }
 
@@ -78,6 +86,13 @@ public sealed record AttentionPublisherCountResult(
 /// <b>No novelty test.</b> AD-16 §2 rules it out: 89.5 % of accrued evidence does not resolve on disk (spec
 /// 142), so a publisher would appear "new" whenever its earlier evidence is simply missing — novelty would
 /// measure the gap, not the market.
+/// </para>
+/// <para>
+/// <b>Recorded collector attribution only.</b> An article counts only when the <c>newssearch</c> stamp spec
+/// 146 wrote is present on its evidence; spec 151's INFERRED attribution drops the company-date like missing
+/// attribution does. See the comment at the check for why — in short, AD-16 §5 requires coverage that is
+/// recorded and "never inferred or backfilled", and a precommitted metric that moved with a scoring-only
+/// config flag would not be precommitted.
 /// </para>
 /// <para>
 /// Read-only: it resolves signals and evidence and creates, amends and deletes nothing.
@@ -200,12 +215,23 @@ public sealed class AttentionPublisherCountBuilder
             }
 
             var attribution = _attribution.Resolve(evidence);
-            if (!attribution.IsAttributed
+            if (attribution.Source != CollectorAttributionSource.Recorded
                 || !string.Equals(attribution.CollectorName, _options.AttentionCollector, StringComparison.Ordinal))
             {
-                // Missing OR unsupported attribution: this article's collection coverage cannot be proved, so
-                // the company-date drops rather than being counted from a source whose completeness is
-                // unknown. Ordinal match, mirroring ScoringChannel.Consumes — a case near-miss is a miss.
+                // Missing, INFERRED or unsupported attribution: this article's collection coverage cannot be
+                // PROVED, so the company-date drops rather than being counted from a source whose completeness
+                // is unknown. Ordinal match, mirroring ScoringChannel.Consumes — a case near-miss is a miss.
+                //
+                // Recorded ONLY, deliberately — not IsAttributed. Spec 151's inference is a legitimate
+                // research affordance for SCORING, but it is an inference about which collector retrieved an
+                // article, and AD-16 §5 requires RECORDED successful coverage, "never inferred or
+                // backfilled" (spec 169's constraint names the same rule: "No inferred success" — nothing
+                // legacy or derived may prove coverage). Accepting Inferred here would also make this
+                // precommitted screen's primary metric depend on
+                // Radar:Scoring:InferLegacyCollectorAttribution — a scoring-only flag an operator can flip
+                // between runs, which is exactly the unfalsifiability AD-16 forbids. The metric must be
+                // invariant to it, so the check is on the SOURCE, structurally, rather than on which
+                // resolver composition happened to inject.
                 return AttentionPublisherCountResult.Undefined(Failure(
                     window,
                     AttentionPublisherCountFailure.UnresolvedComparatorProvenance,

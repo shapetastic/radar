@@ -213,6 +213,13 @@ public sealed class AttentionArrivalRenderer
             .Append("in the collection cadence. A window that failed, was capped, or was collected by a ")
             .Append("partial or score-only pass is dropped as `IncompleteAttentionCollection` — never ")
             .Append("counted as a publisher count of zero.\n\n");
+        builder.Append("Per article, the same proof rule applies: it counts only when its evidence carries ")
+            .Append("the collector stamp `").Append(result.AttentionCollector)
+            .Append("` RECORDED at collection time. Attribution Radar re-derived afterwards (spec 151's ")
+            .Append("legacy inference) cannot prove that article's collection was complete, so it drops the ")
+            .Append("company-date as `UnresolvedComparatorProvenance`/`UnresolvedOutcomeProvenance` just as ")
+            .Append("missing attribution does. This screen's metric is therefore invariant to the ")
+            .Append("scoring-only legacy-attribution setting.\n\n");
         builder.Append("**This is an operational statement about Radar's CONFIGURED news source, not a claim ")
             .Append("that it indexes the whole web.** A publisher Radar's source never surfaced is invisible ")
             .Append("here regardless of coverage proof. Within a proved-complete window, an absence of ")
