@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Radar.Application.Collectors;
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -328,6 +329,113 @@ public sealed class WorkerTests
         Assert.Equal(["seed", "replay"], callLog);
     }
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 169: AD-16's attention-arrival screen rides the same read-only Worker step.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AttentionArrivalScreen_RunsAfterTheLeaderboard_OutsideThePipeline()
+    {
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: new RecordingEfficacyGenerator(callLog),
+            replayRunner: null,
+            strategyComparisonGenerator: new RecordingStrategyComparisonGenerator(callLog),
+            companyFilter: null,
+            attentionArrivalGenerator: new RecordingAttentionArrivalGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        // After the pipeline, so this run's freshly-persisted run record and snapshots are visible to it.
+        Assert.Equal(["seed", "run", "efficacy", "comparison", "attention-arrival"], callLog);
+    }
+
+    [Fact]
+    public async Task AttentionArrivalScreen_RunsEvenWhenItIsTheOnlyEnabledReadSideStep()
+    {
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            attentionArrivalGenerator: new RecordingAttentionArrivalGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run", "attention-arrival"], callLog);
+    }
+
+    [Fact]
+    public async Task CompanyFilteredRun_SkipsTheAttentionArrivalScreenToo()
+    {
+        // It reads the seeded company universe, so a filtered pass would evaluate the screen over a partial
+        // view and overwrite the whole-universe artifact with it.
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true, Mode = RadarRunMode.Collect },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: null,
+            replayRunner: null,
+            strategyComparisonGenerator: null,
+            companyFilter: CompanyFilter.FromTickers(["CASS"]),
+            attentionArrivalGenerator: new RecordingAttentionArrivalGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run"], callLog);
+    }
+
+    [Fact]
+    public async Task ReplayRun_SkipsTheAttentionArrivalScreenToo()
+    {
+        // A replay REPLACES the run (spec 139) and returns before the read-side step is reached.
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: null,
+            replayRunner: new RecordingReplayRunner(callLog),
+            strategyComparisonGenerator: null,
+            companyFilter: null,
+            attentionArrivalGenerator: new RecordingAttentionArrivalGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "replay"], callLog);
+    }
+
     [Fact]
     public async Task ReplayRunner_Absent_LeavesTheDefaultWorkerUnchanged()
     {
@@ -393,6 +501,23 @@ public sealed class WorkerTests
                 DroppedStrategies: [],
                 Windows: new StrategyComparisonWindows(0, 0, 0, null, null, null, null),
                 Options: StrategyComparisonOptions.Default));
+        }
+    }
+
+    private sealed class RecordingAttentionArrivalGenerator(List<string> callLog)
+        : IAttentionArrivalScreenGenerator
+    {
+        public Task<AttentionArrivalScreenResult> GenerateAsync(CancellationToken ct)
+        {
+            lock (callLog)
+            {
+                callLog.Add("attention-arrival");
+            }
+
+            return Task.FromResult(AttentionArrivalScreenResult.Unavailable(
+                AttentionEvaluationUnavailableReason.CohortConfigurationUnavailable,
+                "test",
+                "newssearch"));
         }
     }
 

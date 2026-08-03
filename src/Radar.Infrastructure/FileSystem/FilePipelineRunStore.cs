@@ -131,4 +131,82 @@ public sealed class FilePipelineRunStore : IPipelineRunStore
             .Take(count)
             .ToList();
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Deliberately reads EVERY file rather than the newest N (spec 169): the AD-16 coverage chain has to be
+    /// able to distinguish "no run happened in this window" from "the newest-N read truncated before reaching
+    /// it", and only a time-bounded read can. The filter is applied to the DESERIALIZED
+    /// <see cref="PipelineRunRecord.CreatedAtUtc"/>, not to the file name, so a record whose name and content
+    /// ever disagreed is still classified by its content.
+    /// </remarks>
+    public async Task<IReadOnlyList<PipelineRunRecord>> ReadBetweenAsync(
+        DateTimeOffset startInclusiveUtc, DateTimeOffset endInclusiveUtc, CancellationToken ct)
+    {
+        if (endInclusiveUtc < startInclusiveUtc)
+        {
+            // An inverted range describes no interval at all; returning empty is honest and lets a caller
+            // that computed a degenerate range degrade instead of throwing mid-report.
+            return Array.Empty<PipelineRunRecord>();
+        }
+
+        if (!Directory.Exists(_options.RootDirectory))
+        {
+            return Array.Empty<PipelineRunRecord>();
+        }
+
+        List<string> files;
+        try
+        {
+            files = Directory
+                .EnumerateFiles(_options.RootDirectory, "*.json", SearchOption.AllDirectories)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to enumerate run-log files in '{RootDirectory}'; returning no history.",
+                _options.RootDirectory);
+            return Array.Empty<PipelineRunRecord>();
+        }
+
+        // Enumerate in a deterministic order so a partially-unreadable directory still logs the same way run
+        // to run; the returned list is re-sorted on the deserialized fields below regardless.
+        files.Sort(static (a, b) => string.CompareOrdinal(a, b));
+
+        var records = new List<PipelineRunRecord>();
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+                var record = JsonSerializer.Deserialize<PipelineRunRecord>(text, RadarFileStoreJson.Options);
+                if (record is null)
+                {
+                    _logger.LogWarning("Run-log file '{File}' contained a null run record; skipping.", file);
+                    continue;
+                }
+
+                if (record.CreatedAtUtc >= startInclusiveUtc && record.CreatedAtUtc <= endInclusiveUtc)
+                {
+                    records.Add(record);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // One unreadable/malformed run file must not break the whole history read (skip-don't-throw).
+                _logger.LogWarning(ex, "Failed to read run-log file '{File}'; skipping.", file);
+            }
+        }
+
+        // ASCENDING here (the opposite of ReadRecentAsync): the coverage chain walks the run history forwards
+        // looking for gaps, and the contract is CreatedAtUtc then Id, both ascending (AD-3).
+        return records
+            .OrderBy(r => r.CreatedAtUtc)
+            .ThenBy(r => r.Id)
+            .ToList();
+    }
 }

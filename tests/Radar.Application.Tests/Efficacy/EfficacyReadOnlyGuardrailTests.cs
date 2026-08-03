@@ -29,6 +29,47 @@ public sealed class EfficacyReadOnlyGuardrailTests
         "ISignalRepository",
         "IEvidenceRepository",
         "IEvidenceCollector",
+        // The durable WRITE seams the original list never named. Their write methods are called WriteAsync,
+        // which cannot join ForbiddenMutationCalls below because the efficacy artifact stores legitimately
+        // use that name — so banning the TYPES is the only guard that catches them. None of these is
+        // referenced by any efficacy source today; this pins that.
+        "ISignalFileStore",
+        "IRawEvidenceStore",
+        "IScoreRepository",
+    ];
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 169: the ONE sanctioned exception, narrowed rather than waived.
+    //
+    // AD-16's attention-arrival screen has to READ durable signals and evidence — its whole outcome is
+    // "distinct third-party publishers with a resolving MediaAttention signal", which is not expressible over
+    // score snapshots alone. So Efficacy/Attention may name the two READ seams and the evidence record it
+    // reads fields off. It may still NOT name any collection/extraction/scoring COMPUTE type, and the
+    // second test below asserts positively that it never calls a repository MUTATION — which is the property
+    // the type ban was standing in for. That is a stronger check than the name ban it replaces here, not a
+    // weaker one.
+    // ---------------------------------------------------------------------------------------------------
+    private const string AttentionSubfolder = "Attention";
+
+    private static readonly string[] AttentionReadSeamExemptions =
+    [
+        "EvidenceItem",
+        "ISignalRepository",
+        "IEvidenceRepository",
+    ];
+
+    // Every repository/store MUTATION the efficacy layer must never call. The attention screen's ONLY
+    // sanctioned write is IAttentionArrivalArtifactStore.WriteAsync, which is why the artifact store's own
+    // method name is deliberately absent from this list and the store type is not scanned here.
+    private static readonly string[] ForbiddenMutationCalls =
+    [
+        "AddAsync(",
+        "AddIfNewAsync(",
+        "AddSnapshotAsync(",
+        "AddEvidenceLinkAsync(",
+        "AddAliasAsync(",
+        "AddSourceFeedAsync(",
+        "WriteIfNewAsync(",
     ];
 
     [Fact]
@@ -42,8 +83,15 @@ public sealed class EfficacyReadOnlyGuardrailTests
         foreach (var file in files)
         {
             var text = File.ReadAllText(file);
+            var isAttentionScreen = IsAttentionScreenSource(file);
+
             foreach (var forbidden in ForbiddenTypeReferences)
             {
+                if (isAttentionScreen && AttentionReadSeamExemptions.Contains(forbidden, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
                 Assert.False(
                     text.Contains(forbidden, StringComparison.Ordinal),
                     $"{Path.GetFileName(file)} references forbidden type '{forbidden}' — the efficacy layer must "
@@ -51,6 +99,44 @@ public sealed class EfficacyReadOnlyGuardrailTests
             }
         }
     }
+
+    /// <summary>
+    /// The positive half of the spec-169 exemption: the attention screen may NAME the signal/evidence read
+    /// seams, but it must never CALL a mutation on them. This is what the type ban was standing in for, and
+    /// asserting it directly is stronger — a future edit that adds a write is caught by the call, not by
+    /// whether it happened to introduce a new type name.
+    /// </summary>
+    [Fact]
+    public void AttentionScreenSources_CallNoRepositoryMutation()
+    {
+        var efficacyDir = LocateEfficacySourceDirectory();
+        var files = Directory
+            .GetFiles(efficacyDir, "*.cs", SearchOption.AllDirectories)
+            .Where(IsAttentionScreenSource)
+            .ToList();
+
+        // The exemption must not be able to pass vacuously: if the folder is ever emptied or renamed, this
+        // fails rather than silently certifying nothing.
+        Assert.NotEmpty(files);
+
+        foreach (var file in files)
+        {
+            var text = File.ReadAllText(file);
+            foreach (var mutation in ForbiddenMutationCalls)
+            {
+                Assert.False(
+                    text.Contains(mutation, StringComparison.Ordinal),
+                    $"{Path.GetFileName(file)} calls '{mutation}' — the AD-16 attention screen is READ-ONLY "
+                        + "over signals, evidence, scores and reviews; its only sanctioned write is the "
+                        + "attention-arrival artifact store.");
+            }
+        }
+    }
+
+    private static bool IsAttentionScreenSource(string file) =>
+        Path.GetDirectoryName(file) is { } directory
+        && string.Equals(
+            Path.GetFileName(directory), AttentionSubfolder, StringComparison.Ordinal);
 
     // ---------------------------------------------------------------------------------------------------
     // AD-14, asserted on the TYPE GRAPH rather than on source text (spec 140).
@@ -147,6 +233,66 @@ public sealed class EfficacyReadOnlyGuardrailTests
             unexpected.Count == 0,
             "The comparison module may depend on scoring OUTPUT only, but it references: "
                 + string.Join(", ", unexpected));
+    }
+
+    private const string AttentionNamespace = "Radar.Application.Efficacy.Attention";
+
+    [Fact]
+    public void AttentionScreenModule_TouchesOnlyScoringOUTPUTTypes()
+    {
+        // The spec-169 mirror of the test above, asserted on the TYPE GRAPH rather than on prose: the AD-16
+        // screen reads persisted snapshots and the composition-time description of a strategy, and knows
+        // nothing that computes, mutates or fingerprints a score.
+        string[] permitted =
+        [
+            nameof(IScoreSnapshotFileStore),
+            nameof(ScoringStrategyDefinition),
+            nameof(ScoringStrategySet),
+        ];
+
+        var attentionTypes = typeof(ScoringInput).Assembly.GetTypes()
+            .Where(t => t.Namespace == AttentionNamespace)
+            .ToList();
+
+        Assert.NotEmpty(attentionTypes);
+
+        var scoringReferences = attentionTypes
+            .SelectMany(ReferencedTypes)
+            .Where(t => t.Namespace == ScoringNamespace)
+            .Select(t => t.Name)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        var unexpected = scoringReferences.Except(permitted, StringComparer.Ordinal).ToList();
+        Assert.True(
+            unexpected.Count == 0,
+            "The attention-arrival screen may depend on scoring OUTPUT only, but it references: "
+                + string.Join(", ", unexpected));
+    }
+
+    [Fact]
+    public void AttentionScreenModule_NeverReachesAPriceType()
+    {
+        // AD-16's outcome is ATTENTION ARRIVING LATER, not price. Price is validation-only (AD-14) and has
+        // no place in this screen at all — not as an input, not as a reported diagnostic.
+        var attentionTypes = typeof(ScoringInput).Assembly.GetTypes()
+            .Where(t => t.Namespace == AttentionNamespace)
+            .ToList();
+
+        Assert.NotEmpty(attentionTypes);
+
+        var priceLeaks = TransitiveClosure(attentionTypes)
+            .Where(t => t.Namespace is not null
+                && t.Namespace.StartsWith(PricesNamespace, StringComparison.Ordinal))
+            .Select(t => t.FullName)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            priceLeaks.Count == 0,
+            "The attention-arrival screen must never reach a price type, but these are reachable: "
+                + string.Join(", ", priceLeaks));
     }
 
     /// <summary>

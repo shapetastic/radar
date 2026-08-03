@@ -1,6 +1,7 @@
 using System.Globalization;
 
 using Radar.Application.Collectors;
+using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -274,6 +275,23 @@ internal static class RadarWorkerServices
                 {
                     services.AddRadarStrategyComparison(comparisonOptions);
                 }
+            }
+
+            // Spec 169: AD-16's precommitted attention-arrival screen. Same read-only posture and the same
+            // "enabled by default inside the already-opt-in efficacy gate" rule as the comparison above — with
+            // too little history it writes an honest Pending artifact rather than failing. Its OUTCOME is
+            // attention, not price, so it reads no price store at all.
+            //
+            // The one composition-dependent input — which collector names produce third-party MediaAttention,
+            // and which of them supplies the spec-169 coverage contract — is resolved HERE, at the config
+            // boundary, from the SAME RadarCollectorNames consts the kind→collector table uses. Radar
+            // .Application never sees a collector class or an IConfiguration.
+            if (options.Efficacy.AttentionArrival.Enabled)
+            {
+                services.AddRadarAttentionArrivalScreen(
+                    BuildAttentionArrivalOptions(),
+                    options.Efficacy.AttentionArrival.CohortsDirectory,
+                    options.EfficacyDirectory);
             }
         }
 
@@ -721,6 +739,33 @@ internal static class RadarWorkerServices
                 "Radar:Efficacy:Comparison is misconfigured: " + ex.Message, ex);
         }
     }
+
+    /// <summary>
+    /// The AD-16 attention-arrival screen's only composition-dependent input (spec 169): which COLLECTORS can
+    /// produce third-party <c>MediaAttention</c>, and which one of them supplies the per-company coverage
+    /// contract the screen needs to prove a window was observed.
+    /// <para>
+    /// Both names come from <see cref="RadarCollectorNames"/> — the same consts the kind→collector table above
+    /// uses — so they cannot drift from the collectors that actually run. The capability set is the closed
+    /// list of collectors declaring <c>EvidenceSourceType.NewsArticle</c>: <c>newssearch</c> (Google-News
+    /// attention search, which records coverage) and <c>news</c> (GDELT, which does not). If GDELT is enabled,
+    /// the evaluator refuses with <c>UnsupportedAttentionCollector</c> rather than silently mixing signals
+    /// whose completeness cannot be proved into a precommitted outcome.
+    /// </para>
+    /// <para>
+    /// Validated at construction (the supported collector must be a member of the capability set), so a future
+    /// edit that renames one and not the other fails at STARTUP rather than producing a screen that quietly
+    /// stopped guarding anything.
+    /// </para>
+    /// </summary>
+    private static AttentionArrivalOptions BuildAttentionArrivalOptions() =>
+        new(
+            attentionCollector: RadarCollectorNames.NewsSearch,
+            thirdPartyAttentionCollectors:
+            [
+                RadarCollectorNames.NewsSearch,
+                RadarCollectorNames.GdeltNews,
+            ]);
 
     /// <summary>
     /// Turns the bound <c>Radar:Replay</c> strings into a validated <see cref="ReplayPlan"/> (spec 139).

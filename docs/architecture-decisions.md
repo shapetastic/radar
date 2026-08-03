@@ -1362,10 +1362,15 @@ nothing about whether the news collectors succeeded on a given day. A gap or an 
 is dropped and counted as `IncompleteAttentionCollection`.
 
 > **Implementation dependency, named so it is not discovered late.** This coverage test needs a store the
-> efficacy path does not currently read. It is satisfiable from existing data — `PipelineRunRecord` carries
+> efficacy path does not currently read. ~~It is satisfiable from existing data — `PipelineRunRecord` carries
 > `Collectors`, `SourcesFailed` and `CollectionWarnings`, and records are persisted per run under
-> `data/runs/{yyyy}/…` — but the evaluator must read run records alongside snapshots and prices. Per-day
-> granularity holds while collection runs daily; a change to that cadence would need this rule revisited.
+> `data/runs/{yyyy}/…`~~ — **CORRECTED by the 2026-08-03 amendment (spec 169): it is NOT.** An aggregate
+> `SourcesFailed` cannot separate a failed RSS feed from a failed `newssearch` feed, carries no per-company
+> granularity, and cannot reveal that a *successful* query hit its result limit. See that amendment for the
+> prospective per-collector + per-company coverage contract that replaces this claim; `null` there means
+> UNPROVEN, never success, and is never backfilled. The evaluator must read run records alongside snapshots.
+> Per-day granularity holds while collection runs daily; a change to that cadence would need this rule
+> revisited.
 
 Within a complete window, **the absence of any `MediaAttention` signal is a valid outcome of zero
 and must remain in the sample**. It is the central negative case, not missing data. If one or more
@@ -1492,3 +1497,83 @@ Amended **before any batch-4 company holds a single snapshot or forward outcome*
 as a pending spec — so the precommitment is intact. Future universe additions must either satisfy neutral
 selection (sector fill + filing cadence, price and events unconsulted — the spec-125/159 standard) or ship
 with their own `docs/cohorts/` exclusion file in the same PR that seeds them.
+
+### AMENDMENT · 2026-08-03 — §4's boundary is CONCRETE, and §5's coverage dependency was factually too strong
+
+Spec 169 makes §§1–7 executable. Making them executable exposed exactly one factual error in this AD and
+left exactly one value still open. Both are settled here, **before any v11 primary-screen outcome exists**.
+
+**A · §4's first eligible primary-screen as-of date is 2026-09-29.** The 2026-07-29 amendment left the
+concrete date to be recorded once the first post-spec-160 baseline run existed. It does:
+
+- `PipelineRunRecord` `7f28ca48-5cb3-4646-8d57-56baf1e482e1`;
+- `CreatedAtUtc = 2026-07-30T08:07:19.5804397Z`.
+
+Sixty days from that instant ends **during** 2026-09-28. Pinning **2026-09-29** — the first whole UTC
+calendar day that is unambiguously past the 60-day seam — keeps eligibility from depending on the intraday
+schedule of a once-daily job: a run that drifts twenty minutes earlier must not silently make a date
+eligible that yesterday's identical run did not. It is conservative by **less than one day**, it is recorded
+before any outcome for that date can exist, and it changes none of the metric, horizon, comparator or
+failure rules. The evaluator carries this date as a code constant, not as configuration: a precommitted
+boundary that an operator can tune is not a precommitment.
+
+Twenty daily eligible dates therefore cannot exist before roughly early November 2026. Until then the
+evaluator's status is `Pending`. That is **expected accrual, not a defect**, and it is deliberately
+distinguished from the availability failures in C below.
+
+**B · Prospective coverage provenance must be recording by 2026-09-08.** The first eligible date's
+comparator window opens at `2026-09-29 − 21 days = 2026-09-08`, so the per-collector/per-company coverage
+record described in C has to be live by then for that date to be usable at all. If it lands later, **do not
+backfill success and do not move the boundary.** The affected company-dates are honestly
+`IncompleteAttentionCollection`, and later as-of dates become usable as their own complete windows accrue.
+Moving a precommitted boundary to rescue observations Radar failed to record is the exact
+unfalsifiability failure the pre-commitment clause exists to prevent.
+
+**C · §5's "Implementation dependency" blockquote is CORRECTED.** It claimed the coverage test was
+"satisfiable from existing data — `PipelineRunRecord` carries `Collectors`, `SourcesFailed` and
+`CollectionWarnings`". **That is factually too strong, and the difference is not cosmetic:**
+
+- `SourcesFailed` is an **aggregate across every collector**. It cannot distinguish two failed RSS feeds
+  (irrelevant to this metric) from one failed `newssearch` feed (fatal to it).
+- Nothing in the record is **per company**. A run in which `newssearch` failed for one company and
+  succeeded for forty-two is indistinguishable from one in which it failed for all forty-three.
+- Nothing records that a **successful** query hit its result limit. A truncated-but-successful feed is the
+  most dangerous case of all: it looks like complete coverage and silently undercounts publishers.
+
+A recent *global* collection date is therefore **not** proof of attention coverage. The dependency is
+replaced by a **prospective per-collector, per-company coverage contract** recorded on the run record:
+
+- `PipelineRunRecord.CollectorRuns` — one row per collector that ran, in stable collector order, carrying
+  that collector's own unmerged summary (sources checked / succeeded / failed, items collected, its source
+  failures) plus optional per-company coverage. It is recorded **before** the collection merge, because the
+  merge discards collector identity.
+- `CollectorRunRecord.CompanyCoverage` — for `newssearch`, one row for **every** company in the collection
+  context (not only those with feeds): expected feed count, successful feed count, whether any feed's **raw**
+  reader result count reached the **effective clamped** request limit, and a stable ordinally-sorted issue
+  set drawn from the closed vocabulary `CollectionHealthMismatch`, `MissingFeed`, `ResultLimitReached`,
+  `SourceFailure`. An empty issue set means complete at that checkpoint.
+
+Both fields are trailing and optional, so every existing on-disk run record still deserializes. They are
+**observational run provenance only** — never an evidence, signal, score, fingerprint or
+strategy-comparability input. **For coverage purposes `null` means UNPROVEN, never success**, and it is
+never inferred or backfilled for records written before this contract existed (heal forward — specs
+142/145).
+
+Coverage for a company over an exact interval `(a, b]` requires a chain of *complete* checkpoints: one at or
+before `a` no more than 36 hours earlier, one at or after `b` no more than 36 hours later, and no gap
+greater than 36 hours between consecutive complete checkpoints spanning it. A partial collection run
+(`CompanyFilter != null`), a score-only run, a legacy record without `CollectorRuns`, a failed or capped
+company feed, or a `newssearch` feed-inventory health warning each break the chain, and the company-date is
+dropped as `IncompleteAttentionCollection` with the more specific coverage reason reported alongside. The
+rule is applied **separately** to `(T − 21d, T]` and `(T, T + 21d]`.
+
+This is an operational statement about **Radar's configured news source**, not a claim that Google News
+indexes the whole web, and every rendered artifact must say so. If an enabled collector other than
+`newssearch` can emit third-party `MediaAttention`, the evaluation fails with `UnsupportedAttentionCollector`
+rather than silently mixing in signals whose coverage cannot be proved.
+
+**Unchanged by this amendment:** the metric (§1), the publisher-novelty rule (§2 — still not used), the
+21-day horizon with no exit tolerance (§3), the missing-data/valid-zero rule (§5's substance), both
+comparators (§6), and the primary statistic, degeneracy rule, minimum-20 rule and median-δ failure screen
+(§7). No scoring input, formula version, rule-set version or fingerprint moves: coverage is recorded
+provenance, and the evaluator is read-only.

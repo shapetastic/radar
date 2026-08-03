@@ -159,7 +159,12 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             // The scoring strategies that ran, in run order, with the primary marked (spec 137) — the run
             // log's answer to "which scorings does this collection pass back?". Observational only.
             Strategies: scoring.Strategies,
-            PrimaryStrategy: scoring.PrimaryStrategy);
+            PrimaryStrategy: scoring.PrimaryStrategy,
+            // This run collected the whole watch universe (a filter is collect-only by guard, spec 161).
+            CompanyFilter: null,
+            // Per-collector run provenance (spec 169), captured by the collection pass before the merge
+            // discarded collector identity. Observational only — see PipelineRunRecord.CollectorRuns.
+            CollectorRuns: collection.CollectorRuns);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

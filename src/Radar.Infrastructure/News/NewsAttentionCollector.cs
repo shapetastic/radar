@@ -92,6 +92,22 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         var feedsFailed = 0;
         var failures = new List<SourceFailure>();
 
+        // PER-COMPANY COVERAGE (spec 169 / AD-16's 2026-08-03 amendment). Accumulated HERE, inside the feed
+        // loop, because this is the only place that knows both the feed→company binding and the RAW returned
+        // item count. Reconstructing it later from ItemsCollected is invalid: the merge discards per-collector
+        // attribution, the aggregate carries no company, and the KEPT count is post-relevance-filter — so it
+        // cannot reveal a censored result set, which is precisely the failure the evaluator must catch.
+        //
+        // Seeded with EVERY company in the context, not only those holding a feed, so a company with no
+        // configured newssearch feed is recorded as MissingFeed rather than silently absent — an absent row
+        // and a clean row must never be the same thing.
+        var coverage = context.Companies.ToDictionary(
+            c => c.Id, c => new CompanyCoverageAccumulator());
+
+        // The EFFECTIVE clamped request limit — the same value BuildQuery sends, not the unclamped config
+        // value. A raw result count that REACHES it means the source may have had more to give.
+        var effectiveLimit = EffectiveMaxRecords;
+
         // Strictly sequential (never Task.WhenAll) + paced: a small polite pace between reads.
         var isFirstRequest = true;
 
@@ -100,10 +116,18 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
             ct.ThrowIfCancellationRequested();
             feedsChecked++;
 
+            // A feed bound to a company that is not in the context universe still counts as a checked feed,
+            // but has no coverage row to record against (it belongs to no company Radar is watching here).
+            var companyCoverage = coverage.GetValueOrDefault(feed.CompanyId);
+            companyCoverage?.RecordExpectedFeed();
+
             var target = QueryFeedTarget.Parse(feed.Url);
             if (target is null)
             {
                 feedsFailed++;
+                // A malformed token is a FEED FAILURE for coverage purposes: the company's configured source
+                // was not read, so the window is not provably complete.
+                companyCoverage?.RecordFeedFailure();
                 failures.Add(new SourceFailure(feed.Name, feed.Url, "malformed news feed token"));
                 _logger.LogWarning(
                     "News search feed '{FeedName}' ({FeedUrl}) has a malformed token "
@@ -128,6 +152,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
             if (!result.IsSuccess)
             {
                 feedsFailed++;
+                companyCoverage?.RecordFeedFailure();
                 failures.Add(new SourceFailure(
                     feed.Name, feed.Url, result.Detail ?? result.Outcome.ToString()));
                 _logger.LogWarning(
@@ -137,6 +162,12 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
                     result.Detail);
                 continue;
             }
+
+            // Read succeeded — and the CENSORING test uses result.Items.Count, the RAW reader count, BEFORE
+            // the relevance filter and before the per-feed dedupe/cap loop below. Equality with the effective
+            // limit means potentially truncated: the source stopped at the ceiling Radar asked for, so
+            // articles beyond it are unobserved even if relevance filtering later keeps far fewer items.
+            companyCoverage?.RecordFeedSuccess(result.Items.Count >= effectiveLimit);
 
             var hints = CollectorCompanyHints.For(feed.CompanyId, companiesById);
 
@@ -187,13 +218,83 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
 
         var summary = new CollectionSummary(
             feedsChecked, feedsChecked - feedsFailed, feedsFailed, results.Count, failures.ToArray());
-        return new CollectionResult(results.ToArray(), summary);
+
+        // Ordered by CompanyId so two runs over the same universe record byte-identical coverage (AD-3).
+        var companyCoverageRows = coverage
+            .OrderBy(kvp => kvp.Key)
+            .Select(kvp => kvp.Value.ToCoverage(kvp.Key))
+            .ToArray();
+
+        return new CollectionResult(results.ToArray(), summary, companyCoverageRows);
     }
+
+    /// <summary>
+    /// The effective clamped per-feed request limit — the value <see cref="BuildQuery"/> actually sends. It
+    /// is the ONE definition, read by both the query builder and the result-limit censoring test, so a
+    /// clamped-vs-unclamped mismatch between "what we asked for" and "what we call truncated" is not
+    /// expressible.
+    /// </summary>
+    private int EffectiveMaxRecords =>
+        Math.Clamp(_options.MaxRecordsPerCompany, ApiMinRecords, ApiMaxRecords);
 
     private NewsSearchQuery BuildQuery(QueryFeedTarget target) => new(
         QueryPhrase: target.QueryPhrase,
-        MaxRecords: Math.Clamp(_options.MaxRecordsPerCompany, ApiMinRecords, ApiMaxRecords),
+        MaxRecords: EffectiveMaxRecords,
         EnglishOnly: _options.EnglishOnly);
+
+    /// <summary>
+    /// Accumulates one company's per-feed coverage facts across the feed loop and projects them into the
+    /// durable <see cref="CollectorCompanyCoverage"/> row. Kept as a tiny mutable accumulator (rather than
+    /// rebuilding an immutable record per feed) so the loop reads as what it is: three counters plus a flag.
+    /// </summary>
+    private sealed class CompanyCoverageAccumulator
+    {
+        private int _expected;
+        private int _succeeded;
+        private bool _failed;
+        private bool _hitLimit;
+
+        public void RecordExpectedFeed() => _expected++;
+
+        public void RecordFeedFailure() => _failed = true;
+
+        public void RecordFeedSuccess(bool hitEffectiveResultLimit)
+        {
+            _succeeded++;
+            _hitLimit |= hitEffectiveResultLimit;
+        }
+
+        public CollectorCompanyCoverage ToCoverage(Guid companyId)
+        {
+            var issues = new List<string>(CollectionCoverageIssues.All.Count);
+
+            // No configured feed at all: recorded, never omitted. A company Radar never asked about must not
+            // be mistakable for a company Radar asked about and heard nothing from.
+            if (_expected == 0)
+            {
+                issues.Add(CollectionCoverageIssues.MissingFeed);
+            }
+
+            // Defensive on BOTH the flag and the counts: a future edit that forgets one still records the
+            // failure rather than silently certifying a window as complete.
+            if (_failed || _succeeded < _expected)
+            {
+                issues.Add(CollectionCoverageIssues.SourceFailure);
+            }
+
+            if (_hitLimit)
+            {
+                issues.Add(CollectionCoverageIssues.ResultLimitReached);
+            }
+
+            return new CollectorCompanyCoverage(
+                CompanyId: companyId,
+                ExpectedFeedCount: _expected,
+                SuccessfulFeedCount: _succeeded,
+                HitEffectiveResultLimit: _hitLimit,
+                Issues: CollectionCoverageIssues.Canonicalize(issues));
+        }
+    }
 
     /// <summary>
     /// True when the whitespace-normalised, case-insensitive article title contains the company query phrase

@@ -132,7 +132,12 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
             PrimaryStrategy: null,
             // Spec 161: null for an unfiltered run (every existing record reads that way too), the canonical
             // ticker list when Radar:Companies restricted this pass. Provenance only.
-            CompanyFilter: _companyFilter?.Tickers);
+            CompanyFilter: _companyFilter?.Tickers,
+            // Per-collector run provenance (spec 169), captured by the SAME collection pass the combined run
+            // uses. A FILTERED pass still records it truthfully — the evaluator rejects the checkpoint on
+            // CompanyFilter, not on missing coverage, so a partial pass can never prove primary-screen
+            // coverage even though its rows are honest about what it did look at.
+            CollectorRuns: collection.CollectorRuns);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

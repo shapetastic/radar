@@ -37,6 +37,28 @@ public sealed record RankCorrelationResult(
 }
 
 /// <summary>
+/// Spearman ρ ALONE, with no interval (spec 169). Same coefficient, same average-rank convention, same
+/// degeneracy names — only the Fisher-z interval is absent.
+/// <para>
+/// <b>Why a second shape and not a second implementation.</b> AD-16's screen consumes ρ and nothing else: its
+/// windows overlap by construction, so it makes no confidence or significance claim and has no use for an
+/// interval. It also must NOT inherit <see cref="RankCorrelationUndefinedReason.PerfectCorrelation"/>, which
+/// exists purely because a zero-width interval would read as certainty — a genuine ρ = ±1 is a perfectly
+/// usable coefficient, and discarding that date would silently drop a real observation from a precommitted
+/// screen. Both shapes share ONE ranking + ONE coefficient computation below.
+/// </para>
+/// </summary>
+public readonly record struct SpearmanRhoResult(
+    bool IsDefined,
+    double Rho,
+    int ObservationCount,
+    RankCorrelationUndefinedReason Reason)
+{
+    public static SpearmanRhoResult Undefined(int n, RankCorrelationUndefinedReason reason) =>
+        new(IsDefined: false, Rho: 0.0, ObservationCount: n, Reason: reason);
+}
+
+/// <summary>
 /// Spearman's rank correlation ρ between a strategy's scores and the subsequent price movement they are being
 /// judged against, plus a closed-form Fisher-z interval for its dispersion (spec 140).
 /// <para>
@@ -74,53 +96,23 @@ public static class RankCorrelation
         IReadOnlyList<double> forwardReturns,
         double normalQuantile)
     {
-        ArgumentNullException.ThrowIfNull(scores);
-        ArgumentNullException.ThrowIfNull(forwardReturns);
+        var n = RequireAligned(scores, forwardReturns, nameof(forwardReturns));
 
-        if (scores.Count != forwardReturns.Count)
-        {
-            throw new ArgumentException(
-                $"Score/return vectors must be index-aligned, but got {scores.Count} and "
-                    + $"{forwardReturns.Count}.",
-                nameof(forwardReturns));
-        }
-
-        var n = scores.Count;
-
-        // n - 3 must be positive for the Fisher-z standard error to exist at all.
+        // n - 3 must be positive for the Fisher-z standard error to exist at all. Checked BEFORE the
+        // coefficient (unchanged from the original ordering) so a tiny window reports "too few" rather than a
+        // constant-vector reason that happens to fire first.
         if (n < StrategyComparisonOptions.MinimumObservationsFloor)
         {
             return RankCorrelationResult.Undefined(n, RankCorrelationUndefinedReason.TooFewObservations);
         }
 
-        var rx = AverageRanks(scores);
-        var ry = AverageRanks(forwardReturns);
-
-        var mx = Mean(rx);
-        var my = Mean(ry);
-
-        double sxy = 0.0, sxx = 0.0, syy = 0.0;
-        for (var i = 0; i < n; i++)
+        var coefficient = ComputeRho(scores, forwardReturns);
+        if (!coefficient.IsDefined)
         {
-            var dx = rx[i] - mx;
-            var dy = ry[i] - my;
-            sxy += dx * dy;
-            sxx += dx * dx;
-            syy += dy * dy;
+            return RankCorrelationResult.Undefined(n, coefficient.Reason);
         }
 
-        if (sxx <= 0.0)
-        {
-            return RankCorrelationResult.Undefined(n, RankCorrelationUndefinedReason.ConstantScores);
-        }
-
-        if (syy <= 0.0)
-        {
-            return RankCorrelationResult.Undefined(n, RankCorrelationUndefinedReason.ConstantReturns);
-        }
-
-        // Clamped only against floating-point overshoot at the ±1 boundary; a genuine |ρ| = 1 is caught below.
-        var rho = Math.Clamp(sxy / Math.Sqrt(sxx * syy), -1.0, 1.0);
+        var rho = coefficient.Rho;
 
         if (Math.Abs(rho) >= 1.0)
         {
@@ -139,6 +131,84 @@ public static class RankCorrelation
             UpperBound: upper,
             ObservationCount: n,
             Reason: RankCorrelationUndefinedReason.None);
+    }
+
+    /// <summary>
+    /// Spearman ρ over two index-aligned vectors, WITHOUT the Fisher-z interval (spec 169). THE coefficient
+    /// computation — <see cref="Compute"/> calls this too, so there is exactly one ranking rule, one
+    /// accumulation order and one clamp in the codebase.
+    /// <para>
+    /// Undefined only for a genuinely unanswerable input: fewer than two observations, or a constant vector on
+    /// either side (<see cref="RankCorrelationUndefinedReason.ConstantScores"/> /
+    /// <see cref="RankCorrelationUndefinedReason.ConstantReturns"/>). A perfect ±1 is DEFINED here — the
+    /// interval that a ±1 would collapse is not being computed.
+    /// </para>
+    /// </summary>
+    public static SpearmanRhoResult ComputeRho(
+        IReadOnlyList<double> first, IReadOnlyList<double> second)
+    {
+        var n = RequireAligned(first, second, nameof(second));
+
+        // Two points is the floor for any rank variance to exist at all; below it there is nothing to
+        // correlate, and reporting 0 would be a fabricated answer rather than a missing one.
+        if (n < 2)
+        {
+            return SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.TooFewObservations);
+        }
+
+        var rx = AverageRanks(first);
+        var ry = AverageRanks(second);
+
+        var mx = Mean(rx);
+        var my = Mean(ry);
+
+        double sxy = 0.0, sxx = 0.0, syy = 0.0;
+        for (var i = 0; i < n; i++)
+        {
+            var dx = rx[i] - mx;
+            var dy = ry[i] - my;
+            sxy += dx * dy;
+            sxx += dx * dx;
+            syy += dy * dy;
+        }
+
+        if (sxx <= 0.0)
+        {
+            return SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.ConstantScores);
+        }
+
+        if (syy <= 0.0)
+        {
+            return SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.ConstantReturns);
+        }
+
+        // Clamped only against floating-point overshoot at the ±1 boundary.
+        var rho = Math.Clamp(sxy / Math.Sqrt(sxx * syy), -1.0, 1.0);
+
+        return new SpearmanRhoResult(
+            IsDefined: true, Rho: rho, ObservationCount: n, Reason: RankCorrelationUndefinedReason.None);
+    }
+
+    /// <summary>
+    /// The shared null/alignment precondition. <paramref name="secondParameterName"/> is threaded from the
+    /// CALLER so each public method's <see cref="ArgumentException.ParamName"/> keeps naming its own
+    /// parameter — extracting this must not quietly change a public surface.
+    /// </summary>
+    private static int RequireAligned(
+        IReadOnlyList<double> first, IReadOnlyList<double> second, string secondParameterName)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+
+        if (first.Count != second.Count)
+        {
+            throw new ArgumentException(
+                $"Score/return vectors must be index-aligned, but got {first.Count} and "
+                    + $"{second.Count}.",
+                secondParameterName);
+        }
+
+        return first.Count;
     }
 
     /// <summary>

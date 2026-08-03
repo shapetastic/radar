@@ -195,7 +195,13 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
             // "unrecorded" value; an empty list would claim a clean reconciliation that never ran.
             CollectionWarnings: null,
             Strategies: scoring.Strategies,
-            PrimaryStrategy: scoring.PrimaryStrategy);
+            PrimaryStrategy: scoring.PrimaryStrategy,
+            CompanyFilter: null,
+            // No collection happened this pass, so there is no per-collector coverage to record (spec 169).
+            // Null is the record's "not recorded" value and reads downstream as UNPROVEN — which is exactly
+            // right: a score pass observed nothing and must never be able to supply a coverage checkpoint.
+            // An empty list would claim that zero collectors ran cleanly.
+            CollectorRuns: null);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

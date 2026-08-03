@@ -293,6 +293,18 @@ public sealed class RadarPipelineRunnerTests
                 .ToList();
             return Task.FromResult(recent);
         }
+
+        // Spec 169's time-bounded read: inclusive bounds, ascending CreatedAtUtc then Id (AD-3).
+        public Task<IReadOnlyList<PipelineRunRecord>> ReadBetweenAsync(
+            DateTimeOffset startInclusiveUtc, DateTimeOffset endInclusiveUtc, CancellationToken ct)
+        {
+            IReadOnlyList<PipelineRunRecord> between = Written
+                .Where(r => r.CreatedAtUtc >= startInclusiveUtc && r.CreatedAtUtc <= endInclusiveUtc)
+                .OrderBy(r => r.CreatedAtUtc)
+                .ThenBy(r => r.Id)
+                .ToList();
+            return Task.FromResult(between);
+        }
     }
 
     /// <summary>
@@ -1448,6 +1460,183 @@ public sealed class RadarPipelineRunnerTests
         Assert.Empty(record.CollectionWarnings!);
     }
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 169: per-COLLECTOR run provenance. Captured inside the collector loop, BEFORE the merge discards
+    // collector identity — the aggregate CollectionSummary cannot separate one collector's failure from
+    // another's, which is the correction AD-16's 2026-08-03 amendment records.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Run_RecordsEachCollectorsOwnUnmergedSummary_InTheStableCollectorOrder()
+    {
+        var companyId = Guid.NewGuid();
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var aCollector = new ConfigurableCollector(
+            "AAA",
+            EvidenceSourceType.LocalFile,
+            new CollectionResult(
+                [BuildCollected()],
+                new CollectionSummary(3, 3, 0, 1, [])));
+
+        var zCollector = new ConfigurableCollector(
+            "ZZZ",
+            EvidenceSourceType.RssFeed,
+            new CollectionResult(
+                [],
+                new CollectionSummary(2, 1, 1, 0, [new SourceFailure("z-feed", "https://z", "HTTP 500")])));
+
+        // Registration-shuffled (Z before A) to prove the record carries the stable CollectorName order.
+        var h = new Harness(
+            [zCollector, aCollector], extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.NotNull(record.CollectorRuns);
+        Assert.Equal(["AAA", "ZZZ"], record.CollectorRuns!.Select(c => c.CollectorName));
+
+        var a = record.CollectorRuns![0];
+        Assert.Equal(3, a.SourcesChecked);
+        Assert.Equal(0, a.SourcesFailed);
+        Assert.Empty(a.Failures);
+        Assert.Null(a.CompanyCoverage);
+
+        // The per-collector rows keep what the aggregate loses: WHICH collector failed, and on what.
+        var z = record.CollectorRuns![1];
+        Assert.Equal(1, z.SourcesFailed);
+        Assert.Equal("HTTP 500", Assert.Single(z.Failures).Reason);
+        Assert.Equal(5, record.SourcesChecked); // the aggregate is unchanged …
+        Assert.Equal(1, record.SourcesFailed);  // … and still cannot say which collector it was.
+    }
+
+    [Fact]
+    public async Task Run_CarriesACollectorsPerCompanyCoverage_ThroughToTheRunRecord()
+    {
+        var companyId = Guid.NewGuid();
+        var coveredCompany = Guid.NewGuid();
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var collector = new ConfigurableCollector(
+            "newssearch",
+            EvidenceSourceType.NewsArticle,
+            new CollectionResult(
+                [BuildCollected()],
+                new CollectionSummary(1, 1, 0, 1, []),
+                [new CollectorCompanyCoverage(coveredCompany, 1, 1, false, [])]));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var coverage = Assert.Single(
+            Assert.Single(Assert.Single(h.RunStore.Written).CollectorRuns!).CompanyCoverage!);
+        Assert.Equal(coveredCompany, coverage.CompanyId);
+        Assert.Empty(coverage.Issues);
+    }
+
+    [Fact]
+    public async Task Run_AFeedInventoryHealthWarning_StampsCollectionHealthMismatchOnThatCollectorsRows()
+    {
+        // The collector is handed the collection CONTEXT, never the reconciliation report, so this token can
+        // only be added by the pass. Over-marking is the safe direction: it costs coverage, never invents it.
+        var companyId = Guid.NewGuid();
+        var covered = Guid.NewGuid();
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var newsSearch = new ConfigurableCollector(
+            "newssearch",
+            EvidenceSourceType.NewsArticle,
+            new CollectionResult(
+                [BuildCollected()],
+                new CollectionSummary(1, 1, 0, 1, []),
+                [
+                    new CollectorCompanyCoverage(
+                        covered, 1, 1, false, [CollectionCoverageIssues.ResultLimitReached]),
+                ]));
+
+        var validator = new StubCollectionHealthValidator(new CollectionHealthReport(
+        [
+            new CollectionHealthWarning(
+                "feeds-lost-before-collection",
+                CollectionHealthSeverity.Warning,
+                FeedType: "newssearch",
+                DeclaredInSeed: 43,
+                ReachedCollectors: 40,
+                Message: "Seed declares 43 'newssearch' feed(s) but only 40 reached the collectors."),
+        ]));
+
+        var h = new Harness(
+            newsSearch, extractor, new PipelineOptions { GenerateReport = false }, healthValidator: validator);
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var coverage = Assert.Single(
+            Assert.Single(Assert.Single(h.RunStore.Written).CollectorRuns!).CompanyCoverage!);
+
+        // Ordinally sorted, and the collector's own token is preserved rather than replaced.
+        Assert.Equal(
+            [CollectionCoverageIssues.CollectionHealthMismatch, CollectionCoverageIssues.ResultLimitReached],
+            coverage.Issues);
+    }
+
+    [Fact]
+    public async Task Run_AHealthWarningForAnotherFeedType_LeavesThisCollectorsCoverageAlone()
+    {
+        var companyId = Guid.NewGuid();
+        var covered = Guid.NewGuid();
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var newsSearch = new ConfigurableCollector(
+            "newssearch",
+            EvidenceSourceType.NewsArticle,
+            new CollectionResult(
+                [BuildCollected()],
+                new CollectionSummary(1, 1, 0, 1, []),
+                [new CollectorCompanyCoverage(covered, 1, 1, false, [])]));
+
+        var validator = new StubCollectionHealthValidator(new CollectionHealthReport(
+        [
+            new CollectionHealthWarning(
+                "feeds-lost-before-collection",
+                CollectionHealthSeverity.Warning,
+                FeedType: "sec",
+                DeclaredInSeed: 43,
+                ReachedCollectors: 40,
+                Message: "Seed declares 43 'sec' feed(s) but only 40 reached the collectors."),
+        ]));
+
+        var h = new Harness(
+            newsSearch, extractor, new PipelineOptions { GenerateReport = false }, healthValidator: validator);
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var coverage = Assert.Single(
+            Assert.Single(Assert.Single(h.RunStore.Written).CollectorRuns!).CompanyCoverage!);
+        Assert.Empty(coverage.Issues);
+    }
+
+    [Fact]
+    public async Task Run_RecordsNoCompanyFilter_SoAFullRunCanSupplyACoverageCheckpoint()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Null(record.CompanyFilter);
+        Assert.NotNull(record.CollectorRuns);
+    }
+
     [Fact]
     public async Task Run_WithGenerateReportFalse_RunRecordReportIdIsNull()
     {
@@ -2392,6 +2581,11 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(0, result.SignalsExtracted);
         Assert.Equal(0, result.SourcesChecked);
         Assert.Empty(Assert.Single(h.RunStore.Written).Collectors);
+
+        // Spec 169: a score pass observed nothing, so it records NO per-collector coverage. Null is the
+        // record's "not recorded" value and reads downstream as UNPROVEN — an empty list would claim that
+        // zero collectors ran cleanly, which would let a score pass certify a coverage checkpoint.
+        Assert.Null(Assert.Single(h.RunStore.Written).CollectorRuns);
     }
 
     /// <summary>
@@ -2548,6 +2742,11 @@ public sealed class RadarPipelineRunnerTests
         // Spec 161: an UNFILTERED run stamps null — the same value every run record written before the field
         // existed deserializes to, so "no companyFilter recorded" and "whole universe" read identically.
         Assert.Null(run.CompanyFilter);
+
+        // Spec 169: a collect pass DID collect, so it records per-collector provenance exactly as the
+        // combined run does — same ICollectionPass, so it cannot drift.
+        Assert.NotNull(run.CollectorRuns);
+        Assert.Equal(run.Collectors, run.CollectorRuns!.Select(c => c.CollectorName));
     }
 
     /// <summary>
@@ -2576,6 +2775,10 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(["CASS", "IDT"], run.CompanyFilter);
         Assert.Equal(0, run.CompaniesScored);
         Assert.Null(run.Strategies);
+
+        // Spec 169: a filtered pass still records its coverage TRUTHFULLY — it is rejected as a
+        // primary-screen checkpoint on CompanyFilter, not by pretending it collected nothing.
+        Assert.NotNull(run.CollectorRuns);
     }
 
     /// <summary>

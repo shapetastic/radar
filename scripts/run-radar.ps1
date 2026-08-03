@@ -153,6 +153,13 @@ $dirArgs = [ordered]@{
     "Radar:ReplayDirectory"          = (Join-Path $outRoot  "replays")  # spec 139 historical as-of replay output; its OWN root, never under scores\ (only written when Radar:Replay:Enabled)
     "Radar:AnalyzedFilingCacheDirectory" = (Join-Path $outRoot "filings-cache")   # spec 107 per-accession earnings analysis-result cache (AD-14 analogue)
     "Radar:FilingReadDebugDirectory" = (Join-Path $outRoot "ai-debug\filings")   # spec 115 opt-in AI filing-read debug records (only written when Radar:Ai:Filings:PersistReadDebug)
+    # spec 169 / AD-16: the COMMITTED exclusion-cohort declarations the attention-arrival screen reads.
+    # $RepoPath, NOT $outRoot — these are shared, read-only, checked-in config, exactly like the company
+    # seed above; an experiment profile must read the same binding cohort as the baseline, never its own copy.
+    # The Worker's default is the RELATIVE "docs/cohorts", which would resolve against `dotnet run`'s working
+    # directory (src\Radar.Worker\) and not exist — and a missing cohort declaration deliberately suppresses
+    # the primary screen, so without this override every run would report CohortConfigurationUnavailable.
+    "Radar:Efficacy:AttentionArrival:CohortsDirectory" = (Join-Path $RepoPath "docs\cohorts")
     "Radar:Sec:UserAgent"            = $SecUserAgent
 }
 foreach ($k in $dirArgs.Keys) { $merged[$k] = $dirArgs[$k] }
