@@ -175,7 +175,13 @@ comparator and outcome must not acquire subtly different filters.
 Read `disclosure-led-v11`, `disclosure-led-v10-control`, `baseline-earnings-only`,
 `baseline-activity-only` and `baseline-media-only` through the existing snapshot-store factory. A primary
 candidate is a v11 snapshot from an unfiltered full run whose exact `PipelineRunRecord.CreatedAtUtc` equals
-`WindowEndUtc`. Group by the UTC date of `T`; if more than one candidate exists, choose the latest exact
+`WindowEndUtc`.
+
+> ⚠️ **SUPERSEDED — see AD-16's `AMENDMENT · 2026-08-03 (ii)`.** "Unfiltered **full** run" was too strong:
+> under a spec-144 split collect/score schedule every snapshot comes from a standalone `score` pass, so that
+> rule would find zero candidates forever and silently. The anchor is an unfiltered run that **scored the
+> primary arm**; whether it also collected is decided — strictly — by the coverage chain, which rejects a
+> score-only run as a checkpoint. Under the current `-Mode full` schedule the two rules coincide. Group by the UTC date of `T`; if more than one candidate exists, choose the latest exact
 instant using only run/snapshot provenance, never the future outcome.
 
 For each candidate date:

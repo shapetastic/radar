@@ -325,6 +325,44 @@ public sealed class AttentionArrivalScreenEvaluatorTests
         Assert.Equal(AttentionScreenStatus.Pending, result.ScreenStatus);
     }
 
+    [Fact]
+    public async Task AStandaloneScoreRunCanAnchorADate_WhenSeparateCollectRunsSupplyTheCoverage()
+    {
+        // AD-16's 2026-08-03 (ii) amendment, locked by a test: under a spec-144 split collect/score
+        // schedule EVERY snapshot comes from a standalone score pass, so requiring the anchor run to have
+        // collected would find zero candidates forever — silently, looking exactly like ordinary accrual.
+        // Here the anchor run has Collectors = [] and CollectorRuns = null (it cannot supply a checkpoint
+        // itself, asserted separately by ScoreOnlyRuns_CannotSupplyACheckpoint), and the coverage chain is
+        // satisfied entirely by the separate collect runs.
+        var fixture = new ScreenFixture(companies: 20, candidateDates: 1) { SplitCollectAndScoreRuns = true };
+
+        var row = Assert.Single((await fixture.EvaluateAsync()).Primary.Dates);
+
+        // The date is admitted on FULL support: the split changed which run anchors, not what was proved.
+        Assert.Equal(20, row.CompaniesIncluded);
+        Assert.Empty(row.Exclusions);
+    }
+
+    [Fact]
+    public async Task ASplitScheduleProducesTheSameScreenAsACombinedOne()
+    {
+        // The stronger claim: splitting the schedule is an OPERATIONAL choice that must not move the
+        // precommitted metric. Same companies, same dates, same correlations, same delta.
+        var combined = await new ScreenFixture(companies: 20, candidateDates: 1).EvaluateAsync();
+        var split = await new ScreenFixture(companies: 20, candidateDates: 1)
+            { SplitCollectAndScoreRuns = true }.EvaluateAsync();
+
+        var a = Assert.Single(combined.Primary.Dates);
+        var b = Assert.Single(split.Primary.Dates);
+
+        Assert.Equal(a.AsOfInstantUtc, b.AsOfInstantUtc);
+        Assert.Equal(a.CompaniesIncluded, b.CompaniesIncluded);
+        Assert.Equal(a.PrimaryCorrelation, b.PrimaryCorrelation);
+        Assert.Equal(a.PersistenceCorrelation, b.PersistenceCorrelation);
+        Assert.Equal(a.IsDeltaDefined, b.IsDeltaDefined);
+        Assert.Equal(a.Delta, b.Delta);
+    }
+
     // -------------------------------------------------------------------------------------------------
     // Status
     // -------------------------------------------------------------------------------------------------
@@ -511,6 +549,13 @@ public sealed class AttentionArrivalScreenEvaluatorTests
 
         public bool FilterTheAnchorRun { get; init; }
 
+        /// <summary>
+        /// Model a spec-144 SPLIT deployment: a standalone <c>score</c> pass (no collectors, no
+        /// <c>CollectorRuns</c>) at each candidate instant, with the collection that proves coverage coming
+        /// from SEPARATE collect runs two hours earlier. See AD-16's 2026-08-03 (ii) amendment.
+        /// </summary>
+        public bool SplitCollectAndScoreRuns { get; init; }
+
         public static Guid CompanyId(int index) => Guid.Parse($"c0000000-0000-0000-0000-{index:D12}");
 
         public string CikFor(int index) => (index + 1).ToString("D10");
@@ -660,6 +705,23 @@ public sealed class AttentionArrivalScreenEvaluatorTests
                 }
 
                 var isAnchor = candidates.Contains(instant);
+
+                if (SplitCollectAndScoreRuns)
+                {
+                    // The collect pass: it carries the coverage but scores nothing, so it can never anchor.
+                    yield return AttentionTestFakes.Checkpoint(
+                        instant.AddHours(-2), coverage, strategies: []);
+
+                    // The score pass at the candidate instant: collectors EMPTY and CollectorRuns NULL, so it
+                    // is a genuine standalone score run and cannot itself supply a checkpoint.
+                    yield return AttentionTestFakes.Checkpoint(instant, coverage) with
+                    {
+                        Collectors = [],
+                        CollectorRuns = null,
+                    };
+                    continue;
+                }
+
                 yield return AttentionTestFakes.Checkpoint(
                     instant,
                     coverage,

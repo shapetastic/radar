@@ -248,6 +248,85 @@ public sealed class AttentionCoverageEvaluatorTests
     }
 
     [Fact]
+    public void AnUnrecognizedIssueToken_IsIncomplete_EvenWithOtherwiseCleanCounts()
+    {
+        // The regression this closes: the four known tokens were checked by name, so a row reporting a
+        // problem outside the closed vocabulary read as "none of the four" and CERTIFIED the window it was
+        // warning about. Counts here are deliberately clean so the token is the only thing rejecting it.
+        var runs = DailyCompleteRuns(CompanyId)
+            .Select(r => AttentionTestFakes.Checkpoint(
+                r.CreatedAtUtc,
+                [new CollectorCompanyCoverage(CompanyId, 1, 1, false, ["AuthenticationBlocked"])]))
+            .ToList();
+
+        var result = Evaluate(runs);
+
+        Assert.False(result.IsComplete);
+        Assert.Equal(
+            AttentionCheckpointDisqualification.UnrecognizedCoverageIssue,
+            result.Disqualification);
+    }
+
+    [Fact]
+    public void AnUnrecognizedIssueToken_RejectsTheRow_EvenAlongsideAKnownToken()
+    {
+        // Schema validity is decided BEFORE content: a row this evaluator cannot fully interpret cannot
+        // explain a window either, so the unknown token wins over the known one it travels with.
+        var runs = DailyCompleteRuns(CompanyId)
+            .Select(r => AttentionTestFakes.Checkpoint(
+                r.CreatedAtUtc,
+                [
+                    new CollectorCompanyCoverage(
+                        CompanyId, 1, 1, false, ["AuthenticationBlocked", CollectionCoverageIssues.SourceFailure])
+                ]))
+            .ToList();
+
+        Assert.Equal(
+            AttentionCheckpointDisqualification.UnrecognizedCoverageIssue,
+            Evaluate(runs).Disqualification);
+    }
+
+    [Theory]
+    [InlineData(1, 2)]   // more feeds succeeded than were ever expected
+    [InlineData(-1, 0)]  // negative expected
+    [InlineData(1, -1)]  // negative successful
+    public void CountsThatCannotDescribeARealObservation_AreIncomplete(int expected, int successful)
+    {
+        var runs = DailyCompleteRuns(CompanyId)
+            .Select(r => AttentionTestFakes.Checkpoint(
+                r.CreatedAtUtc,
+                [new CollectorCompanyCoverage(CompanyId, expected, successful, false, [])]))
+            .ToList();
+
+        var result = Evaluate(runs);
+
+        Assert.False(result.IsComplete);
+        Assert.Equal(
+            AttentionCheckpointDisqualification.InvalidCoverageCounts,
+            result.Disqualification);
+    }
+
+    [Fact]
+    public void EveryTokenInTheClosedVocabulary_IsStillAccepted_AsAnInterpretableRow()
+    {
+        // Guards the reverse failure of the two tests above: the validity gate must reject only tokens
+        // OUTSIDE the vocabulary. If a future token is added to CollectionCoverageIssues.All but the gate
+        // is not updated, this fails rather than silently disqualifying every real row.
+        foreach (var token in CollectionCoverageIssues.All)
+        {
+            var runs = DailyCompleteRuns(CompanyId)
+                .Select(r => AttentionTestFakes.Checkpoint(
+                    r.CreatedAtUtc,
+                    [new CollectorCompanyCoverage(CompanyId, 1, 1, false, [token])]))
+                .ToList();
+
+            Assert.NotEqual(
+                AttentionCheckpointDisqualification.UnrecognizedCoverageIssue,
+                Evaluate(runs).Disqualification);
+        }
+    }
+
+    [Fact]
     public void OneBrokenMidIntervalCheckpoint_BreaksTheChain_AndNamesTheSpecificCause()
     {
         var runs = DailyCompleteRuns(CompanyId);

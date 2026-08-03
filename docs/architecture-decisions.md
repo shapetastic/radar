@@ -1587,3 +1587,52 @@ attribution's *source*, structurally, not on which resolver happens to be compos
 comparators (§6), and the primary statistic, degeneracy rule, minimum-20 rule and median-δ failure screen
 (§7). No scoring input, formula version, rule-set version or fingerprint moves: coverage is recorded
 provenance, and the evaluator is read-only.
+
+### AMENDMENT · 2026-08-03 (ii) — a candidate as-of anchor is an unfiltered run that SCORED the primary arm, not necessarily one that collected
+
+Spec 169 §4 wrote the candidate rule as *"a v11 snapshot from an unfiltered **full** run whose exact
+`PipelineRunRecord.CreatedAtUtc` equals `WindowEndUtc`"*. The shipped evaluator instead requires the anchor
+run to be **unfiltered and to have scored `disclosure-led-v11`**, and does not require that it collected.
+That divergence was argued in the code but never recorded here, which is not good enough for a
+precommitment: **the rule that runs must be the rule that is written down.** It is settled here, in the
+recorded direction, and — like everything else in this AD — **before any eligible outcome exists** (the
+first eligible as-of date is 2026-09-29).
+
+**The amended rule is the implemented one.** A candidate as-of instant is the exact `WindowEndUtc` of a
+`disclosure-led-v11` snapshot whose run record is unfiltered (`CompanyFilter is null`) and lists the primary
+arm among its `Strategies`. Whether that run also collected is **not** part of anchor selection.
+
+**Why the literal wording was wrong, not merely inconvenient.** Spec 144 makes collection and scoring
+independently invokable, and CLAUDE.md documents splitting `RadarBaselineDaily` into `RadarCollectDaily` +
+`RadarScoreDaily` as a supported maintainer step. Under that wiring **every** snapshot comes from a
+standalone `score` pass, which records `collectors=[]`; an anchor rule of `Collectors.Count > 0` would then
+find **zero candidates forever**, and would do so *silently* — the screen would sit at `Pending` looking
+like ordinary accrual while being structurally incapable of ever producing a date. This is not
+hypothetical: two score-only run records already exist in the live store
+(`run-20260727T223707280Z-b348dd4e…`, `run-20260728T072157567Z-701f0148…`).
+
+**Why admitting them costs nothing.** Anchor selection decides only *which instants are candidate as-of
+points*; whether the data behind one is trustworthy is decided separately and strictly by the coverage
+chain, which is unchanged and unweakened:
+
+- `AttentionCoverageEvaluator` independently rejects a score-only run as a checkpoint
+  (`ScoreOnlyRunWithoutCollection`), so a score-anchored `T` still requires a real **collect** checkpoint
+  within 36 hours on **both** sides before a single company can enter that date.
+- Spec 144 refuses a past-dated standalone `score` pass, so a score anchor cannot back-date `T` into a
+  window whose coverage was already settled.
+- Spec 161's company filter is collect-only by guard, so a filtered pass never scores; the
+  `CompanyFilter is null` test is belt-and-braces against a partial pass, not the only defence.
+
+So the guarantee §4 was reaching for — *every screened window is backed by real, complete collection* — is
+preserved in full. It is enforced by the coverage chain, which can prove it, rather than by the anchor test,
+which cannot: a run that collected and failed every fetch would satisfy `Collectors.Count > 0` and prove
+nothing.
+
+**Under the current schedule this changes no date.** `RadarBaselineDaily` runs `-Mode full`, so every
+anchor also collects and the two rules coincide exactly. The amendment is recorded now precisely because it
+is currently inert: after 2026-09-29 the identical edit would be indistinguishable from adjusting the rule
+to fit observed outcomes.
+
+**Unchanged:** the metric, horizon, comparators, cohort exclusion, minimum-20 rules, median-δ failure screen,
+the 2026-09-29 boundary and the entire coverage contract. Nothing here relaxes a coverage requirement; it
+corrects a written rule to match the enforcement that was always doing the work.
