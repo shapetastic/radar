@@ -83,7 +83,13 @@
       }
     ],
     "Prices": { "Enabled": true, "Range": "1y" },
-    "Efficacy": { "Enabled": true },
+    "Efficacy": {
+      "Enabled": true,
+      "Comparison": {
+        "_comment": "PairedFirstEligibleAsOfUtc is the spec-155 / AD-15 CLAIM BOUNDARY, and it is a PRECOMMITMENT, not a tuning knob. Declared 2026-08-03, when ZERO eligible outcomes existed, so it cannot have been derived from observed deltas — which is the entire reason it is worth anything. It deliberately reuses AD-16's first eligible primary-screen date (2026-09-29, itself pinned from PipelineRunRecord 7f28ca48 + 60 days) so the price-outcome and attention-outcome claim families share ONE calendar and spec 155's confirmatory layer lines up with the descriptive screen it sits behind. IMMUTABLE BY CONVENTION (spec 141's rule applied to a boundary): moving it invalidates the whole claim family, and moving it AFTER outcomes exist is the unfalsifiability failure AD-16's pre-commitment clause names — if a different boundary is ever genuinely needed, declare a new one prospectively and treat pre-boundary dates as development data. Dates before it still render, as development data that can never enter the claim interval. NOTE: the gate also needs PairedPrimaryStrategy, which is NOT declared here yet — naming the primary composite is the second half of the same precommitment (AD-15's amendment: choosing whichever arm beats the baselines after seeing results is selection, not evidence), so it must also be recorded before its outcomes exist. Until it is, the paired result stays exploratory.",
+        "PairedFirstEligibleAsOfUtc": "2026-09-29"
+      }
+    },
     "Ai": {
       "Provider": "openai",
       "Model": "deepseek-ai/DeepSeek-V4-Flash",

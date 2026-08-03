@@ -1231,6 +1231,32 @@ order-statistic interval conservative, and every rendered artifact states that l
 interval. *Accepted · 2026-08-03 (spec 155). The suspension above is not lifted by this amendment — see its
 2026-08-03 update note for what remains.*
 
+#### DECLARATION · 2026-08-03 — the claim boundary is **2026-09-29**
+
+`Radar:Efficacy:Comparison:PairedFirstEligibleAsOfUtc = 2026-09-29`, declared in
+`scripts/run-profiles/default.json`. **This is the precommitment itself, not a note about one**, and its
+only value comes from *when* it was written: on 2026-08-03 **no eligible outcome existed** for any date at
+or after it, so it cannot have been chosen to flatter an observed delta. That property expires and does not
+return.
+
+It deliberately reuses **AD-16's** first eligible primary-screen date (pinned in that AD's 2026-08-03
+amendment §A from `PipelineRunRecord` `7f28ca48-5cb3-4646-8d57-56baf1e482e1` + 60 days), so the
+price-outcome and attention-outcome claim families share **one calendar** and this confirmatory layer lines
+up with the descriptive screen it sits behind rather than answering over a different period.
+
+**Immutable by convention** (spec 141's rule applied to a boundary): moving it invalidates the whole claim
+family, and moving it *after* outcomes exist is exactly the unfalsifiability failure AD-16's pre-commitment
+clause names. If a different boundary is ever genuinely needed, declare a new one **prospectively** and
+treat everything before it as development data. Dates before the boundary still render — as development
+data that can never enter the claim interval.
+
+**The second half of this precommitment is NOT yet made.** The gate also requires a predeclared primary
+composite (`PairedPrimaryStrategy`), and per the intersection-union paragraph above, naming it *after*
+seeing which arm beats the baselines is **selection, not evidence**. Until it is declared — prospectively,
+under the same before-the-outcomes rule as this boundary — the paired result stays exploratory regardless
+of how many blocks accrue. Six purged blocks at h=21 from 2026-09-29 mature ≈ **2027-02-02**, so there is
+time; there is no excuse for using it to look first.
+
 Radar therefore ships a small, deliberate **control group** of *dumb baseline* strategies (spec 154),
 declared in `scripts/run-profiles/default.json` and scored through the **normal** seam — same
 `ScoringEngine`, same stores, same `ScoringConfigVersion` fingerprints, same spec-140 leaderboard. There is
