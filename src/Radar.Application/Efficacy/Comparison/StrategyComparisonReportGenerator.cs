@@ -31,7 +31,17 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
     private readonly IEfficacyArtifactStore _artifactStore;
     private readonly StrategyComparisonOptions _options;
     private readonly ILogger<StrategyComparisonReportGenerator> _logger;
+    private readonly PairedComparisonOptions? _pairedOptions;
+    private readonly PairedComparisonHarness _pairedHarness;
+    private readonly PairedComparisonRenderer _pairedRenderer;
 
+    /// <param name="pairedOptions">
+    /// The spec-155 paired-comparison knobs. Optional-nullable DELIBERATELY, and unlike a service dependency
+    /// this is safe: <c>null</c> means "the paired comparison is not configured for this composition" (the
+    /// pre-155 shape), not a wiring accident — the Worker's composition root always supplies it when the
+    /// comparison is enabled. The harness and renderer are never-null: absent registrations fall back to the
+    /// pure defaults, so a missing registration cannot silently skip the step while options are present.
+    /// </param>
     public StrategyComparisonReportGenerator(
         ScoringStrategySet strategies,
         IStrategyScoreSnapshotStoreSelector stores,
@@ -40,7 +50,10 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         StrategyLeaderboardRenderer renderer,
         IEfficacyArtifactStore artifactStore,
         StrategyComparisonOptions options,
-        ILogger<StrategyComparisonReportGenerator> logger)
+        ILogger<StrategyComparisonReportGenerator> logger,
+        PairedComparisonOptions? pairedOptions = null,
+        PairedComparisonHarness? pairedHarness = null,
+        PairedComparisonRenderer? pairedRenderer = null)
     {
         ArgumentNullException.ThrowIfNull(strategies);
         ArgumentNullException.ThrowIfNull(stores);
@@ -59,6 +72,9 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         _artifactStore = artifactStore;
         _options = options;
         _logger = logger;
+        _pairedOptions = pairedOptions;
+        _pairedHarness = pairedHarness ?? new PairedComparisonHarness();
+        _pairedRenderer = pairedRenderer ?? new PairedComparisonRenderer();
     }
 
     public async Task<StrategyLeaderboard> GenerateAsync(CancellationToken ct)
@@ -103,6 +119,61 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
                 drop.MetricReason);
         }
 
+        if (_pairedOptions is not null)
+        {
+            await GeneratePairedAsync(series, _pairedOptions, ct).ConfigureAwait(false);
+        }
+
         return leaderboard;
+    }
+
+    /// <summary>
+    /// The spec-155 paired, purged comparison — run over the SAME already-built series the leaderboard
+    /// consumed (no second read path, no second join).
+    /// <para>
+    /// Skips (with a log line) ONLY when there is nothing to pair at all: no <c>baseline-*</c> strategy is
+    /// configured AND no primary was predeclared. When baselines exist but no primary is named, the honest
+    /// exploratory artifact is still written, pairing the pipeline's primary strategy and naming the missing
+    /// predeclaration — silence there would hide that a claim path exists and merely lacks its declaration.
+    /// </para>
+    /// </summary>
+    private async Task GeneratePairedAsync(
+        IReadOnlyList<StrategyScoreSeries> series, PairedComparisonOptions pairedOptions, CancellationToken ct)
+    {
+        var hasBaselines = _strategies.Strategies.Any(s =>
+            s.Name.StartsWith(PairedComparisonHarness.BaselineNamePrefix, StringComparison.Ordinal));
+        var configuredPrimary = pairedOptions.ConfiguredPrimaryStrategyName;
+
+        if (!hasBaselines && configuredPrimary.Length == 0)
+        {
+            _logger.LogInformation(
+                "Paired strategy comparison skipped: no 'baseline-*' strategy is configured and no "
+                    + "Radar:Efficacy:Comparison:PairedPrimaryStrategy is named — there is nothing to pair.");
+            return;
+        }
+
+        var primaryWasPredeclared = configuredPrimary.Length > 0;
+        var primaryName = primaryWasPredeclared ? configuredPrimary : _strategies.Primary.Name;
+
+        var paired = _pairedHarness.Compare(series, primaryName, primaryWasPredeclared, pairedOptions);
+
+        var pairedCsv = _pairedRenderer.RenderCsv(paired);
+        var pairedMarkdown = _pairedRenderer.RenderMarkdown(paired);
+        await _artifactStore.WritePairedComparisonAsync(pairedCsv, pairedMarkdown, ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Paired strategy comparison over {Series}: primary '{Primary}' (predeclared: {Predeclared}) vs "
+                + "{Baselines} baseline(s); joint support {JointObservations} observation(s) on "
+                + "{JointDates} date(s); {Admitted} purged block(s), {Dropped} dropped date(s); qualifies "
+                + "under AD-15: {Qualifies}.",
+            _stores.SeriesDescription,
+            paired.PrimaryStrategyName,
+            paired.PrimaryWasPredeclared,
+            paired.Baselines.Count,
+            paired.JointSupport.Observations,
+            paired.JointSupport.DistinctAsOfDates,
+            paired.AdmittedBlocks.Count,
+            paired.DroppedDates.Count,
+            paired.QualifiesUnderAd15);
     }
 }

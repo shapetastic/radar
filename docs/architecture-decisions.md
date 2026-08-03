@@ -1179,6 +1179,57 @@ of the price-validation boundary; no scoring math change.*
 > requires accepting an outcome variable and a comparison method — see the parked
 > `docs/next/deferred/155-paired-date-blocked-strategy-comparison.md` for the latter's open problems
 > (dependence across overlapping windows defeats both a naïve parametric interval and a sign test).
+>
+> **Update · 2026-08-03 (spec 155):** the COMPARISON-METHOD half of this suspension's lifting condition is
+> now supplied — the paired, purged, exact-interval gate defined in the 2026-08-03 amendment below is the
+> accepted comparison method, and it is implemented (`data/efficacy/strategy-paired-comparison.{csv,md}`).
+> The OUTCOME-VARIABLE half remains: AD-16's precommitted attention-arrival screen must actually be
+> calculated (its first eligible as-of date is 2026-09-29), and this gate is confirmatory only after that
+> screen has been. No positive claim is licensed by this update itself.
+
+### AMENDMENT · 2026-08-03 — the decision rule is REPLACED (spec 155): a paired, purged, exact-interval gate
+
+The original decision rule quoted above is superseded. **"Beats … by more than the spread between the
+baselines themselves" was not a test of difference**: it compared *marginal* Spearman ρs computed over
+possibly different supports, and the baseline spread carried no coverage guarantee — it *shrinks* exactly
+when the baselines agree. **No claim made under the superseded wording carries over.** (There were none;
+the suspension above predates every candidate.)
+
+The replacement rule: a **predeclared primary composite** may be described as adding value only when, against
+**every** predeclared baseline on the **joint out-of-sample support** (one intersection of admitted
+`(company, as-of)` observations across the primary and every baseline, one paired delta
+`ρ_primary(d) − ρ_baseline(d)` per date per baseline, companies never pooled across dates, mechanically
+overlapping forward windows purged greedily earliest-first before inference):
+
+- the **purged median paired difference is positive**;
+- the **exact two-sided 95% order-statistic interval's lower bound is strictly greater than zero** (the
+  confidence level is never relaxed; fewer than six purged blocks yields `InsufficientPurgedBlocks`, not a
+  weaker interval); and
+- the **boundary, support, block-count and strategy-selection disclosures are present** — the immutable
+  `FirstEligibleAsOf` recorded before its outcomes existed (a missing boundary is
+  `NoPrecommittedEvaluationBoundary` and makes the result exploratory; the marginal leaderboard's **moving
+  70/30 split remains descriptive only** and is not a claim boundary), the marginal/pairwise/joint supports,
+  the admitted block count with every dropped date and its reason, and the number of arms considered.
+
+Requiring the primary to clear every **fixed** baseline is an intersection-union claim; it does **not**
+require a Bonferroni correction merely because there are several fixed baselines. Choosing the best of
+several composite arms *after seeing their results* is a different act: only the arm named primary **before
+its outcomes exist** may use this gate, and every other arm remains exploratory until a separately accepted
+multiplicity rule exists.
+
+**For AD-16:** this machinery is **confirmatory only**, and only after AD-16's already-precommitted
+descriptive screen has been calculated. It must not change AD-16's outcome, horizon, comparator, cohort,
+eligibility rule or failure rule. Its confirmatory baseline family is `baseline-attention-persistence` plus
+the three fixed configured `baseline-*` scoring arms, all ranked against the AD-16 publisher-count outcome on
+the same joint support. The secondary `AttentionScore` comparator and the matched v10 control remain
+diagnostics — AD-16 explicitly does not screen on the former, and the latter isolates formula behaviour
+rather than representing a dumb baseline.
+
+The interval itself is conditional on a predeclared model: purging removes the known mechanical
+forward-window overlap but cannot prove independence or stationarity across market regimes, ties make the
+order-statistic interval conservative, and every rendered artifact states that limitation **beside** the
+interval. *Accepted · 2026-08-03 (spec 155). The suspension above is not lifted by this amendment — see its
+2026-08-03 update note for what remains.*
 
 Radar therefore ships a small, deliberate **control group** of *dumb baseline* strategies (spec 154),
 declared in `scripts/run-profiles/default.json` and scored through the **normal** seam — same
@@ -1433,8 +1484,9 @@ not be rescued by changing the outcome or horizon after inspection. A median `> 
 screen.
 
 The 20 daily windows overlap and are not independent. This screen therefore makes **no significance,
-confidence or efficacy claim in either direction**. A valid dependence-aware comparison remains parked in
-`docs/next/deferred/155-…`, and AD-15's suspension governs every positive claim regardless of what this
+confidence or efficacy claim in either direction**. The valid dependence-aware comparison is spec 155's
+paired, purged, exact-interval gate (AD-15 as amended 2026-08-03), which is confirmatory only after this
+screen has been calculated; AD-15's suspension governs every positive claim regardless of what this
 screen shows.
 
 **Status.** **Accepted · 2026-07-28** — accepted by the maintainer on the day it was proposed, and **binding

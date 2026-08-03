@@ -834,6 +834,13 @@ public sealed class RadarWorkerServicesTests
     // 21 == the default ForwardHorizonDays this theory leaves in place, so the coverage check would be vacuous
     // (every bar after D would qualify) — the exact condition StrategyComparisonOptions refuses.
     [InlineData("Radar:Efficacy:Comparison:ExitToleranceDays", "21", "ExitToleranceDays")]
+
+    // Spec 155: the paired knobs fail fast through the same boundary, naming their key.
+    [InlineData("Radar:Efficacy:Comparison:PairedMinimumCompaniesPerDate", "1", "PairedMinimumCompaniesPerDate")]
+    [InlineData("Radar:Efficacy:Comparison:PairedFirstEligibleAsOfUtc", "not-a-date", "PairedFirstEligibleAsOfUtc")]
+
+    // An INTRADAY boundary is refused: eligibility must not depend on the daily job's exact schedule.
+    [InlineData("Radar:Efficacy:Comparison:PairedFirstEligibleAsOfUtc", "2026-09-29T12:00:00Z", "whole UTC calendar day")]
     public void EfficacyComparisonMisconfigured_FailsFastNamingTheKey(string key, string value, string named)
     {
         var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
@@ -843,6 +850,44 @@ public sealed class RadarWorkerServicesTests
 
         Assert.Contains("Radar:Efficacy:Comparison", ex.Message, StringComparison.Ordinal);
         Assert.Contains(named, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EfficacyEnabled_AlsoRegistersThePairedComparison_WithHonestDefaults()
+    {
+        // Spec 155: the paired comparison rides the comparison registration. The defaults are the HONEST
+        // shape — no predeclared primary, no precommitted boundary — so a deployment that never configured
+        // the keys gets the exploratory/skip behaviour, never an accidental claim path.
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"));
+
+        Assert.NotNull(provider.GetService<PairedComparisonHarness>());
+        Assert.NotNull(provider.GetService<PairedComparisonRenderer>());
+
+        var paired = provider.GetRequiredService<PairedComparisonOptions>();
+        Assert.Equal(string.Empty, paired.ConfiguredPrimaryStrategyName);
+        Assert.Null(paired.FirstEligibleAsOf);
+        Assert.Equal(10, paired.MinimumCompaniesPerDate);
+
+        // The shared knobs are the SAME resolved instance the leaderboard uses — one validation, one truth.
+        Assert.Same(provider.GetRequiredService<StrategyComparisonOptions>(), paired.Comparison);
+    }
+
+    [Fact]
+    public void PairedComparisonKeys_BindParseAndTrimAtTheConfigBoundary()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            ("Radar:Efficacy:Comparison:PairedPrimaryStrategy", "  disclosure-led-v11  "),
+            ("Radar:Efficacy:Comparison:PairedFirstEligibleAsOfUtc", "2026-09-29"),
+            ("Radar:Efficacy:Comparison:PairedMinimumCompaniesPerDate", "12"));
+
+        var paired = provider.GetRequiredService<PairedComparisonOptions>();
+        Assert.Equal("disclosure-led-v11", paired.ConfiguredPrimaryStrategyName);
+        Assert.Equal(new DateOnly(2026, 9, 29), paired.FirstEligibleAsOf);
+        Assert.Equal(12, paired.MinimumCompaniesPerDate);
     }
 
     [Fact]

@@ -235,6 +235,34 @@ public sealed class EfficacyReadOnlyGuardrailTests
                 + string.Join(", ", unexpected));
     }
 
+    private const string StatisticsNamespace = "Radar.Application.Efficacy.Statistics";
+
+    [Fact]
+    public void StatisticsModule_IsOutcomeAgnostic_ReachesNeitherPriceNorTheComparisonHarness()
+    {
+        // Spec 155: the interval/sign-test/purge helpers exist so the AD-16 attention evaluator can reuse
+        // them WITHOUT importing the price harness. That promise is structural: the statistics namespace
+        // must reach no price type and no comparison type (the dependency points the other way).
+        var statisticsTypes = typeof(ScoringInput).Assembly.GetTypes()
+            .Where(t => t.Namespace == StatisticsNamespace)
+            .ToList();
+
+        Assert.NotEmpty(statisticsTypes);
+
+        var leaks = TransitiveClosure(statisticsTypes)
+            .Where(t => t.Namespace is not null
+                && (t.Namespace.StartsWith(PricesNamespace, StringComparison.Ordinal)
+                    || t.Namespace.StartsWith(ComparisonNamespace, StringComparison.Ordinal)))
+            .Select(t => t.FullName)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            leaks.Count == 0,
+            "The efficacy statistics helpers must stay outcome-agnostic (no price, no comparison types), "
+                + "but these are reachable: " + string.Join(", ", leaks));
+    }
+
     private const string AttentionNamespace = "Radar.Application.Efficacy.Attention";
 
     [Fact]

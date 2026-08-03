@@ -750,6 +750,37 @@ public sealed class StrategyComparisonWorkerOptions
     /// running the replay first and pointing a later pass at its label.
     /// </summary>
     public string ReplayLabel { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The PREDECLARED primary composite of the spec-155 paired comparison. Blank (the default) means no
+    /// primary is predeclared: when <c>baseline-*</c> strategies exist the paired artifact is still written —
+    /// pairing the pipeline's primary strategy, honestly labelled exploratory and naming the missing
+    /// predeclaration — but the AD-15 gate can never pass, because only an arm named primary BEFORE its
+    /// outcomes exist may use it.
+    /// </summary>
+    public string PairedPrimaryStrategy { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The spec-155 claim boundary as a whole UTC calendar day (e.g. "2026-09-29"): only as-of dates at or
+    /// after it enter the paired claim interval; earlier dates are development data. Blank (the default)
+    /// means NO boundary is precommitted — the paired result is <c>NoPrecommittedEvaluationBoundary</c> and
+    /// exploratory.
+    /// <para>
+    /// <b>IMMUTABLE BY CONVENTION</b> (spec 141's rule, applied to a claim boundary): record it BEFORE its
+    /// outcomes exist and never move it afterwards — moving it invalidates the whole claim family, and
+    /// deriving it from observed deltas is the unfalsifiability failure AD-16's pre-commitment clause names.
+    /// Neither the evaluator nor this config may infer a boundary; absent means no claim.
+    /// </para>
+    /// </summary>
+    public string PairedFirstEligibleAsOfUtc { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The minimum joint companies a candidate date needs for its per-date cross-sectional rhos to count in
+    /// the paired comparison; a thinner date is dropped and named (<c>too-few-companies</c>). Defaults to 10
+    /// — a claim needs a real cross-section, and the mathematical floor of 2 is a validity bound, not a
+    /// sensible default. Must be at least 2.
+    /// </summary>
+    public int PairedMinimumCompaniesPerDate { get; init; } = 10;
 }
 
 /// <summary>

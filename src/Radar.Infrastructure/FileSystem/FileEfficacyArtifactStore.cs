@@ -94,6 +94,39 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
         return new StrategyLeaderboardPaths(csvPath, markdownPath);
     }
 
+    /// <summary>
+    /// Writes the spec-155 paired-comparison pair to
+    /// <c>{RootDirectory}/strategy-paired-comparison.{csv,md}</c> — the same fixed-name, best-effort (AD-8)
+    /// posture as <see cref="WriteLeaderboardAsync"/>, through the SAME shared
+    /// <see cref="GracefulFileWriter.TryWriteAllTextAsync"/>. A separate pair from the leaderboard on
+    /// purpose: the leaderboard is descriptive, this is the claim-bearing artifact.
+    /// </summary>
+    public async Task<PairedComparisonPaths> WritePairedComparisonAsync(
+        string csv, string markdown, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(csv);
+        ArgumentNullException.ThrowIfNull(markdown);
+
+        var csvPath = Path.Combine(_options.RootDirectory, PairedComparisonFileStem + ".csv");
+        var markdownPath = Path.Combine(_options.RootDirectory, PairedComparisonFileStem + ".md");
+
+        if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
+        {
+            _logger.LogInformation("Wrote paired strategy-comparison CSV to {Path}.", csvPath);
+        }
+
+        if (await GracefulFileWriter.TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
+            .ConfigureAwait(false))
+        {
+            _logger.LogInformation("Wrote paired strategy-comparison markdown to {Path}.", markdownPath);
+        }
+
+        return new PairedComparisonPaths(csvPath, markdownPath);
+    }
+
     /// <summary>The fixed leaderboard file stem (deliberately not a shape any real ticker takes).</summary>
     private const string LeaderboardFileStem = "strategy-leaderboard";
+
+    /// <summary>The fixed paired-comparison file stem (same rule as <see cref="LeaderboardFileStem"/>).</summary>
+    private const string PairedComparisonFileStem = "strategy-paired-comparison";
 }

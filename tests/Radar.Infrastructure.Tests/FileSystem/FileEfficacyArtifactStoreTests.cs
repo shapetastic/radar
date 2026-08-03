@@ -130,4 +130,50 @@ public sealed class FileEfficacyArtifactStoreTests : IDisposable
         Assert.Equal(Path.Combine(rootAsFile, "strategy-leaderboard.csv"), paths.CsvPath);
         Assert.Equal(Path.Combine(rootAsFile, "strategy-leaderboard.md"), paths.MarkdownPath);
     }
+
+    [Fact]
+    public async Task WritePairedComparisonAsync_WritesOneFixedNamedPairUnderTheRoot()
+    {
+        var store = CreateStore();
+
+        var paths = await store.WritePairedComparisonAsync(
+            "status,baseline\nbaseline,x\n", "# Paired comparison\n", CancellationToken.None);
+
+        var expectedCsv = Path.Combine(_tempDir, "strategy-paired-comparison.csv");
+        var expectedMd = Path.Combine(_tempDir, "strategy-paired-comparison.md");
+        Assert.Equal(expectedCsv, paths.CsvPath);
+        Assert.Equal(expectedMd, paths.MarkdownPath);
+        Assert.Equal("status,baseline\nbaseline,x\n", await File.ReadAllTextAsync(expectedCsv));
+        Assert.Equal("# Paired comparison\n", await File.ReadAllTextAsync(expectedMd));
+    }
+
+    [Fact]
+    public async Task WritePairedComparisonAsync_OverwritesInPlace_AndCoexistsWithTheLeaderboardPair()
+    {
+        var store = CreateStore();
+
+        await store.WriteLeaderboardAsync("leader\n", "# leader\n", CancellationToken.None);
+        await store.WritePairedComparisonAsync("first\n", "# first\n", CancellationToken.None);
+        var paths = await store.WritePairedComparisonAsync("second\n", "# second\n", CancellationToken.None);
+
+        Assert.Equal("second\n", await File.ReadAllTextAsync(paths.CsvPath));
+        Assert.Equal("# second\n", await File.ReadAllTextAsync(paths.MarkdownPath));
+
+        // The DESCRIPTIVE leaderboard and the claim-bearing paired artifact are separate files by design.
+        Assert.Equal("leader\n", await File.ReadAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.csv")));
+    }
+
+    [Fact]
+    public async Task WritePairedComparisonAsync_IoFailure_ReturnsAttemptedPathsWithoutThrowing()
+    {
+        var rootAsFile = Path.Combine(_tempDir, "not-a-dir-paired");
+        await File.WriteAllTextAsync(rootAsFile, "x");
+
+        var store = CreateStore(rootAsFile);
+
+        var paths = await store.WritePairedComparisonAsync("csv\n", "md\n", CancellationToken.None);
+
+        Assert.Equal(Path.Combine(rootAsFile, "strategy-paired-comparison.csv"), paths.CsvPath);
+        Assert.Equal(Path.Combine(rootAsFile, "strategy-paired-comparison.md"), paths.MarkdownPath);
+    }
 }
