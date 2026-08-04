@@ -96,19 +96,22 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
 
     /// <summary>
     /// Writes the spec-155 paired-comparison pair to
-    /// <c>{RootDirectory}/strategy-paired-comparison.{csv,md}</c> — the same fixed-name, best-effort (AD-8)
+    /// <c>{RootDirectory}/strategy-paired-comparison.{csv,md}</c> plus the spec-170 per-block rows to
+    /// <c>{RootDirectory}/strategy-paired-comparison-blocks.csv</c> — the same fixed-name, best-effort (AD-8)
     /// posture as <see cref="WriteLeaderboardAsync"/>, through the SAME shared
-    /// <see cref="GracefulFileWriter.TryWriteAllTextAsync"/>. A separate pair from the leaderboard on
-    /// purpose: the leaderboard is descriptive, this is the claim-bearing artifact.
+    /// <see cref="GracefulFileWriter.TryWriteAllTextAsync"/>. Separate files from the leaderboard on
+    /// purpose: the leaderboard is descriptive, these are the claim-bearing artifacts.
     /// </summary>
     public async Task<PairedComparisonPaths> WritePairedComparisonAsync(
-        string csv, string markdown, CancellationToken ct)
+        string csv, string markdown, string blocksCsv, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(csv);
         ArgumentNullException.ThrowIfNull(markdown);
+        ArgumentNullException.ThrowIfNull(blocksCsv);
 
         var csvPath = Path.Combine(_options.RootDirectory, PairedComparisonFileStem + ".csv");
         var markdownPath = Path.Combine(_options.RootDirectory, PairedComparisonFileStem + ".md");
+        var blocksCsvPath = Path.Combine(_options.RootDirectory, PairedComparisonBlocksFileStem + ".csv");
 
         if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
         {
@@ -121,7 +124,13 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
             _logger.LogInformation("Wrote paired strategy-comparison markdown to {Path}.", markdownPath);
         }
 
-        return new PairedComparisonPaths(csvPath, markdownPath);
+        if (await GracefulFileWriter.TryWriteAllTextAsync(blocksCsvPath, blocksCsv, _logger, ct)
+            .ConfigureAwait(false))
+        {
+            _logger.LogInformation("Wrote paired strategy-comparison blocks CSV to {Path}.", blocksCsvPath);
+        }
+
+        return new PairedComparisonPaths(csvPath, markdownPath, blocksCsvPath);
     }
 
     /// <summary>The fixed leaderboard file stem (deliberately not a shape any real ticker takes).</summary>
@@ -129,4 +138,7 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
 
     /// <summary>The fixed paired-comparison file stem (same rule as <see cref="LeaderboardFileStem"/>).</summary>
     private const string PairedComparisonFileStem = "strategy-paired-comparison";
+
+    /// <summary>The fixed per-block file stem (spec 170; same rule as <see cref="LeaderboardFileStem"/>).</summary>
+    private const string PairedComparisonBlocksFileStem = "strategy-paired-comparison-blocks";
 }

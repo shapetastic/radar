@@ -102,6 +102,9 @@ public sealed class EfficacyDatasetBuilder
                     // Spec 140: the knowledge-window end — the honest anchor for a forward-return horizon.
                     // Equal to ScoreDate on a forward run; the simulated as-of on a replay snapshot.
                     AsOfDate = DateOnly.FromDateTime(snapshot.WindowEndUtc.UtcDateTime),
+                    // Spec 170: the SAME fact at full precision, for exact-instant pairing in the paired
+                    // comparison. Read by no per-company renderer and not by the marginal leaderboard.
+                    AsOfInstantUtc = snapshot.WindowEndUtc,
                 });
             }
 

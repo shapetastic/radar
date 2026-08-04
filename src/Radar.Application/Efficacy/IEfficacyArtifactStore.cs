@@ -7,7 +7,7 @@ public sealed record EfficacyArtifactPaths(string SvgPath, string CsvPath);
 public sealed record StrategyLeaderboardPaths(string CsvPath, string MarkdownPath);
 
 /// <summary>The written paired-comparison paths (best-effort; returned even when a write degraded).</summary>
-public sealed record PairedComparisonPaths(string CsvPath, string MarkdownPath);
+public sealed record PairedComparisonPaths(string CsvPath, string MarkdownPath, string BlocksCsvPath);
 
 /// <summary>
 /// The persistence seam for the per-company efficacy artifacts (AD-14 read side): writes the SVG + CSV under
@@ -28,11 +28,14 @@ public interface IEfficacyArtifactStore
 
     /// <summary>
     /// Writes the spec-155 paired, purged strategy comparison to
-    /// <c>data/efficacy/strategy-paired-comparison.{csv,md}</c> — a SEPARATE artifact pair from the
-    /// leaderboard, because the leaderboard is descriptive and this is the only result that can support the
-    /// amended AD-15 claim; sharing a file would let one overwrite the other's meaning. Same best-effort
-    /// posture as <see cref="WriteAsync"/> (AD-8): a disk failure logs and returns the attempted paths rather
-    /// than throwing.
+    /// <c>data/efficacy/strategy-paired-comparison.{csv,md}</c>, plus the spec-170 per-block rows to
+    /// <c>data/efficacy/strategy-paired-comparison-blocks.csv</c> — SEPARATE artifacts from the leaderboard,
+    /// because the leaderboard is descriptive and this is the only result that can support the amended AD-15
+    /// claim; sharing a file would let one overwrite the other's meaning. The blocks file is its own CSV
+    /// (never a <c>recordType</c> discriminator in the summary CSV) so the summary keeps one homogeneous row
+    /// per baseline for its existing readers. Same best-effort posture as <see cref="WriteAsync"/> (AD-8): a
+    /// disk failure logs and returns the attempted paths rather than throwing.
     /// </summary>
-    Task<PairedComparisonPaths> WritePairedComparisonAsync(string csv, string markdown, CancellationToken ct);
+    Task<PairedComparisonPaths> WritePairedComparisonAsync(
+        string csv, string markdown, string blocksCsv, CancellationToken ct);
 }

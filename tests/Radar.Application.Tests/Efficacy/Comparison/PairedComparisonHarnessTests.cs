@@ -1,3 +1,4 @@
+using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Efficacy.Statistics;
 
@@ -5,8 +6,9 @@ namespace Radar.Application.Tests.Efficacy.Comparison;
 
 /// <summary>
 /// The spec-155 paired, purged harness: joint support, per-date rhos over identical companies and outcomes,
-/// the precommitted boundary, the greedy purge, the exact interval, the sign-test diagnostic and the AD-15
-/// gate — each acceptance criterion pinned by a fixture.
+/// the precommitted boundary, the greedy purge, the exact interval, the sign-test diagnostic and the PRICE
+/// half of the AD-15 gate — each acceptance criterion pinned by a fixture. (The composite gate — price +
+/// AD-16 prerequisite — is <c>Ad15ClaimGate</c>'s and has its own tests.)
 /// </summary>
 public sealed class PairedComparisonHarnessTests
 {
@@ -59,8 +61,8 @@ public sealed class PairedComparisonHarnessTests
         Assert.Empty(result.Baselines);
         Assert.Equal(2, result.ArmsConsidered);
         Assert.Equal(PairedSupport.Empty, result.JointSupport);
-        Assert.False(result.QualifiesUnderAd15);
-        Assert.Contains("no-baselines", result.GateReasons);
+        Assert.False(result.SatisfiesPriceGate);
+        Assert.Contains(result.PriceGateReasons, r => r.Code == Ad15GateReasonCodes.NoBaselines);
     }
 
     // ------------------------------------------------------------------------------ per-date rho discipline
@@ -226,8 +228,9 @@ public sealed class PairedComparisonHarnessTests
             PairedFixtures.Options(firstEligibleAsOf: null));
 
         Assert.Null(result.FirstEligibleAsOf);
-        Assert.False(result.QualifiesUnderAd15);
-        Assert.Contains("no-precommitted-evaluation-boundary", result.GateReasons);
+        Assert.False(result.SatisfiesPriceGate);
+        Assert.Contains(
+            result.PriceGateReasons, r => r.Code == Ad15GateReasonCodes.NoPrecommittedBoundary);
 
         // Everything is still rendered/evaluated — exploratory, not silent: the deltas and interval exist
         // even though no claim is expressible from them.
@@ -259,8 +262,13 @@ public sealed class PairedComparisonHarnessTests
         var baseline = Assert.Single(result.Baselines);
         Assert.False(baseline.Interval.IsDefined);
         Assert.Equal(MedianIntervalUndefinedReason.InsufficientPurgedBlocks, baseline.Interval.Reason);
-        Assert.False(result.QualifiesUnderAd15);
-        Assert.Contains(result.GateReasons, r => r.Contains("insufficient-purged-blocks", StringComparison.Ordinal));
+        Assert.False(result.SatisfiesPriceGate);
+        var reason = Assert.Single(
+            result.PriceGateReasons, r => r.Code == Ad15GateReasonCodes.InsufficientPurgedBlocks);
+        // The rendered text of the migrated reason is byte-identical to the pre-170 string.
+        Assert.Equal(
+            "baseline 'baseline-a': insufficient-purged-blocks (admitted 4, need at least 6 at 95%)",
+            reason.Render());
     }
 
     // ----------------------------------------------------------------------------------------- the purge
@@ -342,10 +350,10 @@ public sealed class PairedComparisonHarnessTests
         Assert.Equal(0.0, admittedInterval.Lower, 12);
     }
 
-    // -------------------------------------------------------------------------------------- AD-15 gate
+    // ------------------------------------------------------------------------- AD-15 gate (price half)
 
     [Fact]
-    public void Compare_GateTrue_WhenEveryBaselineClearsWithAPositiveLowerBoundAndBoundaryPresent()
+    public void Compare_PriceGateTrue_WhenEveryBaselineClearsWithAPositiveLowerBoundAndBoundaryPresent()
     {
         var result = Harness.Compare(
             [
@@ -357,8 +365,8 @@ public sealed class PairedComparisonHarnessTests
             primaryWasPredeclared: true,
             PairedFixtures.Options(firstEligibleAsOf: PairedFixtures.FirstAsOf));
 
-        Assert.True(result.QualifiesUnderAd15);
-        Assert.Empty(result.GateReasons);
+        Assert.True(result.SatisfiesPriceGate);
+        Assert.Empty(result.PriceGateReasons);
         Assert.Equal(2, result.Baselines.Count);
         Assert.All(result.Baselines, b =>
         {
@@ -384,10 +392,10 @@ public sealed class PairedComparisonHarnessTests
             primaryWasPredeclared: true,
             PairedFixtures.Options(firstEligibleAsOf: PairedFixtures.FirstAsOf));
 
-        Assert.False(result.QualifiesUnderAd15);
+        Assert.False(result.SatisfiesPriceGate);
         Assert.True(result.Baselines.Single(b => b.BaselineName == "baseline-a").ClearsGate);
         Assert.False(result.Baselines.Single(b => b.BaselineName == "baseline-b").ClearsGate);
-        Assert.All(result.GateReasons, r => Assert.Contains("baseline-b", r, StringComparison.Ordinal));
+        Assert.All(result.PriceGateReasons, r => Assert.Equal("baseline-b", r.BaselineName));
     }
 
     [Fact]
@@ -433,15 +441,15 @@ public sealed class PairedComparisonHarnessTests
         Assert.True(primaryMarginal - Math.Max(baselineAMarginal, baselineBMarginal) > spread);
 
         // …and yet the paired interval includes zero, so no baseline clears and the gate is false.
-        Assert.False(result.QualifiesUnderAd15);
+        Assert.False(result.SatisfiesPriceGate);
         Assert.All(result.Baselines, b =>
         {
             Assert.True(b.Interval.IsDefined);
             Assert.True(b.Interval.Lower <= 0.0 && b.Interval.Upper >= 0.0);
             Assert.False(b.ClearsGate);
         });
-        Assert.Contains(result.GateReasons, r =>
-            r.Contains("interval-lower-bound-not-positive", StringComparison.Ordinal));
+        Assert.Contains(result.PriceGateReasons, r =>
+            r.Code == Ad15GateReasonCodes.IntervalLowerBoundNotPositive);
     }
 
     [Fact]
@@ -456,8 +464,8 @@ public sealed class PairedComparisonHarnessTests
             primaryWasPredeclared: false,
             PairedFixtures.Options(firstEligibleAsOf: PairedFixtures.FirstAsOf, configuredPrimary: ""));
 
-        Assert.False(result.QualifiesUnderAd15);
-        Assert.Contains("no-predeclared-primary-strategy", result.GateReasons);
+        Assert.False(result.SatisfiesPriceGate);
+        Assert.Contains(result.PriceGateReasons, r => r.Code == Ad15GateReasonCodes.NoPredeclaredPrimary);
         Assert.False(result.PrimaryWasPredeclared);
     }
 
@@ -534,7 +542,130 @@ public sealed class PairedComparisonHarnessTests
             PairedFixtures.Options(firstEligibleAsOf: PairedFixtures.FirstAsOf));
 
         var renderer = new PairedComparisonRenderer();
-        Assert.Equal(renderer.RenderCsv(Run()), renderer.RenderCsv(Run()));
-        Assert.Equal(renderer.RenderMarkdown(Run()), renderer.RenderMarkdown(Run()));
+        static Ad15ClaimVerdict Verdict(PairedStrategyComparison result) => Ad15ClaimGate.Evaluate(
+            result.SatisfiesPriceGate,
+            result.PriceGateReasons,
+            Ad15AttentionPrerequisite.For(Ad16ScreenOutcome.ClearsNecessaryScreen));
+
+        var first = Run();
+        var second = Run();
+        Assert.Equal(renderer.RenderCsv(first, Verdict(first)), renderer.RenderCsv(second, Verdict(second)));
+        Assert.Equal(
+            renderer.RenderMarkdown(first, Verdict(first)),
+            renderer.RenderMarkdown(second, Verdict(second)));
+        Assert.Equal(renderer.RenderBlocksCsv(first), renderer.RenderBlocksCsv(second));
+    }
+
+    // ----------------------------------------------------------------- spec 170: exact-instant pairing
+
+    [Fact]
+    public void Compare_SameDayObservationsWithDifferentInstants_AreNotPaired_AndTheKeysAreCounted()
+    {
+        // A partial rerun: on day 21 the primary's four companies were re-scored at 09:00 while baseline-a
+        // still carries midnight snapshots. Same calendar date, different knowledge cutoffs ⇒ NOT paired.
+        var rerunInstant = PairedFixtures.InstantOf(21).AddHours(9);
+        var result = Harness.Compare(
+            [
+                PairedFixtures.Series(
+                    "primary",
+                    PairedFixtures.Aligned,
+                    [0, 21, 42],
+                    instant: (_, d) => d == 21 ? rerunInstant : PairedFixtures.InstantOf(d)),
+                PairedFixtures.Series("baseline-a", PairedFixtures.AntiAligned, [0, 21, 42]),
+            ],
+            "primary",
+            primaryWasPredeclared: true,
+            PairedFixtures.Options(firstEligibleAsOf: PairedFixtures.FirstAsOf));
+
+        // Day 21 vanishes from the joint support entirely — the mismatch never falls back to date pairing.
+        Assert.Equal(2, result.JointSupport.DistinctAsOfDates);
+        Assert.DoesNotContain(result.CandidateDates, d => d.Date == PairedFixtures.AsOf(21));
+
+        // …and the four (company, 2026-01-22) keys are counted as mismatched, in KEY units.
+        Assert.Equal(4, result.ObservationsWithMismatchedAsOfInstant);
+        Assert.Equal(0, result.ObservationsWithoutAsOfInstant);
+    }
+
+    [Fact]
+    public void Compare_ObservationWithoutAnInstant_NeverEntersTheClaimPath_AndIsCounted()
+    {
+        // The primary's company 0 carries NO instant on day 21 (the legacy-point shape). Even though
+        // baseline-a has a same-day observation for it, the pair must NOT form — a legacy point is exactly
+        // the case where the two arms' knowledge cutoffs are unverifiable.
+        var result = Harness.Compare(
+            [
+                PairedFixtures.Series(
+                    "primary",
+                    PairedFixtures.Aligned,
+                    [0, 21, 42],
+                    instant: (c, d) => c == 0 && d == 21 ? null : PairedFixtures.InstantOf(d)),
+                PairedFixtures.Series("baseline-a", PairedFixtures.AntiAligned, [0, 21, 42]),
+            ],
+            "primary",
+            primaryWasPredeclared: true,
+            PairedFixtures.Options(firstEligibleAsOf: PairedFixtures.FirstAsOf));
+
+        Assert.Equal(1, result.ObservationsWithoutAsOfInstant);
+        Assert.Equal(0, result.ObservationsWithMismatchedAsOfInstant);
+
+        // Day 21's joint cross-section holds only the three companies whose instants exist and match.
+        var day21 = Assert.Single(result.CandidateDates, d => d.Date == PairedFixtures.AsOf(21));
+        Assert.Equal(3, day21.Companies);
+
+        // The marginal (date-projection) support still counts the instant-less observation — the
+        // descriptive side is untouched.
+        Assert.Equal(
+            12, result.MarginalSupports.Single(s => s.StrategyName == "primary").Support.Observations);
+    }
+
+    [Fact]
+    public void Compare_EligibleJointSupport_IsTheBoundaryRestrictedSupport_AndEmptyWithoutABoundary()
+    {
+        StrategyScoreSeries[] Arms() =>
+        [
+            PairedFixtures.Series("primary", PairedFixtures.Aligned, PairedFixtures.Spaced(7)),
+            PairedFixtures.Series("baseline-a", PairedFixtures.AntiAligned, PairedFixtures.Spaced(7)),
+        ];
+
+        // Boundary at day 63: dates 0/21/42 are development, 63/84/105/126 are eligible — 4 dates ×
+        // 4 companies = 16 eligible joint observations beside the all-history 28.
+        var bounded = Harness.Compare(
+            Arms(),
+            "primary",
+            primaryWasPredeclared: true,
+            PairedFixtures.Options(firstEligibleAsOf: PairedFixtures.AsOf(63)));
+        Assert.Equal(new PairedSupport(28, 4, 7), bounded.JointSupport);
+        Assert.Equal(new PairedSupport(16, 4, 4), bounded.EligibleJointSupport);
+
+        // No boundary ⇒ the eligible support is EMPTY, never the all-history figure.
+        var unbounded = Harness.Compare(
+            Arms(),
+            "primary",
+            primaryWasPredeclared: true,
+            PairedFixtures.Options(firstEligibleAsOf: null));
+        Assert.Equal(new PairedSupport(28, 4, 7), unbounded.JointSupport);
+        Assert.Equal(PairedSupport.Empty, unbounded.EligibleJointSupport);
+    }
+
+    [Fact]
+    public void Compare_EveryArmSharingOneInstantPerDay_KeepsTheAdmittedBlockSetOfTheDateProjection()
+    {
+        // Spec 170 §2.2: only the INTERSECTION becomes exact; block grouping, purging and the boundary stay
+        // on the calendar date. With one shared instant per day, the admitted-block set is unchanged from
+        // the dense-daily fixture the purge test pins.
+        var result = Harness.Compare(
+            [
+                PairedFixtures.Series("primary", PairedFixtures.Aligned, PairedFixtures.Daily(60), weekdaysOnly: true),
+                PairedFixtures.Series("baseline-a", PairedFixtures.AntiAligned, PairedFixtures.Daily(60), weekdaysOnly: true),
+            ],
+            "primary",
+            primaryWasPredeclared: true,
+            PairedFixtures.Options(firstEligibleAsOf: PairedFixtures.FirstAsOf));
+
+        Assert.Equal(
+            [PairedFixtures.AsOf(0), PairedFixtures.AsOf(21), PairedFixtures.AsOf(42)],
+            result.AdmittedBlocks.Select(b => b.Date).ToList());
+        Assert.Equal(0, result.ObservationsWithoutAsOfInstant);
+        Assert.Equal(0, result.ObservationsWithMismatchedAsOfInstant);
     }
 }

@@ -19,14 +19,55 @@ public readonly record struct StrategyObservation(
     DateOnly ExitDate);
 
 /// <summary>
+/// One usable observation keyed on the EXACT scoring instant (spec 170): the same facts as
+/// <see cref="StrategyObservation"/> plus the snapshot's <c>WindowEndUtc</c>. Consumed only by the paired
+/// comparison's claim path; the marginal leaderboard keeps the date-deduplicated projection.
+/// <para>
+/// <see cref="AsOf"/> is derived from the instant (<c>DateOnly.FromDateTime(instant.UtcDateTime)</c>) — the
+/// calendar date is used ONLY for block grouping, purging and the boundary comparison; the intersection
+/// itself is exact.
+/// </para>
+/// </summary>
+public readonly record struct StrategyInstantObservation(
+    DateTimeOffset AsOfInstantUtc,
+    DateOnly AsOf,
+    Guid CompanyId,
+    double Score,
+    double ForwardReturn,
+    DateOnly EntryDate,
+    DateOnly ExitDate);
+
+/// <summary>
 /// One strategy's whole usable observation set, with the two per-company-day exclusion tallies (spec 152's
 /// split: "no price at all" vs "some price but not the horizon").
+/// <para>
+/// Since spec 170 it carries TWO projections of the SAME single read: the date-deduplicated
+/// <see cref="Usable"/> list (byte-for-byte the pre-170 behaviour, consumed by the marginal leaderboard) and
+/// the exact-instant <see cref="UsableByInstant"/> list (consumed by the paired comparison), plus the count
+/// of usable company-days that carried NO instant and are therefore excluded from the claim path — fail
+/// closed, never date-paired as a fallback.
+/// </para>
 /// </summary>
 public sealed record StrategyObservationSet(
     string StrategyName,
     IReadOnlyList<StrategyObservation> Usable,
     int WithoutForwardPrice,
-    int PartialWindow);
+    int PartialWindow)
+{
+    /// <summary>
+    /// The exact-instant projection: de-duplicated on <c>(CompanyId, AsOfInstantUtc)</c>, last occurrence
+    /// wins (the same rule as <see cref="Usable"/> — nothing throws on a duplicate), deterministic order
+    /// (as-of date, company id, instant).
+    /// </summary>
+    public IReadOnlyList<StrategyInstantObservation> UsableByInstant { get; init; } = [];
+
+    /// <summary>
+    /// Usable (forward-defined) company-days whose every occurrence lacked an <c>AsOfInstantUtc</c>. De-duped
+    /// on the same <c>(CompanyId, AsOf)</c> key as every other tally, and — the established convention — a
+    /// key some occurrence DID cover with an instant is not counted: that key entered the claim path.
+    /// </summary>
+    public int WithoutAsOfInstant { get; init; }
+}
 
 /// <summary>
 /// THE observation builder — extracted from <see cref="StrategyComparisonHarness"/> (spec 155,
@@ -39,9 +80,18 @@ public sealed record StrategyObservationSet(
 /// counting — never hiding — the ones for which no forward price pair exists.
 /// </para>
 /// <para>
+/// <b>TWO projections from ONE read (spec 170).</b> The date-deduplicated projection keys on
+/// <c>(CompanyId, DateOnly)</c> and is BYTE-FOR-BYTE the pre-170 behaviour — re-keying it on the instant
+/// would make the marginal leaderboard count multiple same-day runs instead of collapsing them, silently
+/// changing a descriptive artifact this slice promises not to touch. The exact-instant projection keys on
+/// <c>(CompanyId, DateTimeOffset)</c> and feeds only the paired claim path. One traversal of the score/price
+/// data feeds both; neither re-reads.
+/// </para>
+/// <para>
 /// A company/as-of pair can appear more than once (two runs on the same day both stamp a snapshot). The
-/// LAST occurrence in the store's deterministic ascending-by-CreatedAtUtc order wins, so a same-day re-run
-/// replaces rather than double-counts its earlier self.
+/// LAST occurrence in the store's deterministic ascending-by-CreatedAtUtc order wins — in BOTH projections,
+/// and nothing throws on a duplicate (spec 170 §2.1 explicitly retains this rule; a throw would introduce a
+/// new fatal condition over stores whose duplicate rate has not been measured).
 /// </para>
 /// <para>
 /// <b>The unusable count is de-duped on the SAME key, for the same reason.</b> It is reported next to a
@@ -74,8 +124,11 @@ public static class StrategyObservationBuilder
         ArgumentNullException.ThrowIfNull(strategy);
 
         var byKey = new Dictionary<(Guid CompanyId, DateOnly AsOf), StrategyObservation>();
+        var byInstant = new Dictionary<(Guid CompanyId, DateTimeOffset Instant), StrategyInstantObservation>();
         var withoutForwardPrice = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
         var partialWindow = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
+        var withoutInstant = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
+        var instantCoveredKeys = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
 
         foreach (var company in strategy.Companies)
         {
@@ -101,11 +154,36 @@ public static class StrategyObservationBuilder
                     // Non-null whenever IsDefined — the forward-return contract, not an assumption.
                     forward.EntryDate!.Value,
                     forward.ExitDate!.Value);
+
+                // Spec 170: the exact-instant projection, from the SAME forward-return computation. A point
+                // without an instant cannot enter it — that is the fail-closed exclusion, counted below.
+                if (point.AsOfInstantUtc is { } instant)
+                {
+                    byInstant[(company.CompanyId, instant)] = new StrategyInstantObservation(
+                        instant,
+                        // Block grouping, purging and the boundary comparison operate on the instant's own
+                        // UTC calendar date (spec 170 §2.2); EfficacyDatasetBuilder derives AsOfDate from the
+                        // same WindowEndUtc, so the two agree for every store-read point.
+                        DateOnly.FromDateTime(instant.UtcDateTime),
+                        company.CompanyId,
+                        point.OpportunityScore,
+                        forward.Value,
+                        forward.EntryDate!.Value,
+                        forward.ExitDate!.Value);
+                    instantCoveredKeys.Add((company.CompanyId, asOf));
+                }
+                else
+                {
+                    withoutInstant.Add((company.CompanyId, asOf));
+                }
             }
         }
 
         withoutForwardPrice.ExceptWith(byKey.Keys);
         partialWindow.ExceptWith(byKey.Keys);
+        // The established rule, applied to the instant tally too: a key some occurrence DID cover (here,
+        // with an instant) is not lost from the claim path.
+        withoutInstant.ExceptWith(instantCoveredKeys);
 
         var usable = byKey.Values.ToList();
         usable.Sort(static (a, b) =>
@@ -114,7 +192,24 @@ public static class StrategyObservationBuilder
             return byDate != 0 ? byDate : a.CompanyId.CompareTo(b.CompanyId);
         });
 
+        var usableByInstant = byInstant.Values.ToList();
+        usableByInstant.Sort(static (a, b) =>
+        {
+            var byDate = a.AsOf.CompareTo(b.AsOf);
+            if (byDate != 0)
+            {
+                return byDate;
+            }
+
+            var byCompany = a.CompanyId.CompareTo(b.CompanyId);
+            return byCompany != 0 ? byCompany : a.AsOfInstantUtc.CompareTo(b.AsOfInstantUtc);
+        });
+
         return new StrategyObservationSet(
-            strategy.StrategyName, usable, withoutForwardPrice.Count, partialWindow.Count);
+            strategy.StrategyName, usable, withoutForwardPrice.Count, partialWindow.Count)
+        {
+            UsableByInstant = usableByInstant,
+            WithoutAsOfInstant = withoutInstant.Count,
+        };
     }
 }

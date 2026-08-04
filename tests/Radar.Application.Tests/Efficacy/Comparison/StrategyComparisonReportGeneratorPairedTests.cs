@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Efficacy;
+using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Scoring;
 using Radar.Domain.Scoring;
@@ -111,19 +112,52 @@ public sealed class StrategyComparisonReportGeneratorPairedTests
             new StrategyComparisonOptions(21, 1.0 / 3.0, 20, ComparisonFixtures.ExitToleranceDays));
 
     [Fact]
-    public async Task GenerateAsync_WithPairedOptionsAndABaseline_WritesThePairedArtifactPair()
+    public async Task GenerateAsync_WithPairedOptionsAndABaseline_WritesThePairedArtifacts()
     {
         var fixture = BuildFixture("baseline-mirror", Paired("primary"));
 
         await fixture.Generator.GenerateAsync(CancellationToken.None);
 
-        var (csv, markdown) = Assert.Single(fixture.Artifacts.PairedComparisons);
+        var (csv, markdown, blocksCsv) = Assert.Single(fixture.Artifacts.PairedComparisons);
         Assert.StartsWith("status,primaryStrategy,", csv, StringComparison.Ordinal);
         Assert.Contains("baseline-mirror", markdown, StringComparison.Ordinal);
         Assert.Contains(PairedComparisonRenderer.Framing, markdown, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "baseline,blockDate,companies,primaryRho,baselineRho,pairedDelta",
+            blocksCsv,
+            StringComparison.Ordinal);
 
         // The leaderboard pair is still written — the paired artifact is additive, not a replacement.
         Assert.Single(fixture.Artifacts.Leaderboards);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_WithNoPrerequisite_TheArtifactFailsClosedAsNotCalculated()
+    {
+        // The 1-arg overload is "no attention screen in this composition": the composite gate must read
+        // ad16-screen-not-calculated, never silently qualify from the price side.
+        var fixture = BuildFixture("baseline-mirror", Paired("primary"));
+
+        await fixture.Generator.GenerateAsync(CancellationToken.None);
+
+        var (csv, markdown, _) = Assert.Single(fixture.Artifacts.PairedComparisons);
+        Assert.Contains("ad16-screen-not-calculated", csv, StringComparison.Ordinal);
+        Assert.Contains("ad16-screen-not-calculated", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("adding value", markdown, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_WithAPrerequisite_TheArtifactCarriesItsOutcome()
+    {
+        var fixture = BuildFixture("baseline-mirror", Paired("primary"));
+
+        await fixture.Generator.GenerateAsync(
+            Ad15AttentionPrerequisite.For(Ad16ScreenOutcome.Pending), CancellationToken.None);
+
+        var (csv, markdown, _) = Assert.Single(fixture.Artifacts.PairedComparisons);
+        Assert.Contains(",pending,", csv, StringComparison.Ordinal);
+        Assert.Contains("ad16-screen-pending", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("adding value", markdown, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -133,7 +167,7 @@ public sealed class StrategyComparisonReportGeneratorPairedTests
 
         await fixture.Generator.GenerateAsync(CancellationToken.None);
 
-        var (_, markdown) = Assert.Single(fixture.Artifacts.PairedComparisons);
+        var (_, markdown, _) = Assert.Single(fixture.Artifacts.PairedComparisons);
         Assert.Contains("No primary was predeclared", markdown, StringComparison.Ordinal);
         Assert.Contains("Status: EXPLORATORY", markdown, StringComparison.Ordinal);
         Assert.Contains("'primary'", markdown, StringComparison.Ordinal);   // paired the pipeline primary
@@ -157,7 +191,7 @@ public sealed class StrategyComparisonReportGeneratorPairedTests
 
         await fixture.Generator.GenerateAsync(CancellationToken.None);
 
-        var (csv, markdown) = Assert.Single(fixture.Artifacts.PairedComparisons);
+        var (csv, markdown, _) = Assert.Single(fixture.Artifacts.PairedComparisons);
         Assert.Contains("no-baselines", csv, StringComparison.Ordinal);
         Assert.Contains("no-baselines", markdown, StringComparison.Ordinal);
     }

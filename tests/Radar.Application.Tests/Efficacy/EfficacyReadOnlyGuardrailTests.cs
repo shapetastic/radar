@@ -264,6 +264,78 @@ public sealed class EfficacyReadOnlyGuardrailTests
     }
 
     private const string AttentionNamespace = "Radar.Application.Efficacy.Attention";
+    private const string ClaimsNamespace = "Radar.Application.Efficacy.Claims";
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 170: the AD-15 gate is composite, and the wiring must not be circular. The neutral
+    // Efficacy.Claims namespace exists precisely so the comparison can consume AD-16's outcome WITHOUT
+    // referencing an Attention type: Attention → Claims and Comparison → Claims are permitted;
+    // Comparison → Attention is forbidden — asserted on the TYPE GRAPH, with positive controls so the
+    // guard cannot pass vacuously.
+    // ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ComparisonModule_NeverReachesAnAttentionType()
+    {
+        var comparisonTypes = typeof(ScoringInput).Assembly.GetTypes()
+            .Where(t => t.Namespace == ComparisonNamespace)
+            .ToList();
+
+        Assert.NotEmpty(comparisonTypes);
+
+        var leaks = TransitiveClosure(comparisonTypes)
+            .Where(t => t.Namespace is not null
+                && t.Namespace.StartsWith(AttentionNamespace, StringComparison.Ordinal))
+            .Select(t => t.FullName)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            leaks.Count == 0,
+            "The comparison module must consume AD-16's outcome through the neutral Efficacy.Claims "
+                + "prerequisite, never an Attention type — but these are reachable: "
+                + string.Join(", ", leaks));
+    }
+
+    [Fact]
+    public void ClaimsModule_IsNeutral_ReachesNeitherAttentionNorComparisonNorPrice()
+    {
+        var claimsTypes = typeof(ScoringInput).Assembly.GetTypes()
+            .Where(t => t.Namespace == ClaimsNamespace)
+            .ToList();
+
+        Assert.NotEmpty(claimsTypes);
+
+        var leaks = TransitiveClosure(claimsTypes)
+            .Where(t => t.Namespace is not null
+                && (t.Namespace.StartsWith(AttentionNamespace, StringComparison.Ordinal)
+                    || t.Namespace.StartsWith(ComparisonNamespace, StringComparison.Ordinal)
+                    || t.Namespace.StartsWith(PricesNamespace, StringComparison.Ordinal)))
+            .Select(t => t.FullName)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            leaks.Count == 0,
+            "Efficacy.Claims is the namespace BOTH sides may depend on, so it must depend on neither — "
+                + "but these are reachable: " + string.Join(", ", leaks));
+    }
+
+    [Fact]
+    public void AttentionAndComparison_BothReachClaims_SoTheNeutralityGuardIsNotVacuous()
+    {
+        // The positive controls: the mapper (Attention → Claims) and the gate consumption
+        // (Comparison → Claims) really exist. If either stopped referencing Claims, the guards above would
+        // still pass while proving nothing about the boundary.
+        var assembly = typeof(ScoringInput).Assembly;
+
+        bool ReachesClaims(string ns) => TransitiveClosure(
+                assembly.GetTypes().Where(t => t.Namespace == ns).ToList())
+            .Any(t => t.Namespace == ClaimsNamespace);
+
+        Assert.True(ReachesClaims(AttentionNamespace), "Attention is supposed to map onto Claims (spec 170).");
+        Assert.True(ReachesClaims(ComparisonNamespace), "Comparison is supposed to consume Claims (spec 170).");
+    }
 
     [Fact]
     public void AttentionScreenModule_TouchesOnlyScoringOUTPUTTypes()

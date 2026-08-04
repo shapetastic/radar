@@ -1,19 +1,27 @@
 using System.Globalization;
 using System.Text;
 
+using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Statistics;
 
 namespace Radar.Application.Efficacy.Comparison;
 
 /// <summary>
-/// Pure, deterministic rendering of a <see cref="PairedStrategyComparison"/> as CSV (machine) + markdown
-/// (human). Culture-invariant, fixed precision, <c>\n</c> line endings, no embedded wall-clock — identical
-/// input yields byte-identical output (AD-3), matching <see cref="StrategyLeaderboardRenderer"/>'s
-/// conventions.
+/// Pure, deterministic rendering of a <see cref="PairedStrategyComparison"/> plus its composite
+/// <see cref="Ad15ClaimVerdict"/> as CSV (machine) + markdown (human), and the per-block CSV. Culture-
+/// invariant, fixed precision, <c>\n</c> line endings, no embedded wall-clock — identical input yields
+/// byte-identical output (AD-3), matching <see cref="StrategyLeaderboardRenderer"/>'s conventions.
 /// <para>
 /// <b>The limitation is rendered BESIDE every interval, never only in a footnote:</b> purging removes the
 /// known mechanical forward-window overlap but cannot prove independence or stationarity across market
 /// regimes, so the interval is conditional on that predeclared model.
+/// </para>
+/// <para>
+/// <b>The claim gate is COMPOSITE (spec 170).</b> The "adding value" sentence is emitted ONLY for a
+/// qualifying composite verdict — never for a price-side pass alone. A price-gate pass with an unmet AD-16
+/// prerequisite states the price result, names the missing prerequisite, and says plainly that no claim is
+/// licensed. When the prerequisite is met by a <c>Miss</c>, the Miss is stated in the same block, BEFORE the
+/// licence sentence.
 /// </para>
 /// <para>
 /// <b>Framing (AD-9).</b> The gate outcome is a statement about Radar's own scoring — whether the
@@ -38,16 +46,27 @@ public sealed class PairedComparisonRenderer
             + "but cannot prove independence or stationarity across market regimes; ties make the "
             + "order-statistic interval conservative";
 
+    // The pre-170 column set with `qualifiesUnderAd15` renamed to `satisfiesPriceGate` and `gateReasons`
+    // carrying the COMPOSITE verdict's reasons (price texts unchanged, prerequisite code appended when
+    // unmet), followed by the spec-170 additive columns. `observationsWithoutAsOfInstant` counts
+    // OBSERVATIONS; `mismatchedAsOfInstantKeys` counts KEYS — the units differ deliberately and the names
+    // carry them.
     private const string CsvHeader =
         "status,primaryStrategy,primaryPredeclared,firstEligibleAsOf,armsConsidered,baselinesCompared,"
             + "baseline,jointObservations,jointCompanies,jointDates,candidateDates,droppedDates,"
             + "developmentDates,inconsistentOutcomeObservations,purgedBlocks,medianPairedDelta,"
             + "intervalLower95,intervalUpper95,intervalCoverage,intervalReason,signTestP,signTestEffectiveN,"
-            + "signTestZeroDeltasDropped,baselineClears,qualifiesUnderAd15,gateReasons";
+            + "signTestZeroDeltasDropped,baselineClears,satisfiesPriceGate,gateReasons,"
+            + "qualifiesUnderAd15,ad16ScreenOutcome,"
+            + "eligibleJointObservations,eligibleJointCompanies,eligibleJointDates,"
+            + "observationsWithoutAsOfInstant,mismatchedAsOfInstantKeys";
 
-    public string RenderCsv(PairedStrategyComparison result)
+    private const string BlocksCsvHeader = "baseline,blockDate,companies,primaryRho,baselineRho,pairedDelta";
+
+    public string RenderCsv(PairedStrategyComparison result, Ad15ClaimVerdict verdict)
     {
         ArgumentNullException.ThrowIfNull(result);
+        RequireConsistent(result, verdict);
 
         var sb = new StringBuilder();
         sb.Append(CsvHeader).Append('\n');
@@ -59,7 +78,7 @@ public sealed class PairedComparisonRenderer
             AppendJoint(sb, result);
             // purgedBlocks .. baselineClears: empty — with no baseline there is no headline to misread.
             sb.Append(",,,,,,,,,,");
-            AppendGate(sb, result);
+            AppendGate(sb, result, verdict);
             sb.Append('\n');
             return sb.ToString();
         }
@@ -81,8 +100,42 @@ public sealed class PairedComparisonRenderer
             sb.Append(Int(baseline.SignTest.EffectiveN)).Append(',');
             sb.Append(Int(baseline.SignTest.ZeroDeltasDropped)).Append(',');
             sb.Append(Bool(baseline.ClearsGate)).Append(',');
-            AppendGate(sb, result);
+            AppendGate(sb, result, verdict);
             sb.Append('\n');
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The spec-170 per-block artifact (<c>strategy-paired-comparison-blocks.csv</c>): one row per
+    /// (baseline, admitted block) carrying the block's as-of date, its joint company N and both arms' ρs
+    /// beside the paired delta. A SEPARATE file, deliberately — the summary CSV is one homogeneous row per
+    /// baseline and a <c>recordType</c> discriminator would break that assumption for every existing reader.
+    /// </summary>
+    public string RenderBlocksCsv(PairedStrategyComparison result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        var sb = new StringBuilder();
+        sb.Append(BlocksCsvHeader).Append('\n');
+
+        var candidatesByDate = result.CandidateDates.ToDictionary(d => d.Date);
+        foreach (var baseline in result.Baselines)
+        {
+            foreach (var delta in baseline.AdmittedDeltas)
+            {
+                var candidate = candidatesByDate[delta.Date];
+                var baselineRho = candidate.Baselines.Single(x =>
+                    string.Equals(x.BaselineName, baseline.BaselineName, StringComparison.Ordinal));
+
+                sb.Append(CsvField.Escape(baseline.BaselineName)).Append(',');
+                sb.Append(Date(delta.Date)).Append(',');
+                sb.Append(Int(candidate.Companies)).Append(',');
+                sb.Append(Delta(candidate.PrimaryRho)).Append(',');
+                sb.Append(Delta(baselineRho.Rho)).Append(',');
+                sb.Append(Delta(delta.Delta)).Append('\n');
+            }
         }
 
         return sb.ToString();
@@ -109,15 +162,24 @@ public sealed class PairedComparisonRenderer
         sb.Append(Int(result.InconsistentOutcomeObservationsDropped)).Append(',');
     }
 
-    private static void AppendGate(StringBuilder sb, PairedStrategyComparison result)
+    private static void AppendGate(
+        StringBuilder sb, PairedStrategyComparison result, Ad15ClaimVerdict verdict)
     {
-        sb.Append(Bool(result.QualifiesUnderAd15)).Append(',');
-        sb.Append(CsvField.Escape(string.Join("; ", result.GateReasons)));
+        sb.Append(Bool(result.SatisfiesPriceGate)).Append(',');
+        sb.Append(CsvField.Escape(string.Join("; ", verdict.Reasons.Select(r => r.Render())))).Append(',');
+        sb.Append(Bool(verdict.Qualifies)).Append(',');
+        sb.Append(Ad15ClaimGate.OutcomeToken(verdict.Prerequisite.Outcome)).Append(',');
+        sb.Append(Int(result.EligibleJointSupport.Observations)).Append(',');
+        sb.Append(Int(result.EligibleJointSupport.DistinctCompanies)).Append(',');
+        sb.Append(Int(result.EligibleJointSupport.DistinctAsOfDates)).Append(',');
+        sb.Append(Int(result.ObservationsWithoutAsOfInstant)).Append(',');
+        sb.Append(Int(result.ObservationsWithMismatchedAsOfInstant));
     }
 
-    public string RenderMarkdown(PairedStrategyComparison result)
+    public string RenderMarkdown(PairedStrategyComparison result, Ad15ClaimVerdict verdict)
     {
         ArgumentNullException.ThrowIfNull(result);
+        RequireConsistent(result, verdict);
 
         var o = result.Options;
         var sb = new StringBuilder();
@@ -164,6 +226,7 @@ public sealed class PairedComparisonRenderer
 
         sb.Append("## How to read this\n\n");
         sb.Append("- One delta per date per baseline: on each joint date, every arm's cross-sectional Spearman rho is computed against the SAME outcome ranks over the SAME companies, and the paired difference is rho_primary − rho_baseline. Companies are never pooled across dates.\n");
+        sb.Append("- Arms are intersected on the EXACT scoring instant (the snapshot's WindowEndUtc), not the calendar date: after a partial rerun, two arms' same-day snapshots can represent different knowledge cutoffs, and pairing those would attribute to strategy difference what is actually a difference in what each arm could see. The calendar date is used only for block grouping, purging and the boundary. An observation with no recorded instant is excluded from the claim path (counted below), never date-paired as a fallback.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Purge: candidate dates are admitted greedily in ascending order, earliest first, keeping only dates whose nominal outcome window (D, D+{o.Comparison.ForwardHorizonDays}] does not overlap the last admitted window — so admitted dates are at least {o.Comparison.ForwardHorizonDays} calendar days apart. A skipped date is counted as overlapping-outcome-window, never silently discarded. There is no search over weekday, phase or offset.\n");
         sb.Append("- Daily candidate dates are NOT independent — adjacent dates reuse most of the same forward path. Only the purged subset enters the interval, and even those blocks are independent only under the predeclared model stated beside each interval.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Each date needs at least {o.MinimumCompaniesPerDate} joint companies; per-date rho is a coefficient, not a claim.\n");
@@ -192,7 +255,18 @@ public sealed class PairedComparisonRenderer
             sb.Append('\n');
         }
 
-        sb.Append(CultureInfo.InvariantCulture, $"Joint intersection across the primary and every baseline: **{SupportCell(result.JointSupport)}**. Observations dropped because the forward outcome disagreed across arms: {result.InconsistentOutcomeObservationsDropped}.\n\n");
+        sb.Append(CultureInfo.InvariantCulture, $"Joint intersection across the primary and every baseline (ALL history — this figure describes the dataset, never the claim): **{SupportCell(result.JointSupport)}**. Observations dropped because the forward outcome disagreed across arms: {result.InconsistentOutcomeObservationsDropped}.\n\n");
+
+        if (result.FirstEligibleAsOf is not null)
+        {
+            sb.Append(CultureInfo.InvariantCulture, $"Eligible joint support (the CLAIM's support: joint observations on as-of dates at or after the precommitted boundary): **{SupportCell(result.EligibleJointSupport)}**.\n\n");
+        }
+        else
+        {
+            sb.Append("Eligible joint support (the CLAIM's support): **empty** — no boundary is precommitted, so no observation is claim-eligible; the all-history joint figure above is never a substitute for it.\n\n");
+        }
+
+        sb.Append(CultureInfo.InvariantCulture, $"Exact-instant pairing exclusions: {result.ObservationsWithoutAsOfInstant} observation(s) (unit: de-duped company-day observations) excluded from the claim path because the snapshot recorded no as-of instant — such points fail closed and are never date-paired; {result.ObservationsWithMismatchedAsOfInstant} (company, calendar-date) key(s) (unit: keys, not observations) present in two or more arms with differing as-of instants and therefore not paired.\n\n");
 
         sb.Append(CultureInfo.InvariantCulture, $"## Candidate dates ({result.CandidateDates.Count} usable, {result.DroppedDates.Count} dropped)\n\n");
         if (result.DroppedDates.Count > 0)
@@ -207,6 +281,8 @@ public sealed class PairedComparisonRenderer
             sb.Append('\n');
         }
 
+        var candidatesByDate = result.CandidateDates.ToDictionary(d => d.Date);
+
         sb.Append(CultureInfo.InvariantCulture, $"## Purged blocks ({result.AdmittedBlocks.Count} admitted)\n\n");
         if (result.AdmittedBlocks.Count == 0)
         {
@@ -214,14 +290,14 @@ public sealed class PairedComparisonRenderer
         }
         else
         {
-            sb.Append("| block date | observed entry | observed exit |\n");
-            sb.Append("| --- | --- | --- |\n");
+            sb.Append("| block date | companies | observed entry | observed exit |\n");
+            sb.Append("| --- | ---: | --- | --- |\n");
             foreach (var block in result.AdmittedBlocks)
             {
-                sb.Append(CultureInfo.InvariantCulture, $"| {Date(block.Date)} | {Date(block.ObservedEntry)} | {Date(block.ObservedExit)} |\n");
+                sb.Append(CultureInfo.InvariantCulture, $"| {Date(block.Date)} | {candidatesByDate[block.Date].Companies} | {Date(block.ObservedEntry)} | {Date(block.ObservedExit)} |\n");
             }
 
-            sb.Append("\nConsecutive admitted blocks' OBSERVED price intervals are verified non-overlapping (the harness throws otherwise), not merely their nominal windows.\n\n");
+            sb.Append("\nConsecutive admitted blocks' OBSERVED price intervals are verified non-overlapping (the harness throws otherwise), not merely their nominal windows. The companies column is each block's joint cross-section — the N its rho was computed over.\n\n");
         }
 
         sb.Append("## Paired results per baseline\n\n");
@@ -253,32 +329,99 @@ public sealed class PairedComparisonRenderer
 
             if (baseline.AdmittedDeltas.Count > 0)
             {
-                sb.Append("| block date | paired delta |\n");
-                sb.Append("| --- | ---: |\n");
+                sb.Append("| block date | companies | primary rho | baseline rho | paired delta |\n");
+                sb.Append("| --- | ---: | ---: | ---: | ---: |\n");
                 foreach (var delta in baseline.AdmittedDeltas)
                 {
-                    sb.Append(CultureInfo.InvariantCulture, $"| {Date(delta.Date)} | {Delta(delta.Delta)} |\n");
+                    var candidate = candidatesByDate[delta.Date];
+                    var baselineRho = candidate.Baselines.Single(x =>
+                        string.Equals(x.BaselineName, baseline.BaselineName, StringComparison.Ordinal));
+                    sb.Append(CultureInfo.InvariantCulture, $"| {Date(delta.Date)} | {candidate.Companies} | {Delta(candidate.PrimaryRho)} | {Delta(baselineRho.Rho)} | {Delta(delta.Delta)} |\n");
                 }
 
                 sb.Append('\n');
             }
         }
 
-        sb.Append("## AD-15 gate\n\n");
-        if (result.QualifiesUnderAd15)
+        AppendGateMarkdown(sb, result, verdict);
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The composite AD-15 gate block. The order of its parts is load-bearing: the two halves are always
+    /// stated first, an attention <c>Miss</c> that satisfies the prerequisite is stated BEFORE the licence
+    /// sentence, and the licence sentence exists only under a qualifying COMPOSITE verdict.
+    /// </summary>
+    private static void AppendGateMarkdown(
+        StringBuilder sb, PairedStrategyComparison result, Ad15ClaimVerdict verdict)
+    {
+        sb.Append("## AD-15 gate (composite: price result + AD-16 attention prerequisite)\n\n");
+        sb.Append("AD-15's gate is COMPOSITE: the paired price result in this artifact is one half; the other is that AD-16's precommitted attention-arrival screen has actually been CALCULATED (calculated, not passed — a Miss satisfies the prerequisite and is stated here when it does). A price-side pass alone licenses no claim.\n\n");
+
+        sb.Append(CultureInfo.InvariantCulture, $"- Price half — satisfies the price gate: **{YesNo(result.SatisfiesPriceGate)}**.\n");
+        sb.Append(CultureInfo.InvariantCulture, $"- AD-16 attention prerequisite: {PrerequisiteSentence(verdict.Prerequisite.Outcome)}.\n\n");
+
+        if (verdict.Qualifies)
         {
-            sb.Append(CultureInfo.InvariantCulture, $"**Qualifies under AD-15's amended gate: yes.** Against every predeclared baseline on the joint out-of-sample support, the purged median paired difference is positive and the exact 95% interval's lower bound is strictly greater than zero. The predeclared primary '{Md(result.PrimaryStrategyName)}' may therefore be described as adding value relative to these baselines under AD-15's gate — a statement about Radar's scoring, never about any company, security or action, and never a basis for one.\n");
+            if (verdict.Prerequisite.Outcome == Ad16ScreenOutcome.Miss)
+            {
+                // BEFORE the licence sentence, in the same block — a reader must never see the positive
+                // price verdict without the attention outcome beside it (spec 170 §1.2).
+                sb.Append("**AD-16's precommitted attention-arrival screen returned `Miss` at its declared horizon.** The prerequisite requires the screen to be calculated, not passed, so the price-side licence below stands — but the Miss stands beside it and travels with any quotation of it.\n\n");
+            }
+
+            sb.Append(CultureInfo.InvariantCulture, $"**Qualifies under AD-15's amended gate: yes.** Against every predeclared baseline on the joint out-of-sample support, the purged median paired difference is positive and the exact 95% interval's lower bound is strictly greater than zero, and AD-16's precommitted attention-arrival screen has been calculated ({Ad15ClaimGate.OutcomeToken(verdict.Prerequisite.Outcome)}). The predeclared primary '{Md(result.PrimaryStrategyName)}' may therefore be described as adding value relative to these baselines under AD-15's gate — a statement about Radar's scoring, never about any company, security or action, and never a basis for one.\n");
+        }
+        else if (result.SatisfiesPriceGate)
+        {
+            sb.Append("**Satisfies the price half of AD-15's gate: yes — and still NO claim is licensed.** The AD-16 attention prerequisite is unmet, and the gate is composite. Reasons:\n\n");
+            foreach (var reason in verdict.Reasons)
+            {
+                sb.Append(CultureInfo.InvariantCulture, $"- {Md(reason.Render())}\n");
+            }
         }
         else
         {
             sb.Append("**Qualifies under AD-15's amended gate: no.** Reasons:\n\n");
-            foreach (var reason in result.GateReasons)
+            foreach (var reason in verdict.Reasons)
             {
-                sb.Append(CultureInfo.InvariantCulture, $"- {Md(reason)}\n");
+                sb.Append(CultureInfo.InvariantCulture, $"- {Md(reason.Render())}\n");
             }
         }
+    }
 
-        return sb.ToString();
+    /// <summary>One restrained sentence per prerequisite outcome; total, and every unmet state names its code.</summary>
+    private static string PrerequisiteSentence(Ad16ScreenOutcome outcome) => outcome switch
+    {
+        Ad16ScreenOutcome.NotCalculated =>
+            "**not calculated** (ad16-screen-not-calculated) — no attention-arrival screen result was supplied to this comparison (the generator is disabled or was not run), so the prerequisite is unmet",
+        Ad16ScreenOutcome.Unavailable =>
+            "**unavailable** (ad16-screen-unavailable) — the screen could not be evaluated (a configuration failure, per AD-16), so the prerequisite is unmet",
+        Ad16ScreenOutcome.Pending =>
+            "**pending** (ad16-screen-pending) — the screen ran but its minimum eligible dates have not accrued, so it is not yet calculated and the prerequisite is unmet",
+        Ad16ScreenOutcome.Miss =>
+            "**calculated — Miss** at the declared horizon. The prerequisite is met (AD-15 requires the screen to be calculated, not passed); the Miss is stated beside any licensed claim",
+        Ad16ScreenOutcome.ClearsNecessaryScreen =>
+            "**calculated — clears its necessary screen** (a necessary screen only, never proof of efficacy). The prerequisite is met",
+        _ =>
+            "**invalid** (ad16-screen-invalid) — the screen result could not be interpreted, so the prerequisite is unmet",
+    };
+
+    /// <summary>
+    /// The verdict must be THE verdict for this result — computed from its price gate, not another run's. A
+    /// mismatch is a wiring defect and must not render as a claim.
+    /// </summary>
+    private static void RequireConsistent(PairedStrategyComparison result, Ad15ClaimVerdict verdict)
+    {
+        ArgumentNullException.ThrowIfNull(verdict);
+        if (verdict.SatisfiesPriceGate != result.SatisfiesPriceGate)
+        {
+            throw new InvalidOperationException(
+                "The AD-15 claim verdict disagrees with the paired result's price gate "
+                    + $"(verdict {verdict.SatisfiesPriceGate}, result {result.SatisfiesPriceGate}) — the "
+                    + "verdict must be computed from THIS result's price half via Ad15ClaimGate.Evaluate.");
+        }
     }
 
     private static string SupportCell(PairedSupport support) =>
@@ -296,6 +439,8 @@ public sealed class PairedComparisonRenderer
     private static string Int(int value) => value.ToString(CultureInfo.InvariantCulture);
 
     private static string Bool(bool value) => value ? "true" : "false";
+
+    private static string YesNo(bool value) => value ? "yes" : "no";
 
     /// <summary>Stable machine tokens — the enum name is the contract, not a localized phrase.</summary>
     internal static string DropReasonToken(PairedDateDropReason reason) => reason switch
