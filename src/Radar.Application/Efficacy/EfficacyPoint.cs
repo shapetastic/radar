@@ -41,4 +41,19 @@ public sealed record EfficacyPoint(
     /// </para>
     /// </summary>
     public DateOnly? AsOfDate { get; init; }
+
+    /// <summary>
+    /// The EXACT instant the score's knowledge window ended (the snapshot's <c>WindowEndUtc</c>, spec 170) —
+    /// the same fact as <see cref="AsOfDate"/> at full precision. Additive and trailing (init-only), so every
+    /// existing construction site compiles unchanged; the per-company CSV/SVG renderers and the marginal
+    /// leaderboard do not read it, so their output stays byte-identical (asserted, not assumed).
+    /// <para>
+    /// It exists because spec 155's paired comparison must intersect arms on the exact scoring instant, not
+    /// the calendar date: after a partial rerun, two arms' same-day snapshots can represent DIFFERENT
+    /// knowledge cutoffs, and pairing them by date would attribute to strategy difference what is actually a
+    /// difference in what each arm could see. <c>null</c> means "not recorded" (a hand-constructed point) —
+    /// such a point FAILS CLOSED out of the claim path (counted, never date-paired as a fallback).
+    /// </para>
+    /// </summary>
+    public DateTimeOffset? AsOfInstantUtc { get; init; }
 }

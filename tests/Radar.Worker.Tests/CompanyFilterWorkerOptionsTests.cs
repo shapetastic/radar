@@ -362,7 +362,9 @@ public sealed class CompanyFilterWorkerOptionsTests : IDisposable
     private sealed class RecordingStrategyComparisonGenerator(List<string> callLog)
         : IStrategyComparisonReportGenerator
     {
-        public Task<StrategyLeaderboard> GenerateAsync(CancellationToken ct)
+        public Task<StrategyLeaderboard> GenerateAsync(
+            Radar.Application.Efficacy.Claims.Ad15AttentionPrerequisite? attentionPrerequisite,
+            CancellationToken ct)
         {
             callLog.Add("comparison");
             return Task.FromResult(new StrategyLeaderboard(

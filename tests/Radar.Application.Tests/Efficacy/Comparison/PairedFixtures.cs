@@ -48,6 +48,15 @@ internal static class PairedFixtures
 
     public static DateOnly AsOf(int dayOffset) => FirstAsOf.AddDays(dayOffset);
 
+    /// <summary>
+    /// The default exact scoring instant for a day offset: midnight UTC of the as-of date, so every arm
+    /// shares one instant per day (the normal full-run shape) and the spec-170 exact-instant intersection
+    /// reproduces the date intersection. Tests dial per-arm instants via <c>Series</c>'s <c>instant</c>
+    /// function to manufacture partial-rerun mismatches.
+    /// </summary>
+    public static DateTimeOffset InstantOf(int dayOffset) =>
+        new(AsOf(dayOffset).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+
     /// <summary>Day offsets spaced exactly one horizon apart — every one survives the purge.</summary>
     public static IReadOnlyList<int> Spaced(int count) =>
         [.. Enumerable.Range(0, count).Select(i => i * HorizonDays)];
@@ -84,7 +93,9 @@ internal static class PairedFixtures
     /// <summary>
     /// One strategy over the given companies and day offsets. <paramref name="score"/> returns null to omit
     /// that company-date entirely (membership control); <paramref name="barsOverride"/> lets a test hand one
-    /// arm DIFFERENT price bars to manufacture an inconsistent outcome.
+    /// arm DIFFERENT price bars to manufacture an inconsistent outcome; <paramref name="instant"/> lets a
+    /// test dial the exact scoring instant per (company, day) — returning null omits the instant entirely
+    /// (the legacy-point shape) — and defaults to the shared midnight <see cref="InstantOf"/>.
     /// </summary>
     public static StrategyScoreSeries Series(
         string name,
@@ -92,10 +103,12 @@ internal static class PairedFixtures
         IEnumerable<int> dayOffsets,
         IEnumerable<int>? companyIndexes = null,
         bool weekdaysOnly = false,
-        Func<int, IReadOnlyList<PriceBar>>? barsOverride = null)
+        Func<int, IReadOnlyList<PriceBar>>? barsOverride = null,
+        Func<int, int, DateTimeOffset?>? instant = null)
     {
         var dates = dayOffsets.ToList();
         var companies = (companyIndexes ?? Enumerable.Range(0, 4)).ToList();
+        instant ??= (_, d) => InstantOf(d);
 
         var series = new List<CompanyEfficacySeries>();
         foreach (var c in companies)
@@ -123,6 +136,7 @@ internal static class PairedFixtures
                     PriceAdjClose: null)
                 {
                     AsOfDate = asOf,
+                    AsOfInstantUtc = instant(c, d),
                 });
             }
 

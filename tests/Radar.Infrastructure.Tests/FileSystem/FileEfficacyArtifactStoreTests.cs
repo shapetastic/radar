@@ -132,19 +132,26 @@ public sealed class FileEfficacyArtifactStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task WritePairedComparisonAsync_WritesOneFixedNamedPairUnderTheRoot()
+    public async Task WritePairedComparisonAsync_WritesTheFixedNamedTrioUnderTheRoot()
     {
         var store = CreateStore();
 
         var paths = await store.WritePairedComparisonAsync(
-            "status,baseline\nbaseline,x\n", "# Paired comparison\n", CancellationToken.None);
+            "status,baseline\nbaseline,x\n",
+            "# Paired comparison\n",
+            "baseline,blockDate\nbaseline-x,2026-01-01\n",
+            CancellationToken.None);
 
         var expectedCsv = Path.Combine(_tempDir, "strategy-paired-comparison.csv");
         var expectedMd = Path.Combine(_tempDir, "strategy-paired-comparison.md");
+        var expectedBlocks = Path.Combine(_tempDir, "strategy-paired-comparison-blocks.csv");
         Assert.Equal(expectedCsv, paths.CsvPath);
         Assert.Equal(expectedMd, paths.MarkdownPath);
+        Assert.Equal(expectedBlocks, paths.BlocksCsvPath);
         Assert.Equal("status,baseline\nbaseline,x\n", await File.ReadAllTextAsync(expectedCsv));
         Assert.Equal("# Paired comparison\n", await File.ReadAllTextAsync(expectedMd));
+        Assert.Equal(
+            "baseline,blockDate\nbaseline-x,2026-01-01\n", await File.ReadAllTextAsync(expectedBlocks));
     }
 
     [Fact]
@@ -153,11 +160,13 @@ public sealed class FileEfficacyArtifactStoreTests : IDisposable
         var store = CreateStore();
 
         await store.WriteLeaderboardAsync("leader\n", "# leader\n", CancellationToken.None);
-        await store.WritePairedComparisonAsync("first\n", "# first\n", CancellationToken.None);
-        var paths = await store.WritePairedComparisonAsync("second\n", "# second\n", CancellationToken.None);
+        await store.WritePairedComparisonAsync("first\n", "# first\n", "blocks1\n", CancellationToken.None);
+        var paths = await store.WritePairedComparisonAsync(
+            "second\n", "# second\n", "blocks2\n", CancellationToken.None);
 
         Assert.Equal("second\n", await File.ReadAllTextAsync(paths.CsvPath));
         Assert.Equal("# second\n", await File.ReadAllTextAsync(paths.MarkdownPath));
+        Assert.Equal("blocks2\n", await File.ReadAllTextAsync(paths.BlocksCsvPath));
 
         // The DESCRIPTIVE leaderboard and the claim-bearing paired artifact are separate files by design.
         Assert.Equal("leader\n", await File.ReadAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.csv")));
@@ -171,9 +180,12 @@ public sealed class FileEfficacyArtifactStoreTests : IDisposable
 
         var store = CreateStore(rootAsFile);
 
-        var paths = await store.WritePairedComparisonAsync("csv\n", "md\n", CancellationToken.None);
+        var paths = await store.WritePairedComparisonAsync(
+            "csv\n", "md\n", "blocks\n", CancellationToken.None);
 
         Assert.Equal(Path.Combine(rootAsFile, "strategy-paired-comparison.csv"), paths.CsvPath);
         Assert.Equal(Path.Combine(rootAsFile, "strategy-paired-comparison.md"), paths.MarkdownPath);
+        Assert.Equal(
+            Path.Combine(rootAsFile, "strategy-paired-comparison-blocks.csv"), paths.BlocksCsvPath);
     }
 }

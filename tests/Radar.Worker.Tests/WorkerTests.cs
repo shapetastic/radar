@@ -5,6 +5,7 @@ using Microsoft.Extensions.Time.Testing;
 using Radar.Application.Collectors;
 using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
+using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -334,7 +335,7 @@ public sealed class WorkerTests
     // -------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task AttentionArrivalScreen_RunsAfterTheLeaderboard_OutsideThePipeline()
+    public async Task AttentionArrivalScreen_RunsBeforeTheStrategyComparison_OutsideThePipeline()
     {
         var callLog = new List<string>();
         using var lifetime = new RecordingLifetime();
@@ -356,8 +357,71 @@ public sealed class WorkerTests
         await worker.StartAsync(CancellationToken.None);
         await worker.ExecuteTask!;
 
-        // After the pipeline, so this run's freshly-persisted run record and snapshots are visible to it.
-        Assert.Equal(["seed", "run", "efficacy", "comparison", "attention-arrival"], callLog);
+        // After the pipeline (so this run's freshly-persisted run record and snapshots are visible to the
+        // screen) and BEFORE the comparison (spec 170: the comparison's composite AD-15 gate consumes the
+        // screen's outcome, so the screen must already have run).
+        Assert.Equal(["seed", "run", "efficacy", "attention-arrival", "comparison"], callLog);
+    }
+
+    [Fact]
+    public async Task StrategyComparison_ReceivesTheMappedAttentionPrerequisite()
+    {
+        // The Worker is the one composition point that sees both sides: it maps the screen result onto the
+        // neutral Claims prerequisite. An Unavailable screen must arrive as an Unavailable (uncalculated)
+        // prerequisite — never as null, and never as anything that could satisfy the gate.
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+        var comparison = new RecordingStrategyComparisonGenerator(callLog);
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: null,
+            replayRunner: null,
+            strategyComparisonGenerator: comparison,
+            companyFilter: null,
+            attentionArrivalGenerator: new RecordingAttentionArrivalGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.True(comparison.Invoked);
+        Assert.NotNull(comparison.LastPrerequisite);
+        Assert.Equal(Ad16ScreenOutcome.Unavailable, comparison.LastPrerequisite!.Outcome);
+        Assert.False(comparison.LastPrerequisite.WasCalculated);
+    }
+
+    [Fact]
+    public async Task StrategyComparison_WithNoAttentionGenerator_ReceivesANullPrerequisite()
+    {
+        // The screen is disabled ⇒ the Worker passes null ⇒ the gate fails closed as
+        // ad16-screen-not-calculated. The Worker must never invent a prerequisite for a screen it never ran.
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+        var comparison = new RecordingStrategyComparisonGenerator(callLog);
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: null,
+            replayRunner: null,
+            strategyComparisonGenerator: comparison);
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.True(comparison.Invoked);
+        Assert.Null(comparison.LastPrerequisite);
     }
 
     [Fact]
@@ -487,12 +551,20 @@ public sealed class WorkerTests
     private sealed class RecordingStrategyComparisonGenerator(List<string> callLog)
         : IStrategyComparisonReportGenerator
     {
-        public Task<StrategyLeaderboard> GenerateAsync(CancellationToken ct)
+        public bool Invoked { get; private set; }
+
+        public Ad15AttentionPrerequisite? LastPrerequisite { get; private set; }
+
+        public Task<StrategyLeaderboard> GenerateAsync(
+            Ad15AttentionPrerequisite? attentionPrerequisite, CancellationToken ct)
         {
             lock (callLog)
             {
                 callLog.Add("comparison");
             }
+
+            Invoked = true;
+            LastPrerequisite = attentionPrerequisite;
 
             return Task.FromResult(new StrategyLeaderboard(
                 StrategiesCompared: 0,
@@ -504,7 +576,8 @@ public sealed class WorkerTests
         }
     }
 
-    private sealed class RecordingAttentionArrivalGenerator(List<string> callLog)
+    private sealed class RecordingAttentionArrivalGenerator(
+        List<string> callLog, AttentionArrivalScreenResult? result = null)
         : IAttentionArrivalScreenGenerator
     {
         public Task<AttentionArrivalScreenResult> GenerateAsync(CancellationToken ct)
@@ -514,7 +587,7 @@ public sealed class WorkerTests
                 callLog.Add("attention-arrival");
             }
 
-            return Task.FromResult(AttentionArrivalScreenResult.Unavailable(
+            return Task.FromResult(result ?? AttentionArrivalScreenResult.Unavailable(
                 AttentionEvaluationUnavailableReason.CohortConfigurationUnavailable,
                 "test",
                 "newssearch"));

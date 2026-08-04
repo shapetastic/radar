@@ -1,5 +1,6 @@
 using System.Globalization;
 
+using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Statistics;
 
 namespace Radar.Application.Efficacy.Comparison;
@@ -16,23 +17,35 @@ namespace Radar.Application.Efficacy.Comparison;
 /// (3) purges mechanically overlapping forward windows before any inference.
 /// </para>
 /// <para>
+/// <b>The intersection is EXACT on the scoring instant (spec 170 §2).</b> Two arms' same-day observations
+/// pair only when their <c>WindowEndUtc</c> instants are identical — after a partial rerun, two same-day
+/// snapshots can represent DIFFERENT knowledge cutoffs, and pairing them by calendar date would attribute to
+/// strategy difference what is actually a difference in what each arm could see. The calendar date
+/// (<c>DateOnly.FromDateTime(instant.UtcDateTime)</c>) is still what groups blocks, drives the purge and is
+/// compared against the boundary — the purge is a 21-day rule, not a sub-second one. An observation with no
+/// recorded instant fails CLOSED out of the claim path (counted, never date-paired); a (company, date) key
+/// whose arms share no common instant is counted as mismatched and not paired.
+/// </para>
+/// <para>
 /// <b>Daily date blocks are not independent, and no code here claims they are.</b> Blocking by date removes
 /// the contemporaneous cross-company nuisance only; the purge then removes the known forward-window overlap;
 /// what remains is an interval CONDITIONAL on the predeclared model that purged blocks are independent draws
 /// from a stable distribution — a limitation every renderer states beside the interval.
 /// </para>
 /// <para>
-/// <b>The gate is computed HERE</b>, inside the harness, so a caller cannot re-derive a friendlier one:
-/// <c>QualifiesUnderAd15</c> is true only when the primary was predeclared, the boundary was precommitted,
+/// <b>The PRICE gate is computed HERE</b>, inside the harness, so a caller cannot re-derive a friendlier one:
+/// <c>SatisfiesPriceGate</c> is true only when the primary was predeclared, the boundary was precommitted,
 /// and every baseline's purged median delta is positive with an exact-interval lower bound strictly above
-/// zero. Requiring the primary to clear every FIXED baseline is an intersection-union claim and needs no
+/// zero. It is deliberately NOT named "qualifies" — AD-15's gate is COMPOSITE (spec 170), and the AD-16
+/// attention prerequisite is judged by <c>Ad15ClaimGate</c> outside this type, which never sees an Attention
+/// type. Requiring the primary to clear every FIXED baseline is an intersection-union claim and needs no
 /// Bonferroni correction; choosing the best of several composite arms after seeing results is a different
 /// act, which is why the arms-considered count is a result field.
 /// </para>
 /// <para>
 /// <b>Pure (AD-3).</b> No clock, no randomness, no I/O, no logging; same inputs yield a byte-identical
 /// result. It consumes the SAME <see cref="StrategyObservationBuilder"/> admissions the marginal leaderboard
-/// uses, so the two artifacts can never disagree about which observations exist.
+/// uses — one read, two projections — so the two artifacts can never disagree about which observations exist.
 /// </para>
 /// </summary>
 public sealed class PairedComparisonHarness
@@ -42,13 +55,6 @@ public sealed class PairedComparisonHarness
     /// the baseline family is identified by NAME, never by a special-cased type.
     /// </summary>
     public const string BaselineNamePrefix = "baseline-";
-
-    // Stable machine-readable gate-reason tokens (the leaderboard's kebab-case token convention).
-    internal const string ReasonNoPredeclaredPrimary = "no-predeclared-primary-strategy";
-    internal const string ReasonNoPrecommittedBoundary = "no-precommitted-evaluation-boundary";
-    internal const string ReasonNoBaselines = "no-baselines";
-    internal const string ReasonEmptyIntersection = "empty-intersection";
-    internal const string ReasonNoEligibleBlocks = "no-eligible-blocks";
 
     public PairedStrategyComparison Compare(
         IReadOnlyList<StrategyScoreSeries> strategies,
@@ -107,33 +113,42 @@ public sealed class PairedComparisonHarness
                 s.StrategyName, SupportOf(s.Usable), s.WithoutForwardPrice, s.PartialWindow))
             .ToList();
 
-        var primaryByKey = ByKey(primary);
-        var baselinesByKey = baselines.Select(ByKey).ToList();
+        // The claim path's arms: the primary and every baseline. Only these can pair, so only their
+        // instant-less observations are "excluded from the claim path" rather than merely unused.
+        var claimArms = new List<StrategyObservationSet>(baselines.Count + 1) { primary };
+        claimArms.AddRange(baselines);
+        var observationsWithoutAsOfInstant = claimArms.Sum(s => s.WithoutAsOfInstant);
+        var observationsWithMismatchedAsOfInstant = CountMismatchedInstantKeys(claimArms);
+
+        var primaryByInstant = ByInstantKey(primary);
+        var baselinesByInstant = baselines.Select(ByInstantKey).ToList();
 
         var pairwiseSupports = new List<PairwiseIntersectionSupport>(baselines.Count);
         for (var b = 0; b < baselines.Count; b++)
         {
-            var intersection = primary.Usable
-                .Where(o => baselinesByKey[b].ContainsKey((o.CompanyId, o.AsOf)))
-                .ToList();
+            var map = baselinesByInstant[b];
+            var intersection = CollapseToOnePerCompanyDate(
+                primary.UsableByInstant
+                    .Where(o => map.ContainsKey((o.CompanyId, o.AsOfInstantUtc)))
+                    .ToList());
             pairwiseSupports.Add(new PairwiseIntersectionSupport(
                 baselines[b].StrategyName, SupportOf(intersection)));
         }
 
-        // The JOINT intersection: keys present for the primary and EVERY baseline, with the shared outcome
-        // required to be THE SAME number in every arm. All arms read one price store, so a difference is a
-        // data defect — the observation is dropped with its own counter rather than one arm's value being
-        // silently preferred.
-        var joint = new List<StrategyObservation>();
+        // The JOINT intersection: EXACT (company, instant) keys present for the primary and EVERY baseline,
+        // with the shared outcome required to be THE SAME number in every arm. All arms read one price
+        // store, so a difference is a data defect — the observation is dropped with its own counter rather
+        // than one arm's value being silently preferred.
+        var joint = new List<StrategyInstantObservation>();
         var inconsistentOutcomes = 0;
         if (baselines.Count > 0)
         {
-            foreach (var observation in primary.Usable)
+            foreach (var observation in primary.UsableByInstant)
             {
-                var key = (observation.CompanyId, observation.AsOf);
+                var key = (observation.CompanyId, observation.AsOfInstantUtc);
                 var presentEverywhere = true;
                 var outcomesAgree = true;
-                foreach (var baselineMap in baselinesByKey)
+                foreach (var baselineMap in baselinesByInstant)
                 {
                     if (!baselineMap.TryGetValue(key, out var baselineObservation))
                     {
@@ -162,11 +177,22 @@ public sealed class PairedComparisonHarness
             }
         }
 
-        var jointSupport = SupportOf(joint);
+        // One observation per (company, calendar date) in the block cross-sections: when a company-day
+        // paired at more than one instant (a full same-day rerun mirrored across every arm), the LATEST
+        // instant wins — the deterministic analogue of the builder's last-occurrence-wins rule.
+        var collapsedJoint = CollapseToOnePerCompanyDate(joint);
+
+        var jointSupport = SupportOf(collapsedJoint);
+
+        // The claim's own support: the joint intersection restricted to as-of dates at or after the
+        // precommitted boundary. No boundary ⇒ EMPTY, never the all-history figure (spec 170 §3).
+        var eligibleJointSupport = options.FirstEligibleAsOf is { } eligibleBoundary
+            ? SupportOf(collapsedJoint.Where(o => o.AsOf >= eligibleBoundary).ToList())
+            : PairedSupport.Empty;
 
         // Group the joint observations by as-of date, ascending, companies ordered by id — the deterministic
         // cross-section every per-date ρ is computed over.
-        var byDate = joint
+        var byDate = collapsedJoint
             .GroupBy(o => o.AsOf)
             .OrderBy(g => g.Key)
             .Select(g => (Date: g.Key, Observations: g.OrderBy(o => o.CompanyId).ToList()))
@@ -174,7 +200,7 @@ public sealed class PairedComparisonHarness
 
         var candidateDates = new List<PairedCandidateDate>();
         var droppedDates = new List<PairedDroppedDate>();
-        var survivingObservations = new Dictionary<DateOnly, List<StrategyObservation>>();
+        var survivingObservations = new Dictionary<DateOnly, List<StrategyInstantObservation>>();
 
         foreach (var (date, observations) in byDate)
         {
@@ -204,10 +230,10 @@ public sealed class PairedComparisonHarness
 
             var baselineRhos = new List<PairedBaselineRho>(baselines.Count);
             string? constantBaseline = null;
-            foreach (var (baseline, baselineMap) in baselines.Zip(baselinesByKey))
+            foreach (var (baseline, baselineMap) in baselines.Zip(baselinesByInstant))
             {
                 var baselineScores = observations
-                    .Select(o => baselineMap[(o.CompanyId, o.AsOf)].Score)
+                    .Select(o => baselineMap[(o.CompanyId, o.AsOfInstantUtc)].Score)
                     .ToList();
                 var baselineRho = RankCorrelation.ComputeRho(baselineScores, outcome);
                 if (!baselineRho.IsDefined)
@@ -292,7 +318,7 @@ public sealed class PairedComparisonHarness
                 baselineName, deltas, median, interval, signTest, clears));
         }
 
-        var gateReasons = BuildGateReasons(
+        var priceGateReasons = BuildPriceGateReasons(
             primaryWasPredeclared, boundary, baselines.Count, jointSupport, eligible.Count, baselineResults);
 
         return new PairedStrategyComparison(
@@ -304,28 +330,121 @@ public sealed class PairedComparisonHarness
             MarginalSupports: marginalSupports,
             PairwiseSupports: pairwiseSupports,
             JointSupport: jointSupport,
+            EligibleJointSupport: eligibleJointSupport,
             InconsistentOutcomeObservationsDropped: inconsistentOutcomes,
+            ObservationsWithoutAsOfInstant: observationsWithoutAsOfInstant,
+            ObservationsWithMismatchedAsOfInstant: observationsWithMismatchedAsOfInstant,
             CandidateDates: candidateDates,
             DroppedDates: droppedDates,
             DevelopmentDateCount: developmentDateCount,
             AdmittedBlocks: admittedBlocks,
             Baselines: baselineResults,
-            QualifiesUnderAd15: gateReasons.Count == 0,
-            GateReasons: gateReasons,
+            SatisfiesPriceGate: priceGateReasons.Count == 0,
+            PriceGateReasons: priceGateReasons,
             Options: options);
     }
 
-    private static Dictionary<(Guid CompanyId, DateOnly AsOf), StrategyObservation> ByKey(
-        StrategyObservationSet set)
+    private static Dictionary<(Guid CompanyId, DateTimeOffset Instant), StrategyInstantObservation>
+        ByInstantKey(StrategyObservationSet set)
     {
-        var map = new Dictionary<(Guid, DateOnly), StrategyObservation>(set.Usable.Count);
-        foreach (var observation in set.Usable)
+        var map = new Dictionary<(Guid, DateTimeOffset), StrategyInstantObservation>(
+            set.UsableByInstant.Count);
+        foreach (var observation in set.UsableByInstant)
         {
             // The builder already de-duped on this key; a duplicate here would be a builder defect.
-            map.Add((observation.CompanyId, observation.AsOf), observation);
+            map.Add((observation.CompanyId, observation.AsOfInstantUtc), observation);
         }
 
         return map;
+    }
+
+    /// <summary>
+    /// Collapses a set of exact-instant observations to ONE per (company, calendar date), keeping the
+    /// LATEST instant — the deterministic analogue of the builder's last-occurrence-wins same-day rule —
+    /// then restores the deterministic (date, company) order. Identity when every company-day carries one
+    /// instant, which is every normal full run.
+    /// </summary>
+    private static List<StrategyInstantObservation> CollapseToOnePerCompanyDate(
+        IReadOnlyList<StrategyInstantObservation> observations)
+    {
+        var byCompanyDate = new Dictionary<(Guid, DateOnly), StrategyInstantObservation>(observations.Count);
+        foreach (var observation in observations)
+        {
+            var key = (observation.CompanyId, observation.AsOf);
+            if (!byCompanyDate.TryGetValue(key, out var existing)
+                || observation.AsOfInstantUtc > existing.AsOfInstantUtc)
+            {
+                byCompanyDate[key] = observation;
+            }
+        }
+
+        var collapsed = byCompanyDate.Values.ToList();
+        collapsed.Sort(static (a, b) =>
+        {
+            var byDate = a.AsOf.CompareTo(b.AsOf);
+            return byDate != 0 ? byDate : a.CompanyId.CompareTo(b.CompanyId);
+        });
+
+        return collapsed;
+    }
+
+    /// <summary>
+    /// Counts (company, calendar-date) keys present in TWO OR MORE claim-path arms with NO instant common to
+    /// every arm carrying the key — the keys that could not pair BECAUSE their instants differed (spec 170
+    /// §2.3). A key one arm carries alone is not mismatched (it is merely not everywhere), and a key whose
+    /// carriers share at least one instant paired at that instant.
+    /// </summary>
+    private static int CountMismatchedInstantKeys(IReadOnlyList<StrategyObservationSet> arms)
+    {
+        var perKey = new Dictionary<(Guid, DateOnly), List<HashSet<DateTimeOffset>>>();
+        foreach (var arm in arms)
+        {
+            var armInstants = new Dictionary<(Guid, DateOnly), HashSet<DateTimeOffset>>();
+            foreach (var observation in arm.UsableByInstant)
+            {
+                var key = (observation.CompanyId, observation.AsOf);
+                if (!armInstants.TryGetValue(key, out var instants))
+                {
+                    instants = [];
+                    armInstants[key] = instants;
+                }
+
+                instants.Add(observation.AsOfInstantUtc);
+            }
+
+            foreach (var (key, instants) in armInstants)
+            {
+                if (!perKey.TryGetValue(key, out var list))
+                {
+                    list = [];
+                    perKey[key] = list;
+                }
+
+                list.Add(instants);
+            }
+        }
+
+        var mismatched = 0;
+        foreach (var armSets in perKey.Values)
+        {
+            if (armSets.Count < 2)
+            {
+                continue;
+            }
+
+            var common = new HashSet<DateTimeOffset>(armSets[0]);
+            for (var i = 1; i < armSets.Count && common.Count > 0; i++)
+            {
+                common.IntersectWith(armSets[i]);
+            }
+
+            if (common.Count == 0)
+            {
+                mismatched++;
+            }
+        }
+
+        return mismatched;
     }
 
     private static PairedSupport SupportOf(IReadOnlyList<StrategyObservation> observations)
@@ -341,9 +460,22 @@ public sealed class PairedComparisonHarness
         return new PairedSupport(observations.Count, companies.Count, dates.Count);
     }
 
+    private static PairedSupport SupportOf(IReadOnlyList<StrategyInstantObservation> observations)
+    {
+        var companies = new HashSet<Guid>();
+        var dates = new HashSet<DateOnly>();
+        foreach (var observation in observations)
+        {
+            companies.Add(observation.CompanyId);
+            dates.Add(observation.AsOf);
+        }
+
+        return new PairedSupport(observations.Count, companies.Count, dates.Count);
+    }
+
     private static List<PairedAdmittedBlock> BuildAdmittedBlocks(
         IReadOnlyList<OutcomeWindowBlock> admitted,
-        IReadOnlyDictionary<DateOnly, List<StrategyObservation>> survivingObservations)
+        IReadOnlyDictionary<DateOnly, List<StrategyInstantObservation>> survivingObservations)
     {
         var blocks = new List<PairedAdmittedBlock>(admitted.Count);
         foreach (var block in admitted)
@@ -382,7 +514,12 @@ public sealed class PairedComparisonHarness
         }
     }
 
-    private static List<string> BuildGateReasons(
+    /// <summary>
+    /// The PRICE half's reasons, as structured closed-coded records (spec 170 §1.2). The rendered text of
+    /// every reason is byte-identical to the pre-170 strings — <see cref="Ad15GateReason.Render"/> reproduces
+    /// them — so the artifact's human-readable output does not regress while the record becomes parseable.
+    /// </summary>
+    private static List<Ad15GateReason> BuildPriceGateReasons(
         bool primaryWasPredeclared,
         DateOnly? boundary,
         int baselineCount,
@@ -390,49 +527,53 @@ public sealed class PairedComparisonHarness
         int eligibleCandidateCount,
         IReadOnlyList<BaselinePairedResult> baselineResults)
     {
-        var reasons = new List<string>();
+        var reasons = new List<Ad15GateReason>();
         if (!primaryWasPredeclared)
         {
-            reasons.Add(ReasonNoPredeclaredPrimary);
+            reasons.Add(new Ad15GateReason(Ad15GateReasonCodes.NoPredeclaredPrimary));
         }
 
         if (boundary is null)
         {
-            reasons.Add(ReasonNoPrecommittedBoundary);
+            reasons.Add(new Ad15GateReason(Ad15GateReasonCodes.NoPrecommittedBoundary));
         }
 
         if (baselineCount == 0)
         {
-            reasons.Add(ReasonNoBaselines);
+            reasons.Add(new Ad15GateReason(Ad15GateReasonCodes.NoBaselines));
         }
         else if (jointSupport.Observations == 0)
         {
-            reasons.Add(ReasonEmptyIntersection);
+            reasons.Add(new Ad15GateReason(Ad15GateReasonCodes.EmptyIntersection));
         }
         else if (eligibleCandidateCount == 0)
         {
-            reasons.Add(ReasonNoEligibleBlocks);
+            reasons.Add(new Ad15GateReason(Ad15GateReasonCodes.NoEligibleBlocks));
         }
 
         foreach (var baseline in baselineResults)
         {
             if (!baseline.Interval.IsDefined)
             {
-                reasons.Add(string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"baseline '{baseline.BaselineName}': insufficient-purged-blocks "
-                        + $"(admitted {baseline.Interval.BlockCount}, need at least 6 at 95%)"));
+                reasons.Add(new Ad15GateReason(
+                    Ad15GateReasonCodes.InsufficientPurgedBlocks,
+                    baseline.BaselineName,
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"admitted {baseline.Interval.BlockCount}, need at least 6 at 95%")));
                 continue;
             }
 
             if (baseline.MedianDelta is not { } median || median <= 0.0)
             {
-                reasons.Add($"baseline '{baseline.BaselineName}': median-paired-delta-not-positive");
+                reasons.Add(new Ad15GateReason(
+                    Ad15GateReasonCodes.MedianPairedDeltaNotPositive, baseline.BaselineName));
             }
 
             if (baseline.Interval.Lower <= 0.0)
             {
-                reasons.Add($"baseline '{baseline.BaselineName}': interval-lower-bound-not-positive");
+                reasons.Add(new Ad15GateReason(
+                    Ad15GateReasonCodes.IntervalLowerBoundNotPositive, baseline.BaselineName));
             }
         }
 

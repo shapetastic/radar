@@ -1,5 +1,6 @@
 using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
+using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -25,11 +26,14 @@ namespace Radar.Worker;
 /// is included in the join) as a SEPARATE step, DISTINCT from and OUTSIDE <see cref="IRadarPipeline"/> (AD-14
 /// read side): it READS score history + price and writes only efficacy artifacts. When disabled the dependency
 /// is <c>null</c> and the step is skipped. The optional
-/// <see cref="IStrategyComparisonReportGenerator"/> (spec 140, <c>Radar:Efficacy:Comparison:Enabled</c>) runs
-/// in the same step, immediately after it, with the same read-only posture — followed by the
 /// <see cref="IAttentionArrivalScreenGenerator"/> (spec 169, <c>Radar:Efficacy:AttentionArrival:Enabled</c>),
-/// AD-16's precommitted attention-arrival screen, which reads score history + run records + durable
-/// signals/evidence and writes only its own artifacts.
+/// AD-16's precommitted attention-arrival screen — which reads score history + run records + durable
+/// signals/evidence and writes only its own artifacts — runs in the same step, immediately after it, with the
+/// same read-only posture. The <see cref="IStrategyComparisonReportGenerator"/> (spec 140,
+/// <c>Radar:Efficacy:Comparison:Enabled</c>) runs AFTER the attention screen (spec 170): its paired
+/// comparison's AD-15 gate is COMPOSITE, so the Worker maps the screen result onto the neutral
+/// <see cref="Ad15AttentionPrerequisite"/> and hands it in — <c>null</c> when the screen is disabled, which
+/// fails closed as <c>ad16-screen-not-calculated</c>.
 /// </para>
 /// <para>
 /// When the opt-in historical as-of replay is enabled (<c>Radar:Replay:Enabled</c>), the optional
@@ -210,23 +214,34 @@ public sealed class Worker : BackgroundService
             await _efficacyReportGenerator.GenerateAsync(ct).ConfigureAwait(false);
         }
 
-        // Spec 140's strategy-vs-price comparison: the same AD-14 read-side posture, immediately after the
-        // per-company render and still OUTSIDE IRadarPipeline. Skipped (dependency null) unless
-        // Radar:Efficacy:Enabled AND Radar:Efficacy:Comparison:Enabled. It ranks Radar's own strategies
-        // against subsequent price movement and writes one leaderboard artifact pair; it promotes nothing.
-        if (_strategyComparisonGenerator is not null)
-        {
-            await _strategyComparisonGenerator.GenerateAsync(ct).ConfigureAwait(false);
-        }
-
-        // Spec 169's AD-16 attention-arrival screen: the same read-only posture, immediately after the
-        // leaderboard and still OUTSIDE IRadarPipeline. It runs after the pipeline so the run record and
-        // snapshots this run just persisted are visible to it. Skipped (dependency null) unless
-        // Radar:Efficacy:Enabled AND Radar:Efficacy:AttentionArrival:Enabled — and never in a replay run,
-        // which replaces the pipeline entirely and returns before this method is reached.
+        // Spec 169's AD-16 attention-arrival screen: the same read-only posture, still OUTSIDE
+        // IRadarPipeline. It runs after the pipeline so the run record and snapshots this run just persisted
+        // are visible to it, and BEFORE the strategy comparison (spec 170) so the comparison's composite
+        // AD-15 gate can consume its outcome. Skipped (dependency null) unless Radar:Efficacy:Enabled AND
+        // Radar:Efficacy:AttentionArrival:Enabled — and never in a replay run, which replaces the pipeline
+        // entirely and returns before this method is reached.
+        AttentionArrivalScreenResult? attentionScreen = null;
         if (_attentionArrivalGenerator is not null)
         {
-            await _attentionArrivalGenerator.GenerateAsync(ct).ConfigureAwait(false);
+            attentionScreen = await _attentionArrivalGenerator.GenerateAsync(ct).ConfigureAwait(false);
+        }
+
+        // Spec 140's strategy-vs-price comparison: the same AD-14 read-side posture, still OUTSIDE
+        // IRadarPipeline. Skipped (dependency null) unless Radar:Efficacy:Enabled AND
+        // Radar:Efficacy:Comparison:Enabled. It ranks Radar's own strategies against subsequent price
+        // movement and writes one leaderboard artifact pair; it promotes nothing. The Worker is the ONE
+        // composition point that can see both the Attention result and the Comparison seam, so the spec-170
+        // mapping happens here: screen result → neutral Claims prerequisite. A null screen (generator
+        // disabled) is passed through as null and fails closed inside the gate — never invented, never
+        // defaulted to "calculated".
+        if (_strategyComparisonGenerator is not null)
+        {
+            var attentionPrerequisite = attentionScreen is null
+                ? null
+                : Ad15AttentionPrerequisiteMap.From(attentionScreen);
+            await _strategyComparisonGenerator
+                .GenerateAsync(attentionPrerequisite, ct)
+                .ConfigureAwait(false);
         }
     }
 }

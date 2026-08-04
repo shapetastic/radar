@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Efficacy.Claims;
 using Radar.Application.Scoring;
 
 namespace Radar.Application.Efficacy.Comparison;
@@ -77,7 +78,12 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         _pairedRenderer = pairedRenderer ?? new PairedComparisonRenderer();
     }
 
-    public async Task<StrategyLeaderboard> GenerateAsync(CancellationToken ct)
+    /// <summary>No attention screen in this composition: the prerequisite is not calculated (fails closed).</summary>
+    public Task<StrategyLeaderboard> GenerateAsync(CancellationToken ct) =>
+        GenerateAsync(attentionPrerequisite: null, ct);
+
+    public async Task<StrategyLeaderboard> GenerateAsync(
+        Ad15AttentionPrerequisite? attentionPrerequisite, CancellationToken ct)
     {
         var series = new List<StrategyScoreSeries>(_strategies.Strategies.Count);
         foreach (var strategy in _strategies.Strategies)
@@ -121,7 +127,8 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
 
         if (_pairedOptions is not null)
         {
-            await GeneratePairedAsync(series, _pairedOptions, ct).ConfigureAwait(false);
+            await GeneratePairedAsync(series, _pairedOptions, attentionPrerequisite, ct)
+                .ConfigureAwait(false);
         }
 
         return leaderboard;
@@ -129,7 +136,10 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
 
     /// <summary>
     /// The spec-155 paired, purged comparison — run over the SAME already-built series the leaderboard
-    /// consumed (no second read path, no second join).
+    /// consumed (no second read path, no second join), judged by the spec-170 COMPOSITE AD-15 gate: the
+    /// harness computes the price half, <see cref="Ad15ClaimGate"/> composes it with AD-16's attention
+    /// prerequisite, and the renderer receives the verdict — it can never license a claim from the price
+    /// side alone.
     /// <para>
     /// Skips (with a log line) ONLY when there is nothing to pair at all: no <c>baseline-*</c> strategy is
     /// configured AND no primary was predeclared. When baselines exist but no primary is named, the honest
@@ -138,7 +148,10 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
     /// </para>
     /// </summary>
     private async Task GeneratePairedAsync(
-        IReadOnlyList<StrategyScoreSeries> series, PairedComparisonOptions pairedOptions, CancellationToken ct)
+        IReadOnlyList<StrategyScoreSeries> series,
+        PairedComparisonOptions pairedOptions,
+        Ad15AttentionPrerequisite? attentionPrerequisite,
+        CancellationToken ct)
     {
         var hasBaselines = _strategies.Strategies.Any(s =>
             s.Name.StartsWith(PairedComparisonHarness.BaselineNamePrefix, StringComparison.Ordinal));
@@ -157,15 +170,24 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
 
         var paired = _pairedHarness.Compare(series, primaryName, primaryWasPredeclared, pairedOptions);
 
-        var pairedCsv = _pairedRenderer.RenderCsv(paired);
-        var pairedMarkdown = _pairedRenderer.RenderMarkdown(paired);
-        await _artifactStore.WritePairedComparisonAsync(pairedCsv, pairedMarkdown, ct).ConfigureAwait(false);
+        // The COMPOSITE verdict (spec 170): the price half from the harness plus AD-16's attention
+        // prerequisite. A null prerequisite fails closed as ad16-screen-not-calculated.
+        var verdict = Ad15ClaimGate.Evaluate(
+            paired.SatisfiesPriceGate, paired.PriceGateReasons, attentionPrerequisite);
+
+        var pairedCsv = _pairedRenderer.RenderCsv(paired, verdict);
+        var pairedMarkdown = _pairedRenderer.RenderMarkdown(paired, verdict);
+        var pairedBlocksCsv = _pairedRenderer.RenderBlocksCsv(paired);
+        await _artifactStore
+            .WritePairedComparisonAsync(pairedCsv, pairedMarkdown, pairedBlocksCsv, ct)
+            .ConfigureAwait(false);
 
         _logger.LogInformation(
             "Paired strategy comparison over {Series}: primary '{Primary}' (predeclared: {Predeclared}) vs "
                 + "{Baselines} baseline(s); joint support {JointObservations} observation(s) on "
-                + "{JointDates} date(s); {Admitted} purged block(s), {Dropped} dropped date(s); qualifies "
-                + "under AD-15: {Qualifies}.",
+                + "{JointDates} date(s); {Admitted} purged block(s), {Dropped} dropped date(s); satisfies "
+                + "price gate: {SatisfiesPriceGate}; AD-16 prerequisite {Ad16Outcome}; qualifies under AD-15 "
+                + "(composite): {Qualifies}.",
             _stores.SeriesDescription,
             paired.PrimaryStrategyName,
             paired.PrimaryWasPredeclared,
@@ -174,6 +196,8 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
             paired.JointSupport.DistinctAsOfDates,
             paired.AdmittedBlocks.Count,
             paired.DroppedDates.Count,
-            paired.QualifiesUnderAd15);
+            paired.SatisfiesPriceGate,
+            Ad15ClaimGate.OutcomeToken(verdict.Prerequisite.Outcome),
+            verdict.Qualifies);
     }
 }

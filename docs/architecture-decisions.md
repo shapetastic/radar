@@ -1331,6 +1331,46 @@ research statistic, not a recommendation), and spec 141's immutable-by-conventio
 baseline's saturation constants means a NEW NAME, e.g. `baseline-activity-only` →
 `baseline-activity-only-v2`, not an in-place edit).
 
+### AMENDMENT · 2026-08-04 — the gate is COMPOSITE and enforced in code; a `Miss` satisfies the prerequisite (spec 170)
+
+The 2026-08-03 amendment's own suspension note already said the gate has two halves — the paired price result
+AND "AD-16's precommitted attention-arrival screen **must actually be calculated** … this gate is confirmatory
+only after that screen has been" — but the implementation computed only the price half:
+`QualifiesUnderAd15` was set from the price-side reasons alone, and the artifact could print the "adding
+value" licence while the condition this AD makes binding had never been evaluated. That was the sixth found
+instance of one shape (*a gate reading as satisfied because its precondition was never checked*), and the one
+that reaches the reader as a claim. **This amendment changes no precommitment** — the boundary
+(`2026-09-29`), the primary (`disclosure-led-v11`), the metric, horizon, minimum-N, purge and interval are
+untouched; the rule that runs is now the rule that was written down. As implemented:
+
+- **The record and the claim are separate, structurally.** The harness's price verdict is renamed
+  `SatisfiesPriceGate` (and its reasons `PriceGateReasons`) so a price-side result cannot *read* as the claim
+  even when the record is consumed directly. The composite verdict is computed only by `Ad15ClaimGate` in the
+  neutral `Efficacy.Claims` namespace — Attention → Claims and Comparison → Claims are permitted,
+  Comparison → Attention stays forbidden and guardrail-tested — and only a qualifying **composite** verdict
+  licenses the "adding value" sentence.
+- **Absence fails closed, by construction.** The gate takes the AD-16 prerequisite as a nullable parameter;
+  `null` (the screen disabled or never run) yields `ad16-screen-not-calculated` and can never qualify. An
+  Available screen whose status is null or unrecognised is `ad16-screen-invalid` — named, never folded into a
+  Pending-like or satisfied branch. Gate reasons are structured records with a CLOSED code vocabulary
+  (`Ad15GateReason { Code, BaselineName?, Detail? }`); the pre-170 rendered texts are preserved verbatim.
+- **The recorded reading, stated because it borders on a precommitment: `Miss` and `ClearsNecessaryScreen`
+  both SATISFY the prerequisite.** This AD requires the screen to be **calculated**, not passed — tightening
+  that to "must not be a Miss" would be an unrecorded change to a precommitted decision and was deliberately
+  not made. The compensating obligation is on the renderer: when the prerequisite is met by a `Miss`, the
+  claim block states the Miss **before** the licence sentence, in the same block, so the positive price
+  verdict is never visible without the attention outcome beside it.
+- **Support honesty (spec 170 §§2–3), same act:** the claim path pairs arms on the EXACT scoring instant
+  (`WindowEndUtc`) rather than the calendar date — an instant-less or mismatched observation fails closed out
+  of the claim path, counted (`ObservationsWithoutAsOfInstant`, `ObservationsWithMismatchedAsOfInstant`) —
+  and the artifacts render `EligibleJointSupport` (empty with no boundary, never the all-history figure)
+  beside the all-history `JointSupport`, plus per-block company N in
+  `data/efficacy/strategy-paired-comparison-blocks.csv`.
+
+*Accepted · 2026-08-04 (spec 170). The suspension above is still not lifted: this amendment closes the gap
+between the written rule and the running one; the outcome-variable half still requires AD-16's screen to
+actually be calculated (first eligible as-of date 2026-09-29).*
+
 ---
 
 ## AD-16 — Radar tests a STEALTH thesis: evidence accumulates before attention arrives
