@@ -1,4 +1,4 @@
-# Task: The scheduled baseline run must hold a power request and capture a log
+# Task: The scheduled baseline run must hold a power request, capture a log, and move to 22:30 UK
 
 > ⚠️ **DEFERRED — operational, not scoring.** Deferred by maintainer choice, not by a technical gate: there
 > is no fingerprint move, no formula change, no scoring behaviour of any kind here, so nothing blocks it
@@ -40,6 +40,35 @@ Measured settings at time of writing:
 
 Raising the display timeout would mask it on this host and silently regress on the next one. The run should
 declare that it needs the system awake.
+
+### It costs COLLECTION, not just wall-clock — this is the stronger justification
+
+The same fault silently drops evidence. On 2026-08-04, **54 of 343 sources failed** (against 2 the previous
+day), 52 of them `transport error`, and the failures are not distributed — they are a clean time-slice:
+
+```
+09:37:39  machine WAKES
+09:38:09  RssPressReleaseCollector  ─┐
+09:38:51  newssearch                 │  succeed: 41/41, 75/75, 74/74
+09:41:01  sec-edgar                  │
+09:41:15  sec-form4 starts          ─┘
+09:42:07  machine ENTERS STANDBY  ←── every failure falls after this line
+09:52:47  machine WAKES (10.7 min lost)
+```
+
+`sec-form4` lost **49 of 74** sources (it was mid-collector at the boundary) and `usaspending` lost **3 of
+3** (it runs after `sec-form4`, so it never got an awake moment). Radar therefore scored that day on about a
+third of the Form 4 universe — the direct input to `filings-led-*`'s `sec-form4` channel — while recording
+no collection warning about it.
+
+A VPN on a US exit was considered and **ruled out**: `sec-edgar` and `sec-13dg` both returned 74/74 minutes
+earlier on the same host and the same connection, which an SEC fair-access block could not selectively
+spare, and such a block presents as HTTP 403 — the run logged exactly **one** 403 across 343 sources against
+52 transport errors. That is a dead network, not a refused one.
+
+(Reconstruction caveat: those timestamps exist only for collectors that wrote NEW evidence, so `sec-13dg`
+(1,451 items, 0 new) and `fda` (0 items) left no trace, and `usaspending`'s position is inferred from ordinal
+collector ordering rather than observed.)
 
 ### Why this needed forensics
 
@@ -112,6 +141,55 @@ it is lower risk — but a long `-Mode score` sweep has the same exposure. Apply
 too, extracted **once** into a shared helper dot-sourced by both rather than pasted (reuse-over-copy — a
 duplicated primitive gets fixed in one copy only).
 
+### 4. Move the daily trigger to 22:30 UK — SECOND, and only once §1 is verified
+
+**Sequencing is not optional.** `RadarBaselineDaily` currently fires at 09:00 UK. Moving it to a late slot
+*before* the keep-awake fix is verified makes the problem strictly worse: the run would sit entirely inside
+the unattended period, where connected standby lasts for hours rather than minutes (measured overnight
+2026-08-03/04: 95.3 min and 172.6 min unbroken). Do §1, verify it over at least one full run, then move the
+trigger.
+
+**Why move it at all — measured latency.** US market close is **21:00 UK local year-round** (16:00 EDT =
+20:00 UTC = 21:00 BST in summer; 16:00 EST = 21:00 UTC = 21:00 GMT in winter — both regions shift, so the
+local-time alignment holds outside the few weeks of transition mismatch). Earnings 8-Ks land from then
+onward. Worked example from 2026-08-04: UFPT's results 8-K published **21:12 UTC on 08-03**; the 09:00 run
+scored it the next morning — a **~11 hour** lag, and Radar's +17 therefore landed a full day after the
+market had already repriced the stock ~5%. A 22:30 UK start cuts that to **~1.5 hours**.
+
+**Why 22:30 and not 22:00 or 23:30 — both alternatives fail, for different reasons:**
+
+- **22:00 UK is inside the filing wave, not after it.** It fires ~1 h after close, while earnings 8-Ks are
+  still arriving. Whether a given filing is captured then depends on where its collector falls in the
+  intra-run ordering — on 2026-08-04 `sec-edgar` polled ~3 minutes into collection, so a 22:00 start would
+  have polled at ~22:03 and missed the 22:12 UFPT filing by nine minutes, deferring it 24 h. Non-deterministic
+  capture of the single most decision-relevant filing class is worse than a consistent lag.
+- **23:30 UK breaks in winter.** The as-of instant is captured **after collection** (spec 144's
+  `CollectionPass`), so start time plus collection duration must stay inside one UTC day. 23:30 BST = 22:30
+  UTC → as-of ~23:20 UTC ✓; but 23:30 GMT = 23:30 UTC → as-of **~00:20 UTC the following day** ✗. The
+  schedule must be DST-safe without anyone remembering to revisit it in October.
+- **22:30 UK satisfies both, year-round**: BST → 21:30 UTC start, as-of ~22:20 UTC; GMT → 22:30 UTC start,
+  as-of ~23:20 UTC. Both ≥1.5 h after close and both comfortably inside the same UTC day.
+
+**Why the UTC-day boundary matters.** Scores are consumed by as-of *date*: `ForwardReturn.TryCompute` takes
+a **`DateOnly asOf`** and admits bars on `bar.Date > asOf`, and the spec-140 hold-out partitions the sorted
+**distinct** as-of dates. An as-of that slips past midnight UTC therefore either doubles a date or leaves a
+gap in the series.
+
+**The corollary is the good news: time-of-day within a UTC day changes nothing downstream.** Because the
+pairing is date-granular, moving 08:00 UTC → 21:30 UTC does **not** alter any forward-return pairing, the
+in-sample/out-of-sample partition, or the accruing strategy comparison. This move is safe for the experiment
+in flight.
+
+**Switchover rule — exactly one run per UTC date.** On the changeover day the morning run has already
+written a snapshot for that date; starting the evening schedule the same day would put **two** runs on one
+as-of date. Set the first evening trigger for the day **after** the last morning run, and verify afterwards
+that `data/scores/` has exactly one snapshot per company per date across the boundary.
+
+**Mechanics.** The trigger time belongs in `scripts/setup-baseline-task.ps1` (which owns the registration)
+as a parameter with the new default, not as a manual edit in Task Scheduler — otherwise the repo's record of
+how the task is registered silently diverges from the machine. Re-registering is an elevated maintainer
+step; document the exact command in the script header alongside the existing `-Mode` guidance.
+
 ## Verification
 
 This is a `scripts/`-only change with no .NET surface, so `dotnet test` cannot cover it. Verification is
@@ -127,14 +205,30 @@ operational and must actually be performed:
 - [ ] `dotnet build Radar.sln -c Release` and `dotnet test Radar.sln -c Release --no-build` still pass
       (unchanged — no production code is touched).
 
+After the trigger move (§4), additionally:
+
+- [ ] The first evening run's as-of instant (`createdAtUtc` in the run record) falls on the intended UTC
+      date, with ≥30 min of margin to midnight UTC.
+- [ ] Exactly one snapshot per company per as-of date across the changeover boundary — no doubled date, no
+      gap.
+- [ ] An earnings 8-K filed shortly after US close is picked up by that night's run rather than the next
+      day's (spot-check one, the way UFPT's 2026-08-03 filing was traced).
+- [ ] Re-verify in winter, or confirm by calculation, that the GMT start still leaves the as-of inside the
+      same UTC day.
+
 ## Constraints
 
 - No production code, no scoring change, no new fingerprint input, no formula or `RuleSetVersion` bump. All
   four spec-148 pins stand untouched.
 - The key-handling rule in `run-baseline-scheduled.ps1`'s header is unchanged and unweakened.
-- Do not change `RadarBaselineDaily`'s registered settings as part of this — `WakeToRun` wakes the host to
-  *start* a task, which is a different question from keeping it awake once running, and changing the task
-  registration is an elevated maintainer step (`setup-baseline-task.ps1`).
+- **The trigger time (§4) is the ONLY registered setting this spec changes.** Leave `WakeToRun`,
+  `RunOnlyIfIdle`, `StopIfGoingOnBatteries` and `ExecutionTimeLimit` exactly as they are — `WakeToRun` wakes
+  the host to *start* a task, which is a different question from keeping it awake once running, and §1 is
+  the correct fix for the latter. Re-registering the task is an elevated maintainer step
+  (`setup-baseline-task.ps1`).
+- §4 must not be applied before §1 is verified over a full run, and must not be applied on the same UTC date
+  as a morning run.
+- `-Mode` defaults are untouched: this spec does not split the schedule into separate collect/score tasks.
 
 ## Follow-up — recorded, NOT built here
 
@@ -166,3 +260,9 @@ standby is understood to be the dominant cost.
 - [ ] Verified on a real run that the log contains no API key material.
 - [ ] The keep-awake helper is shared between `run-baseline-scheduled.ps1` and `run-radar.ps1`, not pasted.
 - [ ] A full baseline run completes with zero `Kernel-Power` 506 events between first and last snapshot.
+- [ ] **Only after the above:** the trigger moves to **22:30 UK local** via `setup-baseline-task.ps1`
+      (parameterised, default updated, exact re-registration command in the script header) — not by hand in
+      Task Scheduler.
+- [ ] The changeover leaves exactly one run per UTC date, and the first evening run's as-of lands on the
+      intended date with margin to midnight UTC.
+- [ ] Post-close filing latency measurably drops from ~11 h to ~1.5 h on a spot-checked earnings 8-K.
