@@ -399,36 +399,31 @@ public sealed class PairedComparisonRendererTests
     }
 
     /// <summary>Column count of one CSV line, respecting quoted fields (the shared CsvField rule).</summary>
-    private static int SplitCsv(string line)
-    {
-        var inQuotes = false;
-        var count = 1;
-        foreach (var ch in line)
-        {
-            if (ch == '"')
-            {
-                inQuotes = !inQuotes;
-            }
-            else if (ch == ',' && !inQuotes)
-            {
-                count++;
-            }
-        }
+    private static int SplitCsv(string line) => SplitCsvFields(line).Count;
 
-        return count;
-    }
-
-    /// <summary>The fields of one CSV line, respecting quoted fields (quotes are NOT unescaped).</summary>
+    /// <summary>
+    /// The fields of one CSV line, respecting quoted fields and unescaping CsvField's doubled-quote
+    /// escape ("" inside a quoted field yields one literal quote).
+    /// </summary>
     private static List<string> SplitCsvFields(string line)
     {
         var fields = new List<string>();
         var current = new System.Text.StringBuilder();
         var inQuotes = false;
-        foreach (var ch in line)
+        for (var i = 0; i < line.Length; i++)
         {
+            var ch = line[i];
             if (ch == '"')
             {
-                inQuotes = !inQuotes;
+                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    current.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                }
             }
             else if (ch == ',' && !inQuotes)
             {
