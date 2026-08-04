@@ -47,7 +47,15 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$SecUserAgent,                              # SEC EDGAR contact, "Name email".
     [string]$TaskName      = "RadarBaselineDaily",
-    [string]$At            = "09:00",
+    # 22:30 UK, not 09:00 (spec 171 section 4). US market close is 21:00 UK year-round, and earnings 8-Ks
+    # land from then; a 09:00 run saw them ~11h late (measured: UFPT's 2026-08-03 21:12 UTC results 8-K was
+    # scored the following morning, a day after the market had repriced). 22:30 is >=1.5h after close AND is
+    # DST-safe for the post-collection as-of instant: BST 21:30 UTC / GMT 22:30 UTC, both comfortably inside
+    # the same UTC day. Do NOT use 23:30 - in GMT that is 23:30 UTC and collection pushes the as-of past
+    # midnight, which doubles or gaps an as-of date in the efficacy series. Do NOT use 22:00 - it lands
+    # inside the after-close filing wave, so capture depends on intra-run collector ordering.
+    # When changing this, fire the first run on a date that has NOT already had one: exactly one run per UTC date.
+    [string]$At            = "22:30",
     [string]$Profile       = "default",
     [ValidateSet("full", "collect", "score")]
     [string]$Mode          = "full",                    # Which pass the task runs (spec 144). Default leaves RadarBaselineDaily exactly as it is.
