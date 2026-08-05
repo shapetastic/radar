@@ -66,6 +66,13 @@
 #     SKIPPED for the filtered pass (they read the seeded universe, which is partial here).
 #   * omit -Companies for the normal whole-universe run - the off-switch is absence.
 #
+# KEEP-AWAKE (spec 171): from the moment the build starts until the Worker exits, this script holds
+# ES_CONTINUOUS|ES_SYSTEM_REQUIRED via scripts/lib/keep-awake.ps1 (the same helper run-baseline-scheduled.ps1
+# uses - dot-sourced, not copied), so a Modern Standby host cannot suspend the run when its display times out.
+# The DISPLAY is deliberately not held, the request is released in a `finally`, and it FAILS OPEN with a warning
+# on a host where the P/Invoke is unavailable. Otherwise this script behaves exactly as it always has; -WhatIf
+# still returns before anything - including the power request - happens.
+#
 # Examples:
 #   powershell -File scripts/run-radar.ps1                       # baseline run -> data\
 #   powershell -File scripts/run-radar.ps1 -Profile low-media    # experiment  -> data\experiments\low-media\
@@ -96,6 +103,9 @@ $ErrorActionPreference = 'Stop'
 # Resolve the script's own directory robustly ($PSScriptRoot can be empty at param-binding under `powershell -File`).
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if ([string]::IsNullOrWhiteSpace($RepoPath)) { $RepoPath = Split-Path -Parent $scriptDir }
+# Keep-awake (spec 171 sections 1 + 3): shared with run-baseline-scheduled.ps1, dot-sourced rather than pasted.
+# It is held below, around the build+run, and released in a `finally`.
+. (Join-Path $scriptDir "lib\keep-awake.ps1")
 $profilesDir = Join-Path $scriptDir "run-profiles"
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 
@@ -247,11 +257,28 @@ $cliArgs | ForEach-Object { Write-Host "  $_" }
 if ($WhatIf) { Write-Host "`n(-WhatIf: not running)" -ForegroundColor Yellow; return }
 
 $proj = Join-Path $RepoPath "src\Radar.Worker"
-if (-not $SkipBuild) {
-    Write-Host "`n==== dotnet build ====" -ForegroundColor Cyan
-    & dotnet build (Join-Path $RepoPath "Radar.sln") -c Release
-    if ($LASTEXITCODE) { throw "build failed (exit $LASTEXITCODE)" }
+
+# Ask Windows to keep the SYSTEM awake (never the display) until this run finishes. A long -Mode score sweep
+# has the same connected-standby exposure as the scheduled baseline. Fail-open on purpose: a refused request
+# costs wall clock, never correctness - the full reasoning lives in lib/keep-awake.ps1. Taken AFTER the -WhatIf
+# return above, so printing the resolved args never touches the host's power state. When this script is invoked
+# by run-baseline-scheduled.ps1 (same process) the wrapper already holds the request; the helper counts the
+# nesting so this script's `finally` cannot release the wrapper's hold.
+$exitCode = $null
+if (Enable-RadarKeepAwake -Reason "this Radar run") {
+    Write-Host "Keep-awake : holding a SYSTEM power request for the duration of this run (the display is NOT held)." -ForegroundColor DarkGray
 }
-Write-Host "`n==== dotnet run (profile: $Profile, mode: $Mode) ====" -ForegroundColor Cyan
-& dotnet run --project $proj -c Release --no-launch-profile --no-build -- @cliArgs
-exit $LASTEXITCODE
+try {
+    if (-not $SkipBuild) {
+        Write-Host "`n==== dotnet build ====" -ForegroundColor Cyan
+        & dotnet build (Join-Path $RepoPath "Radar.sln") -c Release
+        if ($LASTEXITCODE) { throw "build failed (exit $LASTEXITCODE)" }
+    }
+    Write-Host "`n==== dotnet run (profile: $Profile, mode: $Mode) ====" -ForegroundColor Cyan
+    & dotnet run --project $proj -c Release --no-launch-profile --no-build -- @cliArgs
+    $exitCode = $LASTEXITCODE
+}
+finally {
+    Disable-RadarKeepAwake
+}
+exit $exitCode

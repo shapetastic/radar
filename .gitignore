@@ -159,3 +159,9 @@ secrets.json
 /data/replays/backtest-infer-on/strategies
 /data/calibration-audit
 /data/calibration-audit-164/shadow
+
+# Scheduled-run wrapper logs (spec 171): host-local operational output produced by
+# scripts/run-baseline-scheduled.ps1, pruned by its -LogRetentionDays. Never repo content.
+# (The generic [Ll]ogs/ rule near the top already matches these; named here so the intent is explicit
+# and survives a reorganisation of the build-output section.)
+/logs/
