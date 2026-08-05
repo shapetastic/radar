@@ -92,9 +92,37 @@ function ConvertTo-RunLogText($item) {
 
 # Write one line to the console AND the run log. Used for this script's own lines; the child's output goes
 # through the capture pipeline below.
+#
+# FLUSHING EVERY LINE IS THE POINT, NOT AN OVERSIGHT (recorded here because it reads like one). This log exists
+# to diagnose runs that are SUSPENDED, killed, or lose the machine mid-flight - exactly the cases where the
+# `finally` never runs and a buffered tail is lost, and the lost lines would be precisely the ones immediately
+# before the failure. It also makes the file tail-able while a multi-hour run is in progress. The cost is
+# negligible against a ~90-minute run: Worker output is modest (spec 145 aggregated the dropped-signal warnings
+# from ~13,625 lines per run to 43). Do not "optimise" this back to buffered writes.
 function Write-RunLog([string]$line, [string]$color) {
     if ($color) { Write-Host $line -ForegroundColor $color } else { Write-Host $line }
     if ($script:logWriter) { $script:logWriter.WriteLine($line); $script:logWriter.Flush() }
+}
+
+# Warn on the console through the real warning stream (so the console is unchanged) AND record the same text in
+# the run log, so the log stays self-contained. Used for warnings THIS script raises.
+function Write-RunWarning([string]$message) {
+    Write-Warning $message
+    if ($script:logWriter) { $script:logWriter.WriteLine("WARNING: $message"); $script:logWriter.Flush() }
+}
+
+# Record warnings raised INSIDE a called function (captured via -WarningVariable) in the run log. The console
+# already showed them - -WarningVariable collects without suppressing - so this writes to the file only, and it
+# does so WITHOUT any stream redirection: merging streams around a call that may reach a native command is the
+# Windows PowerShell 5.1 trap documented in the header, and -WarningVariable avoids it entirely.
+function Write-CapturedWarningsToLog($warnings) {
+    if (-not $script:logWriter) { return }
+    foreach ($w in $warnings) {
+        if ($null -eq $w) { continue }
+        $text = if ($w -is [System.Management.Automation.WarningRecord]) { $w.Message } else { [string]$w }
+        $script:logWriter.WriteLine("WARNING: $text")
+    }
+    $script:logWriter.Flush()
 }
 
 # --- load the API key (fail loud; never echo the value) ---
@@ -132,9 +160,14 @@ try {
     $logPath = Join-Path $LogDirectory ("baseline-{0}.log" -f $runStartUtc.ToString("yyyyMMdd'T'HHmmss'Z'"))
     # Explicit UTF-8 without BOM and append=$true, so every writer in this script agrees on one encoding
     # (Add-Content/Out-File/Tee-Object disagree about the default under Windows PowerShell 5.1).
+    # APPEND, not overwrite, deliberately: the name is second-granularity and a baseline run takes hours, so a
+    # collision is essentially unreachable - but if one ever happened, append keeps BOTH runs behind their own
+    # start/end banners, whereas overwrite would silently destroy the earlier log.
     $logWriter = [System.IO.StreamWriter]::new($logPath, $true, (New-Object System.Text.UTF8Encoding($false)))
 }
 catch {
+    # No writer exists here by definition, so this one can only reach the console - which is the whole point of
+    # the warning: it says where the missing log went.
     $logWriter = $null
     Write-Warning "Could not open a run log under '$LogDirectory' ($($_.Exception.Message)). Continuing WITHOUT one - the run's output is unaffected."
 }
@@ -156,19 +189,30 @@ if ($null -ne $logPath -and $LogRetentionDays -gt 0) {
         if ($stale.Count -gt 0) { Write-RunLog "Prune  : removed $($stale.Count) log(s) older than $LogRetentionDays day(s)." }
     }
     catch {
-        Write-Warning "Could not prune old run logs in '$LogDirectory' ($($_.Exception.Message)). Continuing."
+        # Write-RunWarning, not Write-Warning: an unattended run's log must explain its own gaps. A prune that
+        # silently stopped working would otherwise only show up as a full disk weeks later.
+        Write-RunWarning "Could not prune old run logs in '$LogDirectory' ($($_.Exception.Message)). Continuing."
     }
 }
 
 # --- hold the host awake for the whole run (spec 171 section 1) ---
 # Fail-open on purpose: a refused power request costs wall clock, never correctness - the reasoning is recorded
 # in full in lib/keep-awake.ps1. Released in the `finally` below.
-$keepAwakeHeld = Enable-RadarKeepAwake -Reason "the scheduled Radar baseline run"
+#
+# -WarningVariable, NOT a stream merge. The helper explains a failed hold via Write-Warning, and that reason has
+# to reach the LOG: this task runs unattended for many nights in a row, so if the hold fails on night one it
+# fails on all of them, and the log is the only witness. -WarningVariable collects the WarningRecords WITHOUT
+# suppressing their console display and WITHOUT any redirection operator, so it cannot reintroduce the
+# 5.1 merged-stream terminating-error trap described in the header. The captured lines are written to the log
+# immediately, i.e. BEFORE the "Awake :" line - the same order the console shows them in.
+$keepAwakeWarnings = $null
+$keepAwakeHeld = Enable-RadarKeepAwake -Reason "the scheduled Radar baseline run" -WarningVariable keepAwakeWarnings
+Write-CapturedWarningsToLog $keepAwakeWarnings
 if ($keepAwakeHeld) {
     Write-RunLog "Awake  : holding ES_CONTINUOUS|ES_SYSTEM_REQUIRED for this run (the display is NOT held)."
 }
 else {
-    Write-RunLog "Awake  : NOT held - see the warning above. The run continues; expect it to take longer and to lose collector sources if this host suspends."
+    Write-RunLog "Awake  : NOT held - the WARNING line(s) immediately above give the reason. The run continues; expect it to take longer and to lose collector sources if this host suspends."
 }
 
 # --- run the measurement ---
@@ -186,6 +230,8 @@ try {
     # line to BOTH the console and the log. Stream 2 is deliberately NOT merged - see the header: under
     # Windows PowerShell 5.1 with $ErrorActionPreference='Stop' a merged native stderr line becomes a
     # terminating error and would abort the run. Unredirected, it reaches the console exactly as before.
+    # (Flushed per line for the reason recorded on Write-RunLog above: a suspended or killed run must not lose
+    # the tail, which is exactly the part that explains what happened.)
     & $runRadar @runArgs 3>&1 6>&1 | ForEach-Object {
         $text = ConvertTo-RunLogText $_
         Write-Host $text
@@ -200,7 +246,11 @@ catch {
     throw
 }
 finally {
-    Disable-RadarKeepAwake
+    # Same capture as the acquire above: a failed RELEASE is the one that could leave the host awake, so its
+    # reason belongs in the log too. The writer is still open here; it is disposed at the end of this block.
+    $releaseWarnings = $null
+    Disable-RadarKeepAwake -WarningVariable releaseWarnings
+    Write-CapturedWarningsToLog $releaseWarnings
 
     $endUtc  = [datetime]::UtcNow
     $elapsed = $endUtc - $runStartUtc
