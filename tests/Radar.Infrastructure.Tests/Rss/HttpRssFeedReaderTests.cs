@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -237,6 +238,127 @@ public sealed class HttpRssFeedReaderTests
     }
 
     [Fact]
+    public async Task ReadAsync_LeadingWhitespaceBeforeDeclaration_ParsesItems()
+    {
+        // Reproduces https://www.idt.net/feed/ : HTTP 200, well-formed RSS, but a server-side stray-output
+        // bug emits blank lines and spaces before the XML declaration. XmlReader rejects that outright, so
+        // without the leading-noise tolerance the whole feed is discarded as malformed.
+        var reader = CreateReader(new ByteStubHandler(
+            HttpStatusCode.OK, Encoding.UTF8.GetBytes("
+
+
+
+    
+
+" + ValidRss)));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.Success, result.Outcome);
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal("Acme launches widget", result.Items[0].Title);
+        Assert.Equal("https://acme.test/news/1", result.Items[0].Link);
+        Assert.Equal("Acme opens plant", result.Items[1].Title);
+    }
+
+    [Fact]
+    public async Task ReadAsync_Utf8BomThenLeadingWhitespace_ParsesItems()
+    {
+        // Order matters: the BOM comes first, so the whitespace scan has to step over it to reach the
+        // declaration.
+        var body = new List<byte>();
+        body.AddRange(Encoding.UTF8.GetPreamble());
+        body.AddRange(Encoding.UTF8.GetBytes("
+	  
+" + ValidRss));
+        var reader = CreateReader(new ByteStubHandler(HttpStatusCode.OK, body.ToArray()));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.Success, result.Outcome);
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal("Acme launches widget", result.Items[0].Title);
+    }
+
+    [Fact]
+    public async Task ReadAsync_Utf8BomWithNoWhitespace_ParsesItems()
+    {
+        // A lone BOM is legal and is XmlReader's own encoding-detection input, so the tolerance leaves it
+        // alone; the feed must still parse exactly as before.
+        var body = new List<byte>();
+        body.AddRange(Encoding.UTF8.GetPreamble());
+        body.AddRange(Encoding.UTF8.GetBytes(ValidRss));
+        var reader = CreateReader(new ByteStubHandler(HttpStatusCode.OK, body.ToArray()));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.Success, result.Outcome);
+        Assert.Equal(2, result.Items.Count);
+    }
+
+    [Fact]
+    public async Task ReadAsync_LeadingWhitespaceThenMalformedXml_StillReturnsMalformed()
+    {
+        // The tolerance must not launder genuine breakage into a success: it only moves past the noise.
+        var reader = CreateReader(new ByteStubHandler(
+            HttpStatusCode.OK, Encoding.UTF8.GetBytes("
+
+   
+ this is not <xml")));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.Malformed, result.Outcome);
+        Assert.Empty(result.Items);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("
+
+	
+   ")]
+    public async Task ReadAsync_EmptyOrAllWhitespaceBody_ReturnsMalformedWithoutThrowing(string body)
+    {
+        // Degenerate inputs must land on the ordinary Malformed path, never an unhandled exception.
+        var reader = CreateReader(new ByteStubHandler(HttpStatusCode.OK, Encoding.UTF8.GetBytes(body)));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.Malformed, result.Outcome);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public async Task ReadAsync_BomOnlyBody_ReturnsMalformedWithoutThrowing()
+    {
+        var reader = CreateReader(new ByteStubHandler(HttpStatusCode.OK, Encoding.UTF8.GetPreamble()));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.Malformed, result.Outcome);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public async Task ReadAsync_LeadingWhitespaceOnNonSuccessStatus_StillReturnsHttpError()
+    {
+        // The status ladder runs before the body is ever looked at; the tolerance must not reach it.
+        var reader = CreateReader(new ByteStubHandler(
+            HttpStatusCode.Forbidden, Encoding.UTF8.GetBytes("
+
+" + ValidRss)));
+
+        var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
+
+        Assert.Equal(RssFeedReadOutcome.HttpError, result.Outcome);
+        Assert.False(result.IsSuccess);
+        Assert.Contains("403", result.Detail);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
     public async Task ReadAsync_HttpRequestException_ReturnsUnreachableWithoutThrowing()
     {
         var reader = CreateReader(new ThrowingHandler(new HttpRequestException("network down")));
@@ -280,6 +402,21 @@ public sealed class HttpRssFeedReaderTests
                 Content = new StringContent(body, Encoding.UTF8, "application/rss+xml"),
             };
             return Task.FromResult(response);
+        }
+    }
+
+    /// <summary>
+    /// Serves the body as raw BYTES. <see cref="StubHandler"/> goes through <c>StringContent</c>, which can
+    /// never express a BOM or exact leading-byte layout — the very thing these cases are about.
+    /// </summary>
+    private sealed class ByteStubHandler(HttpStatusCode status, byte[] body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var content = new ByteArrayContent(body);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/rss+xml");
+            return Task.FromResult(new HttpResponseMessage(status) { Content = content });
         }
     }
 
