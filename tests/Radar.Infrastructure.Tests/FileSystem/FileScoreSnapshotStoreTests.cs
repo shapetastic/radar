@@ -526,6 +526,88 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
         Assert.Empty(all);
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // Spec 172: the link-bearing read (IScoreSnapshotLinkReader) — the SAME files, the SAME per-file
+    // parse; only the projection differs (Links hydrated instead of deliberately empty).
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ReadAllWithLinksForCompanyAsync_RoundTripsTheStoredLinks_InTheSameDeterministicOrder()
+    {
+        var companyId = Guid.NewGuid();
+        var t1 = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var t2 = new DateTimeOffset(2026, 2, 8, 0, 0, 0, TimeSpan.Zero);
+
+        var first = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithCreatedAtUtc(t1)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+        var second = new ScoreSnapshotBuilder()
+            .WithId(Guid.NewGuid())
+            .WithCompanyId(companyId)
+            .WithCreatedAtUtc(t2)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+
+        var neutral = LinkFor(
+            second, Guid.NewGuid(), Guid.NewGuid(),
+            reason: "MediaAttention (Neutral), strength 2, confidence 0.60");
+        var positive = LinkFor(
+            second, Guid.NewGuid(), Guid.NewGuid(), weight: 5,
+            reason: "GuidanceChange (Positive), strength 8, confidence 0.90");
+
+        var store = CreateStore();
+        // Write out of order to prove the read sorts, not the disk order.
+        await store.WriteAsync(second, new List<ScoreEvidenceLink> { neutral, positive }, CancellationToken.None);
+        await store.WriteAsync(first, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        var all = await store.ReadAllWithLinksForCompanyAsync(companyId, CancellationToken.None);
+
+        Assert.Equal(2, all.Count);
+        Assert.Equal(first.Id, all[0].Snapshot.Id); // ascending by CreatedAtUtc, same rule as the scalar read
+        Assert.Empty(all[0].Links);
+
+        Assert.Equal(second.Id, all[1].Snapshot.Id);
+        Assert.Equal(second.OpportunityScore, all[1].Snapshot.OpportunityScore);
+        Assert.Equal(2, all[1].Links.Count);
+        var roundTrippedNeutral = Assert.Single(all[1].Links, l => l.Id == neutral.Id);
+        Assert.Equal(neutral.ContributionReason, roundTrippedNeutral.ContributionReason);
+        Assert.Equal(neutral.SignalId, roundTrippedNeutral.SignalId);
+        Assert.Equal(neutral.EvidenceId, roundTrippedNeutral.EvidenceId);
+        Assert.Equal(neutral.ContributionWeight, roundTrippedNeutral.ContributionWeight);
+        Assert.Equal(second.Id, roundTrippedNeutral.ScoreSnapshotId);
+        var roundTrippedPositive = Assert.Single(all[1].Links, l => l.Id == positive.Id);
+        Assert.Equal(5, roundTrippedPositive.ContributionWeight);
+    }
+
+    [Fact]
+    public async Task ReadAllWithLinksForCompanyAsync_SkipsMalformedFiles_AndMissingDirectoryReturnsEmpty()
+    {
+        var companyId = Guid.NewGuid();
+        var store = CreateStore();
+
+        Assert.Empty(await store.ReadAllWithLinksForCompanyAsync(companyId, CancellationToken.None));
+
+        var snapshot = new ScoreSnapshotBuilder()
+            .WithCompanyId(companyId)
+            .WithWindow(WindowStart, WindowEnd)
+            .Build();
+        await store.WriteAsync(
+            snapshot,
+            new List<ScoreEvidenceLink> { LinkFor(snapshot, Guid.NewGuid(), Guid.NewGuid()) },
+            CancellationToken.None);
+        await File.WriteAllTextAsync(
+            Path.Combine(_tempDir, companyId.ToString(), "bad.json"), "{ not valid json");
+
+        var all = await store.ReadAllWithLinksForCompanyAsync(companyId, CancellationToken.None);
+
+        var only = Assert.Single(all);
+        Assert.Equal(snapshot.Id, only.Snapshot.Id);
+        Assert.Single(only.Links);
+    }
+
     [Fact]
     public async Task ReadAllForCompanyAsync_AlreadyCancelledToken_Throws()
     {

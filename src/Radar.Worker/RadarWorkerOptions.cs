@@ -178,6 +178,15 @@ public sealed class RadarWorkerOptions
     public string EfficacyDirectory { get; init; } = "data/efficacy";
 
     /// <summary>
+    /// Root directory for the read-only audit artifacts (spec 172). Only used when
+    /// "Radar:Efficacy:DenominatorAudit:Enabled" is true (inside the "Radar:Efficacy:Enabled" gate).
+    /// Deliberately a NEW root, separate from <see cref="EfficacyDirectory"/>, so no existing efficacy
+    /// artifact can be overwritten; it is created only when the audit actually writes, so the default-off
+    /// configuration leaves no directory behind.
+    /// </summary>
+    public string AuditsDirectory { get; init; } = "data/audits";
+
+    /// <summary>
     /// Root directory for the historical as-of replay output (spec 139). Only used when
     /// "Radar:Replay:Enabled" is true. Deliberately its OWN root, NOT a subdirectory of
     /// <see cref="ScoresDirectory"/>: the forward efficacy series is accrued history and a replay is a
@@ -668,6 +677,33 @@ public sealed class EfficacyWorkerOptions
     /// Only consulted when <see cref="Enabled"/>, mirroring <see cref="Comparison"/>.
     /// </summary>
     public AttentionArrivalWorkerOptions AttentionArrival { get; init; } = new();
+
+    /// <summary>
+    /// Score-move vs evidence-denominator audit configuration (bound from
+    /// "Radar:Efficacy:DenominatorAudit"; spec 172). Only consulted when <see cref="Enabled"/> — and, unlike
+    /// <see cref="Comparison"/> / <see cref="AttentionArrival"/>, DEFAULT OFF even inside the efficacy gate.
+    /// </summary>
+    public DenominatorAuditWorkerOptions DenominatorAudit { get; init; } = new();
+}
+
+/// <summary>
+/// Score-move vs evidence-denominator audit configuration (bound from "Radar:Efficacy:DenominatorAudit";
+/// spec 172). DISABLED by default even <b>within</b> the already-opt-in <c>Radar:Efficacy</c> gate —
+/// deliberately unlike the comparison and the attention screen, because this is a one-shot diagnostic, not a
+/// nightly artifact, and the nightly baseline run is unattended. When disabled nothing audit-related is
+/// registered, no file is written and no directory is created.
+/// <para>
+/// The audit is READ-ONLY over persisted score history (snapshots + their stored evidence links): it measures
+/// whether score MOVES concentrate where the directional evidence base is thin, changes no score, reads no
+/// price (AD-14), and writes only <c>data/audits/score-move-denominator.{csv,md}</c> — a NEW directory, so no
+/// existing efficacy artifact can be overwritten. A replay run skips it entirely (a replay replaces the
+/// pipeline run and never reaches the efficacy step).
+/// </para>
+/// </summary>
+public sealed class DenominatorAuditWorkerOptions
+{
+    /// <summary>Whether to build and write the score-move denominator audit when efficacy reporting is enabled. DISABLED by default.</summary>
+    public bool Enabled { get; init; }
 }
 
 /// <summary>

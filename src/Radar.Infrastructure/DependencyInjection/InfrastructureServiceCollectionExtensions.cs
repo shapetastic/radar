@@ -9,6 +9,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
+using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
@@ -2452,6 +2453,36 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<AttentionArrivalScreenEvaluator>();
         services.AddSingleton<AttentionArrivalRenderer>();
         services.AddSingleton<IAttentionArrivalScreenGenerator, AttentionArrivalScreenGenerator>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the opt-in <b>score-move vs evidence-denominator audit</b> (spec 172): the pure
+    /// computation + renderer, the generator, and the file-backed artifact store rooted at
+    /// <paramref name="auditsDirectory"/> (a NEW root — <c>data/audits</c> — so no existing efficacy
+    /// artifact can be overwritten; the directory is created only when the audit actually writes).
+    /// <para>
+    /// READ-ONLY and downstream of scoring: it reads each configured strategy's persisted snapshot series
+    /// (through the SAME <see cref="IStrategyScoreSnapshotStoreSelector"/> seam specs 140/169 use — the
+    /// selector is registered with <c>TryAdd</c> exactly as they register it, so a graph that has several
+    /// keeps one consistent choice of series) together with the stored evidence links
+    /// (<see cref="IScoreSnapshotLinkReader"/>, implemented by the SAME file store — one format, one
+    /// deserializer). It creates, amends or deletes no score, signal, evidence or review; no scoring input,
+    /// formula version, rule-set version or fingerprint is touched; price is never read (AD-14 — the audit
+    /// measures score mechanics, not efficacy).
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarScoreMoveDenominatorAudit(
+        this IServiceCollection services, string auditsDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(auditsDirectory);
+
+        services.AddSingleton(new FileDenominatorAuditArtifactStoreOptions { RootDirectory = auditsDirectory });
+        services.AddSingleton<IDenominatorAuditArtifactStore, FileDenominatorAuditArtifactStore>();
+
+        services.TryAddSingleton<IStrategyScoreSnapshotStoreSelector, LiveStrategyScoreSnapshotStoreSelector>();
+        services.AddSingleton<ScoreMoveDenominatorAuditRenderer>();
+        services.AddSingleton<IScoreMoveDenominatorAuditGenerator, ScoreMoveDenominatorAuditGenerator>();
         return services;
     }
 

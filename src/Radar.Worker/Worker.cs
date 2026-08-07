@@ -2,6 +2,7 @@ using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
+using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
@@ -63,6 +64,7 @@ public sealed class Worker : BackgroundService
     private readonly IReplayRunner? _replayRunner;
     private readonly IStrategyComparisonReportGenerator? _strategyComparisonGenerator;
     private readonly IAttentionArrivalScreenGenerator? _attentionArrivalGenerator;
+    private readonly IScoreMoveDenominatorAuditGenerator? _denominatorAuditGenerator;
     private readonly CompanyFilter? _companyFilter;
 
     public Worker(
@@ -77,7 +79,8 @@ public sealed class Worker : BackgroundService
         IReplayRunner? replayRunner = null,
         IStrategyComparisonReportGenerator? strategyComparisonGenerator = null,
         CompanyFilter? companyFilter = null,
-        IAttentionArrivalScreenGenerator? attentionArrivalGenerator = null)
+        IAttentionArrivalScreenGenerator? attentionArrivalGenerator = null,
+        IScoreMoveDenominatorAuditGenerator? denominatorAuditGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -97,6 +100,7 @@ public sealed class Worker : BackgroundService
         _replayRunner = replayRunner;
         _strategyComparisonGenerator = strategyComparisonGenerator;
         _attentionArrivalGenerator = attentionArrivalGenerator;
+        _denominatorAuditGenerator = denominatorAuditGenerator;
         _companyFilter = companyFilter;
     }
 
@@ -186,7 +190,8 @@ public sealed class Worker : BackgroundService
     {
         if (_efficacyReportGenerator is null
             && _strategyComparisonGenerator is null
-            && _attentionArrivalGenerator is null)
+            && _attentionArrivalGenerator is null
+            && _denominatorAuditGenerator is null)
         {
             return;
         }
@@ -242,6 +247,17 @@ public sealed class Worker : BackgroundService
             await _strategyComparisonGenerator
                 .GenerateAsync(attentionPrerequisite, ct)
                 .ConfigureAwait(false);
+        }
+
+        // Spec 172's score-move vs evidence-denominator audit: the same read-only posture, still OUTSIDE
+        // IRadarPipeline. Skipped (dependency null) unless Radar:Efficacy:Enabled AND
+        // Radar:Efficacy:DenominatorAudit:Enabled (DEFAULT OFF — a one-shot diagnostic). It reads persisted
+        // snapshots + stored evidence links, changes no score, reads no price, and writes only the audit
+        // artifact pair under data/audits/. A replay run replaces the pipeline entirely and returns before
+        // this method is reached; a company-filtered pass returned above.
+        if (_denominatorAuditGenerator is not null)
+        {
+            await _denominatorAuditGenerator.GenerateAsync(ct).ConfigureAwait(false);
         }
     }
 }
