@@ -10,6 +10,7 @@ using Radar.Application.Signals;
 using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
+using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
@@ -794,6 +795,70 @@ public sealed class RadarWorkerServicesTests
         Assert.Null(provider.GetService<IAttentionArrivalScreenGenerator>());
         Assert.Null(provider.GetService<IExcludedCohortStore>());
         Assert.Null(provider.GetService<IAttentionArrivalArtifactStore>());
+    }
+
+    [Fact]
+    public void EfficacyEnabled_DoesNotRegisterTheDenominatorAudit_DefaultOff()
+    {
+        // Spec 172: unlike the comparison and the attention screen, the denominator audit is DEFAULT OFF
+        // even inside the already-opt-in Radar:Efficacy gate — a one-shot diagnostic, not a nightly
+        // artifact. With no config key present nothing audit-related is registered, so no file can be
+        // written and no data/audits directory can be created.
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"));
+
+        Assert.Null(provider.GetService<IScoreMoveDenominatorAuditGenerator>());
+        Assert.Null(provider.GetService<IDenominatorAuditArtifactStore>());
+        Assert.Null(provider.GetService<ScoreMoveDenominatorAuditRenderer>());
+        Assert.Null(provider.GetService<FileDenominatorAuditArtifactStoreOptions>());
+    }
+
+    [Fact]
+    public void DenominatorAuditEnabled_RegistersTheGeneratorInsideTheEfficacyGate()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            ("Radar:Efficacy:DenominatorAudit:Enabled", "true"));
+
+        Assert.NotNull(provider.GetService<IScoreMoveDenominatorAuditGenerator>());
+        Assert.NotNull(provider.GetService<IDenominatorAuditArtifactStore>());
+
+        // The artifact root defaults to data/audits — a NEW directory, never the efficacy directory.
+        Assert.Equal(
+            "data/audits",
+            provider.GetRequiredService<FileDenominatorAuditArtifactStoreOptions>().RootDirectory);
+
+        // It shares the SAME strategy-store selector seam the comparison/screen use (TryAdd — one
+        // consistent choice of series in a graph that has several consumers).
+        Assert.NotNull(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
+    }
+
+    [Fact]
+    public void DenominatorAuditAuditsDirectory_IsConfigurable()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            ("Radar:Efficacy:DenominatorAudit:Enabled", "true"),
+            ("Radar:AuditsDirectory", @"C:\radar\data\audits"));
+
+        Assert.Equal(
+            @"C:\radar\data\audits",
+            provider.GetRequiredService<FileDenominatorAuditArtifactStoreOptions>().RootDirectory);
+    }
+
+    [Fact]
+    public void EfficacyDisabled_DenominatorAuditEnabledAlone_RegistersNothing()
+    {
+        // The audit lives INSIDE the Radar:Efficacy gate: enabling it without efficacy registers nothing.
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:DenominatorAudit:Enabled", "true"));
+
+        Assert.Null(provider.GetService<IScoreMoveDenominatorAuditGenerator>());
+        Assert.Null(provider.GetService<IDenominatorAuditArtifactStore>());
     }
 
     [Fact]

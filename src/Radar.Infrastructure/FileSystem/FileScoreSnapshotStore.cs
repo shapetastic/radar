@@ -2,6 +2,7 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.Scoring;
 using Radar.Application.Storage;
 using Radar.Domain.Scoring;
@@ -23,8 +24,15 @@ namespace Radar.Infrastructure.FileSystem;
 /// insert-only <see cref="FileRawEvidenceStore"/>: AD-1 immutability governs <i>evidence only</i>.
 /// Score snapshots are upsert-by-Id, so an existing file for the same snapshot id is overwritten rather
 /// than skipped. This is intentional — do not re-flag it as an AD-1 violation.
+/// <para>
+/// <b>Also the link-bearing read (spec 172).</b> This store ADDITIONALLY implements
+/// <see cref="IScoreSnapshotLinkReader"/> — spec 142's "the repository IS the file store" pattern, applied
+/// to the score files: the persisted format has always carried the evidence links, so the denominator
+/// audit's link read lives on the SAME class, one format definition, one deserializer, one skip-don't-throw
+/// rule set. The scalar reads keep their deliberately-empty <c>Links</c> posture, unchanged.
+/// </para>
 /// </remarks>
-public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
+public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore, IScoreSnapshotLinkReader
 {
     private readonly FileScoreSnapshotStoreOptions _options;
     private readonly ILogger<FileScoreSnapshotStore> _logger;
@@ -168,6 +176,44 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
     }
 
     /// <summary>
+    /// All persisted snapshots for the company WITH their evidence links hydrated (spec 172's
+    /// <see cref="IScoreSnapshotLinkReader"/>), ascending by CreatedAtUtc then Id — the SAME deterministic
+    /// order (AD-3) and the SAME per-file parse (guards, logging, skip-don't-throw) as
+    /// <see cref="ReadAllForCompanyAsync"/>; only the projection differs. Read-only; a missing directory
+    /// returns an empty list; cancellation propagates.
+    /// </summary>
+    public async Task<IReadOnlyList<ScoreSnapshotWithLinks>> ReadAllWithLinksForCompanyAsync(
+        Guid companyId, CancellationToken ct)
+    {
+        var files = EnumerateCompanyFiles(companyId);
+        if (files is null)
+        {
+            return [];
+        }
+
+        var snapshots = new List<ScoreSnapshotWithLinks>(files.Count);
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var parsed = await TryReadFileAsync(file, companyId, ct).ConfigureAwait(false);
+            if (parsed is not null)
+            {
+                snapshots.Add(new ScoreSnapshotWithLinks(ToSnapshot(parsed), ToLinks(parsed)));
+            }
+        }
+
+        // Deterministic (AD-3): ascending by CreatedAtUtc, tie-broken by Id — same rule as the scalar read.
+        snapshots.Sort(static (a, b) =>
+        {
+            var byCreated = a.Snapshot.CreatedAtUtc.CompareTo(b.Snapshot.CreatedAtUtc);
+            return byCreated != 0 ? byCreated : a.Snapshot.Id.CompareTo(b.Snapshot.Id);
+        });
+
+        return snapshots;
+    }
+
+    /// <summary>
     /// The leaf file name for a snapshot: <c>{snapshotId}.json</c> unless the options supply a deterministic
     /// selector (<see cref="FileScoreSnapshotStoreOptions.SnapshotFileName"/> — replay, spec 139). The guard
     /// is a programming-error check, not graceful degradation: a selector returning a path would silently
@@ -229,14 +275,25 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
     }
 
     /// <summary>
-    /// Reads and parses a single snapshot file (read text → deserialize → null/CompanyId guards →
-    /// reconstruct scalar fields). The shared per-file parse both read methods route through (reuse over
-    /// copy). Returns <c>null</c> when the file is a JSON <c>null</c>, carries a foreign CompanyId, or is
-    /// unreadable/malformed (each logged + skipped, never thrown); cancellation propagates. The Links are
-    /// intentionally left empty (scalar fields only) — this is NOT dropped provenance: the current report's
-    /// evidence links still come from the in-memory repo, unchanged.
+    /// Reads and parses a single snapshot file, scalar fields only. Routes through
+    /// <see cref="TryReadFileAsync"/> (the ONE per-file parse — reuse over copy) and projects the scalar
+    /// snapshot. The Links are intentionally left empty on this path — this is NOT dropped provenance: the
+    /// current report's evidence links still come from the in-memory repo, unchanged, and the link-bearing
+    /// projection is <see cref="ReadAllWithLinksForCompanyAsync"/>.
     /// </summary>
     private async Task<CompanyScoreSnapshot?> TryReadSnapshotAsync(
+        string file, Guid companyId, CancellationToken ct)
+    {
+        var parsed = await TryReadFileAsync(file, companyId, ct).ConfigureAwait(false);
+        return parsed is null ? null : ToSnapshot(parsed);
+    }
+
+    /// <summary>
+    /// The shared per-file parse every read method routes through (read text → deserialize →
+    /// null/CompanyId guards). Returns <c>null</c> when the file is a JSON <c>null</c>, carries a foreign
+    /// CompanyId, or is unreadable/malformed (each logged + skipped, never thrown); cancellation propagates.
+    /// </summary>
+    private async Task<ScoreSnapshotFile?> TryReadFileAsync(
         string file, Guid companyId, CancellationToken ct)
     {
         try
@@ -266,30 +323,7 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
                 return null;
             }
 
-            return new CompanyScoreSnapshot(
-                Id: parsed.SnapshotId,
-                CompanyId: parsed.CompanyId,
-                ScoringVersion: parsed.ScoringVersion,
-                TrajectoryScore: parsed.TrajectoryScore,
-                OpportunityScore: parsed.OpportunityScore,
-                AttentionScore: parsed.AttentionScore,
-                EvidenceConfidenceScore: parsed.EvidenceConfidenceScore,
-                SignalVelocityScore: parsed.SignalVelocityScore,
-                Explanation: parsed.Explanation,
-                ComponentJson: parsed.ComponentJson,
-                WindowStartUtc: parsed.WindowStartUtc,
-                WindowEndUtc: parsed.WindowEndUtc,
-                CreatedAtUtc: parsed.CreatedAtUtc,
-                // Old-format files lack this property and deserialize to null (default System.Text.Json
-                // tolerates missing members). A null stamp is treated as "not comparable".
-                ScoringConfigVersion: parsed.ScoringConfigVersion,
-                // Same posture (spec 137): a pre-existing snapshot file has no strategyName property, so it
-                // deserializes to null — read as the primary/legacy strategy.
-                StrategyName: parsed.StrategyName,
-                // Same posture again (spec 141): a file written before the collectionProvenance property
-                // existed deserializes to null — "what was collected then is unknown", which is honest and
-                // affects nothing (the field is recorded, never hashed, never a comparability input).
-                CollectionProvenance: parsed.CollectionProvenance);
+            return parsed;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -297,6 +331,60 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore
             _logger.LogWarning(ex, "Failed to read score-snapshot file '{File}'; skipping.", file);
             return null;
         }
+    }
+
+    /// <summary>Projects the persisted shape onto the scalar domain snapshot (Links deliberately empty).</summary>
+    private static CompanyScoreSnapshot ToSnapshot(ScoreSnapshotFile parsed) =>
+        new(
+            Id: parsed.SnapshotId,
+            CompanyId: parsed.CompanyId,
+            ScoringVersion: parsed.ScoringVersion,
+            TrajectoryScore: parsed.TrajectoryScore,
+            OpportunityScore: parsed.OpportunityScore,
+            AttentionScore: parsed.AttentionScore,
+            EvidenceConfidenceScore: parsed.EvidenceConfidenceScore,
+            SignalVelocityScore: parsed.SignalVelocityScore,
+            Explanation: parsed.Explanation,
+            ComponentJson: parsed.ComponentJson,
+            WindowStartUtc: parsed.WindowStartUtc,
+            WindowEndUtc: parsed.WindowEndUtc,
+            CreatedAtUtc: parsed.CreatedAtUtc,
+            // Old-format files lack this property and deserialize to null (default System.Text.Json
+            // tolerates missing members). A null stamp is treated as "not comparable".
+            ScoringConfigVersion: parsed.ScoringConfigVersion,
+            // Same posture (spec 137): a pre-existing snapshot file has no strategyName property, so it
+            // deserializes to null — read as the primary/legacy strategy.
+            StrategyName: parsed.StrategyName,
+            // Same posture again (spec 141): a file written before the collectionProvenance property
+            // existed deserializes to null — "what was collected then is unknown", which is honest and
+            // affects nothing (the field is recorded, never hashed, never a comparability input).
+            CollectionProvenance: parsed.CollectionProvenance);
+
+    /// <summary>
+    /// Projects the persisted link shapes back onto the domain record (spec 172). Defensive nulls only for
+    /// hand-edited files: a missing <c>links</c> property reads as an empty list and a missing reason as an
+    /// empty string — never a throw, matching the store's skip-don't-throw posture.
+    /// </summary>
+    private static IReadOnlyList<ScoreEvidenceLink> ToLinks(ScoreSnapshotFile parsed)
+    {
+        if (parsed.Links is not { Count: > 0 } persisted)
+        {
+            return [];
+        }
+
+        var links = new List<ScoreEvidenceLink>(persisted.Count);
+        foreach (var link in persisted)
+        {
+            links.Add(new ScoreEvidenceLink(
+                Id: link.LinkId,
+                ScoreSnapshotId: link.ScoreSnapshotId,
+                SignalId: link.SignalId,
+                EvidenceId: link.EvidenceId,
+                ContributionReason: link.ContributionReason ?? string.Empty,
+                ContributionWeight: link.ContributionWeight));
+        }
+
+        return links;
     }
 
     private static string Serialize(CompanyScoreSnapshot snapshot, IReadOnlyList<ScoreEvidenceLink> links)

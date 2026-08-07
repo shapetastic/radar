@@ -298,6 +298,17 @@ internal static class RadarWorkerServices
                     options.Efficacy.AttentionArrival.CohortsDirectory,
                     options.EfficacyDirectory);
             }
+
+            // Spec 172: the read-only score-move vs evidence-denominator audit. DEFAULT OFF even inside this
+            // already-opt-in gate — a one-shot diagnostic, not a nightly artifact (the nightly baseline is
+            // unattended). It reads persisted snapshots + their stored evidence links through the same
+            // strategy-store seam as the comparison/screen, changes no score, reads no price (AD-14), and
+            // writes only under Radar:AuditsDirectory — a NEW root, so no existing efficacy artifact can be
+            // overwritten; the directory is created only when the audit actually writes.
+            if (options.Efficacy.DenominatorAudit.Enabled)
+            {
+                services.AddRadarScoreMoveDenominatorAudit(options.AuditsDirectory);
+            }
         }
 
         // Wire the historical as-of replay seam ONLY when the resolved run mode is Replay (spec 139, extended
