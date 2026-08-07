@@ -971,10 +971,22 @@ public static class InfrastructureServiceCollectionExtensions
     /// <see cref="ICompanyRepository.GetSourceFeedsAsync"/>) and produces raw
     /// <see cref="Radar.Application.Collectors.CollectedEvidence"/> press releases; it does not persist
     /// them. All HTTP/XML/Syndication code stays in Infrastructure (AD-5).
+    /// <para>
+    /// The named client sends Radar's shared generic User-Agent. This is a correctness requirement, not just
+    /// politeness: .NET's <c>HttpClient</c> sends NO <c>User-Agent</c> by default, and some IR feed hosts
+    /// (measured: Energy Recovery's press-release feed) answer a header-less request with HTTP 403 while
+    /// answering the very same request with any UA at all with HTTP 200.
+    /// </para>
     /// </summary>
     public static IServiceCollection AddRssPressReleaseCollector(this IServiceCollection services)
     {
-        services.AddHttpClient<IRssFeedReader, HttpRssFeedReader>();
+        services.AddHttpClient<IRssFeedReader, HttpRssFeedReader>(client =>
+        {
+            // A generic, polite User-Agent (IR feeds need no key or specific UA). Set at the single
+            // client-config site so the header is consistent for every RSS request; the literal itself is
+            // shared (RadarHttpUserAgent) so the four clients that send it cannot drift apart.
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(RadarHttpUserAgent.Default);
+        });
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IEvidenceCollector, RssPressReleaseCollector>();
         return services;
@@ -1419,8 +1431,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHttpClient<IPatentSearchReader, HttpPatentSearchReader>(client =>
             {
                 // A generic, polite User-Agent (the API needs a key, not a specific UA). Set at the single
-                // client-config site so the header is consistent for every patents request.
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/shapetastic/radar)");
+                // client-config site so the header is consistent for every patents request; the literal itself
+                // is shared (RadarHttpUserAgent) so the four clients that send it cannot drift apart.
+                client.DefaultRequestHeaders.UserAgent.ParseAdd(RadarHttpUserAgent.Default);
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
@@ -1478,8 +1491,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHttpClient<IFdaClearanceReader, HttpFdaClearanceReader>(client =>
             {
                 // A generic, polite User-Agent (openFDA needs no key or specific UA). Set at the single
-                // client-config site so the header is consistent for every FDA request.
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/shapetastic/radar)");
+                // client-config site so the header is consistent for every FDA request; the literal itself
+                // is shared (RadarHttpUserAgent) so the four clients that send it cannot drift apart.
+                client.DefaultRequestHeaders.UserAgent.ParseAdd(RadarHttpUserAgent.Default);
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
@@ -1548,8 +1562,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHttpClient<ITrademarkSearchReader, HttpTrademarkSearchReader>(client =>
             {
                 // A generic, polite User-Agent (the API needs a key, not a specific UA). Set at the single
-                // client-config site so the header is consistent for every trademark request.
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("Radar/1.0 (+https://github.com/shapetastic/radar)");
+                // client-config site so the header is consistent for every trademark request; the literal
+                // itself is shared (RadarHttpUserAgent) so the four clients that send it cannot drift apart.
+                client.DefaultRequestHeaders.UserAgent.ParseAdd(RadarHttpUserAgent.Default);
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
