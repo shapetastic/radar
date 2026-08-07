@@ -273,9 +273,18 @@ foreach ($dir in $companyDirs) {
     }) | Out-Null
 }
 
-# Primary ranking: opportunityScore desc, companyId asc (AD-3). Guid strings are hex+dashes, so ordinal
-# and culture orderings agree; CompareOrdinal keeps it explicit.
-$ranked = @($latestPerCompany | Sort-Object -Property @{Expression = { -$_.Opportunity }}, @{Expression = { $_.CompanyId }})
+# Primary ranking: opportunityScore desc, companyId asc (AD-3). Sort-Object compares strings with the
+# culture-aware comparer, so an explicit CompareOrdinal comparison is used instead - same rule as the
+# [Array]::Sort ordinal calls above, and locale-proof even if the session culture is changed.
+$ranked = $latestPerCompany.ToArray()
+if ($ranked.Length -gt 1) {
+    [Array]::Sort($ranked, [System.Comparison[object]]{
+        param($a, $b)
+        $byScore = ([int]$b.Opportunity).CompareTo([int]$a.Opportunity)
+        if ($byScore -ne 0) { return $byScore }
+        return [string]::CompareOrdinal([string]$a.CompanyId, [string]$b.CompanyId)
+    })
+}
 
 $unresolvableLinks = 0
 $companyReports = New-Object System.Collections.Generic.List[object]
@@ -540,7 +549,14 @@ foreach ($fr in $fixtureResults) {
         classification = $fr.Classification; origin = $fr.Origin; detail = 'PASS' }
 }
 
-foreach ($row in @($guidanceRows | Sort-Object -Property @{Expression = { $_.SignalId }})) {
+# Ordinal by signalId, for the same locale-independence reason as the ranking sort above.
+$sortedGuidanceRows = $guidanceRows.ToArray()
+if ($sortedGuidanceRows.Length -gt 1) {
+    [Array]::Sort($sortedGuidanceRows, [System.Comparison[object]]{
+        param($a, $b) [string]::CompareOrdinal([string]$a.SignalId, [string]$b.SignalId)
+    })
+}
+foreach ($row in $sortedGuidanceRows) {
     Add-CsvRow @{ section = 'signal'; signalId = $row.SignalId; companyId = $row.CompanyId
         origin = $row.Origin; classification = $row.Classification; direction = $row.Direction
         strength = $row.Strength; confidence = ('{0:0.00}' -f $row.Confidence) }
