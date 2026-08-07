@@ -242,15 +242,10 @@ public sealed class HttpRssFeedReaderTests
     {
         // Reproduces https://www.idt.net/feed/ : HTTP 200, well-formed RSS, but a server-side stray-output
         // bug emits blank lines and spaces before the XML declaration. XmlReader rejects that outright, so
-        // without the leading-noise tolerance the whole feed is discarded as malformed.
+        // without the leading-noise tolerance the whole feed is discarded as malformed. The escaped bytes
+        // below are the real feed's prefix, verbatim.
         var reader = CreateReader(new ByteStubHandler(
-            HttpStatusCode.OK, Encoding.UTF8.GetBytes("
-
-
-
-    
-
-" + ValidRss)));
+            HttpStatusCode.OK, Encoding.UTF8.GetBytes("\n\n\n\n    \n\n" + ValidRss)));
 
         var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
@@ -265,12 +260,10 @@ public sealed class HttpRssFeedReaderTests
     public async Task ReadAsync_Utf8BomThenLeadingWhitespace_ParsesItems()
     {
         // Order matters: the BOM comes first, so the whitespace scan has to step over it to reach the
-        // declaration.
+        // declaration. CR and tab are in the mix deliberately - all four ASCII whitespace bytes count.
         var body = new List<byte>();
         body.AddRange(Encoding.UTF8.GetPreamble());
-        body.AddRange(Encoding.UTF8.GetBytes("
-	  
-" + ValidRss));
+        body.AddRange(Encoding.UTF8.GetBytes("\r\n\t  \r\n" + ValidRss));
         var reader = CreateReader(new ByteStubHandler(HttpStatusCode.OK, body.ToArray()));
 
         var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
@@ -301,10 +294,7 @@ public sealed class HttpRssFeedReaderTests
     {
         // The tolerance must not launder genuine breakage into a success: it only moves past the noise.
         var reader = CreateReader(new ByteStubHandler(
-            HttpStatusCode.OK, Encoding.UTF8.GetBytes("
-
-   
- this is not <xml")));
+            HttpStatusCode.OK, Encoding.UTF8.GetBytes("\n\n   \n this is not <xml")));
 
         var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
@@ -315,10 +305,7 @@ public sealed class HttpRssFeedReaderTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("
-
-	
-   ")]
+    [InlineData("\n\n\t\n   ")]
     public async Task ReadAsync_EmptyOrAllWhitespaceBody_ReturnsMalformedWithoutThrowing(string body)
     {
         // Degenerate inputs must land on the ordinary Malformed path, never an unhandled exception.
@@ -346,9 +333,7 @@ public sealed class HttpRssFeedReaderTests
     {
         // The status ladder runs before the body is ever looked at; the tolerance must not reach it.
         var reader = CreateReader(new ByteStubHandler(
-            HttpStatusCode.Forbidden, Encoding.UTF8.GetBytes("
-
-" + ValidRss)));
+            HttpStatusCode.Forbidden, Encoding.UTF8.GetBytes("\n\n" + ValidRss)));
 
         var result = await reader.ReadAsync("https://acme.test/rss", CancellationToken.None);
 
@@ -357,6 +342,7 @@ public sealed class HttpRssFeedReaderTests
         Assert.Contains("403", result.Detail);
         Assert.Empty(result.Items);
     }
+
 
     [Fact]
     public async Task ReadAsync_HttpRequestException_ReturnsUnreachableWithoutThrowing()
