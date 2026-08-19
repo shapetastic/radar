@@ -226,7 +226,7 @@ public static class InfrastructureServiceCollectionExtensions
         ScoringWeights weights;
         if (section.Exists())
         {
-            weights = section.Get<ScoringWeights>() ?? new ScoringWeights();
+            weights = BindScoringProfileSection(section, effectiveName, requestingConfigKey);
         }
         else if (!string.IsNullOrWhiteSpace(requestedProfile)
             && !string.Equals(effectiveName, "default", StringComparison.OrdinalIgnoreCase))
@@ -246,6 +246,86 @@ public static class InfrastructureServiceCollectionExtensions
         weights.Validate();
 
         return (effectiveName, weights);
+    }
+
+    /// <summary>
+    /// Binds ONE existing scoring-profile section with the spec-149 fail-open guards extended to the named
+    /// profile path (spec 174, the arch-sweep M-1). Pre-174 this was
+    /// <c>section.Get&lt;ScoringWeights&gt;() ?? new ScoringWeights()</c>: a mis-shaped profile (a scalar
+    /// body) silently bound the CODE DEFAULTS, and a typo'd weight key inside a well-formed profile
+    /// (<c>"MediaReachWieght"</c>) was silently ignored by the binder — so the experiment ran, stamped and got
+    /// RANKED (spec 140) at defaults while reading as tuned. The guards mirror
+    /// <see cref="ApplyInlineWeightOverrides"/> (whose own messages are pinned by tests and therefore not
+    /// rerouted) and reuse the SAME <see cref="ScoringWeightNames"/> set, so the profile path and the inline
+    /// path can never disagree about what a weight key is. Every failure names the profile AND
+    /// <paramref name="requestingConfigKey"/>, so an ambient failure names <c>Radar:Scoring:Profile</c> and a
+    /// per-strategy failure names its strategy's <c>ScoringProfile</c> key. The ONE legitimate quiet case is
+    /// preserved: a section that exists with no children and no scalar value (an empty or explicitly-null
+    /// profile object) is an honest "all code defaults", not a mis-shape.
+    /// </summary>
+    private static ScoringWeights BindScoringProfileSection(
+        IConfigurationSection section, string profileName, string requestingConfigKey)
+    {
+        ConfigSectionGuards.FailIfScalarSection(
+            section,
+            $"scoring profile '{profileName}' (requested by {requestingConfigKey}) must be a JSON OBJECT of "
+                + "ScoringWeights field names to numbers (e.g. { \"MediaReachWeight\": 0.05 }); a scalar body "
+                + "would otherwise silently bind the code defaults while the run reads as tuned. Write the "
+                + "profile as an object, or remove it to use the code defaults.");
+
+        var children = section.GetChildren().ToList();
+        if (children.Count == 0)
+        {
+            // An empty/null profile object binds nothing — an honest "all defaults", never a mis-shape.
+            return new ScoringWeights();
+        }
+
+        ConfigSectionGuards.FailOnUnknownKeys(
+            section,
+            ScoringWeightNames,
+            "ScoringWeights",
+            $"so scoring profile '{profileName}' (requested by {requestingConfigKey}) would run with the code "
+                + "default for it while appearing tuned. Every profile key must name a scoring weight");
+
+        foreach (var child in children)
+        {
+            // Per-ENTRY shape guard (same rationale as ApplyInlineWeightOverrides): every ScoringWeights
+            // field is a plain number, so a known key carrying a nested object, an array or an explicit null
+            // can only leave the profile untuned (or differently tuned) while it reads as tuned.
+            if (child.GetChildren().Any() || child.Value is null)
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path} carries no numeric value for scoring profile '{profileName}' (requested by "
+                        + $"{requestingConfigKey}); every ScoringWeights field is a plain NUMBER (e.g. "
+                        + "{ \"MediaReachWeight\": 0.05 }), not a nested object, an array or null. Omit the "
+                        + "key entirely to keep the code default.");
+            }
+        }
+
+        ScoringWeights? bound;
+        try
+        {
+            bound = section.Get<ScoringWeights>();
+        }
+        catch (InvalidOperationException ex)
+        {
+            // The binder's own message names the config path but not which profile (or which requesting key)
+            // is broken; rethrow naming both, keeping the binder exception as InnerException so the offending
+            // key, target type and underlying FormatException all survive.
+            throw new InvalidOperationException(
+                $"{section.Path}: scoring profile '{profileName}' (requested by {requestingConfigKey}) has an "
+                    + "entry that could not be bound; every ScoringWeights field must be a NUMBER. "
+                    + ex.Message,
+                ex);
+        }
+
+        // Unreachable once the section has children (the binder constructs an instance), but stated as a
+        // throw rather than the pre-174 silent `?? new ScoringWeights()`: an existing, non-empty profile must
+        // never silently revert to the code defaults.
+        return bound ?? throw new InvalidOperationException(
+            $"{section.Path} exists but could not be bound as ScoringWeights for scoring profile "
+                + $"'{profileName}' (requested by {requestingConfigKey}); write the profile as a JSON object "
+                + "of weight fields, or remove it to use the code defaults.");
     }
 
     /// <summary>
@@ -410,9 +490,12 @@ public static class InfrastructureServiceCollectionExtensions
 
     /// <summary>
     /// The public, settable <see cref="ScoringWeights"/> property names — the ONLY accepted keys under a
-    /// strategy's inline <c>Weights</c> (spec 149). Built by reflection FROM the record, so a new weight is
-    /// tunable inline the day it is added and this set can never drift from what the binder would actually
-    /// bind.
+    /// strategy's inline <c>Weights</c> (spec 149) AND, since spec 174, under a named
+    /// <c>Radar:Scoring:Profiles:{name}</c> profile (<see cref="BindScoringProfileSection"/>): one set, reused
+    /// at both call sites, never derived twice. Built by reflection FROM the record (via
+    /// <see cref="ConfigSectionGuards.BindablePropertyNames"/>, the one derivation behind every spec-174
+    /// allowlist), so a new weight is tunable the day it is added and this set can never drift from what the
+    /// binder would actually bind.
     /// <para>
     /// <b>Case-INSENSITIVE, deliberately.</b> <c>ConfigurationBinder</c> matches config keys to properties
     /// case-insensitively, so a case-sensitive validator would disagree with the binder in both directions:
@@ -423,11 +506,7 @@ public static class InfrastructureServiceCollectionExtensions
     /// </para>
     /// </summary>
     private static readonly HashSet<string> ScoringWeightNames =
-        typeof(ScoringWeights)
-            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-            .Where(p => p.CanRead && p.CanWrite)
-            .Select(p => p.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        ConfigSectionGuards.BindablePropertyNames(typeof(ScoringWeights));
 
     /// <summary>
     /// Applies ONE strategy's inline <c>Weights</c> object (spec 149) on top of the weights its
@@ -822,6 +901,23 @@ public static class InfrastructureServiceCollectionExtensions
         InsiderMaterialityWeights weights;
         if (section.Exists())
         {
+            // Spec 174 shape/key guards (the arch-sweep M-1): the binder silently ignores a typo'd top-level
+            // key ("ClusterBost"), and a mis-shaped profile used to silently revert to the code defaults —
+            // an experiment that reads as tuned while measuring nothing. Guards run BEFORE the bind so a
+            // broken profile fails naming itself.
+            ConfigSectionGuards.FailIfScalarSection(
+                section,
+                $"insider profile '{effectiveName}' (requested by Radar:Insider:Profile) must be a JSON "
+                    + "OBJECT carrying BuyTiers/SellTiers arrays and/or a ClusterBoost number. Write the "
+                    + "profile as an object, or remove it to use the code defaults.");
+            ConfigSectionGuards.FailOnUnknownKeys(
+                section,
+                InsiderMaterialityNames,
+                "InsiderMaterialityWeights",
+                $"so insider profile '{effectiveName}' (requested by Radar:Insider:Profile) would run with "
+                    + "the code default for it while appearing tuned. Every profile key must name a "
+                    + "materiality field");
+
             // Bind each list sub-section into a FRESH list (Get<List<T>> starts empty), overriding a whole
             // table only when the profile supplies it — otherwise keep the code default. Binding the record
             // directly with Get<InsiderMaterialityWeights>() would APPEND the profile's tiers onto the
@@ -830,9 +926,9 @@ public static class InfrastructureServiceCollectionExtensions
             var defaults = new InsiderMaterialityWeights();
             weights = defaults with
             {
-                BuyTiers = BindTiersOrDefault(section.GetSection("BuyTiers"), defaults.BuyTiers),
-                SellTiers = BindTiersOrDefault(section.GetSection("SellTiers"), defaults.SellTiers),
-                ClusterBoost = section.GetValue("ClusterBoost", defaults.ClusterBoost),
+                BuyTiers = BindTiersOrDefault(section.GetSection("BuyTiers"), defaults.BuyTiers, effectiveName),
+                SellTiers = BindTiersOrDefault(section.GetSection("SellTiers"), defaults.SellTiers, effectiveName),
+                ClusterBoost = BindClusterBoostOrDefault(section, defaults.ClusterBoost, effectiveName),
             };
         }
         else if (!string.IsNullOrWhiteSpace(name)
@@ -856,13 +952,156 @@ public static class InfrastructureServiceCollectionExtensions
         return services;
     }
 
-    // Binds a tier table from its config sub-section into a FRESH list (clean replace semantics); returns the
-    // supplied fallback (the code default) when the profile does not define the table at all.
+    /// <summary>
+    /// The public, settable <see cref="InsiderMaterialityWeights"/> / <see cref="InsiderMaterialityTier"/>
+    /// property names — the only accepted keys of an insider profile / of a tier entry (spec 174). Derived
+    /// through the SAME reflection projection as <see cref="ScoringWeightNames"/>
+    /// (<see cref="ConfigSectionGuards.BindablePropertyNames"/>), OrdinalIgnoreCase because that is the
+    /// comparison the binder itself uses — see the rationale on <see cref="ScoringWeightNames"/>.
+    /// </summary>
+    private static readonly HashSet<string> InsiderMaterialityNames =
+        ConfigSectionGuards.BindablePropertyNames(typeof(InsiderMaterialityWeights));
+
+    private static readonly HashSet<string> InsiderMaterialityTierNames =
+        ConfigSectionGuards.BindablePropertyNames(typeof(InsiderMaterialityTier));
+
+    /// <summary>
+    /// Binds a tier table from its config sub-section into a FRESH list (clean replace semantics); returns the
+    /// supplied fallback (the code default) when the profile does not define the table at all — or defines it
+    /// as an empty/null array, which binds nothing (pre-174 behaviour, byte-identical). Spec 174: an EXISTING
+    /// table must bind or fail — the pre-174 <c>?? fallback</c> silently reverted an unbindable table to the
+    /// code default (the exact arch-sweep M-1 shape), and the binder silently ignored a typo'd tier-entry key.
+    /// </summary>
     private static IReadOnlyList<InsiderMaterialityTier> BindTiersOrDefault(
-        IConfigurationSection section, IReadOnlyList<InsiderMaterialityTier> fallback) =>
-        section.Exists()
-            ? section.Get<List<InsiderMaterialityTier>>() ?? fallback
-            : fallback;
+        IConfigurationSection section, IReadOnlyList<InsiderMaterialityTier> fallback, string profileName)
+    {
+        if (!section.Exists())
+        {
+            return fallback;
+        }
+
+        ConfigSectionGuards.FailIfScalarSection(
+            section,
+            $"a tier table for insider profile '{profileName}' must be a JSON ARRAY of "
+                + "{ MinInclusive, Strength } entries (e.g. [ { \"MinInclusive\": 250000, \"Strength\": 6 } ])."
+                + " Omit the table entirely to keep the code default.");
+
+        var entries = section.GetChildren().ToList();
+        if (entries.Count == 0)
+        {
+            return fallback;
+        }
+
+        foreach (var entry in entries)
+        {
+            if (!entry.GetChildren().Any())
+            {
+                throw new InvalidOperationException(
+                    $"{entry.Path} is not a {{ MinInclusive, Strength }} object for insider profile "
+                        + $"'{profileName}'"
+                        + (entry.Value is null ? string.Empty : $" (it is the scalar '{entry.Value}')")
+                        + "; every tier entry must be an object carrying MinInclusive and Strength.");
+            }
+
+            ConfigSectionGuards.FailOnUnknownKeys(
+                entry,
+                InsiderMaterialityTierNames,
+                "InsiderMaterialityTier",
+                $"so insider profile '{profileName}' would keep a default tier value while appearing tuned. "
+                    + "Every tier-entry key must name a tier field");
+
+            foreach (var field in entry.GetChildren())
+            {
+                if (field.GetChildren().Any() || field.Value is null)
+                {
+                    throw new InvalidOperationException(
+                        $"{field.Path} carries no numeric value for insider profile '{profileName}'; "
+                            + "MinInclusive and Strength are plain NUMBERS, not nested objects, arrays or "
+                            + "null.");
+                }
+
+                // The binder SWALLOWS a failed conversion inside a LIST element (BindCollection wraps each
+                // item in a catch and silently drops it — measured, not assumed: a non-numeric MinInclusive
+                // used to produce an EMPTY table rather than a throw), so a non-numeric tier value must be
+                // rejected here, or a broken tier silently vanishes from the table.
+                var parses = field.Key.Equals(
+                        nameof(InsiderMaterialityTier.Strength), StringComparison.OrdinalIgnoreCase)
+                    ? int.TryParse(field.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)
+                    : decimal.TryParse(field.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out _);
+                if (!parses)
+                {
+                    throw new InvalidOperationException(
+                        $"{field.Path} is '{field.Value}' for insider profile '{profileName}', which is not "
+                            + "a number; MinInclusive and Strength must both be NUMBERS (culture-invariant, "
+                            + "'.' decimal separator).");
+                }
+            }
+        }
+
+        List<InsiderMaterialityTier>? bound;
+        try
+        {
+            bound = section.Get<List<InsiderMaterialityTier>>();
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException(
+                $"{section.Path}: insider profile '{profileName}' has a tier entry that could not be bound; "
+                    + "MinInclusive and Strength must both be NUMBERS. " + ex.Message,
+                ex);
+        }
+
+        if (bound is null || bound.Count != entries.Count)
+        {
+            // Belt-and-braces against the binder's silent element drop: an existing table must bind EVERY
+            // declared entry or fail — never silently shrink, and never silently revert to the code default.
+            throw new InvalidOperationException(
+                $"{section.Path} declares {entries.Count} tier entries for insider profile '{profileName}' "
+                    + $"but only {bound?.Count ?? 0} could be bound; the binder silently drops an unbindable "
+                    + "list element, and a silently shortened tier table would mis-map materiality. Fix the "
+                    + "entries, or remove the table to use the code default.");
+        }
+
+        return bound;
+    }
+
+    /// <summary>
+    /// Reads an optional <c>ClusterBoost</c> number with the spec-174 guards. <c>GetValue</c> THROWS on a
+    /// present-but-unparseable scalar (verified by test — <c>ConfigurationBinder.ConvertValue</c> wraps the
+    /// conversion failure in an <see cref="InvalidOperationException"/>), which is rethrown here naming the
+    /// profile; but it silently returns the DEFAULT when the key carries a nested object/array (its
+    /// <c>Value</c> is null), so that shape is guarded explicitly — a silently-defaulted boost on a profile
+    /// that reads as tuned is the exact M-1 fail-open.
+    /// </summary>
+    private static int BindClusterBoostOrDefault(
+        IConfigurationSection profileSection, int fallback, string profileName)
+    {
+        var section = profileSection.GetSection("ClusterBoost");
+        if (!section.Exists())
+        {
+            return fallback;
+        }
+
+        if (section.GetChildren().Any())
+        {
+            throw new InvalidOperationException(
+                $"{section.Path} carries no numeric value for insider profile '{profileName}'; ClusterBoost "
+                    + "is a plain NUMBER (e.g. 1), not a nested object or array. Omit the key entirely to "
+                    + "keep the code default.");
+        }
+
+        try
+        {
+            return profileSection.GetValue("ClusterBoost", fallback);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException(
+                $"{section.Path}: insider profile '{profileName}' has a ClusterBoost that could not be parsed "
+                    + "as a number. " + ex.Message,
+                ex);
+        }
+    }
 
     /// <summary>
     /// Resolves the effective same-event media-collapse window (spec 109) and registers the concrete
@@ -883,7 +1122,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         var section = configuration.GetSection("Radar:Scoring:MediaCollapse");
         var options = section.Exists()
-            ? section.Get<MediaCollapseOptions>() ?? new MediaCollapseOptions()
+            ? BindMediaCollapseSection(section)
             : new MediaCollapseOptions();
 
         // Fail fast at registration on a non-positive window (also enforced in the collapse ctor).
@@ -891,6 +1130,250 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddSingleton(options);
         return services;
+    }
+
+    /// <summary>
+    /// The public, settable <see cref="MediaCollapseOptions"/> property names (spec 174) — currently just
+    /// <c>EventWindowDays</c>: the derived <c>EventWindow</c> is get-only, so
+    /// <see cref="ConfigSectionGuards.BindablePropertyNames"/> excludes it exactly as the binder does.
+    /// </summary>
+    private static readonly HashSet<string> MediaCollapseNames =
+        ConfigSectionGuards.BindablePropertyNames(typeof(MediaCollapseOptions));
+
+    /// <summary>
+    /// Binds an existing <c>Radar:Scoring:MediaCollapse</c> section with the spec-174 guards: pre-174 a
+    /// mis-shaped section silently kept the 3-day default via <c>?? new MediaCollapseOptions()</c> and a
+    /// typo'd key (<c>"EventWindowDay"</c>) was silently ignored. A present-and-EMPTY section still binds the
+    /// code defaults, unchanged — only a mis-shape or an unknown key fails.
+    /// </summary>
+    private static MediaCollapseOptions BindMediaCollapseSection(IConfigurationSection section)
+    {
+        ConfigSectionGuards.FailIfScalarSection(
+            section,
+            "Radar:Scoring:MediaCollapse must be a JSON OBJECT (e.g. { \"EventWindowDays\": 3 }); a scalar "
+                + "body would otherwise silently keep the code default while the run reads as tuned. Omit "
+                + "the section entirely to keep the default.");
+
+        ConfigSectionGuards.FailOnUnknownKeys(
+            section,
+            MediaCollapseNames,
+            "MediaCollapseOptions",
+            "so the run would keep the code-default collapse window while appearing tuned. Every key must "
+                + "name a media-collapse field");
+
+        foreach (var child in section.GetChildren())
+        {
+            if (child.GetChildren().Any() || child.Value is null)
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path} carries no numeric value; every MediaCollapseOptions field is a plain "
+                        + "NUMBER (e.g. { \"EventWindowDays\": 3 }), not a nested object, an array or null. "
+                        + "Omit the key entirely to keep the code default.");
+            }
+        }
+
+        try
+        {
+            // A present-and-empty section binds nothing → code defaults, unchanged (the one quiet case).
+            return section.Get<MediaCollapseOptions>() ?? new MediaCollapseOptions();
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException(
+                "Radar:Scoring:MediaCollapse has an entry that could not be bound; every field must be a "
+                    + "NUMBER. " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// The public, settable <see cref="AttentionSourceTierOptions"/> and nested
+    /// <see cref="AttentionSourceTierOptions.SourceTier"/> property names (spec 174). Note
+    /// <see cref="AttentionSourceTierOptions.Default"/> is STATIC and the nested <c>SourceTier</c> class is
+    /// not a property, so neither appears in the set — <c>BindingFlags.Instance</c> excludes statics, exactly
+    /// as the binder does.
+    /// </summary>
+    private static readonly HashSet<string> AttentionTierOptionNames =
+        ConfigSectionGuards.BindablePropertyNames(typeof(AttentionSourceTierOptions));
+
+    private static readonly HashSet<string> AttentionSourceTierNames =
+        ConfigSectionGuards.BindablePropertyNames(typeof(AttentionSourceTierOptions.SourceTier));
+
+    /// <summary>
+    /// Resolves the attention source-quality tiers (spec 88) from <c>Radar:Attention</c> and registers the
+    /// concrete <see cref="AttentionSourceTierOptions"/> as a singleton so it wins over the library's
+    /// <c>TryAddSingleton</c> default (call this BEFORE <see cref="AddRadarApplicationServices"/>, mirroring
+    /// <see cref="AddRadarScoringWeights"/>). Moved here from an inline bind in the Worker by spec 174 — it
+    /// was the ONE scoring-affecting bind living outside this DI home — and given the same shape/key guards
+    /// as the other binders: an absent (or explicitly null/empty) section still yields
+    /// <see cref="AttentionSourceTierOptions.Default"/>, but an EXISTING section must bind or fail fast — the
+    /// pre-174 <c>?? Default</c> silently swallowed a mis-shaped section, and the binder silently ignored a
+    /// typo'd key. <c>SourceTiers</c> is a dictionary whose KEYS are free-form tier names and are deliberately
+    /// NOT validated; each tier's VALUE is shape-checked against
+    /// <see cref="AttentionSourceTierOptions.SourceTier"/> (<c>Weight</c> a number, <c>Publishers</c> an
+    /// array). <see cref="ConfiguredAttentionSourceWeights"/> still validates the bound VALUES at startup,
+    /// unchanged — these guards are about shape and key validity, which the value validator structurally
+    /// cannot see.
+    /// </summary>
+    public static IServiceCollection AddRadarAttentionTiers(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddSingleton(ResolveAttentionTiers(configuration.GetSection("Radar:Attention")));
+        return services;
+    }
+
+    private static AttentionSourceTierOptions ResolveAttentionTiers(IConfigurationSection section)
+    {
+        if (!section.Exists())
+        {
+            // The ONLY surviving Default fallback (spec 174): an absent section.
+            return AttentionSourceTierOptions.Default;
+        }
+
+        ConfigSectionGuards.FailIfScalarSection(
+            section,
+            "Radar:Attention must be a JSON OBJECT carrying UnknownWeight and/or SourceTiers; a scalar body "
+                + "would otherwise silently fall back to the curated default while the run reads as tuned. "
+                + "Omit the section entirely to use the default tiers.");
+
+        if (!section.GetChildren().Any())
+        {
+            // An explicitly-null/empty section binds nothing — same as absent, preserving the long-standing
+            // "falls back to the curated code default when the section is absent/null" contract.
+            return AttentionSourceTierOptions.Default;
+        }
+
+        ConfigSectionGuards.FailOnUnknownKeys(
+            section,
+            AttentionTierOptionNames,
+            "AttentionSourceTierOptions",
+            "so the run would keep the curated default for it while appearing tuned. Every Radar:Attention "
+                + "key must name a tier-options field");
+
+        var unknownWeight = section.GetSection("UnknownWeight");
+        if (unknownWeight.Exists() && (unknownWeight.GetChildren().Any() || unknownWeight.Value is null))
+        {
+            throw new InvalidOperationException(
+                $"{unknownWeight.Path} carries no numeric value; UnknownWeight is a plain NUMBER in [0,1] "
+                    + "(e.g. 0.25), not a nested object, an array or null. Omit the key entirely to keep the "
+                    + "default.");
+        }
+
+        var tiers = section.GetSection("SourceTiers");
+        if (tiers.Exists())
+        {
+            ConfigSectionGuards.FailIfScalarSection(
+                tiers,
+                "Radar:Attention:SourceTiers must be a JSON OBJECT of tier NAME to { Weight, Publishers } "
+                    + "(tier names are free-form). Omit the key entirely to keep the default tiers.");
+
+            foreach (var tier in tiers.GetChildren())
+            {
+                // The tier NAME (the dictionary key) is free-form and deliberately not validated against
+                // anything; only the tier VALUE's shape is.
+                if (!tier.GetChildren().Any())
+                {
+                    throw new InvalidOperationException(
+                        $"{tier.Path} is not a {{ Weight, Publishers }} object"
+                            + (tier.Value is null ? string.Empty : $" (it is the scalar '{tier.Value}')")
+                            + "; every source tier must be an object carrying a Weight and a Publishers "
+                            + "array.");
+                }
+
+                ConfigSectionGuards.FailOnUnknownKeys(
+                    tier,
+                    AttentionSourceTierNames,
+                    "SourceTier",
+                    $"so tier '{tier.Key}' would keep a default value while appearing tuned. Every tier key "
+                        + "must name a tier field");
+
+                var weight = tier.GetSection("Weight");
+                if (weight.Exists())
+                {
+                    if (weight.GetChildren().Any() || weight.Value is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"{weight.Path} carries no numeric value; a tier's Weight is a plain NUMBER in "
+                                + "[0,1] (e.g. 0.1), not a nested object, an array or null.");
+                    }
+
+                    // The binder SWALLOWS a failed conversion inside a DICTIONARY element (measured, not
+                    // assumed: a non-numeric tier Weight used to bind without a throw, silently losing the
+                    // tier), so it must be rejected here.
+                    if (!double.TryParse(
+                            weight.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+                    {
+                        throw new InvalidOperationException(
+                            $"{weight.Path} is '{weight.Value}', which is not a number; a tier's Weight is a "
+                                + "plain NUMBER in [0,1] (culture-invariant, '.' decimal separator).");
+                    }
+                }
+
+                var publishers = tier.GetSection("Publishers");
+                if (publishers.Exists())
+                {
+                    if (!publishers.GetChildren().Any() && !string.IsNullOrWhiteSpace(publishers.Value))
+                    {
+                        throw new InvalidOperationException(
+                            $"{publishers.Path} is the scalar '{publishers.Value}'; Publishers must be a "
+                                + "JSON ARRAY of publisher names (e.g. [ \"Reuters\", \"Bloomberg\" ]).");
+                    }
+
+                    foreach (var publisher in publishers.GetChildren())
+                    {
+                        // The binder silently drops an unbindable list element, so a nested object where a
+                        // publisher NAME was meant would quietly shorten the list.
+                        if (publisher.GetChildren().Any() || publisher.Value is null)
+                        {
+                            throw new InvalidOperationException(
+                                $"{publisher.Path} is not a plain string; every Publishers entry is a "
+                                    + "publisher name (e.g. \"Reuters\"), not a nested object, an array or "
+                                    + "null.");
+                        }
+                    }
+                }
+            }
+        }
+
+        AttentionSourceTierOptions? bound;
+        try
+        {
+            bound = section.Get<AttentionSourceTierOptions>();
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException(
+                "Radar:Attention has an entry that could not be bound (UnknownWeight and each tier Weight "
+                    + "must be NUMBERS; Publishers must be an array of strings). " + ex.Message,
+                ex);
+        }
+
+        if (bound is null)
+        {
+            throw new InvalidOperationException(
+                "Radar:Attention exists but could not be bound as AttentionSourceTierOptions; an existing "
+                    + "section never silently falls back to the curated default. Fix the section, or remove "
+                    + "it entirely to use the default tiers.");
+        }
+
+        if (tiers.Exists())
+        {
+            // Belt-and-braces against the binder's silent dictionary-element drop: every declared tier must
+            // survive the bind or the run fails, never quietly scores with fewer tiers than were written.
+            var declared = tiers.GetChildren().Count();
+            if (bound.SourceTiers.Count != declared)
+            {
+                throw new InvalidOperationException(
+                    $"Radar:Attention:SourceTiers declares {declared} tiers but only "
+                        + $"{bound.SourceTiers.Count} could be bound; the binder silently drops an unbindable "
+                        + "dictionary element. Fix the tiers, or remove the section to use the default "
+                        + "tiers.");
+            }
+        }
+
+        return bound;
     }
 
     /// <summary>
