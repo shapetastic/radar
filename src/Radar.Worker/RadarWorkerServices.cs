@@ -10,7 +10,6 @@ using Radar.Application.Replay;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Infrastructure.Ai;
-using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Fda;
 using Radar.Infrastructure.Filings;
@@ -108,10 +107,10 @@ internal static class RadarWorkerServices
         // BEFORE AddRadarApplicationServices so configuration wins over the library default (its TryAddSingleton
         // is a no-op once this concrete instance is registered). Falls back to the curated code default when the
         // section is absent/null. ConfiguredAttentionSourceWeights validates the bound options at startup and
-        // fails fast on an invalid weight.
-        services.AddSingleton(
-            configuration.GetSection("Radar:Attention").Get<AttentionSourceTierOptions>()
-                ?? AttentionSourceTierOptions.Default);
+        // fails fast on an invalid weight. Since spec 174 the bind lives in the DI home
+        // (AddRadarAttentionTiers, beside the other scoring-affecting binders) with the same shape/key guards:
+        // an existing-but-mis-shaped section or a typo'd key now fails fast instead of silently defaulting.
+        services.AddRadarAttentionTiers(configuration);
 
         // Scoring magnitude weights (spec 89): resolve the Radar:Scoring:Profile / Profiles selection and
         // register the concrete ScoringWeights BEFORE AddRadarApplicationServices so configuration wins over
