@@ -22,6 +22,25 @@ this window — 14 FinancingOrDilution, 6 IndexOrTradingMechanics, 4 ProductOrTe
 It is read-side and shadow: no score, label, strategy, fingerprint or report rank changes. Typed attention as
 a scoring input is explicitly a later, separately named strategy spec.
 
+**This spec is STAGE 1 of a two-stage read architecture (maintainer decision, 2026-08-22).** Every recorded
+AI misread in this repo is a *judgment* failure, not an extraction failure — llama saw EOSE's −70% gross
+margin and said "Improving"; DeepSeek saw CASS's prior-year securities loss and called the doubling Positive;
+and the fix that worked (spec 160's comparability scan) is precisely a fact-extraction stage mechanically
+constraining a judgment. So extraction and direction-weighing are SEPARATED: this spec is the fact/event
+layer ("what kind of it, and what did it say"), receiving NO directional question; a later stage-2 spec adds
+the direction judge, which consumes ONLY the typed, citation-validated fact layer — never the raw persuasive
+prose — and cites fact ids, extending the provenance chain to judgment → fact → excerpt → observation →
+archive. Benefits this structure is chosen for: the judge never sees engineered headline framing; facts are
+extracted once and re-judged many ways (rubric changes re-run stage 2 only — decisive for the 13k backfill);
+extraction recall and judgment quality become separately measurable (spec 162 measured a 36.7%
+false-omission rate and could not localize it); and an asymmetric reader split (cheap local extractor,
+stronger judge) becomes testable.
+
+**Omission-bias guard at the new interface:** stage 1 decides what is "pertinent", and a fact it drops is a
+fact stage 2 can never see — the omission failure mode reborn at a new seam. Therefore stage 1 EXTRACTS
+LIBERALLY and stage 2 filters, never the reverse; the raw text stays archived (177) so nothing is ever
+unrecoverable; and stage-1 recall is measured against the §3 audited sample as a first-class number.
+
 ## Assignment
 
 Worktree: any
@@ -47,10 +66,11 @@ does not proceed on hope: the remedy is a prompt/schema revision in 179's cohort
 
 ## 2. What "typing" is and is not
 
-One observation → one primary event type (plus optional secondaries), with relevance and cited support. It
-is **not** sentiment: valence stays where it already lives (179's risk read; the earnings AI read). Typing an
-article as `FinancingOrDilution` records what the coverage is about, not whether it is bad — 179 already
-answers the bad. The two reads are complementary and their outputs are stored separately.
+One observation → one primary event type (plus optional secondaries), with relevance, cited support and a
+liberal list of pertinent facts. It is **not** sentiment and receives no directional question: valence stays
+where it already lives (179's risk read; the earnings AI read) until the stage-2 judge spec consumes this
+layer. Typing an article as `FinancingOrDilution` records what the coverage is about, not whether it is bad.
+The two reads are complementary and their outputs are stored separately.
 
 Closed per-observation schema:
 
@@ -59,8 +79,14 @@ Relevance        CompanySpecific | SectorOrMacroContext | NotAboutThisCompany | 
 PrimaryType      one taxonomy entry (§3)
 SecondaryTypes[] zero or more taxonomy entries
 Confidence       0..1
+PertinentFacts[] short factual statements, each with exact-substring citations — extracted LIBERALLY
+                 (stage 2 filters; stage 1 never pre-judges materiality), no directional language
 SupportingExcerpts[]   exact substrings of supplied text
 ```
+
+The `PertinentFacts` shape is finalized through the same §3 audit procedure as the taxonomy, and stage-1
+recall over the audited sample (facts a human judged pertinent that the extractor missed) is recorded as a
+headline number beside the citation-drop rate.
 
 Mechanical validation mirrors spec 179 §6, including its definition of archived text (the union of fields
 actually supplied). Invalid or uncited claims are dropped and counted; all-invalid results are
@@ -124,10 +150,14 @@ a parallel store keyed by observation id.
 
 ## 7. Out of scope, recorded not built
 
+- **The stage-2 direction judge** — its own spec, consuming ONLY this layer's typed facts by fact id,
+  citing them in every claim, and A/B-measured as a new cohort against the spec-179 single-call read
+  (citation-drop, category agreement, and the localized extraction-vs-judgment error split) rather than
+  asserted better. The asymmetric split (local extractor + stronger judge) is one of its cohorts.
 - Typed attention as a scoring input (an event-type-aware breadth channel, filtering
   `PromotionalOrListicle`/`IndexOrTradingMechanics` from attention, a typed-coverage strategy): each is a
   NEW named strategy/formula spec with its own fingerprint story, declared prospectively.
-- Sentiment/valence for general news (179 owns risk; anything broader is its own spec).
+- Sentiment/valence for general news (179 owns risk until stage 2 lands; anything broader is its own spec).
 - New providers or fetching beyond the spec-177 archive.
 
 ## Acceptance criteria
