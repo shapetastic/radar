@@ -163,6 +163,46 @@ public sealed class NewsRiskInputBundleBuilderTests
     }
 
     [Fact]
+    public void QualifyingCount_CountsDedupeSurvivors_NotDuplicates_AndTheCapMakesTheBundleCapped()
+    {
+        // Four observations, two sharing a normalized headline: THREE qualify (a dedupe-collapsed
+        // duplicate is NOT a cap drop — spec 182 §2). With a cap of 2, one qualifying article is dropped.
+        var a = NewsRiskTestData.Observation(Company, "Acme wins contract - Reuters", D.AddDays(-1));
+        var dupe = NewsRiskTestData.Observation(Company, "Acme wins contract - Yahoo Finance", D.AddDays(-2));
+        var b = NewsRiskTestData.Observation(Company, "Second story", D.AddDays(-3));
+        var c = NewsRiskTestData.Observation(Company, "Third story", D.AddDays(-4));
+
+        var uncapped = Build([a, dupe, b, c]);
+        Assert.Equal(3, uncapped.Articles.Count);
+        Assert.Equal(3, uncapped.QualifyingArticleCount);
+        Assert.Equal(NewsRiskAssessmentBundle.Complete, uncapped.Completeness);
+
+        var capped = Build([a, dupe, b, c], maxArticles: 2);
+        Assert.Equal(2, capped.Articles.Count);
+        Assert.Equal(3, capped.QualifyingArticleCount);
+        Assert.Equal(NewsRiskAssessmentBundle.Capped, capped.Completeness);
+    }
+
+    [Fact]
+    public void QualifyingCount_IsNotABundleHashInput_SoTheCacheKeyDoesNotMove()
+    {
+        // The hash stays over the SUPPLIED articles only: a capped bundle hashes identically to a bundle
+        // built from just its supplied articles, whatever the qualifying count says.
+        var a = NewsRiskTestData.Observation(Company, "First story", D.AddDays(-1));
+        var b = NewsRiskTestData.Observation(Company, "Second story", D.AddDays(-2));
+        var c = NewsRiskTestData.Observation(Company, "Third story", D.AddDays(-3));
+
+        var capped = Build([a, b, c], maxArticles: 2);
+        var exact = Build([a, b], maxArticles: 2);
+
+        Assert.Equal(NewsRiskAssessmentBundle.Capped, capped.Completeness);
+        Assert.Equal(NewsRiskAssessmentBundle.Complete, exact.Completeness);
+        Assert.Equal(exact.BundleHash, capped.BundleHash);
+        Assert.Equal(
+            NewsRiskInputBundleBuilder.ComputeBundleHash(capped.Articles), capped.BundleHash);
+    }
+
+    [Fact]
     public void BundleHash_ChangesWithContentIdentity_Order_AndSuppliedFields()
     {
         var obsA = NewsRiskTestData.Article(Guid.NewGuid(), "a", description: "d");

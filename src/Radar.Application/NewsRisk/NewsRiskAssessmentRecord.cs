@@ -5,16 +5,20 @@ namespace Radar.Application.NewsRisk;
 
 /// <summary>
 /// The CLOSED per-attempt status vocabulary. EVERY attempt is persisted (spec 179 §6) — no content,
-/// incomplete coverage, provider error, parse error and validation failure included — so absence of a
-/// record is never mistakable for a clean result. The first three are completed analyses; the rest are
-/// named non-results, none of which may ever render as "no risk".
+/// provider error, parse error and validation failure included — so absence of a record is never
+/// mistakable for a clean result. The first three are completed analyses; the rest are named
+/// non-results, none of which may ever render as "no risk".
 /// </summary>
 public enum NewsRiskAssessmentStatus
 {
     /// <summary>Completed: the supplied text supports ≥ 1 validated risk claim.</summary>
     ThesisChallenged = 0,
 
-    /// <summary>Completed: sufficient supplied text, no supported risk. Renders ONLY under the §7 fail-closed gate.</summary>
+    /// <summary>
+    /// Completed: sufficient supplied text, no supported risk — a statement about the SUPPLIED TEXT ONLY,
+    /// rendered with this run's three completeness dimensions stated beside it (spec 182 §3). Never an
+    /// all-clear about the company.
+    /// </summary>
     NoRiskFoundInSuppliedText,
 
     /// <summary>Completed: the supplied text was too thin to assess. Not a low score.</summary>
@@ -32,7 +36,14 @@ public enum NewsRiskAssessmentStatus
     /// <summary>The point-in-time bundle held zero admissible articles; no model call was made.</summary>
     NoContent,
 
-    /// <summary>The run's newssearch coverage / archive batch was incomplete or capped for this company; no model call was made (fail closed).</summary>
+    /// <summary>
+    /// RETIRED by spec 182 (never produced again): under spec 179 §4, incomplete newssearch coverage
+    /// blocked the model call entirely. Spec 182 records completeness as three independent dimensions
+    /// (<see cref="NewsRiskArchiveCapture"/>/<see cref="NewsRiskSearchEnumeration"/>/
+    /// <see cref="NewsRiskAssessmentBundle"/>) instead — completeness gates only ABSENCE claims, never
+    /// presence claims. The member stays so accrued v1 records still deserialize.
+    /// </summary>
+    [Obsolete("Spec 182 retired this status in favour of the recorded completeness dimensions; it is never produced.")]
     IncompleteCoverage,
 }
 
@@ -59,9 +70,15 @@ public sealed record NewsRiskShadowLimitsRecord(
 /// One durably persisted news-risk assessment ATTEMPT (spec 179 §6) — the frozen predictor the §9 evaluator
 /// later joins to forward prices. Carries the full provenance list: durable run id, selection/assessment
 /// cutoffs, selecting strategy/rank/snapshot facts, ordered observation ids + payload/body hashes,
-/// coverage/archive completeness, provider/exact model id, prompt/schema versions, the bounded raw-response
-/// hash, the §6-validated result, and creation time. Never a scoring input; never hashed into any
-/// fingerprint.
+/// the three spec-182 completeness dimensions, provider/exact model id, prompt/schema versions, the bounded
+/// raw-response hash, the §6-validated result, and creation time. Never a scoring input; never hashed into
+/// any fingerprint.
+/// <para>
+/// v2 (spec 182) replaced the v1 <c>CoverageComplete</c> boolean with the three INDEPENDENT dimension
+/// fields. A v1 JSON file deserializes safely: its extra <c>coverageComplete</c> property is ignored, and
+/// its missing dimension fields default to each enum's zero value — deliberately the DEGRADED state on
+/// every dimension, so no legacy record can ever read as best-state.
+/// </para>
 /// </summary>
 public sealed record NewsRiskAssessmentRecord(
     string SchemaVersion,
@@ -81,7 +98,9 @@ public sealed record NewsRiskAssessmentRecord(
     string CohortKey,
     string InputBundleHash,
     IReadOnlyList<NewsRiskInputObservationRef> Observations,
-    bool CoverageComplete,
+    NewsRiskArchiveCapture ArchiveCapture,
+    NewsRiskSearchEnumeration SearchEnumeration,
+    NewsRiskAssessmentBundle AssessmentBundle,
     IReadOnlyList<string> CoverageIssues,
     NewsRiskAssessmentStatus Status,
     int? RiskScore,
@@ -98,8 +117,8 @@ public sealed record NewsRiskAssessmentRecord(
     Guid? ReusedFromAssessmentId,
     DateTimeOffset CreatedAtUtc)
 {
-    /// <summary>The archive schema version stamped on every assessment record.</summary>
-    public const string CurrentSchemaVersion = "news-risk-assessment-v1";
+    /// <summary>The archive schema version stamped on every assessment record (v2: spec 182's three completeness dimensions).</summary>
+    public const string CurrentSchemaVersion = "news-risk-assessment-v2";
 
     /// <summary>Whether this attempt is a COMPLETED analysis (reusable through the §6 cache) rather than a named non-result.</summary>
     public bool IsCompletedAnalysis => Status

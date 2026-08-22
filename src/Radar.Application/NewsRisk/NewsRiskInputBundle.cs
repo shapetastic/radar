@@ -29,13 +29,30 @@ public sealed record NewsRiskInputArticle(
 
 /// <summary>
 /// The frozen point-in-time input bundle for one (candidate, run): ordered articles, the selection instant D,
-/// the honest assessment cutoff, and the ordered input-bundle hash the assessment cache keys on.
+/// the honest assessment cutoff, the ordered input-bundle hash the assessment cache keys on, and the count
+/// of QUALIFYING observations (admitted by the window/cutoff filters AND surviving the duplicate-headline
+/// collapse — spec 182 §2). <see cref="QualifyingArticleCount"/> exceeding <c>Articles.Count</c> means the
+/// article cap dropped qualifying observations; it is deliberately a count rather than a bool because the
+/// dropped volume is itself information. It is NOT a <see cref="BundleHash"/> input — the hash stays over
+/// the supplied articles only, so the assessment cache key does not move.
 /// </summary>
 public sealed record NewsRiskInputBundle(
     IReadOnlyList<NewsRiskInputArticle> Articles,
     DateTimeOffset SelectionAsOfUtc,
     DateTimeOffset AssessmentCutoffUtc,
-    string BundleHash);
+    string BundleHash,
+    int QualifyingArticleCount)
+{
+    /// <summary>
+    /// The spec-182 model-input completeness dimension: <c>Capped</c> when qualifying observations were
+    /// dropped by the bundle bound. Computed, so a <c>with</c>-copy (e.g. live body attachment) can never
+    /// carry a stale value.
+    /// </summary>
+    public NewsRiskAssessmentBundle Completeness =>
+        QualifyingArticleCount > Articles.Count
+            ? NewsRiskAssessmentBundle.Capped
+            : NewsRiskAssessmentBundle.Complete;
+}
 
 /// <summary>
 /// Deterministic point-in-time input-bundle construction (spec 179 §4). Pure — no clock, no I/O:
@@ -86,19 +103,23 @@ public static class NewsRiskInputBundleBuilder
 
         // Collapse exact duplicate normalized headlines: the comparison key is suffix-stripped + trimmed,
         // ordinal — the FIRST (newest) copy survives. Publisher diversity and exact ids stay visible on the
-        // surviving article; nothing else is normalized.
+        // surviving article; nothing else is normalized. Enumeration continues PAST the article cap (without
+        // adding) so the bundle can report how many QUALIFYING observations exist — a dedupe-collapsed
+        // duplicate is not a cap drop (spec 182 §2).
         var seenHeadlines = new HashSet<string>(StringComparer.Ordinal);
         var articles = new List<NewsRiskInputArticle>();
+        var qualifying = 0;
         var fetchedAttached = 0;
         foreach (var o in admitted)
         {
-            if (articles.Count >= maxArticlesPerCompany)
-            {
-                break;
-            }
-
             var normalized = (GoogleNewsHeadline.StripPublisherSuffix(o.Headline) ?? string.Empty).Trim();
             if (!seenHeadlines.Add(normalized))
+            {
+                continue;
+            }
+
+            qualifying++;
+            if (articles.Count >= maxArticlesPerCompany)
             {
                 continue;
             }
@@ -134,7 +155,8 @@ public static class NewsRiskInputBundleBuilder
             Articles: articles,
             SelectionAsOfUtc: selectionAsOfUtc,
             AssessmentCutoffUtc: ComputeCutoff(selectionAsOfUtc, articles),
-            BundleHash: ComputeBundleHash(articles));
+            BundleHash: ComputeBundleHash(articles),
+            QualifyingArticleCount: qualifying);
     }
 
     /// <summary>
