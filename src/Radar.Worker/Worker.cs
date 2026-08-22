@@ -5,6 +5,8 @@ using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.EntityResolution;
 using Radar.Application.News;
+using Radar.Application.NewsRisk;
+using Radar.Application.NewsRisk.Evaluation;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -68,6 +70,8 @@ public sealed class Worker : BackgroundService
     private readonly IScoreMoveDenominatorAuditGenerator? _denominatorAuditGenerator;
     private readonly CompanyFilter? _companyFilter;
     private readonly INewsObservationMigration? _newsObservationMigration;
+    private readonly INewsRiskShadowGenerator? _newsRiskShadowGenerator;
+    private readonly INewsRiskEvaluationGenerator? _newsRiskEvaluationGenerator;
 
     public Worker(
         ICompanyUniverseSeeder seeder,
@@ -83,7 +87,9 @@ public sealed class Worker : BackgroundService
         CompanyFilter? companyFilter = null,
         IAttentionArrivalScreenGenerator? attentionArrivalGenerator = null,
         IScoreMoveDenominatorAuditGenerator? denominatorAuditGenerator = null,
-        INewsObservationMigration? newsObservationMigration = null)
+        INewsObservationMigration? newsObservationMigration = null,
+        INewsRiskShadowGenerator? newsRiskShadowGenerator = null,
+        INewsRiskEvaluationGenerator? newsRiskEvaluationGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -106,6 +112,8 @@ public sealed class Worker : BackgroundService
         _denominatorAuditGenerator = denominatorAuditGenerator;
         _companyFilter = companyFilter;
         _newsObservationMigration = newsObservationMigration;
+        _newsRiskShadowGenerator = newsRiskShadowGenerator;
+        _newsRiskEvaluationGenerator = newsRiskEvaluationGenerator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -175,19 +183,16 @@ public sealed class Worker : BackgroundService
 
             if (_options.RunOnce)
             {
-                await RunPipelineAsync(stoppingToken).ConfigureAwait(false);
-                await RunEfficacyReportAsync(stoppingToken).ConfigureAwait(false);
+                await RunPipelineAndFollowUpsAsync(stoppingToken).ConfigureAwait(false);
                 _lifetime.StopApplication();
                 return;
             }
 
             using var timer = new PeriodicTimer(_options.Interval, _timeProvider);
-            await RunPipelineAsync(stoppingToken).ConfigureAwait(false);
-            await RunEfficacyReportAsync(stoppingToken).ConfigureAwait(false);
+            await RunPipelineAndFollowUpsAsync(stoppingToken).ConfigureAwait(false);
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                await RunPipelineAsync(stoppingToken).ConfigureAwait(false);
-                await RunEfficacyReportAsync(stoppingToken).ConfigureAwait(false);
+                await RunPipelineAndFollowUpsAsync(stoppingToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -197,7 +202,16 @@ public sealed class Worker : BackgroundService
         }
     }
 
-    private async Task RunPipelineAsync(CancellationToken ct)
+    private async Task RunPipelineAndFollowUpsAsync(CancellationToken ct)
+    {
+        var result = await RunPipelineAsync(ct).ConfigureAwait(false);
+        // Spec 179 §2: the news-risk shadow read runs BEFORE the existing efficacy step, consuming the
+        // exact section instances and durable run id the pipeline result carries.
+        await RunNewsRiskShadowAsync(result, ct).ConfigureAwait(false);
+        await RunEfficacyReportAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<RadarPipelineResult> RunPipelineAsync(CancellationToken ct)
     {
         var result = await _pipeline.RunAsync(ct).ConfigureAwait(false);
         _logger.LogInformation(
@@ -209,6 +223,45 @@ public sealed class Worker : BackgroundService
             result.SourcesFailed,
             result.SourcesChecked,
             result.ReportId);
+        return result;
+    }
+
+    // Spec 179: the in-process news-risk shadow read — a SEPARATE step AFTER the pipeline run (and before
+    // the efficacy step), OUTSIDE IRadarPipeline, following the efficacy-generator architecture. It consumes
+    // the EXACT spec-176 structured sections the run's report builder produced (handed through the pipeline
+    // result — never parsed Markdown, never a reopened score store) and reads NO price; the separate
+    // read-only evaluator that joins frozen assessments to prices runs immediately after it. Both are
+    // skipped entirely (dependencies null) unless Radar:NewsResearch:Shadow:Enabled in unfiltered full mode
+    // with a resolvable reader. The generator owns its own failure handling (a shadow failure writes a named
+    // FAILED artifact and never rolls back the run); the belt-and-braces catch here keeps even an unexpected
+    // escape from aborting the host loop.
+    private async Task RunNewsRiskShadowAsync(RadarPipelineResult result, CancellationToken ct)
+    {
+        if (_newsRiskShadowGenerator is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _newsRiskShadowGenerator
+                .GenerateAsync(result.RunId, result.StrategySections, ct)
+                .ConfigureAwait(false);
+
+            if (_newsRiskEvaluationGenerator is not null)
+            {
+                await _newsRiskEvaluationGenerator.GenerateAsync(ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex, "News-risk shadow step failed unexpectedly; the Radar run itself is unaffected.");
+        }
     }
 
     // Opt-in price-efficacy reporting (AD-14 read side): a SEPARATE step AFTER the pipeline run, DISTINCT from

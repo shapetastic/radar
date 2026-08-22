@@ -5,6 +5,7 @@ using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.News;
+using Radar.Application.NewsRisk;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -199,9 +200,12 @@ internal static class RadarWorkerServices
         }
 
         // Spec 177: the point-in-time news observation archive, the safe article-fetch seam, and the
-        // explicit one-shot migration. Strictly validated (unknown keys / invalid limits fail startup);
-        // observational only — none of it is hashed into any scoring fingerprint.
-        AddRadarNewsResearch(services, configuration, options, runMode, companyFilter);
+        // explicit one-shot migration. Spec 179 adds the in-process news-risk shadow read behind the same
+        // fail-closed block (registered only for an unfiltered full-mode run with a resolvable reader).
+        // Strictly validated (unknown keys / invalid limits fail startup); observational only — none of it
+        // is hashed into any scoring fingerprint.
+        var newsRiskShadowRegistered = AddRadarNewsResearch(
+            services, configuration, options, runMode, companyFilter);
 
         // Wire the AI chat-client seam ONLY when a provider is configured (opt-in gate). AI is not a collector,
         // so it is gated on Provider presence rather than the Collectors list. A blank Provider (the default)
@@ -314,6 +318,21 @@ internal static class RadarWorkerServices
             {
                 services.AddRadarScoreMoveDenominatorAudit(options.AuditsDirectory);
             }
+        }
+
+        // Spec 179 §9: the read-only frozen-assessment evaluator rides the shadow registration. It joins
+        // PERSISTED assessments + the committed development declarations + the price reference store, and
+        // writes only its own audit artifact pair (AD-14 read side — the ONE news-risk component that may
+        // touch price). The price store may already be registered by the Prices/Efficacy blocks above;
+        // otherwise the read-only file store is registered here over the same data/prices root.
+        if (newsRiskShadowRegistered)
+        {
+            if (!options.Prices.Enabled && !options.Efficacy.Enabled)
+            {
+                services.AddFilePriceHistoryStore(options.PricesDirectory);
+            }
+
+            services.AddRadarNewsRiskEvaluation(options.NewsResearch.Shadow.DevelopmentExamplesPath);
         }
 
         // Wire the historical as-of replay seam ONLY when the resolved run mode is Replay (spec 139, extended
@@ -618,59 +637,19 @@ internal static class RadarWorkerServices
     {
         if (!string.IsNullOrWhiteSpace(options.Ai.Provider))
         {
-            // For the OpenAI-compatible provider, an optional nested model (Radar:Ai:OpenAi:Model) overrides the
-            // top-level Radar:Ai:Model; blank falls back to the top-level model so a single Ai.Model keeps working.
-            var isOpenAiProvider = string.Equals(options.Ai.Provider.Trim(), "openai", StringComparison.OrdinalIgnoreCase);
-            // Trimmed here (not just inside ChatClientFactory) so the model used for the SDK call, the
-            // fingerprint descriptor and the analyzed-filing cache scope are all the same string.
-            var effectiveModel = (isOpenAiProvider && !string.IsNullOrWhiteSpace(options.Ai.OpenAi.Model)
-                ? options.Ai.OpenAi.Model
-                : options.Ai.Model)?.Trim() ?? string.Empty;
+            // The ONE ambient-config → AiClientOptions flattening (shared since spec 179 with the news-risk
+            // reader resolution, so the two cannot drift): nested-model fallback, env-var key resolution and
+            // the never-echo-a-secret guard all live in FlattenAiClientOptions.
+            var clientOptions = FlattenAiClientOptions(
+                options.Ai.Provider,
+                options.Ai.Model,
+                options.Ai.Anthropic,
+                options.Ai.Ollama,
+                options.Ai.OpenAi,
+                "Radar:Ai");
+            var effectiveModel = clientOptions.Model;
 
-            // Resolve the OpenAI-compatible API key from the env var NAMED by config (never from committed config,
-            // mirroring the SEC-User-Agent secret precedent). Only the env-var NAME may appear in a message/log —
-            // the key VALUE is never surfaced. Resolved only for the openai provider.
-            string openAiApiKey = string.Empty;
-            if (isOpenAiProvider)
-            {
-                var envVar = options.Ai.OpenAi.ApiKeyEnvVar?.Trim() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(envVar))
-                {
-                    throw new InvalidOperationException(
-                        "Radar:Ai:OpenAi:ApiKeyEnvVar must name the environment variable holding the OpenAI-compatible API key "
-                            + "(e.g. \"DEEPINFRA_API_KEY\") when Provider is \"openai\" — the key is never committed to config.");
-                }
-
-                // Guard against a mis-paste: ApiKeyEnvVar must be the NAME of an environment variable, not the key
-                // value. If it does not look like an env-var name, refuse WITHOUT echoing it — the messages below
-                // interpolate envVar, so a pasted secret must never be allowed to reach an exception or a log.
-                if (!IsLikelyEnvVarName(envVar))
-                {
-                    throw new InvalidOperationException(
-                        "Radar:Ai:OpenAi:ApiKeyEnvVar must be the NAME of an environment variable "
-                            + "(e.g. \"DEEPINFRA_API_KEY\"), not an API key value; the configured value is not a valid "
-                            + "environment-variable name. Its value is not echoed here in case it is a secret.");
-                }
-
-                openAiApiKey = Environment.GetEnvironmentVariable(envVar) ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(openAiApiKey))
-                {
-                    throw new InvalidOperationException(
-                        $"Environment variable '{envVar}' (named by Radar:Ai:OpenAi:ApiKeyEnvVar) is not set or is empty; "
-                            + "set it to the OpenAI-compatible host API key before selecting the \"openai\" provider. "
-                            + "The key value is never logged.");
-                }
-            }
-
-            services.AddRadarAi(new AiClientOptions
-            {
-                Provider = options.Ai.Provider,
-                Model = effectiveModel,
-                AnthropicApiKey = options.Ai.Anthropic.ApiKey,
-                OllamaEndpoint = options.Ai.Ollama.Endpoint,
-                OpenAiBaseUrl = options.Ai.OpenAi.BaseUrl,
-                OpenAiApiKey = openAiApiKey,
-            });
+            services.AddRadarAi(clientOptions);
 
             // The filing analyzer rides the same opt-in gate: it consumes the IChatClient AddRadarAi just
             // registered, so it is only wired when a provider is configured. Blank Provider = neither runs.
@@ -734,6 +713,74 @@ internal static class RadarWorkerServices
     }
 
     /// <summary>
+    /// Flattens one provider-config block (the <c>Radar:Ai</c> shape) into the already-resolved
+    /// <see cref="AiClientOptions"/> Infrastructure consumes. <paramref name="pathPrefix"/> names the block
+    /// in every message (<c>"Radar:Ai"</c> for the ambient seam — those messages are byte-identical to the
+    /// pre-179 inline ones — or <c>"Radar:NewsResearch:Shadow:Readers:{i}"</c> for a news-risk reader).
+    /// <list type="bullet">
+    /// <item>For the OpenAI-compatible provider, an optional nested model overrides the top-level one;
+    /// blank falls back so a single <c>Model</c> keeps working. Trimmed here so the SDK call, the
+    /// fingerprint descriptor and every cache/cohort scope agree on one string.</item>
+    /// <item>The OpenAI-compatible API key is resolved from the env var NAMED by config (never from
+    /// committed config, mirroring the SEC-User-Agent secret precedent). Only the env-var NAME may appear
+    /// in a message/log — the key VALUE is never surfaced, and a value that does not look like an env-var
+    /// name is refused WITHOUT being echoed (it may be a pasted secret).</item>
+    /// </list>
+    /// </summary>
+    private static AiClientOptions FlattenAiClientOptions(
+        string provider,
+        string topLevelModel,
+        AiAnthropicWorkerOptions anthropic,
+        AiOllamaWorkerOptions ollama,
+        AiOpenAiWorkerOptions openAi,
+        string pathPrefix)
+    {
+        var isOpenAiProvider = string.Equals(provider?.Trim(), "openai", StringComparison.OrdinalIgnoreCase);
+        var effectiveModel = (isOpenAiProvider && !string.IsNullOrWhiteSpace(openAi.Model)
+            ? openAi.Model
+            : topLevelModel)?.Trim() ?? string.Empty;
+
+        string openAiApiKey = string.Empty;
+        if (isOpenAiProvider)
+        {
+            var envVar = openAi.ApiKeyEnvVar?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(envVar))
+            {
+                throw new InvalidOperationException(
+                    $"{pathPrefix}:OpenAi:ApiKeyEnvVar must name the environment variable holding the OpenAI-compatible API key "
+                        + "(e.g. \"DEEPINFRA_API_KEY\") when Provider is \"openai\" — the key is never committed to config.");
+            }
+
+            if (!IsLikelyEnvVarName(envVar))
+            {
+                throw new InvalidOperationException(
+                    $"{pathPrefix}:OpenAi:ApiKeyEnvVar must be the NAME of an environment variable "
+                        + "(e.g. \"DEEPINFRA_API_KEY\"), not an API key value; the configured value is not a valid "
+                        + "environment-variable name. Its value is not echoed here in case it is a secret.");
+            }
+
+            openAiApiKey = Environment.GetEnvironmentVariable(envVar) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(openAiApiKey))
+            {
+                throw new InvalidOperationException(
+                    $"Environment variable '{envVar}' (named by {pathPrefix}:OpenAi:ApiKeyEnvVar) is not set or is empty; "
+                        + "set it to the OpenAI-compatible host API key before selecting the \"openai\" provider. "
+                        + "The key value is never logged.");
+            }
+        }
+
+        return new AiClientOptions
+        {
+            Provider = provider ?? string.Empty,
+            Model = effectiveModel,
+            AnthropicApiKey = anthropic.ApiKey,
+            OllamaEndpoint = ollama.Endpoint,
+            OpenAiBaseUrl = openAi.BaseUrl,
+            OpenAiApiKey = openAiApiKey,
+        };
+    }
+
+    /// <summary>
     /// Wires the spec-177 news-research seams from the fail-closed <c>Radar:NewsResearch</c> block.
     /// <list type="bullet">
     /// <item><b>Strict section validation first</b> (the specs-149/174 posture, via the shared
@@ -751,7 +798,7 @@ internal static class RadarWorkerServices
     /// replay fails fast naming both keys, and the retrospective-fetch pass requires the fetch seam.</item>
     /// </list>
     /// </summary>
-    private static void AddRadarNewsResearch(
+    private static bool AddRadarNewsResearch(
         IServiceCollection services,
         IConfiguration configuration,
         RadarWorkerOptions options,
@@ -763,6 +810,11 @@ internal static class RadarWorkerServices
         var research = options.NewsResearch;
         var fetch = research.ArticleFetch;
         var migration = research.Migration;
+        var shadow = research.Shadow;
+
+        // Shadow limits are validated regardless of Enabled (the spec-177 posture): an invalid limit is a
+        // configuration error now, not a trap that springs the day the shadow is switched on.
+        ValidateNewsRiskShadowLimits(shadow);
 
         if (string.IsNullOrWhiteSpace(research.ObservationDirectory))
         {
@@ -826,9 +878,26 @@ internal static class RadarWorkerServices
             });
         }
 
+        // The spec-179 shadow read runs ONLY on an unfiltered full-mode run (never a filtered, replay,
+        // score or collect pass — the mode/filter gate is structural: nothing shadow-related is registered
+        // there, so it cannot run "accidentally"). Inside that gate the two remaining rules fail FAST:
+        // structured sections are produced by report construction (GenerateReport=false is a
+        // contradiction), and a shadow with no resolvable reader is a fail-open, not a no-op.
+        var registerShadow = shadow.Enabled && runMode == RadarRunMode.Full && companyFilter is null;
+        if (registerShadow && !options.GenerateReport)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Shadow:Enabled is true while Radar:GenerateReport is false. The shadow "
+                    + "read consumes the EXACT structured strategy sections produced by weekly-report "
+                    + "construction (spec 179 §2) — with no report there are no sections and no candidate "
+                    + "rows. Enable the report, or disable the shadow.");
+        }
+
         // Score mode NEVER gets the archive (a score pass must not need a collection-side store); every
-        // other mode gets it when capture is on — or when the migration, which writes through it, runs.
-        var archiveWanted = runMode != RadarRunMode.Score && (research.CaptureRss || migration.Enabled);
+        // other mode gets it when capture is on — or when the migration (which writes through it) or the
+        // spec-179 shadow read (which reads observations, batch manifests and the boundary) runs.
+        var archiveWanted = runMode != RadarRunMode.Score
+            && (research.CaptureRss || migration.Enabled || registerShadow);
         if (archiveWanted)
         {
             services.AddFileNewsObservationArchive(research.ObservationDirectory);
@@ -849,6 +918,139 @@ internal static class RadarWorkerServices
             });
             services.AddSingleton<INewsObservationMigration, NewsObservationMigration>();
         }
+
+        if (registerShadow)
+        {
+            services.AddRadarNewsRiskShadow(
+                new NewsRiskShadowOptions(
+                    outputDirectory: shadow.OutputDirectory,
+                    lookbackDays: shadow.LookbackDays,
+                    maxCompaniesPerRun: shadow.MaxCompaniesPerRun,
+                    maxArticlesPerCompany: shadow.MaxArticlesPerCompany,
+                    maxFetchedArticlesPerCompany: shadow.MaxFetchedArticlesPerCompany,
+                    // From the SAME const the kind→collector table uses (the AttentionArrival precedent), so
+                    // the coverage gate cannot drift from the collector that actually records coverage.
+                    newsSearchCollectorName: RadarCollectorNames.NewsSearch),
+                BuildNewsRiskReaderRegistrations(options));
+        }
+
+        return registerShadow;
+    }
+
+    /// <summary>
+    /// Fail-fast limit validation for the <c>Radar:NewsResearch:Shadow</c> block, applied even when the
+    /// shadow is disabled (the spec-177 posture: an invalid limit is a config error, not a latent one).
+    /// </summary>
+    private static void ValidateNewsRiskShadowLimits(NewsRiskShadowWorkerOptions shadow)
+    {
+        if (string.IsNullOrWhiteSpace(shadow.OutputDirectory))
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Shadow:OutputDirectory must not be blank; it is the news-risk output "
+                    + "root (default \"data/news-risk\").");
+        }
+
+        if (string.IsNullOrWhiteSpace(shadow.DevelopmentExamplesPath))
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Shadow:DevelopmentExamplesPath must not be blank; the evaluator reads "
+                    + "the committed development-example declarations directly (default "
+                    + "\"docs/cohorts/news-risk-development.json\").");
+        }
+
+        if (shadow.LookbackDays <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Shadow:LookbackDays must be positive (was {shadow.LookbackDays}); it "
+                    + "bounds the observation window (D − LookbackDays, D] (default 30).");
+        }
+
+        if (shadow.MaxCompaniesPerRun <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Shadow:MaxCompaniesPerRun must be positive (was {shadow.MaxCompaniesPerRun}); "
+                    + "it is the per-run candidate cost budget (default 30).");
+        }
+
+        if (shadow.MaxArticlesPerCompany <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Shadow:MaxArticlesPerCompany must be positive (was {shadow.MaxArticlesPerCompany}); "
+                    + "it caps the supplied articles per company (default 12).");
+        }
+
+        if (shadow.MaxFetchedArticlesPerCompany < 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Shadow:MaxFetchedArticlesPerCompany must not be negative (was "
+                    + $"{shadow.MaxFetchedArticlesPerCompany}); it caps fetched publisher bodies per company "
+                    + "(default 3, 0 disables body attachment).");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the news-risk reader set (spec 179 §5). An omitted/empty <c>Readers</c> list resolves to
+    /// exactly ONE reader over the ambient <c>Radar:Ai</c> provider/model — byte-identical single-reader
+    /// behaviour requiring no new configuration; a shadow with NO resolvable reader at all fails startup
+    /// (a shadow that silently never runs is a fail-open). Each configured entry flattens through the SAME
+    /// <see cref="FlattenAiClientOptions"/> path as <c>Radar:Ai</c>, with every failure re-thrown naming
+    /// the reader and its exact config path; the remaining rules (provider/model validation, unique names,
+    /// unique (provider, model) pairs) are enforced inside <c>AddRadarNewsRiskShadow</c>.
+    /// </summary>
+    private static IReadOnlyList<InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration>
+        BuildNewsRiskReaderRegistrations(RadarWorkerOptions options)
+    {
+        var readers = options.NewsResearch.Shadow.Readers;
+        if (readers is not { Count: > 0 })
+        {
+            if (string.IsNullOrWhiteSpace(options.Ai.Provider))
+            {
+                throw new InvalidOperationException(
+                    "Radar:NewsResearch:Shadow:Enabled is true but no news-risk reader is resolvable: "
+                        + "Radar:Ai:Provider is blank and Radar:NewsResearch:Shadow:Readers is empty. "
+                        + "Configure the ambient AI provider, add a reader, or disable the shadow.");
+            }
+
+            return
+            [
+                new InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration(
+                    Name: "ambient",
+                    ConfigPath: "Radar:Ai",
+                    Client: FlattenAiClientOptions(
+                        options.Ai.Provider,
+                        options.Ai.Model,
+                        options.Ai.Anthropic,
+                        options.Ai.Ollama,
+                        options.Ai.OpenAi,
+                        "Radar:Ai")),
+            ];
+        }
+
+        var registrations =
+            new List<InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration>(readers.Count);
+        for (var i = 0; i < readers.Count; i++)
+        {
+            var reader = readers[i];
+            var path = $"Radar:NewsResearch:Shadow:Readers:{i}";
+            try
+            {
+                registrations.Add(new InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration(
+                    Name: reader.Name,
+                    ConfigPath: path,
+                    Client: FlattenAiClientOptions(
+                        reader.Provider, reader.Model, reader.Anthropic, reader.Ollama, reader.OpenAi, path)));
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Spec 179 §5: an invalid reader fails startup naming the READER and the exact path. The
+                // flattening's own message already carries the path; the name is added here, the first
+                // place it is known.
+                throw new InvalidOperationException(
+                    $"News-risk reader '{reader.Name}' ({path}) is misconfigured: {ex.Message}", ex);
+            }
+        }
+
+        return registrations;
     }
 
     /// <summary>
@@ -886,6 +1088,38 @@ internal static class RadarWorkerServices
             typeof(NewsObservationMigrationWorkerOptions),
             "Radar:NewsResearch:Migration",
             "must be an object carrying Enabled / RetrospectiveFetch keys.");
+
+        // Spec 179: the Shadow sub-block and each reader entry get the same strict treatment — an unknown
+        // key on a reader would silently leave the DEFAULT provider config in place while the run read as
+        // configured, the exact fail-open shape this block forbids.
+        var shadowSection = section.GetSection("Shadow");
+        ValidateNestedSection(
+            shadowSection,
+            typeof(NewsRiskShadowWorkerOptions),
+            "Radar:NewsResearch:Shadow",
+            "must be an object carrying Enabled / OutputDirectory / LookbackDays / MaxCompaniesPerRun / "
+                + "MaxArticlesPerCompany / MaxFetchedArticlesPerCompany / Readers / DevelopmentExamplesPath "
+                + "keys.");
+        if (shadowSection.Exists())
+        {
+            var readersSection = shadowSection.GetSection("Readers");
+            if (readersSection.Exists())
+            {
+                ConfigSectionGuards.FailIfScalarSection(
+                    readersSection,
+                    "Radar:NewsResearch:Shadow:Readers must be a LIST of reader objects, each carrying "
+                        + "Name / Provider / Model (+ provider-specific settings).");
+                foreach (var reader in readersSection.GetChildren())
+                {
+                    ValidateNestedSection(
+                        reader,
+                        typeof(NewsRiskReaderWorkerOptions),
+                        $"Radar:NewsResearch:Shadow:Readers:{reader.Key}",
+                        "must be an object carrying Name / Provider / Model / Anthropic / Ollama / OpenAi "
+                            + "keys.");
+                }
+            }
+        }
     }
 
     private static void ValidateNestedSection(

@@ -1,0 +1,650 @@
+using System.Globalization;
+
+using Microsoft.Extensions.Logging;
+
+using Radar.Application.News;
+using Radar.Application.Pipeline;
+using Radar.Application.Reporting;
+
+namespace Radar.Application.NewsRisk;
+
+/// <summary>
+/// The in-process shadow news-risk step (spec 179 §2), invoked by the Worker AFTER <c>IRadarPipeline</c>
+/// returns and BEFORE the efficacy step. Consumes the EXACT spec-176 structured section instances handed
+/// through <c>RadarPipelineResult</c> — never parsed Markdown, never a reopened/re-ranked score store.
+/// </summary>
+public interface INewsRiskShadowGenerator
+{
+    /// <summary>
+    /// Runs the shadow read for the completed run <paramref name="runId"/> over the exact
+    /// <paramref name="strategySections"/> the report builder produced. Never throws for its own failures
+    /// (a shadow failure writes the NAMED failed artifact and never rolls back or relabels the
+    /// already-durable Radar run); caller cancellation propagates.
+    /// </summary>
+    Task GenerateAsync(
+        Guid? runId, IReadOnlyList<StrategyReportSection>? strategySections, CancellationToken ct);
+}
+
+/// <summary>
+/// Orchestrates one shadow pass (spec 179): frozen candidate selection (§3) → point-in-time input bundles
+/// (§4) → one analyzer pass per configured reader (§5) → mechanical validation (§6) → durable per-attempt
+/// persistence with the §6 cache → the fail-closed live artifact (§7).
+/// <para>
+/// AD-14 boundary: this type has NO price dependency of any kind (asserted structurally by the news-risk
+/// architecture guard test) — only the separate read-only §9 evaluator may touch price. It also holds no
+/// score repository/file-store seam: the ONLY row source is the handed-in section instances.
+/// </para>
+/// </summary>
+public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
+{
+    /// <summary>How many recent run records are scanned to resolve the durable record for this run id.</summary>
+    private const int RunLookupWindow = 50;
+
+    private readonly IPipelineRunStore _runStore;
+    private readonly INewsObservationArchive _observationArchive;
+    private readonly INewsObservationBatchReader _batchReader;
+    private readonly NewsRiskReaderSet _readers;
+    private readonly INewsRiskAssessmentStore _assessmentStore;
+    private readonly INewsRiskArtifactStore _artifactStore;
+    private readonly NewsRiskShadowOptions _options;
+    private readonly INewsArticleContentReader? _contentReader;
+    private readonly TimeProvider _timeProvider;
+    private readonly ILogger<NewsRiskShadowGenerator> _logger;
+
+    public NewsRiskShadowGenerator(
+        IPipelineRunStore runStore,
+        INewsObservationArchive observationArchive,
+        INewsObservationBatchReader batchReader,
+        NewsRiskReaderSet readers,
+        INewsRiskAssessmentStore assessmentStore,
+        INewsRiskArtifactStore artifactStore,
+        NewsRiskShadowOptions options,
+        TimeProvider timeProvider,
+        ILogger<NewsRiskShadowGenerator> logger,
+        INewsArticleContentReader? contentReader = null)
+    {
+        ArgumentNullException.ThrowIfNull(runStore);
+        ArgumentNullException.ThrowIfNull(observationArchive);
+        ArgumentNullException.ThrowIfNull(batchReader);
+        ArgumentNullException.ThrowIfNull(readers);
+        ArgumentNullException.ThrowIfNull(assessmentStore);
+        ArgumentNullException.ThrowIfNull(artifactStore);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        if (readers.Readers.Count == 0)
+        {
+            throw new ArgumentException(
+                "NewsRiskReaderSet must resolve at least one reader; the composition root registers the "
+                    + "shadow step only when one (ambient or configured) exists.",
+                nameof(readers));
+        }
+
+        _runStore = runStore;
+        _observationArchive = observationArchive;
+        _batchReader = batchReader;
+        _readers = readers;
+        _assessmentStore = assessmentStore;
+        _artifactStore = artifactStore;
+        _options = options;
+        _contentReader = contentReader;
+        _timeProvider = timeProvider;
+        _logger = logger;
+    }
+
+    public async Task GenerateAsync(
+        Guid? runId, IReadOnlyList<StrategyReportSection>? strategySections, CancellationToken ct)
+    {
+        var fallbackDateToken = _timeProvider.GetUtcNow().UtcDateTime
+            .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        try
+        {
+            await GenerateCoreAsync(runId, strategySections, fallbackDateToken, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A shadow failure must never abort or relabel the already-durable Radar run (spec 179 §7):
+            // write the named failed artifact (itself best-effort) and return.
+            _logger.LogError(ex, "News-risk shadow read failed; writing the named failed artifact.");
+            await _artifactStore
+                .WriteFailedAsync(fallbackDateToken, $"{ex.GetType().Name}: {ex.Message}", ct)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task GenerateCoreAsync(
+        Guid? runId,
+        IReadOnlyList<StrategyReportSection>? strategySections,
+        string fallbackDateToken,
+        CancellationToken ct)
+    {
+        var readerLabels = _readers.Readers
+            .Select(r => $"{r.Identity.Name} ({r.Identity.Provider}:{r.Identity.ModelId})")
+            .ToList();
+
+        if (runId is not { } id)
+        {
+            await _artifactStore
+                .WriteFailedAsync(
+                    fallbackDateToken,
+                    "RunIdUnavailable: the pipeline result carried no durable run id.",
+                    ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var runRecord = await FindRunRecordAsync(id, ct).ConfigureAwait(false);
+        if (runRecord is null)
+        {
+            await _artifactStore
+                .WriteFailedAsync(
+                    fallbackDateToken,
+                    $"RunRecordNotFound: no durable run record with id {id:D} was readable.",
+                    ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        // The selection cutoff is the EXACT completed run's as-of instant (spec 179 §3): a candidate can
+        // never be selected from a report row belonging to another run.
+        var selectionAsOfUtc = runRecord.CreatedAtUtc;
+        var asOfDateToken = selectionAsOfUtc.UtcDateTime
+            .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+        var candidates = strategySections is { Count: > 0 }
+            ? NewsRiskCandidateSelector.Select(strategySections, _options.MaxCompaniesPerRun)
+            : [];
+
+        if (candidates.Count == 0)
+        {
+            // Named diagnostic, never invented rows (spec 179 §2): a single-strategy run builds no
+            // sections, and a run whose Research sections held no evidence-linked rows selects nothing.
+            var diagnosticDocument = new NewsRiskLiveDocument(
+                SchemaVersion: NewsRiskLiveDocument.CurrentSchemaVersion,
+                RunId: id,
+                SelectionAsOfUtc: selectionAsOfUtc,
+                Caveat: NewsRiskLiveDocument.LiveCaveat,
+                Readers: readerLabels,
+                Diagnostic: NewsRiskLiveDocument.NoLiveStrategySections,
+                Companies: [],
+                GeneratedAtUtc: _timeProvider.GetUtcNow());
+            await _artifactStore
+                .WriteLiveAsync(
+                    asOfDateToken,
+                    NewsRiskLiveArtifactRenderer.RenderMarkdown(diagnosticDocument),
+                    diagnosticDocument,
+                    ct)
+                .ConfigureAwait(false);
+            _logger.LogInformation(
+                "News-risk shadow read: no live strategy sections for run {RunId}; wrote the "
+                    + "NoLiveStrategySections diagnostic artifact.",
+                id);
+            return;
+        }
+
+        var observations = await _observationArchive.GetAllAsync(ct).ConfigureAwait(false);
+        var batch = runRecord.NewsObservationBatchId is { } batchId
+            ? await _batchReader.GetBatchAsync(batchId, ct).ConfigureAwait(false)
+            : null;
+
+        var companies = new List<NewsRiskLiveCompany>(candidates.Count);
+        foreach (var candidate in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            companies.Add(await AssessCandidateAsync(
+                candidate, id, selectionAsOfUtc, observations, batch, ct).ConfigureAwait(false));
+        }
+
+        var document = new NewsRiskLiveDocument(
+            SchemaVersion: NewsRiskLiveDocument.CurrentSchemaVersion,
+            RunId: id,
+            SelectionAsOfUtc: selectionAsOfUtc,
+            Caveat: NewsRiskLiveDocument.LiveCaveat,
+            Readers: readerLabels,
+            Diagnostic: null,
+            Companies: companies,
+            GeneratedAtUtc: _timeProvider.GetUtcNow());
+
+        await _artifactStore
+            .WriteLiveAsync(
+                asOfDateToken, NewsRiskLiveArtifactRenderer.RenderMarkdown(document), document, ct)
+            .ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "News-risk shadow read complete for run {RunId}: {Companies} candidate(s) × {Readers} reader(s).",
+            id,
+            companies.Count,
+            _readers.Readers.Count);
+    }
+
+    private async Task<NewsRiskLiveCompany> AssessCandidateAsync(
+        NewsRiskCandidate candidate,
+        Guid runId,
+        DateTimeOffset selectionAsOfUtc,
+        IReadOnlyList<NewsObservationRecord> observations,
+        NewsObservationBatch? batch,
+        CancellationToken ct)
+    {
+        var (coverageComplete, coverageIssues) = EvaluateCoverage(batch, candidate.CompanyId);
+
+        var bundle = NewsRiskInputBundleBuilder.Build(
+            candidate.CompanyId,
+            observations,
+            selectionAsOfUtc,
+            _options.LookbackDays,
+            _options.MaxArticlesPerCompany,
+            _options.MaxFetchedArticlesPerCompany);
+
+        var fetchWarnings = new List<string>();
+        if (_contentReader is not null && coverageComplete && bundle.Articles.Count > 0)
+        {
+            bundle = await AttachLiveBodiesAsync(bundle, fetchWarnings, ct).ConfigureAwait(false);
+        }
+
+        var readerResults = new List<NewsRiskLiveReaderResult>(_readers.Readers.Count);
+        foreach (var reader in _readers.Readers)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // One reader's runtime failure never blocks another (spec 179 §5): each pass is independently
+            // recorded, and the analyzer contract already types provider failures rather than throwing.
+            var record = await AssessWithReaderAsync(
+                reader, candidate, runId, selectionAsOfUtc, bundle, coverageComplete, coverageIssues, ct)
+                .ConfigureAwait(false);
+
+            var warnings = new List<string>(fetchWarnings);
+            if (!record.CoverageComplete)
+            {
+                warnings.Add("coverage incomplete — result is UNKNOWN, never no-risk (fail closed)");
+            }
+
+            if (record.ClaimsDropped > 0)
+            {
+                warnings.Add(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{record.ClaimsDropped} of {record.ClaimsTotal} claim(s) dropped by validation"));
+            }
+
+            if (record.FailureDetail is not null)
+            {
+                warnings.Add(record.FailureDetail);
+            }
+
+            if (record.ReusedFromAssessmentId is { } reused)
+            {
+                warnings.Add($"reused cached assessment `{reused:D}` (same model/prompt/schema/input)");
+            }
+
+            readerResults.Add(new NewsRiskLiveReaderResult(
+                ReaderName: record.ReaderName,
+                Provider: record.Provider,
+                ModelId: record.ModelId,
+                AssessmentId: record.AssessmentId,
+                Status: record.Status,
+                AssessmentCutoffUtc: record.AssessmentCutoffUtc,
+                RiskScore: record.RiskScore,
+                Categories: record.Categories,
+                Claims: record.Claims,
+                Rationale: record.Rationale,
+                Warnings: warnings));
+        }
+
+        return new NewsRiskLiveCompany(
+            CompanyId: candidate.CompanyId,
+            CompanyName: candidate.CompanyName,
+            Ticker: candidate.Ticker,
+            Selections: candidate.Selections,
+            Articles: bundle.Articles
+                .Select(a => new NewsRiskLiveArticle(
+                    a.ObservationId,
+                    a.Headline,
+                    a.Publisher,
+                    a.Url,
+                    a.CaptureMode,
+                    InputKind(a)))
+                .ToList(),
+            CoverageComplete: coverageComplete,
+            CoverageIssues: coverageIssues,
+            ReaderResults: readerResults);
+    }
+
+    private async Task<NewsRiskAssessmentRecord> AssessWithReaderAsync(
+        NewsRiskReader reader,
+        NewsRiskCandidate candidate,
+        Guid runId,
+        DateTimeOffset selectionAsOfUtc,
+        NewsRiskInputBundle bundle,
+        bool coverageComplete,
+        IReadOnlyList<string> coverageIssues,
+        CancellationToken ct)
+    {
+        var identity = reader.Identity;
+        var cohortKey = identity.CohortKey;
+        NewsRiskAssessmentRecord record;
+
+        if (!coverageComplete)
+        {
+            // FAIL CLOSED, structurally: with incomplete coverage no model is called, so a persisted
+            // NoRiskFoundInSuppliedText can only ever exist over proven-complete input (§7 render gate).
+            record = BaseRecord(
+                identity, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
+                coverageComplete, coverageIssues, NewsRiskAssessmentStatus.IncompleteCoverage);
+        }
+        else if (bundle.Articles.Count == 0)
+        {
+            record = BaseRecord(
+                identity, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
+                coverageComplete, coverageIssues, NewsRiskAssessmentStatus.NoContent);
+        }
+        else
+        {
+            var cached = await _assessmentStore
+                .FindCompletedAsync(cohortKey, bundle.BundleHash, ct)
+                .ConfigureAwait(false);
+            if (cached is not null)
+            {
+                record = BaseRecord(
+                    identity, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
+                    coverageComplete, coverageIssues, cached.Status) with
+                {
+                    RiskScore = cached.RiskScore,
+                    Categories = cached.Categories,
+                    Claims = cached.Claims,
+                    Rationale = cached.Rationale,
+                    ClaimsTotal = cached.ClaimsTotal,
+                    ClaimsAccepted = cached.ClaimsAccepted,
+                    ClaimsDropped = cached.ClaimsDropped,
+                    ClaimDropReasons = cached.ClaimDropReasons,
+                    RawResponseHash = cached.RawResponseHash,
+                    ReusedFromAssessmentId = cached.AssessmentId,
+                };
+            }
+            else
+            {
+                record = await AnalyzeAsync(
+                    reader, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
+                    coverageComplete, coverageIssues, ct).ConfigureAwait(false);
+            }
+        }
+
+        await _assessmentStore.WriteAsync(record, ct).ConfigureAwait(false);
+        return record;
+    }
+
+    private async Task<NewsRiskAssessmentRecord> AnalyzeAsync(
+        NewsRiskReader reader,
+        string cohortKey,
+        NewsRiskCandidate candidate,
+        Guid runId,
+        DateTimeOffset selectionAsOfUtc,
+        NewsRiskInputBundle bundle,
+        bool coverageComplete,
+        IReadOnlyList<string> coverageIssues,
+        CancellationToken ct)
+    {
+        // The model request carries the company name/ticker and the ordered id-labelled text ONLY (spec 179
+        // §5): no Radar score, rank or label, no price, no future outcome, no uncited background. Rank stays
+        // OUTPUT provenance on the record, never prompt content.
+        var request = new NewsRiskAnalysisRequest(candidate.CompanyName, candidate.Ticker, bundle.Articles);
+
+        NewsRiskAnalysisOutcome outcome;
+        try
+        {
+            outcome = await reader.Analyzer.AnalyzeAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Belt-and-braces: the analyzer contract types provider failures, but a throwing implementation
+            // must still degrade to a recorded provider-failure attempt so other readers proceed.
+            _logger.LogWarning(
+                ex,
+                "News-risk reader {Reader} threw for company {Company}; recording a provider failure.",
+                reader.Identity.Name,
+                candidate.CompanyName);
+            outcome = new NewsRiskAnalysisOutcome(
+                NewsRiskAnalysisFailure.ProviderError, null, null, $"{ex.GetType().Name}: {ex.Message}");
+        }
+
+        var record = BaseRecord(
+            reader.Identity, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
+            coverageComplete, coverageIssues, NewsRiskAssessmentStatus.ProviderFailure) with
+        {
+            RawResponseHash = outcome.RawResponseHash,
+        };
+
+        switch (outcome.Failure)
+        {
+            case NewsRiskAnalysisFailure.ProviderError:
+                return record with
+                {
+                    Status = NewsRiskAssessmentStatus.ProviderFailure,
+                    FailureDetail = outcome.FailureDetail,
+                };
+            case NewsRiskAnalysisFailure.ParseError:
+                return record with
+                {
+                    Status = NewsRiskAssessmentStatus.ParseFailure,
+                    FailureDetail = outcome.FailureDetail,
+                };
+            default:
+            {
+                var validated = NewsRiskClaimValidator.Validate(outcome.Response!, bundle.Articles);
+                return record with
+                {
+                    Status = validated.Status,
+                    RiskScore = validated.RiskScore,
+                    Categories = validated.Categories,
+                    Claims = validated.Claims,
+                    Rationale = validated.Rationale,
+                    ClaimsTotal = validated.ClaimsTotal,
+                    ClaimsAccepted = validated.ClaimsAccepted,
+                    ClaimsDropped = validated.ClaimsDropped,
+                    ClaimDropReasons = validated.ClaimDropReasons,
+                };
+            }
+        }
+    }
+
+    private NewsRiskAssessmentRecord BaseRecord(
+        NewsRiskReaderIdentity identity,
+        string cohortKey,
+        NewsRiskCandidate candidate,
+        Guid runId,
+        DateTimeOffset selectionAsOfUtc,
+        NewsRiskInputBundle bundle,
+        bool coverageComplete,
+        IReadOnlyList<string> coverageIssues,
+        NewsRiskAssessmentStatus status) =>
+        new(
+            SchemaVersion: NewsRiskAssessmentRecord.CurrentSchemaVersion,
+            AssessmentId: NewsRiskAssessmentRecord.IdentityFor(
+                cohortKey, bundle.BundleHash, runId, identity.Name),
+            RunId: runId,
+            SelectionAsOfUtc: selectionAsOfUtc,
+            AssessmentCutoffUtc: bundle.AssessmentCutoffUtc,
+            CompanyId: candidate.CompanyId,
+            CompanyName: candidate.CompanyName,
+            Ticker: candidate.Ticker,
+            Selections: candidate.Selections,
+            ReaderName: identity.Name,
+            Provider: identity.Provider,
+            ModelId: identity.ModelId,
+            PromptVersion: NewsRiskAnalysisContract.PromptVersion,
+            ResultSchemaVersion: NewsRiskAnalysisContract.SchemaVersion,
+            CohortKey: cohortKey,
+            InputBundleHash: bundle.BundleHash,
+            Observations: bundle.Articles
+                .Select(a => new NewsRiskInputObservationRef(
+                    a.ObservationId,
+                    a.PayloadHash,
+                    DescriptionSupplied: a.DescriptionText is not null,
+                    BodySupplied: a.BodyText is not null,
+                    BodyContentHash: a.BodyContentHash,
+                    BodyRetrievedAtUtc: a.BodyRetrievedAtUtc,
+                    BodyExtractorVersion: a.BodyExtractorVersion,
+                    BodyRetrievalPolicy: a.BodyRetrievalPolicy,
+                    CaptureMode: a.CaptureMode))
+                .ToList(),
+            CoverageComplete: coverageComplete,
+            CoverageIssues: coverageIssues,
+            Status: status,
+            RiskScore: null,
+            Categories: [],
+            Claims: [],
+            Rationale: null,
+            ClaimsTotal: 0,
+            ClaimsAccepted: 0,
+            ClaimsDropped: 0,
+            ClaimDropReasons: [],
+            RawResponseHash: null,
+            FailureDetail: null,
+            Limits: _options.ToLimitsRecord(),
+            ReusedFromAssessmentId: null,
+            CreatedAtUtc: _timeProvider.GetUtcNow());
+
+    /// <summary>
+    /// Live publisher-body fetch (spec 179 §4) through the spec-177 allowlisted safe reader, only when that
+    /// opt-in seam is composed: at most the fetched-article cap, newest first, skipping articles that
+    /// already carry a stored archived body. A body retrieved NOW moves the assessment cutoff to the actual
+    /// retrieval instant via the bundle recomputation — never backward, never backdated onto the article's
+    /// publication/collection time.
+    /// </summary>
+    private async Task<NewsRiskInputBundle> AttachLiveBodiesAsync(
+        NewsRiskInputBundle bundle, List<string> fetchWarnings, CancellationToken ct)
+    {
+        var articles = bundle.Articles.ToList();
+        var attached = articles.Count(a => a.BodyText is not null);
+        for (var i = 0; i < articles.Count && attached < _options.MaxFetchedArticlesPerCompany; i++)
+        {
+            if (articles[i].BodyText is not null)
+            {
+                continue;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var fetch = await _contentReader!.FetchAsync(articles[i].Url, ct).ConfigureAwait(false);
+            if (fetch is { Outcome: NewsArticleFetchOutcome.Fetched, BodyText: not null })
+            {
+                articles[i] = articles[i] with
+                {
+                    BodyText = fetch.BodyText,
+                    BodyContentHash = fetch.ContentHash,
+                    BodyRetrievedAtUtc = fetch.RetrievedAtUtc,
+                    BodyExtractorVersion = fetch.ExtractorVersion,
+                    BodyRetrievalPolicy = fetch.RetrievalPolicy,
+                };
+                attached++;
+            }
+            else
+            {
+                fetchWarnings.Add(
+                    $"body fetch {fetch.Outcome} for observation {articles[i].ObservationId:D}");
+            }
+        }
+
+        return bundle with
+        {
+            Articles = articles,
+            AssessmentCutoffUtc = NewsRiskInputBundleBuilder.ComputeCutoff(
+                bundle.SelectionAsOfUtc, articles),
+            BundleHash = NewsRiskInputBundleBuilder.ComputeBundleHash(articles),
+        };
+    }
+
+    /// <summary>
+    /// The §4 coverage gate, FAIL CLOSED at every step: an absent batch manifest, unproven capture, missing
+    /// coverage rows, a company without a successful complete newssearch feed set, or a capped result list
+    /// all read as INCOMPLETE (unknown), never as clean.
+    /// </summary>
+    private (bool Complete, IReadOnlyList<string> Issues) EvaluateCoverage(
+        NewsObservationBatch? batch, Guid companyId)
+    {
+        var issues = new List<string>();
+        if (batch is null)
+        {
+            issues.Add("archive-batch-unavailable: no batch manifest is readable for this run");
+            return (false, issues);
+        }
+
+        if (!batch.CaptureProven)
+        {
+            issues.Add("archive-batch-unproven: the batch recorded observation persistence failures");
+        }
+
+        var capture = batch.Collectors.FirstOrDefault(
+            c => string.Equals(c.CollectorName, _options.NewsSearchCollectorName, StringComparison.Ordinal));
+        if (capture is null)
+        {
+            issues.Add($"newssearch-capture-not-recorded: no '{_options.NewsSearchCollectorName}' capture in the batch");
+            return (false, issues);
+        }
+
+        if (capture.CompanyCoverage is null)
+        {
+            issues.Add("newssearch-coverage-not-recorded: coverage rows are absent (unproven)");
+            return (false, issues);
+        }
+
+        var row = capture.CompanyCoverage.FirstOrDefault(r => r.CompanyId == companyId);
+        if (row is null)
+        {
+            issues.Add("company-coverage-missing: this company has no newssearch coverage row");
+            return (false, issues);
+        }
+
+        if (row.ExpectedFeedCount == 0)
+        {
+            issues.Add("no-newssearch-feed: this company declares no newssearch feed");
+        }
+
+        if (row.SuccessfulFeedCount < row.ExpectedFeedCount)
+        {
+            issues.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"feed-failures: {row.SuccessfulFeedCount}/{row.ExpectedFeedCount} newssearch feeds succeeded"));
+        }
+
+        if (row.HitEffectiveResultLimit)
+        {
+            issues.Add("result-limit-reached: the newssearch result list was capped (possible truncation)");
+        }
+
+        if (row.Issues.Count > 0)
+        {
+            issues.AddRange(row.Issues.Select(i => "coverage-issue: " + i));
+        }
+
+        return (issues.Count == 0, issues);
+    }
+
+    private static string InputKind(NewsRiskInputArticle article) => (article.DescriptionText, article.BodyText) switch
+    {
+        (not null, not null) => "headline+description+body",
+        (not null, null) => "headline+description",
+        (null, not null) => "headline+body",
+        _ => "headline",
+    };
+
+    private async Task<PipelineRunRecord?> FindRunRecordAsync(Guid runId, CancellationToken ct)
+    {
+        try
+        {
+            var recent = await _runStore.ReadRecentAsync(RunLookupWindow, ct).ConfigureAwait(false);
+            return recent.FirstOrDefault(r => r.Id == runId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to read the run log while resolving run {RunId}.", runId);
+            return null;
+        }
+    }
+}

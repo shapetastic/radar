@@ -98,8 +98,11 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             .RunAsync(collection.Companies, collection.AsOfUtc, ct)
             .ConfigureAwait(false);
 
-        // Stage 7: optional report.
+        // Stage 7: optional report. The builder's exact per-strategy section instances (spec 179 §2) are
+        // kept so the returned result can hand them to the in-process news-risk shadow step — the one
+        // structured row source; never re-read, never re-ranked.
         Guid? reportId = null;
+        IReadOnlyList<StrategyReportSection>? strategySections = null;
         if (_options.GenerateReport)
         {
             var report = await _reportBuilder
@@ -107,6 +110,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
                 .ConfigureAwait(false);
             await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
             reportId = report.Report.Id;
+            strategySections = report.StrategySections;
         }
 
         _logger.LogInformation(
@@ -124,6 +128,11 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             collection.Collection.SourcesChecked,
             reportId?.ToString() ?? "none");
 
+        // The run id is minted ONCE (spec 179 §2): the SAME value is written to the durable run record
+        // below and returned on the pipeline result, so the shadow step's persisted assessments reference
+        // exactly the run record that exists on disk — never a second id for the same run.
+        var runId = Guid.NewGuid();
+
         var pipelineResult = new RadarPipelineResult(
             EvidenceCollected: collection.EvidenceCollected,
             EvidenceNew: collection.EvidenceNew,
@@ -135,14 +144,17 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             ReportId: reportId,
             SourcesChecked: collection.Collection.SourcesChecked,
             SourcesFailed: collection.Collection.SourcesFailed,
-            Collection: collection.Collection);
+            Collection: collection.Collection,
+            RunId: runId,
+            StrategySections: strategySections);
 
         // Persist a durable run record (append-only run log, AD-8). Best-effort like the other file
         // stores: the store swallows disk errors, so a failure here never changes a counter or aborts
         // the run. Reuse asOfUtc (AD-7: one run, one instant) and the collection pass's already-ordered
-        // collector names so the record reflects what actually ran.
+        // collector names so the record reflects what actually ran. The result is returned only AFTER
+        // this write (spec 179 §2: the run record is durable before anything downstream consumes RunId).
         var runRecord = new PipelineRunRecord(
-            Id: Guid.NewGuid(),
+            Id: runId,
             CreatedAtUtc: collection.AsOfUtc,
             Collectors: collection.Collectors,
             EvidenceCollected: pipelineResult.EvidenceCollected,

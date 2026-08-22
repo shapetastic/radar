@@ -1,0 +1,21 @@
+{
+  "_comment": "Spec 179 §8: the committed known-development-example declarations for the news-risk shadow read. These companies were examined BEFORE spec 179 existed, so they may exercise the feature but can never serve as validation evidence: the read-only evaluator marks their rows KnownDevelopmentExample and excludes them from the clean prospective table. THIS FILE — not git history — is the declaration mechanism; the evaluator reads it directly, and a missing/unreadable file suppresses the clean table entirely (fail closed). Add a ticker BEFORE inspecting it through this feature, never after its outcome is known.",
+  "schemaVersion": "news-risk-development-v1",
+  "examples": [
+    {
+      "ticker": "EOSE",
+      "inspectedOnUtc": "2026-08-22",
+      "reason": "The motivating failure case for spec 179: company disclosures and filing activity looked constructive while contemporaneous third-party reporting carried financing/dilution/cash-runway and execution risks (also the spec-119 llama3.1 misread case). Examined repeatedly before this spec."
+    },
+    {
+      "ticker": "CASS",
+      "inspectedOnUtc": "2026-08-22",
+      "reason": "Related known development example: the 2026-07-29 spec-160 DeepSeek misread case (a headline GAAP doubling the release itself declared non-comparable). Examined before this spec."
+    },
+    {
+      "ticker": "MSEX",
+      "inspectedOnUtc": "2026-08-22",
+      "reason": "Related known development example examined alongside EOSE/CASS while developing the news-reading arc, before this spec."
+    }
+  ]
+}

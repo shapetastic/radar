@@ -5,6 +5,7 @@ using System.Xml.Linq;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.News;
 using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.News;
@@ -42,7 +43,10 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
     // asks for English-only coverage (see BuildRequestUri) — do NOT bake them into the base template.
     private const string SearchEndpointTemplate = "https://news.google.com/rss/search?q={0}";
     private const string EnglishUsLocaleParams = "&hl=en-US&gl=US&ceid=US:en";
-    private const string TitleSuffixSeparator = " - ";
+    // The ONE Google News publisher-suffix separator definition (spec 179 extracted it; this reader keeps
+    // its own genuinely different behaviour — extracting the suffix as a source-name FALLBACK — but shares
+    // the token so the two rules cannot drift).
+    private const string TitleSuffixSeparator = GoogleNewsHeadline.PublisherSuffixSeparator;
     private const int MinRecords = 1;
     private const int MaxRecords = 100;
 

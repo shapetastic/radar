@@ -852,6 +852,77 @@ public sealed class NewsResearchWorkerOptions
 
     /// <summary>The explicit one-shot migration (spec 177 §7). Never part of a default run.</summary>
     public NewsObservationMigrationWorkerOptions Migration { get; init; } = new();
+
+    /// <summary>The in-process news-risk shadow read + frozen-assessment evaluator (spec 179). DISABLED by default in code; the live baseline profile enables it.</summary>
+    public NewsRiskShadowWorkerOptions Shadow { get; init; } = new();
+}
+
+/// <summary>
+/// News-risk shadow configuration (bound from "Radar:NewsResearch:Shadow"; spec 179 §11). Every limit is a
+/// cost/safety control — recorded on each persisted assessment and hashed into NO scoring fingerprint. The
+/// composition root validates the section against a strict key allowlist and fails startup on an invalid
+/// limit; registration happens ONLY for an unfiltered full-mode run with at least one resolvable reader
+/// (ambient <c>Radar:Ai</c>, or a configured <see cref="Readers"/> entry).
+/// </summary>
+public sealed class NewsRiskShadowWorkerOptions
+{
+    /// <summary>Whether the shadow read runs after each unfiltered full pipeline run. DISABLED by default.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>News-risk output root (live artifacts, durable assessments, evaluator output). run-radar.ps1 supplies this beneath its output root.</summary>
+    public string OutputDirectory { get; init; } = "data/news-risk";
+
+    /// <summary>Observation lookback window in days: input articles come from (D − LookbackDays, D]. Default 30; must be positive.</summary>
+    public int LookbackDays { get; init; } = 30;
+
+    /// <summary>Cost budget on selected companies per run (traversal order, spec 179 §3). Default 30; must be positive.</summary>
+    public int MaxCompaniesPerRun { get; init; } = 30;
+
+    /// <summary>Cap on supplied articles per company. Default 12; must be positive.</summary>
+    public int MaxArticlesPerCompany { get; init; } = 12;
+
+    /// <summary>Cap on articles that may carry a fetched publisher body. Default 3; must be non-negative.</summary>
+    public int MaxFetchedArticlesPerCompany { get; init; } = 3;
+
+    /// <summary>
+    /// Optional analyzer reader list (spec 179 §5). Omitted/empty ⇒ exactly one reader over the ambient
+    /// <c>Radar:Ai</c> provider/model — byte-identical single-reader behaviour requiring no new config.
+    /// </summary>
+    public IReadOnlyList<NewsRiskReaderWorkerOptions> Readers { get; init; } = [];
+
+    /// <summary>
+    /// Path of the committed known-development-example declarations (spec 179 §8). Read DIRECTLY by the
+    /// evaluator; run-radar.ps1 supplies the absolute repo path (the relative default would resolve against
+    /// the Worker's working directory, mirroring the AttentionArrival cohorts precedent).
+    /// </summary>
+    public string DevelopmentExamplesPath { get; init; } = "docs/cohorts/news-risk-development.json";
+}
+
+/// <summary>
+/// One configured news-risk reader (bound from "Radar:NewsResearch:Shadow:Readers:{i}"; spec 179 §5): a
+/// unique display/provenance <see cref="Name"/> plus the SAME provider/model/settings shape as
+/// <c>Radar:Ai</c> (validated through the same rules). The reader name is provenance display only — cohort
+/// identity is provider + exact model id + prompt/schema version, so renaming a reader forks no cohort.
+/// </summary>
+public sealed class NewsRiskReaderWorkerOptions
+{
+    /// <summary>The display/provenance label, unique case-insensitively across the reader set. Required.</summary>
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>The AI provider ("anthropic" / "ollama" / "openai"), same vocabulary as Radar:Ai:Provider. Required.</summary>
+    public string Provider { get; init; } = string.Empty;
+
+    /// <summary>The model id; for "openai" this is the fallback when <see cref="OpenAi"/>.Model is blank — the same rule as Radar:Ai.</summary>
+    public string Model { get; init; } = string.Empty;
+
+    /// <summary>Anthropic provider config. Only read when Provider is "anthropic".</summary>
+    public AiAnthropicWorkerOptions Anthropic { get; init; } = new();
+
+    /// <summary>Ollama provider config. Only read when Provider is "ollama".</summary>
+    public AiOllamaWorkerOptions Ollama { get; init; } = new();
+
+    /// <summary>OpenAI-compatible provider config. Only read when Provider is "openai". The key is resolved from the env var NAMED here, never committed.</summary>
+    public AiOpenAiWorkerOptions OpenAi { get; init; } = new();
 }
 
 /// <summary>

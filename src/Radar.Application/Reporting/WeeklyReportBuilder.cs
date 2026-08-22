@@ -400,7 +400,9 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             periodStartUtc,
             periodEndUtc);
 
-        return new WeeklyReportResult(report, items);
+        // Spec 179 §2: return the EXACT section instances built (and rendered) above — the one structured
+        // row source the news-risk shadow step may consume. Never rebuilt, never re-ranked.
+        return new WeeklyReportResult(report, items, strategySections);
     }
 
     /// <summary>

@@ -13,6 +13,8 @@ using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
+using Radar.Application.NewsRisk;
+using Radar.Application.NewsRisk.Evaluation;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -31,6 +33,7 @@ using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Hiring;
 using Radar.Infrastructure.News;
+using Radar.Infrastructure.NewsRisk;
 using Radar.Infrastructure.Patents;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Prices;
@@ -2283,6 +2286,13 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<FileNewsObservationArchive>();
         services.AddSingleton<Radar.Application.News.INewsObservationArchive>(
             sp => sp.GetRequiredService<FileNewsObservationArchive>());
+        // Spec 179: the read seams over the SAME hydrated instance — batch manifests by explicit id (the
+        // shadow step's coverage gate) and the create-once prospective boundary (the evaluator's clean-table
+        // gate). Read-only; the archive stays insert-only.
+        services.AddSingleton<Radar.Application.News.INewsObservationBatchReader>(
+            sp => sp.GetRequiredService<FileNewsObservationArchive>());
+        services.AddSingleton<Radar.Application.News.INewsProspectiveBoundaryReader>(
+            sp => sp.GetRequiredService<FileNewsObservationArchive>());
         return services;
     }
 
@@ -2507,6 +2517,217 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IChatClientFactory, ChatClientFactory>();
         services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<IChatClientFactory>().Create());
         return services;
+    }
+
+    /// <summary>
+    /// One configured news-risk READER (spec 179 §5): a display/provenance <paramref name="Name"/>, the exact
+    /// config path the entry was bound from (so every failure can name it), and the resolved provider client
+    /// options — the SAME <see cref="AiClientOptions"/> shape <c>Radar:Ai</c> flattens into, validated by the
+    /// same rules.
+    /// </summary>
+    public sealed record NewsRiskReaderRegistration(string Name, string ConfigPath, AiClientOptions Client);
+
+    /// <summary>
+    /// Registers the spec-179 in-process news-risk shadow step: the durable assessment store + artifact
+    /// writer (both under the shadow output root), the resolved reader set, and the
+    /// <see cref="INewsRiskShadowGenerator"/>. Call ONLY when the shadow is enabled in unfiltered full mode
+    /// with at least one resolvable reader — the composition root owns those gates.
+    /// <para>
+    /// Reader rules enforced HERE, fail-fast, every message naming the reader and its exact config path:
+    /// blank/duplicate names (case-insensitive — the name is display/provenance only), invalid provider
+    /// client options (the same rules <see cref="AddRadarAi"/> applies to <c>Radar:Ai</c>, with
+    /// reader-scoped messages), and two readers resolving to the SAME (provider, model) pair — they would
+    /// share every cohort/cache key and assess nothing twice, so the duplication is a misconfiguration, not
+    /// redundancy.
+    /// </para>
+    /// <para>
+    /// Depends on the archive read seams (<see cref="AddFileNewsObservationArchive"/>) and the run store
+    /// being registered; the optional spec-177 <c>INewsArticleContentReader</c> is consumed when composed
+    /// and defaulted to null otherwise.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarNewsRiskShadow(
+        this IServiceCollection services,
+        NewsRiskShadowOptions options,
+        IReadOnlyList<NewsRiskReaderRegistration> readers)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(readers);
+
+        if (readers.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Shadow is enabled but no news-risk reader is resolvable: configure "
+                    + "Radar:Ai (the ambient reader) or at least one Radar:NewsResearch:Shadow:Readers "
+                    + "entry. A shadow step that silently never runs is a fail-open.");
+        }
+
+        var normalized = new List<(string Name, string ConfigPath, AiClientOptions Client)>(readers.Count);
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var reader in readers)
+        {
+            var name = reader.Name?.Trim() ?? string.Empty;
+            if (name.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"News-risk reader at {reader.ConfigPath} has a blank Name; every reader needs a "
+                        + "display/provenance label (e.g. \"deepseek\", \"local-ollama\").");
+            }
+
+            if (!seenNames.Add(name))
+            {
+                throw new InvalidOperationException(
+                    $"News-risk reader '{name}' ({reader.ConfigPath}) duplicates another reader's name "
+                        + "(names are compared case-insensitively); reader names are provenance labels and "
+                        + "must be unique.");
+            }
+
+            normalized.Add((name, reader.ConfigPath, ValidateNewsRiskReaderClient(name, reader.ConfigPath, reader.Client)));
+        }
+
+        // Two readers on the same (provider, model) share every cohort/cache key (the reader NAME is
+        // deliberately not part of cohort identity), so the pair must be unique. Provider compared
+        // case-insensitively (AddRadarAi treats it so); the model id exactly.
+        for (var i = 0; i < normalized.Count; i++)
+        {
+            for (var j = i + 1; j < normalized.Count; j++)
+            {
+                if (string.Equals(normalized[i].Client.Provider, normalized[j].Client.Provider, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(normalized[i].Client.Model, normalized[j].Client.Model, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"News-risk readers '{normalized[i].Name}' ({normalized[i].ConfigPath}) and "
+                            + $"'{normalized[j].Name}' ({normalized[j].ConfigPath}) both resolve to "
+                            + $"provider '{normalized[j].Client.Provider}' model "
+                            + $"'{normalized[j].Client.Model}'. Cohort identity is provider + exact model "
+                            + "id + prompt/schema version, so they would share every cache key and assess "
+                            + "nothing twice — remove one, or point it at a different model.");
+                }
+            }
+        }
+
+        services.AddSingleton(options);
+        services.AddSingleton(new FileNewsRiskAssessmentStoreOptions
+        {
+            RootDirectory = options.OutputDirectory,
+        });
+        services.AddSingleton<INewsRiskAssessmentStore, FileNewsRiskAssessmentStore>();
+        services.AddSingleton(new FileNewsRiskArtifactStoreOptions
+        {
+            RootDirectory = options.OutputDirectory,
+        });
+        services.AddSingleton<INewsRiskArtifactStore, FileNewsRiskArtifactStore>();
+        services.AddSingleton(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<ChatNewsRiskAnalyzer>>();
+            var resolved = normalized
+                .Select(r =>
+                {
+                    var identity = new NewsRiskReaderIdentity(r.Name, r.Client.Provider, r.Client.Model);
+                    var client = new ChatClientFactory(r.Client).Create();
+                    return new NewsRiskReader(identity, new ChatNewsRiskAnalyzer(client, identity, logger));
+                })
+                .ToList();
+            return new NewsRiskReaderSet(resolved);
+        });
+        services.AddSingleton<INewsRiskShadowGenerator, NewsRiskShadowGenerator>();
+        services.TryAddSingleton(TimeProvider.System);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the spec-179 §9 read-only frozen-assessment evaluator: the committed development-example
+    /// declarations reader and the <see cref="INewsRiskEvaluationGenerator"/>. Requires the shadow
+    /// registration above (assessment/artifact stores), the archive boundary reader and an
+    /// <see cref="IPriceHistoryStore"/> — the ONE place in the news-risk subsystem that touches price
+    /// (AD-14 read side).
+    /// </summary>
+    public static IServiceCollection AddRadarNewsRiskEvaluation(
+        this IServiceCollection services, string developmentDeclarationsPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(developmentDeclarationsPath);
+
+        services.AddSingleton(new FileNewsRiskDevelopmentExampleSourceOptions
+        {
+            FilePath = developmentDeclarationsPath,
+        });
+        services.AddSingleton<INewsRiskDevelopmentExampleSource, FileNewsRiskDevelopmentExampleSource>();
+        services.AddSingleton<INewsRiskEvaluationGenerator, NewsRiskEvaluationGenerator>();
+        return services;
+    }
+
+    /// <summary>
+    /// Validates one reader's provider client options with the SAME rules <see cref="AddRadarAi"/> applies
+    /// to <c>Radar:Ai</c> (supported provider, model required, per-provider key/endpoint requirements),
+    /// with every message naming the READER and its exact config path (spec 179 §5). The rules deliberately
+    /// mirror AddRadarAi's — a reader is "the same shape and validation as Radar:Ai" — while the messages
+    /// cannot be shared because the reader/path naming is the requirement. Returns the trimmed/normalized
+    /// options (the same normalization AddRadarAi performs), so validation, the built client and the cohort
+    /// identity all agree on one string.
+    /// </summary>
+    private static AiClientOptions ValidateNewsRiskReaderClient(
+        string readerName, string configPath, AiClientOptions client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+
+        var normalized = new AiClientOptions
+        {
+            Provider = client.Provider?.Trim() ?? string.Empty,
+            Model = client.Model?.Trim() ?? string.Empty,
+            AnthropicApiKey = client.AnthropicApiKey?.Trim() ?? string.Empty,
+            OllamaEndpoint = client.OllamaEndpoint?.Trim() ?? string.Empty,
+            OpenAiBaseUrl = client.OpenAiBaseUrl?.Trim() ?? string.Empty,
+            OpenAiApiKey = client.OpenAiApiKey?.Trim() ?? string.Empty,
+        };
+
+        var isAnthropic = string.Equals(normalized.Provider, "anthropic", StringComparison.OrdinalIgnoreCase);
+        var isOllama = string.Equals(normalized.Provider, "ollama", StringComparison.OrdinalIgnoreCase);
+        var isOpenAi = string.Equals(normalized.Provider, "openai", StringComparison.OrdinalIgnoreCase);
+
+        if (!isAnthropic && !isOllama && !isOpenAi)
+        {
+            throw new InvalidOperationException(
+                $"News-risk reader '{readerName}' ({configPath}:Provider) must be \"anthropic\", "
+                    + "\"ollama\", or \"openai\" — a blank/unknown provider has no client to build.");
+        }
+
+        if (string.IsNullOrWhiteSpace(normalized.Model))
+        {
+            throw new InvalidOperationException(
+                $"News-risk reader '{readerName}' ({configPath}:Model) requires a model id — a blank value "
+                    + "has no model to call.");
+        }
+
+        if (isAnthropic && string.IsNullOrWhiteSpace(normalized.AnthropicApiKey))
+        {
+            throw new InvalidOperationException(
+                $"News-risk reader '{readerName}' ({configPath}:Anthropic:ApiKey) requires an API key for "
+                    + "the hosted anthropic provider.");
+        }
+
+        if (isOllama && !IsAbsoluteHttpUri(normalized.OllamaEndpoint))
+        {
+            throw new InvalidOperationException(
+                $"News-risk reader '{readerName}' ({configPath}:Ollama:Endpoint) requires an absolute "
+                    + "http/https endpoint URI (default http://localhost:11434).");
+        }
+
+        if (isOpenAi && !IsAbsoluteHttpUri(normalized.OpenAiBaseUrl))
+        {
+            throw new InvalidOperationException(
+                $"News-risk reader '{readerName}' ({configPath}:OpenAi:BaseUrl) requires an absolute "
+                    + "http/https base URL (e.g. DeepInfra https://api.deepinfra.com/v1/openai).");
+        }
+
+        if (isOpenAi && string.IsNullOrWhiteSpace(normalized.OpenAiApiKey))
+        {
+            throw new InvalidOperationException(
+                $"News-risk reader '{readerName}' ({configPath}:OpenAi:ApiKeyEnvVar) must name a SET "
+                    + "environment variable holding the API key — the key is never committed to config and "
+                    + "its value is never logged.");
+        }
+
+        return normalized;
     }
 
     /// <summary>

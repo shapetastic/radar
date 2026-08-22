@@ -42,7 +42,8 @@ namespace Radar.Infrastructure.News;
 /// The archive feeds no evidence, no signal, no score and no fingerprint.
 /// </para>
 /// </remarks>
-public sealed class FileNewsObservationArchive : INewsObservationArchive
+public sealed class FileNewsObservationArchive
+    : INewsObservationArchive, INewsObservationBatchReader, INewsProspectiveBoundaryReader
 {
     private const string ObservationsFolder = "observations";
     private const string BatchesFolder = "batches";
@@ -267,7 +268,7 @@ public sealed class FileNewsObservationArchive : INewsObservationArchive
             return;
         }
 
-        var boundary = new NewsObservationBoundaryFile(
+        var boundary = new NewsObservationBoundary(
             SchemaVersion: NewsObservationRecord.CurrentSchemaVersion,
             FirstProspectiveCaptureAsOfUtc: batch.RunAsOfUtc,
             EstablishedByBatchId: batch.BatchId);
@@ -469,12 +470,75 @@ public sealed class FileNewsObservationArchive : INewsObservationArchive
     }
 
     /// <summary>
-    /// The create-once boundary file shape: the whole-universe prospective-capture start
-    /// (<c>firstProspectiveCaptureAsOfUtc</c> comes from the actual establishing run) plus the explicit
-    /// batch association.
+    /// Resolves one batch manifest by explicit batch id (spec 179 §4). Manifests are as-of-named on disk, so
+    /// this enumerates <c>{root}/batches/*.json</c> in deterministic ordinal order and matches on the
+    /// serialized <c>BatchId</c>. Every read failure degrades to <c>null</c> (Warning) — the caller must
+    /// treat that as UNPROVEN capture, never as a clean batch; cancellation propagates.
     /// </summary>
-    private sealed record NewsObservationBoundaryFile(
-        string SchemaVersion,
-        DateTimeOffset FirstProspectiveCaptureAsOfUtc,
-        Guid EstablishedByBatchId);
+    public async Task<NewsObservationBatch?> GetBatchAsync(Guid batchId, CancellationToken ct)
+    {
+        var batchesRoot = Path.Combine(_options.RootDirectory, BatchesFolder);
+        if (!Directory.Exists(batchesRoot))
+        {
+            return null;
+        }
+
+        string[] files;
+        try
+        {
+            files = Directory.GetFiles(batchesRoot, "*.json");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex, "Failed to enumerate news observation batch manifests under '{Root}'.", batchesRoot);
+            return null;
+        }
+
+        foreach (var file in files.Order(StringComparer.Ordinal))
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+                var parsed = JsonSerializer.Deserialize<NewsObservationBatch>(text, RadarFileStoreJson.Options);
+                if (parsed is not null && parsed.BatchId == batchId)
+                {
+                    return parsed;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                _logger.LogWarning(
+                    ex, "Failed to read news observation batch manifest '{File}'; skipping.", file);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads the create-once <c>boundary.json</c> (spec 179 §9). <c>null</c> when it has not been
+    /// established or cannot be read — fail closed at the caller: no boundary means no clean prospective
+    /// cohort, never "everything is prospective".
+    /// </summary>
+    public async Task<NewsObservationBoundary?> ReadBoundaryAsync(CancellationToken ct)
+    {
+        var path = Path.Combine(_options.RootDirectory, BoundaryFileName);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var text = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+            return JsonSerializer.Deserialize<NewsObservationBoundary>(text, RadarFileStoreJson.Options);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _logger.LogWarning(ex, "Failed to read news observation boundary at {Path}.", path);
+            return null;
+        }
+    }
 }
