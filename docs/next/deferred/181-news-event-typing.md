@@ -107,9 +107,12 @@ Facts[]          extracted LIBERALLY (stage 2 filters; stage 1 never pre-judges 
   AssertionStatus      confirmed-filing | reported | alleged | solicited | speculative | ...
   Confidence           0..1
   Citations[]          exact substrings of supplied text
-  SameEventFamilyId    §4's deterministic family — stage 2 consumes CANONICAL fact/event families,
-                       never N syndicated copies of one claim
 ```
+
+Facts carry NO family id: the extractor works one observation at a time and must not invent
+cross-observation identifiers. Families are SEPARATE RECORDS built by §4's deterministic post-extraction
+pass, which reference member FactIds — stage 2 consumes those canonical families, never N syndicated copies
+of one claim.
 
 The fact shape and the `Attribution`/`AssertionStatus` vocabularies are finalized through the same §3 audit
 procedure as the taxonomy. Stage-1 recall over the audited sample (facts a human judged pertinent that the
@@ -149,6 +152,26 @@ Finalization procedure (part of this spec's implementation, before any prospecti
 "coverage that says nothing about the business" buckets whose *identification* is half this spec's value.
 
 ## 4. Execution, cohorts and storage
+
+### The family builder — versioned, deterministic, post-extraction
+
+`fact-family-v1` is a separate deterministic pass over the run's extracted facts (never a model call, never
+the extractor's job — AD-3): it groups facts asserting the SAME claim about the same company, so syndication
+reaches the judge as one family with size metadata. Rules:
+
+- **Key**: companyId + overlapping `EventTypes` + normalized-statement similarity (the versioned
+  normalization is part of the family-builder identity) + temporal proximity. The existing media collapse is
+  NOT reused — it is a time-window bucket that can merge unrelated same-day stories; family membership here
+  means *same claim*, not *same day*.
+- **Conflict handling**: facts with contradictory statements (different quantities for the same measure,
+  negated vs asserted) never share a family, however similar their text — a family is one claim, and
+  merging a contradiction would erase exactly the information stage 2 needs to see.
+- **Representative selection is deterministic**: earliest `firstObservedAtUtc`, then lowest FactId; family
+  metadata records member count, distinct publishers and the full FactId membership list.
+- **Family records are separate insert-only files** under the typing store, keyed by family id (derived from
+  the builder version + canonical member key), re-derivable from the facts alone; fact records are never
+  mutated to point at families.
+- Bumping the builder's normalization/keying is a `fact-family-v2` — a new cohort dimension, never an edit.
 
 - Reuses spec 179's `Readers` seam verbatim: each configured reader types independently; cohort identity is
   provider + model + prompt/schema/taxonomy version; cohorts never pool; no merged verdict.
