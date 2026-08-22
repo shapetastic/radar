@@ -2,6 +2,7 @@ namespace Radar.Application.Reporting;
 
 using System.Globalization;
 using System.Text;
+using Radar.Application.Scoring;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Signals;
@@ -132,6 +133,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
 
         AppendHeading(sb, model);
         AppendDisclaimers(sb);
+        AppendLiveStrategyLeaders(sb, model);
         AppendHighestOpportunity(sb, model);
         AppendThesisSection(sb, model, RadarReportAction.ThesisImproving, "Thesis improving");
         AppendThesisSection(sb, model, RadarReportAction.ThesisDeteriorating, "Thesis deteriorating");
@@ -178,6 +180,131 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             .Append("— either a deterministic Neutral earnings-filing marker or an AI earnings-trajectory ")
             .Append("read; it does not by itself mean the company issued or changed guidance.")
             .Append(Lf);
+        sb.Append(Lf);
+    }
+
+    // Spec 176: the compact live summary — AT MOST this many rows per strategy. A PRESENTATION constant,
+    // deliberately not a configuration knob and not a scoring threshold: the full per-strategy tables below
+    // (spec 150) keep the report's MaxItems cap, this section only answers "what is each arm saying now".
+    private const int LiveLeadersPerStrategy = 5;
+
+    // Spec 176 §1 — the fixed honesty wording, pinned by tests. Live scores are a different STATE from a
+    // descriptive efficacy observation and from AD-15 claim support, and the rendered language must never
+    // conflate them.
+    private const string LiveLeadersNoForwardPriceLine =
+        "Live scores are shown immediately and are never gated on a future price. Forward outcomes are "
+            + "required only to evaluate the strategy later; these rankings are not efficacy results.";
+
+    private const string LiveLeadersNoCrossStrategyLine =
+        "Scores and score magnitudes are comparable only within the same strategy. Repeated company names "
+            + "across arms are not a consensus signal.";
+
+    private const string LiveLeadersComparatorLine =
+        "Comparators are displayed to diagnose what the research arms may merely be reproducing. A "
+            + "comparator leader is not a Radar candidate.";
+
+    // Spec 176: the live strategy leaders — a SECOND RENDERING of the first few spec-150 rows per strategy,
+    // never a second construction of them (every value is read off the row's already-guarded current
+    // snapshot). Rendered immediately after the standing disclaimers and BEFORE "## Highest opportunity",
+    // and only when the model carries strategy sections — a single-strategy run (Strategies == null) stays
+    // byte-identical to the pre-150 report.
+    //
+    // Deliberately NOT here (spec 176 §5): no merged/cross-strategy rank, no consensus score or count, no
+    // agreement badges, no labels for non-primary strategies, no cross-formula score threshold, and no
+    // movement/previous-score data (that would need the cross-run file-store read path — a later,
+    // separately bounded feature).
+    private static void AppendLiveStrategyLeaders(StringBuilder sb, WeeklyReportModel model)
+    {
+        var strategies = model.Strategies;
+        if (strategies is null || strategies.Count == 0)
+        {
+            return;
+        }
+
+        // Grouping uses the CARRIED Purpose only — never a name/prefix/formula inference (spec 176 §2).
+        // Within each group the model's configured order is preserved; the research group additionally puts
+        // the primary first (a stable partition, mirroring the builder's own ordering rule).
+        var research = new List<StrategyReportSection>(strategies.Count);
+        research.AddRange(strategies.Where(s => s.Purpose == StrategyPurpose.Research && s.IsPrimary));
+        research.AddRange(strategies.Where(s => s.Purpose == StrategyPurpose.Research && !s.IsPrimary));
+        var comparators = strategies.Where(s => s.Purpose == StrategyPurpose.Comparator).ToList();
+
+        sb.Append("## Live strategy leaders").Append(Lf);
+        sb.Append(Lf);
+
+        if (research.Count > 0)
+        {
+            sb.Append("### Research arms").Append(Lf);
+            sb.Append(Lf);
+            sb.Append(LiveLeadersNoForwardPriceLine).Append(Lf);
+            sb.Append(Lf);
+            sb.Append(LiveLeadersNoCrossStrategyLine).Append(Lf);
+            sb.Append(Lf);
+            AppendLiveLeadersTable(sb, research);
+        }
+
+        if (comparators.Count > 0)
+        {
+            sb.Append("### Comparators — diagnostic only").Append(Lf);
+            sb.Append(Lf);
+            sb.Append(LiveLeadersComparatorLine).Append(Lf);
+            sb.Append(Lf);
+            AppendLiveLeadersTable(sb, comparators);
+        }
+    }
+
+    // ONE combined table per subsection: per strategy, at most its first LiveLeadersPerStrategy existing
+    // spec-150 rows (already ranked, already evidence-filtered per spec 53 — fewer than five means fewer
+    // rows, never manufactured ones). A strategy with zero surfaced rows is RETAINED with an explicit empty
+    // message: an empty experimental arm is a result, not grounds to omit the arm.
+    private static void AppendLiveLeadersTable(
+        StringBuilder sb, IReadOnlyList<StrategyReportSection> sections)
+    {
+        sb.Append("| strategy | rank | company | ticker | Opportunity | as-of UTC |").Append(Lf);
+        sb.Append("| --- | ---: | --- | --- | ---: | --- |").Append(Lf);
+
+        foreach (var section in sections)
+        {
+            // The primary is labelled so a reader can tell which arm owns the narrative below (spec 176 §2:
+            // "a valid primary is labelled primary research"). A Comparator primary cannot exist — the
+            // strategy set rejects it at startup — so the label never contradicts the subsection.
+            var strategyCell = EscapeTableCell(section.StrategyName)
+                + (section.IsPrimary ? " (primary research)" : string.Empty);
+
+            if (section.Rows.Count == 0)
+            {
+                sb.Append("| ")
+                    .Append(strategyCell)
+                    .Append(" | — | No evidence-linked live scores in this report window. | — | — | — |")
+                    .Append(Lf);
+                continue;
+            }
+
+            for (var i = 0; i < section.Rows.Count && i < LiveLeadersPerStrategy; i++)
+            {
+                var row = section.Rows[i];
+                sb.Append("| ")
+                    .Append(strategyCell)
+                    .Append(" | ")
+                    // The existing within-strategy rank — never recomputed, never merged across strategies.
+                    .Append(row.Rank.ToString(CultureInfo.InvariantCulture))
+                    .Append(" | ")
+                    .Append(EscapeTableCell(row.CompanyName))
+                    .Append(" | ")
+                    .Append(string.IsNullOrEmpty(row.Ticker) ? "—" : EscapeTableCell(row.Ticker))
+                    .Append(" | ")
+                    .Append(row.Snapshot.OpportunityScore.ToString(CultureInfo.InvariantCulture))
+                    .Append(" | ")
+                    // The EXACT scoring cutoff: the snapshot's WindowEndUtc — deliberately not CreatedAtUtc
+                    // and not the report date, so two rows with different knowledge cutoffs are visibly
+                    // different rather than reading as one synchronized table.
+                    .Append(row.Snapshot.WindowEndUtc.ToString(
+                        "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))
+                    .Append("Z |")
+                    .Append(Lf);
+            }
+        }
+
         sb.Append(Lf);
     }
 

@@ -600,6 +600,186 @@ public sealed class ScoringStrategyBindingTests
         Assert.Equal(new ScoringWeights(), Assert.Single(set.Strategies).Weights);
     }
 
+    // ---- Spec 176: the per-strategy reporting Purpose --------------------------------------------------
+
+    [Fact]
+    public void NoPurpose_DefaultsToResearch()
+    {
+        var set = Resolve(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "baseline",
+            ["Radar:PrimaryStrategy"] = "baseline",
+        });
+
+        Assert.Equal(StrategyPurpose.Research, Assert.Single(set.Strategies).Purpose);
+    }
+
+    [Fact]
+    public void SynthesisedDefaultStrategy_IsResearch()
+    {
+        var set = Resolve(new Dictionary<string, string?>());
+
+        Assert.Equal(StrategyPurpose.Research, Assert.Single(set.Strategies).Purpose);
+    }
+
+    [Theory]
+    [InlineData("Comparator")]
+    [InlineData("comparator")]
+    [InlineData("COMPARATOR")]
+    [InlineData("  Comparator  ")]
+    public void ComparatorPurpose_BindsCaseInsensitively(string value)
+    {
+        var set = Resolve(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "alpha",
+            ["Radar:Strategies:1:Name"] = "baseline",
+            ["Radar:Strategies:1:Purpose"] = value,
+            ["Radar:PrimaryStrategy"] = "alpha",
+        });
+
+        Assert.Equal(StrategyPurpose.Research, set.Strategies[0].Purpose);
+        Assert.Equal(StrategyPurpose.Comparator, set.Strategies[1].Purpose);
+    }
+
+    [Theory]
+    [InlineData("research")]
+    [InlineData("RESEARCH")]
+    public void ResearchPurpose_BindsCaseInsensitively(string value)
+    {
+        var set = Resolve(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "alpha",
+            ["Radar:Strategies:0:Purpose"] = value,
+            ["Radar:PrimaryStrategy"] = "alpha",
+        });
+
+        Assert.Equal(StrategyPurpose.Research, Assert.Single(set.Strategies).Purpose);
+    }
+
+    [Fact]
+    public void UnknownPurpose_FailsFast_NamingTheExactPathAndBothValidValues()
+    {
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "alpha",
+            ["Radar:Strategies:0:Purpose"] = "Baseline",
+            ["Radar:PrimaryStrategy"] = "alpha",
+        });
+
+        Assert.Contains("Radar:Strategies:0:Purpose", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Baseline", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Research", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Comparator", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ObjectValuedPurpose_IsRejected_RatherThanSilentlyMeaningResearch()
+    {
+        // "Purpose": { ... } binds as a section with children and no value; without the shape guard it would
+        // fall through to the Research default — a comparator silently displayed as research.
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "alpha",
+            ["Radar:Strategies:0:Purpose:Value"] = "Comparator",
+            ["Radar:PrimaryStrategy"] = "alpha",
+        });
+
+        Assert.Contains("Radar:Strategies:0:Purpose", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComparatorPrimary_FailsStartup_NamingThePrimaryAndTheRemedy()
+    {
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "baseline-activity-only",
+            ["Radar:Strategies:0:Purpose"] = "Comparator",
+            ["Radar:Strategies:1:Name"] = "research-arm",
+            ["Radar:PrimaryStrategy"] = "baseline-activity-only",
+        });
+
+        Assert.Contains("baseline-activity-only", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Research", ex.Message, StringComparison.Ordinal);
+    }
+
+    // ---- Spec 176: the entry-level key allowlist -------------------------------------------------------
+
+    [Fact]
+    public void AllSevenValidEntryKeys_BindCaseInsensitively()
+    {
+        // The allowlist must answer exactly the question IConfiguration's case-insensitive lookups answer:
+        // every valid key in a non-canonical case both PASSES the guard and actually BINDS.
+        var set = Resolve(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:name"] = "tuned",
+            ["Radar:Strategies:0:scoringprofile"] = "experiment",
+            ["Radar:Strategies:0:WEIGHTS:RecencyFloor"] = "0.3",
+            ["Radar:Strategies:0:signaltypes:0"] = "InsiderBuying",
+            ["Radar:Strategies:0:purpose"] = "comparator",
+            ["Radar:Strategies:1:NAME"] = "channelled",
+            ["Radar:Strategies:1:FORMULA"] = "radar-formula-v9",
+            ["Radar:Strategies:1:channels:0:Name"] = "insider",
+            ["Radar:Strategies:1:channels:0:Collectors:0"] = "sec-form4",
+            ["Radar:Strategies:1:channels:0:Weight"] = "1.0",
+            ["Radar:Strategies:1:channels:0:Saturation"] = "2",
+            ["Radar:Scoring:Profiles:experiment:MediaReachWeight"] = "0.02",
+            ["Radar:PrimaryStrategy"] = "channelled",
+        });
+
+        Assert.Equal("tuned", set.Strategies[0].Name);
+        Assert.Equal("experiment", set.Strategies[0].ScoringProfile);
+        Assert.Equal(0.3, set.Strategies[0].Weights.RecencyFloor);
+        Assert.Equal(0.02, set.Strategies[0].Weights.MediaReachWeight);
+        Assert.Equal([SignalType.InsiderBuying], set.Strategies[0].SignalTypes.Types);
+        Assert.Equal(StrategyPurpose.Comparator, set.Strategies[0].Purpose);
+        Assert.Equal("channelled", set.Strategies[1].Name);
+        Assert.Equal(ScoreFormulaVersions.V9, set.Strategies[1].Formula);
+        Assert.Single(set.Strategies[1].Channels.Channels);
+    }
+
+    [Theory]
+    [InlineData("Purpsoe")]
+    [InlineData("SignalTypess")]
+    [InlineData("Wieghts")]
+    public void UnknownStrategyEntryKey_FailsFast_NamingTheExactIndexedPathAndTheValidSet(string key)
+    {
+        // THE entry-level fail-open (spec 176 §2): before this guard the entry loop read known children and
+        // silently ignored every sibling, so `Purpsoe` quietly became the default purpose and `SignalTypess`
+        // silently widened a strategy to ALL signal types.
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "alpha",
+            ["Radar:Strategies:1:Name"] = "beta",
+            [$"Radar:Strategies:1:{key}"] = "whatever",
+            ["Radar:PrimaryStrategy"] = "alpha",
+        });
+
+        Assert.Contains($"Radar:Strategies:1:{key}", ex.Message, StringComparison.Ordinal);
+        // The message lists the whole valid set so the fix is obvious from the log line alone.
+        foreach (var valid in new[]
+                 {
+                     "Name", "ScoringProfile", "Weights", "SignalTypes", "Formula", "Channels", "Purpose",
+                 })
+        {
+            Assert.Contains(valid, ex.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void UnknownStrategyEntryKey_WithChildren_FailsFastToo()
+    {
+        // A misspelt SECTION (children, no value) must fail the same way as a misspelt scalar — the binder
+        // ignores both identically.
+        var ex = Rejects(new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "alpha",
+            ["Radar:Strategies:0:Chanels:0:Name"] = "insider",
+            ["Radar:PrimaryStrategy"] = "alpha",
+        });
+
+        Assert.Contains("Radar:Strategies:0:Chanels", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void InlineWeights_AreIgnoredForTheSynthesisedDefaultStrategy_BecauseThereIsNoEntryToDeclareThemOn()
     {

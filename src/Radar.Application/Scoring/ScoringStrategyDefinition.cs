@@ -77,4 +77,22 @@ public sealed record ScoringStrategyDefinition(
     /// </para>
     /// </summary>
     public ScoringChannelSet Channels { get; init; } = ScoringChannelSet.Empty;
+
+    /// <summary>
+    /// The declared reporting purpose of this strategy (spec 176): <see cref="StrategyPurpose.Research"/>
+    /// (the default — a genuine hypothesis) or <see cref="StrategyPurpose.Comparator"/> (a diagnostic
+    /// baseline that exists to be beaten, AD-15). Additive and init-only for the same reason as
+    /// <see cref="SignalTypes"/>: every existing construction site keeps compiling and keeps today's
+    /// behaviour.
+    /// <para>
+    /// Unlike <see cref="SignalTypes"/>/<see cref="Channels"/> — and like <see cref="Name"/> — it is
+    /// deliberately <b>NOT</b> a fingerprint input: purpose is report metadata, not a scoring-affecting
+    /// choice, so two strategies differing only in purpose are the SAME effective scoring and must share a
+    /// <c>ScoringConfigVersion</c>. A purpose-only edit therefore moves no fingerprint, forks no series and
+    /// never trips <c>StrategyIdentityGuard</c>. <see cref="ScoringStrategySet"/> rejects a Comparator
+    /// PRIMARY: the primary owns the Radar narrative and labels, so a comparator primary would make the
+    /// config say two contradictory things.
+    /// </para>
+    /// </summary>
+    public StrategyPurpose Purpose { get; init; } = StrategyPurpose.Research;
 }

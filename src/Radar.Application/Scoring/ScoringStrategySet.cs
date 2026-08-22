@@ -157,6 +157,19 @@ public sealed class ScoringStrategySet
                     + "location and is the one the weekly report renders.");
         }
 
+        // Spec 176: the primary owns the Radar narrative and labels, so a primary declared as a diagnostic
+        // COMPARATOR would make the config say two contradictory things — "this arm exists only to be
+        // beaten" and "this arm is the series the report leads with". Rejected rather than silently
+        // displayed under Research; IsPrimary stays an independent property for every other combination.
+        if (primaries[0].Purpose == StrategyPurpose.Comparator)
+        {
+            throw new InvalidOperationException(
+                $"Radar:PrimaryStrategy '{primaries[0].Name}' declares Purpose 'Comparator', but the primary "
+                    + "strategy owns the Radar narrative and labels, so it must be a Research arm. Either "
+                    + "point Radar:PrimaryStrategy at a Research strategy, or remove Purpose (or set it to "
+                    + $"'Research') on '{primaries[0].Name}'.");
+        }
+
         Strategies = [.. strategies];
         Primary = primaries[0];
     }

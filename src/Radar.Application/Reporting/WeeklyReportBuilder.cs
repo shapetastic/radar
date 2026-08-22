@@ -545,7 +545,12 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 IsPrimary: runtime.Definition.IsPrimary,
                 CompaniesScored: candidates.Count,
                 CompaniesWithLinkedEvidence: withLinks.Count,
-                Rows: rows));
+                Rows: rows)
+            {
+                // Spec 176: the declared reporting purpose, carried onto the section so the renderer can
+                // group the live strategy leaders without inferring purpose from a name/formula/channel.
+                Purpose = runtime.Definition.Purpose,
+            });
         }
 
         return sections;

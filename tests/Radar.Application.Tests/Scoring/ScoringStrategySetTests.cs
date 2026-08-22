@@ -51,6 +51,37 @@ public sealed class ScoringStrategySetTests
             () => new ScoringStrategySet([Def(name, primary: true)]));
     }
 
+    // ---- Spec 176: the primary must be a Research arm --------------------------------------------------
+
+    [Fact]
+    public void ComparatorPrimary_IsRejected_NamingThePrimaryAndTheRemedy()
+    {
+        // The primary owns the Radar narrative and labels, so a comparator primary would make the config say
+        // two contradictory things — rejected rather than silently displayed under Research.
+        var ex = Assert.Throws<InvalidOperationException>(() => new ScoringStrategySet(
+        [
+            Def("baseline-activity-only", primary: true) with { Purpose = StrategyPurpose.Comparator },
+            Def("research-arm", primary: false),
+        ]));
+
+        Assert.Contains("baseline-activity-only", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Comparator", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Research", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComparatorNonPrimary_IsAccepted_AndTheDefaultPurposeIsResearch()
+    {
+        var set = new ScoringStrategySet(
+        [
+            Def("alpha", primary: true),
+            Def("baseline", primary: false) with { Purpose = StrategyPurpose.Comparator },
+        ]);
+
+        Assert.Equal(StrategyPurpose.Research, set.Primary.Purpose);
+        Assert.Equal(StrategyPurpose.Comparator, set.Strategies[1].Purpose);
+    }
+
     [Fact]
     public void DuplicateNames_AreRejectedCaseInsensitively()
     {

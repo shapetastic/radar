@@ -160,6 +160,7 @@ public sealed class WeeklyReportBuilderTests
                         IsPrimary: s.IsPrimary)
                     {
                         Formula = s.Formula,
+                        Purpose = s.Purpose,
                     },
                     new NonScoringEngine(new EffectiveScoringConfig(
                         Fingerprint: s.Fingerprint,
@@ -184,7 +185,8 @@ public sealed class WeeklyReportBuilderTests
         string Name,
         bool IsPrimary,
         string Fingerprint = "radar-scoring-fp-000000000000",
-        string Formula = ScoreFormulaVersions.V8);
+        string Formula = ScoreFormulaVersions.V8,
+        StrategyPurpose Purpose = StrategyPurpose.Research);
 
     private static readonly IReadOnlyList<TestStrategy> SingleDefaultStrategy =
         [new TestStrategy("default", IsPrimary: true)];
@@ -2056,5 +2058,108 @@ public sealed class WeeklyReportBuilderTests
         var lowMediaFingerprint = provider.GetRequiredService<IScoringStrategyFactory>()
             .Runtimes.Single(r => r.Definition.Name == "low-media").Engine.EffectiveConfig.Fingerprint;
         Assert.Contains($"Fingerprint: {lowMediaFingerprint} ·", markdown, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Spec 176 — the live strategy leaders are a second RENDERING of the spec-150 sections, never a
+    // second construction: the builder's only new work is carrying Purpose onto each section.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>Counts the only file-store read the builder performs (the primary movement lookup).</summary>
+    private sealed class CountingScoreSnapshotFileStore : IScoreSnapshotFileStore
+    {
+        public int ReadLatestBeforeCallCount { get; private set; }
+
+        public int ReadAllForCompanyCallCount { get; private set; }
+
+        public Task<string> WriteAsync(
+            CompanyScoreSnapshot snapshot,
+            IReadOnlyList<ScoreEvidenceLink> links,
+            CancellationToken ct) => Task.FromResult("unused");
+
+        public Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
+            Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct)
+        {
+            ReadLatestBeforeCallCount++;
+            return Task.FromResult<CompanyScoreSnapshot?>(null);
+        }
+
+        public Task<IReadOnlyList<CompanyScoreSnapshot>> ReadAllForCompanyAsync(
+            Guid companyId, CancellationToken ct)
+        {
+            ReadAllForCompanyCallCount++;
+            return Task.FromResult<IReadOnlyList<CompanyScoreSnapshot>>([]);
+        }
+    }
+
+    [Fact]
+    public async Task StrategySections_CarryTheRuntimeDefinitionsPurpose()
+    {
+        var h = new Harness(strategies:
+        [
+            new TestStrategy("default", IsPrimary: true),
+            new TestStrategy("baseline-activity-only", IsPrimary: false,
+                Purpose: StrategyPurpose.Comparator),
+            new TestStrategy("filings-led", IsPrimary: false),
+        ]);
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
+
+        await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        var sections = h.Renderer.LastModel!.Strategies!;
+        Assert.Equal(
+            [StrategyPurpose.Research, StrategyPurpose.Comparator, StrategyPurpose.Research],
+            sections.Select(s => s.Purpose).ToArray());
+        // Grouping metadata only: the spec-150 section list itself keeps its primary-first configured order,
+        // NOT a purpose-grouped order — the renderer groups, the builder does not.
+        Assert.Equal(
+            ["default", "baseline-activity-only", "filings-led"],
+            sections.Select(s => s.StrategyName).ToArray());
+    }
+
+    [Fact]
+    public async Task LiveLeadersSummary_AddsNoRepositoryOrFileStoreRead()
+    {
+        // The compact summary consumes the ALREADY-BUILT StrategyReportSection rows. With one surfaced
+        // primary company and two strategies, the only file-store read is the primary walk's single
+        // movement lookup — rendering the live section on top of the same model adds zero reads.
+        var scoreFiles = new CountingScoreSnapshotFileStore();
+        var h = new Harness(scoreFiles: scoreFiles, strategies: TwoStrategies);
+        var companyId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId, Guid.NewGuid(), opportunity: 70);
+        await SeedStrategySnapshotAsync(h, "filings-led", companyId, Guid.NewGuid(), opportunity: 55);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        // The section IS rendered…
+        Assert.Contains("## Live strategy leaders", result.Report.MarkdownContent, StringComparison.Ordinal);
+        // …and the read counts are exactly the pre-176 ones: one movement lookup for the surfaced primary
+        // entry, and no ReadAllForCompanyAsync at all (that path belongs to efficacy, not reporting).
+        Assert.Equal(1, scoreFiles.ReadLatestBeforeCallCount);
+        Assert.Equal(0, scoreFiles.ReadAllForCompanyCallCount);
+    }
+
+    [Fact]
+    public async Task LiveLeaders_RenderBeforeHighestOpportunity_FromTheSameSectionRows()
+    {
+        var h = new Harness(strategies: TwoStrategies);
+        var companyId = Guid.NewGuid();
+        await SeedCompanyAsync(h, companyId, Guid.NewGuid(), opportunity: 70, name: "Acme Dynamics",
+            ticker: "ACME");
+        await SeedStrategySnapshotAsync(h, "filings-led", companyId, Guid.NewGuid(), opportunity: 55);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var markdown = result.Report.MarkdownContent;
+
+        var live = markdown.IndexOf("## Live strategy leaders", StringComparison.Ordinal);
+        var highest = markdown.IndexOf("## Highest opportunity", StringComparison.Ordinal);
+        Assert.True(live >= 0 && highest >= 0 && live < highest,
+            "The live summary must render before the Highest opportunity narrative.");
+
+        // Both strategies' leaders appear, each with its OWN rank-1 row read off its own section.
+        Assert.Contains("| default (primary research) | 1 | Acme Dynamics | ACME | 70 |",
+            markdown, StringComparison.Ordinal);
+        Assert.Contains("| filings-led | 1 | Acme Dynamics | ACME | 55 |",
+            markdown, StringComparison.Ordinal);
     }
 }

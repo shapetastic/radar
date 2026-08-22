@@ -136,7 +136,12 @@ public sealed class StrategyLeaderboardRenderer
             sb.Append('\n');
         }
 
-        sb.Append(CultureInfo.InvariantCulture, $"## Dropped strategies ({leaderboard.DroppedStrategies.Count})\n\n");
+        // Spec 176: "dropped" here means dropped FROM THIS RANKING, never "failed to score live" — a
+        // strategy listed below may be scoring every company on every run while its declared forward-outcome
+        // sample is still too young to rank. The heading and the sentence say so; the count, every numeric
+        // field and every drop reason are unchanged.
+        sb.Append(CultureInfo.InvariantCulture, $"## Dropped from efficacy ranking ({leaderboard.DroppedStrategies.Count})\n\n");
+        sb.Append("A strategy listed here may still be scoring every company live; this section means only that its declared forward-outcome sample cannot yet be ranked.\n\n");
         if (leaderboard.DroppedStrategies.Count == 0)
         {
             sb.Append("_None — every strategy considered was ranked._\n");

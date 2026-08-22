@@ -441,6 +441,12 @@ public static class InfrastructureServiceCollectionExtensions
         var definitions = new List<ScoringStrategyDefinition>(entries.Count);
         foreach (var entry in entries)
         {
+            // Spec 176: the ENTRY-level fail-open guard. Specs 149/174 guarded the nested Weights and
+            // named-profile/options sections, but the entry loop itself read known children and silently
+            // ignored every sibling — so `Purpsoe` would quietly become the default purpose, and the
+            // already-dangerous `SignalTypess` shape would silently widen a strategy to ALL signal types.
+            RejectUnknownStrategyEntryKeys(entry);
+
             var name = entry["Name"];
             if (string.IsNullOrWhiteSpace(name))
             {
@@ -470,6 +476,9 @@ public static class InfrastructureServiceCollectionExtensions
                 // validation implementation regardless of how a definition is composed.
                 Formula = ResolveFormula(entry),
                 Channels = ResolveChannels(entry, name),
+                // Spec 176: the declared reporting purpose. Report metadata only — never a fingerprint
+                // input — so an omitted key is byte-identical to before the key existed.
+                Purpose = ResolvePurpose(entry),
             });
         }
 
@@ -697,6 +706,80 @@ public static class InfrastructureServiceCollectionExtensions
         // Create() canonicalises: duplicates collapse, order is irrelevant, and a list naming EVERY declared
         // type returns All — so "all types spelled out" is byte-identical to omitting the key.
         return SignalTypeFilter.Create(types);
+    }
+
+    /// <summary>
+    /// The complete valid child-key set of ONE <c>Radar:Strategies[i]</c> entry (spec 176) — the entry-level
+    /// allowlist. <b>Case-INSENSITIVE, deliberately</b>, for the same reason as
+    /// <see cref="ScoringWeightNames"/>: <c>IConfiguration</c> key lookups are case-insensitive, so the
+    /// validator must answer exactly the question the reads below answer — <c>name</c> binds and must pass,
+    /// while a near-miss such as <c>Purpsoe</c> is unknown to both and must fail fast.
+    /// </summary>
+    private static readonly HashSet<string> StrategyEntryKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Name", "ScoringProfile", "Weights", "SignalTypes", "Formula", "Channels", "Purpose",
+    };
+
+    /// <summary>
+    /// Fails fast on any unknown sibling key of a <c>Radar:Strategies[i]</c> entry (spec 176), naming the
+    /// exact <c>Radar:Strategies:{index}:{key}</c> path and the valid set. Before this guard the entry loop
+    /// read its known children and silently ignored everything else, so a typo'd key (<c>Purpsoe</c>,
+    /// <c>SignalTypess</c>) left the strategy running with a silently-defaulted aspect while the operator
+    /// believed it configured — the exact fail-open shape specs 138/149/174 each had to close elsewhere.
+    /// </summary>
+    private static void RejectUnknownStrategyEntryKeys(IConfigurationSection entry)
+    {
+        foreach (var child in entry.GetChildren())
+        {
+            if (!StrategyEntryKeys.Contains(child.Key))
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path} names '{child.Key}', which is not a Radar:Strategies entry key, so it "
+                        + "would be silently ignored and the strategy would run with the corresponding "
+                        + "default while appearing configured. Valid keys: "
+                        + "Name, ScoringProfile, Weights, SignalTypes, Formula, Channels, Purpose.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolves ONE strategy's <c>Purpose</c> (spec 176). Absent or blank ⇒
+    /// <see cref="StrategyPurpose.Research"/> — the byte-identical default. A non-blank value must name one
+    /// of the two declared purposes (matched case-insensitively, exactly as the binder would); anything else
+    /// fails fast naming the exact configuration path and both valid values, so a typo can never silently
+    /// display a comparator as research (or vice versa). A non-scalar <c>Purpose</c> (an object/array) is
+    /// rejected for the same reason as the <c>Weights</c>/<c>SignalTypes</c> shape guards.
+    /// </summary>
+    private static StrategyPurpose ResolvePurpose(IConfigurationSection entry)
+    {
+        var section = entry.GetSection("Purpose");
+        if (section.GetChildren().Any())
+        {
+            throw new InvalidOperationException(
+                $"{section.Path} is not a scalar; a strategy's Purpose must be the single value 'Research' "
+                    + "or 'Comparator'. Omit Purpose entirely for a Research strategy.");
+        }
+
+        var raw = section.Value;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return StrategyPurpose.Research;
+        }
+
+        var trimmed = raw.Trim();
+        if (string.Equals(trimmed, nameof(StrategyPurpose.Research), StringComparison.OrdinalIgnoreCase))
+        {
+            return StrategyPurpose.Research;
+        }
+
+        if (string.Equals(trimmed, nameof(StrategyPurpose.Comparator), StringComparison.OrdinalIgnoreCase))
+        {
+            return StrategyPurpose.Comparator;
+        }
+
+        throw new InvalidOperationException(
+            $"{section.Path} is '{raw}', which is not a strategy purpose (valid values: Research, "
+                + "Comparator). Omit Purpose entirely for a Research strategy.");
     }
 
     /// <summary>

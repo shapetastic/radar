@@ -133,6 +133,48 @@ public sealed class ScoringStrategyFactoryTests
     }
 
     [Fact]
+    public void StrategyPurpose_IsNotAFingerprintInput()
+    {
+        // Spec 176: Purpose is REPORT METADATA — two strategies differing only in purpose are the same
+        // effective scoring, so a purpose-only edit moves no fingerprint (and, via StrategyIdentityGuard's
+        // fingerprint comparison, never trips the identity tripwire — see StrategyIdentityGuardTests).
+        var weights = new ScoringWeights();
+        var set = new ScoringStrategySet(
+        [
+            new ScoringStrategyDefinition("alpha", "default", weights, IsPrimary: true),
+            new ScoringStrategyDefinition("beta", "default", weights, IsPrimary: false)
+            {
+                Purpose = StrategyPurpose.Comparator,
+            },
+        ]);
+
+        using var provider = BuildDefaultGraph();
+        var factory = new ScoringStrategyFactory(
+            set,
+            provider.GetRequiredService<ISignalRepository>(),
+            provider.GetRequiredService<ISignalFileStore>(),
+            provider.GetRequiredService<IEvidenceRepository>(),
+            new StrategyScopedScoreRepositoryFactory(provider.GetRequiredService<IScoreRepository>()),
+            provider.GetRequiredService<ICompanyRepository>(),
+            provider.GetRequiredService<IScoreFormulaFactory>(),
+            provider.GetRequiredService<IAttentionSourceWeights>(),
+            provider.GetRequiredService<ISignalSourceDescriptor>(),
+            provider.GetRequiredService<InsiderMaterialityWeights>(),
+            provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<ScoringOptions>(),
+            provider.GetRequiredService<ILogger<ScoringEngine>>());
+
+        Assert.Equal(
+            factory.Runtimes[0].Engine.EffectiveConfig.Fingerprint,
+            factory.Runtimes[1].Engine.EffectiveConfig.Fingerprint);
+        // The whole effective config is identical too — not just the hash: nothing purpose-shaped is
+        // recorded anywhere a comparability decision could read it back from.
+        Assert.Equal(
+            factory.Runtimes[0].Engine.EffectiveConfig,
+            factory.Runtimes[1].Engine.EffectiveConfig);
+    }
+
+    [Fact]
     public void DeclaredSignalTypes_ReachTheStrategyEngine_AndReStampOnlyThatStrategy()
     {
         // Spec 138: the declared set travels definition → engine → fingerprint. Two strategies over identical
