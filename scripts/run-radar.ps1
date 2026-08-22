@@ -166,6 +166,11 @@ $dirArgs = [ordered]@{
     "Radar:ReplayDirectory"          = (Join-Path $outRoot  "replays")  # spec 139 historical as-of replay output; its OWN root, never under scores\ (only written when Radar:Replay:Enabled)
     "Radar:AnalyzedFilingCacheDirectory" = (Join-Path $outRoot "filings-cache")   # spec 107 per-accession earnings analysis-result cache (AD-14 analogue)
     "Radar:NewsResearch:ObservationDirectory" = (Join-Path $outRoot "news-observations")   # spec 177 point-in-time news observation archive (observational only; never evidence/score input)
+    "Radar:NewsResearch:Shadow:OutputDirectory" = (Join-Path $outRoot "news-risk")   # spec 179 news-risk shadow read output (live artifacts + durable assessments + evaluator; never a score/label/fingerprint input)
+    # spec 179 §8: the COMMITTED known-development-example declarations the evaluator reads directly.
+    # $RepoPath, NOT $outRoot - shared, read-only, checked-in config (same reasoning as the AttentionArrival
+    # cohorts above); the Worker's relative default would resolve against dotnet run's working directory.
+    "Radar:NewsResearch:Shadow:DevelopmentExamplesPath" = (Join-Path $RepoPath "docs\cohorts\news-risk-development.json")
     "Radar:FilingReadDebugDirectory" = (Join-Path $outRoot "ai-debug\filings")   # spec 115 opt-in AI filing-read debug records (only written when Radar:Ai:Filings:PersistReadDebug)
     # spec 169 / AD-16: the COMMITTED exclusion-cohort declarations the attention-arrival screen reads.
     # $RepoPath, NOT $outRoot — these are shared, read-only, checked-in config, exactly like the company
@@ -269,6 +274,24 @@ if ($merged["Radar:Ai:Provider"] -eq 'openai') {
         Write-Warning "Environment variable '$keyEnvVar' (named by Radar:Ai:OpenAi:ApiKeyEnvVar) is not set - the AI earnings read will fail fast. Set it for this session, e.g. `$env:$keyEnvVar = (Get-Content <key-file> -Raw).Trim()  # never print or commit the value."
     }
 }
+# spec 179: state the news-risk shadow posture BEFORE the run (and under -WhatIf): the gates, the paths and
+# the RESOLVED reader list, so an operator can see exactly which models will read the news without starting one.
+if ($merged["Radar:NewsResearch:Shadow:Enabled"] -eq 'true') {
+    $shadowRuns = ($Mode -eq 'full') -and (-not $Replay) -and (-not $MigrateNewsObservations) -and ($companyTickers.Count -eq 0)
+    $shadowReaders = @()
+    $i = 0
+    while ($merged.Contains("Radar:NewsResearch:Shadow:Readers:${i}:Name")) {
+        $shadowReaders += "$($merged["Radar:NewsResearch:Shadow:Readers:${i}:Name"]) ($($merged["Radar:NewsResearch:Shadow:Readers:${i}:Provider"]):$($merged["Radar:NewsResearch:Shadow:Readers:${i}:Model"]))"
+        $i++
+    }
+    if ($shadowReaders.Count -eq 0) { $shadowReaders = @("ambient ($($merged["Radar:Ai:Provider"]):$($merged["Radar:Ai:Model"]))") }
+    Write-Host "News-risk shadow (spec 179): ENABLED$(if (-not $shadowRuns) { ' but NOT RUNNING this pass (unfiltered full mode only)' })" -ForegroundColor Cyan
+    Write-Host "  gates   : unfiltered full mode + GenerateReport + >=1 resolvable reader; coverage/validation fail CLOSED (no-risk is never rendered over incomplete input)"
+    Write-Host "  output  : $(Join-Path $outRoot 'news-risk')\live\news-risk-<date>.{md,json} + \assessments\ + \evaluation\"
+    Write-Host "  dev set : $(Join-Path $RepoPath 'docs\cohorts\news-risk-development.json') (EOSE/CASS/MSEX excluded from the clean prospective table)"
+    Write-Host "  readers : $($shadowReaders -join '; ')  (one independent cohort per reader; no merged verdict)"
+}
+
 Write-Host "Resolved --Radar args:" -ForegroundColor Cyan
 $cliArgs | ForEach-Object { Write-Host "  $_" }
 

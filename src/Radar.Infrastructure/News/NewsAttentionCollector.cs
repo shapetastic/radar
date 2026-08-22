@@ -36,7 +36,6 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
 {
     private const int ApiMinRecords = 1;
     private const int ApiMaxRecords = 100;
-    private const string TitleSuffixSeparator = " - ";
 
     private readonly INewsSearchReader _reader;
     private readonly ILogger<NewsAttentionCollector> _logger;
@@ -374,19 +373,12 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
 
     /// <summary>
     /// Removes a trailing <c>" - Publisher"</c> suffix Google News appends to the headline (the outlet name),
-    /// so the relevance check runs against the real headline only. Returns the input unchanged when no suffix
-    /// is present.
+    /// so the relevance check runs against the real headline only — via the ONE shared rule
+    /// (<see cref="GoogleNewsHeadline"/>, extracted by spec 179; the spec-179 duplicate-headline collapse
+    /// uses the same rule, so the two cannot drift).
     /// </summary>
-    private static string? StripPublisherSuffix(string? title)
-    {
-        if (string.IsNullOrEmpty(title))
-        {
-            return title;
-        }
-
-        var separatorIndex = title.LastIndexOf(TitleSuffixSeparator, StringComparison.Ordinal);
-        return separatorIndex >= 0 ? title[..separatorIndex] : title;
-    }
+    private static string? StripPublisherSuffix(string? title) =>
+        GoogleNewsHeadline.StripPublisherSuffix(title);
 
     /// <summary>Collapses every run of whitespace to a single space and trims; null/blank becomes empty.</summary>
     private static string NormalizeWhitespace(string? value)

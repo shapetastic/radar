@@ -2841,6 +2841,81 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(ScoringStrategySet.DefaultStrategyName, run.PrimaryStrategy);
     }
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 179 §2 — the additive in-process transport for the news-risk shadow step.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Run_ReturnsTheExactDurableRunId_ItWroteToThePipelineRunRecord()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        var result = await h.Runner.RunAsync(default);
+
+        // ONE run id, minted once: the returned value IS the id of the durable run record on disk, so a
+        // shadow assessment's RunId always dereferences to a record that exists.
+        var run = Assert.Single(h.RunStore.Written);
+        Assert.NotNull(result.RunId);
+        Assert.Equal(run.Id, result.RunId);
+    }
+
+    [Fact]
+    public async Task Run_WithASingleStrategy_ReturnsNullStrategySections()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        var result = await h.Runner.RunAsync(default);
+
+        // Single strategy ⇒ the builder builds no sections ⇒ the transport carries exactly that null
+        // (the NoLiveStrategySections diagnostic downstream, never invented rows).
+        Assert.Null(result.StrategySections);
+    }
+
+    [Fact]
+    public async Task Run_WithGenerateReportFalse_ReturnsNullStrategySections()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Null(result.StrategySections);
+    }
+
+    [Fact]
+    public async Task Run_WithTwoStrategies_ReturnsTheReportBuildersSections_TracingToThisRunsOwnSnapshots()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = true },
+            strategies: TwoStrategies());
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        // The structured sections came back through the transport (never re-read, never re-ranked): the
+        // primary section's row references the EXACT snapshot id this run's primary store persisted.
+        Assert.NotNull(result.StrategySections);
+        Assert.Equal(["baseline", "low-media"], result.StrategySections!.Select(s => s.StrategyName));
+        var primarySection = result.StrategySections[0];
+        Assert.True(primarySection.IsPrimary);
+        var row = Assert.Single(primarySection.Rows);
+        Assert.Equal(companyId, row.CompanyId);
+        Assert.Equal(Assert.Single(h.ScoreStores.Primary.Written).Snapshot.Id, row.ScoreSnapshotId);
+    }
+
     /// <summary>
     /// Normalises the per-call minted <c>Guid</c> out of a snapshot so two runs can be compared as RECORDS on
     /// every other field. Same deliberate exclusion the replay⊆forward tests make.
