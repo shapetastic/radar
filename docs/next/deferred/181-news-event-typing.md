@@ -168,10 +168,21 @@ reaches the judge as one family with size metadata. Rules:
   merging a contradiction would erase exactly the information stage 2 needs to see.
 - **Representative selection is deterministic**: earliest `firstObservedAtUtc`, then lowest FactId; family
   metadata records member count, distinct publishers and the full FactId membership list.
-- **Family records are separate insert-only files** under the typing store, keyed by family id (derived from
-  the builder version + canonical member key), re-derivable from the facts alone; fact records are never
-  mutated to point at families.
-- Bumping the builder's normalization/keying is a `fact-family-v2` — a new cohort dimension, never an edit.
+- **Lifecycle: checkpoint SNAPSHOTS, not incremental accretion.** At each checkpoint the builder runs over
+  ALL qualifying validated facts in that window for exactly ONE extractor cohort — never only the newly
+  extracted facts (which would miss duplicates from earlier runs). The output is a persisted checkpoint
+  family SET with each family's complete member list; a later run writes a new snapshot, never edits an old
+  one.
+- **Family ids are stable under changing membership**: derived from builder version + company + the stable
+  canonical-claim key — NOT from the member list — so a later-arriving member joins the same family id at
+  the next checkpoint instead of minting a sibling and leaving the old family active.
+- **The full builder definition enters the cohort identity**: builder version, statement normalization,
+  similarity metric AND threshold, and the temporal window are all part of `fact-family-v1`'s identity —
+  changing any of them is `fact-family-v2`, a new cohort dimension, never an edit.
+- **Pinned fixtures, minimum set**: syndicated duplicate variants collapse to one family; unrelated same-day
+  stories do NOT merge; contradictory claims (different quantities for one measure) do NOT merge; a rerun
+  over identical facts is byte-deterministic; a later-arriving member joins the existing family id in the
+  next snapshot with the prior snapshot unchanged.
 
 - Reuses spec 179's `Readers` seam verbatim: each configured reader types independently; cohort identity is
   provider + model + prompt/schema/taxonomy version; cohorts never pool; no merged verdict.

@@ -1,15 +1,17 @@
 # Task: Stage-2 direction judge — weigh canonical fact families, qualify the leaders
 
 > ⚠️ **DEFERRED — dispatch after spec 181 (stage-1 fact layer) is implemented and its first audited-sample
-> recall/citation numbers exist.** Drafted BEFORE 181 is built, deliberately: this is the consumer contract
-> the fact layer must satisfy, so 181 cannot ship a fact shape nothing can consume. Changes here that alter
-> the required fact shape must be reflected in 181 before either is dispatched.
+> recall/citation numbers exist. Dependencies: spec 182 merged (its completeness dimensions and no-all-clear
+> doctrine are consumed here verbatim); spec 181 merged.** Drafted BEFORE 181 is built, deliberately: this
+> is the consumer contract the fact layer must satisfy, so 181 cannot ship a fact shape nothing can consume.
+> Changes here that alter the required fact shape must be reflected in 181 before either is dispatched.
 
 ## Overview
 
-Spec 181 produces typed, citation-validated, attribution-aware facts with same-event family ids and no
-verdicts. This spec adds the judge: a model call that receives ONLY canonical fact/event families — never
-raw article prose — and produces directional risk/support judgments citing FactIds, extending provenance to
+Spec 181 produces typed, citation-validated, attribution-aware facts, grouped by its deterministic builder
+into separate checkpoint family records (facts themselves carry no family id). This spec adds the judge: a
+model call that receives ONLY canonical fact/event families — never raw article prose — and produces
+challenge findings plus a factual trajectory axis citing FactIds, extending provenance to
 **judgment → fact → excerpt → observation → archive**.
 
 Why the judge sees no prose: every motivating misread (llama/EOSE "Improving", DeepSeek/CASS "Positive") was
@@ -61,7 +63,9 @@ result — the model never chooses presentation. A future support-finding taxono
 something consumes it.
 
 Mechanical validation mirrors 179 §6: every cited FactId supplied; enums/ranges valid; advice-language guard;
-a challenged/supported verdict needs ≥1 surviving finding; invalid findings dropped and counted. Attribution
+every surviving finding cites ≥1 supplied FactId; invalid findings dropped and counted. **A response whose
+findings are ALL invalid is `ValidationFailed` and renders `? unassessed` — never "no challenge found in
+supplied facts"**, which may only come from a completed, validated judgment. Attribution
 weighting is a PROMPT rule, not post-hoc: a plaintiff-firm solicitation is a weaker basis than a confirmed
 filing, and "may face" is weaker than "was charged" — the judge must use `AssertionStatus`, which is why 181
 carries it.
@@ -122,9 +126,20 @@ Rules:
   run id, stage-1 cohort identity, family-set hash, raw-response hash, status and validated result. The
   live artifact (the existing `data/news-risk/live/news-risk-{date}.{md,json}`, schema version bumped)
   gains the per-company judgment sections and the marker states.
-- Completeness/failure vocabulary reuses spec 182's three capture/search/bundle dimensions verbatim plus the
-  judgment's own status — nothing here re-invents coverage language, and no combination of failures ever
-  renders as clean.
+- Completeness/failure vocabulary reuses spec 182's three capture/search/bundle dimensions verbatim and adds
+  the two the pipeline gains upstream of the judge — nothing here re-invents coverage language, and no
+  combination of failures ever renders as clean:
+
+```text
+typingCompleteness   Complete | Backlog | Failed    (181's MaxNewTypingsPerRun can defer articles;
+                                                     a deferred article is an untyped fact source)
+familyBundle         Complete | Capped              (any bound on families supplied to the judge)
+```
+
+  All five dimensions persist on every judgment record and render in the artifact; the
+  `· no challenge found in supplied facts` marker appends **`(typing incomplete)`** whenever
+  `typingCompleteness != Complete` — finding nothing in facts that were never fully typed is a weaker
+  statement, and it says so.
 
 ## 6. Out of scope, recorded not built
 
@@ -135,9 +150,13 @@ Rules:
 
 ## Acceptance criteria
 
-- [ ] The judge receives canonical fact families only — no prose, no score, no price — and every finding
-      cites supplied FactIds; the provenance chain judgment → fact → excerpt → observation → archive resolves
-      end to end.
+- [ ] The judge receives canonical fact families only — no prose, no score, no independently joined price
+      series or future returns (contemporaneously reported `MarketReaction` facts permitted) — and every
+      finding cites supplied FactIds; the provenance chain judgment → fact → excerpt → observation → archive
+      resolves end to end.
+- [ ] All five completeness dimensions (capture, search, bundle, typing, family) persist per judgment and
+      render; "no challenge found" carries `(typing incomplete)` when typing was not complete; all-invalid
+      findings become `ValidationFailed` → `? unassessed`.
 - [ ] Syndicated duplicates reach the judge as one family with size metadata; family size never multiplies
       findings.
 - [ ] Attribution/assertion status demonstrably changes judgments (alleged-only vs confirmed-filing fixtures
