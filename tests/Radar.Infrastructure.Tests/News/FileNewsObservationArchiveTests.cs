@@ -221,6 +221,28 @@ public sealed class FileNewsObservationArchiveTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteBatchAsync_SameAsOfToken_NeverOverwrites_FallsBackToBatchIdSuffixedName()
+    {
+        var archive = CreateArchive();
+        var asOf = new DateTimeOffset(2026, 1, 10, 9, 30, 15, TimeSpan.Zero);
+        var first = Batch(asOf: asOf);
+        var second = Batch(asOf: asOf);
+
+        Assert.True(await archive.WriteBatchAsync(first, CancellationToken.None));
+        var tokenPath = Path.Combine(_tempDir, "batches", "20260110T093015Z.json");
+        var firstBytes = File.ReadAllBytes(tokenPath);
+
+        // A manifest is a run record: the taken token falls back to a suffixed name, and the first
+        // manifest survives byte-untouched.
+        Assert.True(await archive.WriteBatchAsync(second, CancellationToken.None));
+        Assert.Equal(firstBytes, File.ReadAllBytes(tokenPath));
+        var suffixedPath = Path.Combine(
+            _tempDir, "batches", "20260110T093015Z-" + second.BatchId.ToString("N") + ".json");
+        Assert.True(File.Exists(suffixedPath));
+        Assert.Contains(second.BatchId.ToString(), File.ReadAllText(suffixedPath));
+    }
+
+    [Fact]
     public async Task Boundary_IsEstablishedOnce_ByTheFirstSuccessfulFullUniverseBatch_AndNeverOverwritten()
     {
         var archive = CreateArchive();

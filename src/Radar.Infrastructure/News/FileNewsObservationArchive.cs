@@ -135,23 +135,31 @@ public sealed class FileNewsObservationArchive : INewsObservationArchive
 
         var fileToken = batch.RunAsOfUtc.UtcDateTime
             .ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
-        var path = Path.Combine(_options.RootDirectory, BatchesFolder, fileToken + ".json");
+        var json = JsonSerializer.Serialize(batch, RadarFileStoreJson.Options);
 
-        // Manifests are as-of-named per the spec's layout; two batches within one second exist only in
-        // tests, but an existing token must still never be overwritten (a manifest is a run record), so
-        // the collision falls back to a batch-id-suffixed name rather than clobbering.
-        if (File.Exists(path))
+        // Manifests are as-of-named per the spec's layout, but they are run records and as immutable as
+        // observation files, so never-overwrite must be structural (FileMode.CreateNew), not a check-then-
+        // write that a concurrent process could race past. A taken token (two batches within one second,
+        // or the race itself) falls back ONCE to a batch-id-suffixed name — the id is unique per batch,
+        // so a second exists collision can only mean this very manifest is already on disk.
+        var path = Path.Combine(_options.RootDirectory, BatchesFolder, fileToken + ".json");
+        var outcome = await TryCreateManifestAsync(path, json, ct).ConfigureAwait(false);
+        if (outcome == ManifestWriteOutcome.PathTaken)
         {
             path = Path.Combine(
                 _options.RootDirectory,
                 BatchesFolder,
                 fileToken + "-" + batch.BatchId.ToString("N") + ".json");
+            outcome = await TryCreateManifestAsync(path, json, ct).ConfigureAwait(false);
+            if (outcome == ManifestWriteOutcome.PathTaken)
+            {
+                _logger.LogWarning(
+                    "News observation batch manifest already exists at {Path}; refusing to overwrite it.",
+                    path);
+            }
         }
 
-        var written = await GracefulFileWriter.TryWriteAllTextAsync(
-            path, JsonSerializer.Serialize(batch, RadarFileStoreJson.Options), _logger, ct)
-            .ConfigureAwait(false);
-
+        var written = outcome == ManifestWriteOutcome.Written;
         if (written)
         {
             await TryEstablishBoundaryAsync(batch, ct).ConfigureAwait(false);
@@ -190,6 +198,53 @@ public sealed class FileNewsObservationArchive : INewsObservationArchive
         }
 
         return NewsObservationWriteOutcome.CrossRunDeduped;
+    }
+
+    private enum ManifestWriteOutcome
+    {
+        Written,
+        PathTaken,
+        Failed,
+    }
+
+    /// <summary>
+    /// One <see cref="FileMode.CreateNew"/> manifest write attempt: <see cref="ManifestWriteOutcome.PathTaken"/>
+    /// when another writer holds the path (the caller picks a different name — never overwrites), and the
+    /// usual graceful degradation (Warning + <see cref="ManifestWriteOutcome.Failed"/>) on a genuine disk
+    /// failure so a hiccup never aborts the run.
+    /// </summary>
+    private async Task<ManifestWriteOutcome> TryCreateManifestAsync(
+        string path, string json, CancellationToken ct)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var streamOptions = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous,
+            };
+            await using var stream = new FileStream(path, streamOptions);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+            return ManifestWriteOutcome.Written;
+        }
+        catch (IOException ex) when (File.Exists(path))
+        {
+            _logger.LogDebug(
+                ex,
+                "News observation batch manifest path {Path} is already taken; it will not be overwritten.",
+                path);
+            return ManifestWriteOutcome.PathTaken;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex, "Failed to write news observation batch manifest at {Path}; skipping.", path);
+            return ManifestWriteOutcome.Failed;
+        }
     }
 
     /// <summary>

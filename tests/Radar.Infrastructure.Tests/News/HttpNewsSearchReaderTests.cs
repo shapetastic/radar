@@ -359,6 +359,44 @@ public sealed class HttpNewsSearchReaderTests
     }
 
     [Fact]
+    public async Task ReadAsync_OversizedDescription_CutLandingMidSurrogatePair_DropsTheWholePair()
+    {
+        // 'a' (1 byte) then astral chars ('𝛼' = one surrogate PAIR = 4 UTF-8 bytes): every pair boundary
+        // sits at 1 + 4k bytes, so the byte bound can never fall exactly on one — the cut must drop the
+        // whole straddling pair rather than split it.
+        var oversized = "a" + string.Concat(
+            Enumerable.Repeat("\U0001D6FC", HttpNewsSearchReader.MaxDescriptionUtf8Bytes / 2));
+        var body = $"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0">
+              <channel>
+                <item>
+                  <title>Astral one - Pub</title>
+                  <link>https://news.google.com/rss/articles/ASTRAL</link>
+                  <description>{oversized}</description>
+                </item>
+              </channel>
+            </rss>
+            """;
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, body));
+
+        var result = await reader.ReadAsync(Query with { QueryPhrase = "x" }, CancellationToken.None);
+
+        var item = Assert.Single(result.Items);
+        Assert.True(item.DescriptionTruncated);
+        // The whole pair straddling the bound is dropped: exactly maxBytes − 3 bytes survive, and the
+        // retained prefix ends on a complete pair, never an unpaired high surrogate.
+        Assert.Equal(
+            HttpNewsSearchReader.MaxDescriptionUtf8Bytes - 3,
+            Encoding.UTF8.GetByteCount(item.DescriptionRaw!));
+        Assert.False(char.IsHighSurrogate(item.DescriptionRaw![^1]));
+        Assert.Equal(
+            "a" + string.Concat(
+                Enumerable.Repeat("\U0001D6FC", (HttpNewsSearchReader.MaxDescriptionUtf8Bytes - 4) / 4)),
+            item.DescriptionRaw);
+    }
+
+    [Fact]
     public async Task ReadAsync_NonAbsoluteOrNonHttpSourceUrl_DegradesToNull()
     {
         const string body = """

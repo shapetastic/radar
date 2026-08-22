@@ -307,7 +307,9 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
         var i = 0;
         while (i < value.Length)
         {
-            var charCount = char.IsHighSurrogate(value[i]) && i + 1 < value.Length ? 2 : 1;
+            var charCount = char.IsHighSurrogate(value[i])
+                && i + 1 < value.Length
+                && char.IsLowSurrogate(value[i + 1]) ? 2 : 1;
             var step = Encoding.UTF8.GetByteCount(value, i, charCount);
             if (bytes + step > maxBytes)
             {
