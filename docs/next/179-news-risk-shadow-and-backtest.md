@@ -21,7 +21,7 @@ separate read-only evaluator that can later join that frozen predictor to forwar
 Worktree: any  
 Dependencies: spec 176 merged (purpose + live strategy sections); spec 177 merged (observation archive and
 safe content reader).  
-Estimated time: ~1–2 days.
+Estimated time: ~2 days (including the multi-reader seam).
 
 ## 1. Three states remain distinct
 
@@ -121,6 +121,41 @@ Add provider-neutral `INewsRiskAnalyzer` over the existing `IChatClient` seam. I
 plus ordered, id-labelled input text. It receives no Radar score/rank/label, price, future outcome or uncited
 company background.
 
+### Readers — one assessment pass per configured model
+
+`Radar:NewsResearch:Shadow:Readers` is an optional list of analyzer model configurations. Each reader
+resolves through the same client-factory/validation path as `Radar:Ai` and carries:
+
+```text
+name                          display/provenance label, unique case-insensitive
+provider / model / provider-specific settings   (same shape and validation as Radar:Ai)
+```
+
+Rules:
+
+- Omitted or empty ⇒ exactly one reader, the ambient `Radar:Ai` provider/model — byte-identical to the
+  single-reader behaviour and requiring no new configuration. The earnings read and its fingerprint
+  semantics are untouched either way: readers configure the NEWS analyzer only.
+- Each selected candidate's input bundle is assessed once per reader. `MaxCompaniesPerRun` bounds each
+  reader's pass; total model calls scale linearly with reader count, deliberately.
+- Cohort identity remains provider + exact model id + prompt/schema version. The reader `name` is
+  provenance display only, so renaming a reader forks no cohort. Two readers resolving to the same
+  (provider, model) pair fail startup naming both: they would share every cache key and assess nothing
+  twice.
+- A reader whose configuration is invalid fails startup naming the reader and the exact path. A reader
+  whose provider is unreachable at run time records a provider-failure attempt per candidate (the
+  existing persistence rule) and never blocks the other readers.
+- The reader set is recorded in every run artifact and hashed into no scoring fingerprint.
+
+Rationale, recorded so the choice is legible: articles are a classification-with-citation task over
+pre-digested journalist text — materially simpler than the accounting-comparability reasoning that broke
+weaker models on filings (the spec-119 llama3.1 EOSE misread; the spec-160 DeepSeek CASS misread) — so a
+local model (e.g. Ollama) may be adequate here. That is a hypothesis to measure, not assume: running a
+local reader beside the configured DeepInfra reader from day one yields an immediate, price-free quality
+comparison (citation-drop rates, category agreement) through the cohort machinery this spec already
+requires. The shadow read is also where a weaker model's mistakes cost least — no score impact,
+fail-closed validation, human-read artifact.
+
 Closed result:
 
 ```text
@@ -194,8 +229,14 @@ Write `data/news-risk/live/news-risk-{asOfDate}.md` and `.json`. Each selected c
 - headline, publisher, URL and whether input was headline, RSS description or permitted publisher body; and
 - coverage/archive/fetch/model/validation warnings.
 
+With multiple readers, each company renders every reader's assessment separately, labelled by reader name
+and exact model id. Factual agreement may be displayed (categories found by both readers, or by only one);
+no merged risk score, majority vote or combined verdict is computed — reader disagreement is a finding
+about the readers, not something to average away.
+
 Render `NoRiskFoundInSuppliedText` only when company `newssearch` coverage and archive batch are complete,
-input is sufficient, and the analyzer/validator completed successfully. Everything else is unknown/failure.
+input is sufficient, and the analyzer/validator completed successfully — applied **per reader**; one
+reader's clean result never speaks for another. Everything else is unknown/failure.
 
 The step runs after the normal report and cannot rewrite its labels/ranks. A shadow failure writes a named
 failed artifact and does not roll back or relabel the already-durable Radar run. A later report may link to the
@@ -237,7 +278,8 @@ The clean prospective table requires:
 Report company/date counts, every exclusion reason, per-date/date-block associations between `RiskScore` and
 adverse move, flagged/non-flagged descriptive returns/drawdowns, and tie/constant-predictor frequency.
 `LegacyHeadlineOnly` and `RetrospectiveUrlFetch` stay in separate development tables and never pool with the
-clean cohort.
+clean cohort. Reader cohorts never pool either: each reader's assessments form their own rows and tables,
+compared side by side, never averaged.
 
 No pass/fail threshold, promotion rule or alpha claim is declared here. If useful, a later spec declares a
 new strategy, one predictor/outcome/threshold and first eligible date before outcomes exist.
@@ -268,7 +310,8 @@ Extend spec 177's fail-closed block:
     "LookbackDays": 30,
     "MaxCompaniesPerRun": 30,
     "MaxArticlesPerCompany": 12,
-    "MaxFetchedArticlesPerCompany": 3
+    "MaxFetchedArticlesPerCompany": 3,
+    "Readers": []
   },
   "ArticleFetch": {
     "Enabled": false,
@@ -277,9 +320,14 @@ Extend spec 177's fail-closed block:
 }
 ```
 
-Unknown keys/invalid limits fail startup. Enable shadow in live `default.json`; register it only when the
-existing AI provider is configured. Article fetching remains off until an explicit domain/storage decision.
-`run-radar.ps1 -WhatIf` prints the gates and paths.
+Unknown keys/invalid limits fail startup. Enable shadow in live `default.json`; register it only when at
+least one reader (ambient or configured) is resolvable. Article fetching remains off until an explicit
+domain/storage decision. `run-radar.ps1 -WhatIf` prints the gates, paths and the resolved reader list.
+
+Ship `default.json` with `Readers` **omitted** (ambient DeepSeek only) — the local-Ollama second reader is
+an operator opt-in added when the machine actually runs Ollama, not a committed assumption about every
+environment. When added, it is one entry naming the Ollama provider/model, and its cohort accrues beside
+the DeepSeek one from that run onward.
 
 These limits are cost/safety controls, recorded in assessments and hashed into no scoring fingerprint.
 
@@ -316,7 +364,11 @@ These limits are cost/safety controls, recorded in assessments and hashed into n
   fabricated/omitted-field citations; drop rates persist.
 - Incomplete coverage/archive/model/validation states cannot render clean/no-risk.
 - Model/prompt/schema/input changes create distinct records/cache entries.
-- Development, legacy, retrospective and prospective evaluator cohorts never pool.
+- Readers: omitted list resolves to exactly the ambient `Radar:Ai` reader (byte-identical behaviour);
+  duplicate (provider, model) pairs and invalid reader configs fail startup naming the reader; two readers
+  produce two separate cohorts/cache entries per candidate; one reader's provider failure never blocks the
+  other; the renderer shows per-reader results and computes no merged verdict.
+- Development, legacy, retrospective, prospective and per-reader evaluator cohorts never pool.
 - Partial forward windows and unresolved prices fail closed through reused efficacy primitives.
 - AD-14 architecture test pins that live analysis cannot read price and Scoring/Pipeline cannot reference it.
 
@@ -334,6 +386,9 @@ session.
 - [ ] Every risk claim is mechanically tied to exact text actually supplied to the model.
 - [ ] Missing coverage/content/model output never becomes a low/no-risk result.
 - [ ] EOSE/CASS/MSEX remain visible development examples but cannot support the clean prospective table.
+- [ ] Multiple configured readers assess independently as separate cohorts with no merged verdict; an
+      omitted `Readers` list is byte-identical to the ambient single-reader behaviour; the earnings read
+      and every scoring fingerprint are untouched by reader configuration.
 - [ ] The evaluator reads frozen assessments + prices only and never reruns selection, fetching or AI.
 - [ ] No score, label, strategy, fingerprint or AD-15/AD-16 claim changes.
 - [ ] Build and coordinated tests green.
