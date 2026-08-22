@@ -22,12 +22,16 @@ this window — 14 FinancingOrDilution, 6 IndexOrTradingMechanics, 4 ProductOrTe
 It is read-side and shadow: no score, label, strategy, fingerprint or report rank changes. Typed attention as
 a scoring input is explicitly a later, separately named strategy spec.
 
-**This spec is STAGE 1 of a two-stage read architecture (maintainer decision, 2026-08-22).** Every recorded
-AI misread in this repo is a *judgment* failure, not an extraction failure — llama saw EOSE's −70% gross
-margin and said "Improving"; DeepSeek saw CASS's prior-year securities loss and called the doubling Positive;
-and the fix that worked (spec 160's comparability scan) is precisely a fact-extraction stage mechanically
-constraining a judgment. So extraction and direction-weighing are SEPARATED: this spec is the fact/event
-layer ("what kind of it, and what did it say"), receiving NO directional question; a later stage-2 spec adds
+**This spec is STAGE 1 of a two-stage read architecture (maintainer decision, 2026-08-22).** The MOTIVATING
+misreads in this repo were *judgment* failures — llama saw EOSE's −70% gross margin and said "Improving";
+DeepSeek saw CASS's prior-year securities loss and called the doubling Positive; and the fix that worked
+(spec 160's comparability scan) is precisely a fact-extraction stage mechanically constraining a judgment.
+That is motivation, not proof that all failures are judgment failures: spec 162's measured 36.7%
+false-OMISSION rate shows extraction/recall failure exists too (or at least that a combined read cannot
+localize which stage failed) — which is itself an argument for the split, since only separated stages make
+recall and judgment separately measurable. So extraction and direction-weighing are SEPARATED: this spec is the fact/event
+layer ("what kind of it, and what did it say"), receiving NO directional question; the stage-2 spec
+(**spec 185, drafted alongside this amendment so the consumer contract shapes the layer it consumes**) adds
 the direction judge, which consumes ONLY the typed, citation-validated fact layer — never the raw persuasive
 prose — and cites fact ids, extending the provenance chain to judgment → fact → excerpt → observation →
 archive. Benefits this structure is chosen for: the judge never sees engineered headline framing; facts are
@@ -66,27 +70,53 @@ does not proceed on hope: the remedy is a prompt/schema revision in 179's cohort
 
 ## 2. What "typing" is and is not
 
-One observation → one primary event type (plus optional secondaries), with relevance, cited support and a
-liberal list of pertinent facts. It is **not** sentiment and receives no directional question: valence stays
-where it already lives (179's risk read; the earnings AI read) until the stage-2 judge spec consumes this
-layer. Typing an article as `FinancingOrDilution` records what the coverage is about, not whether it is bad.
-The two reads are complementary and their outputs are stored separately.
+**Facts are the typed unit; the observation-level type is derived.** One headline routinely carries several
+events — a real EOSE example holds `EarningsOrGuidance` (wider Q2 loss), `RegulatoryOrLegal` (legal
+scrutiny) and `MarketReaction` (down 11.8%) in one sentence — so each extracted fact carries its OWN event
+type(s), temporal scope, confidence and citations, and the observation's primary type is derived from its
+facts for display, never authored separately.
+
+**The extractor withholds the VERDICT, not the factual direction.** The contract, exactly: *preserve actors,
+quantities, periods, comparisons, negation, modality and attribution exactly; do not assign investment
+direction, severity or materiality.* "Loss widened from X to Y", "shares fell 11.8%", "guidance changed from
+X–Y to A–B", "a plaintiff law firm announced an investigation" are FACTS — stripping "widened"/"fell"/
+"lowered", negation, modality or numerical baselines would neuter the layer and recreate the original
+blindness at a new boundary. What stage 1 never emits: Positive/Negative, severity, materiality,
+ThesisChallenged.
+
+**Epistemic status and attribution are first-class**, because stage 2 never sees the prose: an SEC
+investigation vs a plaintiff-firm shareholder solicitation, a confirmed filing vs a publisher assertion,
+"may face" vs "was charged" must be distinguishable from the fact record alone — otherwise the fact layer
+launders headline framing into apparent certainty.
+
+It is **not** sentiment and receives no directional question: valence stays where it already lives (179's
+risk read; the earnings AI read) until spec 185's judge consumes this layer. The two reads are complementary
+and their outputs are stored separately.
 
 Closed per-observation schema:
 
 ```text
 Relevance        CompanySpecific | SectorOrMacroContext | NotAboutThisCompany | InsufficientContent
-PrimaryType      one taxonomy entry (§3)
-SecondaryTypes[] zero or more taxonomy entries
-Confidence       0..1
-PertinentFacts[] short factual statements, each with exact-substring citations — extracted LIBERALLY
-                 (stage 2 filters; stage 1 never pre-judges materiality), no directional language
-SupportingExcerpts[]   exact substrings of supplied text
+DerivedPrimaryType   derived from the facts below for display, never authored
+Facts[]          extracted LIBERALLY (stage 2 filters; stage 1 never pre-judges materiality), each:
+  FactId
+  EventTypes[]         one or more taxonomy entries (§3)
+  Statement            preserving actors/quantities/periods/comparisons/negation/modality/attribution
+  TemporalScope
+  Attribution          who asserts it (company | regulator | plaintiff firm | publisher | analyst | ...)
+  AssertionStatus      confirmed-filing | reported | alleged | solicited | speculative | ...
+  Confidence           0..1
+  Citations[]          exact substrings of supplied text
+  SameEventFamilyId    §4's deterministic family — stage 2 consumes CANONICAL fact/event families,
+                       never N syndicated copies of one claim
 ```
 
-The `PertinentFacts` shape is finalized through the same §3 audit procedure as the taxonomy, and stage-1
-recall over the audited sample (facts a human judged pertinent that the extractor missed) is recorded as a
-headline number beside the citation-drop rate.
+The fact shape and the `Attribution`/`AssertionStatus` vocabularies are finalized through the same §3 audit
+procedure as the taxonomy. Stage-1 recall over the audited sample (facts a human judged pertinent that the
+extractor missed) is recorded as a headline number beside the citation-drop rate. Same-event family
+collapse happens BEFORE judgment: the two near-identical "StocksToTrade" legal-scrutiny headlines in the
+live EOSE bundle are one family, and syndication volume must never reach the judge as repetition — the
+40-outlets problem must not be reborn at the judgment seam.
 
 Mechanical validation mirrors spec 179 §6, including its definition of archived text (the union of fields
 actually supplied). Invalid or uncited claims are dropped and counted; all-invalid results are
@@ -101,9 +131,12 @@ immutable by convention (change ⇒ v2, cohorts never pool across versions). The
 ```text
 EarningsOrGuidance | MergerAcquisitionOrStake | FinancingOrDilution | ProductOrTechnology |
 ContractOrCustomerWin | RegulatoryOrLegal | ManagementOrGovernance | AnalystOrRatingAction |
-IndexOrTradingMechanics | ShortSellerOrCritique | DividendOrBuyback | PromotionalOrListicle |
-OtherSpecified
+MarketReaction | IndexOrTradingMechanics | ShortSellerOrCritique | DividendOrBuyback |
+PromotionalOrListicle | OtherSpecified
 ```
+
+(`MarketReaction` added on review: a stock falling after earnings is a price-move report, not
+`IndexOrTradingMechanics` — conflating them would misfile the most common headline kind there is.)
 
 Finalization procedure (part of this spec's implementation, before any prospective claim):
 
@@ -150,10 +183,14 @@ a parallel store keyed by observation id.
 
 ## 7. Out of scope, recorded not built
 
-- **The stage-2 direction judge** — its own spec, consuming ONLY this layer's typed facts by fact id,
-  citing them in every claim, and A/B-measured as a new cohort against the spec-179 single-call read
+- **The stage-2 direction judge** — **spec 185** (deferred beside this one, drafted FIRST so this layer is
+  built against a real consumer contract), consuming ONLY canonical fact/event families by FactId, citing
+  them in every claim, and A/B-measured as a new cohort against the spec-179 single-call read
   (citation-drop, category agreement, and the localized extraction-vs-judgment error split) rather than
-  asserted better. The asymmetric split (local extractor + stronger judge) is one of its cohorts.
+  asserted better. The asymmetric split (local extractor + stronger judge) is one of its cohorts. Its
+  end-to-end acceptance case is the EOSE chain: facts extracted and attributed → duplicated legal stories
+  collapse to one family → the judge records a thesis challenge → EOSE cannot render as an unqualified
+  leader.
 - Typed attention as a scoring input (an event-type-aware breadth channel, filtering
   `PromotionalOrListicle`/`IndexOrTradingMechanics` from attention, a typed-coverage strategy): each is a
   NEW named strategy/formula spec with its own fingerprint story, declared prospectively.
