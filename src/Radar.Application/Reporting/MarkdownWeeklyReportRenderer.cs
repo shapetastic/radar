@@ -297,8 +297,9 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                     .Append(" | ")
                     // The EXACT scoring cutoff: the snapshot's WindowEndUtc — deliberately not CreatedAtUtc
                     // and not the report date, so two rows with different knowledge cutoffs are visibly
-                    // different rather than reading as one synchronized table.
-                    .Append(row.Snapshot.WindowEndUtc.ToString(
+                    // different rather than reading as one synchronized table. Normalized to UTC so the
+                    // trailing Z is true even for a snapshot deserialized with a non-zero offset.
+                    .Append(row.Snapshot.WindowEndUtc.ToUniversalTime().ToString(
                         "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))
                     .Append("Z |")
                     .Append(Lf);

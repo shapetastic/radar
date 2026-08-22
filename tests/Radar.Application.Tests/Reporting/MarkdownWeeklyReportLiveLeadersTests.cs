@@ -221,6 +221,28 @@ public sealed class MarkdownWeeklyReportLiveLeadersTests
     }
 
     [Fact]
+    public void AsOfColumn_NormalizesANonZeroOffsetToUtc_SoTheZSuffixIsTrue()
+    {
+        // 2026-06-06 10:05 +02:00 IS 2026-06-06 08:05Z. A snapshot ever constructed/deserialized with a
+        // non-zero offset must render the UTC clock time — printing the local clock labelled Z would be a
+        // silent mislabel.
+        var markdown = Render(
+            Section("default", isPrimary: true,
+                [
+                    Row(1, "Acme Dynamics", "AEHR", Snapshot(
+                        Guid.NewGuid(), Guid.NewGuid(), 29,
+                        windowEndUtc: new DateTimeOffset(2026, 6, 6, 10, 5, 0, TimeSpan.FromHours(2)))),
+                ]),
+            Section("filings-led", isPrimary: false, []));
+
+        var live = LiveSectionOf(markdown);
+        Assert.Contains(
+            "| default (primary research) | 1 | Acme Dynamics | AEHR | 29 | 2026-06-06 08:05Z |",
+            live, StringComparison.Ordinal);
+        Assert.DoesNotContain("2026-06-06 10:05Z", live, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void EmptyArm_IsRetainedWithTheExplicitEmptyMessage_NeverOmitted()
     {
         var markdown = Render(
