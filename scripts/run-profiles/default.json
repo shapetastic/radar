@@ -85,9 +85,28 @@
       }
     ],
     "NewsResearch": {
-      "_comment": "SPEC 177 (2026-08-22) - point-in-time news observation archive. CaptureRss=true (also the code default, declared here so the baseline's posture is explicit): every relevance-kept Google News RSS article is archived immutably under <outRoot>/news-observations (run-radar.ps1 supplies Radar:NewsResearch:ObservationDirectory) with its exact bounded <description> payload, publisher provenance and retrieval instant, plus a per-run batch manifest tied to the PipelineRunRecord by explicit batch id. Capture is independent of AI, is never evidence, never a signal, never a scoring/fingerprint input, and no existing news evidence/signal/score moves. The safe ArticleFetch seam stays SHIPPED-DISABLED with an empty allowlist (enabling it requires a non-empty domain allowlist + contact-bearing User-Agent, and fails startup otherwise); the one-shot migration (run-radar.ps1 -MigrateNewsObservations) is never part of this baseline run. SPEC 179 (2026-08-22) - the in-process news-risk SHADOW read is enabled below: after each unfiltered full run, the top live Research-strategy leaders (5 per arm, deduped, max 30) get a cited thesis-breaker read over their archived point-in-time news text, written to <outRoot>/news-risk/live/news-risk-{date}.{md,json} with every attempt durably persisted under <outRoot>/news-risk/assessments/ (run-radar.ps1 supplies Radar:NewsResearch:Shadow:OutputDirectory and DevelopmentExamplesPath). It changes NO score, label, rank or fingerprint; absence of a detected risk is never evidence of safety (fail-closed coverage/validation gates); and 'Readers' is deliberately OMITTED, so the ONE reader is the ambient Radar:Ai DeepSeek — the optional local-Ollama second reader is an operator opt-in (one Readers entry naming the ollama provider/model) added only on a machine that actually runs Ollama; its cohort accrues beside the DeepSeek one from that run onward. EOSE/CASS/MSEX are declared development examples in docs/cohorts/news-risk-development.json and can never enter the evaluator's clean prospective table.",
+      "_comment": "SPEC 177 (2026-08-22) - point-in-time news observation archive. CaptureRss=true (also the code default, declared here so the baseline's posture is explicit): every relevance-kept Google News RSS article is archived immutably under <outRoot>/news-observations (run-radar.ps1 supplies Radar:NewsResearch:ObservationDirectory) with its exact bounded <description> payload, publisher provenance and retrieval instant, plus a per-run batch manifest tied to the PipelineRunRecord by explicit batch id. Capture is independent of AI, is never evidence, never a signal, never a scoring/fingerprint input, and no existing news evidence/signal/score moves. The safe ArticleFetch seam stays SHIPPED-DISABLED with an empty allowlist (enabling it requires a non-empty domain allowlist + contact-bearing User-Agent, and fails startup otherwise); the one-shot migration (run-radar.ps1 -MigrateNewsObservations) is never part of this baseline run. SPEC 179 (2026-08-22) - the in-process news-risk SHADOW read is enabled below: after each unfiltered full run, the top live Research-strategy leaders (5 per arm, deduped, max 30) get a cited thesis-breaker read over their archived point-in-time news text, written to <outRoot>/news-risk/live/news-risk-{date}.{md,json} with every attempt durably persisted under <outRoot>/news-risk/assessments/ (run-radar.ps1 supplies Radar:NewsResearch:Shadow:OutputDirectory and DevelopmentExamplesPath). It changes NO score, label, rank or fingerprint; absence of a detected risk is never evidence of safety (fail-closed coverage/validation gates); and the OPERATOR OPT-IN for a second reader WAS TAKEN on 2026-08-22 (maintainer decision, same day): Readers below declares TWO readers — and note the semantics: a NON-EMPTY Readers list REPLACES the ambient Radar:Ai reader (it does not append to it), so the DeepSeek reader MUST be declared explicitly here or the baseline cohort silently vanishes. Entry 0 re-declares the ambient DeepInfra DeepSeek (same BaseUrl/model/ApiKeyEnvVar as Radar:Ai — its cohort is model-scoped so it is continuous with the pre-Readers ambient cohort); entry 1 adds the local Ollama reader. Two cohorts accrue per candidate from this run onward — provider+exact-model-id-scoped, never pooled, never merged into one verdict. The model is DELIBERATELY llama3.1 — the SAME local model spec 119 retired for misreading EOSE's -70% gross-margin 8-K as Improving 0.90 — because the open question (spec 181 §1's gate) is whether short pre-digested ARTICLE text is a simpler read than accounting filings: same model, same companies, new input class, measured via citation-drop + category-agreement vs the DeepSeek cohort. If llama3.1 holds up here, the 13k-article legacy backfill can run free/local; if it diverges, the harness says so per run. This machine runs Ollama at :11434 with llama3.1:latest installed (verified 2026-08-22); a machine without Ollama records provider-failure attempts per candidate (never blocks the DeepSeek reader, never fails the run). EOSE/CASS/MSEX are declared development examples in docs/cohorts/news-risk-development.json and can never enter the evaluator's clean prospective table.",
       "CaptureRss": true,
-      "Shadow": { "Enabled": true }
+      "Shadow": {
+        "Enabled": true,
+        "Readers": [
+          {
+            "Name": "deepinfra-deepseek",
+            "Provider": "openai",
+            "OpenAi": {
+              "BaseUrl": "https://api.deepinfra.com/v1/openai",
+              "Model": "deepseek-ai/DeepSeek-V4-Flash",
+              "ApiKeyEnvVar": "DEEPINFRA_API_KEY"
+            }
+          },
+          {
+            "Name": "ollama-local",
+            "Provider": "ollama",
+            "Model": "llama3.1",
+            "Ollama": { "Endpoint": "http://localhost:11434" }
+          }
+        ]
+      }
     },
     "Prices": { "Enabled": true, "Range": "1y" },
     "Efficacy": {
