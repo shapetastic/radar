@@ -348,9 +348,11 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Equal(NewsRiskAssessmentBundle.Complete, record.AssessmentBundle); // independent dimension
         Assert.Contains("archive-batch-unavailable", Assert.Single(record.CoverageIssues));
         // The live result carries a degraded-dimension warning — a stated caveat, never a suppression.
+        // Unproven-only degradation reads as "not proven", never overstated as "known incomplete".
         var result = Assert.Single(Assert.Single(artifacts.LiveDocument!.Companies).ReaderResults);
         Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, result.Status);
-        Assert.Contains(result.Warnings, w => w.Contains("supplied text is known incomplete", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings, w => w.Contains("supplied text completeness is not proven", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("known incomplete", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -417,13 +419,14 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Contains("Status: **ThesisChallenged**", artifacts.LiveMarkdown!);
         Assert.Contains(
             "Completeness: archive capture Proven · search enumeration Truncated · assessment bundle "
-                + "Capped (2 of 3 qualifying supplied)",
+                + "Capped (2 supplied of 3 qualifying available)",
             artifacts.LiveMarkdown!);
         var result = Assert.Single(company.ReaderResults);
         Assert.Contains(
             result.Warnings,
             w => w.Contains("search enumeration Truncated", StringComparison.Ordinal)
-                && w.Contains("bundle capped at 2 of 3 qualifying", StringComparison.Ordinal));
+                && w.Contains("bundle capped at 2 of 3 qualifying available", StringComparison.Ordinal)
+                && w.Contains("supplied text is known incomplete", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -488,8 +491,9 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Equal(NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText, reused.Status); // raw verdict reused
         Assert.Equal(NewsRiskArchiveCapture.Unproven, reused.ArchiveCapture); // THIS run's dimensions
         Assert.Equal(NewsRiskSearchEnumeration.Unproven, reused.SearchEnumeration);
-        // And the rendered presentation is derived from THIS run's dimensions too.
-        Assert.Contains("Supplied text is known to be incomplete", artifacts.LiveMarkdown!);
+        // And the rendered presentation is derived from THIS run's dimensions too — unproven-only
+        // degradation reads as "not proven", never overstated as "known incomplete".
+        Assert.Contains("Supplied text is not proven complete", artifacts.LiveMarkdown!);
         Assert.Contains("archive capture Unproven", artifacts.LiveMarkdown!);
     }
 

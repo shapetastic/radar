@@ -98,10 +98,15 @@ public sealed class NewsRiskLiveArtifactRendererTests
         Assert.Contains($"archive capture {capture}", markdown);
         Assert.Contains($"search enumeration {search}", markdown);
         Assert.Contains($"assessment bundle {bundle}", markdown);
-        // …a degraded combination additionally states the degradation…
+        // …a degraded combination additionally states the degradation — as KNOWN incompleteness only
+        // when a dimension proves it, and as "not proven" when the degradation is unproven-only…
         if (!NewsRiskCompletenessDescription.IsBestState(capture, search, bundle))
         {
-            Assert.Contains("Supplied text is known to be incomplete", markdown);
+            Assert.Contains(
+                NewsRiskCompletenessDescription.HasKnownIncompleteness(search, bundle)
+                    ? "Supplied text is known to be incomplete"
+                    : "Supplied text is not proven complete",
+                markdown);
         }
 
         // …and nothing, at any combination, reads as an all-clear.
@@ -122,7 +127,7 @@ public sealed class NewsRiskLiveArtifactRendererTests
         Assert.Contains("Status: **ThesisChallenged**", markdown);
         Assert.Contains(
             "Completeness: archive capture Proven · search enumeration Truncated · assessment bundle "
-                + "Capped (2 of 5 qualifying supplied)",
+                + "Capped (2 supplied of 5 qualifying available)",
             markdown);
         AssertNoAllClear(markdown);
     }
@@ -159,7 +164,7 @@ public sealed class NewsRiskLiveArtifactRendererTests
         Assert.Contains("This is a statement about the 2 supplied article(s)", best);
         Assert.DoesNotContain("incomplete", best);
         Assert.Contains("search enumeration Truncated", degraded);
-        Assert.Contains("bundle capped at 2 of 5 qualifying", degraded);
+        Assert.Contains("bundle capped at 2 of 5 qualifying available", degraded);
 
         // And the rendered markdown for each carries exactly that derived wording.
         var bestMarkdown = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(Company(

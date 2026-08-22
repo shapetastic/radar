@@ -272,7 +272,13 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
                 bundle.QualifyingArticleCount);
             if (degraded.Count > 0)
             {
-                warnings.Add(string.Join("; ", degraded) + " — supplied text is known incomplete");
+                // "Known incomplete" only when a dimension states a KNOWN incompleteness; unproven-only
+                // degradation reads as "not proven" — never overstated into certainty.
+                var caveat = NewsRiskCompletenessDescription.HasKnownIncompleteness(
+                    record.SearchEnumeration, record.AssessmentBundle)
+                    ? " — supplied text is known incomplete"
+                    : " — supplied text completeness is not proven";
+                warnings.Add(string.Join("; ", degraded) + caveat);
             }
 
             if (record.ClaimsDropped > 0)

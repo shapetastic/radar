@@ -213,8 +213,19 @@ public static class NewsRiskCompletenessDescription
         string.Create(
             CultureInfo.InvariantCulture,
             $"archive capture {archiveCapture} · search enumeration {searchEnumeration} · assessment "
-                + $"bundle {assessmentBundle} ({suppliedArticleCount} of {qualifyingArticleCount} "
-                + $"qualifying supplied)");
+                + $"bundle {assessmentBundle} ({suppliedArticleCount} supplied of {qualifyingArticleCount} "
+                + $"qualifying available)");
+
+    /// <summary>
+    /// Whether any degraded dimension states a KNOWN incompleteness (search failed/truncated, bundle
+    /// capped) as opposed to merely unproven ("cannot tell"). Archive capture never contributes — its
+    /// only degraded state is <see cref="NewsRiskArchiveCapture.Unproven"/>.
+    /// </summary>
+    public static bool HasKnownIncompleteness(
+        NewsRiskSearchEnumeration searchEnumeration,
+        NewsRiskAssessmentBundle assessmentBundle) =>
+        searchEnumeration is NewsRiskSearchEnumeration.Failed or NewsRiskSearchEnumeration.Truncated
+            || assessmentBundle == NewsRiskAssessmentBundle.Capped;
 
     /// <summary>The degraded dimensions, each named — empty at best-state.</summary>
     public static IReadOnlyList<string> DegradedParts(
@@ -239,7 +250,7 @@ public static class NewsRiskCompletenessDescription
         {
             parts.Add(string.Create(
                 CultureInfo.InvariantCulture,
-                $"bundle capped at {suppliedArticleCount} of {qualifyingArticleCount} qualifying"));
+                $"bundle capped at {suppliedArticleCount} of {qualifyingArticleCount} qualifying available"));
         }
 
         return parts;
@@ -260,6 +271,11 @@ public static class NewsRiskCompletenessDescription
         var degraded = DegradedParts(
             archiveCapture, searchEnumeration, assessmentBundle,
             suppliedArticleCount, qualifyingArticleCount);
+        // A KNOWN incompleteness is stated as fact; an unproven-only degradation must not be — "cannot
+        // tell" overstated as "known incomplete" is its own kind of false certainty.
+        var caveat = HasKnownIncompleteness(searchEnumeration, assessmentBundle)
+            ? "known to be incomplete"
+            : "not proven complete";
         return degraded.Count == 0
             ? string.Create(
                 CultureInfo.InvariantCulture,
@@ -267,7 +283,7 @@ public static class NewsRiskCompletenessDescription
                     + $"{suppliedArticleCount} supplied article(s), not about the company.")
             : string.Create(
                 CultureInfo.InvariantCulture,
-                $"No risk was supported by the supplied text. Supplied text is known to be incomplete "
+                $"No risk was supported by the supplied text. Supplied text is {caveat} "
                     + $"({string.Join("; ", degraded)}) — this is a statement about "
                     + $"{suppliedArticleCount} article(s), not about the company.");
     }
