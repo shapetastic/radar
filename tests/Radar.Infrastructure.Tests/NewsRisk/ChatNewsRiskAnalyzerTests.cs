@@ -14,6 +14,9 @@ namespace Radar.Infrastructure.Tests.NewsRisk;
 /// </summary>
 public sealed class ChatNewsRiskAnalyzerTests
 {
+    private static readonly DateTimeOffset FixedRetrievedAtUtc =
+        new(2026, 8, 20, 12, 0, 0, TimeSpan.Zero);
+
     private static NewsRiskInputArticle Article(
         Guid id, string headline, string? description, string? body) => new(
         ObservationId: id,
@@ -23,11 +26,11 @@ public sealed class ChatNewsRiskAnalyzerTests
         Publisher: "Example Wire",
         Url: "https://example.com/secret-url-token",
         PublishedAtUtc: null,
-        RetrievedAtUtc: DateTimeOffset.UtcNow,
+        RetrievedAtUtc: FixedRetrievedAtUtc,
         CaptureMode: NewsObservationCaptureMode.ProspectiveRss,
         PayloadHash: "ph",
         BodyContentHash: body is null ? null : "bh",
-        BodyRetrievedAtUtc: body is null ? null : DateTimeOffset.UtcNow,
+        BodyRetrievedAtUtc: body is null ? null : FixedRetrievedAtUtc,
         BodyExtractorVersion: null,
         BodyRetrievalPolicy: null);
 

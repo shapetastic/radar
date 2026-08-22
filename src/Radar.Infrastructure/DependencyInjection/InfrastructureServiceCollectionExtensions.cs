@@ -2617,19 +2617,26 @@ public static class InfrastructureServiceCollectionExtensions
             RootDirectory = options.OutputDirectory,
         });
         services.AddSingleton<INewsRiskArtifactStore, FileNewsRiskArtifactStore>();
+        // The per-reader clients are created here rather than registered as IChatClient (they would
+        // collide with the ambient AddRadarAi client), so the container would never dispose them.
+        // NewsRiskReaderClientOwner holds them and IS container-created, so the ServiceProvider
+        // disposes the clients on shutdown; NewsRiskReaderSet resolves off it unchanged.
         services.AddSingleton(sp =>
         {
             var logger = sp.GetRequiredService<ILogger<ChatNewsRiskAnalyzer>>();
-            var resolved = normalized
-                .Select(r =>
-                {
-                    var identity = new NewsRiskReaderIdentity(r.Name, r.Client.Provider, r.Client.Model);
-                    var client = new ChatClientFactory(r.Client).Create();
-                    return new NewsRiskReader(identity, new ChatNewsRiskAnalyzer(client, identity, logger));
-                })
-                .ToList();
-            return new NewsRiskReaderSet(resolved);
+            var readers = new List<NewsRiskReader>(normalized.Count);
+            var clients = new List<IChatClient>(normalized.Count);
+            foreach (var r in normalized)
+            {
+                var identity = new NewsRiskReaderIdentity(r.Name, r.Client.Provider, r.Client.Model);
+                var client = new ChatClientFactory(r.Client).Create();
+                clients.Add(client);
+                readers.Add(new NewsRiskReader(identity, new ChatNewsRiskAnalyzer(client, identity, logger)));
+            }
+
+            return new NewsRiskReaderClientOwner(new NewsRiskReaderSet(readers), clients);
         });
+        services.AddSingleton(sp => sp.GetRequiredService<NewsRiskReaderClientOwner>().Readers);
         services.AddSingleton<INewsRiskShadowGenerator, NewsRiskShadowGenerator>();
         services.TryAddSingleton(TimeProvider.System);
         return services;

@@ -152,7 +152,9 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // stores: the store swallows disk errors, so a failure here never changes a counter or aborts
         // the run. Reuse asOfUtc (AD-7: one run, one instant) and the collection pass's already-ordered
         // collector names so the record reflects what actually ran. The result is returned only AFTER
-        // this write (spec 179 §2: the run record is durable before anything downstream consumes RunId).
+        // this write is awaited (spec 179 §2: the write is attempted before anything downstream
+        // consumes RunId) — but because the store degrades on disk failure, durability is attempted,
+        // not guaranteed, and consumers of RunId must tolerate a missing/unreadable run record.
         var runRecord = new PipelineRunRecord(
             Id: runId,
             CreatedAtUtc: collection.AsOfUtc,
