@@ -10,10 +10,11 @@ using Radar.Application.Scoring;
 namespace Radar.Application.Tests.NewsRisk;
 
 /// <summary>
-/// Spec 179 §§2–7: the shadow generator consumes the EXACT handed-in section instances (no score store, no
-/// ranking), freezes selection provenance into every persisted attempt, fails CLOSED on missing
-/// sections/coverage, isolates readers from each other's failures, and caches by cohort + ordered
-/// input-bundle hash.
+/// Spec 179 §§2–7 as amended by spec 182: the shadow generator consumes the EXACT handed-in section
+/// instances (no score store, no ranking), freezes selection provenance into every persisted attempt,
+/// records the three completeness dimensions on every attempt WITHOUT ever blocking a reader on them
+/// (completeness gates absence claims, never presence claims), isolates readers from each other's
+/// failures, and caches ONLY the raw verdict by cohort + ordered input-bundle hash.
 /// </summary>
 public sealed class NewsRiskShadowGeneratorTests
 {
@@ -129,6 +130,18 @@ public sealed class NewsRiskShadowGeneratorTests
         {
             Requests.Add(request);
             return Task.FromResult(_respond(request));
+        }
+    }
+
+    private sealed class ScriptedContentReader(Func<string, NewsArticleFetchResult> respond)
+        : INewsArticleContentReader
+    {
+        public List<string> Urls { get; } = [];
+
+        public Task<NewsArticleFetchResult> FetchAsync(string url, CancellationToken ct)
+        {
+            Urls.Add(url);
+            return Task.FromResult(respond(url));
         }
     }
 
@@ -260,7 +273,9 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Equal(sections[0].Rows[0].ScoreSnapshotId, selection.ScoreSnapshotId);
         Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, record.Status);
         Assert.Equal(66, record.RiskScore);
-        Assert.True(record.CoverageComplete);
+        Assert.Equal(NewsRiskArchiveCapture.Proven, record.ArchiveCapture);
+        Assert.Equal(NewsRiskSearchEnumeration.Complete, record.SearchEnumeration);
+        Assert.Equal(NewsRiskAssessmentBundle.Complete, record.AssessmentBundle);
         Assert.NotNull(artifacts.LiveDocument);
         Assert.Null(artifacts.LiveDocument!.Diagnostic);
     }
@@ -310,25 +325,216 @@ public sealed class NewsRiskShadowGeneratorTests
     }
 
     [Fact]
-    public async Task IncompleteCoverage_RecordsIncompleteCoverage_CallsNoModel_AndCannotRenderNoRisk()
+    public async Task DegradedCoverage_NeverBlocksTheReader_AndRecordsUnprovenDimensions()
     {
+        // Spec 182 §1: completeness is required for ABSENCE claims, never PRESENCE claims — with no batch
+        // manifest at all (both coverage dimensions Unproven) the reader still assesses the supplied text.
         var runStore = new FakeRunStore();
         runStore.Records.Add(RunRecord(batchId: null)); // no batch manifest at all → unproven
         var archive = new FakeArchive();
-        archive.Observations.Add(NewsRiskTestData.Observation(Company, "headline", AsOf.AddDays(-1)));
-        var analyzer = new ScriptedAnalyzer(_ => NoRiskOutcome());
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Test Co flags doubt", AsOf.AddDays(-1)));
+        var analyzer = new ScriptedAnalyzer(ThesisChallengedOutcome);
         var assessments = new InMemoryAssessmentStore();
         var artifacts = new FakeArtifactStore();
 
         await Build(runStore, archive, assessments, artifacts, Reader("a", "model-a", analyzer))
             .GenerateAsync(RunId, Sections(Company), CancellationToken.None);
 
-        Assert.Empty(analyzer.Requests); // fail closed: no model call over unproven coverage
+        Assert.Single(analyzer.Requests); // the model IS called over one qualifying article
         var record = Assert.Single(assessments.Records);
-        Assert.Equal(NewsRiskAssessmentStatus.IncompleteCoverage, record.Status);
-        Assert.False(record.CoverageComplete);
+        Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, record.Status);
+        Assert.Equal(NewsRiskArchiveCapture.Unproven, record.ArchiveCapture);
+        Assert.Equal(NewsRiskSearchEnumeration.Unproven, record.SearchEnumeration);
+        Assert.Equal(NewsRiskAssessmentBundle.Complete, record.AssessmentBundle); // independent dimension
+        Assert.Contains("archive-batch-unavailable", Assert.Single(record.CoverageIssues));
+        // The live result carries a degraded-dimension warning — a stated caveat, never a suppression.
         var result = Assert.Single(Assert.Single(artifacts.LiveDocument!.Companies).ReaderResults);
-        Assert.NotEqual(NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText, result.Status);
+        Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, result.Status);
+        Assert.Contains(result.Warnings, w => w.Contains("supplied text is known incomplete", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EoseShape_TruncatedSearchAndCappedBundle_StillAssesses_AndRecordsEachDimensionIndependently()
+    {
+        // The motivating live failure (spec 182 overview): risk-laden supplied text under a truncated
+        // provider enumeration and a capped bundle. The readers MUST look, and the record must carry
+        // Truncated / Capped / Proven independently.
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var truncatedBatch = CompleteBatch(Company) with
+        {
+            Collectors =
+            [
+                new NewsObservationCollectorCapture(
+                    CollectorName: "newssearch",
+                    CompanyCoverage:
+                    [
+                        new CollectorCompanyCoverage(
+                            CompanyId: Company,
+                            ExpectedFeedCount: 1,
+                            SuccessfulFeedCount: 1,
+                            HitEffectiveResultLimit: true,
+                            Issues: []),
+                    ],
+                    ProviderFailures: [],
+                    AnyFeedHitProviderCap: true),
+            ],
+        };
+        var archive = new FakeArchive { Batch = truncatedBatch };
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Legal Scrutiny Mounts", AsOf.AddDays(-1)));
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Losses Rattle Traders", AsOf.AddDays(-2)));
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Wider Q2 Loss", AsOf.AddDays(-3)));
+        var analyzer = new ScriptedAnalyzer(ThesisChallengedOutcome);
+        var assessments = new InMemoryAssessmentStore();
+        var artifacts = new FakeArtifactStore();
+
+        var generator = new NewsRiskShadowGenerator(
+            runStore,
+            archive,
+            archive,
+            new NewsRiskReaderSet([Reader("a", "model-a", analyzer)]),
+            assessments,
+            artifacts,
+            new NewsRiskShadowOptions("data/news-risk", 30, 30, maxArticlesPerCompany: 2, 0, "newssearch"),
+            new FixedTimeProvider(AsOf.AddMinutes(10)),
+            NullLogger<NewsRiskShadowGenerator>.Instance);
+        await generator.GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        Assert.Single(analyzer.Requests); // the reader IS called
+        var record = Assert.Single(assessments.Records);
+        Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, record.Status);
+        Assert.Equal(NewsRiskArchiveCapture.Proven, record.ArchiveCapture);
+        Assert.Equal(NewsRiskSearchEnumeration.Truncated, record.SearchEnumeration);
+        Assert.Equal(NewsRiskAssessmentBundle.Capped, record.AssessmentBundle);
+        Assert.Equal(2, record.Observations.Count); // capped at 2 of 3 qualifying
+
+        // Validated claims render as ThesisChallenged with all three dimensions stated beside them.
+        var company = Assert.Single(artifacts.LiveDocument!.Companies);
+        Assert.Equal(NewsRiskArchiveCapture.Proven, company.ArchiveCapture);
+        Assert.Equal(NewsRiskSearchEnumeration.Truncated, company.SearchEnumeration);
+        Assert.Equal(NewsRiskAssessmentBundle.Capped, company.AssessmentBundle);
+        Assert.Equal(3, company.QualifyingArticleCount);
+        Assert.Contains("Status: **ThesisChallenged**", artifacts.LiveMarkdown!);
+        Assert.Contains(
+            "Completeness: archive capture Proven · search enumeration Truncated · assessment bundle "
+                + "Capped (2 of 3 qualifying supplied)",
+            artifacts.LiveMarkdown!);
+        var result = Assert.Single(company.ReaderResults);
+        Assert.Contains(
+            result.Warnings,
+            w => w.Contains("search enumeration Truncated", StringComparison.Ordinal)
+                && w.Contains("bundle capped at 2 of 3 qualifying", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CappedBundle_UnderCompleteSearchEnumeration_ShowsTheDimensionsAreIndependent()
+    {
+        // Complete provider coverage does NOT mean complete model input (spec 182 §2): with a perfectly
+        // complete newssearch enumeration, a bundle cap below the qualifying count still records Capped.
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "First story", AsOf.AddDays(-1)));
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Second story", AsOf.AddDays(-2)));
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Third story", AsOf.AddDays(-3)));
+        var analyzer = new ScriptedAnalyzer(ThesisChallengedOutcome);
+        var assessments = new InMemoryAssessmentStore();
+
+        var generator = new NewsRiskShadowGenerator(
+            runStore,
+            archive,
+            archive,
+            new NewsRiskReaderSet([Reader("a", "model-a", analyzer)]),
+            assessments,
+            new FakeArtifactStore(),
+            new NewsRiskShadowOptions("data/news-risk", 30, 30, maxArticlesPerCompany: 2, 0, "newssearch"),
+            new FixedTimeProvider(AsOf.AddMinutes(10)),
+            NullLogger<NewsRiskShadowGenerator>.Instance);
+        await generator.GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        var record = Assert.Single(assessments.Records);
+        Assert.Equal(NewsRiskSearchEnumeration.Complete, record.SearchEnumeration);
+        Assert.Equal(NewsRiskAssessmentBundle.Capped, record.AssessmentBundle);
+        Assert.Equal(NewsRiskArchiveCapture.Proven, record.ArchiveCapture);
+    }
+
+    [Fact]
+    public async Task CachedRawVerdict_ReplayedUnderDifferentDimensions_CarriesTheCurrentRunsDimensions()
+    {
+        // Run 1: complete coverage. Run 2: SAME bundle (cache hit) but no batch manifest — the reused
+        // record must carry run 2's degraded dimensions, never the cached run's (spec 182 §3).
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Test Co flags doubt", AsOf.AddDays(-1)));
+        var analyzer = new ScriptedAnalyzer(_ => NoRiskOutcome());
+        var assessments = new InMemoryAssessmentStore();
+        var artifacts = new FakeArtifactStore();
+
+        var generator = Build(runStore, archive, assessments, artifacts, Reader("a", "model-a", analyzer));
+        await generator.GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        var secondRunId = Guid.NewGuid();
+        runStore.Records.Insert(0, RunRecord(batchId: null) with { Id = secondRunId });
+        archive.Batch = null;
+        await generator.GenerateAsync(secondRunId, Sections(Company), CancellationToken.None);
+
+        Assert.Single(analyzer.Requests); // cache hit — one model call total
+        var first = Assert.Single(assessments.Records, r => r.RunId == RunId);
+        Assert.Equal(NewsRiskArchiveCapture.Proven, first.ArchiveCapture);
+        Assert.Equal(NewsRiskSearchEnumeration.Complete, first.SearchEnumeration);
+        var reused = Assert.Single(assessments.Records, r => r.RunId == secondRunId);
+        Assert.Equal(first.AssessmentId, reused.ReusedFromAssessmentId);
+        Assert.Equal(NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText, reused.Status); // raw verdict reused
+        Assert.Equal(NewsRiskArchiveCapture.Unproven, reused.ArchiveCapture); // THIS run's dimensions
+        Assert.Equal(NewsRiskSearchEnumeration.Unproven, reused.SearchEnumeration);
+        // And the rendered presentation is derived from THIS run's dimensions too.
+        Assert.Contains("Supplied text is known to be incomplete", artifacts.LiveMarkdown!);
+        Assert.Contains("archive capture Unproven", artifacts.LiveMarkdown!);
+    }
+
+    [Fact]
+    public async Task BodyAttachment_ProceedsUnderDegradedCoverage_AndRecordsFetchOutcomes()
+    {
+        // Spec 182 §1: the body-fetch gate no longer requires complete coverage — a fetched body is more
+        // information, and more information never requires completeness.
+        var fetchAt = AsOf.AddHours(2);
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(batchId: null)); // degraded: no batch manifest
+        var archive = new FakeArchive();
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Test Co flags doubt", AsOf.AddDays(-1)));
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Second headline", AsOf.AddDays(-2)));
+        var analyzer = new ScriptedAnalyzer(ThesisChallengedOutcome);
+        var assessments = new InMemoryAssessmentStore();
+        var artifacts = new FakeArtifactStore();
+        var contentReader = new ScriptedContentReader(url =>
+            url.Contains("news.google.com", StringComparison.Ordinal)
+                ? new NewsArticleFetchResult(
+                    NewsArticleFetchOutcome.Fetched, fetchAt, 0, null, 200, "text/html",
+                    false, "vt-1", "bh", "fetched body", "policy-1")
+                : new NewsArticleFetchResult(
+                    NewsArticleFetchOutcome.Paywalled, fetchAt, 0, null, 403, null,
+                    false, null, null, null, "policy-1"));
+
+        var generator = new NewsRiskShadowGenerator(
+            runStore,
+            archive,
+            archive,
+            new NewsRiskReaderSet([Reader("a", "model-a", analyzer)]),
+            assessments,
+            artifacts,
+            new NewsRiskShadowOptions("data/news-risk", 30, 30, 12, maxFetchedArticlesPerCompany: 1, "newssearch"),
+            new FixedTimeProvider(AsOf.AddMinutes(10)),
+            NullLogger<NewsRiskShadowGenerator>.Instance,
+            contentReader);
+        await generator.GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        Assert.Single(contentReader.Urls); // the fetch ran despite degraded coverage (fetched cap 1)
+        var record = Assert.Single(assessments.Records);
+        Assert.Equal(NewsRiskArchiveCapture.Unproven, record.ArchiveCapture);
+        var fetched = Assert.Single(record.Observations, o => o.BodySupplied);
+        Assert.Equal(fetchAt, fetched.BodyRetrievedAtUtc);
+        Assert.Equal(fetchAt, record.AssessmentCutoffUtc); // cutoff still moves to the actual retrieval
     }
 
     [Fact]
@@ -344,7 +550,12 @@ public sealed class NewsRiskShadowGeneratorTests
             .GenerateAsync(RunId, Sections(Company), CancellationToken.None);
 
         Assert.Empty(analyzer.Requests);
-        Assert.Equal(NewsRiskAssessmentStatus.NoContent, Assert.Single(assessments.Records).Status);
+        var record = Assert.Single(assessments.Records);
+        Assert.Equal(NewsRiskAssessmentStatus.NoContent, record.Status);
+        // The dimensions are recorded on EVERY persisted attempt — NoContent included (spec 182 §2).
+        Assert.Equal(NewsRiskArchiveCapture.Proven, record.ArchiveCapture);
+        Assert.Equal(NewsRiskSearchEnumeration.Complete, record.SearchEnumeration);
+        Assert.Equal(NewsRiskAssessmentBundle.Complete, record.AssessmentBundle);
     }
 
     [Fact]
@@ -370,6 +581,10 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Equal(NewsRiskAssessmentStatus.ProviderFailure, brokenRecord.Status);
         var healthyRecord = Assert.Single(assessments.Records, r => r.ReaderName == "healthy");
         Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, healthyRecord.Status);
+        // Both readers assess independently under IDENTICAL recorded dimensions (per company per run).
+        Assert.Equal(brokenRecord.ArchiveCapture, healthyRecord.ArchiveCapture);
+        Assert.Equal(brokenRecord.SearchEnumeration, healthyRecord.SearchEnumeration);
+        Assert.Equal(brokenRecord.AssessmentBundle, healthyRecord.AssessmentBundle);
         // Two cohorts — never merged; and the artifact renders both readers with no combined verdict.
         Assert.NotEqual(brokenRecord.CohortKey, healthyRecord.CohortKey);
         Assert.Equal(2, Assert.Single(artifacts.LiveDocument!.Companies).ReaderResults.Count);

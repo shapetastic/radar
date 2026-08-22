@@ -66,7 +66,9 @@ public sealed class FileNewsRiskAssessmentStoreTests : IDisposable
                     BodyContentHash: null, BodyRetrievedAtUtc: null, BodyExtractorVersion: null,
                     BodyRetrievalPolicy: null, CaptureMode: NewsObservationCaptureMode.ProspectiveRss),
             ],
-            CoverageComplete: true,
+            ArchiveCapture: NewsRiskArchiveCapture.Proven,
+            SearchEnumeration: NewsRiskSearchEnumeration.Complete,
+            AssessmentBundle: NewsRiskAssessmentBundle.Complete,
             CoverageIssues: [],
             Status: status,
             RiskScore: status == NewsRiskAssessmentStatus.ThesisChallenged ? 66 : null,
@@ -115,6 +117,72 @@ public sealed class FileNewsRiskAssessmentStoreTests : IDisposable
             Assert.Single(read.Observations).CaptureMode);
         Assert.Equal(record.AssessmentCutoffUtc, read.AssessmentCutoffUtc);
         Assert.Equal(record.Limits, read.Limits);
+        // The spec-182 completeness dimensions round-trip losslessly.
+        Assert.Equal(NewsRiskArchiveCapture.Proven, read.ArchiveCapture);
+        Assert.Equal(NewsRiskSearchEnumeration.Complete, read.SearchEnumeration);
+        Assert.Equal(NewsRiskAssessmentBundle.Complete, read.AssessmentBundle);
+    }
+
+    [Fact]
+    public async Task LegacyV1File_HydratesWithEveryDimensionAtItsDegradedDefault_NeverBestState()
+    {
+        // A pre-spec-182 file carries `coverageComplete` (now ignored), the retired IncompleteCoverage
+        // status, and NO dimension fields. Each dimension enum's zero value is DELIBERATELY the degraded
+        // state, so the missing fields deserialize as Unproven/Unproven/Capped — a legacy record can never
+        // read as best-state on any dimension.
+        var id = Guid.NewGuid();
+        var path = Path.Combine(_root, "assessments", "2026", "08", id.ToString("D") + ".json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, $$"""
+            {
+              "schemaVersion": "news-risk-assessment-v1",
+              "assessmentId": "{{id:D}}",
+              "runId": "{{Guid.NewGuid():D}}",
+              "selectionAsOfUtc": "2026-08-20T12:00:00+00:00",
+              "assessmentCutoffUtc": "2026-08-20T12:00:00+00:00",
+              "companyId": "{{Guid.NewGuid():D}}",
+              "companyName": "Legacy Co",
+              "ticker": "LGC",
+              "selections": [],
+              "readerName": "reader",
+              "provider": "test",
+              "modelId": "model-a",
+              "promptVersion": "news-risk-prompt-v1",
+              "resultSchemaVersion": "news-risk-schema-v1",
+              "cohortKey": "test:model-a|news-risk-prompt-v1|news-risk-schema-v1",
+              "inputBundleHash": "bundle-legacy",
+              "observations": [],
+              "coverageComplete": true,
+              "coverageIssues": [],
+              "status": "IncompleteCoverage",
+              "riskScore": null,
+              "categories": [],
+              "claims": [],
+              "rationale": null,
+              "claimsTotal": 0,
+              "claimsAccepted": 0,
+              "claimsDropped": 0,
+              "claimDropReasons": [],
+              "rawResponseHash": null,
+              "failureDetail": null,
+              "limits": { "lookbackDays": 30, "maxCompaniesPerRun": 30, "maxArticlesPerCompany": 12, "maxFetchedArticlesPerCompany": 3 },
+              "reusedFromAssessmentId": null,
+              "createdAtUtc": "2026-08-20T12:05:00+00:00"
+            }
+            """);
+
+        var hydrated = await NewStore().GetAllAsync(CancellationToken.None);
+
+        var read = Assert.Single(hydrated);
+        Assert.Equal(id, read.AssessmentId);
+        Assert.Equal("news-risk-assessment-v1", read.SchemaVersion);
+        Assert.Equal(NewsRiskArchiveCapture.Unproven, read.ArchiveCapture);
+        Assert.Equal(NewsRiskSearchEnumeration.Unproven, read.SearchEnumeration);
+        Assert.Equal(NewsRiskAssessmentBundle.Capped, read.AssessmentBundle);
+#pragma warning disable CS0618 // the retired status must still deserialize from accrued v1 files
+        Assert.Equal(NewsRiskAssessmentStatus.IncompleteCoverage, read.Status);
+#pragma warning restore CS0618
+        Assert.False(read.IsCompletedAnalysis); // and it is never reusable through the §6 cache
     }
 
     [Fact]

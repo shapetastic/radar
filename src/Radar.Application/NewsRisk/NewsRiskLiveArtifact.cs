@@ -13,7 +13,7 @@ public sealed record NewsRiskLiveDocument(
     IReadOnlyList<NewsRiskLiveCompany> Companies,
     DateTimeOffset GeneratedAtUtc)
 {
-    public const string CurrentSchemaVersion = "news-risk-live-v1";
+    public const string CurrentSchemaVersion = "news-risk-live-v2";
 
     /// <summary>The §1 live caveat, verbatim — carried by every live artifact.</summary>
     public const string LiveCaveat =
@@ -25,14 +25,23 @@ public sealed record NewsRiskLiveDocument(
     public const string NoLiveStrategySections = "NoLiveStrategySections";
 }
 
-/// <summary>One selected company's live entry: frozen selection provenance, supplied inputs, and every reader's own result.</summary>
+/// <summary>
+/// One selected company's live entry: frozen selection provenance, supplied inputs, the three spec-182
+/// completeness dimensions (per company per run — identical across readers of one company, so they live
+/// here rather than on each reader result), and every reader's own result. v2 replaced the v1
+/// <c>CoverageComplete</c> boolean with the dimensions plus the qualifying-observation count that makes the
+/// bundle dimension's arithmetic visible.
+/// </summary>
 public sealed record NewsRiskLiveCompany(
     Guid CompanyId,
     string CompanyName,
     string? Ticker,
     IReadOnlyList<NewsRiskCandidateSelection> Selections,
     IReadOnlyList<NewsRiskLiveArticle> Articles,
-    bool CoverageComplete,
+    NewsRiskArchiveCapture ArchiveCapture,
+    NewsRiskSearchEnumeration SearchEnumeration,
+    NewsRiskAssessmentBundle AssessmentBundle,
+    int QualifyingArticleCount,
     IReadOnlyList<string> CoverageIssues,
     IReadOnlyList<NewsRiskLiveReaderResult> ReaderResults);
 
