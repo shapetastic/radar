@@ -4,6 +4,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
+using Radar.Application.News;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -196,6 +197,11 @@ internal static class RadarWorkerServices
                 collector.Register(services, options);
             }
         }
+
+        // Spec 177: the point-in-time news observation archive, the safe article-fetch seam, and the
+        // explicit one-shot migration. Strictly validated (unknown keys / invalid limits fail startup);
+        // observational only — none of it is hashed into any scoring fingerprint.
+        AddRadarNewsResearch(services, configuration, options, runMode, companyFilter);
 
         // Wire the AI chat-client seam ONLY when a provider is configured (opt-in gate). AI is not a collector,
         // so it is gated on Provider presence rather than the Collectors list. A blank Provider (the default)
@@ -725,6 +731,178 @@ internal static class RadarWorkerServices
                 services.AddFileFilingReadDebugStore(options.FilingReadDebugDirectory);
             }
         }
+    }
+
+    /// <summary>
+    /// Wires the spec-177 news-research seams from the fail-closed <c>Radar:NewsResearch</c> block.
+    /// <list type="bullet">
+    /// <item><b>Strict section validation first</b> (the specs-149/174 posture, via the shared
+    /// <see cref="ConfigSectionGuards"/>): an unknown/typo'd key or a scalar-where-object shape fails
+    /// startup instead of silently capturing nothing, and the fetch limits are validated even when the
+    /// fetch is disabled (an invalid limit is a config error, not a latent one).</item>
+    /// <item><b>The archive is a collection-side concern:</b> registered for every mode EXCEPT the
+    /// standalone <c>score</c> pass, which runs no collector and must not need it. When capture is off it
+    /// is registered only if the migration (which writes through it) is enabled.</item>
+    /// <item><b>The safe content reader is registered ONLY when <c>ArticleFetch:Enabled</c>:</b> the
+    /// shipped default is disabled with an empty allowlist, so the default graph carries no publisher-fetch
+    /// capability; enabling with an empty allowlist or a contact-less User-Agent fails startup inside
+    /// <c>AddHttpNewsArticleContentReader</c>.</item>
+    /// <item><b>The migration is a one-shot run replacement</b> (like a replay): enabling it alongside a
+    /// replay fails fast naming both keys, and the retrospective-fetch pass requires the fetch seam.</item>
+    /// </list>
+    /// </summary>
+    private static void AddRadarNewsResearch(
+        IServiceCollection services,
+        IConfiguration configuration,
+        RadarWorkerOptions options,
+        RadarRunMode runMode,
+        CompanyFilter? companyFilter)
+    {
+        ValidateNewsResearchSection(configuration);
+
+        var research = options.NewsResearch;
+        var fetch = research.ArticleFetch;
+        var migration = research.Migration;
+
+        if (string.IsNullOrWhiteSpace(research.ObservationDirectory))
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:ObservationDirectory must not be blank; it is the root of the "
+                    + "point-in-time news observation archive (default \"data/news-observations\").");
+        }
+
+        // Limits are validated regardless of Enabled: an invalid limit is a configuration error now, not a
+        // trap that springs the day the fetch is switched on.
+        if (fetch.TimeoutSeconds <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:ArticleFetch:TimeoutSeconds must be positive (was {fetch.TimeoutSeconds}); "
+                    + "it bounds each fetch attempt's whole redirect chain (default 10).");
+        }
+
+        if (fetch.MaxResponseBytes <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:ArticleFetch:MaxResponseBytes must be positive (was {fetch.MaxResponseBytes}); "
+                    + "it bounds each response body (default 2097152).");
+        }
+
+        if (migration.RetrospectiveFetch && !migration.Enabled)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Migration:RetrospectiveFetch is true while "
+                    + "Radar:NewsResearch:Migration:Enabled is false; the retrospective fetch is a pass OF "
+                    + "the migration. Enable the migration, or clear the retrospective flag.");
+        }
+
+        if (migration.Enabled && runMode != RadarRunMode.Full)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Migration:Enabled is true while Radar:RunMode is "
+                    + $"'{RadarRunModes.Token(runMode)}'; the migration REPLACES the run entirely (like a "
+                    + "replay), so combining it with a replay/collect/score pass would mean one of the two "
+                    + "silently wins. Run the migration on its own, with the default run mode.");
+        }
+
+        if (migration.Enabled && migration.RetrospectiveFetch && !fetch.Enabled)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Migration:RetrospectiveFetch requires the safe article-fetch seam: set "
+                    + "Radar:NewsResearch:ArticleFetch:Enabled=true with a non-empty AllowedDomains "
+                    + "allowlist and a contact-bearing UserAgent. Radar never fetches publisher content "
+                    + "without that explicit operator assertion.");
+        }
+
+        if (fetch.Enabled)
+        {
+            // AddHttpNewsArticleContentReader owns the safety preconditions (non-empty allowlist,
+            // contact-bearing UA) and the handler posture (no auto-redirects, no cookies).
+            services.AddHttpNewsArticleContentReader(new NewsArticleContentReaderOptions
+            {
+                AllowedDomains = fetch.AllowedDomains,
+                UserAgent = fetch.UserAgent,
+                Timeout = TimeSpan.FromSeconds(fetch.TimeoutSeconds),
+                MaxResponseBytes = fetch.MaxResponseBytes,
+            });
+        }
+
+        // Score mode NEVER gets the archive (a score pass must not need a collection-side store); every
+        // other mode gets it when capture is on — or when the migration, which writes through it, runs.
+        var archiveWanted = runMode != RadarRunMode.Score && (research.CaptureRss || migration.Enabled);
+        if (archiveWanted)
+        {
+            services.AddFileNewsObservationArchive(research.ObservationDirectory);
+
+            // Whether THIS pass covers the full watch universe (spec 177 §5): a spec-161 company-filtered
+            // pass may capture observations but must never establish the whole-universe boundary.
+            services.AddSingleton(new NewsObservationCaptureOptions
+            {
+                FullUniverse = companyFilter is null,
+            });
+        }
+
+        if (migration.Enabled)
+        {
+            services.AddSingleton(new NewsObservationMigrationOptions
+            {
+                RetrospectiveFetch = migration.RetrospectiveFetch,
+            });
+            services.AddSingleton<INewsObservationMigration, NewsObservationMigration>();
+        }
+    }
+
+    /// <summary>
+    /// The strict shape/key validation for the whole <c>Radar:NewsResearch</c> block, through the SAME
+    /// shared guards every spec-174 binder uses. An absent section is the honest all-defaults case and
+    /// validates nothing.
+    /// </summary>
+    private static void ValidateNewsResearchSection(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Radar").GetSection("NewsResearch");
+        if (!section.Exists())
+        {
+            return;
+        }
+
+        ConfigSectionGuards.FailIfScalarSection(
+            section,
+            "Radar:NewsResearch must be an object carrying CaptureRss / ObservationDirectory / "
+                + "ArticleFetch / Migration keys.");
+        ConfigSectionGuards.FailOnUnknownKeys(
+            section,
+            ConfigSectionGuards.BindablePropertyNames(typeof(NewsResearchWorkerOptions)),
+            "Radar:NewsResearch",
+            "so it would be silently ignored and the observation capture would quietly diverge from what "
+                + "the operator believes was configured");
+
+        ValidateNestedSection(
+            section.GetSection("ArticleFetch"),
+            typeof(NewsArticleFetchWorkerOptions),
+            "Radar:NewsResearch:ArticleFetch",
+            "must be an object carrying Enabled / AllowedDomains / UserAgent / TimeoutSeconds / "
+                + "MaxResponseBytes keys.");
+        ValidateNestedSection(
+            section.GetSection("Migration"),
+            typeof(NewsObservationMigrationWorkerOptions),
+            "Radar:NewsResearch:Migration",
+            "must be an object carrying Enabled / RetrospectiveFetch keys.");
+    }
+
+    private static void ValidateNestedSection(
+        IConfigurationSection section, Type optionsType, string path, string expectedShape)
+    {
+        if (!section.Exists())
+        {
+            return;
+        }
+
+        ConfigSectionGuards.FailIfScalarSection(section, path + " " + expectedShape);
+        ConfigSectionGuards.FailOnUnknownKeys(
+            section,
+            ConfigSectionGuards.BindablePropertyNames(optionsType),
+            path,
+            "so it would be silently ignored — a safety/observation control that silently does nothing is "
+                + "exactly the fail-open this block forbids");
     }
 
     /// <summary>

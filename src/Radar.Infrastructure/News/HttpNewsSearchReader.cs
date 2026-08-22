@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -45,16 +46,28 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
     private const int MinRecords = 1;
     private const int MaxRecords = 100;
 
+    /// <summary>
+    /// THE canonical bound on the retained <c>&lt;description&gt;</c> payload (spec 177 §3): 16 KiB of
+    /// UTF-8 BYTES — bytes, not UTF-16 code units, so "16 KiB" means what it says on disk — truncated on a
+    /// character boundary (never mid surrogate pair) with the cut recorded explicitly on
+    /// <see cref="NewsArticleItem.DescriptionTruncated"/>.
+    /// </summary>
+    internal const int MaxDescriptionUtf8Bytes = 16 * 1024;
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<HttpNewsSearchReader> _logger;
+    private readonly TimeProvider _timeProvider;
 
-    public HttpNewsSearchReader(HttpClient httpClient, ILogger<HttpNewsSearchReader> logger)
+    public HttpNewsSearchReader(
+        HttpClient httpClient, ILogger<HttpNewsSearchReader> logger, TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         _httpClient = httpClient;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<NewsSearchReadResult> ReadAsync(NewsSearchQuery query, CancellationToken ct)
@@ -188,6 +201,10 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
         var maxRecords = Math.Clamp(query.MaxRecords, MinRecords, MaxRecords);
         var items = new List<NewsArticleItem>();
 
+        // One retrieval instant per response (all items of one read were observed together), from the
+        // injected TimeProvider — never an inline clock (AD-3).
+        var retrievedAt = _timeProvider.GetUtcNow();
+
         foreach (var element in channel.Elements())
         {
             ct.ThrowIfCancellationRequested();
@@ -205,12 +222,19 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
             }
 
             var title = GetChildValue(element, "title");
+            var (descriptionRaw, descriptionText, descriptionTruncated) =
+                ParseDescription(element);
 
             items.Add(new NewsArticleItem(
                 Url: url.Trim(),
                 Title: title,
                 SourceName: ResolveSourceName(element, title),
-                PublishedAt: ParsePubDate(GetChildValue(element, "pubDate"))));
+                PublishedAt: ParsePubDate(GetChildValue(element, "pubDate")),
+                DescriptionRaw: descriptionRaw,
+                DescriptionText: descriptionText,
+                DescriptionTruncated: descriptionTruncated,
+                PublisherSiteUrl: ResolvePublisherSiteUrl(element),
+                RetrievedAt: retrievedAt));
 
             if (items.Count >= maxRecords)
             {
@@ -219,6 +243,84 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
         }
 
         return NewsSearchReadResult.Success(items);
+    }
+
+    /// <summary>
+    /// The spec-177 description payload: the exact <c>&lt;description&gt;</c> element content the feed
+    /// supplied (typically escaped HTML), bounded to <see cref="MaxDescriptionUtf8Bytes"/> UTF-8 bytes, plus
+    /// its deterministic plain-text rendering through the ONE shared <see cref="HtmlVisibleText"/> helper.
+    /// An absent or whitespace-only element degrades to <c>(null, null, false)</c> — never a copied
+    /// headline; a rendering that comes out empty (markup with no visible text) leaves the raw payload but a
+    /// <c>null</c> text, so "the feed said nothing readable" is a recorded fact rather than an empty string.
+    /// </summary>
+    private static (string? Raw, string? Text, bool Truncated) ParseDescription(XElement item)
+    {
+        var value = item.Elements()
+            .FirstOrDefault(e => string.Equals(e.Name.LocalName, "description", StringComparison.Ordinal))
+            ?.Value;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return (null, null, false);
+        }
+
+        var raw = BoundUtf8(value, MaxDescriptionUtf8Bytes, out var truncated);
+        var text = HtmlVisibleText.ToPlainText(raw);
+        return (raw, text.Length == 0 ? null : text, truncated);
+    }
+
+    /// <summary>
+    /// The <c>&lt;source url&gt;</c> attribute as publisher-SITE provenance — kept only when it is an
+    /// absolute HTTP(S) URL, else <c>null</c> (a relative/garbage value is not provenance). It is never a
+    /// claimed canonical article URL: <c>&lt;link&gt;</c> stays the Google News landing URL.
+    /// </summary>
+    private static string? ResolvePublisherSiteUrl(XElement item)
+    {
+        var url = item.Elements()
+            .FirstOrDefault(e => string.Equals(e.Name.LocalName, "source", StringComparison.Ordinal))
+            ?.Attribute("url")
+            ?.Value
+            .Trim();
+
+        return !string.IsNullOrEmpty(url)
+            && Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+            && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps)
+                ? url
+                : null;
+    }
+
+    /// <summary>
+    /// Truncates <paramref name="value"/> to the longest prefix whose UTF-8 encoding fits in
+    /// <paramref name="maxBytes"/>, never splitting a surrogate pair. Deterministic and encoding-honest —
+    /// the bound is declared in bytes, so it is enforced in bytes.
+    /// </summary>
+    private static string BoundUtf8(string value, int maxBytes, out bool truncated)
+    {
+        if (Encoding.UTF8.GetByteCount(value) <= maxBytes)
+        {
+            truncated = false;
+            return value;
+        }
+
+        truncated = true;
+        var bytes = 0;
+        var i = 0;
+        while (i < value.Length)
+        {
+            var charCount = char.IsHighSurrogate(value[i])
+                && i + 1 < value.Length
+                && char.IsLowSurrogate(value[i + 1]) ? 2 : 1;
+            var step = Encoding.UTF8.GetByteCount(value, i, charCount);
+            if (bytes + step > maxBytes)
+            {
+                break;
+            }
+
+            bytes += step;
+            i += charCount;
+        }
+
+        return value[..i];
     }
 
     /// <summary>

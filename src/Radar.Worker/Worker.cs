@@ -4,6 +4,7 @@ using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.EntityResolution;
+using Radar.Application.News;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -66,6 +67,7 @@ public sealed class Worker : BackgroundService
     private readonly IAttentionArrivalScreenGenerator? _attentionArrivalGenerator;
     private readonly IScoreMoveDenominatorAuditGenerator? _denominatorAuditGenerator;
     private readonly CompanyFilter? _companyFilter;
+    private readonly INewsObservationMigration? _newsObservationMigration;
 
     public Worker(
         ICompanyUniverseSeeder seeder,
@@ -80,7 +82,8 @@ public sealed class Worker : BackgroundService
         IStrategyComparisonReportGenerator? strategyComparisonGenerator = null,
         CompanyFilter? companyFilter = null,
         IAttentionArrivalScreenGenerator? attentionArrivalGenerator = null,
-        IScoreMoveDenominatorAuditGenerator? denominatorAuditGenerator = null)
+        IScoreMoveDenominatorAuditGenerator? denominatorAuditGenerator = null,
+        INewsObservationMigration? newsObservationMigration = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -102,6 +105,7 @@ public sealed class Worker : BackgroundService
         _attentionArrivalGenerator = attentionArrivalGenerator;
         _denominatorAuditGenerator = denominatorAuditGenerator;
         _companyFilter = companyFilter;
+        _newsObservationMigration = newsObservationMigration;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -116,6 +120,31 @@ public sealed class Worker : BackgroundService
             // Seed the watch-universe once at startup (idempotent, AD-1) before any pipeline run.
             var seeded = await _seeder.SeedAsync(stoppingToken).ConfigureAwait(false);
             _logger.LogInformation("Seeded {Count} companies into the watch-universe.", seeded);
+
+            // Explicit one-shot news observation migration (spec 177 §7): REPLACES the run entirely, like
+            // a replay — it reads accrued raw news evidence (and, in retrospective mode, revisits saved
+            // URLs through the safe reader) and writes only into the observation archive. Skipped entirely
+            // (dependency null) unless Radar:NewsResearch:Migration:Enabled, so the default worker is
+            // byte-for-byte unchanged; the composition root already rejects migration + replay together.
+            if (_newsObservationMigration is not null)
+            {
+                var migration = await _newsObservationMigration.RunAsync(stoppingToken).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "News observation migration completed at {RunAt:o}: {Scanned} news evidence item(s) "
+                        + "scanned, {Written} legacy observation(s) written ({Deduped} already archived, "
+                        + "{Failed} failed, {Skipped} skipped); retrospective fetch: {RetroAttempted} "
+                        + "attempted, {RetroWritten} written. No pipeline run happened.",
+                    _timeProvider.GetUtcNow(),
+                    migration.EvidenceScanned,
+                    migration.LegacyWritten,
+                    migration.LegacyDeduped,
+                    migration.LegacyFailed,
+                    migration.LegacySkipped,
+                    migration.RetrospectiveAttempted,
+                    migration.RetrospectiveWritten);
+                _lifetime.StopApplication();
+                return;
+            }
 
             // Opt-in historical as-of replay (spec 139): REPLACES the run rather than adding to it. Placed
             // immediately after seeding — replay needs the company universe but must not run price

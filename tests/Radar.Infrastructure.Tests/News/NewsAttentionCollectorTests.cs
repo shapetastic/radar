@@ -640,6 +640,152 @@ public sealed class NewsAttentionCollectorTests
         Assert.True(Assert.Single(result.CompanyCoverage!).HitEffectiveResultLimit);
     }
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 177 §3: the observation sidecar. One row per SURVIVING article; the evidence mapping stays
+    // byte-identical; the collector never touches a filesystem store (it only accumulates rows).
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task CollectAsync_EmitsOneObservationPerSurvivingArticle_WithFullProvenance()
+    {
+        var feedId = Guid.Parse("dddddddd-0000-0000-0000-000000000001");
+        var feed = Feed(feedId, MrcyId, "Mercury — News", MrcyToken);
+
+        var retrievedAt = new DateTimeOffset(2026, 6, 27, 11, 59, 0, TimeSpan.Zero);
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] =
+            [
+                new NewsArticleItem(
+                    Url: "https://news.google.com/rss/articles/mrcy-1",
+                    Title: "Mercury Systems wins radar award - Reuters",
+                    SourceName: "Reuters",
+                    PublishedAt: new DateTimeOffset(2026, 6, 27, 9, 0, 0, TimeSpan.Zero),
+                    DescriptionRaw: "<a href=\"x\">Mercury Systems wins radar award</a>",
+                    DescriptionText: "Mercury Systems wins radar award",
+                    DescriptionTruncated: false,
+                    PublisherSiteUrl: "https://reuters.com",
+                    RetrievedAt: retrievedAt),
+                // Off-topic: dropped by the relevance filter — it must NOT be archived against the company.
+                Article("https://off.example/x", "Something entirely unrelated - Reuters"),
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        var observation = Assert.Single(result.Observations!);
+        Assert.Equal(MrcyId, observation.CompanyId);
+        Assert.Equal("MRCY", observation.Ticker);
+        Assert.Equal(NewsAttentionCollector.Name, observation.Collector);
+        Assert.Equal(MrcyPhrase, observation.QueryPhrase);
+        Assert.Equal(feedId, observation.FeedId);
+        Assert.Equal("Mercury — News", observation.FeedName);
+        Assert.Equal("https://news.google.com/rss/articles/mrcy-1", observation.GoogleLandingUrl);
+        Assert.Equal("Reuters", observation.Publisher);
+        Assert.Equal("https://reuters.com", observation.PublisherSiteUrl);
+        Assert.Equal("Mercury Systems wins radar award - Reuters", observation.Headline);
+        Assert.Equal("<a href=\"x\">Mercury Systems wins radar award</a>", observation.DescriptionRaw);
+        Assert.Equal("Mercury Systems wins radar award", observation.DescriptionText);
+        Assert.False(observation.DescriptionTruncated);
+        Assert.Equal(new DateTimeOffset(2026, 6, 27, 9, 0, 0, TimeSpan.Zero), observation.PublishedAtUtc);
+        Assert.Equal(retrievedAt, observation.RetrievedAtUtc);
+    }
+
+    [Fact]
+    public async Task CollectAsync_ObservationSidecar_RespectsDedupeAndPerFeedCap()
+    {
+        var feed = Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000002"), MrcyId, "Mercury — News", MrcyToken);
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] =
+            [
+                Article("https://dup.example/a", "Mercury Systems earnings beat - Reuters"),
+                Article("https://dup.example/a", "Mercury Systems earnings beat - Reuters"), // URL dupe
+                Article("https://ok.example/2", "Mercury Systems news 2 - Reuters"),
+                Article("https://ok.example/3", "Mercury Systems news 3 - Reuters"),         // over the cap
+            ],
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+        var options = new NewsCollectorOptions { MaxRecordsPerCompany = 2, InterRequestDelay = TimeSpan.Zero };
+
+        var result = await CreateCollector(reader, options).CollectAsync(context, CancellationToken.None);
+
+        // The sidecar mirrors the SURVIVING set exactly: same count, same URLs, same order as the evidence.
+        Assert.Equal(2, result.Observations!.Count);
+        Assert.Equal(
+            result.Evidence.Select(e => e.SourceUrl),
+            result.Observations!.Select(o => o.GoogleLandingUrl));
+    }
+
+    [Fact]
+    public async Task CollectAsync_DescriptionPayload_LeavesEvidenceByteIdentical()
+    {
+        // The load-bearing spec-177 compatibility test: two articles differing ONLY in the (new)
+        // description/source-url/retrieval fields must map to IDENTICAL CollectedEvidence — Title, RawText,
+        // metadata, hints, everything — because those fields feed only the observation sidecar, never
+        // evidence identity (spec 145) or the mapper's Title+RawText ContentHash.
+        var feed = Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000003"), MrcyId, "Mercury — News", MrcyToken);
+        var publishedAt = new DateTimeOffset(2026, 6, 27, 9, 0, 0, TimeSpan.Zero);
+
+        var bare = new NewsArticleItem(
+            Url: "https://news.google.com/rss/articles/same",
+            Title: "Mercury Systems wins radar award - Reuters",
+            SourceName: "Reuters",
+            PublishedAt: publishedAt);
+        var enriched = bare with
+        {
+            DescriptionRaw = "<b>rich description</b>",
+            DescriptionText = "rich description",
+            DescriptionTruncated = true,
+            PublisherSiteUrl = "https://reuters.com",
+            RetrievedAt = new DateTimeOffset(2026, 6, 27, 11, 0, 0, TimeSpan.Zero),
+        };
+
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var readerBare = new FakeNewsSearchReader { [MrcyPhrase] = [bare] };
+        var readerEnriched = new FakeNewsSearchReader { [MrcyPhrase] = [enriched] };
+
+        var evidenceBare = Assert.Single(
+            (await CreateCollector(readerBare).CollectAsync(context, CancellationToken.None)).Evidence);
+        var evidenceEnriched = Assert.Single(
+            (await CreateCollector(readerEnriched).CollectAsync(context, CancellationToken.None)).Evidence);
+
+        Assert.Equal(evidenceBare.SourceType, evidenceEnriched.SourceType);
+        Assert.Equal(evidenceBare.SourceName, evidenceEnriched.SourceName);
+        Assert.Equal(evidenceBare.SourceUrl, evidenceEnriched.SourceUrl);
+        Assert.Equal(evidenceBare.Title, evidenceEnriched.Title);
+        Assert.Equal(evidenceBare.RawText, evidenceEnriched.RawText);
+        Assert.Equal(evidenceBare.PublishedAt, evidenceEnriched.PublishedAt);
+        Assert.Equal(evidenceBare.CollectedAt, evidenceEnriched.CollectedAt);
+        Assert.Equal(evidenceBare.CompanyHints, evidenceEnriched.CompanyHints);
+        Assert.Equal(
+            evidenceBare.Metadata.OrderBy(kvp => kvp.Key, StringComparer.Ordinal),
+            evidenceEnriched.Metadata.OrderBy(kvp => kvp.Key, StringComparer.Ordinal));
+        // And the metadata bag gained NO new key: the description is not smuggled into evidence.
+        Assert.DoesNotContain(evidenceEnriched.Metadata.Keys, k => k.Contains("description", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CollectAsync_HandBuiltArticleWithDefaultRetrievedAt_FallsBackToCollectorClock()
+    {
+        var feed = Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000004"), MrcyId, "Mercury — News", MrcyToken);
+        var reader = new FakeNewsSearchReader
+        {
+            // The Article() helper never sets RetrievedAt, so this exercises the default(DateTimeOffset)
+            // fallback: an observation must never carry the meaningless default instant.
+            [MrcyPhrase] = [Article("https://ok.example/1", "Mercury Systems update - Reuters")],
+        };
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+
+        Assert.Equal(FixedNow, Assert.Single(result.Observations!).RetrievedAtUtc);
+    }
+
     private static void AssertNoAdviceLanguage(CollectedEvidence item)
     {
         string[] banned = ["buy", "sell", "guaranteed upside", "safe bet"];

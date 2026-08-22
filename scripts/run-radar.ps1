@@ -95,6 +95,8 @@ param(
     [string]$ReplayTo      = "",        # upper bound of the as-of series, UTC; required with -Replay
     [string]$ReplayStep    = "1d",      # spacing: 1d / 12h / 30m, or a plain TimeSpan string
     [string]$ReplayLabel   = "",        # output directory segment; blank = derived from the series (idempotent)
+    [switch]$MigrateNewsObservations,   # spec 177: one-shot migration of accrued news evidence into the observation archive, INSTEAD of a pipeline run
+    [switch]$RetrospectiveNewsFetch,    # spec 177: with -MigrateNewsObservations, ALSO revisit saved URLs via the safe reader (requires an enabled ArticleFetch allowlist in the profile)
     [switch]$SkipBuild,
     [switch]$WhatIf
 )
@@ -163,6 +165,7 @@ $dirArgs = [ordered]@{
     "Radar:AuditsDirectory"          = (Join-Path $outRoot  "audits")   # spec 172 read-only score-move denominator audit (only written when Radar:Efficacy:DenominatorAudit:Enabled)
     "Radar:ReplayDirectory"          = (Join-Path $outRoot  "replays")  # spec 139 historical as-of replay output; its OWN root, never under scores\ (only written when Radar:Replay:Enabled)
     "Radar:AnalyzedFilingCacheDirectory" = (Join-Path $outRoot "filings-cache")   # spec 107 per-accession earnings analysis-result cache (AD-14 analogue)
+    "Radar:NewsResearch:ObservationDirectory" = (Join-Path $outRoot "news-observations")   # spec 177 point-in-time news observation archive (observational only; never evidence/score input)
     "Radar:FilingReadDebugDirectory" = (Join-Path $outRoot "ai-debug\filings")   # spec 115 opt-in AI filing-read debug records (only written when Radar:Ai:Filings:PersistReadDebug)
     # spec 169 / AD-16: the COMMITTED exclusion-cohort declarations the attention-arrival screen reads.
     # $RepoPath, NOT $outRoot — these are shared, read-only, checked-in config, exactly like the company
@@ -202,6 +205,20 @@ if ($companyTickers.Count -gt 0) {
         throw "-Companies requires -Mode collect. Filtering is collection-only: a filtered scoring run would overwrite the date-keyed weekly report with a one-company report and mint sparse as-of dates into the strategy-vs-price efficacy join. Filter the gathering, never the measuring - scoring stays whole-universe on the next full/score run."
     }
     for ($i = 0; $i -lt $companyTickers.Count; $i++) { $merged["Radar:Companies:$i"] = $companyTickers[$i] }
+}
+
+# --- optional: one-shot news observation migration (spec 177 sec 7) instead of a pipeline run ---
+# Like -Replay, this REPLACES the run: no collection, no scoring, no report. -RetrospectiveNewsFetch is a
+# pass OF the migration and additionally requires the profile to enable the safe ArticleFetch seam with a
+# non-empty domain allowlist + contact-bearing User-Agent (the Worker fails fast otherwise, by design).
+if ($RetrospectiveNewsFetch -and -not $MigrateNewsObservations) {
+    throw "-RetrospectiveNewsFetch requires -MigrateNewsObservations; the retrospective fetch is a pass of the migration."
+}
+if ($MigrateNewsObservations) {
+    if ($Replay) { throw "-MigrateNewsObservations cannot be combined with -Replay; each replaces the run." }
+    if ($Mode -ne "full") { throw "-MigrateNewsObservations cannot be combined with -Mode $Mode; the migration replaces the run entirely." }
+    $merged["Radar:NewsResearch:Migration:Enabled"] = "true"
+    if ($RetrospectiveNewsFetch) { $merged["Radar:NewsResearch:Migration:RetrospectiveFetch"] = "true" }
 }
 
 # --- optional: historical as-of replay (spec 139) instead of a pipeline run ---

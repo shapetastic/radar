@@ -5,6 +5,7 @@ using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
+using Radar.Application.News;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
@@ -48,6 +49,13 @@ public sealed class CollectionPass : ICollectionPass
     // unchanged. .NET DI supplies the null default when the service is not registered.
     private readonly IDirectionalFilingSignalSource? _directionalFilingSignals;
 
+    // OPT-IN point-in-time news observation archive (spec 177). Null when capture is disabled or this is a
+    // composition that never registered it, in which case the capture step is skipped entirely and the
+    // pass is byte-for-byte unchanged. Observational only: capture never aborts the run, never touches a
+    // counter above, and nothing in the evidence → signal → score path reads the archive.
+    private readonly INewsObservationArchive? _newsObservationArchive;
+    private readonly NewsObservationCaptureOptions _newsObservationCaptureOptions;
+
     public CollectionPass(
         IEnumerable<IEvidenceCollector> collectors,
         CollectedEvidenceMapper mapper,
@@ -63,7 +71,9 @@ public sealed class CollectionPass : ICollectionPass
         ICollectionHealthValidator healthValidator,
         TimeProvider timeProvider,
         ILogger<CollectionPass> logger,
-        IDirectionalFilingSignalSource? directionalFilingSignals = null)
+        IDirectionalFilingSignalSource? directionalFilingSignals = null,
+        INewsObservationArchive? newsObservationArchive = null,
+        NewsObservationCaptureOptions? newsObservationCaptureOptions = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
         ArgumentNullException.ThrowIfNull(mapper);
@@ -112,6 +122,8 @@ public sealed class CollectionPass : ICollectionPass
         _timeProvider = timeProvider;
         _logger = logger;
         _directionalFilingSignals = directionalFilingSignals;
+        _newsObservationArchive = newsObservationArchive;
+        _newsObservationCaptureOptions = newsObservationCaptureOptions ?? new NewsObservationCaptureOptions();
     }
 
     /// <summary>The collector names that will run, in the stable order fixed in the constructor.</summary>
@@ -167,8 +179,12 @@ public sealed class CollectionPass : ICollectionPass
         // AD-16's 2026-08-03 amendment turns on this being a real per-collector/per-company fact rather than
         // an aggregate — an aggregate SourcesFailed cannot separate two failed RSS feeds from one failed
         // newssearch feed. Observational only: hashed into nothing, scored by nothing.
+        // NEWS OBSERVATION SIDECARS ARE CAPTURED HERE TOO (spec 177), before the merge, for the same
+        // structural reason as coverage/provenance: the merge discards per-collector attribution, and the
+        // sidecar's whole value is knowing which collector, feed and query produced each surviving article.
         var results = new List<CollectionResult>(_collectors.Count);
         var collectorRuns = new List<CollectorRunRecord>(_collectors.Count);
+        var observationCaptures = new List<(string CollectorName, CollectionResult Result)>();
         foreach (var collector in _collectors)
         {
             ct.ThrowIfCancellationRequested();
@@ -180,6 +196,11 @@ public sealed class CollectionPass : ICollectionPass
             });
 
             collectorRuns.Add(BuildCollectorRunRecord(collector.CollectorName, result, health));
+
+            if (result.Observations is not null)
+            {
+                observationCaptures.Add((collector.CollectorName, result));
+            }
         }
 
         var collected = CollectionResultMerger.Merge(results);
@@ -213,6 +234,19 @@ public sealed class CollectionPass : ICollectionPass
         // scoring window — scoring from zero signals in the same run. Capturing here keeps asOfUtc at
         // or after every CollectedAtUtc so freshly collected evidence is in-window.
         var asOfUtc = _timeProvider.GetUtcNow();
+
+        // OPT-IN news observation capture (spec 177): archive the surviving news-search articles and this
+        // pass's batch manifest. Runs AFTER the asOfUtc capture (the manifest's run association is that
+        // exact instant) and regardless of the evidence-dedupe outcomes above — an accrued AddIfNewAsync
+        // duplicate still reaches observation capture, because evidence dedupe and observation capture
+        // answer different questions. A write error inside the archive degrades to a Warning recorded on
+        // the manifest as unproven capture; it never aborts the run and never changes a counter.
+        Guid? newsObservationBatchId = null;
+        if (_newsObservationArchive is not null && observationCaptures.Count > 0)
+        {
+            newsObservationBatchId = await CaptureNewsObservationsAsync(observationCaptures, asOfUtc, ct)
+                .ConfigureAwait(false);
+        }
 
         // OPT-IN directional filing enrichment (AI only). Null when AI is disabled -> skipped entirely, so
         // the default pipeline is byte-for-byte unchanged. Produced BEFORE the deterministic extract loop
@@ -347,7 +381,107 @@ public sealed class CollectionPass : ICollectionPass
             Health: health,
             Collectors: CollectorNames,
             Companies: companies,
-            CollectorRuns: collectorRuns);
+            CollectorRuns: collectorRuns,
+            NewsObservationBatchId: newsObservationBatchId);
+    }
+
+    /// <summary>
+    /// Archives every collector-supplied observation candidate and writes the pass's batch manifest
+    /// (spec 177 §§3–5). Identity is minted here through <see cref="NewsObservationRecord.Prospective"/> —
+    /// the collectors hand over raw provider payloads and never touch a filesystem store. Returns the batch
+    /// id, which the run record carries as the EXPLICIT manifest↔run association (never a time join).
+    /// <para>
+    /// The archive's per-record contract is no-throw (every failure is a typed outcome), so a failure here
+    /// can only surface as <c>ObservationsFailed</c> on the manifest — unproven capture for this run, never
+    /// an aborted scoring. The manifest write itself degrades the same way (logged Warning, batch id still
+    /// recorded so the gap is visible as a dangling id rather than an absent association).
+    /// </para>
+    /// </summary>
+    private async Task<Guid> CaptureNewsObservationsAsync(
+        IReadOnlyList<(string CollectorName, CollectionResult Result)> captures,
+        DateTimeOffset asOfUtc,
+        CancellationToken ct)
+    {
+        var attempted = 0;
+        var written = 0;
+        var deduped = 0;
+        var failed = 0;
+
+        foreach (var (_, result) in captures)
+        {
+            foreach (var candidate in result.Observations!)
+            {
+                ct.ThrowIfCancellationRequested();
+                attempted++;
+
+                var outcome = await _newsObservationArchive!
+                    .WriteAsync(NewsObservationRecord.Prospective(candidate), ct)
+                    .ConfigureAwait(false);
+                switch (outcome)
+                {
+                    case NewsObservationWriteOutcome.Written:
+                        written++;
+                        break;
+                    case NewsObservationWriteOutcome.CrossRunDeduped:
+                        deduped++;
+                        break;
+                    default:
+                        failed++;
+                        break;
+                }
+            }
+        }
+
+        var batch = new NewsObservationBatch(
+            BatchId: Guid.NewGuid(),
+            RunAsOfUtc: asOfUtc,
+            SchemaVersion: NewsObservationRecord.CurrentSchemaVersion,
+            FullUniverse: _newsObservationCaptureOptions.FullUniverse,
+            ObservationsAttempted: attempted,
+            ObservationsWritten: written,
+            ObservationsCrossRunDeduped: deduped,
+            ObservationsFailed: failed,
+            CaptureProven: failed == 0,
+            Collectors:
+            [
+                .. captures.Select(c => new NewsObservationCollectorCapture(
+                    CollectorName: c.CollectorName,
+                    CompanyCoverage: c.Result.CompanyCoverage,
+                    ProviderFailures: c.Result.Summary.Failures,
+                    AnyFeedHitProviderCap:
+                        c.Result.CompanyCoverage?.Any(cov => cov.HitEffectiveResultLimit) ?? false)),
+            ]);
+
+        if (failed > 0)
+        {
+            _logger.LogWarning(
+                "News observation capture is UNPROVEN for this run: {Failed} of {Attempted} observation(s) "
+                    + "could not be archived (batch {BatchId}). A later reader must treat this run as "
+                    + "unknown coverage, never as a clean zero.",
+                failed,
+                attempted,
+                batch.BatchId);
+        }
+
+        var manifestWritten = await _newsObservationArchive!.WriteBatchAsync(batch, ct).ConfigureAwait(false);
+        if (!manifestWritten)
+        {
+            _logger.LogWarning(
+                "News observation batch manifest {BatchId} could not be written; this run's capture is "
+                    + "unproven (the run record still carries the batch id, so the gap stays visible).",
+                batch.BatchId);
+        }
+
+        _logger.LogInformation(
+            "News observation capture complete (batch {BatchId}): {Attempted} attempted, {Written} written, "
+                + "{Deduped} cross-run deduped, {Failed} failed.",
+            batch.BatchId,
+            attempted,
+            written,
+            deduped,
+            failed);
+
+        return batch.BatchId;
     }
 
     /// <summary>

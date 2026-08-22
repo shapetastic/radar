@@ -84,6 +84,10 @@
         ]
       }
     ],
+    "NewsResearch": {
+      "_comment": "SPEC 177 (2026-08-22) - point-in-time news observation archive. CaptureRss=true (also the code default, declared here so the baseline's posture is explicit): every relevance-kept Google News RSS article is archived immutably under <outRoot>/news-observations (run-radar.ps1 supplies Radar:NewsResearch:ObservationDirectory) with its exact bounded <description> payload, publisher provenance and retrieval instant, plus a per-run batch manifest tied to the PipelineRunRecord by explicit batch id. Capture is independent of AI, is never evidence, never a signal, never a scoring/fingerprint input, and no existing news evidence/signal/score moves. The safe ArticleFetch seam stays SHIPPED-DISABLED with an empty allowlist (enabling it requires a non-empty domain allowlist + contact-bearing User-Agent, and fails startup otherwise); the one-shot migration (run-radar.ps1 -MigrateNewsObservations) is never part of this baseline run.",
+      "CaptureRss": true
+    },
     "Prices": { "Enabled": true, "Range": "1y" },
     "Efficacy": {
       "Enabled": true,
