@@ -43,11 +43,55 @@ public sealed class StrategyLeaderboardRendererTests
         // K, stated in the rendered text — not merely present on the object.
         Assert.Contains("Strategies compared (ranked): 2", markdown, StringComparison.Ordinal);
         Assert.Contains("Strategies considered: 4; dropped: 2", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Dropped strategies (2)", markdown, StringComparison.Ordinal);
+        Assert.Contains("## Dropped from efficacy ranking (2)", markdown, StringComparison.Ordinal);
 
         // J, named, each with its machine-readable reason.
         Assert.Contains("| thin-in-sample | insufficient-in-sample-observations |", markdown, StringComparison.Ordinal);
         Assert.Contains("| thin-out-of-sample | insufficient-out-of-sample-observations |", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderMarkdown_DroppedHeading_SaysDroppedFromRanking_NeverThatTheStrategyFailedToScore()
+    {
+        // Spec 176 §1: a strategy dropped from EFFICACY RANKING may still be scoring every company live, and
+        // the old heading read as if the strategy itself had been dropped. The heading is pinned EXACTLY
+        // (count preserved) and the clarifying sentence sits immediately below it.
+        var markdown = Renderer.RenderMarkdown(FourStrategiesTwoDropped());
+
+        Assert.DoesNotContain("## Dropped strategies", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "## Dropped from efficacy ranking (2)\n\n"
+                + "A strategy listed here may still be scoring every company live; this section means only "
+                + "that its declared forward-outcome sample cannot yet be ranked.\n\n",
+            markdown,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Spec176Relabel_ChangesNoStatisticNoCountAndNoDropReason()
+    {
+        // "No statistical rule, exclusion count or dropped-strategy reason changes" — the CSV (the machine
+        // artifact, which never carried the heading) is a convenient whole-file witness: every numeric field,
+        // status token and reason must be exactly what the pre-176 renderer emitted for this fixture.
+        var leaderboard = FourStrategiesTwoDropped();
+        var csv = Renderer.RenderCsv(leaderboard);
+
+        Assert.DoesNotContain("Dropped from efficacy ranking", csv, StringComparison.Ordinal);
+        Assert.Equal(2, leaderboard.DroppedStrategies.Count);
+
+        // The markdown drop TABLE (names, reasons, observation counts, metric detail) is untouched too.
+        var markdown = Renderer.RenderMarkdown(leaderboard);
+        Assert.Contains(
+            "| strategy | reason | in-sample obs | out-of-sample obs | metric detail |",
+            markdown, StringComparison.Ordinal);
+        foreach (var drop in leaderboard.DroppedStrategies)
+        {
+            Assert.Contains(
+                $"| {drop.StrategyName} | ", markdown, StringComparison.Ordinal);
+            Assert.Contains(
+                $" | {drop.InSampleObservations} | {drop.OutOfSampleObservations} | ",
+                markdown, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

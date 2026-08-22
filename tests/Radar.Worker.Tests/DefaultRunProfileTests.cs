@@ -208,6 +208,45 @@ public sealed class DefaultRunProfileTests
     }
 
     // ---------------------------------------------------------------------------------------------------
+    // Spec 176 — explicit strategy purpose + the entry-level key allowlist, against the REAL shipped files
+    // ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void DefaultProfile_MarksExactlyTheFourComparators_EverythingElseIsResearch()
+    {
+        // Spec 176: purpose is EXPLICIT metadata, never inferred from a `baseline-` prefix or `-control`
+        // suffix — so the shipped set is pinned by name. The four comparators are the three spec-154
+        // baselines plus the spec-157 matched v10 control; every other arm (including the primary) defaults
+        // to Research and does not write the value redundantly.
+        var set = DefaultProfileStrategies();
+
+        Assert.Equal(
+            [
+                "baseline-earnings-only", "baseline-activity-only", "baseline-media-only",
+                "disclosure-led-v10-control",
+            ],
+            set.Strategies
+                .Where(s => s.Purpose == StrategyPurpose.Comparator)
+                .Select(s => s.Name));
+
+        Assert.Equal(StrategyPurpose.Research, set.Primary.Purpose);
+        Assert.All(
+            set.Strategies.Where(s => s.Purpose == StrategyPurpose.Comparator),
+            s => Assert.False(s.IsPrimary));
+    }
+
+    [Fact]
+    public void ShippedProfiles_RemainCleanUnderTheStrategyEntryAllowlist()
+    {
+        // The spec-176 entry-level guard fails fast on any unknown Radar:Strategies[i] key. Binding each
+        // shipped profile through the REAL AddRadarScoringStrategies proves the committed files carry only
+        // the seven valid keys — and that the guard cannot break a live measurement run.
+        Assert.NotNull(ProfileStrategies(BindProfiles()));
+        Assert.NotNull(ProfileStrategies(BindProfiles("low-media")));
+        Assert.NotNull(ProfileStrategies(BindProfiles("long-window")));
+    }
+
+    // ---------------------------------------------------------------------------------------------------
     // Spec 157 — the matched disclosure-led pair (the predeclared spec-157 §7 / AD-16 budget)
     // ---------------------------------------------------------------------------------------------------
 

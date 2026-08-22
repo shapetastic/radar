@@ -167,6 +167,31 @@ public sealed class StrategyIdentityGuardTests
     }
 
     [Fact]
+    public async Task PurposeOnlyEdit_DoesNotTripTheGuard()
+    {
+        // Spec 176: Purpose is report metadata, not scoring identity. Re-declaring an arm as a Comparator
+        // (or back) must read as "nothing changed" to the tripwire — the same effective config computes the
+        // same fingerprint, and nothing is re-recorded.
+        var store = new FakeScoringConfigStore();
+        var weights = new ScoringWeights();
+
+        await VerifyAsync(store, Runtime("momentum", weights, "rss", "sec-edgar"));
+        var recorded = store.Recorded["momentum"];
+        var afterFirst = store.RecordCallCount;
+
+        var fresh = Runtime("momentum", weights, "rss", "sec-edgar");
+        var repurposed = new ScoringStrategyRuntime(
+            fresh.Definition with { Purpose = StrategyPurpose.Comparator },
+            fresh.Engine);
+
+        await VerifyAsync(store, repurposed);
+
+        Assert.Equal(recorded, store.Recorded["momentum"]);
+        Assert.Equal(recorded, repurposed.Engine.EffectiveConfig.Fingerprint);
+        Assert.Equal(afterFirst, store.RecordCallCount);
+    }
+
+    [Fact]
     public async Task DistinctStrategyNames_AreTrackedIndependently()
     {
         // Adding a NEW strategy name is the sanctioned way to change a strategy: it records its own identity

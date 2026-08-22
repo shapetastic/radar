@@ -1,5 +1,7 @@
 namespace Radar.Application.Reporting;
 
+using Radar.Application.Scoring;
+
 /// <summary>
 /// One configured scoring strategy's own plain ranked table (spec 150). Spec 137 made the PRIMARY strategy
 /// "the series the weekly report renders", so a run with three strategies produced a report about one of
@@ -48,4 +50,13 @@ public sealed record StrategyReportSection(
     /// numbers next to it.
     /// </summary>
     public bool Truncated => CompaniesWithLinkedEvidence > Rows.Count;
+
+    /// <summary>
+    /// The strategy's declared reporting purpose (spec 176), carried from
+    /// <c>ScoringStrategyDefinition.Purpose</c> by the builder. The renderer sees the MODEL, not strategy
+    /// runtimes, so the live-leaders grouping must use this carried value and must never infer purpose from
+    /// a name, formula or channel. Additive and defaulted to <see cref="StrategyPurpose.Research"/> so every
+    /// existing construction site keeps compiling and keeps today's behaviour.
+    /// </summary>
+    public StrategyPurpose Purpose { get; init; } = StrategyPurpose.Research;
 }
