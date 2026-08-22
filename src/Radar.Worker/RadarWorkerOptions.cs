@@ -150,6 +150,15 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public ReplayWorkerOptions Replay { get; init; } = new();
 
+    /// <summary>
+    /// Point-in-time news observation archive + safe article-fetch configuration (bound from
+    /// "Radar:NewsResearch"; spec 177). Fail-closed: the section is validated against a strict key
+    /// allowlist at startup, capture defaults ON (it is pure observation — no AI, no price, no scoring
+    /// input), and the article fetch defaults OFF with an empty allowlist. None of these are scoring
+    /// weights and none are hashed into any fingerprint.
+    /// </summary>
+    public NewsResearchWorkerOptions NewsResearch { get; init; } = new();
+
     /// <summary>Directory of local evidence JSON files (Stage 1 source).</summary>
     public string EvidenceSourceDirectory { get; init; } = "data/evidence";
 
@@ -817,6 +826,77 @@ public sealed class StrategyComparisonWorkerOptions
     /// sensible default. Must be at least 2.
     /// </summary>
     public int PairedMinimumCompaniesPerDate { get; init; } = 10;
+}
+
+/// <summary>
+/// Point-in-time news observation archive configuration (bound from "Radar:NewsResearch"; spec 177). The
+/// archive records what news text/provenance Radar actually observed and when — it is never evidence, never
+/// a signal, never a scoring/fingerprint input, and nothing in the evidence → signal → score path reads it.
+/// The composition root validates this whole section against a strict key allowlist (specs 149/174
+/// precedent), so an unknown/typo'd key fails startup instead of silently doing nothing.
+/// </summary>
+public sealed class NewsResearchWorkerOptions
+{
+    /// <summary>
+    /// Whether the collection pass archives each surviving Google News RSS article as an immutable
+    /// point-in-time observation. Defaults to true — capture is pure observation, independent of AI.
+    /// Score-mode passes never register the archive regardless (it is a collection-side concern).
+    /// </summary>
+    public bool CaptureRss { get; init; } = true;
+
+    /// <summary>Root directory of the observation archive. run-radar.ps1 supplies this beneath its output root.</summary>
+    public string ObservationDirectory { get; init; } = "data/news-observations";
+
+    /// <summary>The safe publisher-content fetch seam (spec 177 §6). Shipped DISABLED with an empty allowlist.</summary>
+    public NewsArticleFetchWorkerOptions ArticleFetch { get; init; } = new();
+
+    /// <summary>The explicit one-shot migration (spec 177 §7). Never part of a default run.</summary>
+    public NewsObservationMigrationWorkerOptions Migration { get; init; } = new();
+}
+
+/// <summary>
+/// Safe article-fetch configuration (bound from "Radar:NewsResearch:ArticleFetch"; spec 177 §6). When
+/// <see cref="Enabled"/> is false (the shipped default) NO reader is registered — the graph carries no
+/// publisher-fetch capability at all. Enabling REQUIRES a non-empty <see cref="AllowedDomains"/> allowlist
+/// (the operator's explicit retrieval/storage permission) and a contact-bearing <see cref="UserAgent"/>;
+/// both fail startup otherwise.
+/// </summary>
+public sealed class NewsArticleFetchWorkerOptions
+{
+    /// <summary>Whether the safe content reader is registered at all. DISABLED by default.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>Exact/suffix domain allowlist (e.g. "example.com" also matches "news.example.com"). Empty by default.</summary>
+    public IReadOnlyList<string> AllowedDomains { get; init; } = [];
+
+    /// <summary>The contact-bearing User-Agent sent on every request (name + reachable email). Required when enabled.</summary>
+    public string UserAgent { get; init; } = string.Empty;
+
+    /// <summary>Per-attempt deadline, in seconds, covering the whole redirect chain. Default 10; must be positive.</summary>
+    public int TimeoutSeconds { get; init; } = 10;
+
+    /// <summary>Response-body byte bound. Default 2 MiB; must be positive.</summary>
+    public int MaxResponseBytes { get; init; } = 2 * 1024 * 1024;
+}
+
+/// <summary>
+/// One-shot news observation migration configuration (bound from "Radar:NewsResearch:Migration"; spec 177
+/// §7). When <see cref="Enabled"/> the run becomes the migration INSTEAD of a pipeline run (like a replay):
+/// accrued raw NewsArticle evidence is copied into honest <c>LegacyHeadlineOnly</c> observations
+/// (idempotent — a second run writes nothing new), and with <see cref="RetrospectiveFetch"/> the saved URLs
+/// are additionally re-visited through the safe reader as visibly retrospective records that are never
+/// backdated. Both are explicit opt-ins, never part of the default run.
+/// </summary>
+public sealed class NewsObservationMigrationWorkerOptions
+{
+    /// <summary>Whether this run IS the one-shot migration. DISABLED by default.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>
+    /// Whether the migration additionally re-fetches saved landing URLs through the §6 reader (requires
+    /// <see cref="NewsArticleFetchWorkerOptions.Enabled"/> — fails startup otherwise). DISABLED by default.
+    /// </summary>
+    public bool RetrospectiveFetch { get; init; }
 }
 
 /// <summary>

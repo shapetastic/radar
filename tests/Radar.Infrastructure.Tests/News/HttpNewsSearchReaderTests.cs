@@ -52,8 +52,15 @@ public sealed class HttpNewsSearchReaderTests
         MaxRecords: 25,
         EnglishOnly: true);
 
+    private static readonly DateTimeOffset FixedNow = new(2026, 7, 2, 13, 0, 0, TimeSpan.Zero);
+
     private static HttpNewsSearchReader CreateReader(HttpMessageHandler handler) =>
-        new(new HttpClient(handler), NullLogger<HttpNewsSearchReader>.Instance);
+        new(new HttpClient(handler), NullLogger<HttpNewsSearchReader>.Instance, new FixedTime(FixedNow));
+
+    private sealed class FixedTime(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
 
     [Fact]
     public async Task ReadAsync_ValidFeed_ParsesItems()
@@ -261,6 +268,124 @@ public sealed class HttpNewsSearchReaderTests
         Assert.NotNull(handler.LastRequestUri);
         Assert.Contains("q=Rocket%20Lab", handler.LastRequestUri!.Query, StringComparison.Ordinal);
         Assert.DoesNotContain("hl=en-US", handler.LastRequestUri.Query, StringComparison.Ordinal);
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Spec 177 §3: the RSS payload Radar used to discard — exact bounded description, deterministic plain
+    // text, explicit truncation, publisher-site URL, retrieval instant.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ReadAsync_PreservesExactDescription_PlainText_SourceUrl_AndRetrievalInstant()
+    {
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, ValidFeed));
+
+        var result = await reader.ReadAsync(Query, CancellationToken.None);
+        var first = result.Items[0];
+
+        // DescriptionRaw is the EXACT element content (the escaped HTML decoded once by the XML layer).
+        Assert.Equal("<a href=\"x\">Rocket Lab wins new launch contract</a>", first.DescriptionRaw);
+        // DescriptionText is the deterministic plain-text rendering (tags stripped, whitespace collapsed).
+        Assert.Equal("Rocket Lab wins new launch contract", first.DescriptionText);
+        Assert.False(first.DescriptionTruncated);
+        // <source url> is publisher-SITE provenance; <link> stays the Google landing URL.
+        Assert.Equal("https://spacenews.com", first.PublisherSiteUrl);
+        Assert.Equal("https://news.google.com/rss/articles/AAA111", first.Url);
+        // Retrieval time comes from the injected TimeProvider, one instant per response.
+        Assert.Equal(FixedNow, first.RetrievedAt);
+        Assert.All(result.Items, i => Assert.Equal(FixedNow, i.RetrievedAt));
+    }
+
+    [Fact]
+    public async Task ReadAsync_AbsentOrBlankDescription_IsNull_NeverACopiedHeadline()
+    {
+        const string body = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0">
+              <channel>
+                <item>
+                  <title>No description here - Pub</title>
+                  <link>https://news.google.com/rss/articles/NODESC</link>
+                </item>
+                <item>
+                  <title>Blank description here - Pub</title>
+                  <link>https://news.google.com/rss/articles/BLANKDESC</link>
+                  <description>   </description>
+                </item>
+              </channel>
+            </rss>
+            """;
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, body));
+
+        var result = await reader.ReadAsync(Query with { QueryPhrase = "x" }, CancellationToken.None);
+
+        Assert.All(result.Items, item =>
+        {
+            Assert.Null(item.DescriptionRaw);
+            Assert.Null(item.DescriptionText);
+            Assert.False(item.DescriptionTruncated);
+        });
+    }
+
+    [Fact]
+    public async Task ReadAsync_OversizedDescription_IsBoundedInUtf8Bytes_WithExplicitTruncationFlag()
+    {
+        // Multi-byte content ('é' = 2 UTF-8 bytes) proves the bound is BYTES, not chars, and that the cut
+        // lands on a character boundary.
+        var oversized = new string('é', HttpNewsSearchReader.MaxDescriptionUtf8Bytes); // 2× the byte bound
+        var body = $"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0">
+              <channel>
+                <item>
+                  <title>Big one - Pub</title>
+                  <link>https://news.google.com/rss/articles/BIG</link>
+                  <description>{oversized}</description>
+                </item>
+              </channel>
+            </rss>
+            """;
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, body));
+
+        var result = await reader.ReadAsync(Query with { QueryPhrase = "x" }, CancellationToken.None);
+
+        var item = Assert.Single(result.Items);
+        Assert.True(item.DescriptionTruncated);
+        Assert.Equal(
+            HttpNewsSearchReader.MaxDescriptionUtf8Bytes,
+            Encoding.UTF8.GetByteCount(item.DescriptionRaw!));
+        // A prefix is never passed off as complete — and the retained prefix is exactly the leading chars.
+        Assert.Equal(new string('é', HttpNewsSearchReader.MaxDescriptionUtf8Bytes / 2), item.DescriptionRaw);
+    }
+
+    [Fact]
+    public async Task ReadAsync_NonAbsoluteOrNonHttpSourceUrl_DegradesToNull()
+    {
+        const string body = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0">
+              <channel>
+                <item>
+                  <title>Relative source url - Pub</title>
+                  <link>https://news.google.com/rss/articles/REL</link>
+                  <source url="/relative/path">Pub</source>
+                </item>
+                <item>
+                  <title>Ftp source url - Pub</title>
+                  <link>https://news.google.com/rss/articles/FTP</link>
+                  <source url="ftp://example.com">Pub</source>
+                </item>
+              </channel>
+            </rss>
+            """;
+        var reader = CreateReader(new StubHandler(HttpStatusCode.OK, body));
+
+        var result = await reader.ReadAsync(Query with { QueryPhrase = "x" }, CancellationToken.None);
+
+        Assert.Equal(2, result.Items.Count);
+        Assert.All(result.Items, item => Assert.Null(item.PublisherSiteUrl));
+        // The publisher NAME still resolves from the <source> element text as before.
+        Assert.All(result.Items, item => Assert.Equal("Pub", item.SourceName));
     }
 
     private sealed class CapturingHandler(HttpStatusCode status, string body) : HttpMessageHandler

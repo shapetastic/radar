@@ -51,4 +51,9 @@ public sealed record PipelineRunRecord(
     // records written before this contract existed (heal forward — specs 142/145). The AD-16 evaluator reads
     // these rows as the proof that an attention observation window was actually observed; treating an absent
     // record as a clean one would let a missed collection read as a valid publisher count of zero.
-    IReadOnlyList<CollectorRunRecord>? CollectorRuns = null);
+    IReadOnlyList<CollectorRunRecord>? CollectorRuns = null,
+    // The spec-177 news-observation batch manifest this run's collection pass wrote (the EXPLICIT
+    // association the spec demands — never a nearest-time join), or null when capture was disabled, no
+    // collector emitted observations, or the record predates the archive. Trailing + optional so every
+    // existing on-disk run JSON still deserializes; observational only, read by no scoring/report path.
+    Guid? NewsObservationBatchId = null);

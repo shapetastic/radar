@@ -137,7 +137,11 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
             // uses. A FILTERED pass still records it truthfully — the evaluator rejects the checkpoint on
             // CompanyFilter, not on missing coverage, so a partial pass can never prove primary-screen
             // coverage even though its rows are honest about what it did look at.
-            CollectorRuns: collection.CollectorRuns);
+            CollectorRuns: collection.CollectorRuns,
+            // The spec-177 news-observation batch this pass wrote — the explicit manifest↔run association.
+            // A FILTERED pass may capture observations; its batch records FullUniverse=false, so it can
+            // never establish the whole-universe prospective boundary.
+            NewsObservationBatchId: collection.NewsObservationBatchId);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

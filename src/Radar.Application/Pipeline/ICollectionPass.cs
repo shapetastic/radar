@@ -56,4 +56,8 @@ public sealed record CollectionPassResult(
     IReadOnlyList<Company> Companies,
     // Per-collector run provenance in the same stable collector order as Collectors (spec 169). Non-null;
     // it can only be empty if no collector ran, which the pass's constructor already forbids.
-    IReadOnlyList<CollectorRunRecord> CollectorRuns);
+    IReadOnlyList<CollectorRunRecord> CollectorRuns,
+    // The spec-177 news-observation batch this pass wrote, or null when capture is disabled / no collector
+    // emitted an observation sidecar. Trailing + defaulted so every existing construction site is
+    // unchanged. It is the EXPLICIT manifest↔run association the run record carries — never a time join.
+    Guid? NewsObservationBatchId = null);

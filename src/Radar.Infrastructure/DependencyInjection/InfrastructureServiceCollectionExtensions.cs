@@ -2265,6 +2265,100 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the point-in-time news observation archive (spec 177): the insert-only, id-indexed file
+    /// store under <paramref name="rootDirectory"/> (<c>observations/{yyyy}/{MM}/</c> partitions, per-pass
+    /// batch manifests, the create-once prospective boundary). Observational only — it is NOT an evidence
+    /// store: nothing in the evidence → signal → score path reads it and it feeds no fingerprint. The
+    /// collection pass consumes it through <see cref="Radar.Application.News.INewsObservationArchive"/> as
+    /// an optional dependency, so a composition that never calls this is byte-for-byte unchanged.
+    /// </summary>
+    public static IServiceCollection AddFileNewsObservationArchive(
+        this IServiceCollection services, string rootDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
+
+        services.AddSingleton(new NewsObservationArchiveOptions { RootDirectory = rootDirectory });
+        // Singleton on purpose: the hydrated observation-id index is the cross-partition dedupe mechanism,
+        // so there must be exactly ONE per process (mirroring FileRawEvidenceStore's registration shape).
+        services.AddSingleton<FileNewsObservationArchive>();
+        services.AddSingleton<Radar.Application.News.INewsObservationArchive>(
+            sp => sp.GetRequiredService<FileNewsObservationArchive>());
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the safe, allowlist-gated publisher-content reader (spec 177 §6). Only call this when
+    /// <c>Radar:NewsResearch:ArticleFetch:Enabled</c> is true — the shipped posture is disabled, so the
+    /// default graph carries no fetch capability at all.
+    /// <para>
+    /// Fails fast on the safety-contract preconditions: an EMPTY domain allowlist (enabling the fetch is
+    /// only meaningful together with the operator's explicit per-domain permission assertion), a
+    /// User-Agent without contact information (a publisher must be able to reach the operator), or a
+    /// non-positive timeout/byte bound. The typed client disables cookies and automatic redirects at the
+    /// handler — the reader follows at most five explicit hops, each re-validated.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddHttpNewsArticleContentReader(
+        this IServiceCollection services, NewsArticleContentReaderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.AllowedDomains is not { Count: > 0 }
+            || options.AllowedDomains.All(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:ArticleFetch:Enabled is true but Radar:NewsResearch:ArticleFetch:"
+                    + "AllowedDomains is empty. The allowlist is the operator's explicit assertion that "
+                    + "retrieval/storage is permitted for those domains, so an enabled fetch with no "
+                    + "allowlist is a contradiction — add the permitted domains or disable the fetch.");
+        }
+
+        if (options.AllowedDomains.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:ArticleFetch:AllowedDomains must not contain blank entries; each entry "
+                    + "is an exact host (also matching its subdomains), e.g. \"example.com\".");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.UserAgent) || !options.UserAgent.Contains('@'))
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:ArticleFetch:UserAgent must be a contact-bearing User-Agent (a real "
+                    + "name plus a reachable email, e.g. \"Radar Research contact@example.com\") so a "
+                    + "publisher can identify and reach the operator. It is required when the article fetch "
+                    + "is enabled.");
+        }
+
+        if (options.Timeout <= TimeSpan.Zero || options.MaxResponseBytes <= 0)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:ArticleFetch timeout and response-byte bounds must be positive; a "
+                    + "non-positive bound would disable exactly the safety limit it exists to enforce.");
+        }
+
+        services.AddSingleton(options);
+        services.AddHttpClient<Radar.Application.News.INewsArticleContentReader, HttpNewsArticleContentReader>(
+            client =>
+            {
+                // The reader owns the per-attempt deadline (one bounded budget across the whole redirect
+                // chain); the ambient client timeout is disabled so the two cannot fight.
+                client.Timeout = Timeout.InfiniteTimeSpan;
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                // The safety contract, made structural: no automatic redirects (each hop is explicitly
+                // re-validated by the reader), no cookies (no session/auth state, ever), no credentials.
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                Credentials = null,
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            });
+
+        services.TryAddSingleton(TimeProvider.System);
+        return services;
+    }
+
+    /// <summary>
     /// Registers the ATS job-board hiring collector (spec 103) and the two named typed <c>HttpClient</c>s
     /// its per-platform <see cref="IJobBoardReader"/>s use (Greenhouse and Lever have different JSON
     /// shapes, so each platform gets its own reader + client). The collector reads the per-company

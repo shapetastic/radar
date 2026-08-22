@@ -164,7 +164,9 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             CompanyFilter: null,
             // Per-collector run provenance (spec 169), captured by the collection pass before the merge
             // discarded collector identity. Observational only — see PipelineRunRecord.CollectorRuns.
-            CollectorRuns: collection.CollectorRuns);
+            CollectorRuns: collection.CollectorRuns,
+            // The spec-177 news-observation batch this pass wrote — the explicit manifest↔run association.
+            NewsObservationBatchId: collection.NewsObservationBatchId);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

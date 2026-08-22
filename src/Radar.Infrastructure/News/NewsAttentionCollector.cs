@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Collectors;
+using Radar.Application.News;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Infrastructure.Sources;
@@ -91,6 +92,14 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         var feedsChecked = 0;
         var feedsFailed = 0;
         var failures = new List<SourceFailure>();
+
+        // SPEC 177 OBSERVATION SIDECAR: one row per SURVIVING article (post relevance filter, post
+        // within-feed URL dedupe, post per-feed cap), carrying the bounded provider payload + provenance.
+        // The collector only ACCUMULATES rows — the collection orchestration owns identity minting and the
+        // archive write; nothing here touches a filesystem store. Off-topic drops are deliberately NOT
+        // archived against the company. The evidence mapping below is byte-identical to pre-177: the
+        // description payload feeds ONLY this sidecar, never Title/RawText/metadata/ContentHash.
+        var observations = new List<NewsObservationCandidate>();
 
         // PER-COMPANY COVERAGE (spec 169 / AD-16's 2026-08-03 amendment). Accumulated HERE, inside the feed
         // loop, because this is the only place that knows both the feed→company binding and the RAW returned
@@ -198,6 +207,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
                 }
 
                 results.Add(MapToEvidence(feed, article, hints));
+                observations.Add(MapToObservation(feed, target, article, companiesById));
                 collectedForFeed++;
             }
 
@@ -225,7 +235,46 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
             .Select(kvp => kvp.Value.ToCoverage(kvp.Key))
             .ToArray();
 
-        return new CollectionResult(results.ToArray(), summary, companyCoverageRows);
+        return new CollectionResult(results.ToArray(), summary, companyCoverageRows, observations.ToArray());
+    }
+
+    /// <summary>
+    /// Projects one surviving article into its observation sidecar row. Purely a field projection — the
+    /// bounded description, the publisher-site URL and the retrieval instant all come from the reader; the
+    /// company/feed/query provenance from the configured binding; nothing is fetched or invented. The
+    /// ticker prefers the seed company's own ticker, falling back to the feed token's ticker hint. A
+    /// defaulted <see cref="NewsArticleItem.RetrievedAt"/> (a hand-built item) falls back to the collector's
+    /// TimeProvider so an observation can never carry the meaningless default instant.
+    /// </summary>
+    private NewsObservationCandidate MapToObservation(
+        CompanySourceFeed feed,
+        QueryFeedTarget target,
+        NewsArticleItem article,
+        IReadOnlyDictionary<Guid, Company> companiesById)
+    {
+        var ticker = companiesById.TryGetValue(feed.CompanyId, out var company)
+            && !string.IsNullOrWhiteSpace(company.Ticker)
+                ? company.Ticker
+                : target.Ticker;
+
+        return new NewsObservationCandidate(
+            CompanyId: feed.CompanyId,
+            Ticker: ticker,
+            Collector: Name,
+            QueryPhrase: target.QueryPhrase,
+            FeedId: feed.Id,
+            FeedName: feed.Name,
+            GoogleLandingUrl: article.Url,
+            Publisher: article.SourceName,
+            PublisherSiteUrl: article.PublisherSiteUrl,
+            Headline: article.Title,
+            DescriptionRaw: article.DescriptionRaw,
+            DescriptionText: article.DescriptionText,
+            DescriptionTruncated: article.DescriptionTruncated,
+            PublishedAtUtc: article.PublishedAt,
+            RetrievedAtUtc: article.RetrievedAt == default
+                ? _timeProvider.GetUtcNow()
+                : article.RetrievedAt);
     }
 
     /// <summary>

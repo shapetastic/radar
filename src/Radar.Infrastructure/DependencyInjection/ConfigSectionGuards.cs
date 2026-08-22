@@ -19,8 +19,13 @@ namespace Radar.Infrastructure.DependencyInjection;
 /// Per-entry VALUE-shape rules are deliberately NOT here: they are not universal (<c>ScoringWeights</c> is
 /// all-numeric, the insider profile carries tier LISTS, attention carries a free-keyed DICTIONARY), so each
 /// call site keeps its own — this is two guards and a name-set derivation, not a generic recursive validator.
+/// <para>
+/// PUBLIC since spec 177: the Worker's composition root applies the same two guards to its own
+/// <c>Radar:NewsResearch</c> options block, and Worker cannot see Infrastructure internals — a second copy
+/// there is exactly the drift these guards were extracted to prevent (CLAUDE.md reuse-over-copy).
+/// </para>
 /// </summary>
-internal static class ConfigSectionGuards
+public static class ConfigSectionGuards
 {
     /// <summary>
     /// The public readable+writable instance property names of <paramref name="optionsType"/> — the ONE
@@ -36,7 +41,7 @@ internal static class ConfigSectionGuards
     /// <c>InfrastructureServiceCollectionExtensions.ScoringWeightNames</c>.
     /// </para>
     /// </summary>
-    internal static HashSet<string> BindablePropertyNames(Type optionsType) =>
+    public static HashSet<string> BindablePropertyNames(Type optionsType) =>
         optionsType
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanRead && p.CanWrite)
@@ -52,7 +57,7 @@ internal static class ConfigSectionGuards
     /// <paramref name="expectedShape"/> states the expected shape and the remedy; the thrown message leads
     /// with the exact section path and the offending scalar.
     /// </summary>
-    internal static void FailIfScalarSection(IConfigurationSection section, string expectedShape)
+    public static void FailIfScalarSection(IConfigurationSection section, string expectedShape)
     {
         if (!string.IsNullOrWhiteSpace(section.Value) && !section.GetChildren().Any())
         {
@@ -68,7 +73,7 @@ internal static class ConfigSectionGuards
     /// spec-149 shape: the offending child path, the key, the per-site <paramref name="consequence"/>
     /// (which should end mid-sentence, e.g. "…must name a scoring weight"), then the sorted valid names.
     /// </summary>
-    internal static void FailOnUnknownKeys(
+    public static void FailOnUnknownKeys(
         IConfigurationSection section,
         IReadOnlySet<string> validNames,
         string targetTypeName,
