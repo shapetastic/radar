@@ -50,6 +50,40 @@ internal static class ComparisonFixtures
 
     public static DateOnly AsOf(int dateIndex) => FirstAsOf.AddDays(dateIndex);
 
+    /// <summary>
+    /// The fixture freeze instant: at the first as-of date, so the whole fixture series is post-freeze (no
+    /// retrospective label). Tests that exercise the retrospective label build their own universe with a
+    /// later freeze.
+    /// </summary>
+    public static readonly DateTimeOffset BenchmarkFrozenAtUtc =
+        new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// A full-coverage frozen universe over this fixture's world: the 4 companies plus 44 flat-price peers
+    /// (48 members ⇒ 47 eligible peers per member ⇒ required = max(40, ceil(0.9 × 47)) = 43, and all 47
+    /// resolve), so every usable observation gets a defined excess. The 44 flat peers return exactly 0, so
+    /// the per-date peer mean is a small date-specific constant and every cross-company ordering the
+    /// fixtures engineered survives the excess transform (it is a positive affine map per date).
+    /// </summary>
+    public static UniverseBenchmark Benchmark()
+    {
+        var members = new List<(Guid, string, IReadOnlyList<PriceBar>)>();
+        for (var c = 0; c < CompanyIds.Length; c++)
+        {
+            members.Add((CompanyIds[c], Tickers[c], Bars(c)));
+        }
+
+        for (var p = 0; p < 44; p++)
+        {
+            members.Add((
+                BenchmarkTestUniverse.PeerId(p),
+                $"PR{p:D2}",
+                BenchmarkTestUniverse.FlatBars(FirstAsOf, 91)));
+        }
+
+        return BenchmarkTestUniverse.Of("benchmark-universe-v1", BenchmarkFrozenAtUtc, members);
+    }
+
     /// <summary>Daily bars for t = 0..90 — comfortably past the last as-of date plus the horizon.</summary>
     public static IReadOnlyList<PriceBar> Bars(int companyIndex)
     {

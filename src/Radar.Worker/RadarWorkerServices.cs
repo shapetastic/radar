@@ -263,6 +263,10 @@ internal static class RadarWorkerServices
             }
 
             services.AddFileEfficacyArtifactStore(options.EfficacyDirectory);
+            // Spec 183: the committed frozen benchmark-universe artifact lives beside the efficacy artifacts
+            // (data/efficacy/benchmark-universe-v1.json). TryAdd inside, so the news-risk block below can
+            // register the same seam when efficacy is disabled without either clobbering the other.
+            services.AddFileBenchmarkUniverseSource(options.EfficacyDirectory);
             services.AddRadarEfficacyReport();
 
             // Spec 140: the strategy-vs-price comparison. Also READ-ONLY and downstream of scoring (AD-14) —
@@ -332,7 +336,8 @@ internal static class RadarWorkerServices
                 services.AddFilePriceHistoryStore(options.PricesDirectory);
             }
 
-            services.AddRadarNewsRiskEvaluation(options.NewsResearch.Shadow.DevelopmentExamplesPath);
+            services.AddRadarNewsRiskEvaluation(
+                options.NewsResearch.Shadow.DevelopmentExamplesPath, options.EfficacyDirectory);
         }
 
         // Wire the historical as-of replay seam ONLY when the resolved run mode is Replay (spec 139, extended

@@ -99,6 +99,7 @@ public sealed class StrategyComparisonReportGeneratorPairedTests
             artifacts,
             options,
             NullLogger<StrategyComparisonReportGenerator>.Instance,
+            new FixedUniverseBenchmarkProvider(ComparisonFixtures.Benchmark()),
             pairedOptions);
 
         return new Fixture(generator, artifacts);

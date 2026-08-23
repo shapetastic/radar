@@ -1,0 +1,453 @@
+{
+  "schemaVersion": "benchmark-universe-schema-v1",
+  "universeVersion": "benchmark-universe-v1",
+  "frozenAtUtc": "2026-08-23T12:26:59Z",
+  "sourceSeedHash": "530ac6b8265851aeb49ce007958724d23ec6893aab4399f4591c708aa8426404",
+  "contentHash": "97e31fde67655453e4bdee8f69eef07785db6f2c80124220176a5637829561fc",
+  "members": [
+    {
+      "companyId": "885ea986-041f-4fc2-8163-b815ae930a78",
+      "ticker": "MRCY",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "MRCY"
+    },
+    {
+      "companyId": "043f8524-d5c6-41e6-a848-ef14f2dbc49e",
+      "ticker": "AEHR",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "AEHR"
+    },
+    {
+      "companyId": "f0d50897-7161-40e6-a367-4ce63fc5aa8c",
+      "ticker": "AGYS",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "AGYS"
+    },
+    {
+      "companyId": "d4def651-0d9e-4198-9dcf-b0dd2ed918d3",
+      "ticker": "CYRX",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "CYRX"
+    },
+    {
+      "companyId": "a825bf45-a23f-431c-b392-a04a029f2400",
+      "ticker": "ERII",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "ERII"
+    },
+    {
+      "companyId": "8a6f696d-130c-4e2d-9b04-ea57b60a0858",
+      "ticker": "HLIO",
+      "exchange": "NYSE",
+      "priceSeriesKey": "HLIO"
+    },
+    {
+      "companyId": "23ddc629-d6d2-4877-9ea8-aa597de3606e",
+      "ticker": "EOSE",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "EOSE"
+    },
+    {
+      "companyId": "6c05d3bf-7a58-4da3-a588-27b455d71665",
+      "ticker": "POWL",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "POWL"
+    },
+    {
+      "companyId": "c29674f6-1409-4d91-8451-a5674fdb9f5c",
+      "ticker": "CVLT",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "CVLT"
+    },
+    {
+      "companyId": "6edd30f5-3322-4cc3-9e29-54bd721f8f46",
+      "ticker": "KLIC",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "KLIC"
+    },
+    {
+      "companyId": "3ba9066c-4280-42fd-8a7f-79045462c922",
+      "ticker": "UFPT",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "UFPT"
+    },
+    {
+      "companyId": "e0df23ce-fa50-4c36-9eef-dac80ef9e418",
+      "ticker": "NSSC",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "NSSC"
+    },
+    {
+      "companyId": "780af212-c991-4880-9cda-5aab48c1e3dc",
+      "ticker": "TR",
+      "exchange": "NYSE",
+      "priceSeriesKey": "TR"
+    },
+    {
+      "companyId": "4c177966-03ab-49d5-aeb4-e7dfadf694ef",
+      "ticker": "NPK",
+      "exchange": "NYSE",
+      "priceSeriesKey": "NPK"
+    },
+    {
+      "companyId": "47a2c96c-e863-47d6-b5ab-44da04074152",
+      "ticker": "FLO",
+      "exchange": "NYSE",
+      "priceSeriesKey": "FLO"
+    },
+    {
+      "companyId": "752a461d-932b-43e4-8bb7-13f0ee815185",
+      "ticker": "CAT",
+      "exchange": "NYSE",
+      "priceSeriesKey": "CAT"
+    },
+    {
+      "companyId": "fc79f8db-05ab-44f0-b695-96e61a849c51",
+      "ticker": "JNJ",
+      "exchange": "NYSE",
+      "priceSeriesKey": "JNJ"
+    },
+    {
+      "companyId": "2a72d8e8-6ee0-4cbd-98dc-4fc8f34793a3",
+      "ticker": "AAPL",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "AAPL"
+    },
+    {
+      "companyId": "f59ea273-1f23-4dba-bf5e-f9e5ecf574fd",
+      "ticker": "TMDX",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "TMDX"
+    },
+    {
+      "companyId": "04678338-ddeb-4505-b8e8-7241a22dfc20",
+      "ticker": "AXGN",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "AXGN"
+    },
+    {
+      "companyId": "c4aecc47-7fb2-43e1-aa16-fddef27e97e8",
+      "ticker": "STRL",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "STRL"
+    },
+    {
+      "companyId": "7477ce65-efa8-4f0d-a4da-7364ab2310d2",
+      "ticker": "MYRG",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "MYRG"
+    },
+    {
+      "companyId": "e8cffb0c-29b9-4db4-9eb3-c5e68fe72ba2",
+      "ticker": "BELFB",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "BELFB"
+    },
+    {
+      "companyId": "5cf9dce6-4874-45ec-a7e7-1db8b1db1b58",
+      "ticker": "AGX",
+      "exchange": "NYSE",
+      "priceSeriesKey": "AGX"
+    },
+    {
+      "companyId": "5d144898-73eb-44d8-a2cd-5ee638010019",
+      "ticker": "WTRG",
+      "exchange": "NYSE",
+      "priceSeriesKey": "WTRG"
+    },
+    {
+      "companyId": "e97734ba-490b-460d-8539-dcac2c8b552d",
+      "ticker": "WDFC",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "WDFC"
+    },
+    {
+      "companyId": "5d774e8c-9009-46cc-9545-36506966d448",
+      "ticker": "HRL",
+      "exchange": "NYSE",
+      "priceSeriesKey": "HRL"
+    },
+    {
+      "companyId": "ced4da3b-9e96-4887-84d8-37f667f7056b",
+      "ticker": "V",
+      "exchange": "NYSE",
+      "priceSeriesKey": "V"
+    },
+    {
+      "companyId": "075523c8-e572-4cc1-9cd8-b02de85f4f44",
+      "ticker": "CVX",
+      "exchange": "NYSE",
+      "priceSeriesKey": "CVX"
+    },
+    {
+      "companyId": "54aff8a1-e329-479b-a81c-ca0b446bbdc6",
+      "ticker": "SFBS",
+      "exchange": "NYSE",
+      "priceSeriesKey": "SFBS"
+    },
+    {
+      "companyId": "1d30f620-ad56-4298-be89-a4f68b36be7b",
+      "ticker": "OFG",
+      "exchange": "NYSE",
+      "priceSeriesKey": "OFG"
+    },
+    {
+      "companyId": "bf94eab2-c734-4c3f-b53c-94e9c1eca61a",
+      "ticker": "SKWD",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "SKWD"
+    },
+    {
+      "companyId": "bb593e45-775b-4d99-b02f-a75b5cbf8988",
+      "ticker": "GTY",
+      "exchange": "NYSE",
+      "priceSeriesKey": "GTY"
+    },
+    {
+      "companyId": "25284ebd-2e1d-45ad-90be-df590b9cc5c6",
+      "ticker": "UMH",
+      "exchange": "NYSE",
+      "priceSeriesKey": "UMH"
+    },
+    {
+      "companyId": "e020e7cc-533b-47a8-8fc9-250ec2b6f246",
+      "ticker": "DEA",
+      "exchange": "NYSE",
+      "priceSeriesKey": "DEA"
+    },
+    {
+      "companyId": "1a2ac7ad-80e4-4a2b-bc32-28de6ea94541",
+      "ticker": "LZB",
+      "exchange": "NYSE",
+      "priceSeriesKey": "LZB"
+    },
+    {
+      "companyId": "4992fcce-00e0-4c6a-a6ea-866ee9333565",
+      "ticker": "HZO",
+      "exchange": "NYSE",
+      "priceSeriesKey": "HZO"
+    },
+    {
+      "companyId": "95074627-0dac-4fc3-b5ed-518fd8f994f2",
+      "ticker": "SHOO",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "SHOO"
+    },
+    {
+      "companyId": "7c0087fb-d79f-418f-96f2-bd5200ed3471",
+      "ticker": "SHEN",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "SHEN"
+    },
+    {
+      "companyId": "bd0a5902-f6c0-4d05-aed9-d0a65d6db734",
+      "ticker": "ATEX",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "ATEX"
+    },
+    {
+      "companyId": "60ec1db4-465c-448b-9e27-46bc9ebc5106",
+      "ticker": "IMAX",
+      "exchange": "NYSE",
+      "priceSeriesKey": "IMAX"
+    },
+    {
+      "companyId": "aa8c9c40-3556-4aec-9242-9745866b1f39",
+      "ticker": "HWKN",
+      "exchange": "NASDAQ",
+      "priceSeriesKey": "HWKN"
+    },
+    {
+      "companyId": "cebbf05a-ecea-4e6f-971e-d86ae9428371",
+      "ticker": "WTTR",
+      "exchange": "NYSE",
+      "priceSeriesKey": "WTTR"
+    },
+    {
+      "companyId": "144fcbb9-ac1c-44c4-b8d8-5310d6b99ca6",
+      "ticker": "MSEX",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "MSEX"
+    },
+    {
+      "companyId": "49a2ea06-4359-4c39-9be1-b797b01fd736",
+      "ticker": "YORW",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "YORW"
+    },
+    {
+      "companyId": "61d2751f-cd3c-4c29-b521-c16dfade89b6",
+      "ticker": "OTTR",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "OTTR"
+    },
+    {
+      "companyId": "7d1fab7e-b7d8-4d1c-a516-ffd3d854b6a3",
+      "ticker": "ASIX",
+      "exchange": "NYSE",
+      "priceSeriesKey": "ASIX"
+    },
+    {
+      "companyId": "1779a777-6a36-4d63-8d8b-7c5fe1ac860b",
+      "ticker": "IOSP",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "IOSP"
+    },
+    {
+      "companyId": "12bfa645-648b-44f6-a27b-4c0e3790774a",
+      "ticker": "KWR",
+      "exchange": "NYSE",
+      "priceSeriesKey": "KWR"
+    },
+    {
+      "companyId": "e2563263-d3da-43d2-8fd3-0bce6f3c802c",
+      "ticker": "KGS",
+      "exchange": "NYSE",
+      "priceSeriesKey": "KGS"
+    },
+    {
+      "companyId": "5d745025-9e06-4182-a9d7-bfb02f5b9eb2",
+      "ticker": "LBRT",
+      "exchange": "NYSE",
+      "priceSeriesKey": "LBRT"
+    },
+    {
+      "companyId": "c35fa86d-93a0-4fce-96fd-0b2ee026d717",
+      "ticker": "PUMP",
+      "exchange": "NYSE",
+      "priceSeriesKey": "PUMP"
+    },
+    {
+      "companyId": "921c789b-bef5-4559-a169-34062a5124d6",
+      "ticker": "CASS",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "CASS"
+    },
+    {
+      "companyId": "165fb627-a751-4250-ba7f-52354fda18f3",
+      "ticker": "TBBK",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "TBBK"
+    },
+    {
+      "companyId": "1a9007ca-1108-49e9-81cc-e561ce7001ca",
+      "ticker": "PLMR",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "PLMR"
+    },
+    {
+      "companyId": "3d5bd844-a041-4d89-ba31-c631b14218c4",
+      "ticker": "IRMD",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "IRMD"
+    },
+    {
+      "companyId": "2ee5285d-e8bc-4707-9989-1335d5bcdf1d",
+      "ticker": "MMSI",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "MMSI"
+    },
+    {
+      "companyId": "19104e71-b27d-423e-b41e-95f9e157adaf",
+      "ticker": "ANIP",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "ANIP"
+    },
+    {
+      "companyId": "d7be07a1-ee7b-42ca-b6ee-3d37e721cbc9",
+      "ticker": "DGII",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "DGII"
+    },
+    {
+      "companyId": "05788145-fa1f-4d53-a395-a5cfd323b90c",
+      "ticker": "CLFD",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "CLFD"
+    },
+    {
+      "companyId": "35469c13-fe5f-43ac-b85f-a2cdc088c363",
+      "ticker": "PLUS",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "PLUS"
+    },
+    {
+      "companyId": "d5162bec-15ec-4ebd-a0a9-83836806a671",
+      "ticker": "JJSF",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "JJSF"
+    },
+    {
+      "companyId": "49ea8a7a-6177-49bd-b4a5-8a62a32d73c6",
+      "ticker": "CALM",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "CALM"
+    },
+    {
+      "companyId": "87e5897a-63f2-45f6-aaf3-055fa3989177",
+      "ticker": "WINA",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "WINA"
+    },
+    {
+      "companyId": "64bc31e8-854a-4917-904b-f5b150d547a6",
+      "ticker": "MNRO",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "MNRO"
+    },
+    {
+      "companyId": "2ae19c6c-09ae-4897-a1a8-8e525243a3b5",
+      "ticker": "IDT",
+      "exchange": "NYSE",
+      "priceSeriesKey": "IDT"
+    },
+    {
+      "companyId": "a578dc83-8653-4f0a-9dea-aef2e596f88d",
+      "ticker": "PSTL",
+      "exchange": "NYSE",
+      "priceSeriesKey": "PSTL"
+    },
+    {
+      "companyId": "34af94fc-564d-48eb-ae0c-3c9755367a52",
+      "ticker": "FR",
+      "exchange": "NYSE",
+      "priceSeriesKey": "FR"
+    },
+    {
+      "companyId": "ddf97f1b-a85e-4898-8f65-bd85522563ac",
+      "ticker": "CCOI",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "CCOI"
+    },
+    {
+      "companyId": "c4930d12-d390-4d53-94b1-43652ca66b24",
+      "ticker": "ATNI",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "ATNI"
+    },
+    {
+      "companyId": "6431f98c-2c88-4874-ac92-03f91ea0c630",
+      "ticker": "CARS",
+      "exchange": "NYSE",
+      "priceSeriesKey": "CARS"
+    },
+    {
+      "companyId": "6028b485-fb23-46ca-9ae9-224e6b00cd0d",
+      "ticker": "MHO",
+      "exchange": "NYSE",
+      "priceSeriesKey": "MHO"
+    },
+    {
+      "companyId": "3b3f2901-e463-45f0-96f3-0ee28c0466cd",
+      "ticker": "THRM",
+      "exchange": "Nasdaq",
+      "priceSeriesKey": "THRM"
+    },
+    {
+      "companyId": "e1394f1d-5901-4924-956d-c0affb508cee",
+      "ticker": "BKE",
+      "exchange": "NYSE",
+      "priceSeriesKey": "BKE"
+    }
+  ]
+}

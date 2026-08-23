@@ -11,12 +11,20 @@ public sealed class StrategyComparisonHarnessTests
 {
     private static readonly StrategyComparisonHarness Harness = new();
 
+    /// <summary>
+    /// The spec-183 full-coverage benchmark: shared across the tests below, so every historical assertion in
+    /// this file now runs over the EXCESS pipeline (per-date excess is a positive affine transform of raw
+    /// for members, so every engineered ordering — and therefore every behavioural assertion — survives).
+    /// </summary>
+    private static readonly UniverseBenchmark Benchmark = ComparisonFixtures.Benchmark();
+
     [Fact]
     public void Compare_SplitsAsOfDatesChronologicallyIntoTwoDisjointWindows()
     {
         var leaderboard = Harness.Compare(
             [ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout)],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         var w = leaderboard.Windows;
 
@@ -43,7 +51,8 @@ public sealed class StrategyComparisonHarnessTests
     {
         var leaderboard = Harness.Compare(
             [ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout)],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         var row = Assert.Single(leaderboard.Rows);
 
@@ -73,7 +82,8 @@ public sealed class StrategyComparisonHarnessTests
                 ComparisonFixtures.Strategy("overfit", ComparisonFixtures.AlignedThenReversed),
                 ComparisonFixtures.Strategy("late-bloomer", ComparisonFixtures.WeakThenAligned),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         Assert.Equal(2, leaderboard.StrategiesCompared);
         Assert.Empty(leaderboard.DroppedStrategies);
@@ -107,7 +117,8 @@ public sealed class StrategyComparisonHarnessTests
                 ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout),
                 ComparisonFixtures.Strategy("date-only", ComparisonFixtures.DateOnlyScore),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         var aligned = leaderboard.Rows.Single(r => r.StrategyName == "aligned");
         var dateOnly = leaderboard.Rows.Single(r => r.StrategyName == "date-only");
@@ -144,7 +155,8 @@ public sealed class StrategyComparisonHarnessTests
                     ComparisonFixtures.AlignedThroughout,
                     dateIndexes: [.. Enumerable.Range(0, ComparisonFixtures.InSampleDateCount), 25]),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         Assert.Equal(4, leaderboard.StrategiesConsidered);
         Assert.Equal(2, leaderboard.StrategiesCompared);
@@ -174,7 +186,8 @@ public sealed class StrategyComparisonHarnessTests
                 ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout),
                 ComparisonFixtures.Strategy("flat", static (_, _) => 50),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         var flat = Assert.Single(leaderboard.DroppedStrategies);
         Assert.Equal("flat", flat.StrategyName);
@@ -197,7 +210,7 @@ public sealed class StrategyComparisonHarnessTests
                         c.CompanyId, c.CompanyName, c.Ticker, c.Points, [])
                     : c)]);
 
-        var leaderboard = Harness.Compare([withoutPrices], ComparisonFixtures.Options());
+        var leaderboard = Harness.Compare([withoutPrices], ComparisonFixtures.Options(), Benchmark);
 
         var row = Assert.Single(leaderboard.Rows);
         Assert.Equal(ComparisonFixtures.AsOfDateCount, row.ObservationsWithoutForwardPrice);
@@ -222,7 +235,7 @@ public sealed class StrategyComparisonHarnessTests
                 [.. c.Points, .. c.Points],           // same company-days, scored twice
                 i == 0 ? [] : c.PriceBars))]);        // company 0 has no price at all
 
-        var leaderboard = Harness.Compare([duplicatedAndPartlyPriceless], ComparisonFixtures.Options());
+        var leaderboard = Harness.Compare([duplicatedAndPartlyPriceless], ComparisonFixtures.Options(), Benchmark);
 
         var row = Assert.Single(leaderboard.Rows);
 
@@ -251,7 +264,7 @@ public sealed class StrategyComparisonHarnessTests
                     company0.CompanyId, company0.CompanyName, company0.Ticker, company0.Points, []),
             ]);
 
-        var leaderboard = Harness.Compare([withAPricelessShadow], ComparisonFixtures.Options());
+        var leaderboard = Harness.Compare([withAPricelessShadow], ComparisonFixtures.Options(), Benchmark);
 
         var row = Assert.Single(leaderboard.Rows);
         Assert.Equal(0, row.ObservationsWithoutForwardPrice);
@@ -288,7 +301,7 @@ public sealed class StrategyComparisonHarnessTests
         var partiallyPriced = TruncateBarsAfter(
             ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout), lastBarDayIndex: 40);
 
-        var leaderboard = Harness.Compare([partiallyPriced], ComparisonFixtures.Options());
+        var leaderboard = Harness.Compare([partiallyPriced], ComparisonFixtures.Options(), Benchmark);
         var row = Assert.Single(leaderboard.Rows);
 
         // Days 24..29 × 4 companies = 24 company-days short of the horizon…
@@ -312,7 +325,7 @@ public sealed class StrategyComparisonHarnessTests
                 "aligned", ComparisonFixtures.AlignedThroughout, dateIndexes: Enumerable.Range(0, 24)),
             lastBarDayIndex: 40);
         var withoutThePartials = Assert.Single(
-            Harness.Compare([completeDatesOnly], ComparisonFixtures.Options()).Rows);
+            Harness.Compare([completeDatesOnly], ComparisonFixtures.Options(), Benchmark).Rows);
 
         Assert.Equal(0, withoutThePartials.ObservationsWithPartialWindow);
         Assert.Equal(row.InSample.Correlation.Rho, withoutThePartials.InSample.Correlation.Rho, 12);
@@ -334,7 +347,7 @@ public sealed class StrategyComparisonHarnessTests
                 ? new CompanyEfficacySeries(c.CompanyId, c.CompanyName, c.Ticker, c.Points, [])
                 : c)]);
 
-        var row = Assert.Single(Harness.Compare([mixed], ComparisonFixtures.Options()).Rows);
+        var row = Assert.Single(Harness.Compare([mixed], ComparisonFixtures.Options(), Benchmark).Rows);
 
         Assert.Equal(ComparisonFixtures.AsOfDateCount, row.ObservationsWithoutForwardPrice);   // 30 company-days
         Assert.Equal(18, row.ObservationsWithPartialWindow);                                   // 6 dates × 3
@@ -362,7 +375,7 @@ public sealed class StrategyComparisonHarnessTests
         var withATruncatedShadow = new StrategyScoreSeries(
             full.StrategyName, [.. full.Companies, truncatedShadow]);
 
-        var row = Assert.Single(Harness.Compare([withATruncatedShadow], ComparisonFixtures.Options()).Rows);
+        var row = Assert.Single(Harness.Compare([withATruncatedShadow], ComparisonFixtures.Options(), Benchmark).Rows);
 
         Assert.Equal(0, row.ObservationsWithPartialWindow);
         Assert.Equal(0, row.ObservationsWithoutForwardPrice);
@@ -375,7 +388,7 @@ public sealed class StrategyComparisonHarnessTests
     [Fact]
     public void Compare_WithNoHistoryProducesAnHonestEmptyLeaderboardRatherThanThrowing()
     {
-        var leaderboard = Harness.Compare([], ComparisonFixtures.Options());
+        var leaderboard = Harness.Compare([], ComparisonFixtures.Options(), Benchmark);
 
         Assert.Equal(0, leaderboard.StrategiesCompared);
         Assert.Equal(0, leaderboard.StrategiesConsidered);
@@ -395,7 +408,8 @@ public sealed class StrategyComparisonHarnessTests
                 ComparisonFixtures.Strategy("date-only", ComparisonFixtures.DateOnlyScore),
                 ComparisonFixtures.Strategy("overfit", ComparisonFixtures.AlignedThenReversed),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         var first = Run();
         var second = Run();
@@ -420,14 +434,16 @@ public sealed class StrategyComparisonHarnessTests
                 ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout),
                 ComparisonFixtures.Strategy("date-only", ComparisonFixtures.DateOnlyScore),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         var reversed = Harness.Compare(
             [
                 ComparisonFixtures.Strategy("date-only", ComparisonFixtures.DateOnlyScore),
                 ComparisonFixtures.Strategy("aligned", ComparisonFixtures.AlignedThroughout),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(),
+            Benchmark);
 
         Assert.Equal(renderer.RenderCsv(forward), renderer.RenderCsv(reversed));
     }
@@ -448,8 +464,8 @@ public sealed class StrategyComparisonHarnessTests
                 [.. c.Points.Select(p => p with { ScoreDate = new DateOnly(2030, 12, 31) })],
                 c.PriceBars))]);
 
-        var a = Harness.Compare([byAsOf], ComparisonFixtures.Options());
-        var b = Harness.Compare([shiftedRunDate], ComparisonFixtures.Options());
+        var a = Harness.Compare([byAsOf], ComparisonFixtures.Options(), Benchmark);
+        var b = Harness.Compare([shiftedRunDate], ComparisonFixtures.Options(), Benchmark);
 
         Assert.Equal(a.Rows[0].InSample.Correlation.Rho, b.Rows[0].InSample.Correlation.Rho, 12);
         Assert.Equal(a.Windows, b.Windows);

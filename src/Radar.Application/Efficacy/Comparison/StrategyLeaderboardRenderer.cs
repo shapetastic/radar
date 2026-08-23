@@ -36,22 +36,44 @@ public sealed class StrategyLeaderboardRenderer
             + "not a claim boundary. The paired, purged comparison (strategy-paired-comparison.md) is the "
             + "only result that can support the amended AD-15 claim.";
 
+    /// <summary>
+    /// The CSV schema version (spec 183: the outcome column changed MEANING from raw to excess forward
+    /// return, so the schema is bumped and the raw series is preserved under its own file name).
+    /// </summary>
+    public const string CsvSchemaVersion = "strategy-leaderboard-v2";
+
+    /// <summary>
+    /// The incomparability statement (spec 183 §3): the excess series and the preserved raw series measure
+    /// different outcomes and must never be read as one series.
+    /// </summary>
+    public const string RawSeriesNotComparable =
+        "This artifact ranks by EXCESS returns (excess-vs-universe-v1) and is NOT comparable with the "
+            + "raw-return series preserved at strategy-leaderboard-raw-v1.{md,csv} — the two measure "
+            + "different outcomes.";
+
     private const string CsvHeader =
-        "status,rank,strategy,strategiesCompared,strategiesConsidered,"
-            + "inSampleRho,inSampleLower95,inSampleUpper95,inSampleObservations,inSampleCompanies,inSampleDates,"
-            + "outOfSampleRho,outOfSampleLower95,outOfSampleUpper95,outOfSampleObservations,"
+        "schemaVersion,status,rank,strategy,strategiesCompared,strategiesConsidered,"
+            + "inSampleRhoExcessVsUniverseV1,inSampleLower95,inSampleUpper95,"
+            + "inSampleObservations,inSampleCompanies,inSampleDates,"
+            + "outOfSampleRhoExcessVsUniverseV1,outOfSampleLower95,outOfSampleUpper95,outOfSampleObservations,"
             + "outOfSampleCompanies,outOfSampleDates,observationsWithoutForwardPrice,"
-            + "observationsWithPartialWindow,dropReason,metricReason";
+            + "observationsWithPartialWindow,observationsBenchmarkUnavailable,"
+            + "observationsNotInBenchmarkUniverse,benchmarkUniverseVersion,benchmarkUniverseContentHash,"
+            + "dropReason,metricReason";
 
     public string RenderCsv(StrategyLeaderboard leaderboard)
     {
         ArgumentNullException.ThrowIfNull(leaderboard);
+
+        var universeVersion = leaderboard.Benchmark?.UniverseVersion ?? string.Empty;
+        var universeHash = leaderboard.Benchmark?.ContentHash ?? string.Empty;
 
         var sb = new StringBuilder();
         sb.Append(CsvHeader).Append('\n');
 
         foreach (var row in leaderboard.Rows)
         {
+            sb.Append(CsvSchemaVersion).Append(',');
             sb.Append("ranked,");
             sb.Append(Int(row.Rank)).Append(',');
             sb.Append(CsvField.Escape(row.StrategyName)).Append(',');
@@ -61,12 +83,17 @@ public sealed class StrategyLeaderboardRenderer
             AppendMetric(sb, row.OutOfSample);
             sb.Append(Int(row.ObservationsWithoutForwardPrice)).Append(',');
             sb.Append(Int(row.ObservationsWithPartialWindow)).Append(',');
+            sb.Append(Int(row.ObservationsBenchmarkUnavailable)).Append(',');
+            sb.Append(Int(row.ObservationsNotInBenchmarkUniverse)).Append(',');
+            sb.Append(CsvField.Escape(universeVersion)).Append(',');
+            sb.Append(CsvField.Escape(universeHash)).Append(',');
             sb.Append(',');                                   // dropReason: empty for a ranked strategy
             sb.Append(MetricReasonToken(row.OutOfSample.Correlation.Reason)).Append('\n');
         }
 
         foreach (var drop in leaderboard.DroppedStrategies)
         {
+            sb.Append(CsvSchemaVersion).Append(',');
             sb.Append("dropped,");
             sb.Append(',');                                   // rank: a dropped strategy has none
             sb.Append(CsvField.Escape(drop.StrategyName)).Append(',');
@@ -76,6 +103,10 @@ public sealed class StrategyLeaderboardRenderer
             sb.Append(",,,").Append(Int(drop.OutOfSampleObservations)).Append(",,,");
             sb.Append(',');                                   // observationsWithoutForwardPrice: not ranked
             sb.Append(',');                                   // observationsWithPartialWindow: not ranked
+            sb.Append(',');                                   // observationsBenchmarkUnavailable: not ranked
+            sb.Append(',');                                   // observationsNotInBenchmarkUniverse: not ranked
+            sb.Append(CsvField.Escape(universeVersion)).Append(',');
+            sb.Append(CsvField.Escape(universeHash)).Append(',');
             sb.Append(DropReasonToken(drop.Reason)).Append(',');
             sb.Append(MetricReasonToken(drop.MetricReason)).Append('\n');
         }
@@ -101,10 +132,13 @@ public sealed class StrategyLeaderboardRenderer
         sb.Append(CultureInfo.InvariantCulture, $"- Forward horizon: {o.ForwardHorizonDays} calendar day(s) — a score at D is judged only against price over (D, D+{o.ForwardHorizonDays}]. Price at or before D is never read.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Exit tolerance: {o.ExitToleranceDays} calendar day(s). An observation counts only when its LATEST bar inside (D, D+{o.ForwardHorizonDays}] falls on or after D+{o.ForwardHorizonDays - o.ExitToleranceDays}. One that falls further short is a PARTIAL forward window: it is excluded from the correlation rather than reported as a full {o.ForwardHorizonDays}-day return. The tolerance exists because markets close at weekends and holidays, so the last bar is rarely on the bound itself.\n");
         sb.Append("- \"Observations without a forward price\" and \"observations with a partial forward window\" are counted separately and mean different things: no price at all in the window, versus some price that does not reach the horizon.\n");
+        sb.Append("- \"Observations excluded: benchmark unavailable\" and \"observations excluded: not in benchmark universe\" are counted separately too (spec 183): the first means the frozen universe's coverage rule failed at that date; the second means the company was added to the seed after the freeze and joins at benchmark-universe-v2, prospectively. Neither is ever silently fed its raw return instead.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Hold-out: the chronologically latest {Percent(o.HoldOutFraction)} of as-of dates. Ranking uses the in-sample window only; the headline number is out-of-sample.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Minimum observations per window: {o.MinimumObservations}.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- As-of dates: {w.TotalAsOfDates} total = {w.InSampleAsOfDates} in-sample ({Range(w.InSampleStart, w.InSampleEnd)}) + {w.OutOfSampleAsOfDates} out-of-sample ({Range(w.OutOfSampleStart, w.OutOfSampleEnd)}). The two sets are disjoint by construction.\n");
-        sb.Append("- Metric: Spearman rank correlation between a company's opportunity score at D and its forward return over the horizon, with a two-sided 95% Fisher-z interval. Observations are pooled across companies and dates and are therefore not independent, so the interval is optimistically narrow — treat it as dispersion, not significance.\n\n");
+        sb.Append("- Metric: Spearman rank correlation between a company's opportunity score at D and its EXCESS forward return over the horizon (excess-vs-universe-v1: the raw return minus the equal-weight mean forward return of the other resolved benchmark-universe members, self-excluded), with a two-sided 95% Fisher-z interval. Observations are pooled across companies and dates and are therefore not independent, so the interval is optimistically narrow — treat it as dispersion, not significance.\n\n");
+
+        AppendBenchmarkSection(sb, leaderboard);
 
         sb.Append("## Headline (out-of-sample)\n\n");
         if (leaderboard.Headline is { } headline)
@@ -126,11 +160,11 @@ public sealed class StrategyLeaderboardRenderer
         }
         else
         {
-            sb.Append("| rank | strategy | in-sample rho | in-sample 95% CI | in-sample obs (companies × dates) | out-of-sample rho | out-of-sample 95% CI | out-of-sample obs (companies × dates) | observations without a forward price | observations with a partial forward window |\n");
-            sb.Append("| ---: | --- | ---: | --- | --- | ---: | --- | --- | ---: | ---: |\n");
+            sb.Append("| rank | strategy | in-sample rho (excess-vs-universe-v1) | in-sample 95% CI | in-sample obs (companies × dates) | out-of-sample rho (excess-vs-universe-v1) | out-of-sample 95% CI | out-of-sample obs (companies × dates) | observations without a forward price | observations with a partial forward window | observations excluded: benchmark unavailable | observations excluded: not in benchmark universe |\n");
+            sb.Append("| ---: | --- | ---: | --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: |\n");
             foreach (var row in leaderboard.Rows)
             {
-                sb.Append(CultureInfo.InvariantCulture, $"| {row.Rank} | {Md(row.StrategyName)} | {Rho(row.InSample.Correlation.Rho)} | {Rho(row.InSample.Correlation.LowerBound)} to {Rho(row.InSample.Correlation.UpperBound)} | {Coverage(row.InSample.Coverage)} | {Rho(row.OutOfSample.Correlation.Rho)} | {Rho(row.OutOfSample.Correlation.LowerBound)} to {Rho(row.OutOfSample.Correlation.UpperBound)} | {Coverage(row.OutOfSample.Coverage)} | {row.ObservationsWithoutForwardPrice} | {row.ObservationsWithPartialWindow} |\n");
+                sb.Append(CultureInfo.InvariantCulture, $"| {row.Rank} | {Md(row.StrategyName)} | {Rho(row.InSample.Correlation.Rho)} | {Rho(row.InSample.Correlation.LowerBound)} to {Rho(row.InSample.Correlation.UpperBound)} | {Coverage(row.InSample.Coverage)} | {Rho(row.OutOfSample.Correlation.Rho)} | {Rho(row.OutOfSample.Correlation.LowerBound)} to {Rho(row.OutOfSample.Correlation.UpperBound)} | {Coverage(row.OutOfSample.Coverage)} | {row.ObservationsWithoutForwardPrice} | {row.ObservationsWithPartialWindow} | {row.ObservationsBenchmarkUnavailable} | {row.ObservationsNotInBenchmarkUniverse} |\n");
             }
 
             sb.Append('\n');
@@ -158,6 +192,65 @@ public sealed class StrategyLeaderboardRenderer
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// The spec-183 benchmark provenance preamble: which frozen universe adjusted these returns, its coverage
+    /// rule (code constants, restated so the artifact is self-describing), the per-day coverage against the
+    /// frozen pond with every unresolved member named, the retrospective label for pre-freeze dates, and the
+    /// incomparability statement against the preserved raw-return series. When the universe could not be
+    /// loaded, the section says so — every observation was then excluded as BenchmarkUnavailable, which is
+    /// visible arithmetic in the table rather than a silent fallback.
+    /// </summary>
+    private static void AppendBenchmarkSection(StringBuilder sb, StrategyLeaderboard leaderboard)
+    {
+        sb.Append("## Benchmark (excess-vs-universe-v1)\n\n");
+        sb.Append(RawSeriesNotComparable).Append("\n\n");
+
+        if (leaderboard.Benchmark is not { } b)
+        {
+            sb.Append("**Benchmark universe UNAVAILABLE** — the frozen benchmark-universe artifact could not be loaded, so every raw-usable observation was excluded as BenchmarkUnavailable (named and counted in the table above; never a silent fallback to raw returns) and nothing could be ranked on an excess basis.\n\n");
+            return;
+        }
+
+        sb.Append(CultureInfo.InvariantCulture, $"- Universe: {b.UniverseVersion} · content hash {b.ContentHash} · {b.MemberCount} member(s) · frozen at {b.FrozenAtUtc.UtcDateTime:yyyy-MM-dd'T'HH:mm:ss'Z'}.\n");
+        sb.Append(CultureInfo.InvariantCulture, $"- Excess = raw forward return − equal-weight mean forward return of the OTHER resolved members (self-excluded). Coverage rule (code constants): resolved peers must be at least max({UniverseBenchmark.MinimumResolvedPeers}, ceil({Percent(UniverseBenchmark.RequiredResolvedPeerProportion)} of eligible peers)); unresolved members stay in the denominator with their reasons.\n");
+        if (b.PreFreezeAsOfDates > 0)
+        {
+            sb.Append(CultureInfo.InvariantCulture, $"- **RETROSPECTIVE span: {b.PreFreezeAsOfDates} of {b.Days.Count} as-of date(s) predate the freeze.** Applying the frozen universe to earlier dates is reproducible but retrospective — later-selected members appear in earlier benchmarks because their prices were backfilled — so every pre-freeze excess result is descriptive only.\n");
+        }
+        else
+        {
+            sb.Append("- No as-of date predates the freeze: the whole series is post-freeze.\n");
+        }
+
+        var daysWithGaps = b.Days.Where(d => d.UnresolvedMembers.Count > 0).ToList();
+        sb.Append(CultureInfo.InvariantCulture, $"- Coverage: {b.Days.Count} as-of date(s) touched; {b.Days.Count - daysWithGaps.Count} with every member resolved.\n");
+        if (daysWithGaps.Count > 0)
+        {
+            sb.Append("\n| as-of date | resolved / members | unresolved members (reason) |\n");
+            sb.Append("| --- | --- | --- |\n");
+            foreach (var day in daysWithGaps)
+            {
+                var unresolved = string.Join(
+                    ", ",
+                    day.UnresolvedMembers.Select(m => $"{Md(m.Ticker)} ({ForwardReasonToken(m.Reason)})"));
+                sb.Append(CultureInfo.InvariantCulture, $"| {day.AsOf:yyyy-MM-dd} | {day.ResolvedMembers} / {day.MemberCount} | {unresolved} |\n");
+            }
+        }
+
+        sb.Append('\n');
+    }
+
+    /// <summary>Stable machine tokens for the member-level spec-152 reasons.</summary>
+    private static string ForwardReasonToken(ForwardReturnUnavailableReason reason) => reason switch
+    {
+        ForwardReturnUnavailableReason.None => "resolved",
+        ForwardReturnUnavailableReason.NoForwardBar => "no-forward-bar",
+        ForwardReturnUnavailableReason.SingleForwardBar => "single-forward-bar",
+        ForwardReturnUnavailableReason.NonPositiveEntryPrice => "non-positive-entry-price",
+        ForwardReturnUnavailableReason.PartialWindow => "partial-window",
+        _ => "unknown",
+    };
 
     private static void AppendMetric(StringBuilder sb, StrategyWindowMetric metric)
     {

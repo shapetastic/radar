@@ -109,7 +109,8 @@ public sealed class StrategyComparisonReportGeneratorTests
             new StrategyLeaderboardRenderer(),
             artifacts,
             options,
-            NullLogger<StrategyComparisonReportGenerator>.Instance);
+            NullLogger<StrategyComparisonReportGenerator>.Instance,
+            new FixedUniverseBenchmarkProvider(ComparisonFixtures.Benchmark()));
 
         return new Fixture(generator, builder, artifacts, options, primaryStore, secondaryStore);
     }
@@ -147,7 +148,8 @@ public sealed class StrategyComparisonReportGeneratorTests
         var existingRead = await fixture.Builder.BuildAsync(CancellationToken.None);
         var recomputed = new StrategyComparisonHarness().Compare(
             [new StrategyScoreSeries("primary", existingRead)],
-            fixture.Options);
+            fixture.Options,
+            ComparisonFixtures.Benchmark());
 
         var fromGenerator = leaderboard.Rows.Single(r => r.StrategyName == "primary");
         var fromExistingRead = Assert.Single(recomputed.Rows);
@@ -171,7 +173,7 @@ public sealed class StrategyComparisonReportGeneratorTests
         var (csv, markdown) = Assert.Single(fixture.Artifacts.Leaderboards);
         Assert.Contains("Strategies compared (ranked): 2", markdown, StringComparison.Ordinal);
         Assert.Contains(StrategyLeaderboardRenderer.Framing, markdown, StringComparison.Ordinal);
-        Assert.StartsWith("status,rank,strategy,", csv, StringComparison.Ordinal);
+        Assert.StartsWith("schemaVersion,status,rank,strategy,", csv, StringComparison.Ordinal);
 
         // It renders no per-company artifact — that is the other generator's job.
         Assert.Empty(fixture.Artifacts.Written);

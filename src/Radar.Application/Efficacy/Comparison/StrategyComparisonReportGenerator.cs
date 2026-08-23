@@ -32,6 +32,7 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
     private readonly IEfficacyArtifactStore _artifactStore;
     private readonly StrategyComparisonOptions _options;
     private readonly ILogger<StrategyComparisonReportGenerator> _logger;
+    private readonly IUniverseBenchmarkProvider _benchmarkProvider;
     private readonly PairedComparisonOptions? _pairedOptions;
     private readonly PairedComparisonHarness _pairedHarness;
     private readonly PairedComparisonRenderer _pairedRenderer;
@@ -52,6 +53,11 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         IEfficacyArtifactStore artifactStore,
         StrategyComparisonOptions options,
         ILogger<StrategyComparisonReportGenerator> logger,
+        // Spec 183: REQUIRED, never optional-nullable — a silently-missing benchmark provider would render
+        // an all-BenchmarkUnavailable leaderboard while every test stays green (the spec-150 lesson). An
+        // unavailable ARTIFACT is a legitimate runtime state the provider reports as null; an unwired seam
+        // is a composition defect that must fail resolution.
+        IUniverseBenchmarkProvider benchmarkProvider,
         PairedComparisonOptions? pairedOptions = null,
         PairedComparisonHarness? pairedHarness = null,
         PairedComparisonRenderer? pairedRenderer = null)
@@ -64,6 +70,7 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         ArgumentNullException.ThrowIfNull(artifactStore);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(benchmarkProvider);
 
         _strategies = strategies;
         _stores = stores;
@@ -73,6 +80,7 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         _artifactStore = artifactStore;
         _options = options;
         _logger = logger;
+        _benchmarkProvider = benchmarkProvider;
         _pairedOptions = pairedOptions;
         _pairedHarness = pairedHarness ?? new PairedComparisonHarness();
         _pairedRenderer = pairedRenderer ?? new PairedComparisonRenderer();
@@ -95,7 +103,12 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
             series.Add(new StrategyScoreSeries(strategy.Name, companies));
         }
 
-        var leaderboard = _harness.Compare(series, _options);
+        // Spec 183: ONE benchmark for every consumer of this run — the pooled leaderboard adjusts on it and
+        // the paired path attaches it for audit (never gating). Null = artifact unavailable, which the
+        // leaderboard records as BenchmarkUnavailable exclusions rather than silently falling back to raw.
+        var benchmark = await _benchmarkProvider.GetAsync(ct).ConfigureAwait(false);
+
+        var leaderboard = _harness.Compare(series, _options, benchmark);
 
         var csv = _renderer.RenderCsv(leaderboard);
         var markdown = _renderer.RenderMarkdown(leaderboard);
@@ -127,7 +140,7 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
 
         if (_pairedOptions is not null)
         {
-            await GeneratePairedAsync(series, _pairedOptions, attentionPrerequisite, ct)
+            await GeneratePairedAsync(series, _pairedOptions, attentionPrerequisite, benchmark, ct)
                 .ConfigureAwait(false);
         }
 
@@ -151,6 +164,7 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         IReadOnlyList<StrategyScoreSeries> series,
         PairedComparisonOptions pairedOptions,
         Ad15AttentionPrerequisite? attentionPrerequisite,
+        UniverseBenchmark? benchmark,
         CancellationToken ct)
     {
         var hasBaselines = _strategies.Strategies.Any(s =>
@@ -168,7 +182,10 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         var primaryWasPredeclared = configuredPrimary.Length > 0;
         var primaryName = primaryWasPredeclared ? configuredPrimary : _strategies.Primary.Name;
 
-        var paired = _pairedHarness.Compare(series, primaryName, primaryWasPredeclared, pairedOptions);
+        // The benchmark is attached for AUDIT only (spec 183 §3): the paired outcome is the per-date
+        // cross-sectional rank of the RAW forward return, and no benchmark gate applies to this path.
+        var paired = _pairedHarness.Compare(
+            series, primaryName, primaryWasPredeclared, pairedOptions, benchmark);
 
         // The COMPOSITE verdict (spec 170): the price half from the harness plus AD-16's attention
         // prerequisite. A null prerequisite fails closed as ad16-screen-not-calculated.

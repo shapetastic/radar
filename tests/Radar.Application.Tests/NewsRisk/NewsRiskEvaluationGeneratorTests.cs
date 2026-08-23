@@ -86,13 +86,14 @@ public sealed class NewsRiskEvaluationGeneratorTests
         NewsRiskAssessmentBundle assessmentBundle = NewsRiskAssessmentBundle.Complete,
         NewsObservationCaptureMode captureMode = NewsObservationCaptureMode.ProspectiveRss,
         string readerName = "ambient",
-        string model = "model-a") => new(
+        string model = "model-a",
+        Guid? companyId = null) => new(
         SchemaVersion: NewsRiskAssessmentRecord.CurrentSchemaVersion,
         AssessmentId: Guid.NewGuid(),
         RunId: Guid.NewGuid(),
         SelectionAsOfUtc: SelectionAsOf,
         AssessmentCutoffUtc: assessmentCutoffUtc ?? SelectionAsOf,
-        CompanyId: Guid.NewGuid(),
+        CompanyId: companyId ?? Guid.NewGuid(),
         CompanyName: ticker + " Co",
         Ticker: ticker,
         Selections: [new NewsRiskCandidateSelection("default", 1, Guid.NewGuid())],
@@ -149,7 +150,8 @@ public sealed class NewsRiskEvaluationGeneratorTests
         IReadOnlyList<NewsRiskAssessmentRecord> assessments,
         IReadOnlyList<NewsRiskDevelopmentExample>? examples,
         NewsObservationBoundary? boundary,
-        Dictionary<string, PriceHistory> prices)
+        Dictionary<string, PriceHistory> prices,
+        Radar.Application.Efficacy.Comparison.IUniverseBenchmarkProvider? benchmarkProvider = null)
     {
         var artifacts = new CapturingArtifactStore();
         var generator = new NewsRiskEvaluationGenerator(
@@ -158,6 +160,7 @@ public sealed class NewsRiskEvaluationGeneratorTests
             new FakeBoundaryReader(boundary),
             new FakePriceStore(prices),
             artifacts,
+            benchmarkProvider ?? new Efficacy.Comparison.FixedUniverseBenchmarkProvider(null),
             NullLogger<NewsRiskEvaluationGenerator>.Instance);
         await generator.GenerateAsync(CancellationToken.None);
         Assert.NotNull(artifacts.Markdown);
@@ -456,5 +459,112 @@ public sealed class NewsRiskEvaluationGeneratorTests
         var (markdown, _) = await RunAsync([], [], null, new());
 
         Assert.Contains(NewsRiskEvaluationGenerator.EvaluatorCaveat, markdown);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 183 §3: rows carry the raw AND the excess forward return, BOTH labelled descriptive; the
+    // RiskScore association keeps its raw max-adverse basis; unavailability is named, never a raw fallback.
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A full-coverage benchmark over the assessed company: the target plus 43 flat peers and one +5%
+    /// peer (45 members ⇒ 44 eligible ⇒ required = max(40, ceil(0.9 × 44) = 40) = 40, all 44 resolving),
+    /// so the excess differs from the raw by exactly the peer mean 0.05 / 44.
+    /// </summary>
+    private static Radar.Application.Efficacy.Comparison.UniverseBenchmark BenchmarkFor(Guid companyId)
+    {
+        var asOf = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime);
+        var start = asOf.AddDays(-5);
+
+        static IReadOnlyList<PriceBar> Series(DateOnly start, decimal startPrice, decimal dailyStep)
+        {
+            var bars = new List<PriceBar>();
+            var price = startPrice;
+            for (var d = 0; d < 40; d++)
+            {
+                var date = start.AddDays(d);
+                bars.Add(new PriceBar(date, price, price, price, price, price, 1000));
+                price += dailyStep;
+            }
+
+            return bars;
+        }
+
+        var members = new List<(Guid, string, IReadOnlyList<PriceBar>)>
+        {
+            (companyId, "AAA", Series(start, 100m, 1m)),
+            (new Guid("aaaaaaaa-1111-1111-1111-111111111111"), "UP", Series(start, 100m, 0.25m)),
+        };
+        for (var p = 0; p < 43; p++)
+        {
+            members.Add((
+                Efficacy.Comparison.BenchmarkTestUniverse.PeerId(p),
+                $"FL{p:D2}",
+                Series(start, 100m, 0m)));
+        }
+
+        return Efficacy.Comparison.BenchmarkTestUniverse.Of(
+            "benchmark-universe-v1",
+            new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero),
+            members);
+    }
+
+    [Fact]
+    public async Task Rows_CarryRawAndExcessForwardReturns_BothLabelledDescriptive_MaxAdverseLabelledRaw()
+    {
+        var companyId = new Guid("aaaaaaaa-2222-2222-2222-222222222222");
+        var record = Assessment("AAA", companyId: companyId);
+        var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
+        var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
+
+        var (markdown, csv) = await RunAsync(
+            [record],
+            [],
+            EstablishedBoundary(),
+            new() { ["AAA"] = History("AAA", start, end) },
+            new Efficacy.Comparison.FixedUniverseBenchmarkProvider(BenchmarkFor(companyId)));
+
+        // Both return columns exist and are labelled: raw as raw, excess against the named frozen universe,
+        // max adverse as raw — and everything descriptive (no claim language anywhere in this artifact).
+        Assert.Contains("Fwd 21d (raw, descriptive)", markdown);
+        Assert.Contains("Excess fwd 21d vs universe-v1 (descriptive)", markdown);
+        Assert.Contains("Max adverse 21d (raw)", markdown);
+        Assert.Contains("Forward returns are DESCRIPTIVE, in both forms (spec 183)", markdown);
+        Assert.Contains("RAW max adverse move", markdown);
+
+        var line = CsvLineFor(csv, record);
+        Assert.Contains(",excess-vs-benchmark-universe-v1,", line);
+        Assert.Contains(
+            "rawForwardReturn21d,excessForwardReturn21d,excessForwardReturn21dBasis,maxAdverseMove21dRaw",
+            csv.Split('\n')[0]);
+
+        // The excess value genuinely differs from the raw one (the +5%-peer moves the mean), so the two
+        // columns cannot silently be one series.
+        var cells = line.Split(',');
+        var header = csv.Split('\n')[0].Split(',');
+        var rawIndex = Array.IndexOf(header, "rawForwardReturn21d");
+        var excessIndex = Array.IndexOf(header, "excessForwardReturn21d");
+        Assert.True(rawIndex >= 0 && excessIndex >= 0);
+        Assert.NotEqual(cells[rawIndex], cells[excessIndex]);
+        Assert.False(string.IsNullOrEmpty(cells[excessIndex]));
+    }
+
+    [Fact]
+    public async Task UnavailableBenchmark_IsANamedBasis_NeverARawFallback()
+    {
+        var record = Assessment("AAA");
+        var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
+        var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
+
+        // The default RunAsync provider hands out a null universe: raw resolves, excess cannot.
+        var (_, csv) = await RunAsync(
+            [record], [], EstablishedBoundary(), new() { ["AAA"] = History("AAA", start, end) });
+
+        var line = CsvLineFor(csv, record);
+        var header = csv.Split('\n')[0].Split(',');
+        var cells = line.Split(',');
+        Assert.Equal("benchmark-unavailable", cells[Array.IndexOf(header, "excessForwardReturn21dBasis")]);
+        Assert.Equal(string.Empty, cells[Array.IndexOf(header, "excessForwardReturn21d")]);
+        Assert.NotEqual(string.Empty, cells[Array.IndexOf(header, "rawForwardReturn21d")]);
     }
 }

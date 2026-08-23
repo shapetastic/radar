@@ -131,6 +131,96 @@ public sealed class FileEfficacyArtifactStoreTests : IDisposable
         Assert.Equal(Path.Combine(rootAsFile, "strategy-leaderboard.md"), paths.MarkdownPath);
     }
 
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 183 §3: the pre-excess RAW leaderboard artifacts are preserved as strategy-leaderboard-raw-v1.*
+    // before the first excess-schema write can overwrite them — once, marked, and never re-copied.
+    // ---------------------------------------------------------------------------------------------------
+
+    private const string RawMd = "# Strategy vs price — efficacy leaderboard\n\nold raw ranking\n";
+    private const string RawCsv = "status,rank,strategy\nranked,1,default\n";
+    private const string ExcessMd = "# Strategy vs price\n\nexcess-vs-universe-v1 ranking\n";
+    private const string ExcessCsv = "schemaVersion,status,rank\nstrategy-leaderboard-v2,ranked,1\n";
+
+    [Fact]
+    public async Task WriteLeaderboardAsync_PreservesThePre183RawArtifacts_MarkedAndVerbatim()
+    {
+        var store = CreateStore();
+
+        // The pre-183 state: raw artifacts on disk from an earlier run.
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.md"), RawMd);
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.csv"), RawCsv);
+
+        await store.WriteLeaderboardAsync(ExcessCsv, ExcessMd, CancellationToken.None);
+
+        // The live pair now holds the excess series…
+        Assert.Equal(ExcessMd, await File.ReadAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.md")));
+        Assert.Equal(ExcessCsv, await File.ReadAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.csv")));
+
+        // …and the raw series survives under its own semantic-version name: the markdown MARKED (with the
+        // original text verbatim below the marker), the CSV byte-for-byte (a prepended comment would
+        // corrupt the format — its renamed file is the marking).
+        var preservedMd = await File.ReadAllTextAsync(
+            Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.md"));
+        Assert.StartsWith(FileEfficacyArtifactStore.RawMarkdownPreservationHeader, preservedMd, StringComparison.Ordinal);
+        Assert.EndsWith(RawMd, preservedMd, StringComparison.Ordinal);
+        Assert.Contains("NOT comparable", preservedMd, StringComparison.Ordinal);
+        Assert.Equal(
+            RawCsv, await File.ReadAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.csv")));
+    }
+
+    [Fact]
+    public async Task WriteLeaderboardAsync_NeverOverwritesAnExistingRawV1Preservation()
+    {
+        var store = CreateStore();
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.md"), RawMd);
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.csv"), RawCsv);
+
+        await store.WriteLeaderboardAsync(ExcessCsv, ExcessMd, CancellationToken.None);
+        var preservedOnce = await File.ReadAllTextAsync(
+            Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.md"));
+
+        // A second (and third) excess run: the live pair keeps updating; the preserved raw pair does not
+        // move — by then the live file holds the EXCESS series and re-copying it would destroy the record.
+        await store.WriteLeaderboardAsync(ExcessCsv + "x\n", ExcessMd + "x\n", CancellationToken.None);
+        await store.WriteLeaderboardAsync(ExcessCsv + "y\n", ExcessMd + "y\n", CancellationToken.None);
+
+        Assert.Equal(
+            preservedOnce,
+            await File.ReadAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.md")));
+        Assert.Equal(
+            RawCsv, await File.ReadAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.csv")));
+    }
+
+    [Fact]
+    public async Task WriteLeaderboardAsync_FreshDeployment_PreservesNothing()
+    {
+        var store = CreateStore();
+
+        await store.WriteLeaderboardAsync(ExcessCsv, ExcessMd, CancellationToken.None);
+        await store.WriteLeaderboardAsync(ExcessCsv, ExcessMd, CancellationToken.None);
+
+        // No pre-183 artifact ever existed here, so there is no raw series to preserve — and the excess
+        // artifact must never be mislabelled as one.
+        Assert.False(File.Exists(Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.md")));
+        Assert.False(File.Exists(Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.csv")));
+    }
+
+    [Fact]
+    public async Task WriteLeaderboardAsync_AnExistingExcessArtifact_IsNeverPreservedAsRaw()
+    {
+        var store = CreateStore();
+
+        // The live pair already holds the EXCESS schema (e.g. the raw-v1 files were deliberately deleted
+        // after archiving elsewhere): preserving it under the raw name would mislabel excess numbers as raw.
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.md"), ExcessMd);
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "strategy-leaderboard.csv"), ExcessCsv);
+
+        await store.WriteLeaderboardAsync(ExcessCsv, ExcessMd, CancellationToken.None);
+
+        Assert.False(File.Exists(Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.md")));
+        Assert.False(File.Exists(Path.Combine(_tempDir, "strategy-leaderboard-raw-v1.csv")));
+    }
+
     [Fact]
     public async Task WritePairedComparisonAsync_WritesTheFixedNamedTrioUnderTheRoot()
     {
