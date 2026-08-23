@@ -6,6 +6,7 @@ using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.News;
 using Radar.Application.NewsRisk;
+using Radar.Application.NewsTyping;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -825,10 +826,12 @@ internal static class RadarWorkerServices
         var fetch = research.ArticleFetch;
         var migration = research.Migration;
         var shadow = research.Shadow;
+        var typing = research.Typing;
 
-        // Shadow limits are validated regardless of Enabled (the spec-177 posture): an invalid limit is a
-        // configuration error now, not a trap that springs the day the shadow is switched on.
+        // Shadow/typing limits are validated regardless of Enabled (the spec-177 posture): an invalid limit
+        // is a configuration error now, not a trap that springs the day the step is switched on.
         ValidateNewsRiskShadowLimits(shadow);
+        ValidateNewsTypingLimits(typing);
 
         if (string.IsNullOrWhiteSpace(research.ObservationDirectory))
         {
@@ -907,11 +910,15 @@ internal static class RadarWorkerServices
                     + "rows. Enable the report, or disable the shadow.");
         }
 
+        // The spec-181 typing step follows the SAME structural gate shape as the shadow (unfiltered
+        // full-mode runs only) — but needs no report: it reads the observation archive, not report sections.
+        var registerTyping = typing.Enabled && runMode == RadarRunMode.Full && companyFilter is null;
+
         // Score mode NEVER gets the archive (a score pass must not need a collection-side store); every
-        // other mode gets it when capture is on — or when the migration (which writes through it) or the
-        // spec-179 shadow read (which reads observations, batch manifests and the boundary) runs.
+        // other mode gets it when capture is on — or when the migration (which writes through it), the
+        // spec-179 shadow read or the spec-181 typing step (both of which read the archive) runs.
         var archiveWanted = runMode != RadarRunMode.Score
-            && (research.CaptureRss || migration.Enabled || registerShadow);
+            && (research.CaptureRss || migration.Enabled || registerShadow || registerTyping);
         if (archiveWanted)
         {
             services.AddFileNewsObservationArchive(research.ObservationDirectory);
@@ -948,8 +955,65 @@ internal static class RadarWorkerServices
                 BuildNewsRiskReaderRegistrations(options));
         }
 
+        if (registerTyping)
+        {
+            services.AddRadarNewsTyping(
+                new NewsTypingOptions(
+                    outputDirectory: typing.OutputDirectory,
+                    maxNewTypingsPerRun: typing.MaxNewTypingsPerRun,
+                    lookbackDays: typing.LookbackDays),
+                BuildNewsTypingReaderRegistrations(options));
+        }
+
         return registerShadow;
     }
+
+    /// <summary>
+    /// Fail-fast limit validation for the <c>Radar:NewsResearch:Typing</c> block (spec 181 §4/§6), applied
+    /// even when typing is disabled (the spec-177 posture: an invalid limit is a config error, not a latent
+    /// one).
+    /// </summary>
+    private static void ValidateNewsTypingLimits(NewsTypingWorkerOptions typing)
+    {
+        if (string.IsNullOrWhiteSpace(typing.OutputDirectory))
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Typing:OutputDirectory must not be blank; it is the news-typing output "
+                    + "root (default \"data/news-typing\").");
+        }
+
+        if (typing.MaxNewTypingsPerRun <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Typing:MaxNewTypingsPerRun must be positive (was "
+                    + $"{typing.MaxNewTypingsPerRun}); it is the per-reader per-run model-call budget "
+                    + "(default 200).");
+        }
+
+        if (typing.LookbackDays <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Typing:LookbackDays must be positive (was {typing.LookbackDays}); it "
+                    + "bounds the decomposition/checkpoint window (asOf − LookbackDays, asOf] (default 30).");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the typing reader set (spec 181 §4) through the SAME shared flattening/validation path as
+    /// the news-risk shadow: an omitted/empty <c>Radar:NewsResearch:Typing:Readers</c> resolves to exactly
+    /// ONE reader over the ambient <c>Radar:Ai</c> provider/model; typing with NO resolvable reader fails
+    /// startup (a typing step that silently never runs is a fail-open).
+    /// </summary>
+    private static IReadOnlyList<InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration>
+        BuildNewsTypingReaderRegistrations(RadarWorkerOptions options) =>
+        BuildReaderRegistrations(
+            options,
+            options.NewsResearch.Typing.Readers,
+            "Radar:NewsResearch:Typing:Readers",
+            "Radar:NewsResearch:Typing:Enabled is true but no typing reader is resolvable: "
+                + "Radar:Ai:Provider is blank and Radar:NewsResearch:Typing:Readers is empty. "
+                + "Configure the ambient AI provider, add a reader, or disable typing.",
+            "News-typing");
 
     /// <summary>
     /// Fail-fast limit validation for the <c>Radar:NewsResearch:Shadow</c> block, applied even when the
@@ -1012,17 +1076,35 @@ internal static class RadarWorkerServices
     /// unique (provider, model) pairs) are enforced inside <c>AddRadarNewsRiskShadow</c>.
     /// </summary>
     private static IReadOnlyList<InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration>
-        BuildNewsRiskReaderRegistrations(RadarWorkerOptions options)
+        BuildNewsRiskReaderRegistrations(RadarWorkerOptions options) =>
+        BuildReaderRegistrations(
+            options,
+            options.NewsResearch.Shadow.Readers,
+            "Radar:NewsResearch:Shadow:Readers",
+            "Radar:NewsResearch:Shadow:Enabled is true but no news-risk reader is resolvable: "
+                + "Radar:Ai:Provider is blank and Radar:NewsResearch:Shadow:Readers is empty. "
+                + "Configure the ambient AI provider, add a reader, or disable the shadow.",
+            "News-risk");
+
+    /// <summary>
+    /// The ONE reader-list → registration resolution shared by the news-risk shadow and the news-typing
+    /// step (spec 181 reuses spec 179's reader seam verbatim). Each configured entry flattens through the
+    /// SAME <see cref="FlattenAiClientOptions"/> path as <c>Radar:Ai</c>, with every failure re-thrown
+    /// naming the reader kind, the reader and its exact config path.
+    /// </summary>
+    private static IReadOnlyList<InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration>
+        BuildReaderRegistrations(
+            RadarWorkerOptions options,
+            IReadOnlyList<NewsRiskReaderWorkerOptions> readers,
+            string readersSectionPath,
+            string noReaderMessage,
+            string readerKind)
     {
-        var readers = options.NewsResearch.Shadow.Readers;
         if (readers is not { Count: > 0 })
         {
             if (string.IsNullOrWhiteSpace(options.Ai.Provider))
             {
-                throw new InvalidOperationException(
-                    "Radar:NewsResearch:Shadow:Enabled is true but no news-risk reader is resolvable: "
-                        + "Radar:Ai:Provider is blank and Radar:NewsResearch:Shadow:Readers is empty. "
-                        + "Configure the ambient AI provider, add a reader, or disable the shadow.");
+                throw new InvalidOperationException(noReaderMessage);
             }
 
             return
@@ -1045,7 +1127,7 @@ internal static class RadarWorkerServices
         for (var i = 0; i < readers.Count; i++)
         {
             var reader = readers[i];
-            var path = $"Radar:NewsResearch:Shadow:Readers:{i}";
+            var path = $"{readersSectionPath}:{i}";
             try
             {
                 registrations.Add(new InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration(
@@ -1060,7 +1142,7 @@ internal static class RadarWorkerServices
                 // flattening's own message already carries the path; the name is added here, the first
                 // place it is known.
                 throw new InvalidOperationException(
-                    $"News-risk reader '{reader.Name}' ({path}) is misconfigured: {ex.Message}", ex);
+                    $"{readerKind} reader '{reader.Name}' ({path}) is misconfigured: {ex.Message}", ex);
             }
         }
 
@@ -1083,7 +1165,7 @@ internal static class RadarWorkerServices
         ConfigSectionGuards.FailIfScalarSection(
             section,
             "Radar:NewsResearch must be an object carrying CaptureRss / ObservationDirectory / "
-                + "ArticleFetch / Migration keys.");
+                + "ArticleFetch / Migration / Shadow / Typing keys.");
         ConfigSectionGuards.FailOnUnknownKeys(
             section,
             ConfigSectionGuards.BindablePropertyNames(typeof(NewsResearchWorkerOptions)),
@@ -1116,23 +1198,44 @@ internal static class RadarWorkerServices
                 + "keys.");
         if (shadowSection.Exists())
         {
-            var readersSection = shadowSection.GetSection("Readers");
-            if (readersSection.Exists())
-            {
-                ConfigSectionGuards.FailIfScalarSection(
-                    readersSection,
-                    "Radar:NewsResearch:Shadow:Readers must be a LIST of reader objects, each carrying "
-                        + "Name / Provider / Model (+ provider-specific settings).");
-                foreach (var reader in readersSection.GetChildren())
-                {
-                    ValidateNestedSection(
-                        reader,
-                        typeof(NewsRiskReaderWorkerOptions),
-                        $"Radar:NewsResearch:Shadow:Readers:{reader.Key}",
-                        "must be an object carrying Name / Provider / Model / Anthropic / Ollama / OpenAi "
-                            + "keys.");
-                }
-            }
+            ValidateReadersList(shadowSection.GetSection("Readers"), "Radar:NewsResearch:Shadow:Readers");
+        }
+
+        // Spec 181: the Typing sub-block and each reader entry get the SAME strict treatment as the Shadow —
+        // an unknown key would silently leave the default in place while the run read as configured.
+        var typingSection = section.GetSection("Typing");
+        ValidateNestedSection(
+            typingSection,
+            typeof(NewsTypingWorkerOptions),
+            "Radar:NewsResearch:Typing",
+            "must be an object carrying Enabled / OutputDirectory / MaxNewTypingsPerRun / LookbackDays / "
+                + "Readers keys.");
+        if (typingSection.Exists())
+        {
+            ValidateReadersList(typingSection.GetSection("Readers"), "Radar:NewsResearch:Typing:Readers");
+        }
+    }
+
+    /// <summary>The ONE reader-list shape validation, shared by the Shadow and Typing reader sections.</summary>
+    private static void ValidateReadersList(IConfigurationSection readersSection, string path)
+    {
+        if (!readersSection.Exists())
+        {
+            return;
+        }
+
+        ConfigSectionGuards.FailIfScalarSection(
+            readersSection,
+            path + " must be a LIST of reader objects, each carrying "
+                + "Name / Provider / Model (+ provider-specific settings).");
+        foreach (var reader in readersSection.GetChildren())
+        {
+            ValidateNestedSection(
+                reader,
+                typeof(NewsRiskReaderWorkerOptions),
+                $"{path}:{reader.Key}",
+                "must be an object carrying Name / Provider / Model / Anthropic / Ollama / OpenAi "
+                    + "keys.");
         }
     }
 
