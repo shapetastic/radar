@@ -75,25 +75,41 @@ tokens everywhere (the `NewsTypingTokens` parse path suggests it does); if any n
 coupling exists, leave the order and add a hydration guard instead. State which branch was taken in the PR.
 
 Tests: the existing `Mixed`-codifying policy test is updated, plus new cases pinning
-`Deteriorating`+0 findings ⇒ `Challenged`, the token rendering in all `Judged` states, null-trajectory ⇒
-`unknown`, and the renderer output for a deteriorating zero-findings leader row.
+`Deteriorating`+0 findings ⇒ `Challenged`, the token rendering in all `Judged` states, null-trajectory
+under `Judged` ⇒ `unassessed (invalid-record)` (review round 3 — the round-2 text here still said
+"unknown", contradicting the rule above; the genuine `Unknown` ENUM value is the case that renders the
+`unknown` trajectory token), and the renderer output for a deteriorating zero-findings leader row.
 
 ## 2. Bounded typing retries (fix 2)
 
 Attempt counts are DERIVED per `(cohortKey, observationId, payloadHash)` from the records the insert-only
 store already holds and the generator already loads — no new store, no side index.
 
+- **Attempt counting must bound HOSTED CALLS, not stored records (review round 3 — the existing typing
+  identity includes `runId`, and a null `runId` maps every invocation onto one "standalone" identity, so
+  re-running one run, or repeatedly invoking the supported null-run path, calls the model again while the
+  insert-only store deduplicates the record and the derived count NEVER advances).** Two rules, both
+  specified here so the identity is deliberate: (a) **same-run idempotency** — within one `runId`, an
+  observation that already has a persisted attempt record for this cohort is SKIPPED, no model call; (b)
+  **every legitimate standalone (null-run) invocation mints a distinct persisted attempt identity** (a
+  per-invocation token folded into the record id), so each real hosted call leaves its own record and the
+  derived attempt count advances by exactly one per call. Invariant, stated plainly: hosted calls for one
+  `(cohort, observation, payload)` can never exceed `MaxTypingAttempts`, whatever mix of re-runs and
+  standalone invocations occurs.
 - **`Radar:NewsResearch:Typing:MaxTypingAttempts`**, default **3**, validated at the config boundary like
   its sibling limits (≥ 1; strict-key allowlist gains the one key).
-- **A bounded RETRY LANE, not a strict ordering (review round 2 — round 1's "all first-attempts before all
-  retries" just inverts the starvation: behind the 13k backlog, a transiently failed CURRENT LEADER would
-  wait ~65 runs for its second attempt).** Per run, per reader: reserve
+- **A bounded RETRY LANE with FIFO fairness (review rounds 2+3 — round 1's strict ordering starved
+  retries behind the 13k backlog; round 2's fewest-attempts-first lane still starved LATER attempts:
+  with continuous fresh failures, the replenishing attempt-1 population keeps an attempt-2 record waiting
+  indefinitely, so it neither retries nor exhausts).** Per run, per reader: reserve
   `min(MaxRetryTypingsPerRun, pending retries)` slots for retries (new key
-  `Radar:NewsResearch:Typing:MaxRetryTypingsPerRun`, default **25**, ≥ 0, must be < `MaxNewTypingsPerRun`);
-  retries fill their lane ordered fewest-attempts first, then oldest `FirstObservedAtUtc`, then observation
-  id (AD-3); UNUSED lane capacity returns to first attempts; first attempts fill the remainder
-  window-newest-first then backlog-oldest-first as today. Neither lane can monopolize the cap, by
-  construction, in either direction.
+  `Radar:NewsResearch:Typing:MaxRetryTypingsPerRun`, default **25**, **≥ 1** — zero would re-permit total
+  retry starvation and is rejected — and < `MaxNewTypingsPerRun`); retries fill their lane ordered by
+  **oldest last-attempt instant first** (then observation id — AD-3), so newly failed work queues BEHIND
+  already-waiting work and the bound `ceil(pendingRetries / MaxRetryTypingsPerRun)` runs-to-reach holds
+  for every record in a pending snapshot; UNUSED lane capacity returns to first attempts; first attempts
+  fill the remainder window-newest-first then backlog-oldest-first as today. Neither lane can monopolize
+  the cap, and no attempt tier can starve another, by construction.
 - **Exhausted records (attempts ≥ max) leave selection and become visible, never silent:** a per-cohort
   `RetryExhausted` count on the run result and the decomposition artifact, and a company holding an
   exhausted untyped observation must never read `Complete` typing completeness (map it onto the existing
@@ -109,11 +125,16 @@ store already holds and the generator already loads — no new store, no side in
   bumps in the PR.
 
 Tests: a persistently failing observation is attempted exactly `MaxTypingAttempts` times across simulated
-runs and then excluded; the retry lane caps retries under a full backlog AND guarantees a pending retry is
-reached within `ceil(pendingRetries / MaxRetryTypingsPerRun)` runs regardless of fresh volume; unused lane
-capacity flows back to first attempts; the exhausted count and completeness degradation are asserted; a
-later PAYLOAD change (new `payloadHash`) resets the attempt count (a different input, not a retry); legacy
-records without the new limits fields hydrate as null.
+runs and then excluded — **asserted on the counting fake extractor's HOSTED-CALL count, not only on stored
+records** (round 3), including repeated invocation with the SAME `runId` (zero extra calls) and repeated
+standalone invocations with `runId` null (each calls once, each persists distinctly, exhaustion still
+trips at the cap); the retry lane caps retries under a full backlog AND the FIFO ordering guarantees a
+pending retry is reached within `ceil(pendingRetries / MaxRetryTypingsPerRun)` runs even while NEW
+failures keep arriving (the round-3 starvation case, pinned: an attempt-2 record is reached ahead of a
+continuously replenishing attempt-1 population); `MaxRetryTypingsPerRun: 0` fails config validation;
+unused lane capacity flows back to first attempts; the exhausted count and completeness degradation are
+asserted; a later PAYLOAD change (new `payloadHash`) resets the attempt count (a different input, not a
+retry); legacy records without the new limits fields hydrate as null.
 
 ## 3. Stable gate-verdict identity (fix 3)
 
@@ -140,6 +161,15 @@ wrong primitive; identity-binding is the right one).
   reducer honours an override iff its `overridesVerdictId` equals the artifact's current `gateVerdictId`.
   Timestamp comparison is DELETED from the reducer's override rule; `ArtifactWrittenAtUtc` and the
   `File.GetLastWriteTimeUtc` read go away. No live call carries `overridesGate` today, so nothing breaks.
+- **This is a VERSIONED schema change, named as such (review round 3):** the reader accepts exactly
+  `strategy-operating-calls-v1` and rejects unknown fields, so adding `overridesVerdictId` —
+  conditionally required and semantically REPLACING timestamp precedence — is
+  **`strategy-operating-calls-v2`**. The committed `data/strategy-operating-calls.json` migrates to v2 in
+  this PR (a mechanical version-token bump; no call in it carries an override). Legacy v1 REMAINS
+  readable — v1 simply cannot express an override, so a v1 file containing `overridesGate: true` fails
+  validation naming the remedy ("migrate to strategy-operating-calls-v2 and bind the override to a
+  verdict id"); a v1 file without overrides behaves exactly as today. Both accepted versions and the
+  v1-with-override rejection are pinned by tests.
 - **A stale override is REPORTED, never silently dropped:** when an override names a verdict id that no
   longer matches, the lifecycle section renders one line naming the call, the id it bound to, and the
   current id — the gate default re-arms (new evidence SHOULD re-open the call), and the maintainer can see
@@ -169,16 +199,26 @@ cohort dimension — never an edit. So:
   still mutable in the ordinary case: families rebuild over a rolling window each checkpoint, so when an
   episode's earliest member ages OUT of the window the anchor would advance and the id would churn run
   after run, turning the promised one-time re-judge into repeated cache churn).** Rules:
-  - Episode SEGMENTATION (the 7-day proximity chaining) is computed per (company, capture mode, canonical
-    claim key) over ALL qualifying validated facts in the store — bounded and cheap, the hydrated fact
-    store is already in memory. The id's temporal anchor is the episode's FIRST-EVER member's
-    `firstObservedAtUtc` UTC date, which is immutable under window expiry by construction (facts are
-    append-only and a fact's first-observed instant never changes).
-  - The CHECKPOINT snapshot still contains only families with ≥ 1 member in the checkpoint window — what a
-    checkpoint MEANS is unchanged; only where the identity anchor comes from widened.
-  - **The id also folds the episode's representative event-type set** (the sorted `EventTypes` of that same
-    first-ever member): membership requires overlapping types, so two same-statement families with
-    DISJOINT types are different families and must not share an id (review round 2's second point).
+  - **TWO STAGES, because durable identity and the window representative are DIFFERENT jobs (review
+    round 3 — with one stage, the first-ever member doubles as `RepresentativeFactId`, and
+    `NewsJudgmentInputBuilder` drops any family whose representative is absent from the current-window
+    fact index: once the anchor fact ages out, a family with FRESH news silently disappears from
+    judgment — the exact opposite of what this fix is for).** Stage 1, SEGMENTATION over ALL qualifying
+    validated facts in the store (bounded and cheap — the hydrated fact store is already in memory),
+    **preserving v1's membership algorithm verbatim**: representative-relative similarity within the
+    7-day temporal proximity rule, exactly as `FactFamilyBuilder` groups today — NOT exact-canonical-key
+    grouping and NOT transitive chaining (round 3: the round-2 phrases "per canonical claim key" and
+    "proximity chaining" would each have been a behavioural change to membership; membership semantics do
+    not change in this spec, only identity and projection do). Stage 1 yields each episode's DURABLE
+    identity anchor: the first-ever member's `firstObservedAtUtc` UTC date plus that member's sorted
+    `EventTypes` (two same-statement families with DISJOINT types are different families — round 2's
+    point, kept), both immutable under window expiry by construction (facts are append-only).
+  - Stage 2, **PROJECTION onto the checkpoint window**: each episode with ≥ 1 in-window member enters the
+    snapshot carrying the durable `FamilyId` from stage 1, while `RepresentativeFactId`, member counts,
+    distinct-publisher counts and the supplied content are all derived from the IN-WINDOW members only
+    (representative = v1's rule applied to the projection: earliest `firstObservedAtUtc`, then lowest
+    FactId). What a checkpoint MEANS — window families, window metadata — is unchanged; only the id
+    survives from full history.
   - All of this — history-wide segmentation, anchor rule, event-type fold — is part of `fact-family-v2`'s
     identity per spec 181 §4's "the full builder definition enters the cohort identity".
 - **Documented, accepted caveat (now the ONLY id-shift case):** a late-arriving member that is temporally
@@ -194,7 +234,11 @@ cohort dimension — never an edit. So:
   byte-identical normalized statements >7 days apart produce two families with two DISTINCT ids; (b)
   **window-expiry stability**: a later checkpoint whose window no longer contains the episode's earliest
   member keeps the SAME family id (the round-2 churn case, pinned); (c) same statement, disjoint event
-  types ⇒ distinct ids. A rerun over identical facts stays byte-deterministic.
+  types ⇒ distinct ids; (d) **end-to-end through the judge** (round 3): a family whose identity anchor
+  fact is OUTSIDE the checkpoint window but which has fresh in-window members is projected with an
+  in-window `RepresentativeFactId` and REACHES `NewsJudgmentInputBuilder`'s output — not dropped; (e) a
+  membership-parity fixture pinning that v2 groups a v1 fixture set into the SAME member partitions v1
+  does (only ids differ). A rerun over identical facts stays byte-deterministic.
 
 ## 5. Out of scope, recorded not built
 
@@ -212,15 +256,21 @@ cohort dimension — never an edit. So:
       `Judged` markers carry the trajectory token; null-trajectory-under-`Judged` renders
       `unassessed (invalid-record)`; the validator is untouched; every judged row's judgment id is
       traceable from the report.
-- [ ] A persistently failing typing input stops consuming budget after `MaxTypingAttempts`, visibly;
-      the bounded retry lane guarantees NEITHER first attempts nor retries can be starved; exhaustion
-      degrades completeness and is counted; the limits-record and decomposition schema bumps are named.
+- [ ] HOSTED CALLS for one `(cohort, observation, payload)` never exceed `MaxTypingAttempts` under any
+      mix of same-run re-invocation and standalone (null-run) invocation — asserted on call counts, not
+      stored records; the FIFO retry lane (≥ 1, never 0) guarantees no attempt tier starves another;
+      exhaustion degrades completeness and is counted; the limits-record and decomposition schema bumps
+      are named.
 - [ ] No verdict consumer reads filesystem mtime or compares timestamps; an override binds to a
       `gateVerdictId`, survives identical-content rewrites and copies, and re-arms — visibly, via the
-      stale-override line — on any new admitted evidence OR an AD-16 prerequisite transition alone.
-- [ ] `fact-family-v2` gives temporally separate episodes distinct ids that are STABLE under window
-      expiry; disjoint-event-type families never share an id; v1 data untouched; all family fixtures
-      pinned under v2 including the collision, window-expiry and disjoint-type cases.
+      stale-override line — on any new admitted evidence OR an AD-16 prerequisite transition alone; the
+      operating-calls schema is `strategy-operating-calls-v2` with the committed file migrated and
+      v1-without-overrides still readable.
+- [ ] `fact-family-v2` separates durable identity (full-history anchor) from the window projection
+      (representative, counts, publishers, content — in-window only); a fresh-news family with an aged-out
+      anchor still reaches the judge; membership semantics are byte-compatible with v1 (parity fixture);
+      temporally separate episodes get distinct ids stable under window expiry; disjoint-event-type
+      families never share an id; v1 data untouched.
 - [ ] No score, label, rank, fingerprint, snapshot field, or AD-15/AD-16 claim changes; the spec-148/160
       pins stand; `ScoringConfigFingerprintTests` untouched.
 - [ ] Build and full test suite green.
