@@ -1,0 +1,23 @@
+{
+  "_comment": "EXPERIMENT profile 'news-typing' - overlays the default profile (spec 181). Enables the stage-1 news event-typing pass over the spec-177 observation archive: after each unfiltered full run, up to Radar:NewsResearch:Typing:MaxNewTypingsPerRun observations PER READER are typed against news-event-taxonomy-v1 (window observations newest-first, then the legacy backlog oldest-first), fact families are checkpointed deterministically (fact-family-v1), and the attention-decomposition artifact is written to <outRoot>/news-typing/live/attention-decomposition-{date}.{md,json} (run-radar.ps1 supplies Radar:NewsResearch:Typing:OutputDirectory). Read-side and shadow: NO score, label, strategy, fingerprint, snapshot field or report rank changes, and nothing is hashed into any fingerprint. The reader is the HOSTED DeepInfra DeepSeek ONLY (same client shape as default.json's Shadow Readers entry 0, requires DEEPINFRA_API_KEY) - the spec-181 §1 gate measured the hosted reader at a 0.0% citation-validation drop rate while llama3.1 dropped 19.2% with near-zero cross-reader agreement, so the local model is NOT a viable solo typing reader and is deliberately absent here; typing runs hosted-only while the news-risk shadow keeps both its cohorts. Cohort identity is provider + exact model id + prompt/schema/TAXONOMY version; capture-mode cohorts (ProspectiveRss vs LegacyHeadlineOnly vs RetrospectiveUrlFetch) never pool in any output. Because this is an overlay, everything else - collectors, strategies, scoring, the news-risk shadow - is byte-identical to the baseline; output routes to data/experiments/news-typing/ so baseline data is untouched.",
+  "Radar": {
+    "NewsResearch": {
+      "Typing": {
+        "Enabled": true,
+        "MaxNewTypingsPerRun": 200,
+        "LookbackDays": 30,
+        "Readers": [
+          {
+            "Name": "deepinfra-deepseek",
+            "Provider": "openai",
+            "OpenAi": {
+              "BaseUrl": "https://api.deepinfra.com/v1/openai",
+              "Model": "deepseek-ai/DeepSeek-V4-Flash",
+              "ApiKeyEnvVar": "DEEPINFRA_API_KEY"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

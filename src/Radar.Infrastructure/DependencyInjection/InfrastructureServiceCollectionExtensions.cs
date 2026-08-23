@@ -16,6 +16,7 @@ using Radar.Application.Filings;
 using Radar.Application.Lifecycle;
 using Radar.Application.NewsRisk;
 using Radar.Application.NewsRisk.Evaluation;
+using Radar.Application.NewsTyping;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -35,6 +36,7 @@ using Radar.Infrastructure.Gdelt;
 using Radar.Infrastructure.Hiring;
 using Radar.Infrastructure.News;
 using Radar.Infrastructure.NewsRisk;
+using Radar.Infrastructure.NewsTyping;
 using Radar.Infrastructure.Patents;
 using Radar.Infrastructure.Persistence.InMemory;
 using Radar.Infrastructure.Prices;
@@ -2574,49 +2576,7 @@ public static class InfrastructureServiceCollectionExtensions
                     + "entry. A shadow step that silently never runs is a fail-open.");
         }
 
-        var normalized = new List<(string Name, string ConfigPath, AiClientOptions Client)>(readers.Count);
-        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var reader in readers)
-        {
-            var name = reader.Name?.Trim() ?? string.Empty;
-            if (name.Length == 0)
-            {
-                throw new InvalidOperationException(
-                    $"News-risk reader at {reader.ConfigPath} has a blank Name; every reader needs a "
-                        + "display/provenance label (e.g. \"deepseek\", \"local-ollama\").");
-            }
-
-            if (!seenNames.Add(name))
-            {
-                throw new InvalidOperationException(
-                    $"News-risk reader '{name}' ({reader.ConfigPath}) duplicates another reader's name "
-                        + "(names are compared case-insensitively); reader names are provenance labels and "
-                        + "must be unique.");
-            }
-
-            normalized.Add((name, reader.ConfigPath, ValidateNewsRiskReaderClient(name, reader.ConfigPath, reader.Client)));
-        }
-
-        // Two readers on the same (provider, model) share every cohort/cache key (the reader NAME is
-        // deliberately not part of cohort identity), so the pair must be unique. Provider compared
-        // case-insensitively (AddRadarAi treats it so); the model id exactly.
-        for (var i = 0; i < normalized.Count; i++)
-        {
-            for (var j = i + 1; j < normalized.Count; j++)
-            {
-                if (string.Equals(normalized[i].Client.Provider, normalized[j].Client.Provider, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(normalized[i].Client.Model, normalized[j].Client.Model, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"News-risk readers '{normalized[i].Name}' ({normalized[i].ConfigPath}) and "
-                            + $"'{normalized[j].Name}' ({normalized[j].ConfigPath}) both resolve to "
-                            + $"provider '{normalized[j].Client.Provider}' model "
-                            + $"'{normalized[j].Client.Model}'. Cohort identity is provider + exact model "
-                            + "id + prompt/schema version, so they would share every cache key and assess "
-                            + "nothing twice — remove one, or point it at a different model.");
-                }
-            }
-        }
+        var normalized = ValidateReaderRegistrations("News-risk", readers);
 
         services.AddSingleton(options);
         services.AddSingleton(new FileNewsRiskAssessmentStoreOptions
@@ -2650,6 +2610,133 @@ public static class InfrastructureServiceCollectionExtensions
         });
         services.AddSingleton(sp => sp.GetRequiredService<NewsRiskReaderClientOwner>().Readers);
         services.AddSingleton<INewsRiskShadowGenerator, NewsRiskShadowGenerator>();
+        services.TryAddSingleton(TimeProvider.System);
+        return services;
+    }
+
+    /// <summary>
+    /// The ONE reader-set validation shared by the news-risk and news-typing registrations (spec 181 reuses
+    /// spec 179's reader seam verbatim): blank/duplicate names (case-insensitive — the name is
+    /// display/provenance only), invalid provider client options (the same rules <see cref="AddRadarAi"/>
+    /// applies), and two readers resolving to the SAME (provider, model) pair — they would share every
+    /// cohort/cache key, so the duplication is a misconfiguration, not redundancy. Every message names the
+    /// reader kind, the reader and its exact config path.
+    /// </summary>
+    private static List<(string Name, string ConfigPath, AiClientOptions Client)> ValidateReaderRegistrations(
+        string readerKind, IReadOnlyList<NewsRiskReaderRegistration> readers)
+    {
+        var normalized = new List<(string Name, string ConfigPath, AiClientOptions Client)>(readers.Count);
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var reader in readers)
+        {
+            var name = reader.Name?.Trim() ?? string.Empty;
+            if (name.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"{readerKind} reader at {reader.ConfigPath} has a blank Name; every reader needs a "
+                        + "display/provenance label (e.g. \"deepseek\", \"local-ollama\").");
+            }
+
+            if (!seenNames.Add(name))
+            {
+                throw new InvalidOperationException(
+                    $"{readerKind} reader '{name}' ({reader.ConfigPath}) duplicates another reader's name "
+                        + "(names are compared case-insensitively); reader names are provenance labels and "
+                        + "must be unique.");
+            }
+
+            normalized.Add((name, reader.ConfigPath, ValidateNewsRiskReaderClient(name, reader.ConfigPath, reader.Client)));
+        }
+
+        // Two readers on the same (provider, model) share every cohort/cache key (the reader NAME is
+        // deliberately not part of cohort identity), so the pair must be unique. Provider compared
+        // case-insensitively (AddRadarAi treats it so); the model id exactly.
+        for (var i = 0; i < normalized.Count; i++)
+        {
+            for (var j = i + 1; j < normalized.Count; j++)
+            {
+                if (string.Equals(normalized[i].Client.Provider, normalized[j].Client.Provider, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(normalized[i].Client.Model, normalized[j].Client.Model, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"{readerKind} readers '{normalized[i].Name}' ({normalized[i].ConfigPath}) and "
+                            + $"'{normalized[j].Name}' ({normalized[j].ConfigPath}) both resolve to "
+                            + $"provider '{normalized[j].Client.Provider}' model "
+                            + $"'{normalized[j].Client.Model}'. Cohort identity is provider + exact model "
+                            + "id + prompt/schema version, so they would share every cache key and assess "
+                            + "nothing twice — remove one, or point it at a different model.");
+                }
+            }
+        }
+
+        return normalized;
+    }
+
+    /// <summary>
+    /// Registers the spec-181 in-process news-typing step: the durable typing store, the fact-family
+    /// checkpoint store and the decomposition artifact writer (all under the typing output root), the
+    /// resolved typing reader set, and the <see cref="INewsTypingGenerator"/>. Call ONLY when typing is
+    /// enabled in unfiltered full mode with at least one resolvable reader — the composition root owns
+    /// those gates. Reader rules are the SAME as the news-risk shadow's (shared
+    /// <see cref="ValidateReaderRegistrations"/>), with typing-scoped messages. Depends on the archive read
+    /// seams (<see cref="AddFileNewsObservationArchive"/>) and the run store being registered. Read-side and
+    /// shadow: nothing here is a scoring input or a fingerprint input.
+    /// </summary>
+    public static IServiceCollection AddRadarNewsTyping(
+        this IServiceCollection services,
+        NewsTypingOptions options,
+        IReadOnlyList<NewsRiskReaderRegistration> readers)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(readers);
+
+        if (readers.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Typing is enabled but no typing reader is resolvable: configure "
+                    + "Radar:Ai (the ambient reader) or at least one Radar:NewsResearch:Typing:Readers "
+                    + "entry. A typing step that silently never runs is a fail-open.");
+        }
+
+        var normalized = ValidateReaderRegistrations("News-typing", readers);
+
+        services.AddSingleton(options);
+        services.AddSingleton(new FileNewsTypingStoreOptions
+        {
+            RootDirectory = options.OutputDirectory,
+        });
+        services.AddSingleton<INewsTypingStore, FileNewsTypingStore>();
+        services.AddSingleton(new FileFactFamilySnapshotStoreOptions
+        {
+            RootDirectory = options.OutputDirectory,
+        });
+        services.AddSingleton<IFactFamilySnapshotStore, FileFactFamilySnapshotStore>();
+        services.AddSingleton(new FileNewsTypingArtifactStoreOptions
+        {
+            RootDirectory = options.OutputDirectory,
+        });
+        services.AddSingleton<INewsTypingArtifactStore, FileNewsTypingArtifactStore>();
+        // Per-reader clients are created here rather than registered as IChatClient (they would collide
+        // with the ambient AddRadarAi client); NewsTypingReaderClientOwner holds them and IS
+        // container-created, so the ServiceProvider disposes them on shutdown (the spec-179 mechanism).
+        services.AddSingleton(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<ChatNewsTypingExtractor>>();
+            var typingReaders = new List<NewsTypingReader>(normalized.Count);
+            var clients = new List<IChatClient>(normalized.Count);
+            foreach (var r in normalized)
+            {
+                var identity = new NewsTypingReaderIdentity(r.Name, r.Client.Provider, r.Client.Model);
+                var client = new ChatClientFactory(r.Client).Create();
+                clients.Add(client);
+                typingReaders.Add(new NewsTypingReader(
+                    identity, new ChatNewsTypingExtractor(client, identity, logger)));
+            }
+
+            return new NewsTypingReaderClientOwner(new NewsTypingReaderSet(typingReaders), clients);
+        });
+        services.AddSingleton(sp => sp.GetRequiredService<NewsTypingReaderClientOwner>().Readers);
+        services.AddSingleton<INewsTypingGenerator, NewsTypingGenerator>();
         services.TryAddSingleton(TimeProvider.System);
         return services;
     }

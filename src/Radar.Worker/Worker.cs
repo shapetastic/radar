@@ -8,6 +8,7 @@ using Radar.Application.Lifecycle;
 using Radar.Application.News;
 using Radar.Application.NewsRisk;
 using Radar.Application.NewsRisk.Evaluation;
+using Radar.Application.NewsTyping;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
@@ -73,6 +74,7 @@ public sealed class Worker : BackgroundService
     private readonly INewsObservationMigration? _newsObservationMigration;
     private readonly INewsRiskShadowGenerator? _newsRiskShadowGenerator;
     private readonly INewsRiskEvaluationGenerator? _newsRiskEvaluationGenerator;
+    private readonly INewsTypingGenerator? _newsTypingGenerator;
     private readonly IOperatingCallStartupValidator? _operatingCallValidator;
 
     public Worker(
@@ -92,7 +94,8 @@ public sealed class Worker : BackgroundService
         INewsObservationMigration? newsObservationMigration = null,
         INewsRiskShadowGenerator? newsRiskShadowGenerator = null,
         INewsRiskEvaluationGenerator? newsRiskEvaluationGenerator = null,
-        IOperatingCallStartupValidator? operatingCallValidator = null)
+        IOperatingCallStartupValidator? operatingCallValidator = null,
+        INewsTypingGenerator? newsTypingGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -117,6 +120,7 @@ public sealed class Worker : BackgroundService
         _newsObservationMigration = newsObservationMigration;
         _newsRiskShadowGenerator = newsRiskShadowGenerator;
         _newsRiskEvaluationGenerator = newsRiskEvaluationGenerator;
+        _newsTypingGenerator = newsTypingGenerator;
         _operatingCallValidator = operatingCallValidator;
     }
 
@@ -220,7 +224,39 @@ public sealed class Worker : BackgroundService
         // Spec 179 §2: the news-risk shadow read runs BEFORE the existing efficacy step, consuming the
         // exact section instances and durable run id the pipeline result carries.
         await RunNewsRiskShadowAsync(result, ct).ConfigureAwait(false);
+        // Spec 181: the news event-typing pass runs right after the news-risk shadow (same shadow posture:
+        // read-side, never a score/label/fingerprint input) and before the efficacy step.
+        await RunNewsTypingAsync(result, ct).ConfigureAwait(false);
         await RunEfficacyReportAsync(ct).ConfigureAwait(false);
+    }
+
+    // Spec 181: the in-process news event-typing pass — a SEPARATE step AFTER the news-risk shadow, OUTSIDE
+    // IRadarPipeline. It types archived spec-177 observations against the closed taxonomy (bounded per-run
+    // per-reader), checkpoints deterministic fact families, and writes the attention-decomposition artifact.
+    // Skipped entirely (dependency null) unless Radar:NewsResearch:Typing:Enabled in unfiltered full mode
+    // with a resolvable reader. The generator owns its own failure handling (a typing failure writes a named
+    // FAILED artifact and never rolls back the run); the belt-and-braces catch here keeps even an unexpected
+    // escape from aborting the host loop.
+    private async Task RunNewsTypingAsync(RadarPipelineResult result, CancellationToken ct)
+    {
+        if (_newsTypingGenerator is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _newsTypingGenerator.GenerateAsync(result.RunId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex, "News-typing step failed unexpectedly; the Radar run itself is unaffected.");
+        }
     }
 
     private async Task<RadarPipelineResult> RunPipelineAsync(CancellationToken ct)

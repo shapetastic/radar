@@ -1096,6 +1096,34 @@ Do not hand back broken code.
     Lead (resolved by the AD-15 composite gate EVENT, not a calendar date), `default` DoNotLead (oos ρ −0.05,
     CI spans zero at call time), the four other research arms Trial (resolved by supersession); comparators
     carry no call, ever. Radar records wrong calls rather than avoiding falsifiable decisions.
+- **News event typing — stage 1 of the two-stage read: facts and event types, NO directional question (spec
+  181).** A new `NewsTyping` slice (Application + Infrastructure) types spec-177 archived observations
+  against the closed **`news-event-taxonomy-v1`** (14 members incl. `MarketReaction`; hash
+  `078f53452ac8bf28526f29704f5d06a345bfae3b7bcbbf54661a2a8193555f5c`, pinned by test and declared in
+  `docs/cohorts/news-event-taxonomy-v1.md` — immutable by convention, change ⇒ v2, cohorts never pool across
+  versions; the §3 ≥200-observation human audit runs against FIRST typings, tooling shipped here). Rules:
+  facts are the typed unit (one headline carries several events); each validated fact carries event types,
+  a preserved statement, temporal scope, closed attribution/assertion-status vocabularies, confidence and
+  EXACT-substring citations (spec-179-style fail-closed validation; unlike 179 an invalid citation is
+  dropped individually and the fact survives on verified remainder — the omission-bias guard);
+  `DerivedPrimaryType` is DERIVED (greatest summed confidence, taxonomy-order tie-break), never authored;
+  the wire schema and prompt contain NO direction/severity/materiality member (reflection-guarded).
+  Cohort key = provider:model|prompt|schema|**taxonomy**; capture-mode cohorts stay separate in every
+  output; no merged verdict anywhere. The generator runs post-run beside the 179 shadow (gate:
+  `Radar:NewsResearch:Typing:Enabled` && Full && unfiltered; **default OFF** — enable via the `news-typing`
+  run-profile overlay, hosted DeepSeek reader only per §1's measured 0%-vs-19.2% citation-drop gap),
+  bounded by `MaxNewTypingsPerRun` PER READER (window observations newest-first, then backlog oldest-first
+  — the bounded backlog phase IS the 13k-article catch-up mechanism; no new RunMode), cached by
+  (cohort, observation, payloadHash) on completed typings (Typed/InsufficientContent only, so failures
+  retry). **`fact-family-v1`** is a deterministic post-extraction checkpoint pass (never a model call):
+  company + capture mode + overlapping event types + token-set-Jaccard ≥ 0.6 over versioned normalization +
+  7-day window, contradictions (differing number multisets, negation XOR) never merge, family id = builder
+  version + company + capture mode + earliest member's normalized statement (never the member list),
+  snapshots append-only per cohort. Output: `data/news-typing/live/attention-decomposition-{date}.md|.json`
+  — per company per reader×capture-mode cohort, type distribution + publisher breadth + family count beside
+  raw count + honest incompleteness marking, carrying the §5 caveat verbatim. Read-side and shadow: no
+  score, label, strategy, fingerprint, snapshot field or report rank moves; the pins do not move. Stage 2
+  (the direction judge consuming ONLY this fact layer) is spec 185.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

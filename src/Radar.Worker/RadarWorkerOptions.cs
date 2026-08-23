@@ -863,6 +863,38 @@ public sealed class NewsResearchWorkerOptions
 
     /// <summary>The in-process news-risk shadow read + frozen-assessment evaluator (spec 179). DISABLED by default in code; the live baseline profile enables it.</summary>
     public NewsRiskShadowWorkerOptions Shadow { get; init; } = new();
+
+    /// <summary>The in-process news event-typing step (spec 181). DISABLED by default; the <c>news-typing</c> run profile enables it.</summary>
+    public NewsTypingWorkerOptions Typing { get; init; } = new();
+}
+
+/// <summary>
+/// News event-typing configuration (bound from "Radar:NewsResearch:Typing"; spec 181 §4/§6). Every limit is
+/// a cost/safety control — recorded on each persisted typing record and hashed into NO scoring fingerprint.
+/// The composition root validates the section against a strict key allowlist and fails startup on an
+/// invalid limit; registration happens ONLY for an unfiltered full-mode run with at least one resolvable
+/// reader (ambient <c>Radar:Ai</c>, or a configured <see cref="Readers"/> entry).
+/// </summary>
+public sealed class NewsTypingWorkerOptions
+{
+    /// <summary>Whether the typing step runs after each unfiltered full pipeline run. DISABLED by default — the default live run is byte-unchanged.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>News-typing output root (typing records, fact-family checkpoints, decomposition artifacts). run-radar.ps1 supplies this beneath its output root.</summary>
+    public string OutputDirectory { get; init; } = "data/news-typing";
+
+    /// <summary>Per-READER per-run cap on new model calls (spec 181 §6: the legacy backlog drains in low-hundreds batches). Default 200; must be positive.</summary>
+    public int MaxNewTypingsPerRun { get; init; } = 200;
+
+    /// <summary>Decomposition/checkpoint window in days: (asOf − LookbackDays, asOf]. Default 30; must be positive.</summary>
+    public int LookbackDays { get; init; } = 30;
+
+    /// <summary>
+    /// Optional typing reader list — its OWN list, reusing the exact spec-179 reader shape/validation, so
+    /// typing can run hosted-only while the news-risk shadow runs both. Omitted/empty ⇒ exactly one reader
+    /// over the ambient <c>Radar:Ai</c> provider/model.
+    /// </summary>
+    public IReadOnlyList<NewsRiskReaderWorkerOptions> Readers { get; init; } = [];
 }
 
 /// <summary>

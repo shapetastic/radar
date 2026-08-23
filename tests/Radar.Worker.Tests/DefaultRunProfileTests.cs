@@ -244,6 +244,51 @@ public sealed class DefaultRunProfileTests
         Assert.NotNull(ProfileStrategies(BindProfiles()));
         Assert.NotNull(ProfileStrategies(BindProfiles("low-media")));
         Assert.NotNull(ProfileStrategies(BindProfiles("long-window")));
+        Assert.NotNull(ProfileStrategies(BindProfiles("news-typing")));
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 181 — the news-typing overlay: typing enabled with the HOSTED reader only, nothing else moved
+    // ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void NewsTypingOverlay_EnablesTypingWithTheHostedReaderOnly_AndMovesNothingElse()
+    {
+        var configuration = BindProfiles("news-typing");
+
+        // The delta: typing on, hosted DeepSeek reader, no second (local) reader — spec 181 §1's measured
+        // verdict (0.0% hosted vs 19.2% local citation-drop) makes the local model no solo typing reader.
+        Assert.Equal("True", configuration["Radar:NewsResearch:Typing:Enabled"]);
+        Assert.Equal("200", configuration["Radar:NewsResearch:Typing:MaxNewTypingsPerRun"]);
+        Assert.Equal(
+            "openai", configuration["Radar:NewsResearch:Typing:Readers:0:Provider"]);
+        Assert.Null(configuration["Radar:NewsResearch:Typing:Readers:1:Name"]);
+
+        // The typing reader is the SAME hosted client as the baseline Radar:Ai (model-scoped cohort
+        // continuity, and one key: DEEPINFRA_API_KEY) — pinned against the ambient block so they cannot
+        // silently diverge.
+        Assert.Equal(
+            configuration["Radar:Ai:OpenAi:BaseUrl"],
+            configuration["Radar:NewsResearch:Typing:Readers:0:OpenAi:BaseUrl"]);
+        Assert.Equal(
+            configuration["Radar:Ai:OpenAi:Model"],
+            configuration["Radar:NewsResearch:Typing:Readers:0:OpenAi:Model"]);
+        Assert.Equal(
+            configuration["Radar:Ai:OpenAi:ApiKeyEnvVar"],
+            configuration["Radar:NewsResearch:Typing:Readers:0:OpenAi:ApiKeyEnvVar"]);
+
+        // Everything else is byte-identical to the baseline: strategies (names AND weights) and the
+        // news-risk shadow block are untouched, so a typing run stays comparable to baseline runs.
+        var baseline = ProfileStrategies(BindProfiles());
+        var overlay = ProfileStrategies(configuration);
+        Assert.Equal(baseline.Strategies.Select(s => s.Name), overlay.Strategies.Select(s => s.Name));
+        Assert.All(
+            overlay.Strategies,
+            s => Assert.Equal(baseline.Strategies.Single(b => b.Name == s.Name).Weights, s.Weights));
+        Assert.Equal(
+            "True", configuration["Radar:NewsResearch:Shadow:Enabled"]);
+        Assert.Equal(
+            "ollama-local", configuration["Radar:NewsResearch:Shadow:Readers:1:Name"]);
     }
 
     // ---------------------------------------------------------------------------------------------------
