@@ -1,10 +1,16 @@
 # Task: Stage-2 direction judge — weigh canonical fact families, qualify the leaders
 
-> ⚠️ **DEFERRED — dispatch after spec 181 (stage-1 fact layer) is implemented and its first audited-sample
-> recall/citation numbers exist. Dependencies: spec 182 merged (its completeness dimensions and no-all-clear
-> doctrine are consumed here verbatim); spec 181 merged.** Drafted BEFORE 181 is built, deliberately: this
-> is the consumer contract the fact layer must satisfy, so 181 cannot ship a fact shape nothing can consume.
-> Changes here that alter the required fact shape must be reflected in 181 before either is dispatched.
+> ✅ **DISPATCHED by maintainer decision, 2026-08-23.** Dependencies met: spec 182 merged; spec 181 merged
+> (`0ec6d48`, PR #188, same day). One gate item is honestly NOT met and the maintainer chose to proceed
+> anyway: **no stage-1 typing run has happened yet** (typing ships default OFF; `data/news-typing/` does not
+> exist), so the "first audited-sample recall/citation numbers" and the §3 ≥200-observation taxonomy audit
+> do not exist — 181 declared `news-event-taxonomy-v1` without them under the decide-don't-fence-sit rule.
+> Consequence for this slice: build the judge against 181's shipped fact/family contract as-is (it was
+> drafted FROM this spec, so the consumer contract holds by construction), keep everything cohort-versioned
+> so a taxonomy v2 or prompt revision after the first audited run re-runs stage 2 only, and treat the first
+> live judged output as exploratory until stage-1 recall numbers exist. Also note from 181 as shipped:
+> `InsufficientContent` facts are EXCLUDED from family checkpoints (a conscious call this spec's judge
+> inherits — revisit if the judge needs them), and there is no standalone catch-up command yet.
 
 ## Overview
 
