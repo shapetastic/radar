@@ -38,9 +38,20 @@ public sealed record LeaderboardStrategyFact(
 /// <summary>
 /// The paired artifact's gate context: WHICH arm is under confirmatory test (the predeclared paired
 /// primary), whether a precommitted boundary exists, the composite verdict, and the rendered gate-reason
-/// text (the closed spec-170 codes appear verbatim inside it). <paramref name="ArtifactWrittenAtUtc"/> is
-/// the persisted artifact's own write instant — the "verdict instant" the reducer's predates rule compares
-/// call <c>asOfUtc</c> against.
+/// text (the closed spec-170 codes appear verbatim inside it).
+/// <para>
+/// <paramref name="GateVerdictId"/> is the artifact's own SEMANTIC verdict identity (spec 186 §3,
+/// <c>GateVerdictIdentity</c>) — the value a human operating call must bind to in order to override the
+/// verdict. EMPTY means "no verdict identity is available": either the artifact expresses no verdict, or it
+/// predates spec 186 and carries no <c>gateVerdictId</c> column at all. Both fail CLOSED — an empty id can
+/// never match an override, so the gate default wins.
+/// </para>
+/// <para>
+/// It deliberately REPLACES the pre-186 <c>ArtifactWrittenAtUtc</c> (the file's mtime): the efficacy
+/// artifacts are rewritten every run, so an mtime-anchored override silently expired after one run, a
+/// copy/restore had the same effect, and the answer was machine-dependent. No verdict consumer reads
+/// filesystem metadata or compares timestamps any more.
+/// </para>
 /// </summary>
 public sealed record PairedGateFact(
     string PrimaryStrategyName,
@@ -48,7 +59,7 @@ public sealed record PairedGateFact(
     bool BoundaryDeclared,
     bool Qualifies,
     string GateReasons,
-    DateTimeOffset ArtifactWrittenAtUtc);
+    string GateVerdictId);
 
 /// <summary>
 /// Reads the persisted efficacy artifacts into <see cref="EfficacyEvidenceFacts"/>. NEVER throws for a

@@ -252,6 +252,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         {
             AppendOperatingCallBlock(sb, lifecycle);
             AppendCallsAndEvidenceStatus(sb, lifecycle, strategies);
+            AppendStaleGateOverrides(sb, lifecycle);
 
             if (lifecycle.Calls.HasDeclaredCalls && !lifecycle.Calls.StopAll)
             {
@@ -298,6 +299,82 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             sb.Append(Lf);
             AppendLiveLeadersTable(sb, comparators, lifecycle, model.NewsJudgment);
         }
+
+        AppendJudgmentProvenance(sb, model.NewsJudgment, research, stopped, comparators);
+    }
+
+    // Spec 186 §1 — the traceability claim, made TRUE rather than asserted: every marker rendered above
+    // comes from ONE persisted judgment record, so the record's id is stated here, once per company across
+    // all three tables, with the judgments-store root stated ONCE (never per row). Display-only: no score,
+    // rank, ordering, label or snapshot is read or moved, and a model carrying no judgment ids (a null
+    // model, the pending placeholder, or a directly-composed marker map) renders nothing at all.
+    private static void AppendJudgmentProvenance(
+        StringBuilder sb,
+        NewsJudgmentMarkerReportModel? newsJudgment,
+        params IReadOnlyList<StrategyReportSection>?[] tables)
+    {
+        if (newsJudgment?.Markers is not { Count: > 0 } markers)
+        {
+            return;
+        }
+
+        // Table order, then the model's section order, then row order — the SAME traversal the tables
+        // above render (AD-3); a company surfaced by several arms is cited once, under its first
+        // appearance, because the marker is a per-company judgment, not a per-row one.
+        var lines = new List<string>();
+        var seen = new HashSet<Guid>();
+        foreach (var table in tables)
+        {
+            if (table is null)
+            {
+                continue;
+            }
+
+            foreach (var section in table)
+            {
+                for (var i = 0; i < section.Rows.Count && i < LiveLeadersPerStrategy; i++)
+                {
+                    var row = section.Rows[i];
+                    if (!seen.Add(row.CompanyId))
+                    {
+                        continue;
+                    }
+
+                    if (markers.TryGetValue(row.CompanyId, out var marker)
+                        && marker.JudgmentId is { } judgmentId)
+                    {
+                        lines.Add(string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"- {row.CompanyName} — judgment `{judgmentId:D}` · {marker.CellText}"));
+                    }
+                }
+            }
+        }
+
+        if (lines.Count == 0)
+        {
+            return;
+        }
+
+        sb.Append("### Judgment provenance — diagnostic appendix").Append(Lf);
+        sb.Append(Lf);
+        sb.Append("Every semantic-read marker above is derived by policy from ONE persisted judgment ")
+            .Append("record; its id is stated here so the marker is traceable to the record that produced ")
+            .Append("it — trajectory, rationale, consumed families and all five completeness dimensions.")
+            .Append(Lf);
+        sb.Append(Lf);
+        sb.Append("Judgments store root: ")
+            .Append(newsJudgment.JudgmentStoreRoot is { Length: > 0 } root
+                ? "`" + root + "`"
+                : "not recorded by this run")
+            .Append(Lf);
+        sb.Append(Lf);
+        foreach (var line in lines)
+        {
+            sb.Append(line).Append(Lf);
+        }
+
+        sb.Append(Lf);
     }
 
     /// <summary>The effective call for a section's strategy, or null (comparators, undeclared layer).</summary>
@@ -349,8 +426,10 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         {
             // The Lead came from the GATE DEFAULT (GatePassed → Lead), not from the declared call — which,
             // when present, may say something else entirely (e.g. Trial). State the actual provenance.
-            sb.Append("- Call: Lead · actor gate-default (the AD-15 composite gate passed for this arm ")
-                .Append("on the artifact written ").Append(Utc(gateVerdict.VerdictAtUtc)).Append(')')
+            sb.Append("- Call: Lead · actor gate-default (the AD-15 composite gate passed for this arm; ")
+                .Append("gate verdict id ")
+                .Append(gateVerdict.VerdictId.Length > 0 ? gateVerdict.VerdictId : "(unavailable)")
+                .Append(')')
                 .Append(Lf);
             if (lead.Declared is { } overridden)
             {
@@ -416,6 +495,44 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                 .Append(" | ")
                 .Append(status is null ? "—" : EscapeTableCell(FormatStatus(status)))
                 .Append(" |")
+                .Append(Lf);
+        }
+
+        sb.Append(Lf);
+    }
+
+    // Spec 186 §3: a declared gate override that no longer binds to the current verdict is REPORTED, never
+    // silently dropped — one line per stale override naming the arm, the id it bound to and the id the
+    // artifact now carries. Emitted only when one exists, so a report with no stale override is
+    // byte-identical to the pre-186 output.
+    private static void AppendStaleGateOverrides(
+        StringBuilder sb, StrategyLifecycleReportModel lifecycle)
+    {
+        var stale = lifecycle.Calls.StaleOverrides;
+        if (stale.Count == 0)
+        {
+            return;
+        }
+
+        sb.Append("### Stale gate override").Append(Lf);
+        sb.Append(Lf);
+        sb.Append("A declared override binds to ONE gate verdict by id. The verdict below has changed ")
+            .Append("since the override was declared, so the gate default re-armed — new evidence should ")
+            .Append("re-open the call. Re-declare the override against the current id in ")
+            .Append("data/strategy-operating-calls.json, or let the gate default stand.")
+            .Append(Lf);
+        sb.Append(Lf);
+
+        foreach (var entry in stale)
+        {
+            sb.Append("- ").Append(entry.StrategyName)
+                .Append(": overridesVerdictId ")
+                .Append(entry.BoundVerdictId.Length > 0 ? entry.BoundVerdictId : "(none declared)")
+                .Append(" no longer matches the current gate verdict id ")
+                .Append(entry.CurrentVerdictId.Length > 0
+                    ? entry.CurrentVerdictId
+                    : "(unavailable — the paired artifact records no verdict identity; re-run efficacy to refresh it)")
+                .Append('.')
                 .Append(Lf);
         }
 

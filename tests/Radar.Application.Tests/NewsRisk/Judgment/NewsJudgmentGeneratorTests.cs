@@ -123,7 +123,8 @@ public sealed class NewsJudgmentGeneratorTests
                     {
                         [Eose] = NewsTypingCompleteness.Complete,
                     },
-                    FactsDroppedInWindow: 2),
+                    FactsDroppedInWindow: 2,
+                    RetryExhausted: 0),
             ]);
     }
 
@@ -194,7 +195,12 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.False(result.Markers!.JudgmentPending);
         var marker = result.Markers.Markers![Eose];
         Assert.Equal(NewsJudgmentMarkerState.Challenged, marker.State);
-        Assert.Equal("⚠ challenged (regulatory-or-legal-setback, high)", marker.CellText);
+        // Spec 186 §1: every judged marker also carries the factual trajectory token.
+        Assert.Equal(
+            "⚠ challenged (regulatory-or-legal-setback, high) · trajectory deteriorating",
+            marker.CellText);
+        // …and the judgment id, so the report can cite the record the marker came from.
+        Assert.Equal(record.JudgmentId, marker.JudgmentId);
 
         // The §3 error split rides the run result: stage-1 drops per cohort, stage-2 drops on the record.
         Assert.Equal(2, result.Stage1FactsDroppedByCohort[record.Stage1CohortKey]);

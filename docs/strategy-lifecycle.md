@@ -54,3 +54,10 @@ after 2026-08-23 is appended as it happens.
   `narrative-led-v2` · **Trial** · basis: research arms still accruing outcome evidence; no descriptive
   result distinguishes them yet · actor: human (maintainer-directed) · review by 2026-09-05T00:00:00Z ·
   resolution rule: resolved by supersession — promoted or stopped by a later journaled call.
+- 2026-08-23 · schema-migrated · `data/strategy-operating-calls.json` ·
+  `strategy-operating-calls-v1` → **`strategy-operating-calls-v2`** (spec 186 §3) · a gate override now
+  BINDS to the verdict it overrides by name (`overridesVerdictId` = the paired artifact's `gateVerdictId`),
+  replacing the pre-186 "the call post-dates the verdict" rule whose verdict instant was the artifact's
+  filesystem mtime — which the daily efficacy re-write advanced, so a valid override silently expired after
+  one run. No call in the committed file carries an override, so no call's meaning changed; v1 stays
+  readable (it simply cannot express an override) · actor: maintainer.

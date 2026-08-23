@@ -8,6 +8,11 @@ namespace Radar.Infrastructure.Tests.FileSystem;
 /// Spec 184 §2 — the strict operating-calls reader: an absent file is <c>null</c> (an undeclared layer, not
 /// an error); a present-but-invalid file fails naming the file and the rule; and the COMMITTED repo file
 /// parses, validates against the live strategy set and reduces to exactly one Lead (the shipped calls).
+/// <para>
+/// Spec 186 §3 adds the schema pair: <c>strategy-operating-calls-v2</c> (current, can bind an override to a
+/// <c>gateVerdictId</c>) and <c>strategy-operating-calls-v1</c> (legacy, readable, cannot express an
+/// override at all).
+/// </para>
 /// </summary>
 public sealed class FileOperatingCallSourceTests : IDisposable
 {
@@ -41,11 +46,11 @@ public sealed class FileOperatingCallSourceTests : IDisposable
     }
 
     [Fact]
-    public async Task ValidFile_ParsesCallsGlobalCallAndResolution()
+    public async Task ValidV2File_ParsesCallsGlobalCallResolutionAndTheBoundOverride()
     {
         var file = await ReadAsync("""
             {
-              "schemaVersion": "strategy-operating-calls-v1",
+              "schemaVersion": "strategy-operating-calls-v2",
               "globalCall": "StopAll",
               "calls": [
                 {
@@ -55,6 +60,7 @@ public sealed class FileOperatingCallSourceTests : IDisposable
                   "basis": "declared basis",
                   "actor": "human",
                   "overridesGate": true,
+                  "overridesVerdictId": "3f6a1c9e5b70",
                   "reviewByUtc": "2026-09-05T00:00:00Z",
                   "resolutionRule": "the immutable rule",
                   "resolution": {
@@ -75,6 +81,7 @@ public sealed class FileOperatingCallSourceTests : IDisposable
         Assert.Equal(new DateTimeOffset(2026, 8, 23, 0, 0, 0, TimeSpan.Zero), call.AsOfUtc);
         Assert.Equal(OperatingCallActor.Human, call.Actor);
         Assert.True(call.OverridesGate);
+        Assert.Equal("3f6a1c9e5b70", call.OverridesVerdictId);
         Assert.Equal(new DateTimeOffset(2026, 9, 5, 0, 0, 0, TimeSpan.Zero), call.ReviewByUtc);
         Assert.Equal("the immutable rule", call.ResolutionRule);
         Assert.Equal(OperatingCallOutcome.Wrong, call.Resolution!.Outcome);
@@ -95,8 +102,24 @@ public sealed class FileOperatingCallSourceTests : IDisposable
         """{"schemaVersion":"strategy-operating-calls-v1","calls":[{"strategy":"a","call":"Lead","asOfUtc":"2026-08-23T00:00:00Z","basis":"b","actor":"human","reviewByUtc":"2026-09-05T00:00:00Z","overidesGate":true}]}""",
         "unknown property 'overidesGate'")]
     [InlineData(
-        """{"schemaVersion":"strategy-operating-calls-v2","calls":[]}""",
+        """{"schemaVersion":"strategy-operating-calls-v3","calls":[]}""",
         "not supported")]
+    // Spec 186 §3: v1 cannot EXPRESS an override, so declaring one names the migration remedy.
+    [InlineData(
+        """{"schemaVersion":"strategy-operating-calls-v1","calls":[{"strategy":"a","call":"Lead","asOfUtc":"2026-08-23T00:00:00Z","basis":"b","actor":"human","reviewByUtc":"2026-09-05T00:00:00Z","overridesGate":true}]}""",
+        "migrate to strategy-operating-calls-v2 and bind the override to a verdict id")]
+    // overridesVerdictId is a v2-only property — in a v1 file it is simply unknown (the existing rule).
+    [InlineData(
+        """{"schemaVersion":"strategy-operating-calls-v1","calls":[{"strategy":"a","call":"Lead","asOfUtc":"2026-08-23T00:00:00Z","basis":"b","actor":"human","reviewByUtc":"2026-09-05T00:00:00Z","overridesVerdictId":"abc"}]}""",
+        "unknown property 'overridesVerdictId'")]
+    // v2: an override MUST name the verdict it overrides.
+    [InlineData(
+        """{"schemaVersion":"strategy-operating-calls-v2","calls":[{"strategy":"a","call":"Lead","asOfUtc":"2026-08-23T00:00:00Z","basis":"b","actor":"human","reviewByUtc":"2026-09-05T00:00:00Z","overridesGate":true}]}""",
+        "declares overridesGate: true without overridesVerdictId")]
+    // …and a binding that overrides nothing reads as an override and is not one.
+    [InlineData(
+        """{"schemaVersion":"strategy-operating-calls-v2","calls":[{"strategy":"a","call":"Lead","asOfUtc":"2026-08-23T00:00:00Z","basis":"b","actor":"human","reviewByUtc":"2026-09-05T00:00:00Z","overridesVerdictId":"abc"}]}""",
+        "carries overridesVerdictId without overridesGate: true")]
     [InlineData(
         """{"schemaVersion":"strategy-operating-calls-v1","calls":[{"strategy":"a","call":"Lead","basis":"b","actor":"human","reviewByUtc":"2026-09-05T00:00:00Z"}]}""",
         "missing a required field")]
@@ -105,6 +128,60 @@ public sealed class FileOperatingCallSourceTests : IDisposable
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => ReadAsync(json));
         Assert.Contains("calls.json", ex.Message);
         Assert.Contains(expectedRuleFragment, ex.Message);
+    }
+
+    [Theory]
+    [InlineData(FileOperatingCallSource.LegacySchemaVersion)]
+    [InlineData(FileOperatingCallSource.SupportedSchemaVersion)]
+    public async Task BothAcceptedSchemaVersions_Parse_WhenNoOverrideIsDeclared(string schemaVersion)
+    {
+        var file = await ReadAsync($$"""
+            {
+              "schemaVersion": "{{schemaVersion}}",
+              "calls": [
+                {
+                  "strategy": "alpha",
+                  "call": "Lead",
+                  "asOfUtc": "2026-08-23T00:00:00Z",
+                  "basis": "declared basis",
+                  "actor": "human",
+                  "reviewByUtc": "2026-09-05T00:00:00Z"
+                }
+              ]
+            }
+            """);
+
+        Assert.NotNull(file);
+        Assert.Equal(schemaVersion, file.SchemaVersion);
+        var call = Assert.Single(file.Calls);
+        Assert.False(call.OverridesGate);
+        Assert.Null(call.OverridesVerdictId);
+    }
+
+    [Fact]
+    public async Task SchemaVersion_IsResolvedBeforeTheCalls_WhateverItsPositionInTheObject()
+    {
+        // JSON object order is not a contract, and which properties a call may carry depends on the
+        // version — so a v2 file that declares its version LAST must still accept a bound override.
+        var file = await ReadAsync("""
+            {
+              "calls": [
+                {
+                  "strategy": "alpha",
+                  "call": "Lead",
+                  "asOfUtc": "2026-08-23T00:00:00Z",
+                  "basis": "declared basis",
+                  "actor": "human",
+                  "overridesGate": true,
+                  "overridesVerdictId": "3f6a1c9e5b70",
+                  "reviewByUtc": "2026-09-05T00:00:00Z"
+                }
+              ],
+              "schemaVersion": "strategy-operating-calls-v2"
+            }
+            """);
+
+        Assert.Equal("3f6a1c9e5b70", Assert.Single(file!.Calls).OverridesVerdictId);
     }
 
     [Fact]
@@ -170,6 +247,14 @@ public sealed class FileOperatingCallSourceTests : IDisposable
         var lead = file.Calls.Single(c => c.Call == OperatingCall.Lead);
         Assert.Equal("disclosure-led-v11", lead.Strategy);
         Assert.Contains("AD-15 composite gate", lead.ResolutionRule);
+
+        // Spec 186 §3: the committed file is migrated to v2, and no shipped call binds an override.
+        Assert.Equal(FileOperatingCallSource.SupportedSchemaVersion, file.SchemaVersion);
+        Assert.All(file.Calls, call =>
+        {
+            Assert.False(call.OverridesGate);
+            Assert.Null(call.OverridesVerdictId);
+        });
     }
 
     private static string LocateRepoRoot()

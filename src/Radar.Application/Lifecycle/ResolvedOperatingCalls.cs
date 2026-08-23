@@ -17,6 +17,16 @@ public enum ResolvedCallProvenance
     ImplicitTrial = 2,
 }
 
+/// <summary>
+/// A declared gate override that did NOT bind to the artifact's current verdict (spec 186 §3): the call
+/// named <paramref name="BoundVerdictId"/>, the artifact now carries <paramref name="CurrentVerdictId"/>
+/// (empty when the artifact carries no verdict identity at all — a pre-186 artifact, or no verdict), so the
+/// gate default re-armed. Reported, never silently dropped: new evidence SHOULD re-open a call, and the
+/// maintainer must be able to see exactly why and re-declare against the current id.
+/// </summary>
+public sealed record StaleGateOverride(
+    string StrategyName, string BoundVerdictId, string CurrentVerdictId);
+
 /// <summary>One Research arm's effective call after reduction, with full provenance.</summary>
 /// <param name="StrategyName">The configured strategy name.</param>
 /// <param name="Call">The effective call.</param>
@@ -24,12 +34,17 @@ public enum ResolvedCallProvenance
 /// <param name="Declared">The file's declared call for this arm, when one exists (kept even when a gate
 /// default overrode it, so the report can state both).</param>
 /// <param name="GateVerdict">The persisted gate verdict that applied, when one did.</param>
+/// <param name="StaleOverride">
+/// Set when this arm's call declared <c>overridesGate</c> but did not bind to the current verdict id
+/// (spec 186 §3). Trailing + defaulted, so every pre-186 construction is unchanged.
+/// </param>
 public sealed record ResolvedStrategyCall(
     string StrategyName,
     OperatingCall Call,
     ResolvedCallProvenance Provenance,
     StrategyOperatingCall? Declared,
-    StrategyGateVerdict? GateVerdict);
+    StrategyGateVerdict? GateVerdict,
+    StaleGateOverride? StaleOverride = null);
 
 /// <summary>
 /// The output of the ONE deterministic reducer (spec 184 §2): every Research arm's effective call, and the
@@ -71,6 +86,15 @@ public sealed record ResolvedOperatingCalls
 
     /// <summary>Every Research arm's effective call, in the configured strategy order (AD-3).</summary>
     public IReadOnlyList<ResolvedStrategyCall> Calls { get; }
+
+    /// <summary>
+    /// Every declared gate override that did not bind to the artifact's current verdict id (spec 186 §3),
+    /// in the configured strategy order (AD-3). Derived from <see cref="Calls"/> — there is exactly one
+    /// place a stale override is decided, and this cannot disagree with it. Empty in the overwhelmingly
+    /// normal case, which is what keeps the rendered report byte-identical when nothing is stale.
+    /// </summary>
+    public IReadOnlyList<StaleGateOverride> StaleOverrides =>
+        [.. Calls.Where(c => c.StaleOverride is not null).Select(c => c.StaleOverride!)];
 
     /// <summary>The effective call for one arm, or null (e.g. a Comparator, which can carry no call).</summary>
     public ResolvedStrategyCall? For(string strategyName) =>

@@ -28,7 +28,9 @@ public sealed record NewsJudgmentLeaderMarker(
     NewsJudgmentMarkerState State,
     string? UnassessedReason = null,
     string? ChallengeSummary = null,
-    bool TypingIncomplete = false)
+    bool TypingIncomplete = false,
+    string? Trajectory = null,
+    Guid? JudgmentId = null)
 {
     /// <summary>
     /// The rendered marker cell — a total function over the state, so an absent/blank marker text is
@@ -39,15 +41,24 @@ public sealed record NewsJudgmentLeaderMarker(
     public string CellText => State switch
     {
         NewsJudgmentMarkerState.Challenged =>
-            ChallengeSummary is { Length: > 0 } summary
+            (ChallengeSummary is { Length: > 0 } summary
                 ? $"⚠ challenged ({summary})"
-                : "⚠ challenged",
+                : "⚠ challenged") + TrajectorySuffix,
         NewsJudgmentMarkerState.NoChallengeFound =>
-            TypingIncomplete
+            (TypingIncomplete
                 ? "· no challenge found in supplied facts (typing incomplete)"
-                : "· no challenge found in supplied facts",
+                : "· no challenge found in supplied facts") + TrajectorySuffix,
         _ => $"? unassessed ({UnassessedReason ?? NewsJudgmentMarkerReasons.NoJudgment})",
     };
+
+    /// <summary>
+    /// Spec 186 §1: the factual trajectory token, rendered on BOTH judged states UNIFORMLY — never
+    /// selectively for bad news. A dot that cannot be read beside the axis the judge actually assessed is
+    /// how "no challenge found" came to imply health; state-complete display is the remedy. Absent for
+    /// every unassessed state (there is no completed read to describe).
+    /// </summary>
+    private string TrajectorySuffix =>
+        Trajectory is { Length: > 0 } token ? " · trajectory " + token : string.Empty;
 }
 
 /// <summary>The CLOSED reason-token vocabulary for the unassessed state (spec 185 §4).</summary>
@@ -69,6 +80,14 @@ public static class NewsJudgmentMarkerReasons
 
     /// <summary>The company was not selected under the candidate cost budget this run.</summary>
     public const string NotACandidate = "not-a-candidate";
+
+    /// <summary>
+    /// Spec 186 §1: a COMPLETED judgment record whose persisted trajectory is null — an impossible state
+    /// under the validator (which requires the trajectory token to parse), so it can only mean a corrupted
+    /// or hand-edited record. It renders unassessed, never a dot and never <c>unknown</c>: the genuine
+    /// <c>Unknown</c> trajectory is a valid completed read and keeps its own token.
+    /// </summary>
+    public const string InvalidRecord = "invalid-record";
 }
 
 /// <summary>
@@ -88,7 +107,8 @@ public static class NewsJudgmentMarkerReasons
 /// </summary>
 public sealed record NewsJudgmentMarkerReportModel(
     bool JudgmentPending,
-    IReadOnlyDictionary<Guid, NewsJudgmentLeaderMarker>? Markers = null)
+    IReadOnlyDictionary<Guid, NewsJudgmentLeaderMarker>? Markers = null,
+    string? JudgmentStoreRoot = null)
 {
     /// <summary>The first-render placeholder: the judgment step is registered but has not run yet.</summary>
     public static NewsJudgmentMarkerReportModel Pending { get; } = new(JudgmentPending: true);

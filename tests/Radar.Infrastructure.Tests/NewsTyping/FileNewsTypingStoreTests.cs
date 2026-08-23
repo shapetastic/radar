@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.News;
@@ -88,7 +90,7 @@ public sealed class FileNewsTypingStoreTests : IDisposable
             Status: status,
             RawResponseHash: "raw-hash",
             FailureDetail: status == NewsTypingStatus.ProviderFailure ? "boom" : null,
-            Limits: new NewsTypingLimitsRecord(200, 30),
+            Limits: new NewsTypingLimitsRecord(200, 30, 3, 25),
             ReusedFromTypingId: null,
             CreatedAtUtc: new DateTimeOffset(2026, 8, 23, 12, 0, 0, TimeSpan.Zero));
     }
@@ -168,6 +170,69 @@ public sealed class FileNewsTypingStoreTests : IDisposable
             CohortKey, ObservationId, "ph-1", CancellationToken.None);
         Assert.NotNull(found);
         Assert.Equal(NewsTypingStatus.InsufficientContent, found.Status);
+    }
+
+    [Fact]
+    public async Task LegacyRecord_WithoutTheSpec186Limits_HydratesAsNotRecorded_NeverAsAFabricatedLimit()
+    {
+        // Write a real record, then strip the two spec-186 limit fields back out of the file on disk: that
+        // IS a pre-186 file, produced by the same serializer that wrote every accrued record.
+        Assert.True(await NewStore().WriteAsync(Record(), CancellationToken.None));
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
+        var limits = document["limits"]!.AsObject();
+        Assert.True(limits.Remove("maxTypingAttempts"));
+        Assert.True(limits.Remove("maxRetryTypingsPerRun"));
+        var legacy = document.ToJsonString();
+        Assert.DoesNotContain("maxTypingAttempts", legacy, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(file, legacy);
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+
+        Assert.Null(hydrated.Limits.MaxTypingAttempts);
+        Assert.Null(hydrated.Limits.MaxRetryTypingsPerRun);
+        // The pre-186 fields are untouched — the additive pair is trailing and nullable, so nothing else
+        // about a legacy file changes meaning.
+        Assert.Equal(200, hydrated.Limits.MaxNewTypingsPerRun);
+        Assert.Equal(30, hydrated.Limits.LookbackDays);
+    }
+
+    [Fact]
+    public async Task StandaloneAttempts_MintDistinctIdentities_WhileTheFirstKeepsItsLegacyId()
+    {
+        // Spec 186 §2 rule (b): attempt 1 keeps the ORIGINAL "standalone" identity (every id already on
+        // disk is byte-unchanged), while a later standalone attempt gets its own — so the insert-only
+        // store records each real hosted call instead of silently deduplicating it away.
+        var first = NewsTypingRecord.IdentityFor(CohortKey, ObservationId, "ph-1", null);
+        Assert.Equal(first, NewsTypingRecord.IdentityFor(CohortKey, ObservationId, "ph-1", null, 1));
+        var second = NewsTypingRecord.IdentityFor(CohortKey, ObservationId, "ph-1", null, 2);
+        Assert.NotEqual(first, second);
+
+        var store = NewStore();
+        Assert.True(await store.WriteAsync(
+            Record(status: NewsTypingStatus.ProviderFailure) with { TypingId = first, RunId = null },
+            CancellationToken.None));
+        Assert.True(await store.WriteAsync(
+            Record(status: NewsTypingStatus.ProviderFailure) with { TypingId = second, RunId = null },
+            CancellationToken.None));
+
+        Assert.Equal(2, (await NewStore().GetAllAsync(CancellationToken.None)).Count);
+    }
+
+    [Fact]
+    public async Task RunScopedIdentity_IsUnchangedByTheAttemptToken_SoRerunningOneRunStaysIdempotent()
+    {
+        var legacy = NewsTypingRecord.IdentityFor(CohortKey, ObservationId, "ph-1", RunA);
+
+        // Whatever attempt ordinal the pass derives, a RUN-scoped attempt keeps today's id — re-running one
+        // run is idempotent by id, and no accrued run-scoped record is re-minted.
+        Assert.Equal(legacy, NewsTypingRecord.IdentityFor(CohortKey, ObservationId, "ph-1", RunA, 1));
+        Assert.Equal(legacy, NewsTypingRecord.IdentityFor(CohortKey, ObservationId, "ph-1", RunA, 4));
+
+        var store = NewStore();
+        Assert.True(await store.WriteAsync(Record(RunA), CancellationToken.None));
+        Assert.True(await store.WriteAsync(Record(RunA), CancellationToken.None));
+        Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
     }
 
     [Fact]

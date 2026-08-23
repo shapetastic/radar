@@ -20,6 +20,9 @@ public sealed partial class WeeklyReportBuilderTests
     private static readonly DateTimeOffset CallAsOf = new(2026, 8, 23, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset CallReviewBy = new(2026, 9, 5, 0, 0, 0, TimeSpan.Zero);
 
+    /// <summary>The artifact's spec-186 semantic gate-verdict identity (never a timestamp).</summary>
+    private const string GateVerdictId = "3f6a1c9e5b70";
+
     private sealed class FixedOperatingCallSource(StrategyOperatingCallsFile? file) : IOperatingCallSource
     {
         public Task<StrategyOperatingCallsFile?> ReadAsync(CancellationToken ct) => Task.FromResult(file);
@@ -51,14 +54,101 @@ public sealed partial class WeeklyReportBuilderTests
         OperatingCall call,
         string basis = "declared for the fixture",
         string? resolutionRule = "resolved by the fixture rule.",
-        OperatingCallResolution? resolution = null) =>
+        OperatingCallResolution? resolution = null,
+        bool overridesGate = false,
+        string? overridesVerdictId = null) =>
         new(
             strategy, call, CallAsOf, basis, OperatingCallActor.Human,
-            OverridesGate: false, CallReviewBy, resolutionRule, resolution);
+            overridesGate, CallReviewBy, resolutionRule, resolution, overridesVerdictId);
 
     private static StrategyOperatingCallsFile CallsFile(
         bool stopAll = false, params StrategyOperatingCall[] calls) =>
-        new(CallsSource, "strategy-operating-calls-v1", stopAll, calls);
+        new(CallsSource, "strategy-operating-calls-v2", stopAll, calls);
+
+    [Fact]
+    public async Task AStaleGateOverride_ReArmsTheGateDefault_AndIsRenderedNotSilentlyDropped()
+    {
+        // Spec 186 §3. The maintainer overrode a GATE-FAILED verdict; new admitted evidence then minted a
+        // new gateVerdictId. The override no longer binds, so the gate default re-arms (Stop ⇒ zero Leads
+        // ⇒ the predeclared StopAll fallback) — and the report SAYS SO, naming the arm, the id the call
+        // bound to and the id the artifact now carries.
+        const string boundId = "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff";
+
+        var calls = new FixedOperatingCallSource(CallsFile(
+            stopAll: false,
+            LifecycleCall(
+                "filings-led",
+                OperatingCall.Lead,
+                overridesGate: true,
+                overridesVerdictId: boundId)));
+        var facts = new FixedFactsSource(new EfficacyEvidenceFacts(
+            LeaderboardAvailable: false,
+            Leaderboard: [],
+            PairedAvailable: true,
+            Paired: new PairedGateFact(
+                PrimaryStrategyName: "filings-led",
+                PrimaryPredeclared: true,
+                BoundaryDeclared: true,
+                Qualifies: false,
+                GateReasons: "baseline 'baseline-x': " + Ad15GateReasonCodes.IntervalLowerBoundNotPositive,
+                GateVerdictId: GateVerdictId)));
+        var h = new Harness(strategies: TwoStrategies, operatingCalls: calls, evidenceFacts: facts);
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 80);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var markdown = result.Report.MarkdownContent;
+
+        var lifecycle = h.Renderer.LastModel!.Lifecycle!;
+        var stale = Assert.Single(lifecycle.Calls.StaleOverrides);
+        Assert.Equal("filings-led", stale.StrategyName);
+        Assert.Equal(boundId, stale.BoundVerdictId);
+        Assert.Equal(GateVerdictId, stale.CurrentVerdictId);
+
+        Assert.Equal(OperatingCall.Stop, lifecycle.Calls.For("filings-led")!.Call);
+        Assert.True(lifecycle.Calls.StopAll);
+
+        Assert.Contains("### Stale gate override", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "filings-led: overridesVerdictId " + boundId
+                + " no longer matches the current gate verdict id " + GateVerdictId,
+            markdown,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ABoundGateOverride_Holds_AndRendersNoStaleLine()
+    {
+        // The same fixture with the override bound to the CURRENT id: the declared Lead stands, and the
+        // stale-override section is absent entirely (a report with nothing stale is unchanged).
+        var calls = new FixedOperatingCallSource(CallsFile(
+            stopAll: false,
+            LifecycleCall(
+                "filings-led",
+                OperatingCall.Lead,
+                overridesGate: true,
+                overridesVerdictId: GateVerdictId)));
+        var facts = new FixedFactsSource(new EfficacyEvidenceFacts(
+            LeaderboardAvailable: false,
+            Leaderboard: [],
+            PairedAvailable: true,
+            Paired: new PairedGateFact(
+                PrimaryStrategyName: "filings-led",
+                PrimaryPredeclared: true,
+                BoundaryDeclared: true,
+                Qualifies: false,
+                GateReasons: "baseline 'baseline-x': " + Ad15GateReasonCodes.IntervalLowerBoundNotPositive,
+                GateVerdictId: GateVerdictId)));
+        var h = new Harness(strategies: TwoStrategies, operatingCalls: calls, evidenceFacts: facts);
+        await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 80);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+        var markdown = result.Report.MarkdownContent;
+
+        var lifecycle = h.Renderer.LastModel!.Lifecycle!;
+        Assert.Empty(lifecycle.Calls.StaleOverrides);
+        Assert.Equal("filings-led", lifecycle.Calls.LeadStrategyName);
+        Assert.DoesNotContain("Stale gate override", markdown, StringComparison.Ordinal);
+    }
 
     [Fact]
     public async Task SingleStrategy_CallLayerIsStructurallyInert_AndReportIsByteIdentical()
@@ -207,7 +297,7 @@ public sealed partial class WeeklyReportBuilderTests
                 BoundaryDeclared: true,
                 Qualifies: false,
                 GateReasons: "baseline 'baseline-x': " + Ad15GateReasonCodes.IntervalLowerBoundNotPositive,
-                ArtifactWrittenAtUtc: new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero))));
+                GateVerdictId: GateVerdictId)));
         var h = new Harness(strategies: TwoStrategies, operatingCalls: calls, evidenceFacts: facts);
         await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 80);
 
@@ -236,7 +326,7 @@ public sealed partial class WeeklyReportBuilderTests
             Paired: new PairedGateFact(
                 "filings-led", PrimaryPredeclared: true, BoundaryDeclared: true, Qualifies: true,
                 GateReasons: string.Empty,
-                ArtifactWrittenAtUtc: new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero))));
+                GateVerdictId: GateVerdictId)));
         var h = new Harness(strategies: TwoStrategies, operatingCalls: calls, evidenceFacts: facts);
         await SeedCompanyAsync(h, Guid.NewGuid(), Guid.NewGuid(), opportunity: 70);
 
@@ -245,8 +335,8 @@ public sealed partial class WeeklyReportBuilderTests
 
         Assert.Contains("**Lead: filings-led**", markdown, StringComparison.Ordinal);
         Assert.Contains(
-            "Call: Lead · actor gate-default (the AD-15 composite gate passed for this arm on the artifact "
-                + "written 2026-10-01 00:00Z)",
+            "Call: Lead · actor gate-default (the AD-15 composite gate passed for this arm; gate verdict "
+                + "id " + GateVerdictId + ")",
             markdown, StringComparison.Ordinal);
         Assert.Contains("Gate passed (AD-15 composite gate)", markdown, StringComparison.Ordinal);
     }

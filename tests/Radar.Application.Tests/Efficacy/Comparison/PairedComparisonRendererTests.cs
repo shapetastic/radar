@@ -299,6 +299,74 @@ public sealed class PairedComparisonRendererTests
     }
 
     [Fact]
+    public void RenderCsv_CarriesTheGateVerdictIdAsAnAdditiveTrailingRunLevelColumn()
+    {
+        // Spec 186 §3. The paired CSV carries NO schemaVersion column of its own (unlike the spec-183
+        // leaderboard), so there is no tag to bump: the identity column is appended, and every reader
+        // resolves columns BY HEADER NAME — asserted here by pinning that no pre-186 column moved.
+        var result = PriceGateTrue();
+        var verdict = Verdict(result, Ad16ScreenOutcome.ClearsNecessaryScreen);
+        var csv = Renderer.RenderCsv(result, verdict);
+        var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Split(',');
+
+        Assert.DoesNotContain("schemaVersion", header);
+        Assert.Equal("gateVerdictId", header[^1]);
+        Assert.Equal(PreSpec186Columns.Length + 1, header.Length);
+        for (var i = 0; i < PreSpec186Columns.Length; i++)
+        {
+            Assert.Equal(PreSpec186Columns[i], header[i]);   // no by-name reader can shift
+        }
+
+        var expected = GateVerdictIdentity.Compute(result, verdict);
+        Assert.NotEmpty(expected);
+        Assert.All(lines.Skip(1), l => Assert.Equal(expected, SplitCsvFields(l)[^1]));
+    }
+
+    [Fact]
+    public void RenderCsv_ExploratoryArtifact_LeavesTheGateVerdictIdEmpty()
+    {
+        // No predeclared primary and no boundary ⇒ no verdict ⇒ nothing to override.
+        var result = Exploratory();
+        var csv = Renderer.RenderCsv(result, AbsentVerdict(result));
+        var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var idIndex = Array.IndexOf(lines[0].Split(','), "gateVerdictId");
+
+        Assert.All(lines.Skip(1), l => Assert.Equal(string.Empty, SplitCsvFields(l)[idIndex]));
+    }
+
+    [Fact]
+    public void RenderMarkdown_StatesTheGateVerdictId_SoAnOverrideCanBindToIt()
+    {
+        var result = PriceGateTrue();
+        var verdict = Verdict(result, Ad16ScreenOutcome.ClearsNecessaryScreen);
+
+        Assert.Contains(
+            "Gate verdict id: `" + GateVerdictIdentity.Compute(result, verdict) + "`",
+            Renderer.RenderMarkdown(result, verdict),
+            StringComparison.Ordinal);
+
+        var exploratory = Exploratory();
+        Assert.Contains(
+            "Gate verdict id: **none**",
+            Renderer.RenderMarkdown(exploratory, AbsentVerdict(exploratory)),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>The pre-186 column set, in order — the by-header-name contract this slice must not disturb.</summary>
+    private static readonly string[] PreSpec186Columns =
+    [
+        "status", "primaryStrategy", "primaryPredeclared", "firstEligibleAsOf", "armsConsidered",
+        "baselinesCompared", "baseline", "jointObservations", "jointCompanies", "jointDates",
+        "candidateDates", "droppedDates", "developmentDates", "inconsistentOutcomeObservations",
+        "purgedBlocks", "medianPairedDelta", "intervalLower95", "intervalUpper95", "intervalCoverage",
+        "intervalReason", "signTestP", "signTestEffectiveN", "signTestZeroDeltasDropped", "baselineClears",
+        "satisfiesPriceGate", "gateReasons", "qualifiesUnderAd15", "ad16ScreenOutcome",
+        "eligibleJointObservations", "eligibleJointCompanies", "eligibleJointDates",
+        "observationsWithoutAsOfInstant", "mismatchedAsOfInstantKeys",
+    ];
+
+    [Fact]
     public void RenderBlocksCsv_OneRowPerBaselinePerAdmittedBlock_WithCompanyNAndBothRhos()
     {
         var result = PriceGateTrue();

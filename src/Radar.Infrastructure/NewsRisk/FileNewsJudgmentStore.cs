@@ -27,8 +27,6 @@ public sealed class FileNewsJudgmentStoreOptions
 /// </summary>
 public sealed class FileNewsJudgmentStore : INewsJudgmentStore
 {
-    private const string JudgmentsFolder = "judgments";
-
     private readonly FileNewsJudgmentStoreOptions _options;
     private readonly ILogger<FileNewsJudgmentStore> _logger;
     private readonly ConcurrentDictionary<Guid, NewsJudgmentRecord> _byId = new();
@@ -58,7 +56,7 @@ public sealed class FileNewsJudgmentStore : INewsJudgmentStore
 
         var path = Path.Combine(
             _options.RootDirectory,
-            JudgmentsFolder,
+            NewsJudgmentStoreLayout.JudgmentsFolder,
             NewsTypingCohortPath.PolicySegment(record.Provider, record.ModelId),
             record.CompanyId.ToString("D"),
             record.JudgmentId.ToString("D") + ".json");
@@ -138,7 +136,7 @@ public sealed class FileNewsJudgmentStore : INewsJudgmentStore
 
             var loaded = 0;
             var unreadable = 0;
-            var root = Path.Combine(_options.RootDirectory, JudgmentsFolder);
+            var root = NewsJudgmentStoreLayout.RootFor(_options.RootDirectory);
             if (Directory.Exists(root))
             {
                 List<string> files;

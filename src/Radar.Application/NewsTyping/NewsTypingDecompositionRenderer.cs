@@ -69,11 +69,19 @@ public static class NewsTypingDecompositionRenderer
                     $"### Reader {cohort.ReaderName} ({cohort.Provider}:{cohort.ModelId}) — "
                         + $"{cohort.CaptureMode}");
                 sb.AppendLine();
+                // Spec 186 §2: exhaustion is a PERMANENT hole, never a backlog — rendered only when it
+                // happened, so it reads as an exception rather than as noise.
+                var exhausted = cohort.RetryExhausted > 0
+                    ? string.Create(
+                        CultureInfo.InvariantCulture,
+                        $" · retries exhausted {cohort.RetryExhausted}")
+                    : string.Empty;
                 sb.AppendLine(string.Create(
                     CultureInfo.InvariantCulture,
                     $"Typed {cohort.ObservationsTyped} · insufficient-content "
                         + $"{cohort.ObservationsInsufficientContent} · untyped remaining "
-                        + $"{cohort.UntypedRemaining} · same-event families {cohort.FamilyCount}"));
+                        + $"{cohort.UntypedRemaining} · same-event families "
+                        + $"{cohort.FamilyCount}{exhausted}"));
                 sb.AppendLine();
                 if (cohort.Types.Count > 0)
                 {

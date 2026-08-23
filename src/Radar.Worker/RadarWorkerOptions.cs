@@ -937,6 +937,20 @@ public sealed class NewsTypingWorkerOptions
     public int LookbackDays { get; init; } = 30;
 
     /// <summary>
+    /// Cap on HOSTED CALLS for one (cohort, observation, payload) — spec 186 §2. Default 3; must be ≥ 1. At
+    /// this many recorded attempts the observation leaves selection permanently instead of re-entering the
+    /// budget every run forever.
+    /// </summary>
+    public int MaxTypingAttempts { get; init; } = 3;
+
+    /// <summary>
+    /// Per-READER per-run cap on the RETRY lane (spec 186 §2). Default 25; must be ≥ 1 (zero would re-permit
+    /// total retry starvation) and strictly below <see cref="MaxNewTypingsPerRun"/> so retries can never
+    /// monopolize the budget.
+    /// </summary>
+    public int MaxRetryTypingsPerRun { get; init; } = 25;
+
+    /// <summary>
     /// Optional typing reader list — its OWN list, reusing the exact spec-179 reader shape/validation, so
     /// typing can run hosted-only while the news-risk shadow runs both. Omitted/empty ⇒ exactly one reader
     /// over the ambient <c>Radar:Ai</c> provider/model.

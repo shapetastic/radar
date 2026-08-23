@@ -15,7 +15,12 @@ public sealed record NewsTypingDecompositionDocument(
     int ObservationsWithoutCompany,
     DateTimeOffset GeneratedAtUtc)
 {
-    public const string CurrentSchemaVersion = "news-typing-decomposition-v1";
+    /// <summary>
+    /// The decomposition schema tag. Bumped to <c>-v2</c> by spec 186 §2 for the ADDITIVE per-cohort
+    /// <see cref="NewsTypingDecompositionCohort.RetryExhausted"/> count; readers are by-NAME, so a v1
+    /// consumer reads a v2 document unchanged (asserted).
+    /// </summary>
+    public const string CurrentSchemaVersion = "news-typing-decomposition-v2";
 
     /// <summary>The §5 caveat, VERBATIM per the spec — carried by every decomposition artifact.</summary>
     public const string Caveat181 =
@@ -39,7 +44,9 @@ public sealed record NewsTypingDecompositionCompany(
 /// <summary>
 /// One (reader cohort × capture mode) breakdown for one company. Capture modes carry different epistemic
 /// weight (spec 177), so they are never pooled — a <c>LegacyHeadlineOnly</c> distribution beside a
-/// <c>ProspectiveRss</c> one is the honesty the separation exists for.
+/// <c>ProspectiveRss</c> one is the honesty the separation exists for. <c>RetryExhausted</c> (spec 186 §2)
+/// counts this cohort's in-window observations that have spent their typing attempts and left selection:
+/// they are a PERMANENT hole in the cohort, not a backlog that a later run drains.
 /// </summary>
 public sealed record NewsTypingDecompositionCohort(
     string ReaderName,
@@ -51,7 +58,8 @@ public sealed record NewsTypingDecompositionCohort(
     int ObservationsInsufficientContent,
     int UntypedRemaining,
     int FamilyCount,
-    IReadOnlyList<NewsTypingDecompositionTypeRow> Types);
+    IReadOnlyList<NewsTypingDecompositionTypeRow> Types,
+    int RetryExhausted);
 
 /// <summary>
 /// One event type's row: how many typed observations carried it as <c>DerivedPrimaryType</c>, the distinct

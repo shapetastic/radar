@@ -65,6 +65,9 @@ public sealed class MarkdownWeeklyReportJudgmentMarkerTests
         return markdown[start..end];
     }
 
+    private static IEnumerable<string> SplitLines(string markdown) =>
+        markdown.Split('\n');
+
     [Fact]
     public void NoJudgmentModel_EveryLeaderRowRendersUnassessedNoJudgment()
     {
@@ -238,6 +241,167 @@ public sealed class MarkdownWeeklyReportJudgmentMarkerTests
             .Replace("? unassessed (no-judgment)", "<marker>", StringComparison.Ordinal)
             .Replace("⚠ challenged (liquidity-or-going-concern, high)", "<marker>", StringComparison.Ordinal);
         Assert.Equal(Normalize(unmarked), Normalize(marked));
+    }
+
+    [Fact]
+    public void DeterioratingZeroFindingsRow_RendersTheChallengeCell_NeverTheDot()
+    {
+        // Spec 186 §1: the live failure this fixes — a Deteriorating trajectory with zero challenge
+        // findings used to render the reassuring dot on a leader row.
+        var deteriorating = Guid.NewGuid();
+        var live = LiveSectionOf(Render(
+            [
+                Section("default", true, [Row(1, deteriorating, "Eos Energy", "EOSE", 61)]),
+            ],
+            new NewsJudgmentMarkerReportModel(
+                JudgmentPending: false,
+                Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>
+                {
+                    [deteriorating] = new(
+                        NewsJudgmentMarkerState.Challenged,
+                        ChallengeSummary: "business-trajectory-deteriorating",
+                        Trajectory: "deteriorating"),
+                })));
+
+        Assert.Contains(
+            "| default (primary research) | 1 | Eos Energy | EOSE | 61 | 2026-06-07 22:15Z | "
+                + "⚠ challenged (business-trajectory-deteriorating) · trajectory deteriorating |",
+            live, StringComparison.Ordinal);
+        // No TABLE ROW carries the dot (the honesty sentence above the table legitimately quotes it).
+        Assert.All(
+            SplitLines(live).Where(l => l.StartsWith("| default", StringComparison.Ordinal)),
+            l => Assert.DoesNotContain("· no challenge found", l, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void JudgedRows_RenderTheTrajectoryToken_InBothJudgedStates()
+    {
+        var challenged = Guid.NewGuid();
+        var clean = Guid.NewGuid();
+        var live = LiveSectionOf(Render(
+            [
+                Section("default", true,
+                    [
+                        Row(1, challenged, "Eos Energy", "EOSE", 61),
+                        Row(2, clean, "Acme Dynamics", "AEHR", 44),
+                    ]),
+            ],
+            new NewsJudgmentMarkerReportModel(
+                JudgmentPending: false,
+                Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>
+                {
+                    [challenged] = new(
+                        NewsJudgmentMarkerState.Challenged,
+                        ChallengeSummary: "regulatory-or-legal-setback, high",
+                        Trajectory: "mixed"),
+                    [clean] = new(
+                        NewsJudgmentMarkerState.NoChallengeFound, Trajectory: "improving"),
+                })));
+
+        Assert.Contains(
+            "⚠ challenged (regulatory-or-legal-setback, high) · trajectory mixed |",
+            live, StringComparison.Ordinal);
+        Assert.Contains(
+            "· no challenge found in supplied facts · trajectory improving |",
+            live, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void JudgmentProvenanceAppendix_CitesEveryJudgedRowsRecord_AndTheStoreRootOnce()
+    {
+        // Spec 186 §1: the traceability claim is made TRUE — the marker text alone linked nothing.
+        var challenged = Guid.NewGuid();
+        var clean = Guid.NewGuid();
+        var uncovered = Guid.NewGuid();
+        var challengedJudgment = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var cleanJudgment = Guid.Parse("22222222-2222-2222-2222-222222222222");
+
+        var markdown = Render(
+            [
+                Section("default", true,
+                    [
+                        Row(1, challenged, "Eos Energy", "EOSE", 61),
+                        Row(2, clean, "Acme Dynamics", "AEHR", 44),
+                        Row(3, uncovered, "Borealis", "BOR", 12),
+                    ]),
+            ],
+            new NewsJudgmentMarkerReportModel(
+                JudgmentPending: false,
+                Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>
+                {
+                    [challenged] = new(
+                        NewsJudgmentMarkerState.Challenged,
+                        ChallengeSummary: "business-trajectory-deteriorating",
+                        Trajectory: "deteriorating",
+                        JudgmentId: challengedJudgment),
+                    [clean] = new(
+                        NewsJudgmentMarkerState.NoChallengeFound,
+                        Trajectory: "improving",
+                        JudgmentId: cleanJudgment),
+                },
+                JudgmentStoreRoot: "data/news-risk/judgments"));
+        var live = LiveSectionOf(markdown);
+
+        Assert.Contains("### Judgment provenance — diagnostic appendix", live, StringComparison.Ordinal);
+        // The store root is stated ONCE, never per row.
+        Assert.Equal(
+            1,
+            live.Split("Judgments store root: `data/news-risk/judgments`").Length - 1);
+        Assert.Contains(
+            "- Eos Energy — judgment `11111111-1111-1111-1111-111111111111` · "
+                + "⚠ challenged (business-trajectory-deteriorating) · trajectory deteriorating",
+            live, StringComparison.Ordinal);
+        Assert.Contains(
+            "- Acme Dynamics — judgment `22222222-2222-2222-2222-222222222222` · "
+                + "· no challenge found in supplied facts · trajectory improving",
+            live, StringComparison.Ordinal);
+        // A row with no judgment record cites nothing — never an invented id.
+        Assert.DoesNotContain("- Borealis — judgment", live, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void JudgmentProvenanceAppendix_IsAbsent_WhenNoMarkerCarriesAJudgmentId()
+    {
+        // Display-only and strictly additive: the pre-186 report shape is untouched whenever the markers
+        // carry no record ids (a null model, the pending placeholder, or a direct marker map).
+        var companyId = Guid.NewGuid();
+        var sections = new[] { Section("default", true, [Row(1, companyId, "Eos Energy", "EOSE", 61)]) };
+
+        Assert.DoesNotContain(
+            "Judgment provenance", Render(sections, judgment: null), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Judgment provenance",
+            Render(sections, NewsJudgmentMarkerReportModel.Pending),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Judgment provenance",
+            Render(sections, new NewsJudgmentMarkerReportModel(
+                JudgmentPending: false,
+                Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>
+                {
+                    [companyId] = new(NewsJudgmentMarkerState.NoChallengeFound, Trajectory: "mixed"),
+                })),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void JudgmentProvenanceAppendix_StatesAnUnrecordedStoreRootHonestly()
+    {
+        var companyId = Guid.NewGuid();
+        var live = LiveSectionOf(Render(
+            [Section("default", true, [Row(1, companyId, "Eos Energy", "EOSE", 61)])],
+            new NewsJudgmentMarkerReportModel(
+                JudgmentPending: false,
+                Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>
+                {
+                    [companyId] = new(
+                        NewsJudgmentMarkerState.NoChallengeFound,
+                        Trajectory: "mixed",
+                        JudgmentId: Guid.NewGuid()),
+                })));
+
+        Assert.Contains(
+            "Judgments store root: not recorded by this run", live, StringComparison.Ordinal);
     }
 
     [Fact]

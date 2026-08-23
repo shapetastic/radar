@@ -51,7 +51,11 @@ public sealed class FileFactFamilySnapshotStoreTests : IDisposable
             [
                 new FactFamilyRecord(
                     FamilyId: FactFamilyBuilder.FamilyIdFor(
-                        companyId, NewsObservationCaptureMode.ProspectiveRss, "faces legal scrutiny"),
+                        companyId,
+                        NewsObservationCaptureMode.ProspectiveRss,
+                        DateOnly.FromDateTime(checkpointUtc.AddDays(-2).UtcDateTime),
+                        [NewsEventType.RegulatoryOrLegal],
+                        "faces legal scrutiny"),
                     CompanyId: companyId,
                     CaptureMode: NewsObservationCaptureMode.ProspectiveRss,
                     RepresentativeFactId: members[0],

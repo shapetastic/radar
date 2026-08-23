@@ -17,6 +17,7 @@ public sealed class NewsTypingDecompositionRendererTests
         int typed,
         int untyped,
         int familyCount,
+        int retryExhausted,
         params NewsTypingDecompositionTypeRow[] types) => new(
         ReaderName: reader,
         Provider: "openai",
@@ -27,7 +28,8 @@ public sealed class NewsTypingDecompositionRendererTests
         ObservationsInsufficientContent: 0,
         UntypedRemaining: untyped,
         FamilyCount: familyCount,
-        Types: types);
+        Types: types,
+        RetryExhausted: retryExhausted);
 
     private static NewsTypingDecompositionDocument Document(
         params NewsTypingDecompositionCompany[] companies) => new(
@@ -70,10 +72,10 @@ public sealed class NewsTypingDecompositionRendererTests
             Cohorts:
             [
                 Cohort(
-                    "a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 14, 0, 3,
+                    "a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 14, 0, 3, 0,
                     new NewsTypingDecompositionTypeRow(NewsEventType.FinancingOrDilution, 14, 6, 2)),
                 Cohort(
-                    "b", "model-b", NewsObservationCaptureMode.ProspectiveRss, 10, 0, 2,
+                    "b", "model-b", NewsObservationCaptureMode.ProspectiveRss, 10, 0, 2, 0,
                     new NewsTypingDecompositionTypeRow(NewsEventType.FinancingOrDilution, 10, 5, 1)),
             ]);
 
@@ -99,7 +101,7 @@ public sealed class NewsTypingDecompositionRendererTests
             Cohorts:
             [
                 Cohort(
-                    "a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 40, 0, 1,
+                    "a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 40, 0, 1, 0,
                     new NewsTypingDecompositionTypeRow(NewsEventType.FinancingOrDilution, 40, 12, 1)),
             ]);
 
@@ -119,7 +121,7 @@ public sealed class NewsTypingDecompositionRendererTests
             ObservationsInWindow: 5,
             Incomplete: true,
             IncompleteReasons: ["typing backlog: 3 observation(s) untyped for a (ProspectiveRss)"],
-            Cohorts: [Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 2, 3, 0)]);
+            Cohorts: [Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 2, 3, 0, 0)]);
 
         var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(Document(company));
 

@@ -9,9 +9,20 @@ namespace Radar.Application.Lifecycle;
 /// <para>
 /// Rules, verbatim from the spec:
 /// <list type="number">
-/// <item>A persisted gate verdict for an arm wins unless the file's call both post-dates the verdict AND
-/// carries <c>overridesGate: true</c>. The gate default is <c>GatePassed → Lead</c>,
-/// <c>GateFailed → Stop</c>.</item>
+/// <item>A persisted gate verdict for an arm wins unless the file's call carries <c>overridesGate: true</c>
+/// AND its <c>overridesVerdictId</c> equals the artifact's CURRENT <c>gateVerdictId</c> (ordinal). The gate
+/// default is <c>GatePassed → Lead</c>, <c>GateFailed → Stop</c>.
+/// <para>
+/// Spec 186 §3 replaced the pre-186 "the call must POST-DATE the verdict" rule outright: the verdict
+/// instant was the artifact's filesystem mtime, which the daily efficacy re-write advanced, so a valid
+/// override silently expired after one run (and a copy/restore did the same, machine-dependently). An
+/// override is about a PARTICULAR verdict, so it binds to that verdict BY NAME. No timestamp is compared
+/// anywhere in this reducer. An empty/absent current id (a pre-186 artifact, or no verdict at all) can
+/// never match — fail closed toward the gate default. An override that names a verdict id which no longer
+/// matches is STALE: the gate default re-arms (new evidence SHOULD re-open the call) and the mismatch is
+/// recorded on <see cref="ResolvedStrategyCall.StaleOverride"/> so the report can state it — never
+/// silently dropped.
+/// </para></item>
 /// <item>Otherwise the file's call applies verbatim; a Research arm with no call is an implicit Trial.</item>
 /// <item>After reduction: a declared <c>globalCall: StopAll</c> means no Lead exists; otherwise exactly one
 /// Research arm must be Lead. ZERO Leads after reduction (e.g. the Lead arm gate-failed) resolves to the
@@ -151,6 +162,10 @@ public static class OperatingCallReducer
             {
                 var gateCall = verdict.Passed ? OperatingCall.Lead : OperatingCall.Stop;
 
+                // A declared override that did not bind to the CURRENT verdict is reported, never silently
+                // dropped (spec 186 §3).
+                var stale = StaleOverrideFor(strategy.Name, declared, verdict);
+
                 // Under a DECLARED StopAll, a gate-passed arm is still not promoted to Lead: StopAll is the
                 // human's explicit "no arm holds the front page", and rule 3 says no Lead may exist. The
                 // verdict itself stays attached so the report can state it.
@@ -161,12 +176,13 @@ public static class OperatingCallReducer
                         declared?.Call ?? OperatingCall.Trial,
                         declared is null ? ResolvedCallProvenance.ImplicitTrial : ResolvedCallProvenance.DeclaredCall,
                         declared,
-                        verdict));
+                        verdict,
+                        stale));
                 }
                 else
                 {
                     resolved.Add(new ResolvedStrategyCall(
-                        strategy.Name, gateCall, ResolvedCallProvenance.GateDefault, declared, verdict));
+                        strategy.Name, gateCall, ResolvedCallProvenance.GateDefault, declared, verdict, stale));
                 }
 
                 continue;
@@ -217,12 +233,27 @@ public static class OperatingCallReducer
     }
 
     /// <summary>
-    /// Rule 1's override condition: the gate default applies UNLESS the file's call both post-dates the
-    /// verdict and carries <c>overridesGate: true</c>. "Predates" is strict, so a call made at exactly the
-    /// verdict instant (with the flag) counts as an override.
+    /// Rule 1's override condition (spec 186 §3): the gate default applies UNLESS the file's call carries
+    /// <c>overridesGate: true</c> AND binds — by identity, ordinal — to the artifact's CURRENT verdict id.
+    /// No timestamp is consulted. An empty current id (pre-186 artifact, or no verdict) and an empty bound
+    /// id can never match, so both fail closed toward the gate default.
     /// </summary>
     private static bool OverrideApplies(StrategyOperatingCall? declared, StrategyGateVerdict verdict) =>
-        declared is not null && declared.OverridesGate && declared.AsOfUtc >= verdict.VerdictAtUtc;
+        declared is { OverridesGate: true, OverridesVerdictId: { Length: > 0 } bound }
+        && verdict.VerdictId.Length > 0
+        && string.Equals(bound, verdict.VerdictId, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The stale-override record for a declared override that did NOT bind to the current verdict, or null
+    /// when the call declares no override. Reported, never silently dropped: the maintainer must be able to
+    /// see WHY their override stopped applying and re-declare against the current id.
+    /// </summary>
+    private static StaleGateOverride? StaleOverrideFor(
+        string strategyName, StrategyOperatingCall? declared, StrategyGateVerdict verdict) =>
+        declared is { OverridesGate: true } && !OverrideApplies(declared, verdict)
+            ? new StaleGateOverride(
+                strategyName, declared.OverridesVerdictId ?? string.Empty, verdict.VerdictId)
+            : null;
 
     private static InvalidOperationException Fail(StrategyOperatingCallsFile file, string rule) =>
         new($"Operating-calls file '{file.Source}': {rule}.");

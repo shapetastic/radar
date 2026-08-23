@@ -976,7 +976,9 @@ internal static class RadarWorkerServices
                 new NewsTypingOptions(
                     outputDirectory: typing.OutputDirectory,
                     maxNewTypingsPerRun: typing.MaxNewTypingsPerRun,
-                    lookbackDays: typing.LookbackDays),
+                    lookbackDays: typing.LookbackDays,
+                    maxTypingAttempts: typing.MaxTypingAttempts,
+                    maxRetryTypingsPerRun: typing.MaxRetryTypingsPerRun),
                 BuildNewsTypingReaderRegistrations(options));
         }
 
@@ -1132,6 +1134,34 @@ internal static class RadarWorkerServices
             throw new InvalidOperationException(
                 $"Radar:NewsResearch:Typing:LookbackDays must be positive (was {typing.LookbackDays}); it "
                     + "bounds the decomposition/checkpoint window (asOf − LookbackDays, asOf] (default 30).");
+        }
+
+        // Spec 186 §2: both retry bounds are validated here, at the config boundary, exactly like their
+        // siblings — an unbounded retry (or a zero-width retry lane) is a configuration error now, not a
+        // trap that springs the day a provider starts failing.
+        if (typing.MaxTypingAttempts < 1)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Typing:MaxTypingAttempts must be at least 1 (was "
+                    + $"{typing.MaxTypingAttempts}); it caps the HOSTED CALLS one (cohort, observation, "
+                    + "payload) may ever consume before it leaves selection (default 3).");
+        }
+
+        if (typing.MaxRetryTypingsPerRun < 1)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Typing:MaxRetryTypingsPerRun must be at least 1 (was "
+                    + $"{typing.MaxRetryTypingsPerRun}); zero would re-permit total retry starvation — a "
+                    + "failed observation would never be retried and never exhaust (default 25).");
+        }
+
+        if (typing.MaxRetryTypingsPerRun >= typing.MaxNewTypingsPerRun)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Typing:MaxRetryTypingsPerRun ({typing.MaxRetryTypingsPerRun}) must be "
+                    + $"strictly below Radar:NewsResearch:Typing:MaxNewTypingsPerRun "
+                    + $"({typing.MaxNewTypingsPerRun}); the retry lane lives INSIDE the per-run call budget "
+                    + "and must never be able to monopolize it (defaults 25 and 200).");
         }
     }
 
@@ -1346,7 +1376,7 @@ internal static class RadarWorkerServices
             typeof(NewsTypingWorkerOptions),
             "Radar:NewsResearch:Typing",
             "must be an object carrying Enabled / OutputDirectory / MaxNewTypingsPerRun / LookbackDays / "
-                + "Readers keys.");
+                + "MaxTypingAttempts / MaxRetryTypingsPerRun / Readers keys.");
         if (typingSection.Exists())
         {
             ValidateReadersList(typingSection.GetSection("Readers"), "Radar:NewsResearch:Typing:Readers");
