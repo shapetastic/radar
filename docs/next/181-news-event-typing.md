@@ -1,8 +1,11 @@
 # Task: News event typing — answer "what kind of it" for every observed article
 
-> ⚠️ **DEFERRED — DO NOT DISPATCH until the entry condition in §1 is met.** This spec is written now so
-> the fix is scheduled with a measured entry gate, not rediscovered later. Move it to `docs/next/` only
-> after §1's numbers exist and §3's taxonomy is finalized from them.
+> ✅ **ENTRY CONDITION RECORDED — dispatched by maintainer decision, 2026-08-23.** §1's measured numbers
+> are recorded below. One honest caveat: of the three spec-179 runs, the two 2026-08-22 runs predate the
+> spec-182 presence-claim unlock and produced zero model calls (all `IncompleteCoverage`), so the reader
+> numbers come from ONE post-182 run (2026-08-23), not two. The maintainer chose to proceed on that basis
+> rather than wait for a second run; the numbers are decisive enough on the one question that gates this
+> spec (see §1). §3's taxonomy finalization stays part of the implementation, per §3's own procedure.
 
 ## Overview
 
@@ -67,6 +70,38 @@ least two full 179 runs:
 
 If 179's validation shows the model cannot reliably classify short news text with exact citations, this spec
 does not proceed on hope: the remedy is a prompt/schema revision in 179's cohort machinery first.
+
+### Recorded 2026-08-23 (measured over `data/news-risk/assessments/`, 108 assessments, 3 runs, 2 readers)
+
+Run inventory: `215d5902` (2026-08-22 17:59Z) and `8ed5aeb7` (2026-08-22 22:49Z) are **pre-spec-182**
+runs — all 36 assessments each came back `IncompleteCoverage` with zero model calls, so they contribute
+run-shape evidence only. `0fbf7ef2` (2026-08-23 13:39:42Z→13:52:15Z) is the first **post-182** run: 36
+assessments (18 companies × 2 readers), every one reaching the model. All reader numbers below are from
+that run.
+
+- **Citation-validation drop rate** (claims total/accepted/dropped):
+  - `openai:deepseek-ai/DeepSeek-V4-Flash|news-risk-prompt-v1|news-risk-schema-v1`: **15/15/0 — 0.0%
+    dropped.** The hosted reader cites exact substrings reliably.
+  - `ollama:llama3.1|news-risk-prompt-v1|news-risk-schema-v1`: **26/21/5 — 19.2% dropped**, every drop
+    `excerpt-not-exact-substring-of-supplied-text` (paraphrase/truncation, not fabricated observation ids).
+- **Assessment completion** (of the 18 read attempts per reader): DeepSeek 4 `ThesisChallenged`,
+  8 `NoRiskFoundInSuppliedText`, 6 `InsufficientContent`, 0 `ValidationFailed`; llama3.1 13
+  `ThesisChallenged`, 3 `NoRiskFoundInSuppliedText`, 2 `ValidationFailed`, 0 `InsufficientContent`. No
+  provider failures in either cohort.
+- **Category agreement between readers**: status agreement **4/18** on paired completed assessments;
+  category-set Jaccard **0.062** (n=14 pairs with categories). llama3.1 flags `ThesisChallenged` 3× as
+  often as DeepSeek and rarely on the same companies. **Consequence for §6: the local model is NOT a
+  viable solo backfill reader** — the backfill runs on the hosted reader (or on both, cohort-separated,
+  with the local cohort treated as exploratory), and the asymmetric-split question stays open for spec 185.
+- **Cost/latency**: per-assessment cost is not recorded in the assessment schema. Wall-clock for the
+  post-182 run: **12.5 min for 36 assessments (~21 s/assessment)** including both readers, sequential.
+  At that rate the 13,027-article legacy backlog is roughly 76 hours of sequential reads per reader —
+  the §6 per-run cap is mandatory, and typing batches should be sized in the low hundreds per run.
+
+Verdict against the gate's own test: the hosted reader classifies short news text with exact citations at
+a 0% validation-drop rate — the task shape is viable. The 19.2% local-model drop rate and near-zero
+cross-reader agreement are recorded as pilot findings, not blockers: they shape §4's reader configuration
+(hosted reader primary) rather than requiring a 179 prompt revision first.
 
 ## 2. What "typing" is and is not
 
