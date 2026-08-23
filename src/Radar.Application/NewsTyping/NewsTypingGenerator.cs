@@ -514,14 +514,26 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 var typeRows = typedRecords
                     .Where(t => t.Record.DerivedPrimaryType is not null)
                     .GroupBy(t => t.Record.DerivedPrimaryType!.Value)
-                    .Select(g => new NewsTypingDecompositionTypeRow(
-                        EventType: g.Key,
-                        ObservationCount: g.Count(),
-                        PublisherBreadth: g
-                            .Select(t => t.Observation.Publisher)
-                            .Distinct(StringComparer.Ordinal)
-                            .Count(),
-                        FamilyCount: cohortFamilies.Count(f => f.EventTypes.Contains(g.Key))))
+                    .Select(g =>
+                    {
+                        // The row counts observations by DerivedPrimaryType, so its family count must
+                        // share that basis: only families containing one of THESE observations' facts
+                        // of this type — never any cohort family that merely mentions the type.
+                        var rowFactIds = g
+                            .SelectMany(t => t.Record.Facts)
+                            .Where(f => f.EventTypes.Contains(g.Key))
+                            .Select(f => f.FactId)
+                            .ToHashSet();
+                        return new NewsTypingDecompositionTypeRow(
+                            EventType: g.Key,
+                            ObservationCount: g.Count(),
+                            PublisherBreadth: g
+                                .Select(t => t.Observation.Publisher)
+                                .Distinct(StringComparer.Ordinal)
+                                .Count(),
+                            FamilyCount: cohortFamilies
+                                .Count(f => f.MemberFactIds.Any(rowFactIds.Contains)));
+                    })
                     .OrderByDescending(r => r.ObservationCount)
                     .ThenBy(r => (int)r.EventType)
                     .ToList();

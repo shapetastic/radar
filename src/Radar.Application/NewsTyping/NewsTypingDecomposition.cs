@@ -56,7 +56,9 @@ public sealed record NewsTypingDecompositionCohort(
 /// <summary>
 /// One event type's row: how many typed observations carried it as <c>DerivedPrimaryType</c>, the distinct
 /// publisher breadth among them, and the same-event FAMILY count beside the raw count — so 40 syndicated
-/// copies of one financing story render as one family.
+/// copies of one financing story render as one family. The family count shares the row's basis: only
+/// families containing one of these observations' facts of this type are counted, never a cohort family
+/// that merely mentions the type from observations primary-typed elsewhere.
 /// </summary>
 public sealed record NewsTypingDecompositionTypeRow(
     NewsEventType EventType,

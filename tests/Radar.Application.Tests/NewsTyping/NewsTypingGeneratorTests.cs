@@ -406,7 +406,61 @@ public sealed class NewsTypingGeneratorTests
         var row = Assert.Single(cohort.Types);
         Assert.Equal(NewsEventType.RegulatoryOrLegal, row.EventType);
         Assert.Equal(1, row.ObservationCount);
+        Assert.Equal(1, row.FamilyCount);
     }
+
+    [Fact]
+    public async Task TypeRowFamilyCount_CountsOnlyFamiliesAnchoredInThatRowsObservations()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+        var legal = Observation("Company faces legal scrutiny", AsOf.AddDays(-2));
+        var financing = Observation("Company announces dilutive offering", AsOf.AddDays(-1));
+        harness.Archive.Observations.AddRange([legal, financing]);
+
+        // The financing observation carries a secondary legal fact, so its primary type is
+        // FinancingOrDilution while a RegulatoryOrLegal family still exists for it.
+        harness.Extractor.Script = request =>
+        {
+            var facts = request.Observation.ObservationId == financing.ObservationId
+                ? new[]
+                {
+                    Fact(request, "FinancingOrDilution", confidence: 0.9),
+                    Fact(request, "RegulatoryOrLegal", confidence: 0.3),
+                }
+                : [Fact(request, "RegulatoryOrLegal", confidence: 0.8)];
+            return new NewsTypingExtractionOutcome(
+                NewsTypingExtractionFailure.None,
+                new NewsTypingModelResponse("CompanySpecific", facts),
+                RawResponseHash: "raw-hash",
+                FailureDetail: null);
+        };
+
+        await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var (_, _, document) = Assert.Single(harness.ArtifactStore.Live);
+        var cohort = Assert.Single(Assert.Single(document.Companies).Cohorts);
+        Assert.Equal(3, cohort.FamilyCount);
+
+        // The financing observation's legal-fact family is NOT anchored in any observation whose
+        // primary type is RegulatoryOrLegal, so the legal row must not count it.
+        var legalRow = cohort.Types.Single(r => r.EventType == NewsEventType.RegulatoryOrLegal);
+        Assert.Equal(1, legalRow.ObservationCount);
+        Assert.Equal(1, legalRow.FamilyCount);
+        var financingRow = cohort.Types.Single(r => r.EventType == NewsEventType.FinancingOrDilution);
+        Assert.Equal(1, financingRow.ObservationCount);
+        Assert.Equal(1, financingRow.FamilyCount);
+    }
+
+    private static NewsTypingModelFact Fact(
+        NewsTypingExtractionRequest request, string eventType, double confidence) => new(
+        EventTypes: [eventType],
+        Statement: request.Observation.Headline,
+        TemporalScope: null,
+        Attribution: "publisher",
+        AssertionStatus: "reported",
+        Confidence: confidence,
+        Citations: [request.Observation.Headline]);
 
     [Fact]
     public async Task ProvenFullUniverseBatch_ClearsTheCaptureCaveat()

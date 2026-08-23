@@ -194,7 +194,7 @@ public sealed class FileNewsTypingStore : INewsTypingStore
             _logger.LogInformation(
                 "Hydrated {Loaded} news-typing record(s) from '{Root}' ({Unreadable} unreadable skipped).",
                 loaded,
-                _options.RootDirectory,
+                root,
                 unreadable);
             _hydrated = true;
         }
