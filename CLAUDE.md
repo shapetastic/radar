@@ -1029,6 +1029,29 @@ Do not hand back broken code.
     the lower scale; the efficacy horizon / outcome variable (spec 152 and the open question after it); and
     migrating any existing strategy onto v10 — it is opt-in, and a strategy that changes formula should get a
     NEW NAME (spec 141's immutable-by-convention rule).
+- **Pooled price outcomes are BENCHMARK-ADJUSTED against a frozen universe; the paired path is deliberately
+  not (spec 183).** AD-16's "must be benchmark-adjusted" is now implemented: excess = raw forward return −
+  the equal-weight mean forward return of the OTHER resolved members of **`benchmark-universe-v1`**
+  (`data/efficacy/benchmark-universe-v1.json` — committed, self-contained, 74 members frozen 2026-08-23,
+  content hash `97e31fde67655453e4bdee8f69eef07785db6f2c80124220176a5637829561fc`), self-excluded, members
+  resolving through the SAME spec-152 `ForwardReturn` rules. Rules: the artifact is the ONLY membership /
+  price-series-key input (never `companies.json` — a seed edit moves nothing; expansion = a prospective
+  `benchmark-universe-v2`, never an edit — the reader refuses a content-hash mismatch); the computation is
+  CENTRAL (`UniverseBenchmark`, cached per (universe, D, horizon, tolerance), shared via
+  `IUniverseBenchmarkProvider` by the spec-140 leaderboard and the spec-179 news-risk evaluator); the
+  excess definition and coverage rule are CODE CONSTANTS (`required = max(40, ceil(0.90 × eligiblePeers))`,
+  integer ceiling so ×10 counts don't FP-round up; unresolved members stay in the denominator with
+  reasons); below the bound the pooled observation is excluded as **`BenchmarkUnavailable`** — named and
+  counted, never a silent raw fallback — and a post-freeze company is **`NotInBenchmarkUniverse`**. The
+  leaderboard now ranks by excess (`excess-vs-universe-v1` columns, CSV schema `strategy-leaderboard-v2`;
+  the pre-183 raw artifacts are preserved once as `strategy-leaderboard-raw-v1.{md,csv}` and declared
+  incomparable; pre-freeze dates carry a retrospective label). **The AD-15 paired path has NO benchmark
+  gate, structurally**: `StrategyObservation` carries `RawForwardReturn` + nullable `ExcessForwardReturn`;
+  the paired harness consumes ONLY raw-return ranks (self-excluded excess is a positive affine per-date
+  transform — `excessᵢ = N/(N−1) × (rᵢ − mean(all))` — so every per-date rank/ρ/delta is identical), and
+  its outputs are byte-identical with or without a benchmark (asserted). News-risk rows carry raw AND
+  excess, both descriptive; max-adverse keeps its raw basis. AD-15/AD-16 amendments dated 2026-08-23. No
+  scoring change, no fingerprint move; the attention screen is untouched.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

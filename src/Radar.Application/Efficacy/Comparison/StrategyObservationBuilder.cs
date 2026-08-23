@@ -1,22 +1,44 @@
 namespace Radar.Application.Efficacy.Comparison;
 
 /// <summary>
-/// One usable (company, as-of) observation of a strategy: its opportunity score and the forward return it is
-/// judged against, PLUS the observed entry/exit bar dates of that return's price window.
+/// One usable (company, as-of) observation of a strategy: its opportunity score and the RAW forward return it
+/// is judged against, PLUS the observed entry/exit bar dates of that return's price window.
 /// <para>
 /// The entry/exit dates were always computed (<see cref="ForwardReturnResult"/> carries them) but the
 /// marginal harness's private observation dropped them; spec 155's paired path needs them to prove that no
 /// admitted block's OBSERVED price interval overlaps the next admitted block's, so they ride on the shared
 /// observation instead of being recomputed.
 /// </para>
+/// <para>
+/// <b>The observation SHAPE is what makes spec 183's "no lost paired support" structural:</b> it carries
+/// <see cref="RawForwardReturn"/> (always, when usable) plus a NULLABLE <see cref="ExcessForwardReturn"/>
+/// (null whenever the benchmark is unavailable for it). The paired harness consumes ONLY raw-return ranks —
+/// per date, self-excluded excess is a positive affine transform of the raw return
+/// (<c>excessᵢ = N/(N−1) × (rᵢ − mean(all))</c>), so every per-date rank, ρ and paired delta is identical and
+/// a benchmark gate there could only discard valid support — while the pooled leaderboard consumes
+/// <see cref="ExcessForwardReturn"/> and excludes null with the named <see cref="ExcessUnavailableReason"/>.
+/// An implementer sharing this type cannot accidentally gate paired support.
+/// </para>
 /// </summary>
 public readonly record struct StrategyObservation(
     DateOnly AsOf,
     Guid CompanyId,
     double Score,
-    double ForwardReturn,
+    double RawForwardReturn,
     DateOnly EntryDate,
-    DateOnly ExitDate);
+    DateOnly ExitDate)
+{
+    /// <summary>
+    /// The benchmark-adjusted forward return (spec 183): raw minus the equal-weight mean forward return of
+    /// the other resolved frozen-universe members. Null exactly when
+    /// <see cref="ExcessUnavailableReason"/> ≠ <c>None</c>.
+    /// </summary>
+    public double? ExcessForwardReturn { get; init; }
+
+    /// <summary>Why <see cref="ExcessForwardReturn"/> is null — <c>None</c> when it is defined.</summary>
+    public BenchmarkExcessUnavailableReason ExcessUnavailableReason { get; init; } =
+        BenchmarkExcessUnavailableReason.BenchmarkUnavailable;
+}
 
 /// <summary>
 /// One usable observation keyed on the EXACT scoring instant (spec 170): the same facts as
@@ -33,9 +55,20 @@ public readonly record struct StrategyInstantObservation(
     DateOnly AsOf,
     Guid CompanyId,
     double Score,
-    double ForwardReturn,
+    double RawForwardReturn,
     DateOnly EntryDate,
-    DateOnly ExitDate);
+    DateOnly ExitDate)
+{
+    /// <summary>
+    /// The excess return, attached for AUDIT consistency only (spec 183 §3): the paired claim path consumes
+    /// exclusively <see cref="RawForwardReturn"/> ranks — no benchmark gate applies there, by design.
+    /// </summary>
+    public double? ExcessForwardReturn { get; init; }
+
+    /// <summary>Why <see cref="ExcessForwardReturn"/> is null — <c>None</c> when it is defined.</summary>
+    public BenchmarkExcessUnavailableReason ExcessUnavailableReason { get; init; } =
+        BenchmarkExcessUnavailableReason.BenchmarkUnavailable;
+}
 
 /// <summary>
 /// One strategy's whole usable observation set, with the two per-company-day exclusion tallies (spec 152's
@@ -118,8 +151,22 @@ public sealed record StrategyObservationSet(
 /// </summary>
 public static class StrategyObservationBuilder
 {
+    /// <summary>The pre-183 shape: no benchmark, so every observation's excess is null (BenchmarkUnavailable).</summary>
     public static StrategyObservationSet Build(
-        StrategyScoreSeries strategy, int forwardHorizonDays, int exitToleranceDays)
+        StrategyScoreSeries strategy, int forwardHorizonDays, int exitToleranceDays) =>
+        Build(strategy, forwardHorizonDays, exitToleranceDays, benchmark: null);
+
+    /// <summary>
+    /// Builds the observation set, attaching each usable observation's excess forward return against the
+    /// frozen benchmark universe (spec 183) when <paramref name="benchmark"/> is supplied. The benchmark
+    /// NEVER changes which observations are usable — admission is the raw forward-return computation exactly
+    /// as before — it only annotates them, which is what keeps the paired path's support byte-identical.
+    /// </summary>
+    public static StrategyObservationSet Build(
+        StrategyScoreSeries strategy,
+        int forwardHorizonDays,
+        int exitToleranceDays,
+        UniverseBenchmark? benchmark)
     {
         ArgumentNullException.ThrowIfNull(strategy);
 
@@ -146,6 +193,11 @@ public static class StrategyObservationBuilder
                     continue;
                 }
 
+                // Spec 183: the excess annotation, from the ONE central benchmark computation. It never
+                // gates admission — a null excess rides along and only the pooled consumer excludes on it.
+                var excess = benchmark?.TryExcess(
+                    company.CompanyId, forward.Value, asOf, forwardHorizonDays, exitToleranceDays);
+
                 byKey[(company.CompanyId, asOf)] = new StrategyObservation(
                     asOf,
                     company.CompanyId,
@@ -153,7 +205,13 @@ public static class StrategyObservationBuilder
                     forward.Value,
                     // Non-null whenever IsDefined — the forward-return contract, not an assumption.
                     forward.EntryDate!.Value,
-                    forward.ExitDate!.Value);
+                    forward.ExitDate!.Value)
+                {
+                    ExcessForwardReturn = excess is { IsDefined: true } ? excess.Excess : null,
+                    ExcessUnavailableReason = excess is null
+                        ? BenchmarkExcessUnavailableReason.BenchmarkUnavailable
+                        : excess.Reason,
+                };
 
                 // Spec 170: the exact-instant projection, from the SAME forward-return computation. A point
                 // without an instant cannot enter it — that is the fail-closed exclusion, counted below.
@@ -169,7 +227,13 @@ public static class StrategyObservationBuilder
                         point.OpportunityScore,
                         forward.Value,
                         forward.EntryDate!.Value,
-                        forward.ExitDate!.Value);
+                        forward.ExitDate!.Value)
+                    {
+                        ExcessForwardReturn = excess is { IsDefined: true } ? excess.Excess : null,
+                        ExcessUnavailableReason = excess is null
+                            ? BenchmarkExcessUnavailableReason.BenchmarkUnavailable
+                            : excess.Reason,
+                    };
                     instantCoveredKeys.Add((company.CompanyId, asOf));
                 }
                 else

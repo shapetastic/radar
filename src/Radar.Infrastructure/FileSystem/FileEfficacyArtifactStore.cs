@@ -80,6 +80,29 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
         var csvPath = Path.Combine(_options.RootDirectory, LeaderboardFileStem + ".csv");
         var markdownPath = Path.Combine(_options.RootDirectory, LeaderboardFileStem + ".md");
 
+        // Spec 183 §3: the pre-excess RAW artifacts are preserved under their own semantic-version names
+        // BEFORE the first excess-schema write can overwrite them, so the raw series survives as a distinct,
+        // marked artifact rather than being silently replaced. Idempotent: once the raw-v1 file exists it is
+        // never touched again (the current file is by then the excess series). Best-effort like every other
+        // write here (AD-8).
+        await PreserveRawLeaderboardAsync(
+                markdownPath,
+                RawMarkdownPreservationHeader,
+                ".md",
+                // An artifact that already names the excess basis is NOT the raw series — copying it to the
+                // raw-v1 name would mislabel excess numbers as raw, the exact confusion this preservation
+                // exists to prevent.
+                static existing => existing.Contains("excess-vs-universe-v1", StringComparison.Ordinal),
+                ct)
+            .ConfigureAwait(false);
+        await PreserveRawLeaderboardAsync(
+                csvPath,
+                prependedMarker: null,
+                ".csv",
+                static existing => existing.StartsWith("schemaVersion,", StringComparison.Ordinal),
+                ct)
+            .ConfigureAwait(false);
+
         if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
         {
             _logger.LogInformation("Wrote strategy-comparison leaderboard CSV to {Path}.", csvPath);
@@ -133,8 +156,70 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
         return new PairedComparisonPaths(csvPath, markdownPath, blocksCsvPath);
     }
 
+    /// <summary>
+    /// Copies an existing pre-183 leaderboard artifact to its <c>strategy-leaderboard-raw-v1</c> name, once.
+    /// Nothing happens when there is no existing file (a fresh deployment has no raw series to preserve) or
+    /// when the raw-v1 file already exists (the preservation already ran — by then the live file holds the
+    /// excess series and must NOT be re-copied over the raw one). The markdown copy is prepended with a
+    /// marker naming what it is and why it is not comparable with the excess series; the CSV is preserved
+    /// byte-for-byte (a prepended comment would corrupt the format — its renamed file IS the marking, and
+    /// its rows still carry the pre-183 header naming raw semantics).
+    /// </summary>
+    private async Task PreserveRawLeaderboardAsync(
+        string currentPath,
+        string? prependedMarker,
+        string extension,
+        Func<string, bool> isAlreadyExcessSchema,
+        CancellationToken ct)
+    {
+        try
+        {
+            var rawPath = Path.Combine(_options.RootDirectory, RawLeaderboardFileStem + extension);
+            if (!File.Exists(currentPath) || File.Exists(rawPath))
+            {
+                return;
+            }
+
+            var existing = await File.ReadAllTextAsync(currentPath, ct).ConfigureAwait(false);
+            if (isAlreadyExcessSchema(existing))
+            {
+                return;
+            }
+
+            var preserved = prependedMarker is null ? existing : prependedMarker + existing;
+            if (await GracefulFileWriter.TryWriteAllTextAsync(rawPath, preserved, _logger, ct)
+                .ConfigureAwait(false))
+            {
+                _logger.LogInformation(
+                    "Preserved the pre-excess raw leaderboard artifact as {Path} (spec 183: the raw and "
+                        + "excess series are distinct semantic versions and are not comparable).",
+                    rawPath);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort (AD-8): preservation must never block the new artifact's write.
+            _logger.LogWarning(
+                ex, "Could not preserve the pre-excess raw leaderboard artifact from {Path}.", currentPath);
+        }
+    }
+
+    /// <summary>The spec-183 marker prepended to the preserved raw markdown artifact.</summary>
+    internal const string RawMarkdownPreservationHeader =
+        "> **PRESERVED RAW-RETURN SERIES (semantic v1, superseded by spec 183).** This artifact ranked by "
+            + "RAW forward returns. The live strategy-leaderboard.md now ranks by EXCESS returns "
+            + "(excess-vs-universe-v1) and the two series are NOT comparable — different outcomes, one "
+            + "file lineage. Kept verbatim below, for the record.\n\n";
+
     /// <summary>The fixed leaderboard file stem (deliberately not a shape any real ticker takes).</summary>
     private const string LeaderboardFileStem = "strategy-leaderboard";
+
+    /// <summary>The preserved pre-183 raw-return leaderboard stem (spec 183 §3).</summary>
+    private const string RawLeaderboardFileStem = "strategy-leaderboard-raw-v1";
 
     /// <summary>The fixed paired-comparison file stem (same rule as <see cref="LeaderboardFileStem"/>).</summary>
     private const string PairedComparisonFileStem = "strategy-paired-comparison";

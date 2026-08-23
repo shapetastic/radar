@@ -44,14 +44,26 @@ public enum NewsRiskEvaluationTable
     Excluded,
 }
 
-/// <summary>One frozen company/run/reader assessment joined (read-only) to its forward outcome.</summary>
+/// <summary>
+/// One frozen company/run/reader assessment joined (read-only) to its forward outcome. Both forward returns
+/// — RAW and EXCESS-vs-benchmark-universe-v1 (spec 183 §3) — are DESCRIPTIVE fields: spec 179 declares no
+/// threshold or alpha claim, and the RiskScore association keeps its raw max-adverse basis.
+/// </summary>
 public sealed record NewsRiskEvaluationRow(
     NewsRiskAssessmentRecord Assessment,
     NewsRiskEvaluationTable Table,
     IReadOnlyList<string> ExclusionReasons,
     DateOnly? EntryDate,
-    double? ForwardReturn21d,
-    double? MaxAdverseMove21d);
+    double? RawForwardReturn21d,
+    double? MaxAdverseMove21d)
+{
+    /// <summary>The excess 21-day forward return vs the frozen benchmark universe — descriptive only.</summary>
+    public double? ExcessForwardReturn21d { get; init; }
+
+    /// <summary>Why the excess is null (<c>None</c> when defined) — the named, never-silent exclusion.</summary>
+    public BenchmarkExcessUnavailableReason ExcessUnavailableReason { get; init; } =
+        BenchmarkExcessUnavailableReason.BenchmarkUnavailable;
+}
 
 /// <summary>
 /// The read-only frozen-assessment evaluator (spec 179 §9): joins PERSISTED assessments + the committed
@@ -104,6 +116,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
     private readonly INewsProspectiveBoundaryReader _boundaryReader;
     private readonly IPriceHistoryStore _priceStore;
     private readonly INewsRiskArtifactStore _artifactStore;
+    private readonly IUniverseBenchmarkProvider _benchmarkProvider;
     private readonly ILogger<NewsRiskEvaluationGenerator> _logger;
 
     public NewsRiskEvaluationGenerator(
@@ -112,6 +125,10 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         INewsProspectiveBoundaryReader boundaryReader,
         IPriceHistoryStore priceStore,
         INewsRiskArtifactStore artifactStore,
+        // Spec 183: the SAME central frozen-universe benchmark the leaderboard consumes (one computation per
+        // (universeVersion, D, horizon, tolerance), shared) — required, never optional-nullable, so a wiring
+        // mistake fails resolution instead of silently rendering every excess as unavailable.
+        IUniverseBenchmarkProvider benchmarkProvider,
         ILogger<NewsRiskEvaluationGenerator> logger)
     {
         ArgumentNullException.ThrowIfNull(assessmentStore);
@@ -119,6 +136,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         ArgumentNullException.ThrowIfNull(boundaryReader);
         ArgumentNullException.ThrowIfNull(priceStore);
         ArgumentNullException.ThrowIfNull(artifactStore);
+        ArgumentNullException.ThrowIfNull(benchmarkProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _assessmentStore = assessmentStore;
@@ -126,6 +144,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         _boundaryReader = boundaryReader;
         _priceStore = priceStore;
         _artifactStore = artifactStore;
+        _benchmarkProvider = benchmarkProvider;
         _logger = logger;
     }
 
@@ -136,12 +155,14 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             var assessments = await _assessmentStore.GetAllAsync(ct).ConfigureAwait(false);
             var examples = await _developmentExamples.GetAllAsync(ct).ConfigureAwait(false);
             var boundary = await _boundaryReader.ReadBoundaryAsync(ct).ConfigureAwait(false);
+            var benchmark = await _benchmarkProvider.GetAsync(ct).ConfigureAwait(false);
 
             var rows = new List<NewsRiskEvaluationRow>(assessments.Count);
             foreach (var assessment in assessments)
             {
                 ct.ThrowIfCancellationRequested();
-                rows.Add(await BuildRowAsync(assessment, examples, boundary, ct).ConfigureAwait(false));
+                rows.Add(await BuildRowAsync(assessment, examples, boundary, benchmark, ct)
+                    .ConfigureAwait(false));
             }
 
             var markdown = RenderMarkdown(rows, examples, boundary);
@@ -175,6 +196,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         NewsRiskAssessmentRecord assessment,
         IReadOnlyList<NewsRiskDevelopmentExample>? examples,
         NewsObservationBoundary? boundary,
+        UniverseBenchmark? benchmark,
         CancellationToken ct)
     {
         // Outcome join first (computed for development rows too — their tables display outcomes; they just
@@ -182,6 +204,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         DateOnly? entryDate = null;
         double? forwardReturn = null;
         double? maxAdverse = null;
+        double? excessReturn = null;
+        var excessReason = BenchmarkExcessUnavailableReason.BenchmarkUnavailable;
         var outcomeReasons = new List<string>();
 
         if (string.IsNullOrWhiteSpace(assessment.Ticker))
@@ -210,6 +234,21 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                     entryDate = forward.EntryDate;
                     forwardReturn = forward.Value;
                     maxAdverse = MaxAdverseMove(history.Bars, asOf, forward.EntryDate!.Value);
+
+                    // Spec 183 §3: the DESCRIPTIVE excess against the frozen universe, through the SAME
+                    // central computation the leaderboard consumes. Unavailability stays a named reason —
+                    // never silently rendered as the raw value.
+                    var excess = benchmark?.TryExcess(
+                        assessment.CompanyId, forward.Value, asOf, HorizonDays, ExitToleranceDays);
+                    if (excess is { IsDefined: true })
+                    {
+                        excessReturn = excess.Excess;
+                        excessReason = BenchmarkExcessUnavailableReason.None;
+                    }
+                    else if (excess is not null)
+                    {
+                        excessReason = excess.Reason;
+                    }
                 }
             }
         }
@@ -301,8 +340,20 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             }
         }
 
-        return new NewsRiskEvaluationRow(assessment, table, reasons, entryDate, forwardReturn, maxAdverse);
+        return new NewsRiskEvaluationRow(assessment, table, reasons, entryDate, forwardReturn, maxAdverse)
+        {
+            ExcessForwardReturn21d = excessReturn,
+            ExcessUnavailableReason = excessReason,
+        };
     }
+
+    /// <summary>Stable machine token for the CSV's excess-basis column.</summary>
+    private static string ExcessBasisToken(NewsRiskEvaluationRow row) => row.ExcessUnavailableReason switch
+    {
+        BenchmarkExcessUnavailableReason.None => "excess-vs-benchmark-universe-v1",
+        BenchmarkExcessUnavailableReason.NotInBenchmarkUniverse => "not-in-benchmark-universe",
+        _ => "benchmark-unavailable",
+    };
 
     /// <summary>The degraded dimensions as machine-readable exclusion tokens — empty at best-state.</summary>
     private static IReadOnlyList<string> DegradedDimensionTokens(NewsRiskAssessmentRecord assessment)
@@ -399,6 +450,14 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 + "presence/absence-claim cohorts; presence claims are admitted at any completeness and "
                 + "segmented by the three completeness dimensions, while absence claims require best-state "
                 + "dimensions on every one.");
+        sb.AppendLine();
+        sb.AppendLine(
+            "Forward returns are DESCRIPTIVE, in both forms (spec 183): the raw 21-day return and the "
+                + "excess 21-day return vs benchmark-universe-v1 (raw minus the equal-weight mean forward "
+                + "return of the other resolved frozen-universe members, self-excluded). Excess values on "
+                + "as-of dates before the universe freeze are additionally RETROSPECTIVE — the frozen "
+                + "members were selected after those dates and their prices backfilled. The RiskScore "
+                + "association keeps its RAW max-adverse-move basis. Nothing here is claim-bearing.");
         sb.AppendLine();
         sb.AppendLine(boundary is null
             ? "Prospective boundary: NOT ESTABLISHED — no prospective presence/absence-claim cohort can exist yet."
@@ -506,8 +565,9 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
 
         sb.AppendLine(
             "| Company | As-of (cutoff) | Status | RiskScore | Completeness (archive/search/bundle) "
-                + "| Fwd 21d | Max adverse 21d | Selected by |");
-        sb.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- |");
+                + "| Fwd 21d (raw, descriptive) | Excess fwd 21d vs universe-v1 (descriptive) "
+                + "| Max adverse 21d (raw) | Selected by |");
+        sb.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
         foreach (var row in rows
             .OrderBy(r => r.Assessment.AssessmentCutoffUtc)
             .ThenBy(r => r.Assessment.CompanyId))
@@ -519,7 +579,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                     + $"| {a.AssessmentCutoffUtc:yyyy-MM-dd} | {a.Status} "
                     + $"| {(a.RiskScore is { } s ? s.ToString(CultureInfo.InvariantCulture) : "—")} "
                     + $"| {DimensionsCell(a)} "
-                    + $"| {FormatPct(row.ForwardReturn21d)} | {FormatPct(row.MaxAdverseMove21d)} "
+                    + $"| {FormatPct(row.RawForwardReturn21d)} | {ExcessCell(row)} "
+                    + $"| {FormatPct(row.MaxAdverseMove21d)} "
                     + $"| {EscapePipes(string.Join("; ", a.Selections.Select(sel => $"{sel.StrategyName} #{sel.Rank}")))} |"));
         }
 
@@ -567,7 +628,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         var definedDates = 0;
         sb.AppendLine(
             "#### Per-date RiskScore ↔ max-adverse-move association "
-                + "(Spearman ρ, flagged rows, per dimension combination)");
+                + "(Spearman ρ, flagged rows, RAW max adverse move, per dimension combination)");
         sb.AppendLine();
         foreach (var combination in flagged
             .GroupBy(r => DimensionCombination(r.Assessment), StringComparer.Ordinal)
@@ -618,8 +679,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             return $"- {label}: (no rows)";
         }
 
-        var returns = rows.Where(r => r.ForwardReturn21d is not null)
-            .Select(r => r.ForwardReturn21d!.Value).ToList();
+        var returns = rows.Where(r => r.RawForwardReturn21d is not null)
+            .Select(r => r.RawForwardReturn21d!.Value).ToList();
         var adverse = rows.Where(r => r.MaxAdverseMove21d is not null)
             .Select(r => r.MaxAdverseMove21d!.Value).ToList();
         var returnsPart = returns.Count > 0
@@ -643,7 +704,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             "assessmentId,runId,cohortKey,readerName,provider,model,companyId,companyName,ticker,"
                 + "selectionAsOfUtc,assessmentCutoffUtc,captureModes,archiveCapture,searchEnumeration,"
                 + "assessmentBundle,status,riskScore,"
-                + "categories,table,exclusionReasons,entryDate,forwardReturn21d,maxAdverseMove21d,selectedBy");
+                + "categories,table,exclusionReasons,entryDate,rawForwardReturn21d,"
+                + "excessForwardReturn21d,excessForwardReturn21dBasis,maxAdverseMove21dRaw,selectedBy");
         foreach (var row in rows
             .OrderBy(r => r.Assessment.AssessmentCutoffUtc)
             .ThenBy(r => r.Assessment.AssessmentId))
@@ -676,7 +738,11 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 CsvField.Escape(row.Table.ToString()),
                 CsvField.Escape(string.Join("|", row.ExclusionReasons)),
                 CsvField.Escape(row.EntryDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
-                CsvField.Escape(row.ForwardReturn21d?.ToString("0.######", CultureInfo.InvariantCulture)),
+                CsvField.Escape(row.RawForwardReturn21d?.ToString("0.######", CultureInfo.InvariantCulture)),
+                CsvField.Escape(row.ExcessForwardReturn21d?.ToString("0.######", CultureInfo.InvariantCulture)),
+                // The basis column names what the excess value IS (or why it is absent), so the two return
+                // columns can never be read as one series (spec 183: both descriptive, different outcomes).
+                CsvField.Escape(row.RawForwardReturn21d is null ? string.Empty : ExcessBasisToken(row)),
                 CsvField.Escape(row.MaxAdverseMove21d?.ToString("0.######", CultureInfo.InvariantCulture)),
                 CsvField.Escape(string.Join(
                     "|", a.Selections.Select(s => $"{s.StrategyName}#{s.Rank}")))));
@@ -690,4 +756,15 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
 
     private static string FormatPct(double? value) =>
         value is { } v ? v.ToString("+0.00%;-0.00%", CultureInfo.InvariantCulture) : "—";
+
+    /// <summary>
+    /// The excess cell: the value when defined, otherwise the NAMED unavailability — an excess that could
+    /// not be computed must never render like a raw value or a blank (spec 183: no silent fallback).
+    /// </summary>
+    private static string ExcessCell(NewsRiskEvaluationRow row) =>
+        row.ExcessForwardReturn21d is { } v
+            ? v.ToString("+0.00%;-0.00%", CultureInfo.InvariantCulture)
+            : row.RawForwardReturn21d is null
+                ? "—"
+                : $"— ({ExcessBasisToken(row)})";
 }

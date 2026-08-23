@@ -56,11 +56,19 @@ public sealed class PairedComparisonHarness
     /// </summary>
     public const string BaselineNamePrefix = "baseline-";
 
+    /// <param name="benchmark">
+    /// The spec-183 frozen-universe benchmark, used ONLY to attach excess values to observations for audit —
+    /// deliberately optional and deliberately consulted by nothing below: the confirmatory outcome is the
+    /// per-date cross-sectional rank of the RAW 21-day adjusted-close forward return (AD-15 as amended
+    /// 2026-08-23), to which self-excluded excess is a positive affine per-date transform, so a benchmark
+    /// gate here could only discard otherwise-valid support while changing no rank, ρ or paired delta.
+    /// </param>
     public PairedStrategyComparison Compare(
         IReadOnlyList<StrategyScoreSeries> strategies,
         string primaryStrategyName,
         bool primaryWasPredeclared,
-        PairedComparisonOptions options)
+        PairedComparisonOptions options,
+        UniverseBenchmark? benchmark = null)
     {
         ArgumentNullException.ThrowIfNull(strategies);
         ArgumentException.ThrowIfNullOrWhiteSpace(primaryStrategyName);
@@ -73,7 +81,7 @@ public sealed class PairedComparisonHarness
         foreach (var strategy in strategies)
         {
             ArgumentNullException.ThrowIfNull(strategy);
-            sets.Add(StrategyObservationBuilder.Build(strategy, horizonDays, exitToleranceDays));
+            sets.Add(StrategyObservationBuilder.Build(strategy, horizonDays, exitToleranceDays, benchmark));
         }
 
         // Strategy names are unique case-insensitively (ScoringStrategySet's rule; ScoreSeriesKey's
@@ -156,7 +164,7 @@ public sealed class PairedComparisonHarness
                         break;
                     }
 
-                    if (baselineObservation.ForwardReturn != observation.ForwardReturn)
+                    if (baselineObservation.RawForwardReturn != observation.RawForwardReturn)
                     {
                         outcomesAgree = false;
                     }
@@ -211,7 +219,9 @@ public sealed class PairedComparisonHarness
                 continue;
             }
 
-            var outcome = observations.Select(o => o.ForwardReturn).ToList();
+            // The confirmatory outcome (AD-15 as amended by spec 183): the per-date cross-sectional rank of
+            // the RAW 21-day adjusted-close forward return. Excess is never consulted on this path.
+            var outcome = observations.Select(o => o.RawForwardReturn).ToList();
             var primaryScores = observations.Select(o => o.Score).ToList();
 
             var primaryRho = RankCorrelation.ComputeRho(primaryScores, outcome);

@@ -48,8 +48,9 @@ public sealed class ExactInstantByteStabilityTests
             PairedFixtures.HorizonDays, 1.0 / 3.0, 4, PairedFixtures.ExitToleranceDays);
 
         var renderer = new StrategyLeaderboardRenderer();
-        var leaderboardWith = harness.Compare([with, mirrorWith], options);
-        var leaderboardWithout = harness.Compare([without, mirrorWithout], options);
+        var benchmark = PairedFixtures.Benchmark();
+        var leaderboardWith = harness.Compare([with, mirrorWith], options, benchmark);
+        var leaderboardWithout = harness.Compare([without, mirrorWithout], options, benchmark);
 
         Assert.Equal(renderer.RenderCsv(leaderboardWithout), renderer.RenderCsv(leaderboardWith));
         Assert.Equal(renderer.RenderMarkdown(leaderboardWithout), renderer.RenderMarkdown(leaderboardWith));

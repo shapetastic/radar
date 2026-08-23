@@ -1371,6 +1371,35 @@ untouched; the rule that runs is now the rule that was written down. As implemen
 between the written rule and the running one; the outcome-variable half still requires AD-16's screen to
 actually be calculated (first eligible as-of date 2026-09-29).*
 
+### AMENDMENT · 2026-08-23 — the confirmatory outcome is the per-date CROSS-SECTIONAL RANK of the 21-day adjusted-close forward return (spec 183)
+
+Recorded **before `PairedFirstEligibleAsOfUtc` (2026-09-29), while the eligible paired support is zero** —
+the legitimate window for defining the confirmatory family's semantics, and the property that expires.
+
+AD-16 requires price outcomes to be benchmark-adjusted. For the paired path, adjustment against the
+equal-weight frozen-universe benchmark defined in AD-16's 2026-08-23 amendment is **mathematically
+REDUNDANT, and gating on it could only destroy support while improving nothing**. For a date with N
+resolved companies, the self-excluded excess is a POSITIVE AFFINE transformation per date:
+
+> `excessᵢ = rᵢ − mean(rⱼ, j≠i) = N/(N−1) × (rᵢ − mean(all returns))`
+
+— strictly increasing in `rᵢ` within the date, so **every per-date cross-sectional rank, every per-date ρ
+and every paired delta is IDENTICAL under raw and excess returns**. The confirmatory outcome is therefore
+(re)defined as what the paired statistic actually consumes: **the per-date cross-sectional rank of the
+21-day adjusted-close forward return**. Consequences, all implemented:
+
+- **NO benchmark-availability gate applies to the paired path.** The shared observation shape makes this
+  structural, not conventional: `StrategyObservation` carries `RawForwardReturn` plus a NULLABLE
+  `ExcessForwardReturn` (null when the benchmark is unavailable); the paired harness consumes ONLY
+  raw-return ranks, while the pooled leaderboard consumes excess and applies its named
+  `BenchmarkUnavailable` exclusion. Paired support counts and every paired numeric output are byte-identical
+  before and after spec 183 (asserted on shared fixtures, rendered artifacts compared byte-for-byte).
+- **Excess values are attached to paired observations for AUDIT consistency only** — read by nothing on the
+  claim path.
+- Boundary (2026-09-29), primary (`disclosure-led-v11`), metric, horizon, minimum-N, purge, interval and
+  the composite AD-16 prerequisite are all **unchanged**. The suspension above is not lifted by this
+  amendment.
+
 ---
 
 ## AD-16 — Radar tests a STEALTH thesis: evidence accumulates before attention arrives
@@ -1773,3 +1802,39 @@ to fit observed outcomes.
 **Unchanged:** the metric, horizon, comparators, cohort exclusion, minimum-20 rules, median-δ failure screen,
 the 2026-09-29 boundary and the entire coverage contract. Nothing here relaxes a coverage requirement; it
 corrects a written rule to match the enforcement that was always doing the work.
+
+### AMENDMENT · 2026-08-23 — the benchmark-adjustment requirement is SATISFIED for pooled/descriptive price outcomes: equal-weight excess over the frozen `benchmark-universe-v1` (spec 183)
+
+This AD's decision bullet "Price stays validation-only (AD-14) and **must be benchmark-adjusted**" predated
+its implementation: `ForwardReturn.TryCompute` computed a raw share return, consumed raw by the spec-140
+leaderboard, the spec-155/AD-15 paired comparison and the spec-179 news-risk evaluator. **Reason recorded:
+the implementation predated the requirement** — the forward-return primitive (spec 140, 2026-07-27) shipped
+the day before this AD was accepted, and no slice closed the gap until now. This amendment defines HOW the
+requirement is satisfied, per consumer:
+
+- **The benchmark is the equal-weight mean forward return of the OTHER resolved members of a FROZEN,
+  VERSIONED universe, self-excluded** — `benchmark-universe-v1`, the committed self-contained artifact
+  `data/efficacy/benchmark-universe-v1.json`: 74 members frozen 2026-08-23 from `companies.json` at seed
+  hash `530ac6b8265851aeb49ce007958724d23ec6893aab4399f4591c708aa8426404`, content hash
+  **`97e31fde67655453e4bdee8f69eef07785db6f2c80124220176a5637829561fc`**. Members resolve to price series
+  through the artifact's own `priceSeriesKey` — the mutable seed list is never consulted, so a seed edit
+  moves no historical benchmark value. Future expansions are a prospective `benchmark-universe-v2` cohort
+  dimension; v1-era results are never restated. Member windows resolve through the SAME spec-152
+  `ForwardReturn.TryCompute` rules (entry `bar.Date > D`, exit tolerance) as the target.
+- **Coverage rule (code constants, not configuration):** `eligiblePeers = members − target`;
+  `required = max(40, ceil(0.90 × eligiblePeers))`; usable iff resolved peers ≥ required. Unresolved
+  members stay in the denominator with their reasons. Below the bound the pooled/descriptive observation is
+  excluded as **`BenchmarkUnavailable`** — named and counted, never a silent raw fallback. A target outside
+  v1 is **`NotInBenchmarkUniverse`** in excess cohorts.
+- **Scope: pooled/descriptive outcomes.** The spec-140 leaderboard ranks by excess (`excess-vs-universe-v1`
+  columns, CSV schema `strategy-leaderboard-v2`); the pre-183 raw artifacts are preserved as
+  `strategy-leaderboard-raw-v1.{md,csv}` and declared incomparable. The spec-179 news-risk evaluator
+  attaches raw AND excess, both descriptive; its RiskScore association keeps its raw max-adverse basis.
+  **Pre-freeze dates are labelled retrospective** in every artifact — applying v1 to earlier dates is
+  reproducible but the members were selected later and their prices backfilled.
+- **The AD-15 paired path is deliberately NOT gated on the benchmark** — see AD-15's 2026-08-23 amendment:
+  self-excluded excess is a positive affine per-date transform, so the confirmatory per-date rank outcome
+  is invariant and an exclusion there could only discard valid support.
+- **This AD's attention-arrival screen is untouched** (publisher counts; no price), as are the boundary
+  (2026-09-29), the coverage contract, and every precommitted rule above. No scoring input, formula
+  version, rule-set version or fingerprint moves.

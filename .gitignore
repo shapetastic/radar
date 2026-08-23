@@ -150,7 +150,10 @@ secrets.json
 /data/runs/
 /data/scoring-configs/
 /data/prices/
-/data/efficacy/
+# data/efficacy is generated output EXCEPT the committed frozen benchmark universe (spec 183):
+# `*` (not the bare directory) so the negation below can re-include the one committed artifact.
+/data/efficacy/*
+!/data/efficacy/benchmark-universe-v1.json
 /data/experiments/
 /data/filings-cache/
 /data/ai-debug/

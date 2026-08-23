@@ -12,6 +12,7 @@ public sealed class StrategyLeaderboardRendererTests
 {
     private static readonly StrategyLeaderboardRenderer Renderer = new();
     private static readonly StrategyComparisonHarness Harness = new();
+    private static readonly UniverseBenchmark Benchmark = ComparisonFixtures.Benchmark();
 
     /// <summary>The hard-rule forbidden terms (CLAUDE.md "Output language"), plus obvious near-misses.</summary>
     private static readonly string[] ForbiddenTerms =
@@ -33,7 +34,7 @@ public sealed class StrategyLeaderboardRendererTests
                 ComparisonFixtures.AlignedThroughout,
                 dateIndexes: [.. Enumerable.Range(0, ComparisonFixtures.InSampleDateCount), 25]),
         ],
-        ComparisonFixtures.Options());
+        ComparisonFixtures.Options(), Benchmark);
 
     [Fact]
     public void RenderMarkdown_StatesTheHonestNAndNamesEveryDroppedStrategyWithItsReason()
@@ -100,7 +101,12 @@ public sealed class StrategyLeaderboardRendererTests
         var csv = Renderer.RenderCsv(FourStrategiesTwoDropped());
         var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
-        Assert.StartsWith("status,rank,strategy,strategiesCompared,strategiesConsidered,", lines[0], StringComparison.Ordinal);
+        // Spec 183: the schema version leads every row (the outcome column changed meaning to excess).
+        Assert.StartsWith(
+            "schemaVersion,status,rank,strategy,strategiesCompared,strategiesConsidered,",
+            lines[0],
+            StringComparison.Ordinal);
+        Assert.Contains("inSampleRhoExcessVsUniverseV1", lines[0], StringComparison.Ordinal);
 
         // 1 header + 2 ranked + 2 dropped.
         Assert.Equal(5, lines.Length);
@@ -111,8 +117,8 @@ public sealed class StrategyLeaderboardRendererTests
             Assert.Equal(columnCount, line.Split(',').Length);
         }
 
-        var ranked = lines.Where(l => l.StartsWith("ranked,", StringComparison.Ordinal)).ToList();
-        var dropped = lines.Where(l => l.StartsWith("dropped,", StringComparison.Ordinal)).ToList();
+        var ranked = lines.Where(l => l.StartsWith(StrategyLeaderboardRenderer.CsvSchemaVersion + ",ranked,", StringComparison.Ordinal)).ToList();
+        var dropped = lines.Where(l => l.StartsWith(StrategyLeaderboardRenderer.CsvSchemaVersion + ",dropped,", StringComparison.Ordinal)).ToList();
         Assert.Equal(2, ranked.Count);
         Assert.Equal(2, dropped.Count);
 
@@ -145,11 +151,11 @@ public sealed class StrategyLeaderboardRendererTests
             Assert.Equal(header.Length, line.Split(',').Length);
         }
 
-        var ranked = lines.Where(l => l.StartsWith("ranked,", StringComparison.Ordinal)).ToList();
+        var ranked = lines.Where(l => l.StartsWith(StrategyLeaderboardRenderer.CsvSchemaVersion + ",ranked,", StringComparison.Ordinal)).ToList();
         Assert.Equal(2, ranked.Count);
         Assert.All(ranked, l => Assert.Equal("0", l.Split(',')[partialIndex]));
 
-        var dropped = lines.Where(l => l.StartsWith("dropped,", StringComparison.Ordinal)).ToList();
+        var dropped = lines.Where(l => l.StartsWith(StrategyLeaderboardRenderer.CsvSchemaVersion + ",dropped,", StringComparison.Ordinal)).ToList();
         Assert.Equal(2, dropped.Count);
         Assert.All(dropped, l => Assert.Equal(string.Empty, l.Split(',')[partialIndex]));
     }
@@ -205,7 +211,7 @@ public sealed class StrategyLeaderboardRendererTests
                 ComparisonFixtures.Strategy("overfit", ComparisonFixtures.AlignedThenReversed),
                 ComparisonFixtures.Strategy("late-bloomer", ComparisonFixtures.WeakThenAligned),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(), Benchmark);
 
         var markdown = Renderer.RenderMarkdown(leaderboard);
         var headline = leaderboard.Headline!;
@@ -226,7 +232,7 @@ public sealed class StrategyLeaderboardRendererTests
     [Fact]
     public void RenderMarkdown_WithNothingRankableSaysSoInsteadOfClaimingAWinner()
     {
-        var markdown = Renderer.RenderMarkdown(Harness.Compare([], ComparisonFixtures.Options()));
+        var markdown = Renderer.RenderMarkdown(Harness.Compare([], ComparisonFixtures.Options(), Benchmark));
 
         Assert.Contains("Strategies compared (ranked): 0", markdown, StringComparison.Ordinal);
         Assert.Contains("No strategy could be ranked", markdown, StringComparison.Ordinal);
@@ -239,7 +245,7 @@ public sealed class StrategyLeaderboardRendererTests
         var leaderboard = FourStrategiesTwoDropped();
         var markdown = Renderer.RenderMarkdown(leaderboard);
         var csv = Renderer.RenderCsv(leaderboard);
-        var empty = Renderer.RenderMarkdown(Harness.Compare([], ComparisonFixtures.Options()));
+        var empty = Renderer.RenderMarkdown(Harness.Compare([], ComparisonFixtures.Options(), Benchmark));
 
         foreach (var text in new[] { markdown, csv, empty })
         {
@@ -302,7 +308,7 @@ public sealed class StrategyLeaderboardRendererTests
                 ComparisonFixtures.Strategy("momentum, v2 |\"x\"", ComparisonFixtures.AlignedThroughout),
                 ComparisonFixtures.Strategy("date-only", ComparisonFixtures.DateOnlyScore),
             ],
-            ComparisonFixtures.Options());
+            ComparisonFixtures.Options(), Benchmark);
 
         var csv = Renderer.RenderCsv(awkward);
         var header = csv.Split('\n')[0];

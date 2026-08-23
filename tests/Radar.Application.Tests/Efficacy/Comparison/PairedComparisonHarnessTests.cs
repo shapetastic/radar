@@ -426,7 +426,7 @@ public sealed class PairedComparisonHarnessTests
                 series, PairedFixtures.HorizonDays, PairedFixtures.ExitToleranceDays);
             var rho = RankCorrelation.ComputeRho(
                 [.. set.Usable.Select(o => o.Score)],
-                [.. set.Usable.Select(o => o.ForwardReturn)]);
+                [.. set.Usable.Select(o => o.RawForwardReturn)]);
             Assert.True(rho.IsDefined);
             return rho.Rho;
         }

@@ -151,6 +151,33 @@ internal static class PairedFixtures
         return new StrategyScoreSeries(name, series);
     }
 
+    /// <summary>
+    /// A full-coverage spec-183 benchmark over this fixture's world: the six companies plus 44 flat peers
+    /// (50 members ⇒ 49 eligible peers ⇒ required = max(40, ceil(0.9 × 49)) = 45, all 49 resolving).
+    /// Frozen at the first as-of date, so nothing in the fixture is retrospective.
+    /// </summary>
+    public static UniverseBenchmark Benchmark()
+    {
+        var members = new List<(Guid, string, IReadOnlyList<PriceBar>)>();
+        for (var c = 0; c < CompanyIds.Length; c++)
+        {
+            members.Add((CompanyIds[c], Tickers[c], Bars(c)));
+        }
+
+        for (var p = 0; p < 44; p++)
+        {
+            members.Add((
+                BenchmarkTestUniverse.PeerId(p),
+                $"PP{p:D2}",
+                BenchmarkTestUniverse.FlatBars(FirstAsOf, 321)));
+        }
+
+        return BenchmarkTestUniverse.Of(
+            "benchmark-universe-v1",
+            new DateTimeOffset(FirstAsOf.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero),
+            members);
+    }
+
     /// <summary>Decreasing in company index — perfectly aligned with the outcome ordering ⇒ per-date ρ = +1.</summary>
     public static int? Aligned(int companyIndex, int dayOffset) => 80 - (10 * companyIndex);
 

@@ -2650,7 +2650,7 @@ public static class InfrastructureServiceCollectionExtensions
     /// (AD-14 read side).
     /// </summary>
     public static IServiceCollection AddRadarNewsRiskEvaluation(
-        this IServiceCollection services, string developmentDeclarationsPath)
+        this IServiceCollection services, string developmentDeclarationsPath, string efficacyDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(developmentDeclarationsPath);
 
@@ -2659,6 +2659,10 @@ public static class InfrastructureServiceCollectionExtensions
             FilePath = developmentDeclarationsPath,
         });
         services.AddSingleton<INewsRiskDevelopmentExampleSource, FileNewsRiskDevelopmentExampleSource>();
+        // Spec 183: the SAME frozen-universe benchmark seam the leaderboard uses (both TryAdd, so a graph
+        // registering both shares one instance and therefore one per-day benchmark computation).
+        services.AddFileBenchmarkUniverseSource(efficacyDirectory);
+        services.TryAddSingleton<IUniverseBenchmarkProvider, UniverseBenchmarkProvider>();
         services.AddSingleton<INewsRiskEvaluationGenerator, NewsRiskEvaluationGenerator>();
         return services;
     }
@@ -3236,6 +3240,26 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the committed frozen benchmark-universe artifact reader (spec 183 §1):
+    /// <c>{efficacyDirectory}/benchmark-universe-v1.json</c>, read once and verified against its own content
+    /// hash. <c>TryAdd</c> so the leaderboard and news-risk registrations can each ask for it without
+    /// clobbering the other — there must be exactly ONE universe per composition, or two consumers could
+    /// benchmark against different ponds.
+    /// </summary>
+    public static IServiceCollection AddFileBenchmarkUniverseSource(
+        this IServiceCollection services, string efficacyDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(efficacyDirectory);
+
+        services.TryAddSingleton(new FileBenchmarkUniverseSourceOptions
+        {
+            FilePath = Path.Combine(efficacyDirectory, FileBenchmarkUniverseSource.FileName),
+        });
+        services.TryAddSingleton<IBenchmarkUniverseSource, FileBenchmarkUniverseSource>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the opt-in price-efficacy reporting step (AD-14 read side): the <see cref="EfficacyDatasetBuilder"/>
     /// (the deterministic no-look-ahead JOIN over score history + price), the pure <see cref="EfficacySvgRenderer"/>
     /// + <see cref="EfficacyCsvRenderer"/>, and the <see cref="IEfficacyReportGenerator"/> that composes them. It
@@ -3295,6 +3319,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<StrategyLeaderboardRenderer>();
         services.AddSingleton<PairedComparisonHarness>();
         services.AddSingleton<PairedComparisonRenderer>();
+        // Spec 183: THE shared frozen-universe benchmark seam (one instance per composition — the news-risk
+        // evaluator TryAdds the same registration, so both consumers read one per-day computation). The
+        // artifact source itself is registered by the composition root (AddFileBenchmarkUniverseSource),
+        // which knows the efficacy directory.
+        services.TryAddSingleton<IUniverseBenchmarkProvider, UniverseBenchmarkProvider>();
         services.AddSingleton<IStrategyComparisonReportGenerator, StrategyComparisonReportGenerator>();
         return services;
     }
