@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
+using Radar.Application.Lifecycle;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
@@ -17,7 +18,7 @@ using Radar.TestSupport;
 
 namespace Radar.Application.Tests.Reporting;
 
-public sealed class WeeklyReportBuilderTests
+public sealed partial class WeeklyReportBuilderTests
 {
     // periodEnd is the inclusive end of the window; with a 7-day period the window is
     // (periodEnd - 7d, periodEnd].
@@ -80,6 +81,38 @@ public sealed class WeeklyReportBuilderTests
                 .OrderBy(s => s.CreatedAtUtc)
                 .ThenBy(s => s.Id)
                 .ToList());
+    }
+
+    // Spec 184: the primary strategy resolves to the SAME store the harness's scoreFiles parameter
+    // supplies (so the lead==primary path is byte-identical to pre-184); each non-primary strategy gets
+    // its own cached fake store, mirroring the production StrategyScopedScoreSnapshotFileStoreFactory.
+    internal sealed class FakeScoreSnapshotFileStoreFactory(IScoreSnapshotFileStore primary)
+        : IScoreSnapshotFileStoreFactory
+    {
+        private readonly Dictionary<string, IScoreSnapshotFileStore> _byStrategy =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public IScoreSnapshotFileStore Primary { get; } = primary;
+
+        public IScoreSnapshotFileStore ForStrategy(ScoringStrategyDefinition strategy)
+        {
+            if (strategy.IsPrimary)
+            {
+                return Primary;
+            }
+
+            if (!_byStrategy.TryGetValue(strategy.Name, out var store))
+            {
+                store = new FakeScoreSnapshotFileStore();
+                _byStrategy[strategy.Name] = store;
+            }
+
+            return store;
+        }
+
+        /// <summary>Seeds a NON-primary strategy's file store with pre-existing snapshots.</summary>
+        public void Seed(string strategyName, IReadOnlyList<CompanyScoreSnapshot> snapshots) =>
+            _byStrategy[strategyName] = new FakeScoreSnapshotFileStore(snapshots);
     }
 
     // Counts GetByIdAsync calls so a test can prove the builder resolves each contributing signal once
@@ -213,17 +246,29 @@ public sealed class WeeklyReportBuilderTests
 
         public WeeklyReportBuilder Builder { get; }
 
+        /// <summary>
+        /// Spec 184: the per-strategy snapshot FILE-store factory the builder reads a non-primary LEAD's
+        /// cross-run "previous" snapshots through. The primary resolves to the same store the harness's
+        /// <c>scoreFiles</c> parameter supplies (byte-identity with the pre-184 path); each non-primary
+        /// strategy gets its own cached fake, which a test seeds by asking for it here.
+        /// </summary>
+        public FakeScoreSnapshotFileStoreFactory ScoreFileStores { get; }
+
         public Harness(
             WeeklyReportOptions? options = null,
             IReadOnlyList<PipelineRunRecord>? runs = null,
             IScoreSnapshotFileStore? scoreFiles = null,
-            IReadOnlyList<TestStrategy>? strategies = null)
+            IReadOnlyList<TestStrategy>? strategies = null,
+            IOperatingCallSource? operatingCalls = null,
+            IStrategyEvidenceFactsSource? evidenceFacts = null)
         {
             CountingSignals = new CountingSignalRepository(Signals);
             Policy = new RecordingActionPolicy(new WeeklyReportActionPolicyV1());
             Renderer = new CapturingRenderer(new MarkdownWeeklyReportRenderer());
             StrategyFactory = new FakeScoringStrategyFactory(strategies ?? SingleDefaultStrategy);
             ScoreRepositories = new StrategyScopedScoreRepositoryFactory(Scores);
+            ScoreFileStores = new FakeScoreSnapshotFileStoreFactory(
+                scoreFiles ?? new FakeScoreSnapshotFileStore());
             Builder = new WeeklyReportBuilder(
                 Companies,
                 Scores,
@@ -234,9 +279,12 @@ public sealed class WeeklyReportBuilderTests
                 Renderer,
                 Reports,
                 new FakeRunStore(runs ?? []),
-                scoreFiles ?? new FakeScoreSnapshotFileStore(),
+                ScoreFileStores.Primary,
                 StrategyFactory,
                 ScoreRepositories,
+                ScoreFileStores,
+                operatingCalls ?? NullOperatingCallSource.Instance,
+                evidenceFacts ?? UnavailableStrategyEvidenceFactsSource.Instance,
                 options ?? new WeeklyReportOptions(),
                 new FixedTimeProvider(FixedNow),
                 NullLogger<WeeklyReportBuilder>.Instance);

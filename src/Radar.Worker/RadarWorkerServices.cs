@@ -151,6 +151,15 @@ internal static class RadarWorkerServices
         // missing/unknown Radar:PrimaryStrategy.
         services.AddRadarScoringStrategies(configuration);
 
+        // Strategy operating calls + evidence status (spec 184): register the file-backed sources BEFORE
+        // AddRadarApplicationServices so they win over the library's inert defaults. The calls file is
+        // read only in a multi-strategy composition; the status facts come from the ALREADY-persisted
+        // efficacy artifacts under Radar:EfficacyDirectory and degrade honestly when absent. The startup
+        // validator (registered by AddRadarApplicationServices, invoked first by the Worker) fails an
+        // invalid calls file BEFORE any collection.
+        services.AddFileOperatingCallSource(options.OperatingCallsFilePath);
+        services.AddFileStrategyEvidenceFacts(options.EfficacyDirectory);
+
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
 

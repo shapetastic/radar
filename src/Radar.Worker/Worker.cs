@@ -4,6 +4,7 @@ using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.EntityResolution;
+using Radar.Application.Lifecycle;
 using Radar.Application.News;
 using Radar.Application.NewsRisk;
 using Radar.Application.NewsRisk.Evaluation;
@@ -72,6 +73,7 @@ public sealed class Worker : BackgroundService
     private readonly INewsObservationMigration? _newsObservationMigration;
     private readonly INewsRiskShadowGenerator? _newsRiskShadowGenerator;
     private readonly INewsRiskEvaluationGenerator? _newsRiskEvaluationGenerator;
+    private readonly IOperatingCallStartupValidator? _operatingCallValidator;
 
     public Worker(
         ICompanyUniverseSeeder seeder,
@@ -89,7 +91,8 @@ public sealed class Worker : BackgroundService
         IScoreMoveDenominatorAuditGenerator? denominatorAuditGenerator = null,
         INewsObservationMigration? newsObservationMigration = null,
         INewsRiskShadowGenerator? newsRiskShadowGenerator = null,
-        INewsRiskEvaluationGenerator? newsRiskEvaluationGenerator = null)
+        INewsRiskEvaluationGenerator? newsRiskEvaluationGenerator = null,
+        IOperatingCallStartupValidator? operatingCallValidator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -114,6 +117,7 @@ public sealed class Worker : BackgroundService
         _newsObservationMigration = newsObservationMigration;
         _newsRiskShadowGenerator = newsRiskShadowGenerator;
         _newsRiskEvaluationGenerator = newsRiskEvaluationGenerator;
+        _operatingCallValidator = operatingCallValidator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -124,6 +128,14 @@ public sealed class Worker : BackgroundService
             // log says whether it was the combined pass, a collect pass, a score pass or a replay. Purely
             // observational: the registered IRadarPipeline / IReplayRunner is what selects the behaviour.
             _logger.LogInformation("Radar run mode: {RunMode}.", RadarRunModes.Token(_options.Mode));
+
+            // Spec 184 §2 rule 4: an invalid operating-calls file fails the run AT STARTUP, before seeding
+            // and before any collection (mirroring StrategyIdentityGuard's "a misconfiguration costs no
+            // collection"). Inert with a single configured strategy and when no calls file exists.
+            if (_operatingCallValidator is not null)
+            {
+                await _operatingCallValidator.ValidateAsync(stoppingToken).ConfigureAwait(false);
+            }
 
             // Seed the watch-universe once at startup (idempotent, AD-1) before any pipeline run.
             var seeded = await _seeder.SeedAsync(stoppingToken).ConfigureAwait(false);

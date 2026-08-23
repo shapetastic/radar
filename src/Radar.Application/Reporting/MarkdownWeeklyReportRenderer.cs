@@ -2,6 +2,7 @@ namespace Radar.Application.Reporting;
 
 using System.Globalization;
 using System.Text;
+using Radar.Application.Lifecycle;
 using Radar.Application.Scoring;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
@@ -232,6 +233,29 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append("## Live strategy leaders").Append(Lf);
         sb.Append(Lf);
 
+        // Spec 184: the operating-call layer. Only ever present in a multi-strategy composition; a null
+        // Lifecycle renders byte-identically to the pre-184 section (direct-model callers, and the whole
+        // single-strategy path, never reach here with one).
+        var lifecycle = model.Lifecycle;
+        List<StrategyReportSection>? stopped = null;
+        if (lifecycle is not null)
+        {
+            AppendOperatingCallBlock(sb, lifecycle);
+            AppendCallsAndEvidenceStatus(sb, lifecycle, strategies);
+
+            if (lifecycle.Calls.HasDeclaredCalls && !lifecycle.Calls.StopAll)
+            {
+                // Lead first, then Trials in configured order, then DoNotLead; Stop arms move to the
+                // diagnostic appendix below — never hidden, never unlabelled (spec 184 §2).
+                var ordered = new List<StrategyReportSection>(research.Count);
+                ordered.AddRange(research.Where(s => CallFor(lifecycle, s) == OperatingCall.Lead));
+                ordered.AddRange(research.Where(s => CallFor(lifecycle, s) == OperatingCall.Trial));
+                ordered.AddRange(research.Where(s => CallFor(lifecycle, s) == OperatingCall.DoNotLead));
+                stopped = research.Where(s => CallFor(lifecycle, s) == OperatingCall.Stop).ToList();
+                research = ordered;
+            }
+        }
+
         if (research.Count > 0)
         {
             sb.Append("### Research arms").Append(Lf);
@@ -240,7 +264,18 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             sb.Append(Lf);
             sb.Append(LiveLeadersNoCrossStrategyLine).Append(Lf);
             sb.Append(Lf);
-            AppendLiveLeadersTable(sb, research);
+            AppendLiveLeadersTable(sb, research, lifecycle);
+        }
+
+        if (stopped is { Count: > 0 })
+        {
+            sb.Append("### Stopped arms — diagnostic appendix").Append(Lf);
+            sb.Append(Lf);
+            sb.Append("Stopped arms remain fully visible: a stop is a recorded decision, not a deletion. ")
+                .Append("Their complete per-strategy tables also remain below.")
+                .Append(Lf);
+            sb.Append(Lf);
+            AppendLiveLeadersTable(sb, stopped, lifecycle);
         }
 
         if (comparators.Count > 0)
@@ -249,8 +284,264 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             sb.Append(Lf);
             sb.Append(LiveLeadersComparatorLine).Append(Lf);
             sb.Append(Lf);
-            AppendLiveLeadersTable(sb, comparators);
+            AppendLiveLeadersTable(sb, comparators, lifecycle);
         }
+    }
+
+    /// <summary>The effective call for a section's strategy, or null (comparators, undeclared layer).</summary>
+    private static OperatingCall? CallFor(StrategyLifecycleReportModel lifecycle, StrategyReportSection s) =>
+        lifecycle.Calls.For(s.StrategyName)?.Call;
+
+    // Spec 184 §2: the operating-call banner. Exactly one of three states — an explicit Lead (with the
+    // call, basis, as-of, review-by and resolution rule rendered), an explicit "no lead — StopAll"
+    // diagnostic banner (declared or the predeclared zero-Lead fallback), or the honest statement that no
+    // call has been declared at all.
+    private static void AppendOperatingCallBlock(StringBuilder sb, StrategyLifecycleReportModel lifecycle)
+    {
+        var calls = lifecycle.Calls;
+
+        sb.Append("### Operating call").Append(Lf);
+        sb.Append(Lf);
+
+        if (!calls.HasDeclaredCalls)
+        {
+            sb.Append("No operating call is declared (").Append(calls.UndeclaredReason)
+                .Append("). Narrative prominence remains with the storage-primary strategy by default. ")
+                .Append("A call is a maintainer decision recorded in data/strategy-operating-calls.json ")
+                .Append("and journaled in docs/strategy-lifecycle.md.")
+                .Append(Lf);
+            sb.Append(Lf);
+            return;
+        }
+
+        if (calls.StopAll)
+        {
+            sb.Append("**No lead — StopAll.** ").Append(calls.StopAllReason).Append(Lf);
+            sb.Append(Lf);
+            sb.Append("No arm holds reader-facing prominence: the sections below are a diagnostic view. ")
+                .Append("The next Lead call is made explicitly by a human and journaled in ")
+                .Append("docs/strategy-lifecycle.md.")
+                .Append(Lf);
+            sb.Append(Lf);
+            return;
+        }
+
+        var lead = calls.For(calls.LeadStrategyName!);
+        sb.Append("**Lead: ").Append(calls.LeadStrategyName)
+            .Append("** — the Lead arm governs the narrative sections and action labels of this report. ")
+            .Append("A call is a declared, falsifiable decision, not an efficacy result; it changes ")
+            .Append("prominence only, never a score.")
+            .Append(Lf);
+
+        if (lead is { Provenance: ResolvedCallProvenance.GateDefault, GateVerdict: { } gateVerdict })
+        {
+            // The Lead came from the GATE DEFAULT (GatePassed → Lead), not from the declared call — which,
+            // when present, may say something else entirely (e.g. Trial). State the actual provenance.
+            sb.Append("- Call: Lead · actor gate-default (the AD-15 composite gate passed for this arm ")
+                .Append("on the artifact written ").Append(Utc(gateVerdict.VerdictAtUtc)).Append(')')
+                .Append(Lf);
+            if (lead.Declared is { } overridden)
+            {
+                sb.Append("- Declared call (superseded by the gate default): ")
+                    .Append(overridden.Call.ToString())
+                    .Append(" · ").Append(ActorToken(overridden.Actor))
+                    .Append(" · as of ").Append(Utc(overridden.AsOfUtc))
+                    .Append(" — ").Append(overridden.Basis)
+                    .Append(Lf);
+            }
+        }
+        else if (lead?.Declared is { } declared)
+        {
+            sb.Append("- Call: Lead · actor ").Append(ActorToken(declared.Actor))
+                .Append(" · as of ").Append(Utc(declared.AsOfUtc))
+                .Append(" · review by ").Append(Utc(declared.ReviewByUtc))
+                .Append(Lf);
+            sb.Append("- Basis: ").Append(declared.Basis).Append(Lf);
+            if (!string.IsNullOrWhiteSpace(declared.ResolutionRule))
+            {
+                sb.Append("- Resolution rule: ").Append(declared.ResolutionRule).Append(Lf);
+            }
+
+            if (declared.Resolution is { } resolution)
+            {
+                sb.Append("- Resolution: ").Append(resolution.Outcome)
+                    .Append(" at ").Append(Utc(resolution.ResolvedAtUtc))
+                    .Append(" — evidence: ").Append(resolution.EvidenceRef)
+                    .Append(Lf);
+            }
+        }
+
+        sb.Append(Lf);
+    }
+
+    // Spec 184 §1+§2: one row per arm carrying its effective call (with provenance and, for DoNotLead and
+    // Trial arms, the declared basis) and its computed evidence status. Comparators are listed too — they
+    // carry no call, ever, but their descriptive status is not hidden.
+    private static void AppendCallsAndEvidenceStatus(
+        StringBuilder sb, StrategyLifecycleReportModel lifecycle, IReadOnlyList<StrategyReportSection> strategies)
+    {
+        sb.Append("### Calls and evidence status").Append(Lf);
+        sb.Append(Lf);
+        sb.Append("Evidence status is computed, descriptive and never a verdict; the call is a recorded ")
+            .Append("decision. The two are stated side by side and never merged.")
+            .Append(Lf);
+        sb.Append(Lf);
+        sb.Append("| strategy | operating call | evidence status |").Append(Lf);
+        sb.Append("| --- | --- | --- |").Append(Lf);
+
+        foreach (var section in strategies)
+        {
+            var call = section.Purpose == StrategyPurpose.Comparator
+                ? null
+                : lifecycle.Calls.For(section.StrategyName);
+            var status = lifecycle.StatusFor(section.StrategyName);
+
+            sb.Append("| ").Append(EscapeTableCell(section.StrategyName))
+                .Append(" | ")
+                .Append(section.Purpose == StrategyPurpose.Comparator
+                    ? "— (comparator; carries no call)"
+                    : EscapeTableCell(FormatCall(call)))
+                .Append(" | ")
+                .Append(status is null ? "—" : EscapeTableCell(FormatStatus(status)))
+                .Append(" |")
+                .Append(Lf);
+        }
+
+        sb.Append(Lf);
+    }
+
+    private static string FormatCall(ResolvedStrategyCall? call)
+    {
+        if (call is null)
+        {
+            return "—";
+        }
+
+        var text = call.Call.ToString();
+        switch (call.Provenance)
+        {
+            case ResolvedCallProvenance.GateDefault:
+                text += call.GateVerdict is { } v
+                    ? $" (gate default: the AD-15 composite gate {(v.Passed ? "passed" : "failed")} for this arm)"
+                    : " (gate default)";
+                break;
+            case ResolvedCallProvenance.ImplicitTrial:
+                text += " (no declared call)";
+                break;
+            default:
+                if (call.Declared is { } declared)
+                {
+                    text += $" ({ActorToken(declared.Actor)}, as of {Utc(declared.AsOfUtc)})";
+                    if (declared.Call is OperatingCall.DoNotLead or OperatingCall.Trial or OperatingCall.Stop)
+                    {
+                        text += $" — {declared.Basis}";
+                    }
+                }
+
+                break;
+        }
+
+        if (call.Declared?.Resolution is { } resolution)
+        {
+            text += $" · resolved {resolution.Outcome} at {Utc(resolution.ResolvedAtUtc)}"
+                + $" — evidence: {resolution.EvidenceRef}";
+        }
+
+        return text;
+    }
+
+    /// <summary>
+    /// Renders one computed evidence status (spec 184 §1). <c>Ranked</c> always carries its numbers (the
+    /// type makes numberless-Ranked unrepresentable); a CI spanning zero renders the SENTENCE "no evidence
+    /// of discrimination yet"; an unreadable artifact renders "Accruing (evidence unavailable)". A gate
+    /// status renders the descriptive leaderboard numbers BESIDE it when they exist — descriptive and
+    /// confirmatory facts are orthogonal and both rendered.
+    /// </summary>
+    private static string FormatStatus(StrategyEvidenceStatus status)
+    {
+        if (status.EvidenceUnavailable)
+        {
+            return "Accruing (evidence unavailable)";
+        }
+
+        return status.Kind switch
+        {
+            StrategyEvidenceStatusKind.Accruing =>
+                status.Detail is { Length: > 0 } d ? $"Accruing — {d}" : "Accruing",
+            StrategyEvidenceStatusKind.Ranked => "Ranked " + RankedNumbers(status.Ranked!),
+            StrategyEvidenceStatusKind.GatePending =>
+                "Gate pending (the precommitted AD-15 composite gate has not yet evaluated)"
+                    + WithDetailAndNumbers(status),
+            StrategyEvidenceStatusKind.GatePassed =>
+                "Gate passed (AD-15 composite gate)" + WithDetailAndNumbers(status),
+            StrategyEvidenceStatusKind.GateFailed =>
+                "Gate failed (AD-15 composite gate, evaluated on its merits)" + WithDetailAndNumbers(status),
+            _ => "Accruing",
+        };
+    }
+
+    private static string WithDetailAndNumbers(StrategyEvidenceStatus status)
+    {
+        var text = string.Empty;
+        if (status.Detail is { Length: > 0 } detail)
+        {
+            text += $" — {detail}";
+        }
+
+        if (status.Ranked is { } ranked)
+        {
+            text += $"; descriptive: ranked {RankedNumbers(ranked)}";
+        }
+
+        return text;
+    }
+
+    private static string RankedNumbers(RankedEvidence ranked)
+    {
+        var text = string.Create(
+            CultureInfo.InvariantCulture,
+            $"#{ranked.Rank} — out-of-sample rho {ranked.OutOfSampleRho:0.0000} (95% CI "
+                + $"{ranked.Lower95:0.0000} to {ranked.Upper95:0.0000}) over {ranked.Observations} observation(s)");
+        if (ranked.CiSpansZero)
+        {
+            // A sentence, not a verdict (spec 184 §1): noise is never converted into pass/fail ahead of
+            // the precommitted gates.
+            text += " — no evidence of discrimination yet";
+        }
+
+        return text;
+    }
+
+    private static string ActorToken(OperatingCallActor actor) =>
+        actor == OperatingCallActor.GateDefault ? "gate-default" : "human";
+
+    private static string Utc(DateTimeOffset value) =>
+        value.ToUniversalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + "Z";
+
+    /// <summary>
+    /// The parenthesised arm annotation in the live-leaders strategy cell. Pre-184 semantics (no lifecycle,
+    /// or no declared calls): the primary is "(primary research)" because it genuinely owns the narrative.
+    /// With declared calls: the LEAD owns the narrative, so it is "(lead)" (plus "· storage primary" when
+    /// it is also the storage primary) and a non-lead storage primary is "(storage primary)" — a series
+    /// identity, not a prominence claim. Under StopAll no arm owns the narrative, so the storage primary is
+    /// annotated as such and nothing is annotated "lead".
+    /// </summary>
+    private static string ArmAnnotation(StrategyReportSection section, StrategyLifecycleReportModel? lifecycle)
+    {
+        if (lifecycle is null || !lifecycle.Calls.HasDeclaredCalls)
+        {
+            return section.IsPrimary ? " (primary research)" : string.Empty;
+        }
+
+        var isLead = lifecycle.Calls.LeadStrategyName is { } lead
+            && string.Equals(lead, section.StrategyName, StringComparison.OrdinalIgnoreCase);
+
+        if (isLead)
+        {
+            return section.IsPrimary ? " (lead · storage primary)" : " (lead)";
+        }
+
+        return section.IsPrimary ? " (storage primary)" : string.Empty;
     }
 
     // ONE combined table per subsection: per strategy, at most its first LiveLeadersPerStrategy existing
@@ -258,7 +549,9 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     // rows, never manufactured ones). A strategy with zero surfaced rows is RETAINED with an explicit empty
     // message: an empty experimental arm is a result, not grounds to omit the arm.
     private static void AppendLiveLeadersTable(
-        StringBuilder sb, IReadOnlyList<StrategyReportSection> sections)
+        StringBuilder sb,
+        IReadOnlyList<StrategyReportSection> sections,
+        StrategyLifecycleReportModel? lifecycle)
     {
         sb.Append("| strategy | rank | company | ticker | Opportunity | as-of UTC |").Append(Lf);
         sb.Append("| --- | ---: | --- | --- | ---: | --- |").Append(Lf);
@@ -268,8 +561,13 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             // The primary is labelled so a reader can tell which arm owns the narrative below (spec 176 §2:
             // "a valid primary is labelled primary research"). A Comparator primary cannot exist — the
             // strategy set rejects it at startup — so the label never contradicts the subsection.
+            //
+            // Spec 184: once calls are DECLARED, narrative ownership belongs to the LEAD, so the annotation
+            // vocabulary changes: the lead arm is "(lead)" and the storage primary — now a series-identity
+            // fact only — is "(storage primary)". Without declared calls the pre-184 label stands, because
+            // its ownership claim is still true.
             var strategyCell = EscapeTableCell(section.StrategyName)
-                + (section.IsPrimary ? " (primary research)" : string.Empty);
+                + ArmAnnotation(section, lifecycle);
 
             if (section.Rows.Count == 0)
             {
@@ -313,6 +611,17 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     {
         sb.Append("## Highest opportunity").Append(Lf);
         sb.Append(Lf);
+
+        // Spec 184: under StopAll no arm holds narrative prominence, so no company narrative is built at
+        // all — stated rather than left as a silently empty section.
+        if (model.Entries.Count == 0 && model.Lifecycle is { Calls.StopAll: true })
+        {
+            sb.Append("No narrative entries: no lead — StopAll. See the operating-call banner above and ")
+                .Append("the per-strategy diagnostic tables below.")
+                .Append(Lf);
+            sb.Append(Lf);
+            return;
+        }
 
         foreach (var entry in model.Entries)
         {
@@ -663,25 +972,55 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         var first = true;
         foreach (var section in strategies)
         {
-            AppendStrategySection(sb, section, isFirst: first);
+            AppendStrategySection(sb, section, isFirst: first, model.Lifecycle);
             first = false;
         }
     }
 
     private static void AppendStrategySection(
-        StringBuilder sb, StrategyReportSection section, bool isFirst)
+        StringBuilder sb, StrategyReportSection section, bool isFirst, StrategyLifecycleReportModel? lifecycle)
     {
         sb.Append("## Strategy: ")
             .Append(section.StrategyName)
             .Append(" (")
             .Append(section.FormulaVersion)
             .Append(')');
-        if (section.IsPrimary)
+
+        // Spec 184: once calls are declared, the narrative above follows the LEAD arm, so the pre-150
+        // "primary (the series reported above)" suffix would be FALSE whenever lead ≠ storage primary.
+        // The wording is therefore call-aware; without declared calls (or without a lifecycle at all) it is
+        // byte-identical to pre-184.
+        if (lifecycle is { Calls.HasDeclaredCalls: true })
+        {
+            var calls = lifecycle.Calls;
+            var isLead = calls.LeadStrategyName is { } lead
+                && string.Equals(lead, section.StrategyName, StringComparison.OrdinalIgnoreCase);
+            if (isLead)
+            {
+                sb.Append(section.IsPrimary
+                    ? " — lead · storage primary (the series reported above)"
+                    : " — lead (the series reported above)");
+            }
+            else if (section.IsPrimary)
+            {
+                sb.Append(calls.StopAll
+                    ? " — storage primary (series identity only; no lead — StopAll)"
+                    : " — storage primary (series identity only; the narrative above follows the lead)");
+            }
+        }
+        else if (section.IsPrimary)
         {
             // So a reader can tell which series the narrative sections above describe.
             sb.Append(" — primary (the series reported above)");
         }
         sb.Append(Lf);
+
+        // Spec 184 §1: the computed evidence status, restated on the strategy's own table so the full
+        // table and the status can never be read apart.
+        if (lifecycle?.StatusFor(section.StrategyName) is { } status)
+        {
+            sb.Append("Evidence status: ").Append(FormatStatus(status)).Append(Lf);
+        }
 
         sb.Append("Fingerprint: ")
             .Append(string.IsNullOrWhiteSpace(section.ScoringConfigVersion)

@@ -222,6 +222,14 @@ public sealed class RadarWorkerOptions
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
 
     /// <summary>
+    /// Path to the committed operating-calls file (spec 184 §2) — the ONLY runtime input to the
+    /// operating-call layer. Read only in a multi-strategy composition; its absence is the honest "no call
+    /// is declared" state (stated in the rendered report), while an invalid file fails startup naming the
+    /// file and the violated rule.
+    /// </summary>
+    public string OperatingCallsFilePath { get; init; } = "data/strategy-operating-calls.json";
+
+    /// <summary>
     /// Recent-signal scoring window length, in days (maps to ScoringOptions.Window).
     /// Defaults to 60: small-cap issuers publish material news roughly monthly, so a 30-day
     /// window systematically misses real recent fundamentals. The scoring formula

@@ -20,4 +20,9 @@ public sealed record WeeklyReportModel(
     // has a single strategy — which is every deployment that never configured Radar:Strategies — so the
     // rendered report stays BYTE-IDENTICAL to the pre-150 output. Trailing and defaulted so every existing
     // construction site keeps compiling. Scores only: no labels, no evidence, no "why noticed".
-    IReadOnlyList<StrategyReportSection>? Strategies = null);
+    IReadOnlyList<StrategyReportSection>? Strategies = null,
+    // The spec-184 operating-call layer + per-strategy evidence statuses. NULL in a single-strategy run
+    // (the call layer is inert there, spec 184 §4) and for direct-model callers that predate it — the
+    // renderer then behaves byte-identically to pre-184. Trailing and defaulted so every existing
+    // construction site keeps compiling.
+    StrategyLifecycleReportModel? Lifecycle = null);

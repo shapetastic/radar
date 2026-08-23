@@ -153,6 +153,7 @@ if ($Profile -ne "default") {
 $outRoot = if ($Profile -eq "default") { Join-Path $RepoPath "data" } else { Join-Path $RepoPath "data\experiments\$Profile" }
 $dirArgs = [ordered]@{
     "Radar:CompanySeedFilePath"      = (Join-Path $RepoPath "data\companies.json")   # shared read-only seed
+    "Radar:OperatingCallsFilePath"   = (Join-Path $RepoPath "data\strategy-operating-calls.json")   # spec 184 committed operating calls (read-only; shared by every profile — a call governs prominence, never a score, so experiments read the same calls)
     "Radar:EvidenceSourceDirectory"  = (Join-Path $outRoot  "evidence")
     "Radar:EvidenceRawDirectory"     = (Join-Path $outRoot  "evidence\raw")
     "Radar:SignalsDirectory"         = (Join-Path $outRoot  "signals")
