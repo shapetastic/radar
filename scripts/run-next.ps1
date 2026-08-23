@@ -21,6 +21,7 @@ param(
     [int]   $WorktreeIndex = 1,        # which <project>-claude-N worktree to drive
     [switch]$Plan,                     # force work-planner mode even if specs exist
     [string]$Spec          = "",       # implement THIS docs/next spec (number e.g. "90", base name, or filename) instead of the lowest-numbered; omit to take next
+    [string]$Model         = "",       # model for the HEADLESS sessions (implementer + Copilot fix pass), e.g. "sonnet" or "opus"; omit to use the CLI's configured default (fable). Decided task by task.
     [string]$PermissionFlag = "--dangerously-skip-permissions", # set "" to be prompted
     [switch]$CopilotReview,            # after the PR opens, wait for Copilot's FIRST review and fix its comments
     [int]   $CopilotPollSeconds = 180, # poll interval while waiting for the review (default 3 min)
@@ -181,15 +182,18 @@ the spec from docs/next/ to docs/). If the reviewer cannot approve within REVIEW
 report instead of committing.
 "@
 
+# Extra args shared by both headless dispatches: -Model (task-by-task; absent = the CLI default, i.e.
+# fable) and the permission flag. Built once so the implementer and the Copilot fix pass cannot drift.
+$claudeArgs = @()
+if (-not [string]::IsNullOrWhiteSpace($Model))          { $claudeArgs += @("--model", $Model) }
+if (-not [string]::IsNullOrWhiteSpace($PermissionFlag)) { $claudeArgs += $PermissionFlag }
+if ($claudeArgs.Count -gt 0) { Write-Host "claude extra args: $($claudeArgs -join ' ')" -ForegroundColor DarkGray }
+
 Push-Location $worktreePath
 try {
     # Pipe $null to give claude an immediate stdin EOF (PowerShell 5.1 has no `< /dev/null`),
     # otherwise headless `claude -p` waits ~3s for piped stdin before proceeding.
-    if ([string]::IsNullOrWhiteSpace($PermissionFlag)) {
-        $null | & claude -p $prompt
-    } else {
-        $null | & claude -p $prompt $PermissionFlag
-    }
+    $null | & claude -p $prompt @claudeArgs
     $code = $LASTEXITCODE
 } finally {
     Pop-Location
@@ -250,11 +254,7 @@ GitHub Copilot has left review comments on that PR. This is a FIX pass, not a ne
 - Commit ("fix: address Copilot review comments") and push to origin/$branch.
 - Do NOT open a new PR, do NOT request another review, and do NOT loop.
 "@
-                        if ([string]::IsNullOrWhiteSpace($PermissionFlag)) {
-                            $null | & claude -p $fixPrompt
-                        } else {
-                            $null | & claude -p $fixPrompt $PermissionFlag
-                        }
+                        $null | & claude -p $fixPrompt @claudeArgs
                         Write-Host "Copilot fix pass exit: $LASTEXITCODE" -ForegroundColor Green
                     }
                 }
