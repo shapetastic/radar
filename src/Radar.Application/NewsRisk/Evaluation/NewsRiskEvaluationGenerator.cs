@@ -54,7 +54,7 @@ public sealed record NewsRiskEvaluationRow(
     NewsRiskEvaluationTable Table,
     IReadOnlyList<string> ExclusionReasons,
     DateOnly? EntryDate,
-    double? ForwardReturn21d,
+    double? RawForwardReturn21d,
     double? MaxAdverseMove21d)
 {
     /// <summary>The excess 21-day forward return vs the frozen benchmark universe — descriptive only.</summary>
@@ -579,7 +579,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                     + $"| {a.AssessmentCutoffUtc:yyyy-MM-dd} | {a.Status} "
                     + $"| {(a.RiskScore is { } s ? s.ToString(CultureInfo.InvariantCulture) : "—")} "
                     + $"| {DimensionsCell(a)} "
-                    + $"| {FormatPct(row.ForwardReturn21d)} | {ExcessCell(row)} "
+                    + $"| {FormatPct(row.RawForwardReturn21d)} | {ExcessCell(row)} "
                     + $"| {FormatPct(row.MaxAdverseMove21d)} "
                     + $"| {EscapePipes(string.Join("; ", a.Selections.Select(sel => $"{sel.StrategyName} #{sel.Rank}")))} |"));
         }
@@ -679,8 +679,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             return $"- {label}: (no rows)";
         }
 
-        var returns = rows.Where(r => r.ForwardReturn21d is not null)
-            .Select(r => r.ForwardReturn21d!.Value).ToList();
+        var returns = rows.Where(r => r.RawForwardReturn21d is not null)
+            .Select(r => r.RawForwardReturn21d!.Value).ToList();
         var adverse = rows.Where(r => r.MaxAdverseMove21d is not null)
             .Select(r => r.MaxAdverseMove21d!.Value).ToList();
         var returnsPart = returns.Count > 0
@@ -738,11 +738,11 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 CsvField.Escape(row.Table.ToString()),
                 CsvField.Escape(string.Join("|", row.ExclusionReasons)),
                 CsvField.Escape(row.EntryDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
-                CsvField.Escape(row.ForwardReturn21d?.ToString("0.######", CultureInfo.InvariantCulture)),
+                CsvField.Escape(row.RawForwardReturn21d?.ToString("0.######", CultureInfo.InvariantCulture)),
                 CsvField.Escape(row.ExcessForwardReturn21d?.ToString("0.######", CultureInfo.InvariantCulture)),
                 // The basis column names what the excess value IS (or why it is absent), so the two return
                 // columns can never be read as one series (spec 183: both descriptive, different outcomes).
-                CsvField.Escape(row.ForwardReturn21d is null ? string.Empty : ExcessBasisToken(row)),
+                CsvField.Escape(row.RawForwardReturn21d is null ? string.Empty : ExcessBasisToken(row)),
                 CsvField.Escape(row.MaxAdverseMove21d?.ToString("0.######", CultureInfo.InvariantCulture)),
                 CsvField.Escape(string.Join(
                     "|", a.Selections.Select(s => $"{s.StrategyName}#{s.Rank}")))));
@@ -764,7 +764,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
     private static string ExcessCell(NewsRiskEvaluationRow row) =>
         row.ExcessForwardReturn21d is { } v
             ? v.ToString("+0.00%;-0.00%", CultureInfo.InvariantCulture)
-            : row.ForwardReturn21d is null
+            : row.RawForwardReturn21d is null
                 ? "—"
                 : $"— ({ExcessBasisToken(row)})";
 }

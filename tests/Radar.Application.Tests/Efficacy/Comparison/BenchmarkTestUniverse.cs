@@ -3,17 +3,17 @@ using Radar.Application.Prices;
 
 namespace Radar.Application.Tests.Efficacy.Comparison;
 
-/// <summary>
-/// The ONE test-side constructor of a frozen-universe benchmark (reuse-over-copy): fixed member order,
-/// content hash computed through the SAME shared <see cref="BenchmarkUniverseContentHash"/> definition the
-/// artifact reader verifies, price series keyed by ticker. No clock, no randomness (AD-3).
-/// </summary>
 /// <summary>A provider handing out one fixed (possibly null) benchmark — the test seam.</summary>
 internal sealed class FixedUniverseBenchmarkProvider(UniverseBenchmark? benchmark) : IUniverseBenchmarkProvider
 {
     public Task<UniverseBenchmark?> GetAsync(CancellationToken ct) => Task.FromResult(benchmark);
 }
 
+/// <summary>
+/// The ONE test-side constructor of a frozen-universe benchmark (reuse-over-copy): fixed member order,
+/// content hash computed through the SAME shared <see cref="BenchmarkUniverseContentHash"/> definition the
+/// artifact reader verifies, price series keyed by ticker. No clock, no randomness (AD-3).
+/// </summary>
 internal static class BenchmarkTestUniverse
 {
     public const string SchemaVersion = "benchmark-universe-schema-v1";
