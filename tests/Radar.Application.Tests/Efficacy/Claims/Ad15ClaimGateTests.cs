@@ -1,4 +1,4 @@
-﻿using Radar.Application.Efficacy.Claims;
+using Radar.Application.Efficacy.Claims;
 
 namespace Radar.Application.Tests.Efficacy.Claims;
 
