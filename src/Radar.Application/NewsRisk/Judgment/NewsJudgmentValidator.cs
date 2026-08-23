@@ -164,7 +164,9 @@ public static class NewsJudgmentValidator
                 dropReasons.Add(
                     $"challenge-strength-out-of-range: '{response.ChallengeStrength}' with "
                         + $"{accepted.Count} surviving finding(s)");
-                return Failed(total, rationale, dropReasons, accepted.Count);
+                // The whole response fails, so the individually-accepted findings are discarded with it:
+                // FindingsAccepted must equal Findings.Count (0), never a pre-failure count.
+                return Failed(total, rationale, dropReasons);
             }
 
             strength = s;
@@ -197,7 +199,7 @@ public static class NewsJudgmentValidator
         or NewsFactAssertionStatus.Speculative;
 
     private static NewsJudgmentValidationResult Failed(
-        int total, string? rationale, List<string> dropReasons, int accepted = 0) =>
+        int total, string? rationale, List<string> dropReasons) =>
         new(
             NewsJudgmentStatus.ValidationFailed,
             BusinessTrajectory: null,
@@ -205,7 +207,7 @@ public static class NewsJudgmentValidator
             Findings: [],
             Rationale: rationale,
             FindingsTotal: total,
-            FindingsAccepted: accepted,
-            FindingsDropped: total - accepted,
+            FindingsAccepted: 0,
+            FindingsDropped: total,
             FindingDropReasons: dropReasons);
 }

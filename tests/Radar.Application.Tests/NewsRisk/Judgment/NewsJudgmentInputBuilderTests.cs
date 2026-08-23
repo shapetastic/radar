@@ -93,6 +93,13 @@ public sealed class NewsJudgmentInputBuilderTests
         var grown = NewsJudgmentInputBuilder.Build(
             Company, [family with { MemberCount = 7 }], facts, 50);
         Assert.NotEqual(first.FamilySetHash, grown.FamilySetHash);
+
+        // Citations are part of what the judge sees, so a citations-only change moves the hash too.
+        var supplied = Assert.Single(first.Families);
+        var recited = supplied with { Citations = [.. supplied.Citations, "an added citation"] };
+        Assert.NotEqual(
+            NewsJudgmentInputBuilder.ComputeFamilySetHash([supplied]),
+            NewsJudgmentInputBuilder.ComputeFamilySetHash([recited]));
     }
 
     [Fact]

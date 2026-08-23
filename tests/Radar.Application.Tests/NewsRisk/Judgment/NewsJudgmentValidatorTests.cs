@@ -301,6 +301,11 @@ public sealed class NewsJudgmentValidatorTests
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
         Assert.Contains(result.FindingDropReasons, r => r.Contains("challenge-strength-out-of-range"));
+        // The whole response failed, so the record is internally consistent: no accepted findings
+        // survive it, and the drop reason (not FindingsAccepted) carries the pre-failure count.
+        Assert.Empty(result.Findings);
+        Assert.Equal(0, result.FindingsAccepted);
+        Assert.Equal(result.FindingsTotal, result.FindingsDropped);
     }
 
     [Theory]

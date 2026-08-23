@@ -107,9 +107,9 @@ public static class NewsJudgmentInputBuilder
 
     /// <summary>
     /// The ordered family-set hash the judgment cache keys on (spec 185 §3): SHA-256 over each supplied
-    /// family's identity, representative fact, typed content and size metadata — so a changed statement, a
-    /// grown family, a re-typed representative or a reordering is a different cache entry, never a silent
-    /// reuse.
+    /// family's identity, representative fact, typed content (citations included) and size metadata — so a
+    /// changed statement, an edited citation, a grown family, a re-typed representative or a reordering is a
+    /// different cache entry, never a silent reuse.
     /// </summary>
     public static string ComputeFamilySetHash(IReadOnlyList<NewsJudgmentInputFamily> families)
     {
@@ -134,6 +134,12 @@ public static class NewsJudgmentInputBuilder
                 .Append(family.AssertionStatus)
                 .Append('|')
                 .Append(family.Confidence.ToString("R", System.Globalization.CultureInfo.InvariantCulture))
+                .Append('|')
+                // Citations are free text; the count prefix + unit-separator join keeps boundaries
+                // unambiguous however the citation strings themselves are shaped.
+                .Append(family.Citations.Count)
+                .Append('|')
+                .Append(string.Join('\u001f', family.Citations))
                 .Append('|')
                 .Append(family.MemberCount)
                 .Append('|')
