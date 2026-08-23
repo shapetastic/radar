@@ -1052,6 +1052,50 @@ Do not hand back broken code.
   its outputs are byte-identical with or without a benchmark (asserted). News-risk rows carry raw AND
   excess, both descriptive; max-adverse keeps its raw basis. AD-15/AD-16 amendments dated 2026-08-23. No
   scoring change, no fingerprint move; the attention screen is untouched.
+- **Facts stay uncertain; the CALL gets made — evidence status + operating calls (spec 184).** Two layers,
+  deliberately separate, both living in `Radar.Application.Lifecycle` OUTSIDE the scoring closure
+  (`StrategyLifecycleBoundaryTests` asserts neither `Radar.Application.Scoring` nor `…Pipeline` can reach a
+  lifecycle type — which is why calls/statuses ride `WeeklyReportModel.Lifecycle`, the renderer-facing model,
+  and are deliberately NOT on `StrategyReportSection`, which travels into the pipeline result and the
+  spec-179 news-risk nomination input). Rules:
+  - **Evidence status** (`Accruing | Ranked | GatePending | GatePassed | GateFailed`) is COMPUTED each run
+    from artifacts that already exist — the spec-140/183 leaderboard CSV + the spec-155/170 paired AD-15
+    composite-gate CSV, read by `FileStrategyEvidenceFactsSource` (degrades, never throws) and mapped by the
+    pure `StrategyEvidenceStatusCalculator`. Descriptive, never a verdict: `Ranked` structurally cannot
+    render without its numbers, a CI spanning zero renders the SENTENCE "no evidence of discrimination yet",
+    unreadable artifacts render "Accruing (evidence unavailable)" (the arm is never hidden), and `GateFailed`
+    requires every gate reason to be a MERIT code (`median-paired-delta-not-positive` /
+    `interval-lower-bound-not-positive`) — any accrual/prerequisite reason is `GatePending`, so noise is
+    never converted into pass/fail ahead of the precommitted gate.
+  - **The operating call** (`Lead | Trial | DoNotLead | Stop`, global `StopAll`) is a declared, journaled,
+    falsifiable DECISION: `data/strategy-operating-calls.json` (committed, strict reader
+    `FileOperatingCallSource` — unknown token/property/schema fails naming the file and rule; ABSENT file =
+    the stated "no call declared" condition, prominence stays with the storage primary by default) is the
+    ONLY runtime input; `docs/strategy-lifecycle.md` is the append-only audit journal, never parsed. ONE
+    deterministic, order-independent reducer (`OperatingCallReducer`): a persisted gate verdict wins unless
+    the call post-dates it AND carries `overridesGate: true` (`GatePassed → Lead`, `GateFailed → Stop`);
+    otherwise the file call verbatim; an uncalled Research arm is an implicit Trial; after reduction exactly
+    one Lead or StopAll — **zero Leads (the Lead arm gate-failed) resolves to the PREDECLARED fallback
+    StopAll**, and two reduced Leads throw rather than pick silently. Validation (unknown strategy, call on a
+    Comparator, duplicate, multiple/zero Leads, Lead beside StopAll, resolution without its immutable
+    `resolutionRule`) fails AT STARTUP via `OperatingCallStartupValidator` — the Worker's first statement,
+    before seeding, so a bad file costs no collection.
+  - **Lead governs ALL user-facing narrative and action prominence**: the weekly report's narrative walk
+    (highest opportunity, movement, labels, "why noticed", evidence blocks) reads the LEAD arm's repositories
+    (`IScoreRepositoryFactory`/`IScoreSnapshotFileStoreFactory` — the same write paths, no second route);
+    spec 150's "labels are primary-only" is amended to **labels are Lead-only** (still exactly one labelled
+    strategy). `Radar:PrimaryStrategy` remains ONLY storage/series identity, untouched. Live-leaders orders
+    Lead (bannered with call/basis/asOf/reviewBy/resolutionRule) → Trials → DoNotLead-with-basis; Stop arms
+    move to a "Stopped arms — diagnostic appendix", never hidden; StopAll renders the diagnostic view under
+    an explicit "no lead — StopAll" banner with NO narrative entries and no labels.
+  - **Nothing else moves**: no fingerprint input, no snapshot field, no formula/rule-set bump — the pins do
+    not move; scores/sections/news-risk nomination asserted byte-identical across call fixtures; and with a
+    SINGLE configured strategy the layer is structurally inert (the sources are never even consulted —
+    asserted with throwing stubs) and the report is byte-identical.
+  - **The initial calls (2026-08-23, actor human, review by 2026-09-05T00:00:00Z)**: `disclosure-led-v11`
+    Lead (resolved by the AD-15 composite gate EVENT, not a calendar date), `default` DoNotLead (oos ρ −0.05,
+    CI spans zero at call time), the four other research arms Trial (resolved by supersession); comparators
+    carry no call, ever. Radar records wrong calls rather than avoiding falsifiable decisions.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

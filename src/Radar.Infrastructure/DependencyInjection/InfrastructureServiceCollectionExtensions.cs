@@ -13,6 +13,7 @@ using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
+using Radar.Application.Lifecycle;
 using Radar.Application.NewsRisk;
 using Radar.Application.NewsRisk.Evaluation;
 using Radar.Application.Pipeline;
@@ -175,6 +176,17 @@ public static class InfrastructureServiceCollectionExtensions
         // Diagnostic only — never evidence/signal/scoring input. Depends on ICompanySeedSource
         // (registered by AddLocalFileCompanySeed).
         services.TryAddSingleton<ICollectionHealthValidator, SeedFeedInventoryValidator>();
+        // Operating calls + evidence status (spec 184): the library defaults are the INERT sources — no
+        // calls file, no readable efficacy artifacts — so a composition that never wires the file-backed
+        // pair keeps today's behaviour (storage-primary prominence; in a multi-strategy report an explicit
+        // "no operating call is declared" line plus "Accruing (evidence unavailable)" statuses; in a
+        // single-strategy report the sources are never even consulted). The Worker registers the
+        // file-backed pair BEFORE this method, which then wins over both TryAdds. The startup validator
+        // fails an invalid calls file BEFORE any collection (mirroring StrategyIdentityGuard) and is a
+        // no-op over the inert default.
+        services.TryAddSingleton<IOperatingCallSource>(NullOperatingCallSource.Instance);
+        services.TryAddSingleton<IStrategyEvidenceFactsSource>(UnavailableStrategyEvidenceFactsSource.Instance);
+        services.TryAddSingleton<IOperatingCallStartupValidator, OperatingCallStartupValidator>();
         services.AddSingleton<IWeeklyReportBuilder, WeeklyReportBuilder>();
         // The mapper is a core pipeline service used regardless of which collector is wired, so its
         // IEvidenceNormalizer dependency is registered here. TryAdd keeps a collector-specific
@@ -3256,6 +3268,40 @@ public static class InfrastructureServiceCollectionExtensions
             FilePath = Path.Combine(efficacyDirectory, FileBenchmarkUniverseSource.FileName),
         });
         services.TryAddSingleton<IBenchmarkUniverseSource, FileBenchmarkUniverseSource>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the file-backed operating-call source (spec 184 §2): the committed
+    /// <c>data/strategy-operating-calls.json</c>, read strictly (an invalid file fails naming the file and
+    /// the rule; an absent file is the honest "no call is declared" state). Call BEFORE
+    /// <see cref="AddRadarApplicationServices"/> so this registration wins over the library's inert
+    /// <see cref="NullOperatingCallSource"/> default.
+    /// </summary>
+    public static IServiceCollection AddFileOperatingCallSource(
+        this IServiceCollection services, string filePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        services.TryAddSingleton(new FileOperatingCallSourceOptions(filePath));
+        services.TryAddSingleton<IOperatingCallSource, FileOperatingCallSource>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the file-backed evidence-facts source (spec 184 §1): reads the ALREADY-persisted
+    /// spec-140/183 leaderboard and spec-155/170 paired-comparison CSVs under the efficacy directory into
+    /// the status layer's facts. Degrades (never throws) on a missing/unreadable artifact. Call BEFORE
+    /// <see cref="AddRadarApplicationServices"/> so this registration wins over the library's inert
+    /// unavailable-facts default.
+    /// </summary>
+    public static IServiceCollection AddFileStrategyEvidenceFacts(
+        this IServiceCollection services, string efficacyDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(efficacyDirectory);
+
+        services.TryAddSingleton(new FileStrategyEvidenceFactsSourceOptions(efficacyDirectory));
+        services.TryAddSingleton<IStrategyEvidenceFactsSource, FileStrategyEvidenceFactsSource>();
         return services;
     }
 

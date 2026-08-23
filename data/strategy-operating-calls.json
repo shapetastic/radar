@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "strategy-operating-calls-v1",
+  "calls": [
+    {
+      "strategy": "disclosure-led-v11",
+      "call": "Lead",
+      "asOfUtc": "2026-08-23T00:00:00Z",
+      "basis": "the prospectively declared AD-15/AD-16 arm under test",
+      "actor": "human",
+      "reviewByUtc": "2026-09-05T00:00:00Z",
+      "resolutionRule": "Right if the AD-15 composite gate PASSES for this arm; Wrong if it FAILS; Unresolved until the gate evaluates. (Interim reviews may re-call on descriptive evidence; doing so journals THIS call as superseded, outcome Unresolved.)"
+    },
+    {
+      "strategy": "default",
+      "call": "DoNotLead",
+      "asOfUtc": "2026-08-23T00:00:00Z",
+      "basis": "oos ρ −0.05, CI spans zero at call time (remains the storage primary / legacy reference series)",
+      "actor": "human",
+      "reviewByUtc": "2026-09-05T00:00:00Z",
+      "resolutionRule": "Wrong if, at the gate-resolution instant, default's out-of-sample ρ interval excludes zero POSITIVELY on the then-current leaderboard; Right otherwise."
+    },
+    {
+      "strategy": "filings-led-v2",
+      "call": "Trial",
+      "asOfUtc": "2026-08-23T00:00:00Z",
+      "basis": "research arm still accruing outcome evidence; no descriptive result distinguishes it yet",
+      "actor": "human",
+      "reviewByUtc": "2026-09-05T00:00:00Z",
+      "resolutionRule": "resolved by supersession — promoted or stopped by a later journaled call."
+    },
+    {
+      "strategy": "filings-led-halfnoted",
+      "call": "Trial",
+      "asOfUtc": "2026-08-23T00:00:00Z",
+      "basis": "research arm still accruing outcome evidence; no descriptive result distinguishes it yet",
+      "actor": "human",
+      "reviewByUtc": "2026-09-05T00:00:00Z",
+      "resolutionRule": "resolved by supersession — promoted or stopped by a later journaled call."
+    },
+    {
+      "strategy": "filings-led-nonoted",
+      "call": "Trial",
+      "asOfUtc": "2026-08-23T00:00:00Z",
+      "basis": "research arm still accruing outcome evidence; no descriptive result distinguishes it yet",
+      "actor": "human",
+      "reviewByUtc": "2026-09-05T00:00:00Z",
+      "resolutionRule": "resolved by supersession — promoted or stopped by a later journaled call."
+    },
+    {
+      "strategy": "narrative-led-v2",
+      "call": "Trial",
+      "asOfUtc": "2026-08-23T00:00:00Z",
+      "basis": "research arm still accruing outcome evidence; no descriptive result distinguishes it yet",
+      "actor": "human",
+      "reviewByUtc": "2026-09-05T00:00:00Z",
+      "resolutionRule": "resolved by supersession — promoted or stopped by a later journaled call."
+    }
+  ]
+}

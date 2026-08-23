@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
+using Radar.Application.Lifecycle;
 using Radar.Application.Filings;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
@@ -479,6 +480,12 @@ public sealed class RadarPipelineRunnerTests
                 // scoring pass writes through.
                 strategyFactory,
                 ScoreRepositories,
+                // Spec 184: the per-strategy file-store factory (a non-primary LEAD's cross-run read
+                // path) plus the INERT operating-call/evidence-fact sources — so these pipeline tests
+                // keep exercising the pre-184 storage-primary narrative unchanged.
+                ScoreStores,
+                NullOperatingCallSource.Instance,
+                UnavailableStrategyEvidenceFactsSource.Instance,
                 new WeeklyReportOptions(),
                 time,
                 NullLogger<WeeklyReportBuilder>.Instance);

@@ -4,6 +4,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
+using Radar.Application.Lifecycle;
 using Radar.Application.Pipeline;
 using Radar.Application.Scoring;
 using Radar.Domain.Companies;
@@ -41,6 +42,9 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private readonly IScoreSnapshotFileStore _scoreSnapshotFileStore;
     private readonly IScoringStrategyFactory _scoringStrategies;
     private readonly IScoreRepositoryFactory _scoreRepositoryFactory;
+    private readonly IScoreSnapshotFileStoreFactory _scoreSnapshotFileStores;
+    private readonly IOperatingCallSource _operatingCalls;
+    private readonly IStrategyEvidenceFactsSource _evidenceFacts;
     private readonly WeeklyReportOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WeeklyReportBuilder> _logger;
@@ -62,6 +66,15 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         // AddSingleton<IWeeklyReportBuilder, WeeklyReportBuilder>() resolves them automatically.
         IScoringStrategyFactory scoringStrategies,
         IScoreRepositoryFactory scoreRepositoryFactory,
+        // Spec 184: all three REQUIRED, never optional-nullable, for the spec-150 reason above — a silently
+        // absent optional dependency would render no call layer while every test stays green. The file
+        // stores are the read path for a non-primary LEAD's cross-run "previous snapshot"; the call and
+        // facts sources have inert Application defaults (NullOperatingCallSource /
+        // UnavailableStrategyEvidenceFactsSource) registered by the library, so every existing DI
+        // composition still resolves.
+        IScoreSnapshotFileStoreFactory scoreSnapshotFileStores,
+        IOperatingCallSource operatingCalls,
+        IStrategyEvidenceFactsSource evidenceFacts,
         WeeklyReportOptions options,
         TimeProvider timeProvider,
         ILogger<WeeklyReportBuilder> logger)
@@ -78,6 +91,9 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         ArgumentNullException.ThrowIfNull(scoreSnapshotFileStore);
         ArgumentNullException.ThrowIfNull(scoringStrategies);
         ArgumentNullException.ThrowIfNull(scoreRepositoryFactory);
+        ArgumentNullException.ThrowIfNull(scoreSnapshotFileStores);
+        ArgumentNullException.ThrowIfNull(operatingCalls);
+        ArgumentNullException.ThrowIfNull(evidenceFacts);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -112,6 +128,9 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _scoreSnapshotFileStore = scoreSnapshotFileStore;
         _scoringStrategies = scoringStrategies;
         _scoreRepositoryFactory = scoreRepositoryFactory;
+        _scoreSnapshotFileStores = scoreSnapshotFileStores;
+        _operatingCalls = operatingCalls;
+        _evidenceFacts = evidenceFacts;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -144,13 +163,50 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         // keep the repository surface untouched in this slice.
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
 
+        // Spec 184: the operating-call layer + evidence statuses. Built ONLY with more than one configured
+        // strategy — with a single strategy neither source is even consulted (structural inertness; the
+        // single-strategy report stays byte-identical). The LEAD arm then governs the whole narrative walk
+        // below: with declared calls and a non-primary lead, the walk reads the lead's own repository and
+        // file-store series; under StopAll (declared, or the predeclared zero-Lead fallback) no arm has
+        // earned the front page and NO narrative is built at all. Radar:PrimaryStrategy remains untouched:
+        // it is storage/series identity only, and without declared calls it keeps the narrative by default
+        // (stated explicitly in the rendered report, never silent).
+        var lifecycle = _scoringStrategies.Runtimes.Count > 1
+            ? await BuildLifecycleAsync(ct).ConfigureAwait(false)
+            : null;
+
+        var narrativeRepository = _scoreRepository;
+        var narrativeFileStore = _scoreSnapshotFileStore;
+        var buildNarrative = true;
+        if (lifecycle is not null && lifecycle.Calls.HasDeclaredCalls)
+        {
+            if (lifecycle.Calls.StopAll)
+            {
+                buildNarrative = false;
+            }
+            else
+            {
+                var leadRuntime = _scoringStrategies.Runtimes.First(r => string.Equals(
+                    r.Definition.Name, lifecycle.Calls.LeadStrategyName, StringComparison.OrdinalIgnoreCase));
+                if (!leadRuntime.Definition.IsPrimary)
+                {
+                    // The SAME factories the scoring stage writes through — no second route to the lead's
+                    // score files. When the lead IS the storage primary the injected pair above is used
+                    // unchanged, so that path is byte-identical to pre-184.
+                    narrativeRepository = _scoreRepositoryFactory.ForStrategy(leadRuntime.Definition);
+                    narrativeFileStore = _scoreSnapshotFileStores.ForStrategy(leadRuntime.Definition);
+                }
+            }
+        }
+
+        IReadOnlyList<Company> narrativeCompanies = buildNarrative ? companies : [];
         var candidates = new List<CandidateEntry>();
-        foreach (var company in companies)
+        foreach (var company in narrativeCompanies)
         {
             ct.ThrowIfCancellationRequested();
 
             // Already ordered by CreatedAtUtc ascending (AD-3).
-            var snapshots = await _scoreRepository
+            var snapshots = await narrativeRepository
                 .GetSnapshotsForCompanyAsync(company.Id, ct)
                 .ConfigureAwait(false);
 
@@ -197,7 +253,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             // zero-link snapshots yields the same surfaced set as filtering before the cap, while
             // bounding link fetches by the number of rendered rows in the common case. The fetched
             // links are reused by both ref builders, so survivors are never double-fetched.
-            var links = await _scoreRepository
+            var links = await narrativeRepository
                 .GetLinksForSnapshotAsync(c.Current.Id, ct)
                 .ConfigureAwait(false);
 
@@ -213,7 +269,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             // disk read (mirroring the link-fetch deferral above) rather than every in-period company.
             // The store swallows per-file read failures and returns null, so a null previous simply
             // renders "(first snapshot)"; no builder-level try/catch is required.
-            var previous = await _scoreSnapshotFileStore
+            var previous = await narrativeFileStore
                 .ReadLatestBeforeAsync(c.Current.CompanyId, c.Current.CreatedAtUtc, ct)
                 .ConfigureAwait(false);
 
@@ -367,7 +423,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             Collection: collection,
             RecentRuns: recentRuns,
             Health: health,
-            Strategies: strategySections);
+            Strategies: strategySections,
+            Lifecycle: lifecycle);
 
         var markdown = _renderer.Render(model);
 
@@ -403,6 +460,37 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         // Spec 179 §2: return the EXACT section instances built (and rendered) above — the one structured
         // row source the news-risk shadow step may consume. Never rebuilt, never re-ranked.
         return new WeeklyReportResult(report, items, strategySections);
+    }
+
+    /// <summary>
+    /// Builds the spec-184 lifecycle view: the per-strategy evidence statuses (computed from the persisted
+    /// efficacy artifacts — descriptive, never a verdict) and the reduced operating calls. Called ONLY when
+    /// more than one strategy is configured; with a single strategy neither source is consulted at all, so
+    /// the call layer is structurally inert there (spec 184 §4).
+    /// <para>
+    /// No calls FILE is not a failure: it reduces to the explicit "no operating call is declared"
+    /// resolution, which the renderer states plainly while prominence stays with the storage primary by
+    /// default. An INVALID file, by contrast, throws — through the same <see cref="OperatingCallReducer"/>
+    /// validation the Worker already ran at startup — naming the file and the violated rule.
+    /// </para>
+    /// </summary>
+    private async Task<StrategyLifecycleReportModel> BuildLifecycleAsync(CancellationToken ct)
+    {
+        var definitions = _scoringStrategies.Runtimes.Select(r => r.Definition).ToList();
+
+        var facts = await _evidenceFacts.ReadAsync(ct).ConfigureAwait(false);
+        var statuses = StrategyEvidenceStatusCalculator.Compute(facts, definitions);
+        var statusLines = definitions
+            .Select(d => new StrategyLifecycleStatusLine(d.Name, statuses[d.Name]))
+            .ToList();
+
+        var file = await _operatingCalls.ReadAsync(ct).ConfigureAwait(false);
+        var calls = file is null
+            ? ResolvedOperatingCalls.None("no operating-calls file was found")
+            : OperatingCallReducer.Reduce(
+                file, definitions, StrategyEvidenceStatusCalculator.GateVerdicts(facts, definitions));
+
+        return new StrategyLifecycleReportModel(calls, statusLines);
     }
 
     /// <summary>
