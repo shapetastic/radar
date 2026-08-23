@@ -1,0 +1,43 @@
+{
+  "_comment": "EXPERIMENT profile 'news-judgment' - overlays the default profile (spec 185, building on spec 181's stage-1 typing). Enables BOTH the stage-1 news event-typing pass (hosted DeepSeek only - identical to the news-typing profile, see its comment for the spec-181 gate numbers) AND the stage-2 direction judge: after typing checkpoints the fact families, the judge reads ONLY canonical fact families (no article prose, no score/rank/label, no price) against the fixed rubric 'the company's recent business trajectory', records challenge-only findings citing FactIds, and persists one judgment per attempt under <outRoot>/news-risk/judgments/. The weekly report's live-strategy-leaders section gains the mandatory semantic-read marker on every leader row, re-rendered in place after the judgment pass; the presentation cohort is DESIGNATED PROSPECTIVELY below as (judge deepinfra-deepseek, extractor deepinfra-deepseek) and never switched after seeing results. Judgments run as a NEW cohort BESIDE the spec-179 single-call shadow read (default.json keeps that enabled) - side by side in the live artifact, never pooled, no merged verdict. FIRST LIVE OUTPUT IS EXPLORATORY: no audited stage-1 recall sample exists yet (the spec-185 dispatch note). Requires DEEPINFRA_API_KEY. Because this is an overlay, everything else - collectors, strategies, scoring, the shadow read - is byte-identical to the baseline; output routes to data/experiments/news-judgment/ so baseline data is untouched, and NO score, label, strategy, fingerprint, snapshot field or report RANK changes (the marker column is display metadata).",
+  "Radar": {
+    "NewsResearch": {
+      "Typing": {
+        "Enabled": true,
+        "MaxNewTypingsPerRun": 200,
+        "LookbackDays": 30,
+        "Readers": [
+          {
+            "Name": "deepinfra-deepseek",
+            "Provider": "openai",
+            "OpenAi": {
+              "BaseUrl": "https://api.deepinfra.com/v1/openai",
+              "Model": "deepseek-ai/DeepSeek-V4-Flash",
+              "ApiKeyEnvVar": "DEEPINFRA_API_KEY"
+            }
+          }
+        ]
+      },
+      "Judgment": {
+        "Enabled": true,
+        "MaxCompaniesPerRun": 30,
+        "MaxFamiliesPerJudgment": 50,
+        "Judges": [
+          {
+            "Name": "deepinfra-deepseek",
+            "Provider": "openai",
+            "OpenAi": {
+              "BaseUrl": "https://api.deepinfra.com/v1/openai",
+              "Model": "deepseek-ai/DeepSeek-V4-Flash",
+              "ApiKeyEnvVar": "DEEPINFRA_API_KEY"
+            }
+          }
+        ],
+        "PresentationCohort": {
+          "Judge": "deepinfra-deepseek",
+          "Extractor": "deepinfra-deepseek"
+        }
+      }
+    }
+  }
+}

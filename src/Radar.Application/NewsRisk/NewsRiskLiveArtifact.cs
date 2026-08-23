@@ -1,4 +1,6 @@
 using Radar.Application.News;
+using Radar.Application.NewsRisk.Judgment;
+using Radar.Application.NewsTyping;
 
 namespace Radar.Application.NewsRisk;
 
@@ -13,7 +15,9 @@ public sealed record NewsRiskLiveDocument(
     IReadOnlyList<NewsRiskLiveCompany> Companies,
     DateTimeOffset GeneratedAtUtc)
 {
-    public const string CurrentSchemaVersion = "news-risk-live-v2";
+    // v3 (spec 185): additive per-company two-stage judgment sections + the presentation-cohort marker
+    // state. A v2 JSON document deserializes safely — the new members are trailing and nullable.
+    public const string CurrentSchemaVersion = "news-risk-live-v3";
 
     /// <summary>The §1 live caveat, verbatim — carried by every live artifact.</summary>
     public const string LiveCaveat =
@@ -43,7 +47,41 @@ public sealed record NewsRiskLiveCompany(
     NewsRiskAssessmentBundle AssessmentBundle,
     int QualifyingArticleCount,
     IReadOnlyList<string> CoverageIssues,
-    IReadOnlyList<NewsRiskLiveReaderResult> ReaderResults);
+    IReadOnlyList<NewsRiskLiveReaderResult> ReaderResults,
+    // Spec 185 (v3, additive): the two-stage judgment cohorts' results for this company — every cohort
+    // rendered independently, never pooled — and the PRESENTATION cohort's semantic-read marker text as
+    // rendered on the leaders. Null when the judgment step did not run this pass.
+    IReadOnlyList<NewsRiskLiveJudgment>? Judgments = null,
+    string? JudgmentMarker = null);
+
+/// <summary>
+/// One stage-2 judgment cohort's result for one company (spec 185 §5): the judge and its upstream stage-1
+/// extractor cohort, the validated result with drop accounting (the judgment side of the
+/// extraction-vs-judgment error split, rendered beside stage 1's fact-drop count), and ALL FIVE
+/// completeness dimensions. Labelled by judge name AND exact model id; never merged across cohorts.
+/// </summary>
+public sealed record NewsRiskLiveJudgment(
+    string JudgeName,
+    string Provider,
+    string ModelId,
+    string Stage1CohortKey,
+    Guid JudgmentId,
+    NewsJudgmentStatus Status,
+    NewsJudgmentTrajectory? BusinessTrajectory,
+    int? ChallengeStrength,
+    IReadOnlyList<NewsJudgmentValidatedFinding> Findings,
+    string? Rationale,
+    int FindingsTotal,
+    int FindingsAccepted,
+    int FindingsDropped,
+    IReadOnlyList<string> FindingDropReasons,
+    int Stage1FactsDroppedInWindow,
+    NewsRiskArchiveCapture ArchiveCapture,
+    NewsRiskSearchEnumeration SearchEnumeration,
+    NewsRiskAssessmentBundle ObservationSupply,
+    NewsTypingCompleteness TypingCompleteness,
+    NewsJudgmentFamilyBundle FamilyBundle,
+    IReadOnlyList<NewsJudgmentFamilyRef> Families);
 
 /// <summary>One supplied article's display row: headline, publisher, URL and which text fields were supplied.</summary>
 public sealed record NewsRiskLiveArticle(

@@ -48,6 +48,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private readonly WeeklyReportOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WeeklyReportBuilder> _logger;
+    private readonly IWeeklyReportJudgmentRerenderer? _judgmentRerenderer;
 
     public WeeklyReportBuilder(
         ICompanyRepository companyRepository,
@@ -77,7 +78,13 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         IStrategyEvidenceFactsSource evidenceFacts,
         WeeklyReportOptions options,
         TimeProvider timeProvider,
-        ILogger<WeeklyReportBuilder> logger)
+        ILogger<WeeklyReportBuilder> logger,
+        // Spec 185: OPTIONAL by design, unlike the required dependencies above — the seam is registered
+        // ONLY when the judgment step is, and its PRESENCE is the signal that this run's first render must
+        // carry the `? unassessed (judgment-pending)` markers (absent ⇒ the honest `no-judgment` default).
+        // A null here is therefore a meaningful state, not a silent wiring hole: the rendered report states
+        // it either way.
+        IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null)
     {
         ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(scoreRepository);
@@ -134,6 +141,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _judgmentRerenderer = judgmentRerenderer;
     }
 
     public async Task<WeeklyReportResult> GenerateAsync(
@@ -413,6 +421,15 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             periodStartUtc,
             periodEndUtc);
 
+        // Spec 185 §4: the semantic-read marker source for the first render. The judgment step runs AFTER
+        // the pipeline, so a registered rerenderer means "judgment-pending" now (re-rendered with the real
+        // markers later); an absent one means the honest "no-judgment" default the renderer applies to a
+        // null model. Only meaningful with strategy sections — a single-strategy report has no leaders
+        // section and stays byte-identical.
+        var judgmentMarkers = _judgmentRerenderer is not null && strategySections is { Count: > 0 }
+            ? NewsJudgmentMarkerReportModel.Pending
+            : null;
+
         var model = new WeeklyReportModel(
             Title: title,
             PeriodStartUtc: periodStartUtc,
@@ -424,7 +441,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             RecentRuns: recentRuns,
             Health: health,
             Strategies: strategySections,
-            Lifecycle: lifecycle);
+            Lifecycle: lifecycle,
+            NewsJudgment: judgmentMarkers);
 
         var markdown = _renderer.Render(model);
 
@@ -449,6 +467,14 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             .ToList();
 
         await _reportRepository.AddAsync(report, items, ct).ConfigureAwait(false);
+
+        // Spec 185 §5: hand the EXACT rendered model/report pair to the re-render seam, so the Worker's
+        // post-judgment pass re-renders the same model with only the marker source changed and overwrites
+        // the same report file through the same writer.
+        if (judgmentMarkers is not null)
+        {
+            _judgmentRerenderer!.CaptureRendered(model, report);
+        }
 
         _logger.LogInformation(
             "Generated weekly report {ReportId} with {ItemCount} item(s) for period {PeriodStart:yyyy-MM-dd}..{PeriodEnd:yyyy-MM-dd}.",

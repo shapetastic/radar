@@ -204,6 +204,16 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         "Comparators are displayed to diagnose what the research arms may merely be reproducing. A "
             + "comparator leader is not a Radar candidate.";
 
+    // Spec 185 §4 — the semantic-read honesty wording, pinned by tests. Every leader row carries exactly
+    // one of the three states; the narrow no-challenge wording is never a clean bill and the sentence says
+    // so, because silent ignorance is the failure the marker column exists to end.
+    private const string LiveLeadersSemanticReadLine =
+        "Semantic read: '⚠ challenged' means the designated judgment cohort recorded at least one validated "
+            + "challenge finding; '? unassessed (reason)' means no completed validated judgment exists for "
+            + "that row; '· no challenge found in supplied facts' comes only from a completed validated "
+            + "judgment and is a statement about the supplied typed facts, never a clean bill for the "
+            + "company.";
+
     // Spec 176: the live strategy leaders — a SECOND RENDERING of the first few spec-150 rows per strategy,
     // never a second construction of them (every value is read off the row's already-guarded current
     // snapshot). Rendered immediately after the standing disclaimers and BEFORE "## Highest opportunity",
@@ -264,7 +274,9 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             sb.Append(Lf);
             sb.Append(LiveLeadersNoCrossStrategyLine).Append(Lf);
             sb.Append(Lf);
-            AppendLiveLeadersTable(sb, research, lifecycle);
+            sb.Append(LiveLeadersSemanticReadLine).Append(Lf);
+            sb.Append(Lf);
+            AppendLiveLeadersTable(sb, research, lifecycle, model.NewsJudgment);
         }
 
         if (stopped is { Count: > 0 })
@@ -275,7 +287,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                 .Append("Their complete per-strategy tables also remain below.")
                 .Append(Lf);
             sb.Append(Lf);
-            AppendLiveLeadersTable(sb, stopped, lifecycle);
+            AppendLiveLeadersTable(sb, stopped, lifecycle, model.NewsJudgment);
         }
 
         if (comparators.Count > 0)
@@ -284,7 +296,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             sb.Append(Lf);
             sb.Append(LiveLeadersComparatorLine).Append(Lf);
             sb.Append(Lf);
-            AppendLiveLeadersTable(sb, comparators, lifecycle);
+            AppendLiveLeadersTable(sb, comparators, lifecycle, model.NewsJudgment);
         }
     }
 
@@ -551,10 +563,16 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     private static void AppendLiveLeadersTable(
         StringBuilder sb,
         IReadOnlyList<StrategyReportSection> sections,
-        StrategyLifecycleReportModel? lifecycle)
+        StrategyLifecycleReportModel? lifecycle,
+        NewsJudgmentMarkerReportModel? newsJudgment)
     {
-        sb.Append("| strategy | rank | company | ticker | Opportunity | as-of UTC |").Append(Lf);
-        sb.Append("| --- | ---: | --- | --- | ---: | --- |").Append(Lf);
+        // Spec 185 §4: the semantic-read marker is a MANDATORY column on EVERY leader row (research,
+        // stopped-appendix and comparator tables alike). MarkerCellFor is total — including over a null
+        // marker model and a company the candidate budget never selected — so an absent marker is
+        // unrepresentable by construction.
+        sb.Append("| strategy | rank | company | ticker | Opportunity | as-of UTC | semantic read |")
+            .Append(Lf);
+        sb.Append("| --- | ---: | --- | --- | ---: | --- | --- |").Append(Lf);
 
         foreach (var section in sections)
         {
@@ -571,9 +589,10 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
 
             if (section.Rows.Count == 0)
             {
+                // Not a leader row (no company exists to assess), but the column count must hold.
                 sb.Append("| ")
                     .Append(strategyCell)
-                    .Append(" | — | No evidence-linked live scores in this report window. | — | — | — |")
+                    .Append(" | — | No evidence-linked live scores in this report window. | — | — | — | — |")
                     .Append(Lf);
                 continue;
             }
@@ -599,7 +618,13 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                     // trailing Z is true even for a snapshot deserialized with a non-zero offset.
                     .Append(row.Snapshot.WindowEndUtc.ToUniversalTime().ToString(
                         "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))
-                    .Append("Z |")
+                    .Append("Z | ")
+                    // Spec 185 §4: exactly one of the three semantic-read states, derived by policy from
+                    // the designated presentation cohort — the model never chooses presentation, and a
+                    // missing/failed/stale judgment renders `? unassessed` with its reason, never nothing.
+                    .Append(EscapeTableCell(
+                        NewsJudgmentMarkerReportModel.MarkerCellFor(newsJudgment, row.CompanyId)))
+                    .Append(" |")
                     .Append(Lf);
             }
         }

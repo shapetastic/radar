@@ -6,6 +6,7 @@ using Radar.Application.Efficacy.Comparison;
 using Radar.Application.EntityResolution;
 using Radar.Application.News;
 using Radar.Application.NewsRisk;
+using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
@@ -827,11 +828,25 @@ internal static class RadarWorkerServices
         var migration = research.Migration;
         var shadow = research.Shadow;
         var typing = research.Typing;
+        var judgment = research.Judgment;
 
-        // Shadow/typing limits are validated regardless of Enabled (the spec-177 posture): an invalid limit
-        // is a configuration error now, not a trap that springs the day the step is switched on.
+        // Shadow/typing/judgment limits are validated regardless of Enabled (the spec-177 posture): an
+        // invalid limit is a configuration error now, not a trap that springs the day the step is switched on.
         ValidateNewsRiskShadowLimits(shadow);
         ValidateNewsTypingLimits(typing);
+        ValidateNewsJudgmentLimits(judgment);
+
+        // Spec 185: the stage-2 judge structurally consumes stage-1's typed fact families — enabling it
+        // without typing is a configuration contradiction in EVERY mode, so it fails startup unconditionally
+        // naming both keys rather than silently producing a judge with nothing to judge.
+        if (judgment.Enabled && !typing.Enabled)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Judgment:Enabled is true while Radar:NewsResearch:Typing:Enabled is "
+                    + "false. The stage-2 direction judge consumes ONLY the stage-1 typed fact families "
+                    + "(spec 185 §1), so it cannot run without the typing step. Enable typing, or disable "
+                    + "the judgment.");
+        }
 
         if (string.IsNullOrWhiteSpace(research.ObservationDirectory))
         {
@@ -965,8 +980,130 @@ internal static class RadarWorkerServices
                 BuildNewsTypingReaderRegistrations(options));
         }
 
+        // The spec-185 judgment step follows the SAME structural gate shape as typing (unfiltered
+        // full-mode runs only, with a resolvable judge). Its candidates come from the report's structured
+        // strategy sections (the spec-179 selector reused), so GenerateReport=false is a contradiction —
+        // the same rule the shadow enforces.
+        var registerJudgment = judgment.Enabled && runMode == RadarRunMode.Full && companyFilter is null;
+        if (registerJudgment && !options.GenerateReport)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Judgment:Enabled is true while Radar:GenerateReport is false. The "
+                    + "judgment step selects its candidates from the EXACT structured strategy sections "
+                    + "produced by weekly-report construction (spec 185 §5) — with no report there are no "
+                    + "sections, no candidate rows and no leaders to qualify. Enable the report, or "
+                    + "disable the judgment.");
+        }
+
+        if (registerJudgment)
+        {
+            var judges = BuildNewsJudgmentReaderRegistrations(options);
+            ValidateJudgmentPresentationCohort(judgment, typing, judges);
+            services.AddRadarNewsJudgment(
+                new NewsJudgmentOptions(
+                    // Judgments persist under the news-risk root (spec 185 §5:
+                    // data/news-risk/judgments/{judge-model-policy}/{companyId}/...), which run-radar.ps1
+                    // already routes via Radar:NewsResearch:Shadow:OutputDirectory.
+                    outputDirectory: shadow.OutputDirectory,
+                    maxCompaniesPerRun: judgment.MaxCompaniesPerRun,
+                    maxFamiliesPerJudgment: judgment.MaxFamiliesPerJudgment,
+                    presentationJudge: judgment.PresentationCohort.Judge.Trim(),
+                    presentationExtractor: judgment.PresentationCohort.Extractor.Trim(),
+                    // From the SAME const the kind→collector table uses, so the judge's coverage
+                    // dimensions cannot drift from the collector that actually records coverage.
+                    newsSearchCollectorName: RadarCollectorNames.NewsSearch),
+                judges);
+        }
+
         return registerShadow;
     }
+
+    /// <summary>
+    /// Fail-fast limit validation for the <c>Radar:NewsResearch:Judgment</c> block (spec 185 §4/§5),
+    /// applied even when the judgment is disabled (the spec-177 posture: an invalid limit is a config
+    /// error, not a latent one).
+    /// </summary>
+    private static void ValidateNewsJudgmentLimits(NewsJudgmentWorkerOptions judgment)
+    {
+        if (judgment.MaxCompaniesPerRun <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Judgment:MaxCompaniesPerRun must be positive (was "
+                    + $"{judgment.MaxCompaniesPerRun}); it is the per-run judged-candidate cost budget "
+                    + "(default 30).");
+        }
+
+        if (judgment.MaxFamiliesPerJudgment <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Judgment:MaxFamiliesPerJudgment must be positive (was "
+                    + $"{judgment.MaxFamiliesPerJudgment}); it caps the fact families supplied to one "
+                    + "judgment (default 50).");
+        }
+    }
+
+    /// <summary>
+    /// The spec-185 §4 presentation-cohort referential validation: the designated (judge, extractor) pair
+    /// must name a CONFIGURED judge reader and a CONFIGURED typing reader ("ambient" when the respective
+    /// list is empty, matching the shared reader-resolution rule). Prospective designation is the point —
+    /// a blank or dangling name must fail before any result exists to pick from.
+    /// </summary>
+    private static void ValidateJudgmentPresentationCohort(
+        NewsJudgmentWorkerOptions judgment,
+        NewsTypingWorkerOptions typing,
+        IReadOnlyList<InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration> judges)
+    {
+        var judgeName = judgment.PresentationCohort.Judge?.Trim() ?? string.Empty;
+        var extractorName = judgment.PresentationCohort.Extractor?.Trim() ?? string.Empty;
+
+        if (judgeName.Length == 0 || extractorName.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Judgment:PresentationCohort must name both a Judge (a "
+                    + "Radar:NewsResearch:Judgment:Judges entry's Name, or \"ambient\") and an Extractor "
+                    + "(a Radar:NewsResearch:Typing:Readers entry's Name, or \"ambient\"): the presentation "
+                    + "cohort is DESIGNATED PROSPECTIVELY (spec 185 §4) — declared before results, never "
+                    + "chosen after seeing them.");
+        }
+
+        var judgeNames = judges.Select(j => j.Name?.Trim() ?? string.Empty).ToList();
+        if (!judgeNames.Contains(judgeName, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Judgment:PresentationCohort:Judge is '{judgeName}', which names no "
+                    + $"configured judge reader (configured: {string.Join(", ", judgeNames)}). The marker "
+                    + "source must be a real cohort, declared prospectively.");
+        }
+
+        var extractorNames = typing.Readers is { Count: > 0 }
+            ? typing.Readers.Select(r => r.Name?.Trim() ?? string.Empty).ToList()
+            : new List<string> { "ambient" };
+        if (!extractorNames.Contains(extractorName, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Judgment:PresentationCohort:Extractor is '{extractorName}', which "
+                    + $"names no configured typing reader (configured: {string.Join(", ", extractorNames)}). "
+                    + "The marker source must be a real stage-1 cohort, declared prospectively.");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the judge reader set (spec 185 §3) through the SAME shared flattening/validation path as
+    /// the news-risk shadow and the typing step: an omitted/empty
+    /// <c>Radar:NewsResearch:Judgment:Judges</c> resolves to exactly ONE judge over the ambient
+    /// <c>Radar:Ai</c> provider/model; a judgment with NO resolvable judge fails startup (a judgment step
+    /// that silently never runs is a fail-open).
+    /// </summary>
+    private static IReadOnlyList<InfrastructureServiceCollectionExtensions.NewsRiskReaderRegistration>
+        BuildNewsJudgmentReaderRegistrations(RadarWorkerOptions options) =>
+        BuildReaderRegistrations(
+            options,
+            options.NewsResearch.Judgment.Judges,
+            "Radar:NewsResearch:Judgment:Judges",
+            "Radar:NewsResearch:Judgment:Enabled is true but no judge reader is resolvable: "
+                + "Radar:Ai:Provider is blank and Radar:NewsResearch:Judgment:Judges is empty. "
+                + "Configure the ambient AI provider, add a judge, or disable the judgment.",
+            "News-judgment");
 
     /// <summary>
     /// Fail-fast limit validation for the <c>Radar:NewsResearch:Typing</c> block (spec 181 §4/§6), applied
@@ -1165,7 +1302,7 @@ internal static class RadarWorkerServices
         ConfigSectionGuards.FailIfScalarSection(
             section,
             "Radar:NewsResearch must be an object carrying CaptureRss / ObservationDirectory / "
-                + "ArticleFetch / Migration / Shadow / Typing keys.");
+                + "ArticleFetch / Migration / Shadow / Typing / Judgment keys.");
         ConfigSectionGuards.FailOnUnknownKeys(
             section,
             ConfigSectionGuards.BindablePropertyNames(typeof(NewsResearchWorkerOptions)),
@@ -1213,6 +1350,27 @@ internal static class RadarWorkerServices
         if (typingSection.Exists())
         {
             ValidateReadersList(typingSection.GetSection("Readers"), "Radar:NewsResearch:Typing:Readers");
+        }
+
+        // Spec 185: the Judgment sub-block, its judge list and its presentation-cohort designation get the
+        // SAME strict treatment — an unknown key would silently leave the default in place while the run
+        // read as configured, and a mis-designated presentation cohort is exactly the fail-open the
+        // prospective-designation rule forbids.
+        var judgmentSection = section.GetSection("Judgment");
+        ValidateNestedSection(
+            judgmentSection,
+            typeof(NewsJudgmentWorkerOptions),
+            "Radar:NewsResearch:Judgment",
+            "must be an object carrying Enabled / MaxCompaniesPerRun / MaxFamiliesPerJudgment / Judges / "
+                + "PresentationCohort keys.");
+        if (judgmentSection.Exists())
+        {
+            ValidateReadersList(judgmentSection.GetSection("Judges"), "Radar:NewsResearch:Judgment:Judges");
+            ValidateNestedSection(
+                judgmentSection.GetSection("PresentationCohort"),
+                typeof(NewsJudgmentPresentationCohortWorkerOptions),
+                "Radar:NewsResearch:Judgment:PresentationCohort",
+                "must be an object carrying Judge / Extractor keys.");
         }
     }
 

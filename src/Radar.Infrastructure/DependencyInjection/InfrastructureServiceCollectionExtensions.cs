@@ -16,6 +16,7 @@ using Radar.Application.Filings;
 using Radar.Application.Lifecycle;
 using Radar.Application.NewsRisk;
 using Radar.Application.NewsRisk.Evaluation;
+using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
@@ -2737,6 +2738,66 @@ public static class InfrastructureServiceCollectionExtensions
         });
         services.AddSingleton(sp => sp.GetRequiredService<NewsTypingReaderClientOwner>().Readers);
         services.AddSingleton<INewsTypingGenerator, NewsTypingGenerator>();
+        services.TryAddSingleton(TimeProvider.System);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the spec-185 in-process stage-2 direction-judge step: the durable judgment store (under
+    /// the news-risk output root), the resolved judge reader set, the <see cref="INewsJudgmentGenerator"/>,
+    /// and the weekly-report judgment re-render seam (whose PRESENCE is what makes the report's first
+    /// render carry <c>? unassessed (judgment-pending)</c> markers). Call ONLY when judgment is enabled in
+    /// unfiltered full mode with typing enabled and at least one resolvable judge — the composition root
+    /// owns those gates, including the presentation-cohort referential validation. Reader rules are the
+    /// SAME as the news-risk shadow's (shared <see cref="ValidateReaderRegistrations"/>), with
+    /// judgment-scoped messages. Read-side and shadow: nothing here is a scoring or fingerprint input.
+    /// </summary>
+    public static IServiceCollection AddRadarNewsJudgment(
+        this IServiceCollection services,
+        NewsJudgmentOptions options,
+        IReadOnlyList<NewsRiskReaderRegistration> judges)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(judges);
+
+        if (judges.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Radar:NewsResearch:Judgment is enabled but no judge reader is resolvable: configure "
+                    + "Radar:Ai (the ambient reader) or at least one Radar:NewsResearch:Judgment:Judges "
+                    + "entry. A judgment step that silently never runs is a fail-open.");
+        }
+
+        var normalized = ValidateReaderRegistrations("News-judgment", judges);
+
+        services.AddSingleton(options);
+        services.AddSingleton(new FileNewsJudgmentStoreOptions
+        {
+            RootDirectory = options.OutputDirectory,
+        });
+        services.AddSingleton<INewsJudgmentStore, FileNewsJudgmentStore>();
+        // Per-judge clients are created here rather than registered as IChatClient (they would collide with
+        // the ambient AddRadarAi client); NewsJudgmentReaderClientOwner holds them and IS
+        // container-created, so the ServiceProvider disposes them on shutdown (the spec-179 mechanism).
+        services.AddSingleton(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<ChatNewsJudgmentAnalyzer>>();
+            var judgeReaders = new List<NewsJudgmentReader>(normalized.Count);
+            var clients = new List<IChatClient>(normalized.Count);
+            foreach (var r in normalized)
+            {
+                var identity = new NewsJudgmentReaderIdentity(r.Name, r.Client.Provider, r.Client.Model);
+                var client = new ChatClientFactory(r.Client).Create();
+                clients.Add(client);
+                judgeReaders.Add(new NewsJudgmentReader(
+                    identity, new ChatNewsJudgmentAnalyzer(client, identity, logger)));
+            }
+
+            return new NewsJudgmentReaderClientOwner(new NewsJudgmentReaderSet(judgeReaders), clients);
+        });
+        services.AddSingleton(sp => sp.GetRequiredService<NewsJudgmentReaderClientOwner>().Readers);
+        services.AddSingleton<INewsJudgmentGenerator, NewsJudgmentGenerator>();
+        services.TryAddSingleton<IWeeklyReportJudgmentRerenderer, WeeklyReportJudgmentRerenderer>();
         services.TryAddSingleton(TimeProvider.System);
         return services;
     }

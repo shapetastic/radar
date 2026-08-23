@@ -710,4 +710,108 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.True(observation.BodySupplied);
         Assert.Equal(fetchAt, observation.BodyRetrievedAtUtc);
     }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 185 §5 — the handed-in judgment run result is embedded per company (never re-read, never pooled)
+    // ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task HandedInJudgment_IsEmbeddedOnTheCompany_WithThePresentationMarker()
+    {
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Test Co flags doubt", AsOf.AddDays(-1)));
+        var artifacts = new FakeArtifactStore();
+
+        var judgmentRecord = new Radar.Application.NewsRisk.Judgment.NewsJudgmentRecord(
+            SchemaVersion: Radar.Application.NewsRisk.Judgment.NewsJudgmentRecord.CurrentSchemaVersion,
+            JudgmentId: Guid.NewGuid(),
+            RunId: RunId,
+            CompanyId: Company,
+            CompanyName: "Test Co",
+            Ticker: "TST",
+            JudgeName: "judge-a",
+            Provider: "openai",
+            ModelId: "judge-model",
+            PromptVersion: Radar.Application.NewsRisk.Judgment.NewsJudgmentContract.PromptVersion,
+            ResultSchemaVersion: Radar.Application.NewsRisk.Judgment.NewsJudgmentContract.SchemaVersion,
+            Stage1CohortKey: "s1",
+            TaxonomyVersion: "news-event-taxonomy-v1",
+            TaxonomyHash: "hash",
+            FamilyBuilderIdentity: "fact-family-v1",
+            CohortKey: "cohort",
+            FamilySetHash: "fsh",
+            Families: [],
+            ArchiveCapture: NewsRiskArchiveCapture.Proven,
+            SearchEnumeration: NewsRiskSearchEnumeration.Complete,
+            ObservationSupply: NewsRiskAssessmentBundle.Complete,
+            TypingCompleteness: Radar.Application.NewsTyping.NewsTypingCompleteness.Complete,
+            FamilyBundle: Radar.Application.NewsRisk.Judgment.NewsJudgmentFamilyBundle.Complete,
+            CoverageIssues: [],
+            Status: Radar.Application.NewsRisk.Judgment.NewsJudgmentStatus.Judged,
+            BusinessTrajectory: Radar.Application.NewsRisk.Judgment.NewsJudgmentTrajectory.Deteriorating,
+            ChallengeStrength: 70,
+            Findings:
+            [
+                new Radar.Application.NewsRisk.Judgment.NewsJudgmentValidatedFinding(
+                    NewsRiskCategory.RegulatoryOrLegalSetback, NewsRiskSeverity.High, 0.8,
+                    [Guid.NewGuid()], null),
+            ],
+            Rationale: null,
+            FindingsTotal: 1,
+            FindingsAccepted: 1,
+            FindingsDropped: 0,
+            FindingDropReasons: [],
+            RawResponseHash: "raw",
+            FailureDetail: null,
+            Limits: new Radar.Application.NewsRisk.Judgment.NewsJudgmentLimitsRecord(30, 50),
+            ReusedFromJudgmentId: null,
+            CreatedAtUtc: AsOf);
+        var judgment = new Radar.Application.NewsRisk.Judgment.NewsJudgmentRunResult(
+            Judgments: [judgmentRecord],
+            Markers: new NewsJudgmentMarkerReportModel(
+                JudgmentPending: false,
+                Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>
+                {
+                    [Company] = new(
+                        NewsJudgmentMarkerState.Challenged,
+                        ChallengeSummary: "regulatory-or-legal-setback, high"),
+                }),
+            Stage1FactsDroppedByCohort: new Dictionary<string, int> { ["s1"] = 3 });
+
+        await Build(
+                runStore, archive, new InMemoryAssessmentStore(), artifacts,
+                Reader("a", "model-a", new ScriptedAnalyzer(ThesisChallengedOutcome)))
+            .GenerateAsync(RunId, Sections(Company), CancellationToken.None, judgment);
+
+        var company = Assert.Single(artifacts.LiveDocument!.Companies);
+        var embedded = Assert.Single(company.Judgments!);
+        Assert.Equal("judge-a", embedded.JudgeName);
+        Assert.Equal(3, embedded.Stage1FactsDroppedInWindow);
+        Assert.Equal(
+            Radar.Application.NewsRisk.Judgment.NewsJudgmentTrajectory.Deteriorating,
+            embedded.BusinessTrajectory);
+        Assert.Equal(
+            "⚠ challenged (regulatory-or-legal-setback, high)", company.JudgmentMarker);
+    }
+
+    [Fact]
+    public async Task NoJudgment_LeavesTheCompanyExactlyAsBefore()
+    {
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Test Co flags doubt", AsOf.AddDays(-1)));
+        var artifacts = new FakeArtifactStore();
+
+        await Build(
+                runStore, archive, new InMemoryAssessmentStore(), artifacts,
+                Reader("a", "model-a", new ScriptedAnalyzer(ThesisChallengedOutcome)))
+            .GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        var company = Assert.Single(artifacts.LiveDocument!.Companies);
+        Assert.Null(company.Judgments);
+        Assert.Null(company.JudgmentMarker);
+    }
 }

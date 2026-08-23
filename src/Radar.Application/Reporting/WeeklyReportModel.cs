@@ -25,4 +25,10 @@ public sealed record WeeklyReportModel(
     // (the call layer is inert there, spec 184 §4) and for direct-model callers that predate it — the
     // renderer then behaves byte-identically to pre-184. Trailing and defaulted so every existing
     // construction site keeps compiling.
-    StrategyLifecycleReportModel? Lifecycle = null);
+    StrategyLifecycleReportModel? Lifecycle = null,
+    // The spec-185 semantic-read marker source for the live-leaders section. Only consulted when the model
+    // carries strategy sections (a single-strategy report has no leaders section and stays byte-identical);
+    // NULL there means "no judgment step is registered" and every leader row renders the honest
+    // `? unassessed (no-judgment)`. Trailing and defaulted so every existing construction site keeps
+    // compiling. Display metadata only — never a score, rank, ordering, label or snapshot change.
+    NewsJudgmentMarkerReportModel? NewsJudgment = null);

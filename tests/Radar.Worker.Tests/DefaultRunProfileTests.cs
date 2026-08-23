@@ -245,6 +245,41 @@ public sealed class DefaultRunProfileTests
         Assert.NotNull(ProfileStrategies(BindProfiles("low-media")));
         Assert.NotNull(ProfileStrategies(BindProfiles("long-window")));
         Assert.NotNull(ProfileStrategies(BindProfiles("news-typing")));
+        Assert.NotNull(ProfileStrategies(BindProfiles("news-judgment")));
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 185 — the news-judgment overlay: typing + judgment on (hosted only), presentation cohort
+    // designated prospectively, nothing else moved
+    // ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void NewsJudgmentOverlay_EnablesTypingAndJudgment_WithTheProspectivePresentationCohort()
+    {
+        var configuration = BindProfiles("news-judgment");
+
+        // The delta: stage-1 typing AND the stage-2 judge, both hosted-only (one key: DEEPINFRA_API_KEY).
+        Assert.Equal("True", configuration["Radar:NewsResearch:Typing:Enabled"]);
+        Assert.Equal("True", configuration["Radar:NewsResearch:Judgment:Enabled"]);
+        Assert.Equal(
+            "deepinfra-deepseek", configuration["Radar:NewsResearch:Judgment:Judges:0:Name"]);
+        Assert.Null(configuration["Radar:NewsResearch:Judgment:Judges:1:Name"]);
+
+        // The presentation cohort is DESIGNATED in the committed profile (spec 185 §4: declared before
+        // results exist, never switched after) and names the configured judge and extractor exactly.
+        Assert.Equal(
+            configuration["Radar:NewsResearch:Judgment:Judges:0:Name"],
+            configuration["Radar:NewsResearch:Judgment:PresentationCohort:Judge"]);
+        Assert.Equal(
+            configuration["Radar:NewsResearch:Typing:Readers:0:Name"],
+            configuration["Radar:NewsResearch:Judgment:PresentationCohort:Extractor"]);
+
+        // Everything else is byte-identical to the baseline: strategies (names AND weights) and the
+        // spec-179 single-call shadow (the CONTROL cohort) are untouched.
+        var baseline = ProfileStrategies(BindProfiles());
+        var overlay = ProfileStrategies(configuration);
+        Assert.Equal(baseline.Strategies.Select(s => s.Name), overlay.Strategies.Select(s => s.Name));
+        Assert.Equal("True", configuration["Radar:NewsResearch:Shadow:Enabled"]);
     }
 
     // ---------------------------------------------------------------------------------------------------

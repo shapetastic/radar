@@ -19,8 +19,13 @@ public interface INewsTypingGenerator
     /// archive and degrades to "no run provenance" rather than refusing). Never throws for its own failures
     /// (a typing failure writes the NAMED failed artifact and never rolls back or relabels the
     /// already-durable Radar run); caller cancellation propagates.
+    /// <para>
+    /// Returns the typed pass outcome (spec 185 §5) — the SAME families/facts this pass checkpointed, per
+    /// cohort, for the stage-2 judge — or <c>null</c> when the pass failed. The return is additive
+    /// observation: nothing about the pass itself changed.
+    /// </para>
     /// </summary>
-    Task GenerateAsync(Guid? runId, CancellationToken ct);
+    Task<NewsTypingRunResult?> GenerateAsync(Guid? runId, CancellationToken ct);
 }
 
 /// <summary>
@@ -105,13 +110,13 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         _logger = logger;
     }
 
-    public async Task GenerateAsync(Guid? runId, CancellationToken ct)
+    public async Task<NewsTypingRunResult?> GenerateAsync(Guid? runId, CancellationToken ct)
     {
         var fallbackDateToken = _timeProvider.GetUtcNow().UtcDateTime
             .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         try
         {
-            await GenerateCoreAsync(runId, ct).ConfigureAwait(false);
+            return await GenerateCoreAsync(runId, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -120,15 +125,16 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         catch (Exception ex)
         {
             // A typing failure must never abort or relabel the already-durable Radar run: write the named
-            // failed artifact (itself best-effort) and return.
+            // failed artifact (itself best-effort) and return null (no stage-1 outcome for the judge).
             _logger.LogError(ex, "News-typing pass failed; writing the named failed artifact.");
             await _artifactStore
                 .WriteFailedAsync(fallbackDateToken, $"{ex.GetType().Name}: {ex.Message}", ct)
                 .ConfigureAwait(false);
+            return null;
         }
     }
 
-    private async Task GenerateCoreAsync(Guid? runId, CancellationToken ct)
+    private async Task<NewsTypingRunResult> GenerateCoreAsync(Guid? runId, CancellationToken ct)
     {
         var now = _timeProvider.GetUtcNow();
         var runRecord = runId is { } id ? await FindRunRecordAsync(id, ct).ConfigureAwait(false) : null;
@@ -189,6 +195,74 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             perReader.Sum(p => p.NewTypings),
             windowStartUtc,
             asOfUtc);
+
+        // Spec 185 §5: expose the pass's own join (families + completed facts + per-company completeness)
+        // for the stage-2 judge — the SAME instances checkpointed above, never a disk re-read.
+        return new NewsTypingRunResult(
+            RunId: runId,
+            WindowStartUtc: windowStartUtc,
+            WindowEndUtc: asOfUtc,
+            NewsObservationBatchId: runRecord?.NewsObservationBatchId,
+            Cohorts: perReader
+                .Select(p => BuildCohortRunResult(p, windowStartUtc, asOfUtc))
+                .ToList());
+    }
+
+    /// <summary>
+    /// One cohort's typed pass outcome (spec 185 §5). The fact index covers COMPLETED <c>Typed</c> window
+    /// typings (the same set the family checkpoint consumed); the per-company completeness map follows the
+    /// spec's precedence — a failed attempt this run outranks a backlog, which outranks complete — and a
+    /// company with zero in-window observations is vacuously <see cref="NewsTypingCompleteness.Complete"/>
+    /// (it also has zero facts, so the judge records <c>InsufficientFacts</c> for it anyway).
+    /// </summary>
+    private static NewsTypingCohortRunResult BuildCohortRunResult(
+        ReaderPass pass, DateTimeOffset windowStartUtc, DateTimeOffset asOfUtc)
+    {
+        var factsById = new Dictionary<Guid, NewsTypingFactRef>();
+        var factsDropped = 0;
+        foreach (var (observation, record) in pass.CompletedWithObservations())
+        {
+            if (observation.FirstObservedAtUtc <= windowStartUtc || observation.FirstObservedAtUtc > asOfUtc)
+            {
+                continue;
+            }
+
+            factsDropped += record.FactsDropped;
+            foreach (var fact in record.Facts)
+            {
+                factsById.TryAdd(fact.FactId, new NewsTypingFactRef(
+                    Fact: fact,
+                    ObservationId: observation.ObservationId,
+                    CompanyId: observation.CompanyId,
+                    CaptureMode: observation.CaptureMode));
+            }
+        }
+
+        var completeness = new Dictionary<Guid, NewsTypingCompleteness>();
+        if (pass.ObservationIndex is not null)
+        {
+            foreach (var companyGroup in pass.ObservationIndex.Values
+                .Where(o => o.CompanyId is not null
+                    && o.FirstObservedAtUtc > windowStartUtc
+                    && o.FirstObservedAtUtc <= asOfUtc)
+                .GroupBy(o => o.CompanyId!.Value))
+            {
+                var untyped = companyGroup.Count(
+                    o => !pass.Completed.ContainsKey((o.ObservationId, o.PayloadHash)));
+                completeness[companyGroup.Key] = pass.FailedCompanyIds.Contains(companyGroup.Key)
+                    ? NewsTypingCompleteness.Failed
+                    : untyped > 0
+                        ? NewsTypingCompleteness.Backlog
+                        : NewsTypingCompleteness.Complete;
+            }
+        }
+
+        return new NewsTypingCohortRunResult(
+            Reader: pass.Identity,
+            Families: pass.Families,
+            FactsById: factsById,
+            TypingCompletenessByCompany: completeness,
+            FactsDroppedInWindow: factsDropped);
     }
 
     private async Task<ReaderPass> RunReaderPassAsync(
@@ -230,6 +304,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             .ToList();
         var selected = windowFirst.Concat(backlog).Take(_options.MaxNewTypingsPerRun).ToList();
 
+        var failedCompanyIds = new HashSet<Guid>();
         var newTypings = 0;
         foreach (var observation in selected)
         {
@@ -242,6 +317,12 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             {
                 completed[(observation.ObservationId, observation.PayloadHash)] = record;
             }
+            else if (observation.CompanyId is { } failedCompanyId)
+            {
+                // Spec 185 §5: a failed attempt THIS run degrades the company's typing completeness to
+                // Failed (precedence over Backlog) in this cohort's run result.
+                failedCompanyIds.Add(failedCompanyId);
+            }
         }
 
         _logger.LogInformation(
@@ -252,7 +333,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             newTypings,
             untyped.Count - newTypings);
 
-        return new ReaderPass(reader.Identity, completed, newTypings);
+        return new ReaderPass(reader.Identity, completed, newTypings, failedCompanyIds);
     }
 
     private async Task<NewsTypingRecord> TypeOneAsync(
@@ -587,7 +668,8 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
     private sealed class ReaderPass(
         NewsTypingReaderIdentity identity,
         Dictionary<(Guid ObservationId, string PayloadHash), NewsTypingRecord> completed,
-        int newTypings)
+        int newTypings,
+        HashSet<Guid> failedCompanyIds)
     {
         public NewsTypingReaderIdentity Identity { get; } = identity;
 
@@ -595,6 +677,9 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             completed;
 
         public int NewTypings { get; } = newTypings;
+
+        /// <summary>Companies with at least one FAILED typing attempt this run (spec 185 §5 completeness precedence).</summary>
+        public HashSet<Guid> FailedCompanyIds { get; } = failedCompanyIds;
 
         public IReadOnlyList<FactFamilyRecord> Families { get; set; } = [];
 

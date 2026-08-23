@@ -1123,7 +1123,47 @@ Do not hand back broken code.
   — per company per reader×capture-mode cohort, type distribution + publisher breadth + family count beside
   raw count + honest incompleteness marking, carrying the §5 caveat verbatim. Read-side and shadow: no
   score, label, strategy, fingerprint, snapshot field or report rank moves; the pins do not move. Stage 2
-  (the direction judge consuming ONLY this fact layer) is spec 185.
+  (the direction judge consuming ONLY this fact layer) is spec 185 — SHIPPED, next bullet.
+- **Stage-2 direction judge — facts-only, challenge-only, and the leaders finally say what the judge saw
+  (spec 185).** `Radar.Application.NewsRisk.Judgment` (deliberately OUTSIDE `Radar.Application.NewsTyping`,
+  whose guard pins that fact types carry no direction member). The judge receives ONLY canonical fact
+  families (representative fact's typed content + `MemberCount`/`DistinctPublisherCount` as corroboration
+  of REPORTING — one claim however syndicated; the request type structurally carries no raw prose, headline,
+  score, rank, label or price, reflection-guarded) against the FIXED rubric verbatim ("the company's recent
+  business trajectory"). v1 findings are CHALLENGE-ONLY (reusing spec-179's `NewsRiskCategory`/`Severity`
+  and `AdviceLanguageGuard`, never copied); `BusinessTrajectory ∈ {Improving,Deteriorating,Mixed,Unknown}`
+  with zero findings IS the supportive read; all-invalid findings ⇒ `ValidationFailed`, NEVER no-challenge;
+  the attribution-caveat rule (every supporting fact below `reported` ⇒ a missing/blank caveat DROPS the
+  finding) makes attribution demonstrably change judgments, and it is a prompt rule too. Cohort key =
+  `{judge}|prompt|schema|stage1={full stage-1 cohort key}|families={FactFamilyBuilder.IdentityString}` — a
+  stage-1/taxonomy/builder change forks stage 2 by construction; cache identity = (cohort, company, ordered
+  family-set hash); completed = `Judged|InsufficientFacts` only (failures retry, spec-181 rule). Records
+  persist insert-only at `{news-risk root}/judgments/{judge-policy-segment}/{companyId}/…` carrying ALL FIVE
+  completeness dimensions (spec-182's capture/search/supply verbatim + `NewsTypingCompleteness
+  {Failed=0,Backlog,Complete}` + `NewsJudgmentFamilyBundle {Capped=0,Complete}`). Orchestration: Worker runs
+  typing FIRST (now returns `NewsTypingRunResult` — the pass's own families/facts/completeness join, no disk
+  re-read), then the judge (spec-179 candidate selector REUSED — same candidates as the single-call read),
+  then the shadow (additive param embeds the judgment sections + A/B category display in the v3 live
+  artifact — `news-risk-live-v3`, cohorts never pool, no merged verdict). The leaders marker: EVERY
+  live-leaders row (research/stopped/comparator alike) carries a MANDATORY `semantic read` column — `⚠
+  challenged (top-finding)` / `· no challenge found in supplied facts` (+` (typing incomplete)` when typing
+  ≠ Complete; never worded clean) / `? unassessed (reason)` from a closed 8-token vocabulary — derived ONLY
+  by `NewsJudgmentMarkerPolicy` from the PROSPECTIVELY designated presentation cohort
+  (`Radar:NewsResearch:Judgment:PresentationCohort {Judge,Extractor}`, referentially validated at startup);
+  the model never chooses presentation, an absent marker is unrepresentable
+  (`NewsJudgmentMarkerReportModel.MarkerCellFor` is total), and only same-run judgments qualify (`stale`
+  otherwise). Because the report renders inside the pipeline and the judge runs after it, the first render
+  says `judgment-pending` and the Worker re-renders the SAME captured model via
+  `IWeeklyReportJudgmentRerenderer` (registered ONLY with the judgment step; its PRESENCE is what makes the
+  builder render pending — absent ⇒ the honest `no-judgment` stands) overwriting the same report file; row
+  numbers are byte-identical apart from the marker cell (asserted), `PreSpec150Golden` is untouched, and
+  labels/ranks/scores/snapshots move NOWHERE. Config: `Radar:NewsResearch:Judgment` (default OFF, strict
+  key allowlist, requires `Typing:Enabled` unconditionally naming both keys, requires `GenerateReport`,
+  Full-mode unfiltered only; judges reuse the spec-179 reader shape); `-Profile news-judgment` enables
+  typing+judgment hosted-DeepSeek-only. Guards extend, never weaken: Scoring/Pipeline cannot reach
+  Judgment, the judge subsystem cannot reach Prices (positive control kept). First live output is
+  EXPLORATORY (no audited stage-1 sample exists — the dispatch note); the artifact caveat says so. No
+  fingerprint input, no snapshot field, no formula/rule-set bump; the pins do not move.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,
