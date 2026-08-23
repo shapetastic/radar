@@ -10,11 +10,26 @@ using Radar.Application.Prices;
 
 namespace Radar.Application.NewsRisk.Evaluation;
 
-/// <summary>Which table one evaluator row belongs to — the cohorts NEVER pool (spec 179 §8/§9).</summary>
+/// <summary>
+/// Which table one evaluator row belongs to — the cohorts NEVER pool (spec 179 §8/§9). Spec 182 §4 split
+/// the former "clean prospective" table into presence and absence claims: nothing named "clean" may admit
+/// caveated rows, and completeness gates only the ABSENCE claim.
+/// </summary>
 public enum NewsRiskEvaluationTable
 {
-    /// <summary>Post-boundary, prospective, complete-coverage, completed, non-development, fully-resolved-window rows.</summary>
-    CleanProspective = 0,
+    /// <summary>
+    /// A validated <c>ThesisChallenged</c> row carrying a RiskScore — admitted at ANY completeness
+    /// (post-boundary, prospective, completed-validated, non-development, resolved forward window), and
+    /// segmented by the three completeness dimensions so degraded and best-state rows never silently pool.
+    /// </summary>
+    PresenceClaim = 0,
+
+    /// <summary>
+    /// A <c>NoRiskFoundInSuppliedText</c> row — admitted ONLY when all three completeness dimensions are
+    /// at their best state (plus the same other gates), because only there does "found nothing" carry
+    /// evidential weight.
+    /// </summary>
+    AbsenceClaim,
 
     /// <summary>A declared development example (EOSE/CASS/MSEX…): visible, never validation evidence.</summary>
     KnownDevelopmentExample,
@@ -63,8 +78,11 @@ public interface INewsRiskEvaluationGenerator
 /// window is required).</item>
 /// <item><b>Associations use ThesisChallenged rows only</b> (they are the rows carrying a
 /// <c>RiskScore</c>); NoRiskFound rows appear in the flagged/non-flagged descriptive split instead — a
-/// number is never invented for them.</item>
-/// <item><b>Reader cohorts never pool</b>: every table and every association is per cohort key.</item>
+/// number is never invented for them, and the non-flagged line draws ONLY from admitted absence-claim
+/// rows (a degraded-completeness "found nothing" was never a claim, so it appears in no such accounting).</item>
+/// <item><b>Reader cohorts never pool</b>: every table and every association is per cohort key. The three
+/// spec-182 completeness dimensions join that segmentation — every aggregate line over presence rows states
+/// the dimension combination it covers.</item>
 /// </list>
 /// </summary>
 public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
@@ -131,10 +149,11 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             await _artifactStore.WriteEvaluationAsync(markdown, csv, ct).ConfigureAwait(false);
 
             _logger.LogInformation(
-                "News-risk evaluation written: {Rows} row(s), {Clean} clean prospective, "
-                    + "{Development} development, {Excluded} excluded.",
+                "News-risk evaluation written: {Rows} row(s), {Presence} presence-claim, "
+                    + "{Absence} absence-claim, {Development} development, {Excluded} excluded.",
                 rows.Count,
-                rows.Count(r => r.Table == NewsRiskEvaluationTable.CleanProspective),
+                rows.Count(r => r.Table == NewsRiskEvaluationTable.PresenceClaim),
+                rows.Count(r => r.Table == NewsRiskEvaluationTable.AbsenceClaim),
                 rows.Count(r => r.Table
                     is NewsRiskEvaluationTable.KnownDevelopmentExample
                     or NewsRiskEvaluationTable.LegacyHeadlineOnly
@@ -220,7 +239,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         }
         else
         {
-            // The clean prospective gates (spec 179 §9), every one named on failure.
+            // The prospective-claim gates (spec 179 §9, amended by spec 182 §4), every one named on
+            // failure. Completeness is deliberately NOT a gate here — it gates only the absence claim.
             if (boundary is null)
             {
                 reasons.Add("no-prospective-boundary");
@@ -228,11 +248,6 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             else if (assessment.AssessmentCutoffUtc < boundary.FirstProspectiveCaptureAsOfUtc)
             {
                 reasons.Add("before-prospective-boundary");
-            }
-
-            if (!assessment.CoverageComplete)
-            {
-                reasons.Add("coverage-incomplete");
             }
 
             if (!assessment.IsCompletedAnalysis
@@ -251,13 +266,77 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 }
             }
 
-            table = reasons.Count == 0
-                ? NewsRiskEvaluationTable.CleanProspective
-                : NewsRiskEvaluationTable.Excluded;
+            if (assessment.Status == NewsRiskAssessmentStatus.ThesisChallenged)
+            {
+                // Presence claim: admitted at ANY completeness — the dimensions segment, never exclude.
+                if (assessment.RiskScore is null)
+                {
+                    reasons.Add("presence-claim-missing-risk-score");
+                }
+
+                table = reasons.Count == 0
+                    ? NewsRiskEvaluationTable.PresenceClaim
+                    : NewsRiskEvaluationTable.Excluded;
+            }
+            else if (assessment.Status == NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText)
+            {
+                // Absence claim: "found nothing" carries evidential weight ONLY over provably-complete
+                // input, so any degraded dimension is a named exclusion. v1 records (no dimension fields)
+                // deserialize at every dimension's degraded zero default and can therefore never enter.
+                var degraded = DegradedDimensionTokens(assessment);
+                if (degraded.Count > 0)
+                {
+                    reasons.Add(
+                        "absence-claim-requires-complete-coverage: " + string.Join(",", degraded));
+                }
+
+                table = reasons.Count == 0
+                    ? NewsRiskEvaluationTable.AbsenceClaim
+                    : NewsRiskEvaluationTable.Excluded;
+            }
+            else
+            {
+                // Every other status already carries the assessment-not-completed-validated reason.
+                table = NewsRiskEvaluationTable.Excluded;
+            }
         }
 
         return new NewsRiskEvaluationRow(assessment, table, reasons, entryDate, forwardReturn, maxAdverse);
     }
+
+    /// <summary>The degraded dimensions as machine-readable exclusion tokens — empty at best-state.</summary>
+    private static IReadOnlyList<string> DegradedDimensionTokens(NewsRiskAssessmentRecord assessment)
+    {
+        var tokens = new List<string>();
+        if (assessment.ArchiveCapture != NewsRiskArchiveCapture.Proven)
+        {
+            tokens.Add("archiveCapture=" + assessment.ArchiveCapture);
+        }
+
+        if (assessment.SearchEnumeration != NewsRiskSearchEnumeration.Complete)
+        {
+            tokens.Add("searchEnumeration=" + assessment.SearchEnumeration);
+        }
+
+        if (assessment.AssessmentBundle != NewsRiskAssessmentBundle.Complete)
+        {
+            tokens.Add("bundle=" + assessment.AssessmentBundle);
+        }
+
+        return tokens;
+    }
+
+    /// <summary>
+    /// The full dimension combination one aggregate line covers (spec 182 §4: presence-claim aggregates
+    /// never silently pool degraded and best-state rows).
+    /// </summary>
+    private static string DimensionCombination(NewsRiskAssessmentRecord assessment) =>
+        $"archiveCapture={assessment.ArchiveCapture}, searchEnumeration={assessment.SearchEnumeration}, "
+            + $"assessmentBundle={assessment.AssessmentBundle}";
+
+    /// <summary>The compact per-row rendering of all three dimensions, archive/search/bundle order.</summary>
+    private static string DimensionsCell(NewsRiskAssessmentRecord assessment) =>
+        $"{assessment.ArchiveCapture}/{assessment.SearchEnumeration}/{assessment.AssessmentBundle}";
 
     /// <summary>
     /// The 21-day maximum adverse close move from the resolved entry close: the minimum of
@@ -316,11 +395,13 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         sb.AppendLine();
         sb.AppendLine(
             "No pass/fail threshold, promotion rule or alpha claim is declared here. Reader cohorts, "
-                + "development examples, legacy and retrospective content never pool with the clean "
-                + "prospective cohort.");
+                + "development examples, legacy and retrospective content never pool with the prospective "
+                + "presence/absence-claim cohorts; presence claims are admitted at any completeness and "
+                + "segmented by the three completeness dimensions, while absence claims require best-state "
+                + "dimensions on every one.");
         sb.AppendLine();
         sb.AppendLine(boundary is null
-            ? "Prospective boundary: NOT ESTABLISHED — no clean prospective cohort can exist yet."
+            ? "Prospective boundary: NOT ESTABLISHED — no prospective presence/absence-claim cohort can exist yet."
             : string.Create(
                 CultureInfo.InvariantCulture,
                 $"Prospective boundary: {boundary.FirstProspectiveCaptureAsOfUtc:yyyy-MM-dd'T'HH:mm:ss'Z'} "
@@ -329,8 +410,9 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         {
             sb.AppendLine();
             sb.AppendLine(
-                "**Development declarations UNAVAILABLE** — the clean prospective table is suppressed "
-                    + "(fail closed): without the declarations a development example could leak into it.");
+                "**Development declarations UNAVAILABLE** — the presence/absence-claim tables are "
+                    + "suppressed (fail closed): without the declarations a development example could "
+                    + "leak into them.");
         }
 
         sb.AppendLine();
@@ -378,35 +460,40 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
 
             if (examples is not null)
             {
+                var presence = cohort
+                    .Where(r => r.Table == NewsRiskEvaluationTable.PresenceClaim).ToList();
+                var absence = cohort
+                    .Where(r => r.Table == NewsRiskEvaluationTable.AbsenceClaim).ToList();
                 RenderCohortTable(
                     sb,
-                    "Clean prospective",
-                    cohort.Where(r => r.Table == NewsRiskEvaluationTable.CleanProspective).ToList(),
-                    renderAssociations: true);
+                    "Presence claims (validated risks, any completeness — dimension-segmented)",
+                    presence);
+                RenderClaimAssociations(sb, presence, absence);
+                RenderCohortTable(
+                    sb,
+                    "Absence claims (nothing found in supplied text — complete coverage only)",
+                    absence);
             }
 
             RenderCohortTable(
                 sb,
                 "Known development examples (never validation evidence)",
-                cohort.Where(r => r.Table == NewsRiskEvaluationTable.KnownDevelopmentExample).ToList(),
-                renderAssociations: false);
+                cohort.Where(r => r.Table == NewsRiskEvaluationTable.KnownDevelopmentExample).ToList());
             RenderCohortTable(
                 sb,
                 "LegacyHeadlineOnly (development)",
-                cohort.Where(r => r.Table == NewsRiskEvaluationTable.LegacyHeadlineOnly).ToList(),
-                renderAssociations: false);
+                cohort.Where(r => r.Table == NewsRiskEvaluationTable.LegacyHeadlineOnly).ToList());
             RenderCohortTable(
                 sb,
                 "RetrospectiveUrlFetch (development)",
-                cohort.Where(r => r.Table == NewsRiskEvaluationTable.RetrospectiveUrlFetch).ToList(),
-                renderAssociations: false);
+                cohort.Where(r => r.Table == NewsRiskEvaluationTable.RetrospectiveUrlFetch).ToList());
         }
 
         return sb.ToString();
     }
 
     private static void RenderCohortTable(
-        StringBuilder sb, string title, IReadOnlyList<NewsRiskEvaluationRow> rows, bool renderAssociations)
+        StringBuilder sb, string title, IReadOnlyList<NewsRiskEvaluationRow> rows)
     {
         sb.AppendLine($"### {title}");
         sb.AppendLine();
@@ -417,8 +504,10 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             return;
         }
 
-        sb.AppendLine("| Company | As-of (cutoff) | Status | RiskScore | Fwd 21d | Max adverse 21d | Selected by |");
-        sb.AppendLine("| --- | --- | --- | --- | --- | --- | --- |");
+        sb.AppendLine(
+            "| Company | As-of (cutoff) | Status | RiskScore | Completeness (archive/search/bundle) "
+                + "| Fwd 21d | Max adverse 21d | Selected by |");
+        sb.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- |");
         foreach (var row in rows
             .OrderBy(r => r.Assessment.AssessmentCutoffUtc)
             .ThenBy(r => r.Assessment.CompanyId))
@@ -429,64 +518,89 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 $"| {EscapePipes(a.CompanyName)} ({EscapePipes(a.Ticker ?? "—")}) "
                     + $"| {a.AssessmentCutoffUtc:yyyy-MM-dd} | {a.Status} "
                     + $"| {(a.RiskScore is { } s ? s.ToString(CultureInfo.InvariantCulture) : "—")} "
+                    + $"| {DimensionsCell(a)} "
                     + $"| {FormatPct(row.ForwardReturn21d)} | {FormatPct(row.MaxAdverseMove21d)} "
                     + $"| {EscapePipes(string.Join("; ", a.Selections.Select(sel => $"{sel.StrategyName} #{sel.Rank}")))} |"));
         }
 
         sb.AppendLine();
+    }
 
-        if (!renderAssociations)
-        {
-            return;
-        }
-
-        // Per-date associations between RiskScore and adverse move, ThesisChallenged rows only (the rows
-        // that carry a score) — plus tie/constant-predictor frequency. Descriptive, never a claim.
-        var flagged = rows
-            .Where(r => r.Assessment.Status == NewsRiskAssessmentStatus.ThesisChallenged
-                && r.Assessment.RiskScore is not null
-                && r.MaxAdverseMove21d is not null)
-            .ToList();
-        var nonFlagged = rows
-            .Where(r => r.Assessment.Status == NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText)
+    /// <summary>
+    /// The descriptive split and per-date associations over the ADMITTED claim rows (spec 182 §4):
+    /// flagged aggregates are broken down per dimension combination (degraded and best-state presence rows
+    /// never silently pool into one number — every aggregate line states the combination it covers), and
+    /// the non-flagged line draws ONLY from absence-claim rows, which required best-state dimensions to be
+    /// admitted at all.
+    /// </summary>
+    private static void RenderClaimAssociations(
+        StringBuilder sb,
+        IReadOnlyList<NewsRiskEvaluationRow> presence,
+        IReadOnlyList<NewsRiskEvaluationRow> absence)
+    {
+        var flagged = presence
+            .Where(r => r.Assessment.RiskScore is not null && r.MaxAdverseMove21d is not null)
             .ToList();
 
         sb.AppendLine("#### Flagged vs non-flagged (descriptive)");
         sb.AppendLine();
-        sb.AppendLine(DescriptiveLine("Flagged (ThesisChallenged)", flagged));
-        sb.AppendLine(DescriptiveLine("Non-flagged (NoRiskFoundInSuppliedText)", nonFlagged));
+        if (flagged.Count == 0)
+        {
+            sb.AppendLine("- Flagged (PresenceClaim): (no rows)");
+        }
+        else
+        {
+            foreach (var combination in flagged
+                .GroupBy(r => DimensionCombination(r.Assessment), StringComparer.Ordinal)
+                .OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                sb.AppendLine(DescriptiveLine(
+                    $"Flagged (PresenceClaim) [{combination.Key}]", combination.ToList()));
+            }
+        }
+
+        sb.AppendLine(DescriptiveLine(
+            "Non-flagged (AbsenceClaim — complete coverage only)", absence));
         sb.AppendLine();
 
         var constantDates = 0;
         var definedDates = 0;
-        sb.AppendLine("#### Per-date RiskScore ↔ max-adverse-move association (Spearman ρ, flagged rows)");
+        sb.AppendLine(
+            "#### Per-date RiskScore ↔ max-adverse-move association "
+                + "(Spearman ρ, flagged rows, per dimension combination)");
         sb.AppendLine();
-        foreach (var date in flagged
-            .GroupBy(r => DateOnly.FromDateTime(r.Assessment.AssessmentCutoffUtc.UtcDateTime))
-            .OrderBy(g => g.Key))
+        foreach (var combination in flagged
+            .GroupBy(r => DimensionCombination(r.Assessment), StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal))
         {
-            var scores = date.Select(r => (double)r.Assessment.RiskScore!.Value).ToList();
-            // Adverse moves are ≤ 0; the association is computed against their MAGNITUDE so a positive ρ
-            // reads as "higher risk score, larger adverse move".
-            var adverse = date.Select(r => -r.MaxAdverseMove21d!.Value).ToList();
-            var rho = RankCorrelation.ComputeRho(scores, adverse);
-            if (rho.IsDefined)
+            foreach (var date in combination
+                .GroupBy(r => DateOnly.FromDateTime(r.Assessment.AssessmentCutoffUtc.UtcDateTime))
+                .OrderBy(g => g.Key))
             {
-                definedDates++;
-                sb.AppendLine(string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"- {date.Key:yyyy-MM-dd}: n={rho.ObservationCount}, ρ={rho.Rho:0.000}"));
-            }
-            else
-            {
-                if (rho.Reason is RankCorrelationUndefinedReason.ConstantScores)
+                var scores = date.Select(r => (double)r.Assessment.RiskScore!.Value).ToList();
+                // Adverse moves are ≤ 0; the association is computed against their MAGNITUDE so a positive
+                // ρ reads as "higher risk score, larger adverse move".
+                var adverse = date.Select(r => -r.MaxAdverseMove21d!.Value).ToList();
+                var rho = RankCorrelation.ComputeRho(scores, adverse);
+                if (rho.IsDefined)
                 {
-                    constantDates++;
+                    definedDates++;
+                    sb.AppendLine(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"- {date.Key:yyyy-MM-dd} [{combination.Key}]: n={rho.ObservationCount}, ρ={rho.Rho:0.000}"));
                 }
+                else
+                {
+                    if (rho.Reason is RankCorrelationUndefinedReason.ConstantScores)
+                    {
+                        constantDates++;
+                    }
 
-                sb.AppendLine(string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"- {date.Key:yyyy-MM-dd}: n={rho.ObservationCount}, ρ undefined ({rho.Reason})"));
+                    sb.AppendLine(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"- {date.Key:yyyy-MM-dd} [{combination.Key}]: n={rho.ObservationCount}, "
+                            + $"ρ undefined ({rho.Reason})"));
+                }
             }
         }
 
@@ -527,7 +641,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         var sb = new StringBuilder();
         sb.AppendLine(
             "assessmentId,runId,cohortKey,readerName,provider,model,companyId,companyName,ticker,"
-                + "selectionAsOfUtc,assessmentCutoffUtc,captureModes,coverageComplete,status,riskScore,"
+                + "selectionAsOfUtc,assessmentCutoffUtc,captureModes,archiveCapture,searchEnumeration,"
+                + "assessmentBundle,status,riskScore,"
                 + "categories,table,exclusionReasons,entryDate,forwardReturn21d,maxAdverseMove21d,selectedBy");
         foreach (var row in rows
             .OrderBy(r => r.Assessment.AssessmentCutoffUtc)
@@ -552,7 +667,9 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 CsvField.Escape(a.AssessmentCutoffUtc.UtcDateTime.ToString(
                     "yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture)),
                 CsvField.Escape(captureModes),
-                CsvField.Escape(a.CoverageComplete ? "true" : "false"),
+                CsvField.Escape(a.ArchiveCapture.ToString()),
+                CsvField.Escape(a.SearchEnumeration.ToString()),
+                CsvField.Escape(a.AssessmentBundle.ToString()),
                 CsvField.Escape(a.Status.ToString()),
                 CsvField.Escape(a.RiskScore?.ToString(CultureInfo.InvariantCulture)),
                 CsvField.Escape(string.Join("|", a.Categories)),

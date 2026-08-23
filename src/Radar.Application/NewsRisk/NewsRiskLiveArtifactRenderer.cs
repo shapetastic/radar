@@ -46,9 +46,19 @@ public static class NewsRiskLiveArtifactRenderer
                         CultureInfo.InvariantCulture,
                         $"{s.StrategyName} #{s.Rank} (snapshot `{s.ScoreSnapshotId:D}`)"))));
             sb.AppendLine();
-            sb.AppendLine(company.CoverageComplete
-                ? "Coverage: newssearch coverage and archive batch complete."
-                : "Coverage: INCOMPLETE — " + string.Join("; ", company.CoverageIssues));
+            // All three completeness dimensions render explicitly, always (spec 182 §2) — no dimension is
+            // ever collapsed into or hidden behind another, and no combination reads as an all-clear.
+            sb.AppendLine("Completeness: " + NewsRiskCompletenessDescription.Describe(
+                company.ArchiveCapture,
+                company.SearchEnumeration,
+                company.AssessmentBundle,
+                company.Articles.Count,
+                company.QualifyingArticleCount));
+            if (company.CoverageIssues.Count > 0)
+            {
+                sb.AppendLine("Coverage issues: " + string.Join("; ", company.CoverageIssues));
+            }
+
             sb.AppendLine();
 
             if (company.Articles.Count > 0)
@@ -77,6 +87,20 @@ public static class NewsRiskLiveArtifactRenderer
                 }
 
                 sb.AppendLine();
+
+                // The permanently-narrow absence wording (spec 182 §3): a pure function of this RUN's
+                // dimensions and counts, so a cached raw verdict replayed under different coverage
+                // circumstances gets THIS run's presentation. Never an all-clear.
+                if (result.Status == NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText)
+                {
+                    sb.AppendLine(NewsRiskCompletenessDescription.NoRiskWording(
+                        company.ArchiveCapture,
+                        company.SearchEnumeration,
+                        company.AssessmentBundle,
+                        company.Articles.Count,
+                        company.QualifyingArticleCount));
+                }
+
                 if (result.Categories.Count > 0)
                 {
                     sb.AppendLine("Categories: " + string.Join(", ", result.Categories));

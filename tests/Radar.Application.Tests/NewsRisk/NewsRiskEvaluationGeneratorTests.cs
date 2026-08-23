@@ -8,10 +8,11 @@ using Radar.Application.Prices;
 namespace Radar.Application.Tests.NewsRisk;
 
 /// <summary>
-/// Spec 179 §9: the read-only evaluator — entry anchored at the ASSESSMENT cutoff (never selection),
-/// partial forward windows failing closed through the reused spec-152 primitive, development examples
-/// visible but excluded from the clean prospective table, legacy/retrospective content in separate
-/// development tables, and reader cohorts never pooling.
+/// Spec 179 §9 as amended by spec 182 §4: the read-only evaluator — entry anchored at the ASSESSMENT
+/// cutoff (never selection), partial forward windows failing closed through the reused spec-152 primitive,
+/// development examples visible but excluded from the presence/absence-claim tables, legacy/retrospective
+/// content in separate development tables, reader cohorts never pooling, presence claims admitted at any
+/// completeness (dimension-segmented), and absence claims requiring best-state dimensions.
 /// </summary>
 public sealed class NewsRiskEvaluationGeneratorTests
 {
@@ -80,7 +81,9 @@ public sealed class NewsRiskEvaluationGeneratorTests
         DateTimeOffset? assessmentCutoffUtc = null,
         NewsRiskAssessmentStatus status = NewsRiskAssessmentStatus.ThesisChallenged,
         int? riskScore = 60,
-        bool coverageComplete = true,
+        NewsRiskArchiveCapture archiveCapture = NewsRiskArchiveCapture.Proven,
+        NewsRiskSearchEnumeration searchEnumeration = NewsRiskSearchEnumeration.Complete,
+        NewsRiskAssessmentBundle assessmentBundle = NewsRiskAssessmentBundle.Complete,
         NewsObservationCaptureMode captureMode = NewsObservationCaptureMode.ProspectiveRss,
         string readerName = "ambient",
         string model = "model-a") => new(
@@ -107,7 +110,9 @@ public sealed class NewsRiskEvaluationGeneratorTests
                 BodyContentHash: null, BodyRetrievedAtUtc: null, BodyExtractorVersion: null,
                 BodyRetrievalPolicy: null, CaptureMode: captureMode),
         ],
-        CoverageComplete: coverageComplete,
+        ArchiveCapture: archiveCapture,
+        SearchEnumeration: searchEnumeration,
+        AssessmentBundle: assessmentBundle,
         CoverageIssues: [],
         Status: status,
         RiskScore: status == NewsRiskAssessmentStatus.ThesisChallenged ? riskScore : null,
@@ -184,7 +189,7 @@ public sealed class NewsRiskEvaluationGeneratorTests
         var line = CsvLineFor(csv, record);
         var expectedEntry = DateOnly.FromDateTime(cutoff.UtcDateTime).AddDays(1);
         Assert.Contains(expectedEntry.ToString("yyyy-MM-dd"), line);
-        Assert.Contains(",CleanProspective,", line);
+        Assert.Contains(",PresenceClaim,", line);
     }
 
     [Fact]
@@ -229,7 +234,7 @@ public sealed class NewsRiskEvaluationGeneratorTests
             new() { ["EOSE"] = History("EOSE", start, end), ["DDD"] = History("DDD", start, end) });
 
         Assert.Contains(",KnownDevelopmentExample,", CsvLineFor(csv, eose));
-        Assert.Contains(",CleanProspective,", CsvLineFor(csv, clean));
+        Assert.Contains(",PresenceClaim,", CsvLineFor(csv, clean));
         Assert.Contains("Known development examples", markdown);
     }
 
@@ -266,7 +271,7 @@ public sealed class NewsRiskEvaluationGeneratorTests
     }
 
     [Fact]
-    public async Task NoBoundary_MeansNoCleanProspectiveRow()
+    public async Task NoBoundary_MeansNoProspectiveClaimRow()
     {
         var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
         var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
@@ -305,24 +310,144 @@ public sealed class NewsRiskEvaluationGeneratorTests
 
         Assert.Contains("development-declarations-unavailable", CsvLineFor(csv, record));
         Assert.Contains("Development declarations UNAVAILABLE", markdown);
-        Assert.DoesNotContain(",CleanProspective,", csv);
+        Assert.DoesNotContain(",PresenceClaim,", csv);
+        Assert.DoesNotContain(",AbsenceClaim,", csv);
     }
 
     [Fact]
-    public async Task IncompleteCoverageOrNonCompletedStatus_NeverEntersTheCleanTable()
+    public async Task DegradedDimensions_NeverExcludeAPresenceClaim_AndAggregatesStateTheCombination()
+    {
+        // Spec 182 §4: a validated risk found over degraded coverage is a presence claim — admitted at ANY
+        // completeness, segmented (never silently pooled) by the dimension combination.
+        var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
+        var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
+        var degraded = Assessment(
+            "AAA",
+            searchEnumeration: NewsRiskSearchEnumeration.Truncated,
+            assessmentBundle: NewsRiskAssessmentBundle.Capped);
+        var bestState = Assessment("BBB");
+
+        var (markdown, csv) = await RunAsync(
+            [degraded, bestState], [], EstablishedBoundary(),
+            new() { ["AAA"] = History("AAA", start, end), ["BBB"] = History("BBB", start, end) });
+
+        Assert.Contains(",PresenceClaim,", CsvLineFor(csv, degraded));
+        Assert.Contains(",PresenceClaim,", CsvLineFor(csv, bestState));
+        // The dimensions are their own CSV columns.
+        Assert.Contains(",Proven,Truncated,Capped,", CsvLineFor(csv, degraded));
+        Assert.Contains(",Proven,Complete,Complete,", CsvLineFor(csv, bestState));
+        // Degraded and best-state presence rows never pool into one aggregate: each aggregate line states
+        // the dimension combination it covers, so two combinations mean two lines.
+        Assert.Contains(
+            "Flagged (PresenceClaim) [archiveCapture=Proven, searchEnumeration=Truncated, "
+                + "assessmentBundle=Capped]",
+            markdown);
+        Assert.Contains(
+            "Flagged (PresenceClaim) [archiveCapture=Proven, searchEnumeration=Complete, "
+                + "assessmentBundle=Complete]",
+            markdown);
+        // Nothing named "clean" exists to admit caveated rows.
+        Assert.DoesNotContain("Clean prospective", markdown);
+        Assert.DoesNotContain("CleanProspective", csv);
+    }
+
+    [Fact]
+    public async Task AbsenceClaims_RequireBestStateDimensions_OnEveryDimension()
     {
         var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
         var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
-        var incomplete = Assessment("AAA", coverageComplete: false);
+        var admitted = Assessment("AAA", status: NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText);
+        var capped = Assessment(
+            "BBB",
+            status: NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText,
+            searchEnumeration: NewsRiskSearchEnumeration.Truncated,
+            assessmentBundle: NewsRiskAssessmentBundle.Capped);
+        var unproven = Assessment(
+            "CCC",
+            status: NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText,
+            archiveCapture: NewsRiskArchiveCapture.Unproven);
+
+        var (markdown, csv) = await RunAsync(
+            [admitted, capped, unproven], [], EstablishedBoundary(),
+            new()
+            {
+                ["AAA"] = History("AAA", start, end),
+                ["BBB"] = History("BBB", start, end),
+                ["CCC"] = History("CCC", start, end),
+            });
+
+        Assert.Contains(",AbsenceClaim,", CsvLineFor(csv, admitted));
+        // A degraded "found nothing" was never a claim: Excluded with the degraded dimensions named.
+        var cappedLine = CsvLineFor(csv, capped);
+        Assert.Contains(",Excluded,", cappedLine);
+        Assert.Contains(
+            "absence-claim-requires-complete-coverage: searchEnumeration=Truncated,bundle=Capped",
+            cappedLine);
+        var unprovenLine = CsvLineFor(csv, unproven);
+        Assert.Contains(",Excluded,", unprovenLine);
+        Assert.Contains(
+            "absence-claim-requires-complete-coverage: archiveCapture=Unproven", unprovenLine);
+        // The non-flagged descriptive accounting draws ONLY from admitted absence rows: n=1, not 3.
+        Assert.Contains("Non-flagged (AbsenceClaim — complete coverage only): n=1", markdown);
+    }
+
+    [Fact]
+    public async Task V1Records_DegradedByDefault_CanNeverEnterTheAbsenceCohort()
+    {
+        // A v1 record deserializes with every dimension at its zero (degraded) default — the enum-zero rule
+        // is the migration: no legacy "found nothing" can ever read as a complete-coverage absence claim.
+        var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
+        var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
+        var legacy = Assessment(
+            "AAA",
+            status: NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText,
+            archiveCapture: default,
+            searchEnumeration: default,
+            assessmentBundle: default) with
+        {
+            SchemaVersion = "news-risk-assessment-v1",
+        };
+
+        // A legacy row still carrying the retired IncompleteCoverage status lands in Excluded through the
+        // existing not-completed-validated gate (it was never a completed analysis).
+#pragma warning disable CS0618 // deliberately exercising the retired v1 status
+        var legacyStatus = Assessment(
+            "BBB",
+            status: NewsRiskAssessmentStatus.IncompleteCoverage,
+            riskScore: null,
+            archiveCapture: default,
+            searchEnumeration: default,
+            assessmentBundle: default) with
+        {
+            SchemaVersion = "news-risk-assessment-v1",
+        };
+#pragma warning restore CS0618
+
+        var (_, csv) = await RunAsync(
+            [legacy, legacyStatus], [], EstablishedBoundary(),
+            new() { ["AAA"] = History("AAA", start, end), ["BBB"] = History("BBB", start, end) });
+
+        var line = CsvLineFor(csv, legacy);
+        Assert.Contains(",Excluded,", line);
+        Assert.Contains("absence-claim-requires-complete-coverage", line);
+        var statusLine = CsvLineFor(csv, legacyStatus);
+        Assert.Contains(",Excluded,", statusLine);
+        Assert.Contains("assessment-not-completed-validated: IncompleteCoverage", statusLine);
+    }
+
+    [Fact]
+    public async Task NonCompletedStatuses_StayExcluded_WithTheNamedReason()
+    {
+        var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
+        var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
         var failed = Assessment("BBB", status: NewsRiskAssessmentStatus.ProviderFailure);
 
         var (_, csv) = await RunAsync(
-            [incomplete, failed], [], EstablishedBoundary(),
-            new() { ["AAA"] = History("AAA", start, end), ["BBB"] = History("BBB", start, end) });
+            [failed], [], EstablishedBoundary(), new() { ["BBB"] = History("BBB", start, end) });
 
-        Assert.Contains("coverage-incomplete", CsvLineFor(csv, incomplete));
-        Assert.Contains("assessment-not-completed-validated", CsvLineFor(csv, failed));
-        Assert.DoesNotContain(",CleanProspective,", csv);
+        var line = CsvLineFor(csv, failed);
+        Assert.Contains(",Excluded,", line);
+        Assert.Contains("assessment-not-completed-validated", line);
     }
 
     [Fact]

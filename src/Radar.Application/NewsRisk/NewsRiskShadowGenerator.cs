@@ -230,7 +230,8 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         NewsObservationBatch? batch,
         CancellationToken ct)
     {
-        var (coverageComplete, coverageIssues) = EvaluateCoverage(batch, candidate.CompanyId);
+        var coverage = NewsRiskCoverageEvaluator.Evaluate(
+            batch, candidate.CompanyId, _options.NewsSearchCollectorName);
 
         var bundle = NewsRiskInputBundleBuilder.Build(
             candidate.CompanyId,
@@ -240,8 +241,10 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             _options.MaxArticlesPerCompany,
             _options.MaxFetchedArticlesPerCompany);
 
+        // Live body attachment runs for ANY non-empty bundle (spec 182 §1): a fetched body for a supplied
+        // article is more information, and more information never requires completeness.
         var fetchWarnings = new List<string>();
-        if (_contentReader is not null && coverageComplete && bundle.Articles.Count > 0)
+        if (_contentReader is not null && bundle.Articles.Count > 0)
         {
             bundle = await AttachLiveBodiesAsync(bundle, fetchWarnings, ct).ConfigureAwait(false);
         }
@@ -254,13 +257,28 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             // One reader's runtime failure never blocks another (spec 179 §5): each pass is independently
             // recorded, and the analyzer contract already types provider failures rather than throwing.
             var record = await AssessWithReaderAsync(
-                reader, candidate, runId, selectionAsOfUtc, bundle, coverageComplete, coverageIssues, ct)
+                reader, candidate, runId, selectionAsOfUtc, bundle, coverage, ct)
                 .ConfigureAwait(false);
 
             var warnings = new List<string>(fetchWarnings);
-            if (!record.CoverageComplete)
+
+            // Any degraded dimension is a stated caveat, NEVER a suppression (spec 182 §3): the assessment
+            // stands, and the warning names exactly which dimensions are degraded.
+            var degraded = NewsRiskCompletenessDescription.DegradedParts(
+                record.ArchiveCapture,
+                record.SearchEnumeration,
+                record.AssessmentBundle,
+                bundle.Articles.Count,
+                bundle.QualifyingArticleCount);
+            if (degraded.Count > 0)
             {
-                warnings.Add("coverage incomplete — result is UNKNOWN, never no-risk (fail closed)");
+                // "Known incomplete" only when a dimension states a KNOWN incompleteness; unproven-only
+                // degradation reads as "not proven" — never overstated into certainty.
+                var caveat = NewsRiskCompletenessDescription.HasKnownIncompleteness(
+                    record.SearchEnumeration, record.AssessmentBundle)
+                    ? " — supplied text is known incomplete"
+                    : " — supplied text completeness is not proven";
+                warnings.Add(string.Join("; ", degraded) + caveat);
             }
 
             if (record.ClaimsDropped > 0)
@@ -308,8 +326,11 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
                     a.CaptureMode,
                     InputKind(a)))
                 .ToList(),
-            CoverageComplete: coverageComplete,
-            CoverageIssues: coverageIssues,
+            ArchiveCapture: coverage.ArchiveCapture,
+            SearchEnumeration: coverage.SearchEnumeration,
+            AssessmentBundle: bundle.Completeness,
+            QualifyingArticleCount: bundle.QualifyingArticleCount,
+            CoverageIssues: coverage.Issues,
             ReaderResults: readerResults);
     }
 
@@ -319,27 +340,21 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         Guid runId,
         DateTimeOffset selectionAsOfUtc,
         NewsRiskInputBundle bundle,
-        bool coverageComplete,
-        IReadOnlyList<string> coverageIssues,
+        NewsRiskCoverageEvaluation coverage,
         CancellationToken ct)
     {
         var identity = reader.Identity;
         var cohortKey = identity.CohortKey;
         NewsRiskAssessmentRecord record;
 
-        if (!coverageComplete)
-        {
-            // FAIL CLOSED, structurally: with incomplete coverage no model is called, so a persisted
-            // NoRiskFoundInSuppliedText can only ever exist over proven-complete input (§7 render gate).
-            record = BaseRecord(
-                identity, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
-                coverageComplete, coverageIssues, NewsRiskAssessmentStatus.IncompleteCoverage);
-        }
-        else if (bundle.Articles.Count == 0)
+        // Readers run whenever at least one qualifying article exists (spec 182 §1): completeness is
+        // required for ABSENCE claims, never PRESENCE claims, so no dimension blocks the model call. The
+        // dimensions are recorded on EVERY persisted attempt instead.
+        if (bundle.Articles.Count == 0)
         {
             record = BaseRecord(
                 identity, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
-                coverageComplete, coverageIssues, NewsRiskAssessmentStatus.NoContent);
+                coverage, NewsRiskAssessmentStatus.NoContent);
         }
         else
         {
@@ -348,9 +363,12 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
                 .ConfigureAwait(false);
             if (cached is not null)
             {
+                // The cache carries ONLY the raw verdict fields; the completeness dimensions come from
+                // BaseRecord and are therefore always the CURRENT run's (spec 182 §3 — a cached verdict
+                // replayed under different coverage circumstances never carries a stale derived state).
                 record = BaseRecord(
                     identity, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
-                    coverageComplete, coverageIssues, cached.Status) with
+                    coverage, cached.Status) with
                 {
                     RiskScore = cached.RiskScore,
                     Categories = cached.Categories,
@@ -368,7 +386,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             {
                 record = await AnalyzeAsync(
                     reader, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
-                    coverageComplete, coverageIssues, ct).ConfigureAwait(false);
+                    coverage, ct).ConfigureAwait(false);
             }
         }
 
@@ -383,8 +401,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         Guid runId,
         DateTimeOffset selectionAsOfUtc,
         NewsRiskInputBundle bundle,
-        bool coverageComplete,
-        IReadOnlyList<string> coverageIssues,
+        NewsRiskCoverageEvaluation coverage,
         CancellationToken ct)
     {
         // The model request carries the company name/ticker and the ordered id-labelled text ONLY (spec 179
@@ -416,7 +433,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
 
         var record = BaseRecord(
             reader.Identity, cohortKey, candidate, runId, selectionAsOfUtc, bundle,
-            coverageComplete, coverageIssues, NewsRiskAssessmentStatus.ProviderFailure) with
+            coverage, NewsRiskAssessmentStatus.ProviderFailure) with
         {
             RawResponseHash = outcome.RawResponseHash,
         };
@@ -461,8 +478,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         Guid runId,
         DateTimeOffset selectionAsOfUtc,
         NewsRiskInputBundle bundle,
-        bool coverageComplete,
-        IReadOnlyList<string> coverageIssues,
+        NewsRiskCoverageEvaluation coverage,
         NewsRiskAssessmentStatus status) =>
         new(
             SchemaVersion: NewsRiskAssessmentRecord.CurrentSchemaVersion,
@@ -494,8 +510,10 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
                     BodyRetrievalPolicy: a.BodyRetrievalPolicy,
                     CaptureMode: a.CaptureMode))
                 .ToList(),
-            CoverageComplete: coverageComplete,
-            CoverageIssues: coverageIssues,
+            ArchiveCapture: coverage.ArchiveCapture,
+            SearchEnumeration: coverage.SearchEnumeration,
+            AssessmentBundle: bundle.Completeness,
+            CoverageIssues: coverage.Issues,
             Status: status,
             RiskScore: null,
             Categories: [],
@@ -558,72 +576,6 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
                 bundle.SelectionAsOfUtc, articles),
             BundleHash = NewsRiskInputBundleBuilder.ComputeBundleHash(articles),
         };
-    }
-
-    /// <summary>
-    /// The §4 coverage gate, FAIL CLOSED at every step: an absent batch manifest, unproven capture, missing
-    /// coverage rows, a company without a successful complete newssearch feed set, or a capped result list
-    /// all read as INCOMPLETE (unknown), never as clean.
-    /// </summary>
-    private (bool Complete, IReadOnlyList<string> Issues) EvaluateCoverage(
-        NewsObservationBatch? batch, Guid companyId)
-    {
-        var issues = new List<string>();
-        if (batch is null)
-        {
-            issues.Add("archive-batch-unavailable: no batch manifest is readable for this run");
-            return (false, issues);
-        }
-
-        if (!batch.CaptureProven)
-        {
-            issues.Add("archive-batch-unproven: the batch recorded observation persistence failures");
-        }
-
-        var capture = batch.Collectors.FirstOrDefault(
-            c => string.Equals(c.CollectorName, _options.NewsSearchCollectorName, StringComparison.Ordinal));
-        if (capture is null)
-        {
-            issues.Add($"newssearch-capture-not-recorded: no '{_options.NewsSearchCollectorName}' capture in the batch");
-            return (false, issues);
-        }
-
-        if (capture.CompanyCoverage is null)
-        {
-            issues.Add("newssearch-coverage-not-recorded: coverage rows are absent (unproven)");
-            return (false, issues);
-        }
-
-        var row = capture.CompanyCoverage.FirstOrDefault(r => r.CompanyId == companyId);
-        if (row is null)
-        {
-            issues.Add("company-coverage-missing: this company has no newssearch coverage row");
-            return (false, issues);
-        }
-
-        if (row.ExpectedFeedCount == 0)
-        {
-            issues.Add("no-newssearch-feed: this company declares no newssearch feed");
-        }
-
-        if (row.SuccessfulFeedCount < row.ExpectedFeedCount)
-        {
-            issues.Add(string.Create(
-                CultureInfo.InvariantCulture,
-                $"feed-failures: {row.SuccessfulFeedCount}/{row.ExpectedFeedCount} newssearch feeds succeeded"));
-        }
-
-        if (row.HitEffectiveResultLimit)
-        {
-            issues.Add("result-limit-reached: the newssearch result list was capped (possible truncation)");
-        }
-
-        if (row.Issues.Count > 0)
-        {
-            issues.AddRange(row.Issues.Select(i => "coverage-issue: " + i));
-        }
-
-        return (issues.Count == 0, issues);
     }
 
     private static string InputKind(NewsRiskInputArticle article) => (article.DescriptionText, article.BodyText) switch
