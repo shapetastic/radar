@@ -8,10 +8,12 @@ using Radar.Application.Lifecycle;
 using Radar.Application.News;
 using Radar.Application.NewsRisk;
 using Radar.Application.NewsRisk.Evaluation;
+using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
 using Radar.Application.Replay;
+using Radar.Application.Reporting;
 
 namespace Radar.Worker;
 
@@ -75,6 +77,8 @@ public sealed class Worker : BackgroundService
     private readonly INewsRiskShadowGenerator? _newsRiskShadowGenerator;
     private readonly INewsRiskEvaluationGenerator? _newsRiskEvaluationGenerator;
     private readonly INewsTypingGenerator? _newsTypingGenerator;
+    private readonly INewsJudgmentGenerator? _newsJudgmentGenerator;
+    private readonly IWeeklyReportJudgmentRerenderer? _judgmentRerenderer;
     private readonly IOperatingCallStartupValidator? _operatingCallValidator;
 
     public Worker(
@@ -95,7 +99,9 @@ public sealed class Worker : BackgroundService
         INewsRiskShadowGenerator? newsRiskShadowGenerator = null,
         INewsRiskEvaluationGenerator? newsRiskEvaluationGenerator = null,
         IOperatingCallStartupValidator? operatingCallValidator = null,
-        INewsTypingGenerator? newsTypingGenerator = null)
+        INewsTypingGenerator? newsTypingGenerator = null,
+        INewsJudgmentGenerator? newsJudgmentGenerator = null,
+        IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -121,6 +127,8 @@ public sealed class Worker : BackgroundService
         _newsRiskShadowGenerator = newsRiskShadowGenerator;
         _newsRiskEvaluationGenerator = newsRiskEvaluationGenerator;
         _newsTypingGenerator = newsTypingGenerator;
+        _newsJudgmentGenerator = newsJudgmentGenerator;
+        _judgmentRerenderer = judgmentRerenderer;
         _operatingCallValidator = operatingCallValidator;
     }
 
@@ -221,32 +229,36 @@ public sealed class Worker : BackgroundService
     private async Task RunPipelineAndFollowUpsAsync(CancellationToken ct)
     {
         var result = await RunPipelineAsync(ct).ConfigureAwait(false);
-        // Spec 179 §2: the news-risk shadow read runs BEFORE the existing efficacy step, consuming the
-        // exact section instances and durable run id the pipeline result carries.
-        await RunNewsRiskShadowAsync(result, ct).ConfigureAwait(false);
-        // Spec 181: the news event-typing pass runs right after the news-risk shadow (same shadow posture:
-        // read-side, never a score/label/fingerprint input) and before the efficacy step.
-        await RunNewsTypingAsync(result, ct).ConfigureAwait(false);
+        // Spec 185 §5 ordering: typing FIRST (it builds the stage-1 fact families), then the judgment step
+        // (which consumes them, re-rendering the report's semantic-read markers), then the news-risk shadow
+        // (whose live artifact embeds the judgment sections beside the single-call read), then efficacy.
+        // Typing and the shadow are independent of each other, so moving typing ahead of the shadow (it ran
+        // after it before spec 185) is behavior-neutral for both.
+        var typing = await RunNewsTypingAsync(result, ct).ConfigureAwait(false);
+        var judgment = await RunNewsJudgmentAsync(result, typing, ct).ConfigureAwait(false);
+        await RunNewsRiskShadowAsync(result, judgment, ct).ConfigureAwait(false);
         await RunEfficacyReportAsync(ct).ConfigureAwait(false);
     }
 
-    // Spec 181: the in-process news event-typing pass — a SEPARATE step AFTER the news-risk shadow, OUTSIDE
+    // Spec 181: the in-process news event-typing pass — a SEPARATE step AFTER the pipeline, OUTSIDE
     // IRadarPipeline. It types archived spec-177 observations against the closed taxonomy (bounded per-run
     // per-reader), checkpoints deterministic fact families, and writes the attention-decomposition artifact.
     // Skipped entirely (dependency null) unless Radar:NewsResearch:Typing:Enabled in unfiltered full mode
     // with a resolvable reader. The generator owns its own failure handling (a typing failure writes a named
     // FAILED artifact and never rolls back the run); the belt-and-braces catch here keeps even an unexpected
-    // escape from aborting the host loop.
-    private async Task RunNewsTypingAsync(RadarPipelineResult result, CancellationToken ct)
+    // escape from aborting the host loop. Returns the typed pass outcome for the spec-185 judgment step
+    // (null when skipped or failed — the judge then structurally cannot run).
+    private async Task<NewsTypingRunResult?> RunNewsTypingAsync(
+        RadarPipelineResult result, CancellationToken ct)
     {
         if (_newsTypingGenerator is null)
         {
-            return;
+            return null;
         }
 
         try
         {
-            await _newsTypingGenerator.GenerateAsync(result.RunId, ct).ConfigureAwait(false);
+            return await _newsTypingGenerator.GenerateAsync(result.RunId, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -256,6 +268,47 @@ public sealed class Worker : BackgroundService
         {
             _logger.LogError(
                 ex, "News-typing step failed unexpectedly; the Radar run itself is unaffected.");
+            return null;
+        }
+    }
+
+    // Spec 185: the in-process stage-2 direction-judge pass — a SEPARATE step AFTER typing (whose fact
+    // families it consumes) and BEFORE the news-risk shadow (whose live artifact embeds its results),
+    // OUTSIDE IRadarPipeline. Skipped entirely (dependency null) unless
+    // Radar:NewsResearch:Judgment:Enabled in unfiltered full mode with typing enabled. After a successful
+    // pass the SAME weekly-report model the pipeline rendered is re-rendered with the policy-derived
+    // semantic-read markers and the report file overwritten in place; when the judgment step is disabled no
+    // re-render happens and the honest `? unassessed (no-judgment)` markers stand.
+    private async Task<NewsJudgmentRunResult?> RunNewsJudgmentAsync(
+        RadarPipelineResult result, NewsTypingRunResult? typing, CancellationToken ct)
+    {
+        if (_newsJudgmentGenerator is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var judgment = await _newsJudgmentGenerator
+                .GenerateAsync(result.RunId, result.StrategySections, typing, ct)
+                .ConfigureAwait(false);
+
+            if (judgment is { Markers: { } markers } && _judgmentRerenderer is not null)
+            {
+                await _judgmentRerenderer.RerenderAsync(markers, ct).ConfigureAwait(false);
+            }
+
+            return judgment;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex, "News-judgment step failed unexpectedly; the Radar run itself is unaffected.");
+            return null;
         }
     }
 
@@ -283,7 +336,8 @@ public sealed class Worker : BackgroundService
     // with a resolvable reader. The generator owns its own failure handling (a shadow failure writes a named
     // FAILED artifact and never rolls back the run); the belt-and-braces catch here keeps even an unexpected
     // escape from aborting the host loop.
-    private async Task RunNewsRiskShadowAsync(RadarPipelineResult result, CancellationToken ct)
+    private async Task RunNewsRiskShadowAsync(
+        RadarPipelineResult result, NewsJudgmentRunResult? judgment, CancellationToken ct)
     {
         if (_newsRiskShadowGenerator is null)
         {
@@ -293,7 +347,7 @@ public sealed class Worker : BackgroundService
         try
         {
             await _newsRiskShadowGenerator
-                .GenerateAsync(result.RunId, result.StrategySections, ct)
+                .GenerateAsync(result.RunId, result.StrategySections, ct, judgment)
                 .ConfigureAwait(false);
 
             if (_newsRiskEvaluationGenerator is not null)

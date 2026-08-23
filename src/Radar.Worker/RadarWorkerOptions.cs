@@ -866,6 +866,53 @@ public sealed class NewsResearchWorkerOptions
 
     /// <summary>The in-process news event-typing step (spec 181). DISABLED by default; the <c>news-typing</c> run profile enables it.</summary>
     public NewsTypingWorkerOptions Typing { get; init; } = new();
+
+    /// <summary>The in-process stage-2 direction-judge step (spec 185). DISABLED by default; requires Typing; the <c>news-judgment</c> run profile enables both.</summary>
+    public NewsJudgmentWorkerOptions Judgment { get; init; } = new();
+}
+
+/// <summary>
+/// Stage-2 direction-judge configuration (bound from "Radar:NewsResearch:Judgment"; spec 185 §4/§5). Every
+/// limit is a cost/safety control — recorded on each persisted judgment record and hashed into NO scoring
+/// fingerprint. The composition root validates the section against a strict key allowlist and fails startup
+/// on an invalid limit or an unresolvable presentation cohort; registration happens ONLY for an unfiltered
+/// full-mode run with typing enabled and at least one resolvable judge reader.
+/// </summary>
+public sealed class NewsJudgmentWorkerOptions
+{
+    /// <summary>Whether the judgment step runs after each unfiltered full pipeline run. DISABLED by default — the default live run is byte-unchanged. Requires <c>Radar:NewsResearch:Typing:Enabled</c> (the judge cannot run without stage 1).</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>Cost budget on judged companies per run (the spec-179 §3 candidate traversal reused). Default 30; must be positive.</summary>
+    public int MaxCompaniesPerRun { get; init; } = 30;
+
+    /// <summary>Cap on families supplied to one judgment (a bite records the Capped family-bundle dimension). Default 50; must be positive.</summary>
+    public int MaxFamiliesPerJudgment { get; init; } = 50;
+
+    /// <summary>
+    /// Optional judge reader list — reusing the exact spec-179 reader shape/validation. Omitted/empty ⇒
+    /// exactly one judge over the ambient <c>Radar:Ai</c> provider/model.
+    /// </summary>
+    public IReadOnlyList<NewsRiskReaderWorkerOptions> Judges { get; init; } = [];
+
+    /// <summary>
+    /// The PROSPECTIVELY designated presentation cohort (spec 185 §4): the ONE (judge reader, typing
+    /// extractor) pair whose judgment supplies the leaders' semantic-read marker — declared before results,
+    /// never switched after seeing them. REQUIRED when <see cref="Enabled"/>; both names are validated at
+    /// startup against the configured reader lists ("ambient" names the ambient <c>Radar:Ai</c> reader when
+    /// the corresponding list is empty). Every other cohort renders in the artifact only.
+    /// </summary>
+    public NewsJudgmentPresentationCohortWorkerOptions PresentationCohort { get; init; } = new();
+}
+
+/// <summary>The presentation-cohort designation (spec 185 §4): one judge reader name + one typing extractor reader name.</summary>
+public sealed class NewsJudgmentPresentationCohortWorkerOptions
+{
+    /// <summary>The judge reader NAME (a <c>Radar:NewsResearch:Judgment:Judges</c> entry's Name, or "ambient").</summary>
+    public string Judge { get; init; } = string.Empty;
+
+    /// <summary>The typing extractor reader NAME (a <c>Radar:NewsResearch:Typing:Readers</c> entry's Name, or "ambient").</summary>
+    public string Extractor { get; init; } = string.Empty;
 }
 
 /// <summary>

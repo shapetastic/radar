@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.News;
+using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 
@@ -19,10 +20,16 @@ public interface INewsRiskShadowGenerator
     /// Runs the shadow read for the completed run <paramref name="runId"/> over the exact
     /// <paramref name="strategySections"/> the report builder produced. Never throws for its own failures
     /// (a shadow failure writes the NAMED failed artifact and never rolls back or relabels the
-    /// already-durable Radar run); caller cancellation propagates.
+    /// already-durable Radar run); caller cancellation propagates. The optional
+    /// <paramref name="judgment"/> (spec 185 §5) carries the SAME judgment records the stage-2 pass just
+    /// persisted, so the live artifact embeds the per-company judgment sections and marker states beside
+    /// the single-call read — side by side, cohorts never pooled, no merged verdict.
     /// </summary>
     Task GenerateAsync(
-        Guid? runId, IReadOnlyList<StrategyReportSection>? strategySections, CancellationToken ct);
+        Guid? runId,
+        IReadOnlyList<StrategyReportSection>? strategySections,
+        CancellationToken ct,
+        NewsJudgmentRunResult? judgment = null);
 }
 
 /// <summary>
@@ -94,13 +101,17 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
     }
 
     public async Task GenerateAsync(
-        Guid? runId, IReadOnlyList<StrategyReportSection>? strategySections, CancellationToken ct)
+        Guid? runId,
+        IReadOnlyList<StrategyReportSection>? strategySections,
+        CancellationToken ct,
+        NewsJudgmentRunResult? judgment = null)
     {
         var fallbackDateToken = _timeProvider.GetUtcNow().UtcDateTime
             .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         try
         {
-            await GenerateCoreAsync(runId, strategySections, fallbackDateToken, ct).ConfigureAwait(false);
+            await GenerateCoreAsync(runId, strategySections, judgment, fallbackDateToken, ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -120,6 +131,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
     private async Task GenerateCoreAsync(
         Guid? runId,
         IReadOnlyList<StrategyReportSection>? strategySections,
+        NewsJudgmentRunResult? judgment,
         string fallbackDateToken,
         CancellationToken ct)
     {
@@ -197,7 +209,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         {
             ct.ThrowIfCancellationRequested();
             companies.Add(await AssessCandidateAsync(
-                candidate, id, selectionAsOfUtc, observations, batch, ct).ConfigureAwait(false));
+                candidate, id, selectionAsOfUtc, observations, batch, judgment, ct).ConfigureAwait(false));
         }
 
         var document = new NewsRiskLiveDocument(
@@ -228,6 +240,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         DateTimeOffset selectionAsOfUtc,
         IReadOnlyList<NewsObservationRecord> observations,
         NewsObservationBatch? batch,
+        NewsJudgmentRunResult? judgment,
         CancellationToken ct)
     {
         var coverage = NewsRiskCoverageEvaluator.Evaluate(
@@ -331,7 +344,55 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             AssessmentBundle: bundle.Completeness,
             QualifyingArticleCount: bundle.QualifyingArticleCount,
             CoverageIssues: coverage.Issues,
-            ReaderResults: readerResults);
+            ReaderResults: readerResults,
+            Judgments: BuildJudgmentSections(candidate.CompanyId, judgment),
+            JudgmentMarker: judgment is null
+                ? null
+                : NewsJudgmentMarkerReportModel.MarkerCellFor(judgment.Markers, candidate.CompanyId));
+    }
+
+    /// <summary>
+    /// The spec-185 §5 per-company judgment sections: every (judge × stage-1 cohort) record for this
+    /// company, in deterministic (judge, stage-1 cohort) order — each cohort rendered independently, never
+    /// pooled, with its stage-1 fact-drop count beside its own finding-drop accounting (the error split).
+    /// Null when the judgment step did not run this pass.
+    /// </summary>
+    private static IReadOnlyList<NewsRiskLiveJudgment>? BuildJudgmentSections(
+        Guid companyId, NewsJudgmentRunResult? judgment)
+    {
+        if (judgment is null)
+        {
+            return null;
+        }
+
+        return judgment.Judgments
+            .Where(j => j.CompanyId == companyId)
+            .OrderBy(j => j.JudgeName, StringComparer.Ordinal)
+            .ThenBy(j => j.Stage1CohortKey, StringComparer.Ordinal)
+            .Select(j => new NewsRiskLiveJudgment(
+                JudgeName: j.JudgeName,
+                Provider: j.Provider,
+                ModelId: j.ModelId,
+                Stage1CohortKey: j.Stage1CohortKey,
+                JudgmentId: j.JudgmentId,
+                Status: j.Status,
+                BusinessTrajectory: j.BusinessTrajectory,
+                ChallengeStrength: j.ChallengeStrength,
+                Findings: j.Findings,
+                Rationale: j.Rationale,
+                FindingsTotal: j.FindingsTotal,
+                FindingsAccepted: j.FindingsAccepted,
+                FindingsDropped: j.FindingsDropped,
+                FindingDropReasons: j.FindingDropReasons,
+                Stage1FactsDroppedInWindow: judgment.Stage1FactsDroppedByCohort.TryGetValue(
+                    j.Stage1CohortKey, out var stage1Drops) ? stage1Drops : 0,
+                ArchiveCapture: j.ArchiveCapture,
+                SearchEnumeration: j.SearchEnumeration,
+                ObservationSupply: j.ObservationSupply,
+                TypingCompleteness: j.TypingCompleteness,
+                FamilyBundle: j.FamilyBundle,
+                Families: j.Families))
+            .ToList();
     }
 
     private async Task<NewsRiskAssessmentRecord> AssessWithReaderAsync(

@@ -1,0 +1,60 @@
+using Radar.Application.News;
+
+namespace Radar.Application.NewsTyping;
+
+/// <summary>
+/// Per-company per-cohort typing coverage (spec 185 §5): whether every in-window supplied-text observation
+/// for a company has a completed typing in one extractor cohort. The zero value is DELIBERATELY the degraded
+/// state (the spec-182 convention): a consumer that never receives a computed value must read "failed",
+/// never "complete". A deferred article (the spec-181 <c>MaxNewTypingsPerRun</c> cap) is an untyped fact
+/// source, so "found no challenge" over a backlogged company is a weaker statement — and says so.
+/// </summary>
+public enum NewsTypingCompleteness
+{
+    /// <summary>At least one typing attempt for the company FAILED this run (provider/parse/validation). Takes precedence over Backlog.</summary>
+    Failed = 0,
+
+    /// <summary>At least one in-window observation for the company remains untyped (deferred by the per-run cap).</summary>
+    Backlog,
+
+    /// <summary>Every in-window supplied-text observation for the company has a completed typing in this cohort.</summary>
+    Complete,
+}
+
+/// <summary>
+/// One validated fact joined back to its observation provenance — the lookup a downstream consumer (the
+/// spec-185 judge) needs to resolve a family's <c>RepresentativeFactId</c> into the fact's typed content
+/// without re-reading the durable typing store.
+/// </summary>
+public sealed record NewsTypingFactRef(
+    NewsTypingValidatedFact Fact,
+    Guid ObservationId,
+    Guid? CompanyId,
+    NewsObservationCaptureMode CaptureMode);
+
+/// <summary>
+/// One extractor cohort's view of one typing pass (spec 185 §5): the checkpoint families this pass built,
+/// the fact lookup behind them, the per-company typing-completeness map over the window, and the stage-1
+/// fact-drop count (the extraction side of the extraction-vs-judgment error split). Exposes the generator's
+/// existing in-memory join instead of adding a read seam to the write-only family snapshot store.
+/// </summary>
+public sealed record NewsTypingCohortRunResult(
+    NewsTypingReaderIdentity Reader,
+    IReadOnlyList<FactFamilyRecord> Families,
+    IReadOnlyDictionary<Guid, NewsTypingFactRef> FactsById,
+    IReadOnlyDictionary<Guid, NewsTypingCompleteness> TypingCompletenessByCompany,
+    int FactsDroppedInWindow);
+
+/// <summary>
+/// The typed outcome of one typing pass (spec 185 §5), returned by <see cref="INewsTypingGenerator"/> so the
+/// stage-2 judge can consume the SAME families/facts this pass checkpointed — never a re-read, never a
+/// second family build. <c>null</c> from the generator means the pass failed or produced nothing consumable.
+/// Carries the run's archive-capture provenance (fail-closed: <c>null</c> = unproven) so downstream
+/// completeness dimensions come from the same evaluation this pass recorded.
+/// </summary>
+public sealed record NewsTypingRunResult(
+    Guid? RunId,
+    DateTimeOffset WindowStartUtc,
+    DateTimeOffset WindowEndUtc,
+    Guid? NewsObservationBatchId,
+    IReadOnlyList<NewsTypingCohortRunResult> Cohorts);

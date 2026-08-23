@@ -128,10 +128,141 @@ public static class NewsRiskLiveArtifactRenderer
                 sb.AppendLine();
             }
 
+            AppendJudgments(sb, company);
             AppendCategoryAgreement(sb, company);
+            AppendJudgmentCategoryComparison(sb, company);
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The spec-185 §5 per-company two-stage judgment sections: one block per (judge × stage-1 cohort),
+    /// each labelled by judge name and exact model id and rendered independently (cohorts never pool, no
+    /// merged verdict). All FIVE completeness dimensions render on every block, the finding-drop accounting
+    /// renders beside stage 1's fact-drop count (the extraction-vs-judgment error split), and the
+    /// presentation cohort's marker state is stated verbatim. The §3 audited-sample error split is not yet
+    /// computable (no audited stage-1 sample exists) — stated as a caveat, never invented.
+    /// </summary>
+    private static void AppendJudgments(StringBuilder sb, NewsRiskLiveCompany company)
+    {
+        if (company.Judgments is not { Count: > 0 } judgments)
+        {
+            return;
+        }
+
+        sb.AppendLine("### Two-stage judgment (facts-only judge; exploratory until stage-1 recall is audited)");
+        sb.AppendLine();
+        if (company.JudgmentMarker is { Length: > 0 } marker)
+        {
+            sb.AppendLine("Leaders marker (presentation cohort only): " + marker);
+            sb.AppendLine();
+        }
+
+        foreach (var judgment in judgments)
+        {
+            sb.AppendLine($"#### Judge {judgment.JudgeName} ({judgment.Provider}:{judgment.ModelId}) "
+                + $"over stage-1 `{judgment.Stage1CohortKey}`");
+            sb.AppendLine();
+            sb.Append(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Status: **{judgment.Status}** · judgment `{judgment.JudgmentId:D}`"));
+            if (judgment.BusinessTrajectory is { } trajectory)
+            {
+                sb.Append(string.Create(
+                    CultureInfo.InvariantCulture, $" · business trajectory {trajectory}"));
+            }
+
+            if (judgment.ChallengeStrength is { } strength)
+            {
+                sb.Append(string.Create(
+                    CultureInfo.InvariantCulture, $" · challenge strength {strength}"));
+            }
+
+            sb.AppendLine();
+            sb.AppendLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Completeness: archive capture {judgment.ArchiveCapture} · search enumeration "
+                    + $"{judgment.SearchEnumeration} · observation supply {judgment.ObservationSupply} · "
+                    + $"typing {judgment.TypingCompleteness} · family bundle {judgment.FamilyBundle}"));
+            sb.AppendLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Supplied families: {judgment.Families.Count} · error split — stage-1 facts dropped in "
+                    + $"window: {judgment.Stage1FactsDroppedInWindow}; stage-2 findings dropped: "
+                    + $"{judgment.FindingsDropped} of {judgment.FindingsTotal}"));
+
+            foreach (var family in judgment.Families)
+            {
+                sb.AppendLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"- family `{family.FamilyId:D}` (representative fact "
+                        + $"`{family.RepresentativeFactId:D}`, {family.MemberCount} member(s), "
+                        + $"{family.DistinctPublisherCount} publisher(s))"));
+            }
+
+            foreach (var finding in judgment.Findings)
+            {
+                var cited = string.Join(", ", finding.FactIds.Select(id => $"`{id:D}`"));
+                sb.Append(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"- {finding.Category} ({finding.Severity}, confidence {finding.Confidence:0.00}) "
+                        + $"[{cited}]"));
+                if (finding.AttributionCaveat is { Length: > 0 } caveat)
+                {
+                    sb.Append(" — attribution caveat: " + caveat);
+                }
+
+                sb.AppendLine();
+            }
+
+            foreach (var reason in judgment.FindingDropReasons)
+            {
+                sb.AppendLine("- ⚠ dropped: " + reason);
+            }
+
+            if (!string.IsNullOrEmpty(judgment.Rationale))
+            {
+                sb.AppendLine("Rationale: " + judgment.Rationale);
+            }
+
+            sb.AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// The spec-185 §3 A/B comparison, DISPLAY only: the single-call read's categories vs each two-stage
+    /// cohort's finding categories, side by side (the category-agreement precedent). No merged verdict, no
+    /// majority vote, no score — disagreement is a finding about the pipelines, not something to average.
+    /// </summary>
+    private static void AppendJudgmentCategoryComparison(StringBuilder sb, NewsRiskLiveCompany company)
+    {
+        if (company.Judgments is not { Count: > 0 } judgments)
+        {
+            return;
+        }
+
+        sb.AppendLine("### Single-call vs two-stage categories (factual, no merged verdict)");
+        sb.AppendLine();
+        foreach (var reader in company.ReaderResults)
+        {
+            var categories = reader.Categories.Count > 0
+                ? string.Join(", ", reader.Categories)
+                : "(none)";
+            sb.AppendLine(
+                $"Single-call {reader.ReaderName} ({reader.Provider}:{reader.ModelId}): {categories}");
+        }
+
+        foreach (var judgment in judgments)
+        {
+            var categories = judgment.Findings.Count > 0
+                ? string.Join(", ", judgment.Findings.Select(f => f.Category).Distinct())
+                : "(none)";
+            sb.AppendLine(
+                $"Two-stage {judgment.JudgeName} ({judgment.Provider}:{judgment.ModelId}) over stage-1 "
+                    + $"`{judgment.Stage1CohortKey}`: {categories}");
+        }
+
+        sb.AppendLine();
     }
 
     /// <summary>
