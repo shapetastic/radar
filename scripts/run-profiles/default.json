@@ -106,6 +106,43 @@
             "Ollama": { "Endpoint": "http://localhost:11434" }
           }
         ]
+      },
+      "_comment2": "SPECS 181+185 PROMOTED INTO THE BASELINE (maintainer decision, 2026-08-23): the stage-1 news event-typing pass and the stage-2 direction judge now run on every unfiltered full baseline run, moved up from the news-typing/news-judgment experiment overlays (which remain as overlays and are now redundant against this baseline). Typing: hosted DeepSeek ONLY, per the spec-181 §1 gate measurement (hosted 0.0% citation-drop vs llama3.1 19.2% with near-zero cross-reader agreement — the local model is not a viable solo typing reader; the news-risk Shadow above deliberately keeps both its cohorts, that comparison is a different question). Judgment: reads ONLY canonical fact families, challenge-only findings + BusinessTrajectory axis, judgments persisted beside the spec-179 shadow assessments — side by side, never pooled, no merged verdict; the weekly report's leaders rows gain the mandatory 3-state semantic-read marker fed by the PROSPECTIVELY designated presentation cohort below (judge deepinfra-deepseek over extractor deepinfra-deepseek — never switched after seeing results). NO score, label, strategy, fingerprint, snapshot field or report RANK changes; the marker is display metadata; nothing here is hashed. FIRST LIVE OUTPUT IS EXPLORATORY: no audited stage-1 recall sample exists yet (the spec-185 dispatch note) — the §3 human audit against the first accrued typings is the standing follow-up, and the legacy 13k-article backlog drains at MaxNewTypingsPerRun 200/reader/run (window-new-first, then backlog oldest-first), ~65 runs to convergence at the current backlog.",
+      "Typing": {
+        "Enabled": true,
+        "MaxNewTypingsPerRun": 200,
+        "LookbackDays": 30,
+        "Readers": [
+          {
+            "Name": "deepinfra-deepseek",
+            "Provider": "openai",
+            "OpenAi": {
+              "BaseUrl": "https://api.deepinfra.com/v1/openai",
+              "Model": "deepseek-ai/DeepSeek-V4-Flash",
+              "ApiKeyEnvVar": "DEEPINFRA_API_KEY"
+            }
+          }
+        ]
+      },
+      "Judgment": {
+        "Enabled": true,
+        "MaxCompaniesPerRun": 30,
+        "MaxFamiliesPerJudgment": 50,
+        "Judges": [
+          {
+            "Name": "deepinfra-deepseek",
+            "Provider": "openai",
+            "OpenAi": {
+              "BaseUrl": "https://api.deepinfra.com/v1/openai",
+              "Model": "deepseek-ai/DeepSeek-V4-Flash",
+              "ApiKeyEnvVar": "DEEPINFRA_API_KEY"
+            }
+          }
+        ],
+        "PresentationCohort": {
+          "Judge": "deepinfra-deepseek",
+          "Extractor": "deepinfra-deepseek"
+        }
       }
     },
     "Prices": { "Enabled": true, "Range": "1y" },
