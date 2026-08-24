@@ -1,3 +1,6 @@
+using Radar.Application.NewsRisk.Judgment;
+using Radar.Application.NewsTyping;
+
 namespace Radar.Worker;
 
 /// <summary>Host-level configuration for a Radar run (bound from the "Radar" config section).</summary>
@@ -890,6 +893,14 @@ public sealed class NewsJudgmentWorkerOptions
     public int MaxFamiliesPerJudgment { get; init; } = 50;
 
     /// <summary>
+    /// Spec 187 §1: the cap on HOSTED CALLS for one (stage-2 cohort, company, family set). The strict
+    /// news-judgment-v2 validator makes a persistent validation failure likelier, and an unbounded retry is
+    /// an unbounded provider bill. Default 3; must be at least 1. Recorded on every judgment record and
+    /// hashed into NO scoring fingerprint.
+    /// </summary>
+    public int MaxJudgmentAttempts { get; init; } = NewsJudgmentOptions.DefaultMaxJudgmentAttempts;
+
+    /// <summary>
     /// Optional judge reader list — reusing the exact spec-179 reader shape/validation. Omitted/empty ⇒
     /// exactly one judge over the ambient <c>Radar:Ai</c> provider/model.
     /// </summary>
@@ -937,9 +948,12 @@ public sealed class NewsTypingWorkerOptions
     public int LookbackDays { get; init; } = 30;
 
     /// <summary>
-    /// Cap on HOSTED CALLS for one (cohort, observation, payload) — spec 186 §2. Default 3; must be ≥ 1. At
-    /// this many recorded attempts the observation leaves selection permanently instead of re-entering the
-    /// budget every run forever.
+    /// Cap on HOSTED CALLS for one (cohort, observation, payload) — spec 186 §2, made a STRICT call bound
+    /// by spec 187 §3. Default 3; must be ≥ 1. At this many OCCUPIED attempts (durable pre-call
+    /// reservations, plus legacy pre-187 outcome records) the observation leaves selection permanently
+    /// instead of re-entering the budget every run forever. Counting persisted OUTCOMES was the weaker
+    /// rule it replaced: an outcome is written after the call, so a crash or a failed outcome write spent a
+    /// call and advanced the count by nothing.
     /// </summary>
     public int MaxTypingAttempts { get; init; } = 3;
 
@@ -949,6 +963,23 @@ public sealed class NewsTypingWorkerOptions
     /// monopolize the budget.
     /// </summary>
     public int MaxRetryTypingsPerRun { get; init; } = 25;
+
+    /// <summary>
+    /// Per-READER per-run cap on the CANDIDATE first-attempt lane (spec 187 §2). Default 100; must be ≥ 1.
+    /// It is how many of the per-run hosted calls may be spent, ahead of the global 30-day/backlog queue,
+    /// on the companies THIS run is about to judge — the first live judgment run spent its whole 200-call
+    /// budget on the global queue and then judged 18 companies whose motivating headlines were still
+    /// untyped.
+    /// <para>
+    /// When judgment is ENABLED the config boundary additionally enforces
+    /// <c>MaxCandidateTypingsPerRun + MaxRetryTypingsPerRun &lt; MaxNewTypingsPerRun</c>, which reserves at
+    /// least one GENERAL first-attempt slot under every valid configuration even when both earlier lanes
+    /// are full (defaults: 100 + 25 &lt; 200 leaves 75). Candidate priority must never be able to stop the
+    /// legacy backlog draining.
+    /// </para>
+    /// </summary>
+    public int MaxCandidateTypingsPerRun { get; init; } =
+        NewsTypingOptions.DefaultMaxCandidateTypingsPerRun;
 
     /// <summary>
     /// Optional typing reader list — its OWN list, reusing the exact spec-179 reader shape/validation, so

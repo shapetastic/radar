@@ -31,6 +31,15 @@ public sealed class NewsTypingDecompositionRendererTests
         Types: types,
         RetryExhausted: retryExhausted);
 
+    private static NewsTypingDecompositionCompany Company(
+        params NewsTypingDecompositionCohort[] cohorts) => new(
+        CompanyId: new Guid("aaaaaaaa-0000-0000-0000-000000000009"),
+        Ticker: "TST",
+        ObservationsInWindow: 4,
+        Incomplete: false,
+        IncompleteReasons: [],
+        Cohorts: cohorts);
+
     private static NewsTypingDecompositionDocument Document(
         params NewsTypingDecompositionCompany[] companies) => new(
         SchemaVersion: NewsTypingDecompositionDocument.CurrentSchemaVersion,
@@ -110,6 +119,41 @@ public sealed class NewsTypingDecompositionRendererTests
         // The 40-syndicated-copies shape: raw 40, families 1 — both visible in one row.
         Assert.Contains("| FinancingOrDilution | 40 | 12 | 1 |", markdown);
         Assert.Contains("same-event families 1", markdown);
+    }
+
+    /// <summary>
+    /// Spec 187 §2: the first-attempt lane split renders BESIDE the existing counters, so "the leaders we
+    /// were about to judge were typed first" is a visible number rather than a claim.
+    /// </summary>
+    [Fact]
+    public void LaneSplit_RendersBesideTheExistingCounters_WhenThePassSelectedWork()
+    {
+        var cohort = Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 0, 2, 0) with
+        {
+            CandidatePrioritySelected = 3,
+            GeneralSelected = 1,
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(
+            Document(Company(cohort)));
+
+        Assert.Contains(
+            "same-event families 2 · selected this pass: 3 judgment-candidate priority, 1 general",
+            markdown);
+    }
+
+    /// <summary>
+    /// A company whose work was all deferred (or already complete) renders EXACTLY as it did before spec
+    /// 187 §2 — the lane split appears only when the pass actually selected something, so it reads as the
+    /// exception it is rather than as a column of zeros on every row.
+    /// </summary>
+    [Fact]
+    public void LaneSplit_IsAbsent_WhenThePassSelectedNothingForThatCompany()
+    {
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(Document(Company(
+            Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 0, 2, 0))));
+
+        Assert.DoesNotContain("selected this pass", markdown);
     }
 
     [Fact]

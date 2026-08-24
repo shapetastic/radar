@@ -128,6 +128,62 @@ public sealed class NewsJudgmentArchitectureGuardTests
     }
 
     [Fact]
+    public void TrajectoryFactIds_CarryOnlySuppliedFactIdentity()
+    {
+        // Spec 187 §1, enforced STRUCTURALLY: the trajectory-evidence channel is IDENTITY only. On the wire
+        // it is strings (the all-strings rule, so an unsupplied/unparseable id arrives as data the
+        // validator names); everywhere inside Radar it is Guid. There is no member on it, and no type
+        // reachable through it, that could carry a headline, article prose, a Radar score/rank/label, a
+        // price series, a marker state, a future outcome or a prior judgment — those are not string or
+        // Guid, so a type check is a complete check.
+        var wire = typeof(NewsJudgmentModelResponse)
+            .GetProperty(nameof(NewsJudgmentModelResponse.TrajectoryFactIds));
+        Assert.NotNull(wire);
+        Assert.Equal(typeof(IReadOnlyList<string>), wire!.PropertyType);
+
+        var validated = typeof(NewsJudgmentValidationResult)
+            .GetProperty(nameof(NewsJudgmentValidationResult.TrajectoryFactIds));
+        Assert.NotNull(validated);
+        Assert.Equal(typeof(IReadOnlyList<Guid>), validated!.PropertyType);
+
+        var persisted = typeof(NewsJudgmentRecord)
+            .GetProperty(nameof(NewsJudgmentRecord.TrajectoryFactIds));
+        Assert.NotNull(persisted);
+        // Trailing and NULLABLE: a v1 record has no such field, and null reads as "not recorded under v1".
+        Assert.Equal(typeof(IReadOnlyList<Guid>), persisted!.PropertyType);
+        // The TRAILING-NULLABLE block, pinned by position. Spec 187 §7 appended a second member to it
+        // (ProviderDurationMs — observational latency provenance), so TrajectoryFactIds is no longer the
+        // very last parameter. What the pin protects is unchanged and is asserted directly: every member
+        // after the required block is optional and nullable, so a v1 record on disk still hydrates
+        // losslessly with "not recorded" for each of them.
+        var trailing = typeof(NewsJudgmentRecord)
+            .GetConstructors()
+            .Single()
+            .GetParameters()
+            .TakeLast(2)
+            .ToList();
+        Assert.Equal(
+            [nameof(NewsJudgmentRecord.TrajectoryFactIds), nameof(NewsJudgmentRecord.ProviderDurationMs)],
+            trailing.Select(p => p.Name).ToList());
+        Assert.All(trailing, p => Assert.True(p.IsOptional));
+        Assert.All(trailing, p => Assert.Null(p.DefaultValue));
+
+        // The duration is observational ONLY: a double, so no model text, score, price or marker state can
+        // ride it, and nothing in Radar reads it back.
+        var duration = typeof(NewsJudgmentRecord)
+            .GetProperty(nameof(NewsJudgmentRecord.ProviderDurationMs));
+        Assert.NotNull(duration);
+        Assert.Equal(typeof(double?), duration!.PropertyType);
+
+        // The marker vocabulary is DISPLAY metadata and stays free of any judgment type, so nothing
+        // presentation-side can leak back into the request/response contract.
+        Assert.DoesNotContain(
+            typeof(Radar.Application.Reporting.NewsJudgmentLeaderMarker)
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance),
+            p => p.PropertyType.Namespace?.StartsWith(JudgmentNamespace, StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public void ExistingNewsTypingContract_IsUntouchedByTheJudgmentSlice()
     {
         // Spec 185's dispatch note: build against spec 181's shipped contract AS-IS. The stage-1 wire

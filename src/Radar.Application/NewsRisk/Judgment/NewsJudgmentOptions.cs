@@ -14,6 +14,7 @@ public sealed record NewsJudgmentOptions
         string outputDirectory,
         int maxCompaniesPerRun,
         int maxFamiliesPerJudgment,
+        int maxJudgmentAttempts,
         string presentationJudge,
         string presentationExtractor,
         string newsSearchCollectorName)
@@ -21,6 +22,7 @@ public sealed record NewsJudgmentOptions
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCompaniesPerRun, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxFamiliesPerJudgment, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxJudgmentAttempts, 1);
         ArgumentException.ThrowIfNullOrWhiteSpace(presentationJudge);
         ArgumentException.ThrowIfNullOrWhiteSpace(presentationExtractor);
         ArgumentException.ThrowIfNullOrWhiteSpace(newsSearchCollectorName);
@@ -28,6 +30,7 @@ public sealed record NewsJudgmentOptions
         OutputDirectory = outputDirectory;
         MaxCompaniesPerRun = maxCompaniesPerRun;
         MaxFamiliesPerJudgment = maxFamiliesPerJudgment;
+        MaxJudgmentAttempts = maxJudgmentAttempts;
         PresentationJudge = presentationJudge;
         PresentationExtractor = presentationExtractor;
         NewsSearchCollectorName = newsSearchCollectorName;
@@ -42,6 +45,15 @@ public sealed record NewsJudgmentOptions
     /// <summary>Cap on families supplied to one judgment; a bite records <see cref="NewsJudgmentFamilyBundle.Capped"/>.</summary>
     public int MaxFamiliesPerJudgment { get; }
 
+    /// <summary>
+    /// The cap on HOSTED CALLS for one (stage-2 cohort, company, family set) — spec 187 §1. The stricter
+    /// v2 validator makes a persistent <see cref="NewsJudgmentStatus.ValidationFailed"/> more likely, and a
+    /// failure that is retried by EVERY later run is an unbounded provider bill. At this many call-producing
+    /// attempts the pass makes NO call and records
+    /// <see cref="NewsJudgmentStatus.AttemptsExhausted"/> instead.
+    /// </summary>
+    public int MaxJudgmentAttempts { get; }
+
     /// <summary>The judge reader NAME whose cohort supplies the leaders marker (declared before results, never switched after).</summary>
     public string PresentationJudge { get; }
 
@@ -51,5 +63,9 @@ public sealed record NewsJudgmentOptions
     /// <summary>The coverage-recording news collector name (the spec-179/182 coverage-dimension input), resolved from the shared const.</summary>
     public string NewsSearchCollectorName { get; }
 
-    public NewsJudgmentLimitsRecord ToLimitsRecord() => new(MaxCompaniesPerRun, MaxFamiliesPerJudgment);
+    /// <summary>The shipped default judgment-attempt bound (spec 187 §1), declared here and referenced by the Worker options so the documented default lives in one place.</summary>
+    public const int DefaultMaxJudgmentAttempts = 3;
+
+    public NewsJudgmentLimitsRecord ToLimitsRecord() =>
+        new(MaxCompaniesPerRun, MaxFamiliesPerJudgment, MaxJudgmentAttempts);
 }

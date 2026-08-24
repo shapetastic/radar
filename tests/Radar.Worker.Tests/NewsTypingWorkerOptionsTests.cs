@@ -54,6 +54,12 @@ public sealed class NewsTypingWorkerOptionsTests
         Assert.NotNull(provider.GetService<INewsTypingGenerator>());
         Assert.NotNull(provider.GetService<INewsTypingStore>());
         Assert.NotNull(provider.GetService<IFactFamilySnapshotStore>());
+
+        // Spec 187 3: the durable PRE-CALL attempt ledger is registered beside the outcome store, as ONE
+        // singleton - a per-resolution instance would re-hydrate (and re-race) on every use.
+        var ledger = provider.GetService<INewsTypingAttemptLedger>();
+        Assert.NotNull(ledger);
+        Assert.Same(ledger, provider.GetService<INewsTypingAttemptLedger>());
     }
 
     [Fact]
@@ -213,9 +219,108 @@ public sealed class NewsTypingWorkerOptionsTests
         var options = provider.GetRequiredService<NewsTypingOptions>();
         Assert.Equal(3, options.MaxTypingAttempts);
         Assert.Equal(25, options.MaxRetryTypingsPerRun);
+
+        // Spec 187 §2: the candidate lane's default rides the SAME limits record, trailing and nullable so
+        // a pre-187 typing record hydrates as "not recorded" rather than as a fabricated lane width.
+        Assert.Equal(100, options.MaxCandidateTypingsPerRun);
         Assert.Equal(
-            new NewsTypingLimitsRecord(options.MaxNewTypingsPerRun, options.LookbackDays, 3, 25),
+            new NewsTypingLimitsRecord(options.MaxNewTypingsPerRun, options.LookbackDays, 3, 25, 100),
             options.ToLimitsRecord());
+    }
+
+    /// <summary>
+    /// Spec 187 §2: a limits record written before this slice carries NO candidate lane width, and that
+    /// <c>null</c> must survive as "not recorded" — never default to the shipped 100, which would claim a
+    /// pre-187 attempt ran under a lane that did not exist.
+    /// </summary>
+    [Fact]
+    public void LimitsRecord_WithoutTheCandidateLane_HydratesAsNotRecorded()
+    {
+        var legacy = new NewsTypingLimitsRecord(200, 30, 3, 25);
+
+        Assert.Null(legacy.MaxCandidateTypingsPerRun);
+        Assert.NotEqual(new NewsTypingLimitsRecord(200, 30, 3, 25, 100), legacy);
+    }
+
+    /// <summary>
+    /// Spec 187 §2: the candidate lane must be at least 1. Zero would restore the exact live failure the
+    /// lane exists to fix — a whole budget spent on the global queue while every judged company stayed
+    /// untyped — so it is a startup error, never a silently inert lane.
+    /// </summary>
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    public void CandidateLaneBelowOne_FailsStartup_EvenWhileTypingIsDisabled(string value)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+            ("Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun", value)));
+
+        Assert.Contains("MaxCandidateTypingsPerRun", ex.Message);
+    }
+
+    /// <summary>
+    /// Spec 187 §2's three-way reservation: with judgment ENABLED, candidate + retry must stay strictly
+    /// below the per-run budget so at least one GENERAL first-attempt slot survives — candidate priority
+    /// must never be able to stop the legacy backlog draining. The message names the rule and all three
+    /// actual values.
+    /// </summary>
+    [Fact]
+    public void CandidatePlusRetryLaneFillingTheBudget_FailsStartup_WhenJudgmentIsEnabled()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(EnabledWithAmbientOllama(
+            ("Radar:NewsResearch:Judgment:Enabled", "true"),
+            ("Radar:NewsResearch:Judgment:PresentationCohort:Judge", "ambient"),
+            ("Radar:NewsResearch:Judgment:PresentationCohort:Extractor", "ambient"),
+            ("Radar:NewsResearch:Typing:MaxNewTypingsPerRun", "200"),
+            ("Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun", "175"),
+            ("Radar:NewsResearch:Typing:MaxRetryTypingsPerRun", "25"))));
+
+        Assert.Contains("MaxCandidateTypingsPerRun", ex.Message);
+        Assert.Contains("MaxRetryTypingsPerRun", ex.Message);
+        Assert.Contains("MaxNewTypingsPerRun", ex.Message);
+        Assert.Contains("175", ex.Message);
+        Assert.Contains("25", ex.Message);
+        Assert.Contains("200", ex.Message);
+        Assert.Contains("general", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The SAME values are ACCEPTED with judgment disabled: no candidate plan can exist (the planner is
+    /// registered with judgment), so the candidate lane is structurally empty and the reservation it
+    /// protects is vacuous. Stated explicitly because the rule is deliberately conditional.
+    /// </summary>
+    [Fact]
+    public void CandidatePlusRetryLaneFillingTheBudget_IsAccepted_WhenJudgmentIsDisabled()
+    {
+        using var provider = BuildProvider(EnabledWithAmbientOllama(
+            ("Radar:NewsResearch:Typing:MaxNewTypingsPerRun", "200"),
+            ("Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun", "175"),
+            ("Radar:NewsResearch:Typing:MaxRetryTypingsPerRun", "25")));
+
+        var options = provider.GetRequiredService<NewsTypingOptions>();
+        Assert.Equal(175, options.MaxCandidateTypingsPerRun);
+        Assert.Null(provider.GetService<Application.NewsRisk.Judgment.INewsJudgmentCandidatePlanner>());
+    }
+
+    /// <summary>The shipped defaults satisfy the rule with room to spare: 100 + 25 &lt; 200 leaves 75 general slots.</summary>
+    [Fact]
+    public void ShippedDefaults_SatisfyTheThreeWayReservation_WithJudgmentEnabled()
+    {
+        using var provider = BuildProvider(EnabledWithAmbientOllama(
+            ("Radar:NewsResearch:Judgment:Enabled", "true"),
+            ("Radar:NewsResearch:Judgment:PresentationCohort:Judge", "ambient"),
+            ("Radar:NewsResearch:Judgment:PresentationCohort:Extractor", "ambient")));
+
+        var options = provider.GetRequiredService<NewsTypingOptions>();
+        Assert.Equal(100, options.MaxCandidateTypingsPerRun);
+        Assert.Equal(25, options.MaxRetryTypingsPerRun);
+        Assert.Equal(200, options.MaxNewTypingsPerRun);
+        Assert.Equal(
+            75,
+            options.MaxNewTypingsPerRun
+                - options.MaxCandidateTypingsPerRun
+                - options.MaxRetryTypingsPerRun);
+        Assert.NotNull(provider.GetService<Application.NewsRisk.Judgment.INewsJudgmentCandidatePlanner>());
     }
 
     [Fact]

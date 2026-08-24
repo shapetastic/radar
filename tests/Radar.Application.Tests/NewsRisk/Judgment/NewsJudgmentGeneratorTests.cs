@@ -73,15 +73,18 @@ public sealed class NewsJudgmentGeneratorTests
                     new NewsJudgmentReaderIdentity(judgeName, "openai", "judge-model"), analyzer),
             ]),
             store,
-            new NewsJudgmentOptions(
-                outputDirectory: "unused",
-                maxCompaniesPerRun: 30,
-                maxFamiliesPerJudgment: 50,
-                presentationJudge: "deepinfra-deepseek",
-                presentationExtractor: "deepinfra-deepseek",
-                newsSearchCollectorName: "newssearch"),
+            JudgmentOptions(),
             TimeProvider.System,
             NullLogger<NewsJudgmentGenerator>.Instance);
+
+    private static NewsJudgmentOptions JudgmentOptions() => new(
+        outputDirectory: "unused",
+        maxCompaniesPerRun: 30,
+        maxFamiliesPerJudgment: 50,
+        maxJudgmentAttempts: 3,
+        presentationJudge: "deepinfra-deepseek",
+        presentationExtractor: "deepinfra-deepseek",
+        newsSearchCollectorName: "newssearch");
 
     /// <summary>Duplicated syndicated legal stories about EOSE, typed as facts, collapsed by the REAL builder.</summary>
     private static NewsTypingRunResult TypingResult(out IReadOnlyList<FactFamilyRecord> families)
@@ -128,6 +131,14 @@ public sealed class NewsJudgmentGeneratorTests
             ]);
     }
 
+    /// <summary>
+    /// Spec 187 §2: the generator now CONSUMES a frozen plan. Tests build it through the REAL
+    /// <see cref="NewsJudgmentCandidatePlanner"/> at the same budget the generator is configured with, so
+    /// they still exercise the production selection path rather than hand-rolling candidates.
+    /// </summary>
+    private static NewsJudgmentCandidatePlan Plan(IReadOnlyList<StrategyReportSection>? sections = null) =>
+        new NewsJudgmentCandidatePlanner(JudgmentOptions()).Plan(sections ?? Sections());
+
     private static IReadOnlyList<StrategyReportSection> Sections() =>
         [
             NewsRiskTestData.Section(
@@ -146,8 +157,11 @@ public sealed class NewsJudgmentGeneratorTests
 
         var analyzer = new StubAnalyzer(request => new NewsJudgmentAnalysisOutcome(
             NewsJudgmentAnalysisFailure.None,
+            // Spec 187 §1 — the EOSE shape, end to end: the ONLY supplied fact is a plaintiff-firm
+            // SOLICITATION, so it may carry a caveated legal challenge but cannot establish an overall
+            // direction. The honest v2 read is therefore `Unknown` with NO cited trajectory evidence.
             new NewsJudgmentModelResponse(
-                BusinessTrajectory: "Deteriorating",
+                BusinessTrajectory: "Unknown",
                 ChallengeStrength: 70,
                 Findings:
                 [
@@ -158,13 +172,14 @@ public sealed class NewsJudgmentGeneratorTests
                         [request.Families[0].RepresentativeFactId.ToString("D")],
                         "Based solely on a plaintiff-firm solicitation; no filing is confirmed."),
                 ],
-                Rationale: "Legal scrutiny challenges the trajectory."),
+                Rationale: "Legal scrutiny challenges the trajectory.",
+                TrajectoryFactIds: []),
             "raw-hash",
             null));
         var store = new InMemoryJudgmentStore();
 
         var result = await Generator(analyzer, store)
-            .GenerateAsync(RunId, Sections(), typing, CancellationToken.None);
+            .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
 
         Assert.NotNull(result);
 
@@ -197,8 +212,11 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal(NewsJudgmentMarkerState.Challenged, marker.State);
         // Spec 186 §1: every judged marker also carries the factual trajectory token.
         Assert.Equal(
-            "⚠ challenged (regulatory-or-legal-setback, high) · trajectory deteriorating",
+            "⚠ challenged (regulatory-or-legal-setback, high) · trajectory unknown",
             marker.CellText);
+        // Spec 187 §1: an Unknown read cites nothing — recorded as the EMPTY set, never as "not recorded".
+        Assert.NotNull(record.TrajectoryFactIds);
+        Assert.Empty(record.TrajectoryFactIds!);
         // …and the judgment id, so the report can cite the record the marker came from.
         Assert.Equal(record.JudgmentId, marker.JudgmentId);
 
@@ -223,7 +241,7 @@ public sealed class NewsJudgmentGeneratorTests
         var store = new InMemoryJudgmentStore();
 
         var result = await Generator(analyzer, store)
-            .GenerateAsync(RunId, sections, typing, CancellationToken.None);
+            .GenerateAsync(RunId, Plan(sections), typing, CancellationToken.None);
 
         Assert.Empty(analyzer.Requests);
         var record = Assert.Single(store.Written);
@@ -239,19 +257,19 @@ public sealed class NewsJudgmentGeneratorTests
         var typing = TypingResult(out _);
         var analyzer = new StubAnalyzer(request => new NewsJudgmentAnalysisOutcome(
             NewsJudgmentAnalysisFailure.None,
-            new NewsJudgmentModelResponse("Mixed", null, [], "Factual read."),
+            new NewsJudgmentModelResponse("Unknown", null, [], "Factual read.", []),
             "raw-hash",
             null));
         var store = new InMemoryJudgmentStore();
         var generator = Generator(analyzer, store);
 
-        var first = await generator.GenerateAsync(RunId, Sections(), typing, CancellationToken.None);
+        var first = await generator.GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
         Assert.Single(analyzer.Requests);
 
         // Second run over the identical family set: the SAME cohort/company/family-set hash hits the cache
         // — no second model call; the reused record carries a NEW id under the new run and cites its source.
         var secondRun = Guid.NewGuid();
-        var second = await generator.GenerateAsync(secondRun, Sections(), typing, CancellationToken.None);
+        var second = await generator.GenerateAsync(secondRun, Plan(), typing, CancellationToken.None);
 
         Assert.Single(analyzer.Requests); // still one call
         Assert.Equal(2, store.Written.Count);
@@ -279,12 +297,12 @@ public sealed class NewsJudgmentGeneratorTests
         var store = new InMemoryJudgmentStore();
         var generator = Generator(analyzer, store);
 
-        var result = await generator.GenerateAsync(RunId, Sections(), typing, CancellationToken.None);
+        var result = await generator.GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
         Assert.Equal(NewsJudgmentStatus.ProviderFailure, Assert.Single(store.Written).Status);
         Assert.Equal("? unassessed (provider-failure)", result!.Markers!.Markers![Eose].CellText);
 
         // A failure is persisted but never reused — the retry issues a fresh model call.
-        await generator.GenerateAsync(Guid.NewGuid(), Sections(), typing, CancellationToken.None);
+        await generator.GenerateAsync(Guid.NewGuid(), Plan(), typing, CancellationToken.None);
         Assert.Equal(2, calls);
     }
 
@@ -295,7 +313,7 @@ public sealed class NewsJudgmentGeneratorTests
         var store = new InMemoryJudgmentStore();
 
         var result = await Generator(analyzer, store)
-            .GenerateAsync(RunId, Sections(), typing: null, CancellationToken.None);
+            .GenerateAsync(RunId, Plan(), typing: null, CancellationToken.None);
 
         Assert.Null(result);
         Assert.Empty(store.Written);
@@ -308,14 +326,14 @@ public sealed class NewsJudgmentGeneratorTests
         var typing = TypingResult(out _);
         var analyzer = new StubAnalyzer(_ => new NewsJudgmentAnalysisOutcome(
             NewsJudgmentAnalysisFailure.None,
-            new NewsJudgmentModelResponse("Unknown", null, [], null),
+            new NewsJudgmentModelResponse("Unknown", null, [], "Factual read.", []),
             "h",
             null));
         var store = new InMemoryJudgmentStore();
 
         // The configured presentation judge name matches no judge this run.
         var result = await Generator(analyzer, store, judgeName: "some-other-judge")
-            .GenerateAsync(RunId, Sections(), typing, CancellationToken.None);
+            .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
 
         Assert.NotNull(result);
         Assert.Null(result!.Markers);

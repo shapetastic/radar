@@ -322,8 +322,88 @@ public sealed class DefaultRunProfileTests
             s => Assert.Equal(baseline.Strategies.Single(b => b.Name == s.Name).Weights, s.Weights));
         Assert.Equal(
             "True", configuration["Radar:NewsResearch:Shadow:Enabled"]);
+
+        // Spec 187 §8: the shadow schedules the ONE hosted reader — the overlay does not add one back.
         Assert.Equal(
-            "ollama-local", configuration["Radar:NewsResearch:Shadow:Readers:1:Name"]);
+            "deepinfra-deepseek", configuration["Radar:NewsResearch:Shadow:Readers:0:Name"]);
+        Assert.Null(configuration["Radar:NewsResearch:Shadow:Readers:1:Name"]);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 187 §8 — the baseline provider posture: DeepInfra DeepSeek ONLY, for all three read stages
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The shipped scheduling decision, pinned against the REAL committed profile: the baseline runs ONE
+    /// hosted DeepInfra DeepSeek reader for the spec-179 shadow, ONE for spec-181 typing and ONE as the
+    /// spec-185 judge — one provider, one key (<c>DEEPINFRA_API_KEY</c>), one cohort per stage.
+    /// <para>
+    /// The <c>ollama-local</c> shadow reader opted in on 2026-08-22 is no longer SCHEDULED. That is a
+    /// scheduling decision, not a provider deletion: the Ollama provider, its option binding and its
+    /// provider tests are retained (an overlay profile can still declare it), and the accrued
+    /// <c>ollama:llama3.1</c> cohort data stays on disk as historical provenance — cohorts never pool.
+    /// The reader LIST itself is deliberately kept with a single entry rather than deleted, because a
+    /// non-empty list REPLACES the ambient <c>Radar:Ai</c> reader: deleting it would silently drop the
+    /// hosted cohort too.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void DefaultProfile_SchedulesExactlyOneHostedDeepSeekReader_ForShadowTypingAndJudgment()
+    {
+        var configuration = BindProfiles();
+
+        const string hosted = "deepinfra-deepseek";
+        const string model = "deepseek-ai/DeepSeek-V4-Flash";
+
+        // Shadow: exactly one reader, the hosted DeepSeek — and NO Readers:1 at all.
+        Assert.Equal(hosted, configuration["Radar:NewsResearch:Shadow:Readers:0:Name"]);
+        Assert.Equal("openai", configuration["Radar:NewsResearch:Shadow:Readers:0:Provider"]);
+        Assert.Equal(model, configuration["Radar:NewsResearch:Shadow:Readers:0:OpenAi:Model"]);
+        Assert.Equal(
+            "DEEPINFRA_API_KEY", configuration["Radar:NewsResearch:Shadow:Readers:0:OpenAi:ApiKeyEnvVar"]);
+        Assert.Null(configuration["Radar:NewsResearch:Shadow:Readers:1:Name"]);
+        Assert.Null(configuration["Radar:NewsResearch:Shadow:Readers:1:Provider"]);
+
+        // Typing: enabled, exactly one hosted DeepSeek reader.
+        Assert.Equal("True", configuration["Radar:NewsResearch:Typing:Enabled"]);
+        Assert.Equal(hosted, configuration["Radar:NewsResearch:Typing:Readers:0:Name"]);
+        Assert.Equal("openai", configuration["Radar:NewsResearch:Typing:Readers:0:Provider"]);
+        Assert.Equal(model, configuration["Radar:NewsResearch:Typing:Readers:0:OpenAi:Model"]);
+        Assert.Null(configuration["Radar:NewsResearch:Typing:Readers:1:Name"]);
+
+        // Judgment: enabled, exactly one hosted DeepSeek judge, and the presentation cohort names it.
+        Assert.Equal("True", configuration["Radar:NewsResearch:Judgment:Enabled"]);
+        Assert.Equal(hosted, configuration["Radar:NewsResearch:Judgment:Judges:0:Name"]);
+        Assert.Equal("openai", configuration["Radar:NewsResearch:Judgment:Judges:0:Provider"]);
+        Assert.Equal(model, configuration["Radar:NewsResearch:Judgment:Judges:0:OpenAi:Model"]);
+        Assert.Null(configuration["Radar:NewsResearch:Judgment:Judges:1:Name"]);
+        Assert.Equal(hosted, configuration["Radar:NewsResearch:Judgment:PresentationCohort:Judge"]);
+        Assert.Equal(hosted, configuration["Radar:NewsResearch:Judgment:PresentationCohort:Extractor"]);
+    }
+
+    /// <summary>
+    /// The negative half of the same decision, asserted against the raw committed JSON so it cannot be
+    /// satisfied by a binding accident: NO reader/judge entry anywhere in the baseline profile names a
+    /// non-hosted provider, and no Claude/Anthropic provider is scheduled at all (spec 187 §8/§10 — Claude
+    /// may be evaluated later, but only under its own explicit provider and cohort identity).
+    /// </summary>
+    [Fact]
+    public void DefaultProfile_SchedulesNoLocalOrAnthropicReader_Anywhere()
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(DefaultProfilePath()));
+        var newsResearch = doc.RootElement.GetProperty("Radar").GetProperty("NewsResearch");
+
+        foreach (var (section, list) in new[]
+                 {
+                     ("Shadow", "Readers"), ("Typing", "Readers"), ("Judgment", "Judges"),
+                 })
+        {
+            var entries = newsResearch.GetProperty(section).GetProperty(list).EnumerateArray().ToArray();
+            var entry = Assert.Single(entries);
+            Assert.Equal("openai", entry.GetProperty("Provider").GetString());
+            Assert.False(entry.TryGetProperty("Ollama", out _));
+            Assert.False(entry.TryGetProperty("Anthropic", out _));
+        }
     }
 
     // ---------------------------------------------------------------------------------------------------

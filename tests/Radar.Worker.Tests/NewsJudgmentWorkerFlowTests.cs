@@ -8,6 +8,8 @@ using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
+using Radar.Application.Scoring;
+using Radar.TestSupport;
 
 namespace Radar.Worker.Tests;
 
@@ -29,16 +31,22 @@ public sealed class NewsJudgmentWorkerFlowTests
         public Task<int> SeedAsync(CancellationToken ct) => Task.FromResult(0);
     }
 
-    private sealed class StubPipeline : IRadarPipeline
+    private sealed class StubPipeline(RadarPipelineResult? result = null) : IRadarPipeline
     {
-        public Task<RadarPipelineResult> RunAsync(CancellationToken ct) => Task.FromResult(Result);
+        public Task<RadarPipelineResult> RunAsync(CancellationToken ct) =>
+            Task.FromResult(result ?? Result);
     }
 
     private sealed class RecordingTyping(List<string> log, NewsTypingRunResult? result) : INewsTypingGenerator
     {
-        public Task<NewsTypingRunResult?> GenerateAsync(Guid? runId, CancellationToken ct)
+        /// <summary>Spec 187 §2: the EXACT plan instance the Worker handed the typing pass.</summary>
+        public NewsJudgmentCandidatePlan? ReceivedPlan { get; private set; }
+
+        public Task<NewsTypingRunResult?> GenerateAsync(
+            Guid? runId, CancellationToken ct, NewsJudgmentCandidatePlan? candidatePlan = null)
         {
             log.Add("typing");
+            ReceivedPlan = candidatePlan;
             return Task.FromResult(result);
         }
     }
@@ -48,14 +56,18 @@ public sealed class NewsJudgmentWorkerFlowTests
     {
         public NewsTypingRunResult? ReceivedTyping { get; private set; }
 
+        /// <summary>Spec 187 §2: the EXACT plan instance the Worker handed the judge.</summary>
+        public NewsJudgmentCandidatePlan? ReceivedPlan { get; private set; }
+
         public Task<NewsJudgmentRunResult?> GenerateAsync(
             Guid? runId,
-            IReadOnlyList<StrategyReportSection>? strategySections,
+            NewsJudgmentCandidatePlan? candidatePlan,
             NewsTypingRunResult? typing,
             CancellationToken ct)
         {
             log.Add("judgment");
             ReceivedTyping = typing;
+            ReceivedPlan = candidatePlan;
             return Task.FromResult(result);
         }
     }
@@ -99,6 +111,14 @@ public sealed class NewsJudgmentWorkerFlowTests
         NewsObservationBatchId: null,
         Cohorts: []);
 
+    private static StrategyReportRow Row(int rank, Guid companyId, string name, string ticker) => new(
+        Rank: rank,
+        CompanyId: companyId,
+        CompanyName: name,
+        Ticker: ticker,
+        ScoreSnapshotId: Guid.NewGuid(),
+        Snapshot: new ScoreSnapshotBuilder().WithCompanyId(companyId).Build());
+
     private static NewsJudgmentRunResult JudgmentResult(NewsJudgmentMarkerReportModel? markers) => new(
         Judgments: [],
         Markers: markers,
@@ -108,12 +128,14 @@ public sealed class NewsJudgmentWorkerFlowTests
         RecordingTyping? typing,
         RecordingJudgment? judgment,
         RecordingShadow? shadow,
-        RecordingRerenderer? rerenderer)
+        RecordingRerenderer? rerenderer,
+        INewsJudgmentCandidatePlanner? candidatePlanner = null,
+        RadarPipelineResult? pipelineResult = null)
     {
         using var lifetime = new NoopDisposableLifetime();
         var worker = new Worker(
             new StubSeeder(),
-            new StubPipeline(),
+            new StubPipeline(pipelineResult),
             lifetime,
             new WorkerRunOptions { RunOnce = true },
             new FakeTimeProvider(),
@@ -121,7 +143,8 @@ public sealed class NewsJudgmentWorkerFlowTests
             newsRiskShadowGenerator: shadow,
             newsTypingGenerator: typing,
             newsJudgmentGenerator: judgment,
-            judgmentRerenderer: rerenderer);
+            judgmentRerenderer: rerenderer,
+            candidatePlanner: candidatePlanner);
 
         await worker.StartAsync(CancellationToken.None);
         await worker.ExecuteTask!;
@@ -189,6 +212,72 @@ public sealed class NewsJudgmentWorkerFlowTests
         Assert.Equal(["typing", "judgment", "shadow"], log);
         Assert.Null(rerenderer.Rendered);
         Assert.NotNull(shadow.ReceivedJudgment);
+    }
+
+    /// <summary>
+    /// Spec 187 §2: the Worker computes the ordered candidate plan ONCE and hands the SAME immutable
+    /// instance to typing and to the judge. Reference identity is the assertion, because "two passes over
+    /// equal-looking lists" is precisely the arrangement that let the first live run type one set of
+    /// companies and judge another.
+    /// </summary>
+    [Fact]
+    public async Task TheCandidatePlan_IsComputedOnce_AndTheSameInstanceReachesTypingAndTheJudge()
+    {
+        var alpha = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
+        var beta = Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002");
+        var sections = new List<StrategyReportSection>
+        {
+            new(
+                StrategyName: "disclosure-led-v11",
+                FormulaVersion: "radar-formula-v8",
+                ScoringConfigVersion: "radar-scoring-fp-test",
+                IsPrimary: true,
+                CompaniesScored: 2,
+                CompaniesWithLinkedEvidence: 2,
+                Rows: [Row(1, alpha, "Alpha Co", "ALPH"), Row(2, beta, "Beta Co", "BETA")])
+            {
+                Purpose = StrategyPurpose.Research,
+            },
+        };
+        var planner = new NewsJudgmentCandidatePlanner(new NewsJudgmentOptions(
+            outputDirectory: "unused",
+            maxCompaniesPerRun: 30,
+            maxFamiliesPerJudgment: 50,
+            maxJudgmentAttempts: 3,
+            presentationJudge: "judge",
+            presentationExtractor: "extractor",
+            newsSearchCollectorName: "newssearch"));
+
+        var log = new List<string>();
+        var typing = new RecordingTyping(log, TypingResult());
+        var judgment = new RecordingJudgment(log, JudgmentResult(markers: null));
+
+        await RunWorkerAsync(
+            typing,
+            judgment,
+            shadow: null,
+            rerenderer: null,
+            candidatePlanner: planner,
+            pipelineResult: Result with { StrategySections = sections });
+
+        Assert.NotNull(typing.ReceivedPlan);
+        Assert.Same(typing.ReceivedPlan, judgment.ReceivedPlan);
+        Assert.Equal([alpha, beta], typing.ReceivedPlan!.CompanyIds);
+    }
+
+    /// <summary>
+    /// With judgment disabled the planner is never registered, so typing receives NO plan and its selection
+    /// stays byte-identical to the pre-187 §2 behaviour (the candidate capacity is simply unused).
+    /// </summary>
+    [Fact]
+    public async Task WithNoPlanner_TypingReceivesNoCandidatePlan()
+    {
+        var log = new List<string>();
+        var typing = new RecordingTyping(log, TypingResult());
+
+        await RunWorkerAsync(typing, judgment: null, shadow: null, rerenderer: null);
+
+        Assert.Null(typing.ReceivedPlan);
     }
 
     [Fact]

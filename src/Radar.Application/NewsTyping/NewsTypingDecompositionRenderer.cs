@@ -76,12 +76,29 @@ public static class NewsTypingDecompositionRenderer
                         CultureInfo.InvariantCulture,
                         $" · retries exhausted {cohort.RetryExhausted}")
                     : string.Empty;
+                // Spec 187 §3: a hosted call spent with no durable outcome is a COST fact, rendered only
+                // when it happened so it reads as the exception it is — never folded into the backlog.
+                var orphaned = cohort.ReservedWithoutOutcome > 0
+                    ? string.Create(
+                        CultureInfo.InvariantCulture,
+                        $" · reserved without outcome {cohort.ReservedWithoutOutcome}")
+                    : string.Empty;
+                // Spec 187 §2: the first-attempt LANE SPLIT for this company's in-window observations,
+                // rendered only when this pass actually selected some — so a company whose work was all
+                // deferred (or already complete) reads unchanged, and "the leaders we were about to judge
+                // were typed first" is a visible number rather than a claim.
+                var lanes = cohort.CandidatePrioritySelected > 0 || cohort.GeneralSelected > 0
+                    ? string.Create(
+                        CultureInfo.InvariantCulture,
+                        $" · selected this pass: {cohort.CandidatePrioritySelected} judgment-candidate "
+                            + $"priority, {cohort.GeneralSelected} general")
+                    : string.Empty;
                 sb.AppendLine(string.Create(
                     CultureInfo.InvariantCulture,
                     $"Typed {cohort.ObservationsTyped} · insufficient-content "
                         + $"{cohort.ObservationsInsufficientContent} · untyped remaining "
                         + $"{cohort.UntypedRemaining} · same-event families "
-                        + $"{cohort.FamilyCount}{exhausted}"));
+                        + $"{cohort.FamilyCount}{exhausted}{orphaned}{lanes}"));
                 sb.AppendLine();
                 if (cohort.Types.Count > 0)
                 {

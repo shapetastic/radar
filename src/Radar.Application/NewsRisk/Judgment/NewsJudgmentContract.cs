@@ -11,8 +11,19 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// </summary>
 public static class NewsJudgmentContract
 {
-    public const string PromptVersion = "news-judgment-prompt-v1";
-    public const string SchemaVersion = "news-judgment-schema-v1";
+    /// <summary>
+    /// Spec 187 §1 forked this to <c>v2</c>: the judge must now CITE the supplied facts that establish its
+    /// <c>BusinessTrajectory</c>, and the instruction states the absence/price/marker rules the first live
+    /// run showed a v1 judge violating. A forked prompt version forks the cohort key, so a v1 judgment can
+    /// never be reused for, or pooled with, a v2 one.
+    /// </summary>
+    public const string PromptVersion = "news-judgment-prompt-v2";
+
+    /// <summary>
+    /// Spec 187 §1 forked this to <c>v2</c>: the structured response gained <c>TrajectoryFactIds</c>, so
+    /// the v1 and v2 result shapes are not interchangeable and must not share a cohort.
+    /// </summary>
+    public const string SchemaVersion = "news-judgment-schema-v2";
 
     /// <summary>
     /// The ONE stage-2 cohort-identity composition (spec 185 §3): judge provider + exact model id + this

@@ -27,6 +27,15 @@ public enum NewsJudgmentStatus
 
     /// <summary>The provider answered but no typed response could be parsed.</summary>
     ParseFailure,
+
+    /// <summary>
+    /// Spec 187 §1 — NO model call was made: this (cohort, company, family set) had already spent
+    /// <c>MaxJudgmentAttempts</c> call-producing attempts. Appended LAST so the existing vocabulary is not
+    /// renumbered. It is NOT a completed judgment (see <see cref="NewsJudgmentRecord.IsCompletedJudgment"/>),
+    /// it does NOT itself count as an attempt, and it renders <c>? unassessed (retries-exhausted)</c> — a
+    /// bound that is VISIBLE rather than an unexplained silence.
+    /// </summary>
+    AttemptsExhausted,
 }
 
 /// <summary>
@@ -50,8 +59,13 @@ public sealed record NewsJudgmentFamilyRef(
     int MemberCount,
     int DistinctPublisherCount);
 
-/// <summary>The cost/safety limits in force for an attempt (recorded on every judgment, hashed into NO scoring fingerprint).</summary>
-public sealed record NewsJudgmentLimitsRecord(int MaxCompaniesPerRun, int MaxFamiliesPerJudgment);
+/// <summary>
+/// The cost/safety limits in force for an attempt (recorded on every judgment, hashed into NO scoring
+/// fingerprint). <c>MaxJudgmentAttempts</c> is TRAILING and NULLABLE: a record written before spec 187
+/// hydrates as "not recorded", never as a fabricated bound.
+/// </summary>
+public sealed record NewsJudgmentLimitsRecord(
+    int MaxCompaniesPerRun, int MaxFamiliesPerJudgment, int? MaxJudgmentAttempts = null);
 
 /// <summary>
 /// One durably persisted direction-judgment ATTEMPT (spec 185 §5) — one company × one judge reader × one
@@ -62,6 +76,14 @@ public sealed record NewsJudgmentLimitsRecord(int MaxCompaniesPerRun, int MaxFam
 /// supply, typing completeness, family bundle — spec 182's three verbatim plus the two this pipeline adds),
 /// the validated result with drop accounting, the bounded raw-response hash, the limits in force, and
 /// creation time. Never a scoring input; never hashed into any fingerprint.
+/// <para>
+/// <see cref="ProviderDurationMs"/> (spec 187 §7) is TRAILING and NULLABLE, the repo's established
+/// convention for an additive persisted field (spec 142's <c>EvidenceQuality</c>, spec 148's
+/// <c>EffectiveScoringConfig.Window</c>, spec 186's typing limits). The schema tag is NOT bumped for it:
+/// <see cref="CurrentSchemaVersion"/> already moved to <c>news-judgment-v2</c> in this same slice for
+/// <see cref="TrajectoryFactIds"/> — a field that changes what a record MEANS — whereas a duration changes
+/// nothing about how any record is interpreted and its own nullability is the whole "not recorded" story.
+/// </para>
 /// </summary>
 public sealed record NewsJudgmentRecord(
     string SchemaVersion,
@@ -101,10 +123,26 @@ public sealed record NewsJudgmentRecord(
     string? FailureDetail,
     NewsJudgmentLimitsRecord Limits,
     Guid? ReusedFromJudgmentId,
-    DateTimeOffset CreatedAtUtc)
+    DateTimeOffset CreatedAtUtc,
+    // Spec 187 §1: the supplied FactIds the judge said ESTABLISH BusinessTrajectory. TRAILING and NULLABLE
+    // for old-file hydration — a v1 record has no such field, and null means "not recorded under v1",
+    // NEVER an empty v2 evidence set and never proof of invalidity. A v2 Judged record always writes a
+    // non-null list (empty iff the trajectory is Unknown).
+    IReadOnlyList<Guid>? TrajectoryFactIds = null,
+    // Spec 187 §7: how long the hosted judgment call took, measured with the injected TimeProvider's
+    // MONOTONIC timestamp APIs. TRAILING and NULLABLE, and observational PROVENANCE ONLY — it enters no
+    // record id, cohort key, family-set hash, scoring identity or fingerprint, and no selection, ordering
+    // or marker decision reads it (AD-3). `null` means NO CALL WAS MADE (a cache reuse, InsufficientFacts,
+    // AttemptsExhausted), never "a call took no time"; a provider, parse or validation failure that
+    // reached the provider RETAINS its duration, because a slow failure is worth seeing.
+    double? ProviderDurationMs = null)
 {
-    /// <summary>The judgment store schema version stamped on every record.</summary>
-    public const string CurrentSchemaVersion = "news-judgment-v1";
+    /// <summary>
+    /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
+    /// spec 187 §1 (the record gained <c>TrajectoryFactIds</c>); v1 records on disk stay readable and are
+    /// never rewritten (AD-8).
+    /// </summary>
+    public const string CurrentSchemaVersion = "news-judgment-v2";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named
@@ -116,17 +154,68 @@ public sealed record NewsJudgmentRecord(
         or NewsJudgmentStatus.InsufficientFacts;
 
     /// <summary>
+    /// Whether this record represents a HOSTED CALL that was actually spent (spec 187 §1's attempt bound).
+    /// <see cref="NewsJudgmentStatus.Judged"/>, <see cref="NewsJudgmentStatus.ValidationFailed"/>,
+    /// <see cref="NewsJudgmentStatus.ProviderFailure"/> and <see cref="NewsJudgmentStatus.ParseFailure"/>
+    /// each consumed one call; <see cref="NewsJudgmentStatus.InsufficientFacts"/> (no families, no call),
+    /// <see cref="NewsJudgmentStatus.AttemptsExhausted"/> (the bound itself) and a CACHE REUSE
+    /// (<see cref="ReusedFromJudgmentId"/> set — a replayed verdict, no provider request) did not.
+    /// </summary>
+    public bool IsCallProducingAttempt => ReusedFromJudgmentId is null && Status
+        is NewsJudgmentStatus.Judged
+        or NewsJudgmentStatus.ValidationFailed
+        or NewsJudgmentStatus.ProviderFailure
+        or NewsJudgmentStatus.ParseFailure;
+
+    /// <summary>
     /// The deterministic per-attempt identity: stage-2 cohort (judge + prompt/schema + stage-1 cohort +
     /// family-builder identity) + company + the ordered family-set hash + run scope. Re-running the SAME
     /// run is idempotent (same id, insert-only store dedupes); the run token is part of the identity so a
     /// NON-completed attempt can be retried by a later run without colliding with its own durable failure
     /// record — the completed-judgment CACHE (which ignores the run) is what prevents duplicate completed
     /// work (the spec-181 mechanism).
+    /// <para>
+    /// Spec 187 §1 preserves the spec-186 §2 TYPING precedent for the supported null-run path: the
+    /// STANDALONE scope additionally folds <paramref name="attemptNumber"/>, because without it every
+    /// standalone invocation minted the same id — a real hosted call was made while the insert-only store
+    /// silently deduplicated its record and the attempt count never advanced, i.e. an unbounded call
+    /// budget. Attempt 1 keeps the ORIGINAL <c>standalone</c> token, so every id already on disk is
+    /// byte-unchanged, and the run-scoped branch is untouched for the same reason. The ordinal is derived
+    /// ONCE from the PRE-PASS store snapshot — deterministic, clock-free (AD-3).
+    /// </para>
     /// </summary>
-    public static Guid IdentityFor(string cohortKey, Guid companyId, string familySetHash, Guid? runId) =>
+    public static Guid IdentityFor(
+        string cohortKey, Guid companyId, string familySetHash, Guid? runId, int attemptNumber = 1) =>
         DeterministicGuid.FromCanonicalString(
             $"radar:news-judgment:{cohortKey}:{companyId:D}:{familySetHash}:"
+                + RunScope(runId, attemptNumber));
+
+    /// <summary>
+    /// The deterministic identity of a NO-CALL <see cref="NewsJudgmentStatus.AttemptsExhausted"/> record
+    /// (spec 187 §1). It lives in its OWN namespace segment (<c>news-judgment-exhausted</c>) and folds the
+    /// CURRENT run scope — the non-null run id, or the literal <c>standalone</c> for the null-run path:
+    /// <list type="bullet">
+    /// <item>the separate namespace makes collision with the last <c>standalone#N</c> CALL attempt
+    /// structurally impossible, so an exhaustion marker can never be mistaken for a spent call;</item>
+    /// <item>folding the run scope means a LATER real run persists ONE small fresh exhaustion record and
+    /// therefore satisfies spec 185's same-run marker rule — without it the row would dedupe onto a prior
+    /// run's record and render <c>stale</c>, hiding the bound behind an unrelated reason; and</item>
+    /// <item>repeated exhausted NULL-run invocations idempotently reuse the single <c>standalone</c>
+    /// exhaustion record (both the record and the current run scope are null), so the marker stays
+    /// <c>retries-exhausted</c> and no call occurs. No clock and no counter enter this id (AD-3).</item>
+    /// </list>
+    /// </summary>
+    public static Guid ExhaustionIdentityFor(
+        string cohortKey, Guid companyId, string familySetHash, Guid? runId) =>
+        DeterministicGuid.FromCanonicalString(
+            $"radar:news-judgment-exhausted:{cohortKey}:{companyId:D}:{familySetHash}:"
                 + (runId is { } id ? id.ToString("D") : "standalone"));
+
+    private static string RunScope(Guid? runId, int attemptNumber) => runId is { } id
+        ? id.ToString("D")
+        : attemptNumber <= 1
+            ? "standalone"
+            : FormattableString.Invariant($"standalone#{attemptNumber}");
 }
 
 /// <summary>

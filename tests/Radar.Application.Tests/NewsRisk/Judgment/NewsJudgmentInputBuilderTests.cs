@@ -182,7 +182,7 @@ public sealed class NewsJudgmentInputBuilderTests
         var stage1 = NewsTypingContract.CohortKey("openai", "deepseek-ai/DeepSeek-V4-Flash");
         var key = NewsJudgmentContract.CohortKey("openai", "judge-model", stage1);
 
-        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v1|news-judgment-schema-v1|", key);
+        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v2|news-judgment-schema-v2|", key);
         Assert.Contains("stage1=" + stage1, key);
         Assert.Contains("families=" + FactFamilyBuilder.IdentityString, key);
         // The stage-1 cohort key carries the extractor model, prompt/schema AND taxonomy version — so a
@@ -192,5 +192,32 @@ public sealed class NewsJudgmentInputBuilderTests
             key,
             NewsJudgmentContract.CohortKey(
                 "openai", "judge-model", NewsTypingContract.CohortKey("ollama", "llama3.1")));
+    }
+
+    [Fact]
+    public void V1AndV2Judgments_CanNeverBeReusedOrPooled()
+    {
+        // Spec 187 §1: the fork is enforced by the cohort key itself, not by a migration. A v1 record on
+        // disk carries the v1 prompt/schema versions in its CohortKey field, so the v2 cache lookup
+        // (cohortKey, company, family set) can never hit it — and no artifact groups them together.
+        // Existing v1 records stay readable and are never rewritten (AD-8).
+        var stage1 = NewsTypingContract.CohortKey("openai", "deepseek-ai/DeepSeek-V4-Flash");
+        var v2Key = NewsJudgmentContract.CohortKey("openai", "judge-model", stage1);
+        var v1Key =
+            $"openai:judge-model|news-judgment-prompt-v1|news-judgment-schema-v1|stage1={stage1}"
+                + $"|families={FactFamilyBuilder.IdentityString}";
+
+        Assert.NotEqual(v1Key, v2Key);
+        Assert.DoesNotContain("news-judgment-prompt-v1", v2Key, StringComparison.Ordinal);
+        Assert.DoesNotContain("news-judgment-schema-v1", v2Key, StringComparison.Ordinal);
+
+        // The per-attempt identity folds the cohort key, so the two cohorts cannot collide on disk either.
+        var companyId = Guid.Parse("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+        Assert.NotEqual(
+            NewsJudgmentRecord.IdentityFor(v1Key, companyId, "hash", runId: null),
+            NewsJudgmentRecord.IdentityFor(v2Key, companyId, "hash", runId: null));
+
+        // …and newly written records stamp the v2 store schema while v1 files keep theirs.
+        Assert.Equal("news-judgment-v2", NewsJudgmentRecord.CurrentSchemaVersion);
     }
 }

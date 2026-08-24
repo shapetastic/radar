@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.NewsRisk;
@@ -94,9 +97,32 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
             FindingDropReasons: [],
             RawResponseHash: "raw",
             FailureDetail: null,
-            Limits: new NewsJudgmentLimitsRecord(30, 50),
+            Limits: new NewsJudgmentLimitsRecord(30, 50, 3),
             ReusedFromJudgmentId: null,
-            CreatedAtUtc: new DateTimeOffset(2026, 8, 23, 12, 0, 0, TimeSpan.Zero));
+            CreatedAtUtc: new DateTimeOffset(2026, 8, 23, 12, 0, 0, TimeSpan.Zero),
+            TrajectoryFactIds: [TrajectoryFactId]);
+    }
+
+    private static readonly Guid TrajectoryFactId = new("77777777-7777-4777-8777-777777777777");
+
+    [Fact]
+    public async Task ProviderDuration_RoundTrips_AndALegacyFileHydratesAsNoCallRecorded()
+    {
+        // Spec 187 §7: observational provenance, persisted trailing + nullable. It survives the round trip,
+        // and a pre-187 file hydrates as `null` — "no call recorded", never a fabricated 0 ms.
+        var record = Record() with { ProviderDurationMs = 987.5 };
+        Assert.True(await NewStore().WriteAsync(record, CancellationToken.None));
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal(987.5, hydrated.ProviderDurationMs);
+
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
+        Assert.True(document.Remove("providerDurationMs"));
+        await File.WriteAllTextAsync(file, document.ToJsonString());
+
+        var legacy = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Null(legacy.ProviderDurationMs);
     }
 
     [Fact]
@@ -116,6 +142,46 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         var finding = Assert.Single(reloaded.Findings);
         Assert.Equal(NewsRiskCategory.RegulatoryOrLegalSetback, finding.Category);
         Assert.Equal(record.Findings[0].FactIds[0], Assert.Single(finding.FactIds));
+        // Spec 187 §1: the trajectory's own provenance and the attempt bound in force both round-trip.
+        Assert.Equal(TrajectoryFactId, Assert.Single(reloaded.TrajectoryFactIds!));
+        Assert.Equal(3, reloaded.Limits.MaxJudgmentAttempts);
+    }
+
+    [Fact]
+    public async Task APreSpec187File_HydratesWithNotRecordedTrajectoryEvidenceAndAttemptBound()
+    {
+        // Spec 187 §1 / AD-8: existing news-judgment-v1 files are readable and are NEVER rewritten. Both
+        // new members are trailing/nullable, so their ABSENCE hydrates as "not recorded" — never as an
+        // empty v2 evidence set (which would read as "the judge cited nothing") and never as a fabricated
+        // attempt bound.
+        await NewStore().WriteAsync(Record(), CancellationToken.None);
+        var file = Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(_root, "judgments"), "*.json", SearchOption.AllDirectories));
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(file));
+        var legacy = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            if (string.Equals(property.Name, "trajectoryFactIds", StringComparison.OrdinalIgnoreCase))
+            {
+                continue; // the v1 shape simply has no such property
+            }
+
+            legacy[property.Name] = property.Value.Clone();
+        }
+
+        legacy["schemaVersion"] = JsonDocument.Parse("\"news-judgment-v1\"").RootElement.Clone();
+        legacy["limits"] = JsonDocument.Parse("{\"maxCompaniesPerRun\":30,\"maxFamiliesPerJudgment\":50}")
+            .RootElement.Clone();
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(legacy));
+
+        var reloaded = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal("news-judgment-v1", reloaded.SchemaVersion);
+        Assert.Null(reloaded.TrajectoryFactIds);
+        Assert.Null(reloaded.Limits.MaxJudgmentAttempts);
+        // …and the rest of the v1 record still reads correctly.
+        Assert.Equal(NewsJudgmentTrajectory.Mixed, reloaded.BusinessTrajectory);
+        Assert.Equal(30, reloaded.Limits.MaxCompaniesPerRun);
     }
 
     [Fact]

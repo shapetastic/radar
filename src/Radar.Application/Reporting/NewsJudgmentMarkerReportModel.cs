@@ -88,6 +88,21 @@ public static class NewsJudgmentMarkerReasons
     /// <c>Unknown</c> trajectory is a valid completed read and keeps its own token.
     /// </summary>
     public const string InvalidRecord = "invalid-record";
+
+    /// <summary>
+    /// Spec 187 §1: this (cohort, company, family set) has spent its <c>MaxJudgmentAttempts</c>
+    /// call-producing attempts, so the run made NO model call and recorded the bound instead. A bound that
+    /// is visible is honest; a silently dropped row is not. It never renders a dot and never a challenge.
+    /// </summary>
+    public const string RetriesExhausted = "retries-exhausted";
+
+    /// <summary>
+    /// Spec 187 §1: a judgment was produced this run but its durable write FAILED, so nothing was
+    /// persisted. An unpersisted result is not a durable judgment and must never reach a row as judged or
+    /// challenged; it is also not <see cref="NotACandidate"/>, which would falsely claim the company was
+    /// never selected.
+    /// </summary>
+    public const string NotPersisted = "not-persisted";
 }
 
 /// <summary>

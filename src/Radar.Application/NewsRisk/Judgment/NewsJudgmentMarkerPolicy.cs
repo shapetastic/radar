@@ -18,7 +18,8 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// judgment; carries the typing-incomplete qualifier whenever the record's typing completeness is not
 /// <see cref="NewsTypingCompleteness.Complete"/>;</item>
 /// <item><b>? unassessed (reason)</b>: everything else, with the closed reason-token vocabulary — a
-/// judgment from a PRIOR run is <c>stale</c> (no stale carryover ever qualifies a row).</item>
+/// judgment from a PRIOR run is <c>stale</c> (no stale carryover ever qualifies a row), and a spec-187 §1
+/// <see cref="NewsJudgmentStatus.AttemptsExhausted"/> record is <c>retries-exhausted</c>.</item>
 /// </list>
 /// <para>
 /// Spec 186 §1 — trajectory honesty, all of it here in the pure policy and never in the validator (a
@@ -94,6 +95,12 @@ public static class NewsJudgmentMarkerPolicy
             NewsJudgmentStatus.ParseFailure => new NewsJudgmentLeaderMarker(
                 NewsJudgmentMarkerState.Unassessed,
                 NewsJudgmentMarkerReasons.ParseFailure,
+                JudgmentId: record.JudgmentId),
+            // Spec 187 §1: the attempt bound was reached, so NO call was made this run. Unassessed with a
+            // named reason — never a dot (nothing was assessed) and never a challenge (nothing was found).
+            NewsJudgmentStatus.AttemptsExhausted => new NewsJudgmentLeaderMarker(
+                NewsJudgmentMarkerState.Unassessed,
+                NewsJudgmentMarkerReasons.RetriesExhausted,
                 JudgmentId: record.JudgmentId),
             _ => new NewsJudgmentLeaderMarker(
                 NewsJudgmentMarkerState.Unassessed,

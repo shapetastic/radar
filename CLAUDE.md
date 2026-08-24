@@ -1198,7 +1198,13 @@ Do not hand back broken code.
     persistently failing records would pin the whole `MaxNewTypingsPerRun` cap and starve the 13k backlog
     permanently. Attempt counts are **DERIVED** per `(cohortKey, observationId, payloadHash)` from the
     records the insert-only store already holds and the generator already loads — no new store, no side
-    index. Two identity rules, both deliberate, because the OLD identity folded `runId` and mapped every
+    index. ⚠ **BOTH OF THOSE CLAIMS ARE SUPERSEDED BY SPEC 187 §3 for TYPING**: an outcome record is written
+    AFTER the call, so an outcome-derived count cannot bound CALLS (a crash, a cancellation or a `false`
+    from `WriteAsync` spent a call and advanced the count by nothing). The "no new store, no side index"
+    constraint is explicitly lifted — typing now takes a durable PRE-CALL reservation and the derived
+    counter survives only as the legacy-occupancy migration read. The rule below still stands VERBATIM for
+    stage-2 JUDGMENT, deliberately (see the spec-187 bullet's asymmetry note). Two identity rules, both
+    deliberate, because the OLD identity folded `runId` and mapped every
     null-run invocation onto one `"standalone"` id (so re-invocation called the model while the store
     deduplicated the record and the count never advanced): (a) **same-run idempotency** — within one `runId`
     an observation with a persisted attempt for this cohort is SKIPPED, no model call; (b) **every
@@ -1207,7 +1213,9 @@ Do not hand back broken code.
     resolved once per pass from the pre-pass store snapshot (deterministic, clock-free, AD-3). **Invariant,
     asserted on the counting fake extractor's CALL COUNT, not on stored records: hosted calls for one
     (cohort, observation, payload) can never exceed `MaxTypingAttempts` under any mix of re-runs and
-    standalone invocations.** `Radar:NewsResearch:Typing:MaxTypingAttempts` (default **3**, ≥ 1) and
+    standalone invocations.** (Since spec 187 §3 that invariant is enforced by the reservation ledger and
+    holds across crashes, failed outcome writes and concurrent processes as well.)
+    `Radar:NewsResearch:Typing:MaxTypingAttempts` (default **3**, ≥ 1) and
     `MaxRetryTypingsPerRun` (default **25**, **≥ 1** — zero would re-permit total retry starvation and is
     REJECTED — and < `MaxNewTypingsPerRun`, the cross-field rule enforced at the config boundary) join the
     strict key allowlist. The **FIFO retry lane** reserves `min(MaxRetryTypingsPerRun, pendingRetries)`
@@ -1295,6 +1303,133 @@ Do not hand back broken code.
     every family id changes on the first post-186 run, so the stage-2 cohort key (which embeds
     `families={FactFamilyBuilder.IdentityString}`) forks and every candidate company re-judges ONCE, draining
     under `MaxCompaniesPerRun`.
+- **The judge must CITE what made the call, and every hosted call is paid for before it is made (spec 187).**
+  Written from the FIRST live typing+judgment run (`976d0f20`, 2026-08-24, 1h03) plus a post-run code
+  review. The run proved the surface works and that a structurally complete judgment is not yet a sound one:
+  every judgment ran at `TypingCompleteness = Backlog`, EOSE had 31 archived observations and 2 typings so
+  the headlines that motivated the arc were invisible to the judge, and **MNRO's own persisted rationale
+  said the supplied fact was neutral and then labelled the trajectory `Deteriorating` because the
+  instruction demanded a direction** — a v1 prompt-CONTRACT defect, not a bad model day (CASS inferred
+  decline from absence, WDFC `Improving` from absence, YORW read a 52-week price low as business execution).
+  Nothing here moves a score, rank, label, strategy, snapshot, scoring fingerprint or AD-15/AD-16 claim; the
+  pins do not move and `ScoringConfigFingerprintTests` is untouched. Rules:
+  - **`news-judgment-v2` — a directional call must name its evidence (§1).** `news-judgment-prompt-v2` +
+    `news-judgment-schema-v2` fork a new stage-2 cohort (v1 records stay readable, never rewritten). The
+    response carries `TrajectoryFactIds`, and the validator makes them load-bearing: every id must parse, be
+    distinct and be a SUPPLIED representative fact; `Improving`/`Deteriorating`/`Mixed` require **at least
+    one**; **`Unknown` requires NONE** (it means no supplied fact established a balance, not that provenance
+    was omitted); at least one cited fact must sit **at-or-above `reported`** — the SAME boundary the
+    spec-185 attribution-caveat rule already used, so the two cannot drift; and the cited set may not be
+    made ENTIRELY of `NewsJudgmentContextOnlyEventTypes` (price/analyst/ownership/promotional context is not
+    business direction — the YORW shape). A `Judged` response additionally requires a non-blank factual
+    rationale ≤ 1,000 chars, and a finding standing only on context-only evidence is dropped individually as
+    `non-business-context-only`. **Deliberately NOT built: a prose polarity scanner over the rationale.**
+    Grepping "declined"/"improved" would be a second, weaker judge with no provenance — the fix is a CITED
+    contract at the structured seam, not string matching. It does not make the model infallible: a v2 call
+    can still be wrong, it just cannot be unattributable.
+  - **Bounded judgment failures, and the asymmetry with typing is stated rather than hidden (§1).** Strict
+    validation makes a persistent `ValidationFailed` likelier, so each (stage-2 cohort, company, family set)
+    gets `MaxJudgmentAttempts` (default **3**) CALL-PRODUCING attempts — `Judged`/`ValidationFailed`/
+    `ProviderFailure`/`ParseFailure`, never `InsufficientFacts`, never the bound marker, never a cache
+    reuse — DERIVED from the insert-only store read once per pass, plus same-run idempotency and the
+    spec-186 `standalone#N` null-run identity. At the bound a **no-call `AttemptsExhausted` record** is
+    persisted under its OWN identity namespace (`radar:news-judgment-exhausted:…`, run-scoped) so it can
+    never be mistaken for a spent call and the row renders **`? unassessed (retries-exhausted)`** rather
+    than a fabricated verdict. **The asymmetry is deliberate and documented on the class:** judgment gets
+    NO pre-call reservation ledger, so a process killed between call and write can spend one unrecorded
+    call — accepted because judgment is one serial call per company per run while typing spends hundreds.
+    The budget is keyed on the **family-set hash**, so a materially changed fact set earns a fresh budget:
+    the bound constrains repeated calls over the SAME input, never the evaluation of new evidence.
+  - **Type the companies you are about to judge (§2).** The live run spent its whole 200-call budget on the
+    global queue and then judged 18 companies whose motivating headlines were still untyped.
+    `MaxCandidateTypingsPerRun` (default **100**) buys a third selection lane between the FIFO retry lane
+    and the general queue, filled **ROUND-ROBIN** over the candidate plan (candidate-at-a-time would
+    reproduce EOSE-style starvation inside the lane). The cross-field rule is **three-way** —
+    `MaxCandidateTypingsPerRun + MaxRetryTypingsPerRun < MaxNewTypingsPerRun` when judgment is enabled
+    (100 + 25 < 200 leaves 75) — so a general first-attempt slot is ALWAYS reserved and candidate priority
+    can never stop the legacy backlog draining. There is **ONE shared candidate plan**
+    (`INewsJudgmentCandidatePlanner` over the existing spec-179 selector, computed once per run and
+    CONSUMED by both stages), which is what makes "typing-prioritized == judged" true by construction
+    rather than by two agreeing copies of a selection rule. `news-typing-decomposition-v3` reports the
+    per-lane counts.
+  - **Every hosted typing call wins a DURABLE PRE-CALL reservation (§3) — and this SUPERSEDES spec 186 §2's
+    "no new store, no side index".** `INewsTypingAttemptLedger` +
+    `NewsTypingAttemptReservation` are keyed on `(cohortKey, observationId, payloadHash, attemptOrdinal)`
+    and deliberately **NOT** on the run id: two processes racing for the same attempt must collide on the
+    same file name and exactly one must win (`FileMode.CreateNew` is the atomic primitive). The protocol at
+    the ONE site that calls the provider: (1) skip completed, (2) skip exhausted, (3) atomically claim the
+    next ordinal, (4) only the winner calls, (5) persist the outcome LINKED to the reservation, (6) let only
+    a durable outcome count. `WriteAsync`'s boolean is now CHECKED — an unpersisted outcome never enters the
+    completed map, never contributes facts or families, and never reaches the judge. Occupancy is the union
+    of reserved ordinals and LEGACY (pre-187, unlinked) outcome records, so 186's derived counter survives
+    ONLY as the legacy-occupancy migration read and every accrued `standalone`/`standalone#N` id is
+    byte-unchanged. `ReservedWithoutOutcome` counts reservations holding no linked outcome (crash,
+    cancellation, failed write): the budget can be spent EARLY but never OVERSPENT, and that trade is
+    reported per cohort rather than assumed.
+  - **A final failed attempt is exhausted in the SAME run, and exhaustion is disjoint from backlog (§4).**
+    Exhaustion was computed pre-pass, so a failure on the last permitted attempt was reported a run late and
+    `BuildCompany` counted the same observation as BOTH typing backlog and retry-exhausted. One local rule
+    now marks exhaustion pre-pass AND during the pass; `UntypedRemaining` means STILL ELIGIBLE (exhausted
+    observations excluded, unpersisted outcomes included, because nothing durable was produced for them), so
+    "the queue a later run can drain" and "work that has permanently left selection" are different numbers
+    that reconcile. `news-typing-decomposition-v1 → v2 → **v3**` for the additive `ReservedWithoutOutcome`
+    and — the reason a bump was owed rather than tidy — the CORRECTED meaning of `UntypedRemaining`.
+  - **The structured gate decision outranks rendered reason text (§5).** `StrategyEvidenceStatusCalculator`
+    still substring-searched the rendered `GateReasons` while the artifact already carried spec 186's
+    semantic `gateVerdictId`, so a baseline NAME containing a reason-code token could make the status
+    disagree with the very verdict identity `GateVerdicts(...)` carried for the same artifact. Now: a
+    **non-empty `GateVerdictId` IS the writer's statement that a verdict exists** (the merit/non-merit split
+    already ran writer-side over the STRUCTURED reasons), so `Qualifies` alone selects
+    `GatePassed`/`GateFailed` and the reasons are DISPLAY DETAIL. A pre-186 artifact with no id falls
+    through to an isolated legacy path that parses reason CODES and fails **CLOSED** (any accrual reason, or
+    a blank/unparseable list, ⇒ `GatePending`). Id and status therefore cannot disagree BY CONSTRUCTION, and
+    `OperatingCallReducer` is **untouched** — 186 §3's override binding is unchanged.
+  - **The `_comment*` flattener repair is committed and the REAL failure boundary is tested (§6).** The
+    2026-08-23 scheduled baseline crashed at startup (0xE0434352) because `run-radar.ps1` skipped only the
+    exact key `_comment`, so the promotion's `Radar:NewsResearch:_comment2` reached the strict allowlist.
+    The fix (skip every `_comment*`) is committed, and the test boundary now reaches the real failure across
+    THREE places: `RunProfileMirror` (in `Radar.TestSupport`) is the ONE flatten mirror of the PowerShell
+    rule — the anti-drift point, so a second copy can never mirror a stale rule —
+    `RunProfileGuardCompatibilityTests` mirrors the `_comment*` prefix behaviour through it,
+    `RunProfileNewsResearchGuardTests` (`Radar.Worker.Tests`) binds the FULL NewsResearch strict guards over
+    the flattened real profile, and `RunRadarScriptWhatIfTests` (`Radar.Worker.Tests`) runs a
+    Windows-conditional `run-radar.ps1 -Profile default -WhatIf` smoke test over the REAL script — the
+    complete suite passing while clean HEAD crashed before doing useful work is the failure mode being
+    closed.
+  - **Provider-call timing: observability, not policy (§7).** Each typing/judgment provider invocation is
+    bracketed by the injected `TimeProvider`'s MONOTONIC APIs (`GetTimestamp`/`GetElapsedTime` — never
+    `DateTimeOffset` subtraction, never `Stopwatch`, never a wall-clock sleep in a test) and persisted as a
+    TRAILING NULLABLE `ProviderDurationMs` on both attempt records; `null` means NO CALL (cache reuse,
+    `NoContent`, `InsufficientFacts`, `AttemptsExhausted`), a failure that reached the provider RETAINS its
+    duration, and neither schema tag moves for it. Bounded Information progress every **25** typing calls
+    per reader / **5** judgment calls per judge×stage-1 cohort, plus the final partial batch, carrying
+    attempted/selected, persisted successes, provider/parse/validation failures, stage elapsed, rolling mean
+    and current max. Each stage then logs calls + **p50/p95/max/total** from ONE shared
+    `ProviderCallTimings` helper (not two copies) over the CURRENT pass's in-memory durations, with the
+    percentile definition stated and pinned: **sort ascending, rank = ceil(p/100 × n), 1-based, clamped to
+    [1, n]** — nearest-rank, no interpolation. A zero-call pass renders **"0 provider call(s); no call
+    latency measured this pass"** and OMITS the percentiles, because a measured zero and an unmeasured zero
+    are different facts. Hashed into nothing, read by nothing: asserted that identical inputs with wildly
+    different latencies produce byte-identical ids, cohort keys, family ids and selection order (AD-3), and
+    that no log line carries model text, an API key or an environment-variable value. Calls stay SERIAL —
+    no timeout, no concurrency change, no automatic fallback, and a 429 follows the existing named
+    failure/retry path where the progress counters can see it.
+  - **Baseline provider posture: one hosted reader, Ollama retained but unscheduled (§8).** `ollama-local`
+    is removed from `Radar:NewsResearch:Shadow:Readers` in `default.json`; the DeepSeek entry STAYS, because
+    a non-empty list REPLACES the ambient reader and deleting the list would take the hosted cohort with it.
+    Baseline is now shadow = 1 hosted DeepInfra DeepSeek reader, typing = 1, judgment = 1. This is a
+    SCHEDULING decision: the Ollama provider, option binding, manual-profile capability and provider tests
+    all remain, the accrued `ollama:llama3.1` cohort data is untouched historical provenance (cohorts never
+    pool), Ollama is NOT substituted into typing or judgment, and **no Claude CLI/provider/wrapper/cohort/
+    fallback exists anywhere** — Claude may be evaluated later under its own explicit provider identity.
+  - **Migration: NONE (§9).** No operator deletion or reset. The first post-187 run naturally creates the
+    v2 judgment cohort and re-judges the current candidates once; **stage-1 typing stays in its EXISTING
+    cohort** because selection priority and attempt accounting change no extractor prompt, schema or
+    taxonomy; and existing facts, families, typings, judgments and assessments remain immutable (AD-8).
+  - **Out of scope, recorded not built**: a prose polarity scanner over rationales, a durable pre-call
+    reservation ledger for JUDGMENT, parallel provider calls / wall-clock stage cutoffs / dynamic
+    throttling / automatic reader substitution, any Claude adapter or cohort, removing Ollama from the code,
+    and feeding typing, trajectory, findings or markers into any score/rank/label/fingerprint calculation.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

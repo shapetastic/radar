@@ -191,6 +191,18 @@ public static class NewsRiskLiveArtifactRenderer
                     + $"window: {judgment.Stage1FactsDroppedInWindow}; stage-2 findings dropped: "
                     + $"{judgment.FindingsDropped} of {judgment.FindingsTotal}"));
 
+            if (judgment.BusinessTrajectory is not null)
+            {
+                // Spec 187 §1: the trajectory's own provenance, rendered beside it. A v1 record predates
+                // the field entirely — it reads as NOT RECORDED, never as an empty v2 evidence set.
+                sb.AppendLine(judgment.TrajectoryFactIds is { } trajectoryFactIds
+                    ? trajectoryFactIds.Count > 0
+                        ? "Trajectory evidence: "
+                            + string.Join(", ", trajectoryFactIds.Select(id => $"`{id:D}`"))
+                        : "Trajectory evidence: none cited (an Unknown trajectory establishes no direction)"
+                    : "Trajectory evidence: not recorded under news-judgment-v1");
+            }
+
             foreach (var family in judgment.Families)
             {
                 sb.AppendLine(string.Create(

@@ -78,7 +78,7 @@ public sealed class NewsJudgmentWorkerOptionsTests
         Assert.Equal("llama3.1", identity.ModelId);
         // The stage-2 cohort key composes the stage-1 cohort AND the family-builder identity.
         var key = identity.CohortKeyFor("stage1-key");
-        Assert.Contains("news-judgment-prompt-v1", key);
+        Assert.Contains("news-judgment-prompt-v2", key);
         Assert.Contains("stage1=stage1-key", key);
         Assert.Contains("families=fact-family-v2", key);
     }
@@ -184,11 +184,39 @@ public sealed class NewsJudgmentWorkerOptionsTests
     [Theory]
     [InlineData("Radar:NewsResearch:Judgment:MaxCompaniesPerRun", "0")]
     [InlineData("Radar:NewsResearch:Judgment:MaxFamiliesPerJudgment", "-1")]
+    // Spec 187 §1: the attempt bound is a limit like any other — invalid ⇒ startup fails naming the key,
+    // even while judgment is disabled (the spec-177 posture: an invalid limit is a config error now, not a
+    // latent one).
+    [InlineData("Radar:NewsResearch:Judgment:MaxJudgmentAttempts", "0")]
+    [InlineData("Radar:NewsResearch:Judgment:MaxJudgmentAttempts", "-1")]
     public void InvalidLimits_FailStartup_EvenWhileJudgmentIsDisabled(string key, string value)
     {
         var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider((key, value)));
 
         Assert.Contains(key.Split(':')[^1], ex.Message);
+    }
+
+    [Fact]
+    public void MaxJudgmentAttempts_DefaultsToThree_AndIsRecordedOnEveryJudgment()
+    {
+        using var provider = BuildProvider(EnabledWithAmbientOllama());
+        var options = provider.GetRequiredService<NewsJudgmentOptions>();
+
+        Assert.Equal(NewsJudgmentOptions.DefaultMaxJudgmentAttempts, options.MaxJudgmentAttempts);
+        Assert.Equal(3, options.MaxJudgmentAttempts);
+        // TRAILING and NULLABLE on the record, so a pre-187 judgment hydrates as "not recorded" — but every
+        // NEW attempt states the bound it ran under.
+        Assert.Equal(3, options.ToLimitsRecord().MaxJudgmentAttempts);
+    }
+
+    [Fact]
+    public void MaxJudgmentAttempts_IsAStrictKeyMember_SoATypoCannotSilentlyLeaveTheDefault()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            BuildProvider(("Radar:NewsResearch:Judgment:MaxJudgmentAttemptss", "5")));
+
+        Assert.Contains("MaxJudgmentAttemptss", ex.Message);
+        Assert.Contains("MaxJudgmentAttempts", ex.Message);
     }
 
     [Fact]

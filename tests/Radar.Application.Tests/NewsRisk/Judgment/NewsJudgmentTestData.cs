@@ -40,15 +40,38 @@ internal static class NewsJudgmentTestData
         FactIds: [factId.ToString("D")],
         AttributionCaveat: caveat);
 
+    /// <summary>
+    /// Spec 187 §1 — the shared TRAJECTORY ANCHOR: a ConfirmedFiling business fact
+    /// (<see cref="NewsEventType.EarningsOrGuidance"/>) that satisfies the v2 trajectory-evidence gate
+    /// (cited, supplied, at-or-above <c>reported</c>, not context-only). Tests whose subject is FINDING
+    /// validation supply it beside their own fixture through <see cref="Supplied"/> so the trajectory axis
+    /// is grounded and the only thing under test is the assertion the test names.
+    /// </summary>
+    public static readonly Guid TrajectoryAnchorFactId =
+        Guid.Parse("a11c0000-0000-4000-8000-000000000001");
+
+    /// <summary>The anchor family itself.</summary>
+    public static NewsJudgmentInputFamily TrajectoryAnchor() => Family(
+        factId: TrajectoryAnchorFactId,
+        assertionStatus: NewsFactAssertionStatus.ConfirmedFiling,
+        statement: "The company filed quarterly results showing revenue up 12%.");
+
+    /// <summary>The anchor family followed by the fixture's own families, in that order.</summary>
+    public static IReadOnlyList<NewsJudgmentInputFamily> Supplied(
+        params NewsJudgmentInputFamily[] families) => [TrajectoryAnchor(), .. families];
+
     public static NewsJudgmentModelResponse Response(
         string? trajectory = "Deteriorating",
         int? strength = 60,
         IReadOnlyList<NewsJudgmentModelFinding>? findings = null,
-        string? rationale = "Legal scrutiny challenges the trajectory.") => new(
+        string? rationale = "Legal scrutiny challenges the trajectory.",
+        IReadOnlyList<string>? trajectoryFactIds = null) => new(
         BusinessTrajectory: trajectory,
         ChallengeStrength: strength,
         Findings: findings,
-        Rationale: rationale);
+        Rationale: rationale,
+        // Defaults to the anchor: a v2 directional read must CITE what establishes it.
+        TrajectoryFactIds: trajectoryFactIds ?? [TrajectoryAnchorFactId.ToString("D")]);
 
     public static FactFamilyRecord FamilyRecord(
         Guid companyId,
