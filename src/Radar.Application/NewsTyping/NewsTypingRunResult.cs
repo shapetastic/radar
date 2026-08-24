@@ -47,6 +47,21 @@ public sealed record NewsTypingFactRef(
 /// That count is PASS-WIDE (window and backlog alike, since an exhausted backlog article is a permanent
 /// cost fact), while the decomposition artifact reports its own per-company IN-WINDOW count and only an
 /// in-window exhaustion degrades a company's completeness above.
+/// <para>
+/// <c>ReservedWithoutOutcome</c> (spec 187 §3) is the pass-wide count of this cohort's durable pre-call
+/// attempt reservations holding no linked outcome record — a hosted call whose result was never persisted
+/// (crash, cancellation, or an outcome write that returned <c>false</c>). It conservatively consumed an
+/// attempt, so it is surfaced rather than silently folded into backlog: a reservation-or-outcome storage
+/// failure must never read as ordinary deferred work.
+/// </para>
+/// <para>
+/// <c>CandidatePrioritySelected</c> and <c>GeneralSelected</c> (spec 187 §2) are this cohort's PASS-WIDE
+/// first-attempt lane split: how many hosted calls went, round-robin, to the companies this run was about
+/// to judge, and how many flowed back to the global window/backlog queue. Retry-lane selections are
+/// reported separately (the per-cohort log line and <c>RetryExhausted</c>); the three lanes are disjoint,
+/// so no observation is counted twice. Diagnostics only — nothing here changes typing content, validation,
+/// cohort identity or fact-family membership.
+/// </para>
 /// Exposes the generator's existing in-memory join instead of adding a read seam to the write-only family
 /// snapshot store.
 /// </summary>
@@ -56,7 +71,10 @@ public sealed record NewsTypingCohortRunResult(
     IReadOnlyDictionary<Guid, NewsTypingFactRef> FactsById,
     IReadOnlyDictionary<Guid, NewsTypingCompleteness> TypingCompletenessByCompany,
     int FactsDroppedInWindow,
-    int RetryExhausted);
+    int RetryExhausted,
+    int ReservedWithoutOutcome = 0,
+    int CandidatePrioritySelected = 0,
+    int GeneralSelected = 0);
 
 /// <summary>
 /// The typed outcome of one typing pass (spec 185 §5), returned by <see cref="INewsTypingGenerator"/> so the

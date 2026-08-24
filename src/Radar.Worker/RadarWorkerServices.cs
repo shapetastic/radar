@@ -833,7 +833,7 @@ internal static class RadarWorkerServices
         // Shadow/typing/judgment limits are validated regardless of Enabled (the spec-177 posture): an
         // invalid limit is a configuration error now, not a trap that springs the day the step is switched on.
         ValidateNewsRiskShadowLimits(shadow);
-        ValidateNewsTypingLimits(typing);
+        ValidateNewsTypingLimits(typing, judgment);
         ValidateNewsJudgmentLimits(judgment);
 
         // Spec 185: the stage-2 judge structurally consumes stage-1's typed fact families — enabling it
@@ -978,7 +978,8 @@ internal static class RadarWorkerServices
                     maxNewTypingsPerRun: typing.MaxNewTypingsPerRun,
                     lookbackDays: typing.LookbackDays,
                     maxTypingAttempts: typing.MaxTypingAttempts,
-                    maxRetryTypingsPerRun: typing.MaxRetryTypingsPerRun),
+                    maxRetryTypingsPerRun: typing.MaxRetryTypingsPerRun,
+                    maxCandidateTypingsPerRun: typing.MaxCandidateTypingsPerRun),
                 BuildNewsTypingReaderRegistrations(options));
         }
 
@@ -1009,6 +1010,7 @@ internal static class RadarWorkerServices
                     outputDirectory: shadow.OutputDirectory,
                     maxCompaniesPerRun: judgment.MaxCompaniesPerRun,
                     maxFamiliesPerJudgment: judgment.MaxFamiliesPerJudgment,
+                    maxJudgmentAttempts: judgment.MaxJudgmentAttempts,
                     presentationJudge: judgment.PresentationCohort.Judge.Trim(),
                     presentationExtractor: judgment.PresentationCohort.Extractor.Trim(),
                     // From the SAME const the kind→collector table uses, so the judge's coverage
@@ -1041,6 +1043,17 @@ internal static class RadarWorkerServices
                 $"Radar:NewsResearch:Judgment:MaxFamiliesPerJudgment must be positive (was "
                     + $"{judgment.MaxFamiliesPerJudgment}); it caps the fact families supplied to one "
                     + "judgment (default 50).");
+        }
+
+        if (judgment.MaxJudgmentAttempts < 1)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Judgment:MaxJudgmentAttempts must be at least 1 (was "
+                    + $"{judgment.MaxJudgmentAttempts}); it caps the HOSTED CALLS one (stage-2 cohort, "
+                    + "company, fact-family set) may spend before the pass records AttemptsExhausted "
+                    + "instead of calling the provider (default "
+                    + $"{NewsJudgmentOptions.DefaultMaxJudgmentAttempts}). Zero would mean 'never judge', "
+                    + "which is what disabling the step expresses.");
         }
     }
 
@@ -1108,11 +1121,14 @@ internal static class RadarWorkerServices
             "News-judgment");
 
     /// <summary>
-    /// Fail-fast limit validation for the <c>Radar:NewsResearch:Typing</c> block (spec 181 §4/§6), applied
-    /// even when typing is disabled (the spec-177 posture: an invalid limit is a config error, not a latent
-    /// one).
+    /// Fail-fast limit validation for the <c>Radar:NewsResearch:Typing</c> block (spec 181 §4/§6, extended
+    /// by spec 186 §2 and spec 187 §2), applied even when typing is disabled (the spec-177 posture: an
+    /// invalid limit is a config error, not a latent one). The <paramref name="judgment"/> block is read
+    /// for ONE cross-block rule only — the spec-187 §2 three-way lane reservation, which is meaningful only
+    /// when a candidate plan can actually exist.
     /// </summary>
-    private static void ValidateNewsTypingLimits(NewsTypingWorkerOptions typing)
+    private static void ValidateNewsTypingLimits(
+        NewsTypingWorkerOptions typing, NewsJudgmentWorkerOptions judgment)
     {
         if (string.IsNullOrWhiteSpace(typing.OutputDirectory))
         {
@@ -1162,6 +1178,39 @@ internal static class RadarWorkerServices
                     + $"strictly below Radar:NewsResearch:Typing:MaxNewTypingsPerRun "
                     + $"({typing.MaxNewTypingsPerRun}); the retry lane lives INSIDE the per-run call budget "
                     + "and must never be able to monopolize it (defaults 25 and 200).");
+        }
+
+        // Spec 187 §2: the candidate lane's own bound, validated in EVERY mode like its siblings.
+        if (typing.MaxCandidateTypingsPerRun < 1)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun must be at least 1 (was "
+                    + $"{typing.MaxCandidateTypingsPerRun}); it is the per-reader per-run cap on the "
+                    + "round-robin lane that types the companies this run is about to judge, and zero "
+                    + "would restore the failure this lane exists to fix — a whole budget spent on the "
+                    + "global queue while every judged company stayed untyped (default 100).");
+        }
+
+        // The THREE-WAY cross-field rule, applied only when a candidate plan can exist (the planner is
+        // registered WITH judgment; with judgment off the candidate lane is structurally empty and the
+        // reservation is vacuous). It guarantees at least ONE general first-attempt slot survives even when
+        // both earlier lanes fill completely — candidate priority must never be able to stop the legacy
+        // backlog draining.
+        if (judgment.Enabled
+            && typing.MaxCandidateTypingsPerRun + typing.MaxRetryTypingsPerRun
+                >= typing.MaxNewTypingsPerRun)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun "
+                    + $"({typing.MaxCandidateTypingsPerRun}) + "
+                    + $"Radar:NewsResearch:Typing:MaxRetryTypingsPerRun "
+                    + $"({typing.MaxRetryTypingsPerRun}) must be strictly below "
+                    + $"Radar:NewsResearch:Typing:MaxNewTypingsPerRun ({typing.MaxNewTypingsPerRun}) while "
+                    + "Radar:NewsResearch:Judgment:Enabled is true. All three lanes live inside the ONE "
+                    + "per-run hosted-call budget, and the strict inequality reserves at least one GENERAL "
+                    + "first-attempt slot under every valid configuration, so the global 30-day/backlog "
+                    + "queue keeps advancing even when the retry and judgment-candidate lanes are both "
+                    + "full (defaults 100 + 25 < 200 leave 75).");
         }
     }
 
@@ -1376,7 +1425,7 @@ internal static class RadarWorkerServices
             typeof(NewsTypingWorkerOptions),
             "Radar:NewsResearch:Typing",
             "must be an object carrying Enabled / OutputDirectory / MaxNewTypingsPerRun / LookbackDays / "
-                + "MaxTypingAttempts / MaxRetryTypingsPerRun / Readers keys.");
+                + "MaxTypingAttempts / MaxRetryTypingsPerRun / MaxCandidateTypingsPerRun / Readers keys.");
         if (typingSection.Exists())
         {
             ValidateReadersList(typingSection.GetSection("Readers"), "Radar:NewsResearch:Typing:Readers");
@@ -1391,8 +1440,8 @@ internal static class RadarWorkerServices
             judgmentSection,
             typeof(NewsJudgmentWorkerOptions),
             "Radar:NewsResearch:Judgment",
-            "must be an object carrying Enabled / MaxCompaniesPerRun / MaxFamiliesPerJudgment / Judges / "
-                + "PresentationCohort keys.");
+            "must be an object carrying Enabled / MaxCompaniesPerRun / MaxFamiliesPerJudgment / "
+                + "MaxJudgmentAttempts / Judges / PresentationCohort keys.");
         if (judgmentSection.Exists())
         {
             ValidateReadersList(judgmentSection.GetSection("Judges"), "Radar:NewsResearch:Judgment:Judges");

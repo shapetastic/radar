@@ -391,7 +391,8 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
                 ObservationSupply: j.ObservationSupply,
                 TypingCompleteness: j.TypingCompleteness,
                 FamilyBundle: j.FamilyBundle,
-                Families: j.Families))
+                Families: j.Families,
+                TrajectoryFactIds: j.TrajectoryFactIds))
             .ToList();
     }
 

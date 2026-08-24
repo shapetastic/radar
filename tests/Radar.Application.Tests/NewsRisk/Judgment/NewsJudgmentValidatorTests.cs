@@ -19,7 +19,7 @@ public sealed class NewsJudgmentValidatorTests
         var response = NewsJudgmentTestData.Response(
             findings: [NewsJudgmentTestData.Finding(family.RepresentativeFactId)]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
         Assert.Equal(NewsJudgmentTrajectory.Deteriorating, result.BusinessTrajectory);
@@ -41,7 +41,7 @@ public sealed class NewsJudgmentValidatorTests
                     family.RepresentativeFactId, category: "regulatory-or-legal-setback", severity: "high"),
             ]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
         Assert.Equal(
@@ -54,7 +54,7 @@ public sealed class NewsJudgmentValidatorTests
         var family = NewsJudgmentTestData.Family();
         var response = NewsJudgmentTestData.Response(trajectory: "ToTheMoon");
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
         Assert.Null(result.BusinessTrajectory);
@@ -65,7 +65,8 @@ public sealed class NewsJudgmentValidatorTests
     public void NumericTrajectoryToken_IsRejected_NeverCoerced()
     {
         var result = NewsJudgmentValidator.Validate(
-            NewsJudgmentTestData.Response(trajectory: "2"), [NewsJudgmentTestData.Family()]);
+            NewsJudgmentTestData.Response(trajectory: "2"),
+            NewsJudgmentTestData.Supplied(NewsJudgmentTestData.Family()));
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
     }
@@ -84,7 +85,7 @@ public sealed class NewsJudgmentValidatorTests
                 NewsJudgmentTestData.Finding(family.RepresentativeFactId, confidence: 1.5),
             ]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
         Assert.Empty(result.Findings);
@@ -101,7 +102,8 @@ public sealed class NewsJudgmentValidatorTests
         var response = NewsJudgmentTestData.Response(
             trajectory: "Improving", strength: 85, findings: []);
 
-        var result = NewsJudgmentValidator.Validate(response, [NewsJudgmentTestData.Family()]);
+        var result = NewsJudgmentValidator.Validate(
+            response, NewsJudgmentTestData.Supplied(NewsJudgmentTestData.Family()));
 
         Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
         Assert.Equal(NewsJudgmentTrajectory.Improving, result.BusinessTrajectory);
@@ -120,7 +122,7 @@ public sealed class NewsJudgmentValidatorTests
                 NewsJudgmentTestData.Finding(Guid.NewGuid()),
             ]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
         Assert.Single(result.Findings);
@@ -138,7 +140,7 @@ public sealed class NewsJudgmentValidatorTests
                 new NewsJudgmentModelFinding("RegulatoryOrLegalSetback", "High", 0.8, [], null),
             ]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
         Assert.Contains(result.FindingDropReasons, r => r.Contains("no-cited-fact"));
@@ -156,7 +158,7 @@ public sealed class NewsJudgmentValidatorTests
         var response = NewsJudgmentTestData.Response(
             findings: [NewsJudgmentTestData.Finding(family.RepresentativeFactId, caveat: null)]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status); // its only finding dropped
         Assert.Contains(result.FindingDropReasons, r => r.Contains("missing-attribution-caveat"));
@@ -176,7 +178,7 @@ public sealed class NewsJudgmentValidatorTests
                     caveat: "Based solely on a plaintiff-firm solicitation; no filing is confirmed."),
             ]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
         var finding = Assert.Single(result.Findings);
@@ -193,7 +195,7 @@ public sealed class NewsJudgmentValidatorTests
         var response = NewsJudgmentTestData.Response(
             findings: [NewsJudgmentTestData.Finding(family.RepresentativeFactId, caveat: null)]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
         Assert.Single(result.Findings);
@@ -217,7 +219,7 @@ public sealed class NewsJudgmentValidatorTests
                     AttributionCaveat: null),
             ]);
 
-        var result = NewsJudgmentValidator.Validate(response, [alleged, confirmed]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(alleged, confirmed));
 
         Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
         Assert.Single(result.Findings);
@@ -234,13 +236,14 @@ public sealed class NewsJudgmentValidatorTests
 
         var overAlleged = NewsJudgmentValidator.Validate(
             response,
-            [NewsJudgmentTestData.Family(factId: factId, assertionStatus: NewsFactAssertionStatus.Alleged)]);
+            NewsJudgmentTestData.Supplied(
+                NewsJudgmentTestData.Family(
+                    factId: factId, assertionStatus: NewsFactAssertionStatus.Alleged)));
         var overConfirmed = NewsJudgmentValidator.Validate(
             response,
-            [
+            NewsJudgmentTestData.Supplied(
                 NewsJudgmentTestData.Family(
-                    factId: factId, assertionStatus: NewsFactAssertionStatus.ConfirmedFiling),
-            ]);
+                    factId: factId, assertionStatus: NewsFactAssertionStatus.ConfirmedFiling)));
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, overAlleged.Status);
         Assert.Equal(NewsJudgmentStatus.Judged, overConfirmed.Status);
@@ -250,18 +253,23 @@ public sealed class NewsJudgmentValidatorTests
     // ── Advice-language guard ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void RationaleWithAdviceLanguage_IsBlankedAndCounted()
+    public void RationaleWithAdviceLanguage_IsScrubbed_AndThenFailsTheWholeResponse()
     {
+        // Spec 187 §1 changes this deliberately: under v1 an advice-scrubbed rationale merely BLANKED, so
+        // the response could still render as a clean judgment Radar could not explain. Under v2 a
+        // scrubbed-to-empty rationale fails the whole response — the scrub reason is still named, so the
+        // artifact says WHY.
         var family = NewsJudgmentTestData.Family(assertionStatus: NewsFactAssertionStatus.ConfirmedFiling);
         var response = NewsJudgmentTestData.Response(
             findings: [NewsJudgmentTestData.Finding(family.RepresentativeFactId)],
             rationale: "You should buy this stock now.");
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
-        Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
+        Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
         Assert.Null(result.Rationale);
         Assert.Contains(result.FindingDropReasons, r => r.Contains("rationale-advice-language"));
+        Assert.Contains(result.FindingDropReasons, r => r.Contains("rationale-missing"));
     }
 
     [Fact]
@@ -277,7 +285,7 @@ public sealed class NewsJudgmentValidatorTests
                     family.RepresentativeFactId, caveat: "Sell now before the lawsuit lands."),
             ]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
         Assert.Contains(result.FindingDropReasons, r => r.Contains("caveat-advice-language"));
@@ -297,7 +305,7 @@ public sealed class NewsJudgmentValidatorTests
             strength: strength,
             findings: [NewsJudgmentTestData.Finding(family.RepresentativeFactId)]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
         Assert.Contains(result.FindingDropReasons, r => r.Contains("challenge-strength-out-of-range"));
@@ -318,7 +326,7 @@ public sealed class NewsJudgmentValidatorTests
         var response = NewsJudgmentTestData.Response(
             findings: [NewsJudgmentTestData.Finding(family.RepresentativeFactId, confidence: confidence)]);
 
-        var result = NewsJudgmentValidator.Validate(response, [family]);
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
 
         Assert.Contains(result.FindingDropReasons, r => r.Contains("confidence-out-of-range"));
     }
@@ -335,8 +343,9 @@ public sealed class NewsJudgmentValidatorTests
         var response = NewsJudgmentTestData.Response(
             findings: [NewsJudgmentTestData.Finding(factId)]);
 
-        var overSingle = NewsJudgmentValidator.Validate(response, [single]);
-        var overSyndicated = NewsJudgmentValidator.Validate(response, [syndicated]);
+        var overSingle = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(single));
+        var overSyndicated = NewsJudgmentValidator.Validate(
+            response, NewsJudgmentTestData.Supplied(syndicated));
 
         // Field-for-field identical: syndication volume multiplies nothing at the validation seam.
         Assert.Equal(overSingle.Status, overSyndicated.Status);

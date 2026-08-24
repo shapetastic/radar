@@ -2674,7 +2674,8 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the spec-181 in-process news-typing step: the durable typing store, the fact-family
+    /// Registers the spec-181 in-process news-typing step: the durable typing store, the spec-187 §3
+    /// pre-call attempt ledger, the fact-family
     /// checkpoint store and the decomposition artifact writer (all under the typing output root), the
     /// resolved typing reader set, and the <see cref="INewsTypingGenerator"/>. Call ONLY when typing is
     /// enabled in unfiltered full mode with at least one resolvable reader — the composition root owns
@@ -2707,6 +2708,13 @@ public static class InfrastructureServiceCollectionExtensions
             RootDirectory = options.OutputDirectory,
         });
         services.AddSingleton<INewsTypingStore, FileNewsTypingStore>();
+        // Spec 187 §3: the durable PRE-CALL attempt ledger, beside the outcome store under the same typing
+        // output root. It is what makes MaxTypingAttempts a bound on hosted CALLS rather than on records.
+        services.AddSingleton(new FileNewsTypingAttemptLedgerOptions
+        {
+            RootDirectory = options.OutputDirectory,
+        });
+        services.AddSingleton<INewsTypingAttemptLedger, FileNewsTypingAttemptLedger>();
         services.AddSingleton(new FileFactFamilySnapshotStoreOptions
         {
             RootDirectory = options.OutputDirectory,
@@ -2744,7 +2752,9 @@ public static class InfrastructureServiceCollectionExtensions
 
     /// <summary>
     /// Registers the spec-185 in-process stage-2 direction-judge step: the durable judgment store (under
-    /// the news-risk output root), the resolved judge reader set, the <see cref="INewsJudgmentGenerator"/>,
+    /// the news-risk output root), the resolved judge reader set, the spec-187 §2
+    /// <see cref="INewsJudgmentCandidatePlanner"/> (the ONE place candidate selection is invoked, shared by
+    /// the typing pass and the judge), the <see cref="INewsJudgmentGenerator"/>,
     /// and the weekly-report judgment re-render seam (whose PRESENCE is what makes the report's first
     /// render carry <c>? unassessed (judgment-pending)</c> markers). Call ONLY when judgment is enabled in
     /// unfiltered full mode with typing enabled and at least one resolvable judge — the composition root
@@ -2796,6 +2806,10 @@ public static class InfrastructureServiceCollectionExtensions
             return new NewsJudgmentReaderClientOwner(new NewsJudgmentReaderSet(judgeReaders), clients);
         });
         services.AddSingleton(sp => sp.GetRequiredService<NewsJudgmentReaderClientOwner>().Readers);
+        // Spec 187 §2: the ONE per-run candidate-selection seam, registered WITH judgment on purpose — the
+        // Worker resolves it once, hands the SAME frozen plan to the typing pass and to the judge, and its
+        // ABSENCE (judgment disabled) is what keeps typing selection byte-identical to spec 186's.
+        services.AddSingleton<INewsJudgmentCandidatePlanner, NewsJudgmentCandidatePlanner>();
         services.AddSingleton<INewsJudgmentGenerator, NewsJudgmentGenerator>();
         services.TryAddSingleton<IWeeklyReportJudgmentRerenderer, WeeklyReportJudgmentRerenderer>();
         services.TryAddSingleton(TimeProvider.System);

@@ -260,6 +260,7 @@ public sealed class NewsJudgmentMarkerPolicyTests
     [InlineData(NewsJudgmentStatus.ProviderFailure, "provider-failure")]
     [InlineData(NewsJudgmentStatus.ParseFailure, "parse-failure")]
     [InlineData(NewsJudgmentStatus.ValidationFailed, "validation-failed")]
+    [InlineData(NewsJudgmentStatus.AttemptsExhausted, "retries-exhausted")]
     public void EveryNonJudgedStatus_IsUnassessedWithItsReasonToken(
         NewsJudgmentStatus status, string reason)
     {
@@ -286,6 +287,40 @@ public sealed class NewsJudgmentMarkerPolicyTests
         var marker = NewsJudgmentMarkerPolicy.Derive(null, RunId);
 
         Assert.Equal("? unassessed (not-a-candidate)", marker.CellText);
+    }
+
+    [Fact]
+    public void AttemptsExhausted_RendersTheBound_NeverADotAndNeverAChallenge()
+    {
+        // Spec 187 §1: the attempt bound was reached, so NO model call was made this run. The row must say
+        // so — an exhausted judgment is not "no challenge found" (nothing was assessed) and not a
+        // challenge (nothing was found).
+        var marker = NewsJudgmentMarkerPolicy.Derive(
+            Record(NewsJudgmentStatus.AttemptsExhausted), RunId);
+
+        Assert.Equal(NewsJudgmentMarkerState.Unassessed, marker.State);
+        Assert.Equal("? unassessed (retries-exhausted)", marker.CellText);
+        Assert.Null(marker.Trajectory);
+        Assert.DoesNotContain("challenged", marker.CellText, StringComparison.Ordinal);
+        Assert.DoesNotContain("·", marker.CellText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AttemptsExhausted_IsAppendedLast_SoTheExistingVocabularyIsNotRenumbered()
+    {
+        // The spec-186 §1 discipline: the persisted status vocabulary is token-only, but appending keeps
+        // every accrued ordinal meaning intact regardless.
+        Assert.Equal(
+            NewsJudgmentStatus.AttemptsExhausted, Enum.GetValues<NewsJudgmentStatus>()[^1]);
+        Assert.Equal(NewsJudgmentStatus.Judged, default(NewsJudgmentStatus));
+    }
+
+    [Fact]
+    public void ExhaustionAndUnpersisted_AreNotCompletedJudgments()
+    {
+        Assert.False(Record(NewsJudgmentStatus.AttemptsExhausted).IsCompletedJudgment);
+        // …and an exhaustion record never counts as one of the calls it is bounding.
+        Assert.False(Record(NewsJudgmentStatus.AttemptsExhausted).IsCallProducingAttempt);
     }
 
     [Fact]
@@ -316,6 +351,32 @@ public sealed class NewsJudgmentMarkerPolicyTests
                 new NewsJudgmentMarkerReportModel(
                     JudgmentPending: false,
                     Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>()),
+                companyId));
+
+        // Spec 187 §1's two new closed tokens still resolve through the SAME total function.
+        Assert.Equal(
+            "? unassessed (retries-exhausted)",
+            NewsJudgmentMarkerReportModel.MarkerCellFor(
+                new NewsJudgmentMarkerReportModel(
+                    JudgmentPending: false,
+                    Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>
+                    {
+                        [companyId] = new(
+                            NewsJudgmentMarkerState.Unassessed,
+                            NewsJudgmentMarkerReasons.RetriesExhausted),
+                    }),
+                companyId));
+        Assert.Equal(
+            "? unassessed (not-persisted)",
+            NewsJudgmentMarkerReportModel.MarkerCellFor(
+                new NewsJudgmentMarkerReportModel(
+                    JudgmentPending: false,
+                    Markers: new Dictionary<Guid, NewsJudgmentLeaderMarker>
+                    {
+                        [companyId] = new(
+                            NewsJudgmentMarkerState.Unassessed,
+                            NewsJudgmentMarkerReasons.NotPersisted),
+                    }),
                 companyId));
     }
 }

@@ -173,6 +173,30 @@ public sealed class FileNewsTypingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ProviderDuration_RoundTrips_AndALegacyFileHydratesAsNoCallRecorded()
+    {
+        // Spec 187 §7: the duration is observational provenance, persisted trailing + nullable. It has to
+        // survive the round trip (otherwise the record would silently misreport a measured call) and a
+        // pre-187 file has to hydrate as `null` — "not recorded", never a fabricated 0 ms.
+        Assert.True(await NewStore().WriteAsync(
+            Record() with { ProviderDurationMs = 1234.5 }, CancellationToken.None));
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal(1234.5, hydrated.ProviderDurationMs);
+
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
+        Assert.True(document.Remove("providerDurationMs"));
+        await File.WriteAllTextAsync(file, document.ToJsonString());
+
+        var legacy = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Null(legacy.ProviderDurationMs);
+        // Nothing else about a pre-187 file changes meaning, and the schema tag is deliberately unmoved.
+        Assert.Equal(NewsTypingRecord.CurrentSchemaVersion, legacy.SchemaVersion);
+        Assert.Equal("news-typing-v1", legacy.SchemaVersion);
+    }
+
+    [Fact]
     public async Task LegacyRecord_WithoutTheSpec186Limits_HydratesAsNotRecorded_NeverAsAFabricatedLimit()
     {
         // Write a real record, then strip the two spec-186 limit fields back out of the file on disk: that

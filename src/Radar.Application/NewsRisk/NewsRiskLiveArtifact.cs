@@ -81,7 +81,10 @@ public sealed record NewsRiskLiveJudgment(
     NewsRiskAssessmentBundle ObservationSupply,
     NewsTypingCompleteness TypingCompleteness,
     NewsJudgmentFamilyBundle FamilyBundle,
-    IReadOnlyList<NewsJudgmentFamilyRef> Families);
+    IReadOnlyList<NewsJudgmentFamilyRef> Families,
+    // Spec 187 §1: the supplied FactIds the judge said ESTABLISH the trajectory. NULL means "not recorded
+    // under news-judgment-v1" — never an empty v2 evidence set and never proof of invalidity.
+    IReadOnlyList<Guid>? TrajectoryFactIds = null);
 
 /// <summary>One supplied article's display row: headline, publisher, URL and which text fields were supplied.</summary>
 public sealed record NewsRiskLiveArticle(

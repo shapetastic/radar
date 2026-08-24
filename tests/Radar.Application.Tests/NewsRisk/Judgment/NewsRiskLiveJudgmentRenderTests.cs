@@ -33,7 +33,8 @@ public sealed class NewsRiskLiveJudgmentRenderTests
     private static NewsRiskLiveJudgment Judgment(
         NewsJudgmentStatus status = NewsJudgmentStatus.Judged,
         IReadOnlyList<NewsJudgmentValidatedFinding>? findings = null,
-        NewsTypingCompleteness typing = NewsTypingCompleteness.Backlog) => new(
+        NewsTypingCompleteness typing = NewsTypingCompleteness.Backlog,
+        IReadOnlyList<Guid>? trajectoryFactIds = null) => new(
         JudgeName: "judge-a",
         Provider: "openai",
         ModelId: "judge-model",
@@ -54,7 +55,8 @@ public sealed class NewsRiskLiveJudgmentRenderTests
         ObservationSupply: NewsRiskAssessmentBundle.Complete,
         TypingCompleteness: typing,
         FamilyBundle: NewsJudgmentFamilyBundle.Capped,
-        Families: [new NewsJudgmentFamilyRef(Guid.NewGuid(), Guid.NewGuid(), 3, 2)]);
+        Families: [new NewsJudgmentFamilyRef(Guid.NewGuid(), Guid.NewGuid(), 3, 2)],
+        TrajectoryFactIds: trajectoryFactIds);
 
     private static NewsRiskLiveCompany Company(
         IReadOnlyList<NewsRiskLiveJudgment>? judgments, string? marker) => new(
@@ -155,5 +157,50 @@ public sealed class NewsRiskLiveJudgmentRenderTests
 
         Assert.DoesNotContain("Two-stage judgment", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("Single-call vs two-stage", markdown, StringComparison.Ordinal);
+    }
+
+    // ── Spec 187 §1: the trajectory's own provenance renders beside it ──────────────────────────────
+
+    [Fact]
+    public void AV2Judgment_RendersTheCitedTrajectoryEvidence()
+    {
+        var factId = Guid.Parse("77770000-0000-4000-8000-000000000001");
+
+        var markdown = Render(Company([Judgment(trajectoryFactIds: [factId])], marker: null));
+
+        Assert.Contains(
+            "Trajectory evidence: `" + factId.ToString("D") + "`", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AV2UnknownJudgment_RendersAnExplicitEmptyEvidenceSet()
+    {
+        var markdown = Render(Company([Judgment(trajectoryFactIds: [])], marker: null));
+
+        Assert.Contains("Trajectory evidence: none cited", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AV1Judgment_RendersNotRecordedUnderV1_NeverAnEmptyEvidenceSet()
+    {
+        // Spec 187 §1: a historical v1 record has NO such field. Rendering it as an empty v2 evidence set
+        // would read as "the judge cited nothing", i.e. as proof of invalidity — a claim about a record
+        // that was written before the question was ever asked. Nothing on disk is rewritten (AD-8).
+        var markdown = Render(Company([Judgment(trajectoryFactIds: null)], marker: null));
+
+        Assert.Contains(
+            "Trajectory evidence: not recorded under news-judgment-v1", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("Trajectory evidence: none cited", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ANonJudgedRecord_RendersNoTrajectoryEvidenceLine()
+    {
+        // There is no trajectory to evidence, so the artifact says nothing about one.
+        var markdown = Render(
+            Company([Judgment(NewsJudgmentStatus.AttemptsExhausted)], marker: null));
+
+        Assert.DoesNotContain("Trajectory evidence:", markdown, StringComparison.Ordinal);
+        Assert.Contains("Status: **AttemptsExhausted**", markdown, StringComparison.Ordinal);
     }
 }

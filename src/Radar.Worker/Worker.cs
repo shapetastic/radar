@@ -79,6 +79,7 @@ public sealed class Worker : BackgroundService
     private readonly INewsTypingGenerator? _newsTypingGenerator;
     private readonly INewsJudgmentGenerator? _newsJudgmentGenerator;
     private readonly IWeeklyReportJudgmentRerenderer? _judgmentRerenderer;
+    private readonly INewsJudgmentCandidatePlanner? _candidatePlanner;
     private readonly IOperatingCallStartupValidator? _operatingCallValidator;
 
     public Worker(
@@ -101,7 +102,8 @@ public sealed class Worker : BackgroundService
         IOperatingCallStartupValidator? operatingCallValidator = null,
         INewsTypingGenerator? newsTypingGenerator = null,
         INewsJudgmentGenerator? newsJudgmentGenerator = null,
-        IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null)
+        IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null,
+        INewsJudgmentCandidatePlanner? candidatePlanner = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -129,6 +131,7 @@ public sealed class Worker : BackgroundService
         _newsTypingGenerator = newsTypingGenerator;
         _newsJudgmentGenerator = newsJudgmentGenerator;
         _judgmentRerenderer = judgmentRerenderer;
+        _candidatePlanner = candidatePlanner;
         _operatingCallValidator = operatingCallValidator;
     }
 
@@ -234,8 +237,16 @@ public sealed class Worker : BackgroundService
         // (whose live artifact embeds the judgment sections beside the single-call read), then efficacy.
         // Typing and the shadow are independent of each other, so moving typing ahead of the shadow (it ran
         // after it before spec 185) is behavior-neutral for both.
-        var typing = await RunNewsTypingAsync(result, ct).ConfigureAwait(false);
-        var judgment = await RunNewsJudgmentAsync(result, typing, ct).ConfigureAwait(false);
+        // Spec 187 §2: the ordered judgment-candidate plan is computed EXACTLY ONCE, here, from this run's
+        // structured strategy sections — then the SAME immutable instance is handed to the typing pass
+        // (which types those companies first) and to the judge (which judges them). Selection policy lives
+        // in one place (INewsJudgmentCandidatePlanner → the spec-179 §3 selector), so the companies typing
+        // prioritized ARE the companies judged, in the same order, by construction. The planner is
+        // registered WITH judgment, so a judgment-disabled run passes null and typing selects exactly as it
+        // did before spec 187 §2.
+        var candidatePlan = _candidatePlanner?.Plan(result.StrategySections);
+        var typing = await RunNewsTypingAsync(result, candidatePlan, ct).ConfigureAwait(false);
+        var judgment = await RunNewsJudgmentAsync(result, candidatePlan, typing, ct).ConfigureAwait(false);
         await RunNewsRiskShadowAsync(result, judgment, ct).ConfigureAwait(false);
         await RunEfficacyReportAsync(ct).ConfigureAwait(false);
     }
@@ -244,12 +255,15 @@ public sealed class Worker : BackgroundService
     // IRadarPipeline. It types archived spec-177 observations against the closed taxonomy (bounded per-run
     // per-reader), checkpoints deterministic fact families, and writes the attention-decomposition artifact.
     // Skipped entirely (dependency null) unless Radar:NewsResearch:Typing:Enabled in unfiltered full mode
-    // with a resolvable reader. The generator owns its own failure handling (a typing failure writes a named
+    // with a resolvable reader. Since spec 187 §2 it also receives this run's frozen judgment-candidate
+    // plan, so its bounded budget types the companies this same run is about to judge before draining the
+    // global queue.
+    // The generator owns its own failure handling (a typing failure writes a named
     // FAILED artifact and never rolls back the run); the belt-and-braces catch here keeps even an unexpected
     // escape from aborting the host loop. Returns the typed pass outcome for the spec-185 judgment step
     // (null when skipped or failed — the judge then structurally cannot run).
     private async Task<NewsTypingRunResult?> RunNewsTypingAsync(
-        RadarPipelineResult result, CancellationToken ct)
+        RadarPipelineResult result, NewsJudgmentCandidatePlan? candidatePlan, CancellationToken ct)
     {
         if (_newsTypingGenerator is null)
         {
@@ -258,7 +272,9 @@ public sealed class Worker : BackgroundService
 
         try
         {
-            return await _newsTypingGenerator.GenerateAsync(result.RunId, ct).ConfigureAwait(false);
+            return await _newsTypingGenerator
+                .GenerateAsync(result.RunId, ct, candidatePlan)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -280,7 +296,10 @@ public sealed class Worker : BackgroundService
     // semantic-read markers and the report file overwritten in place; when the judgment step is disabled no
     // re-render happens and the honest `? unassessed (no-judgment)` markers stand.
     private async Task<NewsJudgmentRunResult?> RunNewsJudgmentAsync(
-        RadarPipelineResult result, NewsTypingRunResult? typing, CancellationToken ct)
+        RadarPipelineResult result,
+        NewsJudgmentCandidatePlan? candidatePlan,
+        NewsTypingRunResult? typing,
+        CancellationToken ct)
     {
         if (_newsJudgmentGenerator is null)
         {
@@ -290,7 +309,7 @@ public sealed class Worker : BackgroundService
         try
         {
             var judgment = await _newsJudgmentGenerator
-                .GenerateAsync(result.RunId, result.StrategySections, typing, ct)
+                .GenerateAsync(result.RunId, candidatePlan, typing, ct)
                 .ConfigureAwait(false);
 
             if (judgment is { Markers: { } markers } && _judgmentRerenderer is not null)

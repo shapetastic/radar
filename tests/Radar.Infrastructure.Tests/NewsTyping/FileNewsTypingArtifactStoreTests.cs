@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -10,10 +11,12 @@ using Radar.Infrastructure.NewsTyping;
 namespace Radar.Infrastructure.Tests.NewsTyping;
 
 /// <summary>
-/// Spec 186 §2: the decomposition artifact gains the ADDITIVE per-cohort <c>RetryExhausted</c> count and its
-/// schema tag is bumped to <c>news-typing-decomposition-v2</c>. Readers are BY NAME, so a consumer written
-/// against v1 reads a v2 document unchanged — asserted here against the production writer rather than
-/// asserted in prose.
+/// Spec 186 §2: the decomposition artifact gains the ADDITIVE per-cohort <c>RetryExhausted</c> count, and
+/// spec 187 adds <c>ReservedWithoutOutcome</c> (§3) plus the <c>CandidatePrioritySelected</c> /
+/// <c>GeneralSelected</c> lane split (§2) while §4 corrects what <c>UntypedRemaining</c> MEANS — so the
+/// schema tag moves to <c>news-typing-decomposition-v3</c> ONCE, jointly, not per section. Readers are BY
+/// NAME, so a consumer written against v1 reads a v3 document unchanged — asserted here against the
+/// production writer rather than asserted in prose.
 /// </summary>
 public sealed class FileNewsTypingArtifactStoreTests : IDisposable
 {
@@ -74,7 +77,11 @@ public sealed class FileNewsTypingArtifactStoreTests : IDisposable
         Converters = { new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: false) },
     };
 
-    private static NewsTypingDecompositionDocument Document(int retryExhausted) => new(
+    private static NewsTypingDecompositionDocument Document(
+        int retryExhausted,
+        int reservedWithoutOutcome = 0,
+        int candidatePrioritySelected = 0,
+        int generalSelected = 0) => new(
         SchemaVersion: NewsTypingDecompositionDocument.CurrentSchemaVersion,
         RunId: new Guid("cccccccc-0000-0000-0000-000000000001"),
         WindowStartUtc: new DateTimeOffset(2026, 7, 24, 0, 0, 0, TimeSpan.Zero),
@@ -110,7 +117,10 @@ public sealed class FileNewsTypingArtifactStoreTests : IDisposable
                             new NewsTypingDecompositionTypeRow(
                                 NewsEventType.FinancingOrDilution, 3, 2, 2),
                         ],
-                        RetryExhausted: retryExhausted),
+                        RetryExhausted: retryExhausted,
+                        ReservedWithoutOutcome: reservedWithoutOutcome,
+                        CandidatePrioritySelected: candidatePrioritySelected,
+                        GeneralSelected: generalSelected),
                 ]),
         ],
         ObservationsWithoutCompany: 0,
@@ -127,10 +137,10 @@ public sealed class FileNewsTypingArtifactStoreTests : IDisposable
     }
 
     [Fact]
-    public void SchemaTag_IsTheNamedV2Bump()
+    public void SchemaTag_IsTheNamedV3Bump()
     {
         Assert.Equal(
-            "news-typing-decomposition-v2", NewsTypingDecompositionDocument.CurrentSchemaVersion);
+            "news-typing-decomposition-v3", NewsTypingDecompositionDocument.CurrentSchemaVersion);
     }
 
     [Fact]
@@ -143,7 +153,7 @@ public sealed class FileNewsTypingArtifactStoreTests : IDisposable
         // The by-NAME v1 reader still binds every field it knows and simply ignores the additive one.
         var v1 = JsonSerializer.Deserialize<V1Document>(json, ReaderOptions);
         Assert.NotNull(v1);
-        Assert.Equal("news-typing-decomposition-v2", v1.SchemaVersion);
+        Assert.Equal("news-typing-decomposition-v3", v1.SchemaVersion);
         Assert.Equal(NewsTypingDecompositionDocument.Caveat181, v1.Caveat);
         var cohort = Assert.Single(Assert.Single(v1.Companies).Cohorts);
         Assert.Equal("a", cohort.ReaderName);
@@ -164,5 +174,111 @@ public sealed class FileNewsTypingArtifactStoreTests : IDisposable
 
         Assert.NotNull(parsed);
         Assert.Equal(2, Assert.Single(Assert.Single(parsed.Companies).Cohorts).RetryExhausted);
+    }
+
+    /// <summary>
+    /// Spec 187 §3: the additive <c>ReservedWithoutOutcome</c> counter is written by name and round-trips,
+    /// and the by-NAME v1 reader — which knows nothing about it — still binds every field it does know.
+    /// Existing v1/v2 artifacts on disk are untouched; this is the "additive, not a migration" proof.
+    /// </summary>
+    [Fact]
+    public async Task ReservedWithoutOutcome_IsWrittenByName_AndAV1ReaderIsStillUnaffected()
+    {
+        var json = await WriteAndReadJsonAsync(Document(retryExhausted: 1, reservedWithoutOutcome: 4));
+
+        Assert.Contains("\"reservedWithoutOutcome\": 4", json, StringComparison.Ordinal);
+
+        var v1 = JsonSerializer.Deserialize<V1Document>(json, ReaderOptions);
+        Assert.NotNull(v1);
+        var v1Cohort = Assert.Single(Assert.Single(v1.Companies).Cohorts);
+        Assert.Equal(3, v1Cohort.ObservationsTyped);
+        Assert.Equal(1, v1Cohort.UntypedRemaining);
+
+        var parsed = JsonSerializer.Deserialize<NewsTypingDecompositionDocument>(json, ReaderOptions);
+        Assert.NotNull(parsed);
+        Assert.Equal(4, Assert.Single(Assert.Single(parsed.Companies).Cohorts).ReservedWithoutOutcome);
+    }
+
+    /// <summary>
+    /// Spec 187 §2: the additive per-company lane split is written by name and round-trips, and the by-NAME
+    /// v1 reader — which knows nothing about either counter — still binds every field it does know. The
+    /// schema tag does NOT move again: §2 and §4 share the single v3 bump.
+    /// </summary>
+    [Fact]
+    public async Task TheLaneSplit_IsWrittenByName_AndAV1ReaderIsStillUnaffected()
+    {
+        var json = await WriteAndReadJsonAsync(
+            Document(retryExhausted: 0, candidatePrioritySelected: 7, generalSelected: 5));
+
+        Assert.Contains("\"candidatePrioritySelected\": 7", json, StringComparison.Ordinal);
+        Assert.Contains("\"generalSelected\": 5", json, StringComparison.Ordinal);
+
+        var v1 = JsonSerializer.Deserialize<V1Document>(json, ReaderOptions);
+        Assert.NotNull(v1);
+        Assert.Equal("news-typing-decomposition-v3", v1.SchemaVersion);
+        var v1Cohort = Assert.Single(Assert.Single(v1.Companies).Cohorts);
+        Assert.Equal(3, v1Cohort.ObservationsTyped);
+        Assert.Equal(1, v1Cohort.UntypedRemaining);
+
+        var parsed = JsonSerializer.Deserialize<NewsTypingDecompositionDocument>(json, ReaderOptions);
+        Assert.NotNull(parsed);
+        var cohort = Assert.Single(Assert.Single(parsed!.Companies).Cohorts);
+        Assert.Equal(7, cohort.CandidatePrioritySelected);
+        Assert.Equal(5, cohort.GeneralSelected);
+    }
+
+    /// <summary>
+    /// A document written with the pre-187 §2 field set (no lane-split keys at all) hydrates as 0/0 — the
+    /// trailing-defaulted-additive convention, checked against the real deserializer instead of assumed.
+    /// </summary>
+    [Fact]
+    public async Task APreSpec187LaneSplitDocument_WithoutTheAdditiveCounters_StillHydrates()
+    {
+        var json = await WriteAndReadJsonAsync(
+            Document(retryExhausted: 0, candidatePrioritySelected: 7, generalSelected: 5));
+        var document = JsonNode.Parse(json)!.AsObject();
+        foreach (var company in document["companies"]!.AsArray())
+        {
+            foreach (var cohort in company!["cohorts"]!.AsArray())
+            {
+                Assert.True(cohort!.AsObject().Remove("candidatePrioritySelected"));
+                Assert.True(cohort.AsObject().Remove("generalSelected"));
+            }
+        }
+
+        var stripped = document.ToJsonString();
+        var parsed = JsonSerializer.Deserialize<NewsTypingDecompositionDocument>(stripped, ReaderOptions);
+
+        Assert.NotNull(parsed);
+        var hydrated = Assert.Single(Assert.Single(parsed!.Companies).Cohorts);
+        Assert.Equal(0, hydrated.CandidatePrioritySelected);
+        Assert.Equal(0, hydrated.GeneralSelected);
+    }
+
+    /// <summary>
+    /// A document written with the pre-187 field set (no <c>reservedWithoutOutcome</c> key at all) hydrates
+    /// as 0 rather than failing — the trailing-defaulted-additive convention, checked against the real
+    /// deserializer instead of assumed.
+    /// </summary>
+    [Fact]
+    public async Task APreSpec187Document_WithoutTheAdditiveCounter_StillHydrates()
+    {
+        var json = await WriteAndReadJsonAsync(Document(retryExhausted: 1));
+        var document = JsonNode.Parse(json)!.AsObject();
+        foreach (var company in document["companies"]!.AsArray())
+        {
+            foreach (var cohort in company!["cohorts"]!.AsArray())
+            {
+                Assert.True(cohort!.AsObject().Remove("reservedWithoutOutcome"));
+            }
+        }
+
+        var stripped = document.ToJsonString();
+        Assert.DoesNotContain("reservedWithoutOutcome", stripped, StringComparison.Ordinal);
+
+        var parsed = JsonSerializer.Deserialize<NewsTypingDecompositionDocument>(stripped, ReaderOptions);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(0, Assert.Single(Assert.Single(parsed.Companies).Cohorts).ReservedWithoutOutcome);
     }
 }
