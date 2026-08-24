@@ -120,11 +120,13 @@ function Read-Profile([string]$name) {
     return (Get-Content $path -Raw | ConvertFrom-Json)
 }
 
-# Flatten a ConvertFrom-Json node into $acc (ordered dict) as "Radar:A:B" -> value. Skips _comment keys.
+# Flatten a ConvertFrom-Json node into $acc (ordered dict) as "Radar:A:B" -> value. Skips _comment* keys
+# (a JSON object cannot repeat "_comment", so multi-note sections use _comment2, _comment3, ... - all of
+# them are annotations, none may reach the Worker's strict config-key allowlists).
 function Add-Flattened($node, [string]$prefix, [System.Collections.Specialized.OrderedDictionary]$acc) {
     if ($node -is [System.Management.Automation.PSCustomObject]) {
         foreach ($p in $node.PSObject.Properties) {
-            if ($p.Name -eq '_comment') { continue }
+            if ($p.Name -like '_comment*') { continue }
             $key = if ($prefix) { "$($prefix):$($p.Name)" } else { $p.Name }
             Add-Flattened $p.Value $key $acc
         }
