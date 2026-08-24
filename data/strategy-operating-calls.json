@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "strategy-operating-calls-v1",
+  "schemaVersion": "strategy-operating-calls-v2",
   "calls": [
     {
       "strategy": "disclosure-led-v11",

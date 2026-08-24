@@ -14,7 +14,12 @@ public sealed class OperatingCallReducerTests
 
     private static readonly DateTimeOffset CallAt = new(2026, 8, 23, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset ReviewBy = new(2026, 9, 5, 0, 0, 0, TimeSpan.Zero);
-    private static readonly DateTimeOffset VerdictAt = new(2026, 10, 1, 0, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset ResolvedAt = new(2026, 10, 1, 0, 0, 0, TimeSpan.Zero);
+
+    // Spec 186 §3: a verdict is identified SEMANTICALLY, never by an instant. These stand in for the
+    // artifact's gateVerdictId column.
+    private const string VerdictId = "9f1c0e7a2b4d";
+    private const string OtherVerdictId = "0000deadbeef";
 
     private static ScoringStrategyDefinition Strategy(
         string name, bool isPrimary = false, StrategyPurpose purpose = StrategyPurpose.Research) =>
@@ -32,6 +37,7 @@ public sealed class OperatingCallReducerTests
         string strategy,
         OperatingCall call,
         bool overridesGate = false,
+        string? overridesVerdictId = null,
         DateTimeOffset? asOf = null,
         string? resolutionRule = "rule text",
         OperatingCallResolution? resolution = null) =>
@@ -44,7 +50,8 @@ public sealed class OperatingCallReducerTests
             OverridesGate: overridesGate,
             ReviewByUtc: ReviewBy,
             ResolutionRule: resolutionRule,
-            Resolution: resolution);
+            Resolution: resolution,
+            OverridesVerdictId: overridesVerdictId);
 
     private static StrategyOperatingCallsFile File(
         bool stopAll = false, params StrategyOperatingCall[] calls) =>
@@ -88,7 +95,7 @@ public sealed class OperatingCallReducerTests
             stopAll: false,
             Call("alpha", OperatingCall.Lead),
             Call("default", OperatingCall.DoNotLead));
-        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: false, VerdictAt) };
+        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: false, VerdictId) };
 
         var resolved = OperatingCallReducer.Reduce(file, Strategies, verdicts);
 
@@ -103,44 +110,79 @@ public sealed class OperatingCallReducerTests
     }
 
     [Fact]
-    public void GateDefault_WinsOverAnOverrideThatPredatesTheVerdict()
+    public void GateDefault_WinsOverAnOverrideBoundToADifferentVerdict()
     {
-        // overridesGate: true, but the call PREDATES the verdict — you cannot pre-override a verdict that
-        // did not exist yet (spec 184 §2 rule 1).
+        // overridesGate: true, but the call binds to a verdict id the artifact no longer carries — new
+        // admitted evidence (or an AD-16 prerequisite transition) re-armed the gate default, and the stale
+        // binding is REPORTED rather than silently dropped (spec 186 §3).
         var file = File(
             stopAll: false,
-            Call("alpha", OperatingCall.Lead, overridesGate: true, asOf: VerdictAt.AddDays(-1)));
-        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: false, VerdictAt) };
+            Call("alpha", OperatingCall.Lead, overridesGate: true, overridesVerdictId: OtherVerdictId));
+        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: false, VerdictId) };
 
         var resolved = OperatingCallReducer.Reduce(file, Strategies, verdicts);
 
         Assert.Equal(OperatingCall.Stop, resolved.For("alpha")!.Call);
         Assert.True(resolved.StopAll);
+
+        var stale = Assert.Single(resolved.StaleOverrides);
+        Assert.Equal("alpha", stale.StrategyName);
+        Assert.Equal(OtherVerdictId, stale.BoundVerdictId);
+        Assert.Equal(VerdictId, stale.CurrentVerdictId);
     }
 
     [Fact]
-    public void Override_Wins_WhenItPostdatesTheVerdictAndDeclaresOverridesGate()
+    public void GateDefault_WinsOverAnOverrideWhenTheArtifactCarriesNoVerdictIdentity()
     {
+        // The pre-186 artifact path: the identity is UNKNOWN, so nothing can match it. Fail closed toward
+        // the gate default, and say so — never fabricate an id (AD-8).
         var file = File(
             stopAll: false,
-            Call("alpha", OperatingCall.Lead, overridesGate: true, asOf: VerdictAt.AddDays(1)));
-        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: false, VerdictAt) };
+            Call("alpha", OperatingCall.Lead, overridesGate: true, overridesVerdictId: VerdictId));
+        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: false, VerdictId: "") };
 
         var resolved = OperatingCallReducer.Reduce(file, Strategies, verdicts);
 
-        var alpha = resolved.For("alpha")!;
-        Assert.Equal(OperatingCall.Lead, alpha.Call);
-        Assert.Equal(ResolvedCallProvenance.DeclaredCall, alpha.Provenance);
-        Assert.NotNull(alpha.GateVerdict); // the overridden verdict stays visible
-        Assert.Equal("alpha", resolved.LeadStrategyName);
-        Assert.False(resolved.StopAll);
+        Assert.Equal(OperatingCall.Stop, resolved.For("alpha")!.Call);
+        Assert.True(resolved.StopAll);
+        Assert.Equal(string.Empty, Assert.Single(resolved.StaleOverrides).CurrentVerdictId);
+    }
+
+    [Fact]
+    public void Override_Wins_WhenItBindsToTheCurrentVerdictId_WhateverTheCallInstant()
+    {
+        // The call's asOfUtc is deliberately a year BEFORE and a year AFTER in the two cases: no timestamp
+        // participates in the override rule any more, so both must resolve identically (spec 186 §3).
+        foreach (var asOf in new[] { CallAt.AddYears(-1), CallAt.AddYears(1) })
+        {
+            var file = File(
+                stopAll: false,
+                Call(
+                    "alpha",
+                    OperatingCall.Lead,
+                    overridesGate: true,
+                    overridesVerdictId: VerdictId,
+                    asOf: asOf));
+            var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: false, VerdictId) };
+
+            var resolved = OperatingCallReducer.Reduce(file, Strategies, verdicts);
+
+            var alpha = resolved.For("alpha")!;
+            Assert.Equal(OperatingCall.Lead, alpha.Call);
+            Assert.Equal(ResolvedCallProvenance.DeclaredCall, alpha.Provenance);
+            Assert.NotNull(alpha.GateVerdict); // the overridden verdict stays visible
+            Assert.Null(alpha.StaleOverride);  // a bound override is not stale
+            Assert.Empty(resolved.StaleOverrides);
+            Assert.Equal("alpha", resolved.LeadStrategyName);
+            Assert.False(resolved.StopAll);
+        }
     }
 
     [Fact]
     public void GatePassed_PromotesTheArm_WhenTheDeclaredLeadIsTheSameArm()
     {
         var file = File(stopAll: false, Call("alpha", OperatingCall.Lead));
-        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: true, VerdictAt) };
+        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: true, VerdictId) };
 
         var resolved = OperatingCallReducer.Reduce(file, Strategies, verdicts);
 
@@ -152,7 +194,7 @@ public sealed class OperatingCallReducerTests
     public void GatePassed_BesideADifferentDeclaredLead_FailsLoudly_NeverPicksSilently()
     {
         var file = File(stopAll: false, Call("alpha", OperatingCall.Lead));
-        var verdicts = new[] { new StrategyGateVerdict("beta", Passed: true, VerdictAt) };
+        var verdicts = new[] { new StrategyGateVerdict("beta", Passed: true, VerdictId) };
 
         var ex = Assert.Throws<InvalidOperationException>(
             () => OperatingCallReducer.Reduce(file, Strategies, verdicts));
@@ -176,7 +218,7 @@ public sealed class OperatingCallReducerTests
     public void DeclaredStopAll_IsNotUndoneByAGatePassedVerdict()
     {
         var file = File(stopAll: true, Call("default", OperatingCall.DoNotLead));
-        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: true, VerdictAt) };
+        var verdicts = new[] { new StrategyGateVerdict("alpha", Passed: true, VerdictId) };
 
         var resolved = OperatingCallReducer.Reduce(file, Strategies, verdicts);
 
@@ -196,7 +238,7 @@ public sealed class OperatingCallReducerTests
         };
         var verdicts = new[]
         {
-            new StrategyGateVerdict("beta", Passed: false, VerdictAt),
+            new StrategyGateVerdict("beta", Passed: false, VerdictId),
         };
 
         var forward = OperatingCallReducer.Reduce(File(false, calls), Strategies, verdicts);
@@ -290,7 +332,7 @@ public sealed class OperatingCallReducerTests
                 OperatingCall.Lead,
                 resolutionRule: null,
                 resolution: new OperatingCallResolution(
-                    OperatingCallOutcome.Wrong, VerdictAt, "data/efficacy/strategy-paired-comparison.md")));
+                    OperatingCallOutcome.Wrong, ResolvedAt, "data/efficacy/strategy-paired-comparison.md")));
         var ex = Assert.Throws<InvalidOperationException>(
             () => OperatingCallReducer.Validate(file, Strategies));
         Assert.Contains("resolution block but no resolutionRule", ex.Message);

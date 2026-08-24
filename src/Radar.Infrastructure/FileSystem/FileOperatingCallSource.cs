@@ -16,11 +16,36 @@ public sealed record FileOperatingCallSourceOptions(string FilePath);
 /// <see cref="InvalidOperationException"/> naming the file and the violated rule — a typo'd call silently
 /// read as "no calls" would hand reader-facing prominence out by accident, the exact fail-open shape
 /// specs 174/176 exist to prevent.
+/// <para>
+/// <b>Two schema versions (spec 186 §3).</b> <c>strategy-operating-calls-v2</c> is current and adds
+/// <c>overridesVerdictId</c> — REQUIRED whenever <c>overridesGate</c> is true, because an override now
+/// binds to the verdict it overrides BY NAME rather than by post-dating its (filesystem-mtime) instant.
+/// <c>strategy-operating-calls-v1</c> stays readable and behaves exactly as before WITHOUT overrides; it
+/// simply cannot express one, so a v1 file declaring <c>overridesGate: true</c> fails validation naming the
+/// remedy, and <c>overridesVerdictId</c> in a v1 file is an unknown property.
+/// </para>
 /// </summary>
 public sealed class FileOperatingCallSource : IOperatingCallSource
 {
-    /// <summary>The one schema this reader understands.</summary>
-    public const string SupportedSchemaVersion = "strategy-operating-calls-v1";
+    /// <summary>
+    /// The LEGACY schema (spec 184). Still readable, but it cannot EXPRESS a gate override: the pre-186
+    /// override rule was "the call post-dates the verdict", which spec 186 §3 replaced with identity
+    /// binding. A v1 file carrying <c>overridesGate: true</c> is therefore rejected, naming the remedy.
+    /// </summary>
+    public const string LegacySchemaVersion = "strategy-operating-calls-v1";
+
+    /// <summary>
+    /// The CURRENT schema (spec 186 §3): identical to v1 except that a call may carry
+    /// <c>overridesVerdictId</c>, which is REQUIRED whenever <c>overridesGate</c> is true.
+    /// </summary>
+    public const string SupportedSchemaVersion = "strategy-operating-calls-v2";
+
+    /// <summary>Every accepted schema version, newest first (both are read; only v2 can express an override).</summary>
+    public static IReadOnlyList<string> AcceptedSchemaVersions { get; } =
+    [
+        SupportedSchemaVersion,
+        LegacySchemaVersion,
+    ];
 
     private readonly FileOperatingCallSourceOptions _options;
 
@@ -68,7 +93,13 @@ public sealed class FileOperatingCallSource : IOperatingCallSource
             throw Fail(path, "the root must be a JSON object");
         }
 
-        string? schemaVersion = null;
+        // The schema version is resolved BEFORE the calls, in its own pass: which properties a call may
+        // carry depends on it, and JSON object order is not a contract (spec 186 §3).
+        var schemaVersion = ResolveSchemaVersion(path, root);
+        var version = string.Equals(schemaVersion, SupportedSchemaVersion, StringComparison.Ordinal)
+            ? CallsSchema.V2
+            : CallsSchema.V1;
+
         var stopAll = false;
         var calls = new List<StrategyOperatingCall>();
 
@@ -77,8 +108,7 @@ public sealed class FileOperatingCallSource : IOperatingCallSource
             switch (property.Name)
             {
                 case "schemaVersion":
-                    schemaVersion = RequireString(path, property, "schemaVersion");
-                    break;
+                    break; // already resolved and validated above
                 case "globalCall":
                     var token = RequireString(path, property, "globalCall");
                     if (!string.Equals(token, "StopAll", StringComparison.Ordinal))
@@ -98,7 +128,7 @@ public sealed class FileOperatingCallSource : IOperatingCallSource
                     var index = 0;
                     foreach (var element in property.Value.EnumerateArray())
                     {
-                        calls.Add(ParseCall(path, element, index));
+                        calls.Add(ParseCall(path, element, index, version));
                         index++;
                     }
 
@@ -110,21 +140,43 @@ public sealed class FileOperatingCallSource : IOperatingCallSource
             }
         }
 
+        return new StrategyOperatingCallsFile(path, schemaVersion, stopAll, calls);
+    }
+
+    /// <summary>The two accepted schema shapes; only <see cref="V2"/> can express a gate override.</summary>
+    private enum CallsSchema
+    {
+        V1,
+        V2,
+    }
+
+    private static string ResolveSchemaVersion(string path, JsonElement root)
+    {
+        string? schemaVersion = null;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (string.Equals(property.Name, "schemaVersion", StringComparison.Ordinal))
+            {
+                schemaVersion = RequireString(path, property, "schemaVersion");
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(schemaVersion))
         {
             throw Fail(path, "schemaVersion is missing");
         }
 
-        if (!string.Equals(schemaVersion, SupportedSchemaVersion, StringComparison.Ordinal))
+        if (!AcceptedSchemaVersions.Contains(schemaVersion, StringComparer.Ordinal))
         {
             throw Fail(path, $"schemaVersion '{schemaVersion}' is not supported — this reader understands "
-                + $"'{SupportedSchemaVersion}' only");
+                + string.Join(" and ", AcceptedSchemaVersions.Select(v => $"'{v}'")) + " only");
         }
 
-        return new StrategyOperatingCallsFile(path, schemaVersion, stopAll, calls);
+        return schemaVersion;
     }
 
-    private static StrategyOperatingCall ParseCall(string path, JsonElement element, int index)
+    private static StrategyOperatingCall ParseCall(
+        string path, JsonElement element, int index, CallsSchema schema)
     {
         if (element.ValueKind != JsonValueKind.Object)
         {
@@ -137,6 +189,7 @@ public sealed class FileOperatingCallSource : IOperatingCallSource
         string? basis = null;
         OperatingCallActor? actor = null;
         var overridesGate = false;
+        string? overridesVerdictId = null;
         DateTimeOffset? reviewByUtc = null;
         string? resolutionRule = null;
         OperatingCallResolution? resolution = null;
@@ -175,6 +228,10 @@ public sealed class FileOperatingCallSource : IOperatingCallSource
 
                     overridesGate = property.Value.GetBoolean();
                     break;
+                case "overridesVerdictId" when schema == CallsSchema.V2:
+                    overridesVerdictId = RequireString(
+                        path, property, $"calls[{index}].overridesVerdictId");
+                    break;
                 case "reviewByUtc":
                     reviewByUtc = ParseUtc(path, property, $"calls[{index}].reviewByUtc");
                     break;
@@ -185,9 +242,12 @@ public sealed class FileOperatingCallSource : IOperatingCallSource
                     resolution = ParseResolution(path, property.Value, index);
                     break;
                 default:
+                    // `overridesVerdictId` is a v2-only property, so in a v1 file it falls through to here
+                    // and is rejected as unknown — exactly the strict rule every other stray key meets.
                     throw Fail(path, $"calls[{index}] carries unknown property '{property.Name}' — the "
                         + "schema allows strategy, call, asOfUtc, basis, actor, overridesGate, reviewByUtc, "
-                        + "resolutionRule and resolution only");
+                        + "resolutionRule and resolution"
+                        + (schema == CallsSchema.V2 ? ", and overridesVerdictId only" : " only"));
             }
         }
 
@@ -198,9 +258,37 @@ public sealed class FileOperatingCallSource : IOperatingCallSource
                 + "call, asOfUtc, basis, actor and reviewByUtc");
         }
 
+        // Spec 186 §3. An override BINDS to the verdict it overrides, by name — v1 cannot express that
+        // binding (its rule was the deleted "the call post-dates the verdict"), and in v2 the binding is
+        // mandatory. Both failures name the file and the remedy; an unbound override would be an override
+        // that quietly applies to whatever verdict happens to be on disk next.
+        if (overridesGate && schema == CallsSchema.V1)
+        {
+            throw Fail(path, $"calls[{index}] ('{strategy}') declares overridesGate: true under "
+                + $"schemaVersion '{LegacySchemaVersion}', which cannot express which verdict is being "
+                + $"overridden — migrate to {SupportedSchemaVersion} and bind the override to a verdict id "
+                + "(the gateVerdictId column of data/efficacy/strategy-paired-comparison.csv, also stated "
+                + "in the .md artifact)");
+        }
+
+        if (overridesGate && overridesVerdictId is null)
+        {
+            throw Fail(path, $"calls[{index}] ('{strategy}') declares overridesGate: true without "
+                + "overridesVerdictId — an override binds to the verdict it overrides BY NAME, never by "
+                + "timestamp; set overridesVerdictId to the gateVerdictId of the verdict being overridden "
+                + "(data/efficacy/strategy-paired-comparison.csv)");
+        }
+
+        if (!overridesGate && overridesVerdictId is not null)
+        {
+            throw Fail(path, $"calls[{index}] ('{strategy}') carries overridesVerdictId without "
+                + "overridesGate: true — a bound verdict id that overrides nothing reads as an override and "
+                + "is not one; declare overridesGate: true, or remove the binding");
+        }
+
         return new StrategyOperatingCall(
             strategy, call.Value, asOfUtc.Value, basis, actor.Value, overridesGate, reviewByUtc.Value,
-            resolutionRule, resolution);
+            resolutionRule, resolution, overridesVerdictId);
     }
 
     private static OperatingCallResolution ParseResolution(string path, JsonElement element, int index)

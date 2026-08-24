@@ -8,10 +8,17 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// </summary>
 public enum NewsJudgmentTrajectory
 {
-    Improving = 0,
+    /// <summary>
+    /// The degraded state, and DELIBERATELY the zero value (the spec-182 convention, applied by spec 186):
+    /// a record that somehow hydrates as the default must never read as the BEST state. Persistence is
+    /// token-only everywhere (the shared file-store JSON options render enums as names and reject integer
+    /// values; the wire shape is a string parsed by <see cref="Radar.Application.NewsTyping.NewsTypingTokens"/>,
+    /// which rejects digits), so the member order carries no persisted or wire meaning.
+    /// </summary>
+    Unknown = 0,
+    Improving,
     Deteriorating,
     Mixed,
-    Unknown,
 }
 
 /// <summary>

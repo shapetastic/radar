@@ -11,7 +11,12 @@ namespace Radar.Application.NewsTyping;
 /// </summary>
 public enum NewsTypingCompleteness
 {
-    /// <summary>At least one typing attempt for the company FAILED this run (provider/parse/validation). Takes precedence over Backlog.</summary>
+    /// <summary>
+    /// At least one typing attempt for the company FAILED this run (provider/parse/validation), OR the
+    /// company holds an in-window observation whose typing attempts are EXHAUSTED (spec 186 §2 — retries
+    /// are bounded, and an exhausted observation will never be typed in this cohort, so it is a permanent
+    /// hole, not a deferral). Takes precedence over Backlog.
+    /// </summary>
     Failed = 0,
 
     /// <summary>At least one in-window observation for the company remains untyped (deferred by the per-run cap).</summary>
@@ -33,17 +38,25 @@ public sealed record NewsTypingFactRef(
     NewsObservationCaptureMode CaptureMode);
 
 /// <summary>
-/// One extractor cohort's view of one typing pass (spec 185 §5): the checkpoint families this pass built,
-/// the fact lookup behind them, the per-company typing-completeness map over the window, and the stage-1
-/// fact-drop count (the extraction side of the extraction-vs-judgment error split). Exposes the generator's
-/// existing in-memory join instead of adding a read seam to the write-only family snapshot store.
+/// One extractor cohort's view of one typing pass (spec 185 §5): the checkpoint families this pass built
+/// (spec 186 §4's WINDOW PROJECTION — durable full-history ids, in-window representatives and metadata, so
+/// every <c>RepresentativeFactId</c> resolves in <see cref="NewsTypingCohortRunResult.FactsById"/>),
+/// the fact lookup behind them, the per-company typing-completeness map over the window, the stage-1
+/// fact-drop count (the extraction side of the extraction-vs-judgment error split), and the spec-186 §2
+/// count of observations whose typing attempts are EXHAUSTED (they left selection — visible, never silent).
+/// That count is PASS-WIDE (window and backlog alike, since an exhausted backlog article is a permanent
+/// cost fact), while the decomposition artifact reports its own per-company IN-WINDOW count and only an
+/// in-window exhaustion degrades a company's completeness above.
+/// Exposes the generator's existing in-memory join instead of adding a read seam to the write-only family
+/// snapshot store.
 /// </summary>
 public sealed record NewsTypingCohortRunResult(
     NewsTypingReaderIdentity Reader,
     IReadOnlyList<FactFamilyRecord> Families,
     IReadOnlyDictionary<Guid, NewsTypingFactRef> FactsById,
     IReadOnlyDictionary<Guid, NewsTypingCompleteness> TypingCompletenessByCompany,
-    int FactsDroppedInWindow);
+    int FactsDroppedInWindow,
+    int RetryExhausted);
 
 /// <summary>
 /// The typed outcome of one typing pass (spec 185 §5), returned by <see cref="INewsTypingGenerator"/> so the

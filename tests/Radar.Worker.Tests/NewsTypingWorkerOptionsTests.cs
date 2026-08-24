@@ -181,11 +181,41 @@ public sealed class NewsTypingWorkerOptionsTests
     [InlineData("Radar:NewsResearch:Typing:MaxNewTypingsPerRun", "0")]
     [InlineData("Radar:NewsResearch:Typing:MaxNewTypingsPerRun", "-5")]
     [InlineData("Radar:NewsResearch:Typing:LookbackDays", "0")]
+    // Spec 186 §2: the retry bounds are validated at the SAME boundary as their siblings. Zero is rejected
+    // for the retry lane specifically — it would re-permit total retry starvation.
+    [InlineData("Radar:NewsResearch:Typing:MaxTypingAttempts", "0")]
+    [InlineData("Radar:NewsResearch:Typing:MaxTypingAttempts", "-1")]
+    [InlineData("Radar:NewsResearch:Typing:MaxRetryTypingsPerRun", "0")]
+    [InlineData("Radar:NewsResearch:Typing:MaxRetryTypingsPerRun", "-1")]
     public void InvalidLimits_FailStartup_EvenWhileTypingIsDisabled(string key, string value)
     {
         var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider((key, value)));
 
         Assert.Contains(key.Split(':')[^1], ex.Message);
+    }
+
+    [Fact]
+    public void RetryLaneAtOrAboveThePerRunCap_FailsStartup_NamingBothKeys()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(
+            ("Radar:NewsResearch:Typing:MaxNewTypingsPerRun", "10"),
+            ("Radar:NewsResearch:Typing:MaxRetryTypingsPerRun", "10")));
+
+        Assert.Contains("MaxRetryTypingsPerRun", ex.Message);
+        Assert.Contains("MaxNewTypingsPerRun", ex.Message);
+    }
+
+    [Fact]
+    public void RetryBounds_HaveTheirDeclaredDefaults()
+    {
+        using var provider = BuildProvider(EnabledWithAmbientOllama());
+
+        var options = provider.GetRequiredService<NewsTypingOptions>();
+        Assert.Equal(3, options.MaxTypingAttempts);
+        Assert.Equal(25, options.MaxRetryTypingsPerRun);
+        Assert.Equal(
+            new NewsTypingLimitsRecord(options.MaxNewTypingsPerRun, options.LookbackDays, 3, 25),
+            options.ToLimitsRecord());
     }
 
     [Fact]

@@ -9,6 +9,15 @@ namespace Radar.Application.Efficacy.Claims;
 /// </summary>
 public static class Ad15GateReasonCodes
 {
+    /// <summary>
+    /// The version of the gate-rule / reason-code VOCABULARY (spec 186 §3). It is an input to the semantic
+    /// gate-verdict identity (<c>GateVerdictIdentity</c>): the same evidence judged under a different rule
+    /// vocabulary is a DIFFERENT verdict, and an operating-call override bound to the old one must not
+    /// silently keep applying. Bump it whenever a code is added/removed/re-meant or the merit split below
+    /// changes.
+    /// </summary>
+    public const string VocabularyVersion = "ad15-gate-reasons-v1";
+
     // ---- price-side codes (spec 155, migrated verbatim) ------------------------------------------------
     public const string NoPredeclaredPrimary = "no-predeclared-primary-strategy";
     public const string NoPrecommittedBoundary = "no-precommitted-evaluation-boundary";
@@ -36,6 +45,37 @@ public static class Ad15GateReasonCodes
         InsufficientPurgedBlocks,
         MedianPairedDeltaNotPositive,
         IntervalLowerBoundNotPositive,
+        Ad16ScreenNotCalculated,
+        Ad16ScreenUnavailable,
+        Ad16ScreenPending,
+        Ad16ScreenInvalid,
+    ];
+
+    /// <summary>
+    /// The codes that mean the gate evaluated ON ITS MERITS and came out negative — i.e. a real VERDICT of
+    /// failure. THE one definition (spec 186 §3): both <c>StrategyEvidenceStatusCalculator</c> (which sees
+    /// the rendered reason text off the artifact) and <c>GateVerdictIdentity</c> (which sees the structured
+    /// reasons) read this list, so "is there a verdict?" cannot be answered two different ways.
+    /// </summary>
+    public static IReadOnlyList<string> MeritFailureCodes { get; } =
+    [
+        MedianPairedDeltaNotPositive,
+        IntervalLowerBoundNotPositive,
+    ];
+
+    /// <summary>
+    /// Every other code: the gate could not (yet) evaluate — accrual, missing predeclaration, or the AD-16
+    /// prerequisite. Those are PENDING, never failed: "not enough data yet" must never read as a negative
+    /// result. Kept as an explicit list (not "All minus merit") so the split is legible where it is used.
+    /// </summary>
+    public static IReadOnlyList<string> NonMeritCodes { get; } =
+    [
+        NoPredeclaredPrimary,
+        NoPrecommittedBoundary,
+        NoBaselines,
+        EmptyIntersection,
+        NoEligibleBlocks,
+        InsufficientPurgedBlocks,
         Ad16ScreenNotCalculated,
         Ad16ScreenUnavailable,
         Ad16ScreenPending,

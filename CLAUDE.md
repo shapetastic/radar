@@ -1073,7 +1073,9 @@ Do not hand back broken code.
     the stated "no call declared" condition, prominence stays with the storage primary by default) is the
     ONLY runtime input; `docs/strategy-lifecycle.md` is the append-only audit journal, never parsed. ONE
     deterministic, order-independent reducer (`OperatingCallReducer`): a persisted gate verdict wins unless
-    the call post-dates it AND carries `overridesGate: true` (`GatePassed → Lead`, `GateFailed → Stop`);
+    the call carries `overridesGate: true` AND ~~post-dates it~~ **binds to it by `overridesVerdictId`
+    (⚠ AMENDED BY SPEC 186 §3 — timestamp precedence is DELETED; see the spec-186 bullet)**
+    (`GatePassed → Lead`, `GateFailed → Stop`);
     otherwise the file call verbatim; an uncalled Research arm is an implicit Trial; after reduction exactly
     one Lead or StopAll — **zero Leads (the Lead arm gate-failed) resolves to the PREDECLARED fallback
     StopAll**, and two reduced Leads throw rather than pick silently. Validation (unknown strategy, call on a
@@ -1119,7 +1121,9 @@ Do not hand back broken code.
   company + capture mode + overlapping event types + token-set-Jaccard ≥ 0.6 over versioned normalization +
   7-day window, contradictions (differing number multisets, negation XOR) never merge, family id = builder
   version + company + capture mode + earliest member's normalized statement (never the member list),
-  snapshots append-only per cohort. Output: `data/news-typing/live/attention-decomposition-{date}.md|.json`
+  snapshots append-only per cohort. ⚠ **SUPERSEDED BY `fact-family-v2` (spec 186 §4)** — MEMBERSHIP is
+  byte-compatible, but identity gained a temporal anchor and the build split into segmentation + projection;
+  see the spec-186 bullet. Output: `data/news-typing/live/attention-decomposition-{date}.md|.json`
   — per company per reader×capture-mode cohort, type distribution + publisher breadth + family count beside
   raw count + honest incompleteness marking, carrying the §5 caveat verbatim. Read-side and shadow: no
   score, label, strategy, fingerprint, snapshot field or report rank moves; the pins do not move. Stage 2
@@ -1164,6 +1168,133 @@ Do not hand back broken code.
   Judgment, the judge subsystem cannot reach Prices (positive control kept). First live output is
   EXPLORATORY (no audited stage-1 sample exists — the dispatch note); the artifact caveat says so. No
   fingerprint input, no snapshot field, no formula/rule-set bump; the pins do not move.
+- **Judgment/typing hardening — four confirmed external-review defects, all read/display-side (spec 186).**
+  Nothing here is hashed into any scoring identity; the spec-148/160 pins stand and
+  `ScoringConfigFingerprintTests` is untouched. Four bounded fixes:
+  - **A `Deteriorating` trajectory can no longer render the reassuring dot (§1).** `NewsJudgmentMarkerPolicy`
+    mapped EVERY `Judged`-plus-zero-findings record to `NoChallengeFound` without consulting
+    `BusinessTrajectory` — an ABSENCE claim rendered beside contrary presence evidence, the omission-bias
+    failure reborn one seam past where spec 185 killed it, and LIVE from the first baseline run. Now
+    `Judged` + 0 findings + `Deteriorating` ⇒ **`Challenged`** with the deterministic summary token
+    `business-trajectory-deteriorating` (no finding is invented — the summary names the trajectory AXIS).
+    The marker STATE vocabulary stays the closed 3-state set and **the validator is UNTOUCHED**: a
+    zero-findings `Deteriorating` read is legitimate model output, because the spec-179 challenge taxonomy
+    has no bucket for gradual decline — which is exactly why the trajectory axis exists. EVERY `Judged`
+    marker now appends `· trajectory <token>` in BOTH judged states, uniformly, so the display is
+    state-complete and the dot can never silently imply health; `Mixed`/`Unknown` + 0 findings therefore
+    stay `NoChallengeFound` defensibly. A `Judged` record with a **NULL** persisted trajectory is an INVALID
+    state, not an unknown one (the validator requires the token to parse) — it renders
+    `? unassessed (invalid-record)`, never a dot. **The provenance claim was made TRUE, not asserted**: a
+    new `### Judgment provenance — diagnostic appendix` names each judged row's `JudgmentId` with the
+    judgments-store root stated ONCE — rendered only when a marker carries an id, so a null model, the
+    pending placeholder and every pre-186 composition are byte-identical. **Enum-zero sub-fix taken, not
+    deferred**: `NewsJudgmentTrajectory` had `Improving = 0`, making the BEST state the default value and
+    inverting the spec-182 house rule; reordered to `Unknown = 0` after VERIFYING token-only persistence
+    (`RadarFileStoreJson` uses `JsonStringEnumConverter(allowIntegerValues: false)` — integers are rejected
+    on read — and the wire type is a `string?` parsed by `NewsTypingTokens`, which rejects all-digit tokens;
+    no `(int)` cast, ordering or `Enum.GetValues` dependency exists). Pinned by test.
+  - **Typing retries are BOUNDED and FAIR, and the bound is on HOSTED CALLS (§2).** The completed-only cache
+    meant provider/parse/validation failures re-entered selection newest-first EVERY run forever; ~200
+    persistently failing records would pin the whole `MaxNewTypingsPerRun` cap and starve the 13k backlog
+    permanently. Attempt counts are **DERIVED** per `(cohortKey, observationId, payloadHash)` from the
+    records the insert-only store already holds and the generator already loads — no new store, no side
+    index. Two identity rules, both deliberate, because the OLD identity folded `runId` and mapped every
+    null-run invocation onto one `"standalone"` id (so re-invocation called the model while the store
+    deduplicated the record and the count never advanced): (a) **same-run idempotency** — within one `runId`
+    an observation with a persisted attempt for this cohort is SKIPPED, no model call; (b) **every
+    standalone (null-run) invocation mints a distinct persisted attempt identity** — attempt 1 keeps the
+    literal `"standalone"` (every id already on disk is unchanged), attempt N > 1 is `"standalone#N"`,
+    resolved once per pass from the pre-pass store snapshot (deterministic, clock-free, AD-3). **Invariant,
+    asserted on the counting fake extractor's CALL COUNT, not on stored records: hosted calls for one
+    (cohort, observation, payload) can never exceed `MaxTypingAttempts` under any mix of re-runs and
+    standalone invocations.** `Radar:NewsResearch:Typing:MaxTypingAttempts` (default **3**, ≥ 1) and
+    `MaxRetryTypingsPerRun` (default **25**, **≥ 1** — zero would re-permit total retry starvation and is
+    REJECTED — and < `MaxNewTypingsPerRun`, the cross-field rule enforced at the config boundary) join the
+    strict key allowlist. The **FIFO retry lane** reserves `min(MaxRetryTypingsPerRun, pendingRetries)`
+    slots ordered by **oldest last-attempt instant first, then observation id** — NOT fewest-attempts-first,
+    which still starved LATER attempts against a replenishing attempt-1 population — so
+    `ceil(pendingRetries / MaxRetryTypingsPerRun)` runs-to-reach holds for every record in a pending
+    snapshot (mutation-proven); unused lane capacity returns to first attempts, which fill the remainder
+    window-newest-first then backlog-oldest-first as before. **Exhaustion is visible, never silent**: a
+    per-cohort `RetryExhausted` count on the run result and the decomposition artifact, one aggregated
+    Warning per cohort (the spec-145 precedent), and an in-window exhausted observation degrades its
+    company's typing completeness to **`Failed`** (doc widened rather than a new token — `Backlog` literally
+    means "deferred by the cap", which is a FALSE statement about an exhausted observation, and `Failed` is
+    the zero/degraded value every consumer already handles). Both schema moves are NAMED:
+    `NewsTypingLimitsRecord` gains the two limits **trailing + nullable** (pre-186 records hydrate as "not
+    recorded", never a fabricated limit), and `news-typing-decomposition-v1 → v2` for the additive
+    `RetryExhausted` (by-name readers unaffected — asserted). `NewsTypingRecord.CurrentSchemaVersion` stays
+    `news-typing-v1` (the repo's trailing-nullable precedent: spec 142 `EvidenceQuality`, spec 148
+    `EffectiveScoringConfig.Window`). **Behaviour change beyond retries**: re-invoking the same `runId` now
+    skips already-attempted observations.
+  - **Filesystem metadata — and TIMESTAMPS — leave the verdict path entirely (§3).** The paired-gate verdict
+    instant was `File.GetLastWriteTimeUtc`, and the efficacy artifacts are rewritten every run, so a valid
+    `overridesGate: true` call silently expired after ONE run (and a copy/restore did the same, and the
+    instant was machine-dependent — the spec-184 reviewer's note, now closed). Time-comparing an override
+    against a verdict is the wrong primitive; **identity-binding is the right one.** `GateVerdictIdentity`
+    computes a **`gateVerdictId`** content hash over, in fixed canonical order: the gate CONTRACT identity
+    (predeclared primary + `PrimaryWasPredeclared` + declared boundary + the new
+    `Ad15GateReasonCodes.VocabularyVersion`), the **ADMITTED purged outcome blocks** (dates and per-block
+    inputs — the evidence the verdict rests on), the price-gate verdict + ordered reason codes, and the
+    AD-16 prerequisite identity + outcome + composite reasons. Deliberately EXCLUDED: every wall-clock
+    instant, path/mtime/size, machine name, run id, and dropped/candidate dates that never entered the
+    claim. `VerdictExists` mirrors `StrategyEvidenceStatusCalculator`'s GatePassed/GateFailed condition over
+    the SHARED `Ad15GateReasonCodes.MeritFailureCodes`/`NonMeritCodes` (moved there, one definition, two
+    consumers), so "an id is present" ⟺ "the reducer sees a verdict" cannot drift; no verdict ⇒ the column
+    is EMPTY. Carried as **one additive run-level CSV column** (the paired CSV carries no schema tag —
+    confirmed by test; the 33 pre-186 column names are pinned at their original indices) plus one markdown
+    line so a maintainer can read the id without opening the CSV. `StrategyGateVerdict.VerdictAtUtc` →
+    `VerdictId`; `PairedGateFact.ArtifactWrittenAtUtc` → `GateVerdictId`; the `File.GetLastWriteTimeUtc`
+    read is DELETED and a repo-wide sweep found it was the only filesystem-metadata consumer on the path.
+    **`OperatingCallReducer`'s timestamp comparison is DELETED**: an override applies iff its
+    `overridesVerdictId` equals the artifact's current `gateVerdictId` (ordinal; an empty/absent id can
+    never match). **`strategy-operating-calls-v2`**, named as such because the conditionally-required
+    `overridesVerdictId` semantically REPLACES timestamp precedence: v1 stays readable and behaves exactly
+    as today WITHOUT overrides, but cannot express one — a v1 file with `overridesGate: true` fails naming
+    the remedy, and `overridesVerdictId` in a v1 file is an unknown property; the committed
+    `data/strategy-operating-calls.json` is migrated (token only — no call carries an override). **A stale
+    override is REPORTED, never silently dropped**: a `### Stale gate override` block names the arm, the id
+    it bound to and the current id, and the gate default re-arms — new evidence SHOULD re-open the call. A
+    **pre-186 artifact** (no column) ⇒ identity unknown ⇒ no override can match ⇒ gate default wins with ONE
+    warning naming the artifact and the remedy; AD-8 preserved, unknown never fabricates an id. Reuse over
+    copy: the hand-copied canonical-string→SHA-256 idiom was **extracted** into
+    `Radar.Application.Identity.CanonicalHash` (the sibling of `DeterministicGuid`) and both the new
+    identity and `NewsJudgmentInput.ComputeFamilySetHash` route through it; the remaining copies
+    (`BenchmarkUniverse`, `NewsObservationIdentity`, `NewsRiskInputBundle`, `NewsEventTaxonomy`,
+    `ScoringConfigFingerprint`) are hash-pinned identities left ALONE deliberately — a follow-up sweep.
+  - **`fact-family-v2` — the id gained a DURABLE temporal anchor, and identity split from projection (§4).**
+    v1 split same-claim facts >7 days apart into separate families but derived the id WITHOUT a temporal
+    component, so recurring corporate news (quarterly dividend/buyback headlines, near-identical normalized
+    statements months apart) produced separate episodes with COLLIDING ids and corrupted judgment
+    provenance. Per spec 181 §4's own rule an identity-input change is a NEW builder version, never an edit.
+    **TWO STAGES, because durable identity and the window representative are DIFFERENT jobs.** Stage 1
+    SEGMENTS over ALL qualifying validated facts in the store — **preserving v1's membership algorithm
+    VERBATIM** (representative-relative similarity within the 7-day proximity rule, greedy first fit over
+    (instant, factId); NOT exact-canonical-key grouping, NOT transitive chaining — **membership semantics do
+    not change in this spec, only identity and projection do**, and a parity fixture is the proof) — and
+    yields each episode's durable anchor: the **first-ever member's `FirstObservedAtUtc` UTC date + that
+    member's sorted `EventTypes`** (two same-statement episodes with DISJOINT types are different families),
+    both immutable under window expiry because facts are append-only. Stage 2 PROJECTS each episode with
+    ≥ 1 in-window member into the snapshot carrying the durable `FamilyId`, while representative, members,
+    counts, publishers, event types, statement, claim key and earliest instant come from the **IN-WINDOW
+    members ALONE**. **Do not collapse the two stages**: with one stage the first-ever member doubles as
+    `RepresentativeFactId`, and `NewsJudgmentInputBuilder` DROPS any family whose representative is absent
+    from the current-window fact index — so once the anchor aged out, a family carrying FRESH news would
+    silently vanish from judgment, the exact opposite of the fix (pinned end-to-end through the judge). Id =
+    `radar:fact-family:{BuilderVersion}:{companyId:D}:{captureMode}:{anchorDate:yyyy-MM-dd}:{sortedEventTypes}:{anchorCanonicalClaimKey}`;
+    the segmentation scope, anchor rule and projection rule all enter `IdentityString`. Stage 1's candidate
+    scan is bucketed by `(CompanyId, CaptureMode)` with episodes pruned once >7 days behind the fact being
+    placed — an EXACT-equivalence transform (both conditions `CanJoin` already rejects, with creation order
+    preserved so first fit is identical), without which a history-wide checkpoint would go quadratic.
+    `FactFamilySnapshot.CurrentSchemaVersion` is **NOT** bumped (no field added/removed/re-meant; the
+    builder change is recorded in `BuilderIdentity`, which spec 181 §4 already made the cohort
+    discriminator) and `FactsConsidered`/`FactsWithoutCompany` keep their **WINDOW** basis (a snapshot is a
+    statement about a window). **The ONLY id-shift case left**, recorded on the builder's doc comment: a
+    late-arriving member temporally EARLIER than every member the episode ever observed shifts the anchor.
+    v1 checkpoints, typing records and judgments on disk are untouched (AD-8); **expected one-time cost:**
+    every family id changes on the first post-186 run, so the stage-2 cohort key (which embeds
+    `families={FactFamilyBuilder.IdentityString}`) forks and every candidate company re-judges ONCE, draining
+    under `MaxCompaniesPerRun`.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

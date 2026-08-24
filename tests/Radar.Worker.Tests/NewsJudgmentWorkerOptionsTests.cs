@@ -80,7 +80,7 @@ public sealed class NewsJudgmentWorkerOptionsTests
         var key = identity.CohortKeyFor("stage1-key");
         Assert.Contains("news-judgment-prompt-v1", key);
         Assert.Contains("stage1=stage1-key", key);
-        Assert.Contains("families=fact-family-v1", key);
+        Assert.Contains("families=fact-family-v2", key);
     }
 
     [Fact]

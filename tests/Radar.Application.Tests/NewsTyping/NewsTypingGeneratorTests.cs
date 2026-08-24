@@ -17,9 +17,17 @@ public sealed class NewsTypingGeneratorTests
     private static readonly Guid RunId = new("dddddddd-0000-0000-0000-000000000001");
     private static readonly Guid CompanyId = new("aaaaaaaa-0000-0000-0000-000000000001");
 
-    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    /// <summary>
+    /// A clock the test can ADVANCE between simulated runs — spec 186 §2's retry lane is FIFO by
+    /// last-attempt instant, so "which run recorded this attempt" has to be distinguishable.
+    /// </summary>
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
     {
-        public override DateTimeOffset GetUtcNow() => now;
+        private DateTimeOffset _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan delta) => _now = _now.Add(delta);
     }
 
     // ---------------------------------------------------------------------------------------------------
@@ -173,9 +181,13 @@ public sealed class NewsTypingGeneratorTests
 
         public ScriptedExtractor Extractor { get; } = new();
 
-        public TimeProvider Time { get; } = new FixedTimeProvider(NewsTypingTestData.AsOf.AddMinutes(10));
+        public MutableTimeProvider Time { get; } = new(NewsTypingTestData.AsOf.AddMinutes(10));
 
-        public NewsTypingGenerator Build(int maxNewTypingsPerRun = 200, int readers = 1)
+        public NewsTypingGenerator Build(
+            int maxNewTypingsPerRun = 200,
+            int readers = 1,
+            int maxTypingAttempts = 3,
+            int maxRetryTypingsPerRun = 25)
         {
             var readerList = new List<NewsTypingReader>();
             for (var i = 0; i < readers; i++)
@@ -193,7 +205,12 @@ public sealed class NewsTypingGeneratorTests
                 Store,
                 FamilyStore,
                 ArtifactStore,
-                new NewsTypingOptions("data/news-typing", maxNewTypingsPerRun, lookbackDays: 30),
+                new NewsTypingOptions(
+                    "data/news-typing",
+                    maxNewTypingsPerRun,
+                    lookbackDays: 30,
+                    maxTypingAttempts: maxTypingAttempts,
+                    maxRetryTypingsPerRun: maxRetryTypingsPerRun),
                 Time,
                 NullLogger<NewsTypingGenerator>.Instance);
         }
@@ -383,6 +400,53 @@ public sealed class NewsTypingGeneratorTests
     }
 
     [Fact]
+    public async Task FamilyCheckpoint_SegmentsOverTheFullHistory_ButProjectsOnlyTheWindow()
+    {
+        // Spec 186 section 4: stage 1 sees ALL qualifying validated facts (the out-of-window anchor
+        // included), so the episode's durable id is anchored on it; stage 2 projects the WINDOW alone, so
+        // the snapshot's representative/counters stay window-only and the window counters keep their
+        // spec-181 basis.
+        const string Anchor = "Company faces legal scrutiny after investor complaint filed";
+        const string Fresh = "Company faces legal scrutiny after an investor complaint filed";
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+        harness.Archive.Observations.Add(Observation(Anchor, AsOf.AddDays(-33)));
+        harness.Archive.Observations.Add(
+            Observation(Fresh, AsOf.AddDays(-28), publisher: "Second Outlet"));
+
+        await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var checkpoint = Assert.Single(harness.FamilyStore.Snapshots).Snapshot;
+        var family = Assert.Single(checkpoint.Families);
+        Assert.Equal(1, family.MemberCount); // window projection: the aged-out anchor is not a member
+        Assert.Equal(Fresh, family.RepresentativeStatement);
+        Assert.Equal(1, checkpoint.FactsConsidered); // WINDOW basis, unchanged from spec 181
+        Assert.Equal(0, checkpoint.FactsWithoutCompany);
+
+        // The id is anchored on the OUT-OF-WINDOW first-ever member's date + event types + claim key —
+        // proof that stage 1 read the whole history rather than the window.
+        Assert.Equal(
+            FactFamilyBuilder.FamilyIdFor(
+                CompanyId,
+                NewsObservationCaptureMode.ProspectiveRss,
+                DateOnly.FromDateTime(AsOf.AddDays(-33).UtcDateTime),
+                [NewsEventType.RegulatoryOrLegal],
+                FactFamilyBuilder.NormalizeStatement(Anchor)),
+            family.FamilyId);
+
+        // Control: without the out-of-window fact the SAME window would anchor on the fresh fact — so the
+        // assertion above cannot pass vacuously.
+        var control = new Harness();
+        control.RunStore.Records.Add(RunRecord());
+        control.Archive.Observations.Add(
+            Observation(Fresh, AsOf.AddDays(-28), publisher: "Second Outlet"));
+        await control.Build().GenerateAsync(RunId, CancellationToken.None);
+        Assert.NotEqual(
+            family.FamilyId,
+            Assert.Single(Assert.Single(control.FamilyStore.Snapshots).Snapshot.Families).FamilyId);
+    }
+
+    [Fact]
     public async Task Decomposition_RendersFamilyCountBesideRawCount_AndBacklogMarksIncomplete()
     {
         var harness = new Harness();
@@ -543,7 +607,7 @@ public sealed class NewsTypingGeneratorTests
             harness.Store,
             harness.FamilyStore,
             harness.ArtifactStore,
-            new NewsTypingOptions("data/news-typing", 10, 30),
+            new NewsTypingOptions("data/news-typing", 10, 30, 3, 5),
             harness.Time,
             NullLogger<NewsTypingGenerator>.Instance);
 
@@ -552,6 +616,242 @@ public sealed class NewsTypingGeneratorTests
         var (_, reason) = Assert.Single(harness.ArtifactStore.Failed);
         Assert.Contains("InvalidOperationException", reason);
         Assert.Empty(harness.ArtifactStore.Live);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 186 §2 — bounded, FIFO-fair typing retries
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>Registers and returns a fresh run id, so each simulated pass is a genuinely NEW run.</summary>
+    private static Guid NextRun(Harness harness)
+    {
+        var id = Guid.NewGuid();
+        harness.RunStore.Records.Insert(0, RunRecord() with { Id = id });
+        return id;
+    }
+
+    private static NewsTypingExtractionOutcome ProviderFailure() =>
+        new(NewsTypingExtractionFailure.ProviderError, null, null, "boom");
+
+    [Fact]
+    public async Task PersistentlyFailingObservation_IsAttemptedExactlyMaxAttempts_ThenLeavesSelection()
+    {
+        var harness = new Harness();
+        harness.Archive.Observations.Add(Observation("provider always fails", AsOf.AddDays(-2)));
+        harness.Extractor.Script = _ => ProviderFailure();
+
+        NewsTypingRunResult? last = null;
+        for (var run = 0; run < 6; run++)
+        {
+            harness.Time.Advance(TimeSpan.FromHours(1));
+            last = await harness.Build(maxTypingAttempts: 3)
+                .GenerateAsync(NextRun(harness), CancellationToken.None);
+        }
+
+        // The bound is on HOSTED CALLS — six runs, three calls. (Stored records agree, but the call count
+        // is the claim: a store that deduplicated would hide an unbounded call budget.)
+        Assert.Equal(3, harness.Extractor.ObservationsSeen.Count);
+        Assert.Equal(3, harness.Store.Records.Count);
+
+        // Exhaustion is VISIBLE: counted on the run result, degraded in completeness, and named in the
+        // decomposition artifact rather than silently draining the budget forever.
+        var cohort = Assert.Single(last!.Cohorts);
+        Assert.Equal(1, cohort.RetryExhausted);
+        Assert.Equal(NewsTypingCompleteness.Failed, cohort.TypingCompletenessByCompany[CompanyId]);
+        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        var company = Assert.Single(document.Companies);
+        Assert.Equal(1, Assert.Single(company.Cohorts).RetryExhausted);
+        Assert.Contains(
+            company.IncompleteReasons,
+            r => r.Contains("typing retries exhausted", StringComparison.Ordinal));
+        Assert.Contains("retries exhausted 1", markdown);
+    }
+
+    [Fact]
+    public async Task RepeatedInvocationWithTheSameRunId_MakesZeroExtraHostedCalls()
+    {
+        var harness = new Harness();
+        harness.Archive.Observations.Add(Observation("provider always fails", AsOf.AddDays(-2)));
+        harness.Extractor.Script = _ => ProviderFailure();
+        var runId = NextRun(harness);
+
+        await harness.Build().GenerateAsync(runId, CancellationToken.None);
+        Assert.Single(harness.Extractor.ObservationsSeen);
+
+        // Rule (a): the SAME run re-invoked skips an observation it already attempted — no model call.
+        harness.Time.Advance(TimeSpan.FromHours(1));
+        await harness.Build().GenerateAsync(runId, CancellationToken.None);
+
+        Assert.Single(harness.Extractor.ObservationsSeen);
+        Assert.Single(harness.Store.Records);
+    }
+
+    [Fact]
+    public async Task RepeatedStandaloneInvocations_EachCallOnce_PersistDistinctly_AndExhaustAtTheCap()
+    {
+        var harness = new Harness();
+        harness.Archive.Observations.Add(Observation("provider always fails", AsOf.AddDays(-2)));
+        harness.Extractor.Script = _ => ProviderFailure();
+
+        for (var invocation = 0; invocation < 5; invocation++)
+        {
+            harness.Time.Advance(TimeSpan.FromHours(1));
+            await harness.Build(maxTypingAttempts: 3).GenerateAsync(null, CancellationToken.None);
+        }
+
+        // Rule (b): each standalone invocation mints its OWN attempt identity, so the derived count really
+        // advances — and the cap therefore binds the standalone path exactly as it binds the run path.
+        Assert.Equal(3, harness.Extractor.ObservationsSeen.Count);
+        Assert.Equal(3, harness.Store.Records.Select(r => r.TypingId).Distinct().Count());
+        Assert.All(harness.Store.Records, r => Assert.Null(r.RunId));
+    }
+
+    [Fact]
+    public async Task RetryLane_IsBounded_SoAFullFirstAttemptBacklogIsNeverStarved()
+    {
+        var harness = new Harness();
+        var typed = harness.Extractor.Script;
+        var failingIds = new HashSet<Guid>();
+        for (var i = 0; i < 4; i++)
+        {
+            var failing = Observation($"failing {i}", AsOf.AddDays(-2));
+            failingIds.Add(failing.ObservationId);
+            harness.Archive.Observations.Add(failing);
+        }
+
+        harness.Extractor.Script = request =>
+            failingIds.Contains(request.Observation.ObservationId) ? ProviderFailure() : typed(request);
+        await harness.Build().GenerateAsync(NextRun(harness), CancellationToken.None);
+        Assert.Equal(4, harness.Extractor.ObservationsSeen.Count);
+
+        // A full first-attempt backlog now arrives beside the four pending retries.
+        for (var i = 0; i < 10; i++)
+        {
+            harness.Archive.Observations.Add(Observation($"fresh {i}", AsOf.AddDays(-3)));
+        }
+
+        harness.Extractor.ObservationsSeen.Clear();
+        harness.Time.Advance(TimeSpan.FromHours(1));
+        await harness.Build(maxNewTypingsPerRun: 6, maxRetryTypingsPerRun: 2)
+            .GenerateAsync(NextRun(harness), CancellationToken.None);
+
+        Assert.Equal(6, harness.Extractor.ObservationsSeen.Count);
+        Assert.Equal(2, harness.Extractor.ObservationsSeen.Count(failingIds.Contains));
+    }
+
+    [Fact]
+    public async Task UnusedRetryLaneCapacity_FlowsBackToFirstAttempts()
+    {
+        var harness = new Harness();
+        var typed = harness.Extractor.Script;
+        var failing = Observation("failing", AsOf.AddDays(-2));
+        harness.Archive.Observations.Add(failing);
+        harness.Extractor.Script = request =>
+            request.Observation.ObservationId == failing.ObservationId
+                ? ProviderFailure()
+                : typed(request);
+        await harness.Build().GenerateAsync(NextRun(harness), CancellationToken.None);
+
+        for (var i = 0; i < 5; i++)
+        {
+            harness.Archive.Observations.Add(Observation($"fresh {i}", AsOf.AddDays(-3)));
+        }
+
+        harness.Extractor.ObservationsSeen.Clear();
+        harness.Time.Advance(TimeSpan.FromHours(1));
+        await harness.Build(maxNewTypingsPerRun: 4, maxRetryTypingsPerRun: 3)
+            .GenerateAsync(NextRun(harness), CancellationToken.None);
+
+        // One retry pending against a three-slot lane: the two unused slots go to first attempts, so the
+        // whole per-run budget is spent (a reservation, never a hold-back).
+        Assert.Equal(4, harness.Extractor.ObservationsSeen.Count);
+        Assert.Equal(1, harness.Extractor.ObservationsSeen.Count(id => id == failing.ObservationId));
+    }
+
+    [Fact]
+    public async Task FifoRetryOrdering_ReachesAWaitingLaterAttempt_WhileNewFailuresKeepArriving()
+    {
+        var harness = new Harness();
+        var typed = harness.Extractor.Script;
+        var failingIds = new HashSet<Guid>();
+        harness.Extractor.Script = request =>
+            failingIds.Contains(request.Observation.ObservationId) ? ProviderFailure() : typed(request);
+
+        var seeded = new List<Guid>();
+        for (var i = 0; i < 5; i++)
+        {
+            var observation = Observation($"seed {i}", AsOf.AddDays(-2));
+            failingIds.Add(observation.ObservationId);
+            seeded.Add(observation.ObservationId);
+            harness.Archive.Observations.Add(observation);
+        }
+
+        // Run 1: every seeded observation reaches attempt 1.
+        await harness.Build(maxNewTypingsPerRun: 6, maxRetryTypingsPerRun: 2)
+            .GenerateAsync(NextRun(harness), CancellationToken.None);
+        Assert.Equal(5, harness.Extractor.ObservationsSeen.Count);
+
+        // Run 2: the retry lane takes the two oldest — they are now at ATTEMPT 2, and they are the records
+        // a fewest-attempts-first lane would starve forever.
+        harness.Extractor.ObservationsSeen.Clear();
+        harness.Time.Advance(TimeSpan.FromHours(1));
+        await harness.Build(maxNewTypingsPerRun: 6, maxRetryTypingsPerRun: 2)
+            .GenerateAsync(NextRun(harness), CancellationToken.None);
+        var attemptTwo = harness.Extractor.ObservationsSeen.ToList();
+        Assert.Equal(2, attemptTwo.Count);
+
+        // Now NEW failures keep arriving every run. The pending snapshot is 5 with a 2-wide lane, so the
+        // bound is ceil(5 / 2) = 3 runs — and it must hold for the attempt-2 records too.
+        var reached = new HashSet<Guid>();
+        for (var run = 0; run < 3; run++)
+        {
+            // A FULL lane's worth of fresh failures arrives every run: under a fewest-attempts-first lane
+            // this replenishing attempt-1 population would consume the lane forever and the attempt-2
+            // records would neither retry nor exhaust. Under FIFO they are strictly behind.
+            for (var arrivals = 0; arrivals < 2; arrivals++)
+            {
+                var arrival = Observation($"fresh {run}-{arrivals}", AsOf.AddDays(-1));
+                failingIds.Add(arrival.ObservationId);
+                harness.Archive.Observations.Add(arrival);
+            }
+
+            harness.Extractor.ObservationsSeen.Clear();
+            harness.Time.Advance(TimeSpan.FromHours(1));
+            await harness.Build(maxNewTypingsPerRun: 6, maxRetryTypingsPerRun: 2, maxTypingAttempts: 99)
+                .GenerateAsync(NextRun(harness), CancellationToken.None);
+            foreach (var id in harness.Extractor.ObservationsSeen)
+            {
+                reached.Add(id);
+            }
+        }
+
+        Assert.All(seeded, id => Assert.Contains(id, reached));
+        Assert.All(attemptTwo, id => Assert.Contains(id, reached));
+    }
+
+    [Fact]
+    public async Task ANewPayloadHash_ResetsTheAttemptCount_BecauseItIsADifferentInput()
+    {
+        var harness = new Harness();
+        harness.Archive.Observations.Add(Observation("provider always fails", AsOf.AddDays(-2)));
+        harness.Extractor.Script = _ => ProviderFailure();
+
+        for (var run = 0; run < 4; run++)
+        {
+            harness.Time.Advance(TimeSpan.FromHours(1));
+            await harness.Build(maxTypingAttempts: 3)
+                .GenerateAsync(NextRun(harness), CancellationToken.None);
+        }
+
+        Assert.Equal(3, harness.Extractor.ObservationsSeen.Count);
+
+        // The SAME observation re-captured with different content is a different input, not a retry.
+        harness.Archive.Observations[0] = harness.Archive.Observations[0] with { PayloadHash = "hash-v2" };
+        harness.Time.Advance(TimeSpan.FromHours(1));
+        await harness.Build(maxTypingAttempts: 3).GenerateAsync(NextRun(harness), CancellationToken.None);
+
+        Assert.Equal(4, harness.Extractor.ObservationsSeen.Count);
+        Assert.Single(harness.Store.Records, r => r.PayloadHash == "hash-v2");
     }
 
     private sealed class ThrowingArchive : INewsObservationArchive

@@ -388,6 +388,11 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             markers[candidate.CompanyId] = NewsJudgmentMarkerPolicy.Derive(record, runId);
         }
 
-        return new NewsJudgmentMarkerReportModel(JudgmentPending: false, Markers: markers);
+        // Spec 186 §1: the store ROOT rides the model once (never per row), so the report's judgment
+        // provenance appendix can name where every cited judgment id resolves.
+        return new NewsJudgmentMarkerReportModel(
+            JudgmentPending: false,
+            Markers: markers,
+            JudgmentStoreRoot: NewsJudgmentStoreLayout.RootFor(_options.OutputDirectory));
     }
 }

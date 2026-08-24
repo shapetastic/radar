@@ -30,6 +30,14 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
     /// <summary>The one leaderboard CSV schema this reader understands (spec 183's excess schema).</summary>
     public const string SupportedLeaderboardSchema = "strategy-leaderboard-v2";
 
+    /// <summary>
+    /// The spec-186 §3 run-level verdict-identity column in the paired artifact. Resolved BY HEADER NAME
+    /// like every other column, so its absence (a pre-186 artifact) is detectable rather than silently
+    /// shifting a value. The paired CSV carries no schema-version column of its own — the additive column
+    /// is therefore appended, and by-name readers are unaffected.
+    /// </summary>
+    public const string GateVerdictIdColumn = "gateVerdictId";
+
     private readonly FileStrategyEvidenceFactsSourceOptions _options;
     private readonly ILogger<FileStrategyEvidenceFactsSource> _logger;
 
@@ -172,6 +180,22 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
             return null;
         }
 
+        // Spec 186 §3: the run-level SEMANTIC verdict identity. An artifact written before 186 carries no
+        // such column at all — the verdict identity is then UNKNOWN, so no override can match and the gate
+        // default wins (fail closed in the safe direction; AD-8 forbids fabricating an id). One warning
+        // naming the artifact and the remedy; it self-heals on the next efficacy run.
+        var hasVerdictIdColumn = TryColumn(header, GateVerdictIdColumn, out var verdictIdCol);
+        if (!hasVerdictIdColumn)
+        {
+            _logger.LogWarning(
+                "Paired-comparison artifact at {Path} carries no '{Column}' column — it predates spec 186, "
+                    + "so this run cannot identify the gate verdict it records. No operating-call override "
+                    + "can bind to an unknown verdict, so the gate default applies. Remedy: re-run efficacy "
+                    + "to refresh the artifact.",
+                path,
+                GateVerdictIdColumn);
+        }
+
         // Every data row repeats the same run-level gate context (the per-row variation is per-baseline),
         // so the first data row carries everything the status layer needs.
         var fields = SplitCsvLine(lines[1]);
@@ -191,7 +215,7 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
             BoundaryDeclared: Field(fields, boundaryCol).Length > 0,
             Qualifies: string.Equals(Field(fields, qualifiesCol), "true", StringComparison.Ordinal),
             GateReasons: Field(fields, reasonsCol),
-            ArtifactWrittenAtUtc: new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero));
+            GateVerdictId: hasVerdictIdColumn ? Field(fields, verdictIdCol) : string.Empty);
     }
 
     private async Task<IReadOnlyList<string>?> TryReadLinesAsync(string path, CancellationToken ct)

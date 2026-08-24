@@ -1,3 +1,4 @@
+using Radar.Application.News;
 using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
 
@@ -110,6 +111,68 @@ public sealed class NewsJudgmentInputBuilderTests
 
         Assert.Empty(bundle.Families);
         Assert.Equal(0, bundle.FamiliesAvailable);
+        Assert.Equal(NewsJudgmentFamilyBundle.Complete, bundle.FamilyBundle);
+    }
+
+    [Fact]
+    public void AFamilyWhoseIdentityAnchorAgedOutOfTheWindow_StillReachesTheJudge()
+    {
+        // Spec 186 section 4, the round-3 case: the episode's DURABLE identity anchor (its first-ever
+        // member) is outside the checkpoint window, but the episode carries FRESH in-window news. Stage 2
+        // must project an IN-WINDOW representative, so this family resolves in the window's fact index and
+        // reaches the judge — collapsing the two stages would have dropped it silently.
+        var anchorFactId = new Guid("cccccccc-0000-0000-0000-000000000001");
+        var freshFactId = new Guid("cccccccc-0000-0000-0000-000000000002");
+        var anchorObservedAt = NewsJudgmentTestData.ObservedAt;
+        const string AnchorStatement = "Company faces legal scrutiny after an investor complaint was filed";
+        const string FreshStatement = "Company faces legal scrutiny after investor complaint filed";
+
+        var allFacts = new List<FactFamilyInputFact>
+        {
+            new(
+                FactId: anchorFactId,
+                CompanyId: Company,
+                EventTypes: [NewsEventType.RegulatoryOrLegal],
+                Statement: AnchorStatement,
+                FirstObservedAtUtc: anchorObservedAt,
+                Publisher: "First Outlet",
+                ObservationId: Guid.NewGuid(),
+                CaptureMode: NewsObservationCaptureMode.ProspectiveRss),
+            new(
+                FactId: freshFactId,
+                CompanyId: Company,
+                EventTypes: [NewsEventType.RegulatoryOrLegal],
+                Statement: FreshStatement,
+                FirstObservedAtUtc: anchorObservedAt.AddDays(3),
+                Publisher: "Second Outlet",
+                ObservationId: Guid.NewGuid(),
+                CaptureMode: NewsObservationCaptureMode.ProspectiveRss),
+        };
+
+        // The full-history family id (both members in view) — the id the projection must preserve.
+        var full = Assert.Single(FactFamilyBuilder.Build(allFacts));
+        Assert.Equal(anchorFactId, full.RepresentativeFactId);
+
+        // The checkpoint window has rolled past the anchor fact.
+        var windowStart = anchorObservedAt.AddDays(1);
+        var windowEnd = anchorObservedAt.AddDays(10);
+        var projected = Assert.Single(FactFamilyBuilder.Build(allFacts, windowStart, windowEnd));
+        Assert.Equal(full.FamilyId, projected.FamilyId);
+        Assert.Equal(freshFactId, projected.RepresentativeFactId);
+
+        // The window's fact index — exactly what NewsTypingCohortRunResult carries — holds the fresh fact
+        // only. The anchor fact is NOT resolvable here, which is the whole point.
+        var windowFacts = new Dictionary<Guid, NewsTypingFactRef>
+        {
+            [freshFactId] = NewsJudgmentTestData.FactRef(Company, freshFactId, FreshStatement),
+        };
+
+        var bundle = NewsJudgmentInputBuilder.Build(Company, [projected], windowFacts, 50);
+
+        var supplied = Assert.Single(bundle.Families);
+        Assert.Equal(full.FamilyId, supplied.FamilyId);
+        Assert.Equal(freshFactId, supplied.RepresentativeFactId);
+        Assert.Equal(1, bundle.FamiliesAvailable);
         Assert.Equal(NewsJudgmentFamilyBundle.Complete, bundle.FamilyBundle);
     }
 

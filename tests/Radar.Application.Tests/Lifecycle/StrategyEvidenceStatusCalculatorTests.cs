@@ -10,7 +10,7 @@ namespace Radar.Application.Tests.Lifecycle;
 /// </summary>
 public sealed class StrategyEvidenceStatusCalculatorTests
 {
-    private static readonly DateTimeOffset WrittenAt = new(2026, 8, 23, 6, 0, 0, TimeSpan.Zero);
+    private const string VerdictId = "a1b2c3d4e5f6";
 
     private static ScoringStrategyDefinition Strategy(string name, bool isPrimary = false) =>
         new(name, name, new ScoringWeights(), isPrimary);
@@ -26,8 +26,9 @@ public sealed class StrategyEvidenceStatusCalculatorTests
         bool predeclared = true,
         bool boundary = true,
         bool qualifies = false,
-        string reasons = "") =>
-        new(primary, predeclared, boundary, qualifies, reasons, WrittenAt);
+        string reasons = "",
+        string verdictId = VerdictId) =>
+        new(primary, predeclared, boundary, qualifies, reasons, verdictId);
 
     [Fact]
     public void NoReadableArtifacts_DegradeToAccruingEvidenceUnavailable_ForEveryArm()
@@ -149,7 +150,7 @@ public sealed class StrategyEvidenceStatusCalculatorTests
     }
 
     [Fact]
-    public void GateVerdicts_ExistOnlyForPassedOrFailed_StampedWithTheArtifactInstant()
+    public void GateVerdicts_ExistOnlyForPassedOrFailed_CarryingTheSemanticVerdictId()
     {
         var pending = new EfficacyEvidenceFacts(
             false, [], true, Gate(reasons: Ad15GateReasonCodes.Ad16ScreenPending));
@@ -159,7 +160,7 @@ public sealed class StrategyEvidenceStatusCalculatorTests
         var verdict = Assert.Single(StrategyEvidenceStatusCalculator.GateVerdicts(passed, Strategies));
         Assert.Equal("alpha", verdict.StrategyName);
         Assert.True(verdict.Passed);
-        Assert.Equal(WrittenAt, verdict.VerdictAtUtc);
+        Assert.Equal(VerdictId, verdict.VerdictId);
 
         var failed = new EfficacyEvidenceFacts(
             false, [], true,

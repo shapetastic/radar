@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Lifecycle;
@@ -51,7 +52,28 @@ public sealed class FileStrategyEvidenceFactsSourceTests : IDisposable
             + "signTestZeroDeltasDropped,baselineClears,satisfiesPriceGate,gateReasons,"
             + "qualifiesUnderAd15,ad16ScreenOutcome,"
             + "eligibleJointObservations,eligibleJointCompanies,eligibleJointDates,"
+            + "observationsWithoutAsOfInstant,mismatchedAsOfInstantKeys,gateVerdictId";
+
+    /// <summary>The pre-186 header, byte-for-byte — the artifact a deployment already has on disk.</summary>
+    private const string PreSpec186PairedHeader =
+        "status,primaryStrategy,primaryPredeclared,firstEligibleAsOf,armsConsidered,baselinesCompared,"
+            + "baseline,jointObservations,jointCompanies,jointDates,candidateDates,droppedDates,"
+            + "developmentDates,inconsistentOutcomeObservations,purgedBlocks,medianPairedDelta,"
+            + "intervalLower95,intervalUpper95,intervalCoverage,intervalReason,signTestP,signTestEffectiveN,"
+            + "signTestZeroDeltasDropped,baselineClears,satisfiesPriceGate,gateReasons,"
+            + "qualifiesUnderAd15,ad16ScreenOutcome,"
+            + "eligibleJointObservations,eligibleJointCompanies,eligibleJointDates,"
             + "observationsWithoutAsOfInstant,mismatchedAsOfInstantKeys";
+
+    private const string VerdictId = "6e5480aeb82d39b899c5b67b7c35469d1c852421a8306a11b269bd4d10c52944";
+
+    /// <summary>One paired data row; a null verdict id renders the pre-186 shape.</summary>
+    private static string PairedRow(string? verdictId) =>
+        "baseline,disclosure-led-v11,true,2026-09-29,10,3,baseline-earnings-only,100,40,3,5,2,1,0,4,"
+            + "0.0500,,,,insufficient-purged-blocks,,0,0,false,false,"
+            + "\"no-precommitted-evaluation-boundary; baseline 'baseline-earnings-only': insufficient-purged-blocks (admitted 4, need at least 6 at 95%)\","
+            + "false,pending,0,0,0,0,0"
+            + (verdictId is null ? string.Empty : "," + verdictId);
 
     private async Task WriteAsync(string fileName, params string[] lines) =>
         await File.WriteAllLinesAsync(Path.Combine(_dir, fileName), lines);
@@ -119,10 +141,7 @@ public sealed class FileStrategyEvidenceFactsSourceTests : IDisposable
         await WriteAsync(
             FileStrategyEvidenceFactsSource.PairedComparisonFileName,
             PairedHeader,
-            "baseline,disclosure-led-v11,true,2026-09-29,10,3,baseline-earnings-only,100,40,3,5,2,1,0,4,"
-                + "0.0500,,,,insufficient-purged-blocks,,0,0,false,false,"
-                + "\"no-precommitted-evaluation-boundary; baseline 'baseline-earnings-only': insufficient-purged-blocks (admitted 4, need at least 6 at 95%)\","
-                + "false,pending,0,0,0,0,0");
+            PairedRow(VerdictId));
 
         var facts = await Source().ReadAsync(default);
 
@@ -133,6 +152,104 @@ public sealed class FileStrategyEvidenceFactsSourceTests : IDisposable
         Assert.True(paired.BoundaryDeclared);
         Assert.False(paired.Qualifies);
         Assert.Contains("insufficient-purged-blocks", paired.GateReasons);
+        Assert.Equal(VerdictId, paired.GateVerdictId);
+    }
+
+    // ---- spec 186 §3: the semantic verdict identity replaces the artifact's filesystem mtime -----------
+
+    [Fact]
+    public async Task Paired_GateVerdictId_SurvivesAnIdenticalRewriteAndACopyRestore()
+    {
+        // The defect this closes: the "verdict instant" used to be File.GetLastWriteTimeUtc, so the daily
+        // efficacy re-write (and a copy/restore, and a different machine) silently expired a valid
+        // override. Identical CONTENT must yield an identical verdict identity, whatever the file's mtime.
+        await WriteAsync(
+            FileStrategyEvidenceFactsSource.PairedComparisonFileName, PairedHeader, PairedRow(VerdictId));
+        var first = (await Source().ReadAsync(default)).Paired!;
+
+        var path = Path.Combine(_dir, FileStrategyEvidenceFactsSource.PairedComparisonFileName);
+        var content = await File.ReadAllTextAsync(path);
+
+        // (a) an identical rewrite, with a deliberately advanced write time
+        await File.WriteAllTextAsync(path, content);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddDays(7));
+        var afterRewrite = (await Source().ReadAsync(default)).Paired!;
+
+        // (b) a copy/restore, which also resets the mtime
+        var copy = Path.Combine(_dir, "copy.csv");
+        File.Copy(path, copy, overwrite: true);
+        File.Delete(path);
+        File.Copy(copy, path);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddDays(-30));
+        var afterRestore = (await Source().ReadAsync(default)).Paired!;
+
+        Assert.Equal(VerdictId, first.GateVerdictId);
+        Assert.Equal(first.GateVerdictId, afterRewrite.GateVerdictId);
+        Assert.Equal(first.GateVerdictId, afterRestore.GateVerdictId);
+    }
+
+    [Fact]
+    public async Task Paired_PreSpec186Artifact_WarnsOnce_AndReportsNoVerdictIdentity()
+    {
+        // No gateVerdictId column ⇒ the verdict identity is UNKNOWN. Nothing is fabricated (AD-8): the fact
+        // carries an empty id, which can never match an override, so the gate default wins. It self-heals
+        // on the next efficacy run, and the warning says exactly that.
+        await WriteAsync(
+            FileStrategyEvidenceFactsSource.PairedComparisonFileName,
+            PreSpec186PairedHeader,
+            PairedRow(verdictId: null));
+
+        var logger = new CapturingLogger<FileStrategyEvidenceFactsSource>();
+        var source = new FileStrategyEvidenceFactsSource(
+            new FileStrategyEvidenceFactsSourceOptions(_dir), logger);
+
+        var facts = await source.ReadAsync(default);
+
+        Assert.True(facts.PairedAvailable);                       // the arm is never hidden
+        Assert.Equal(string.Empty, facts.Paired!.GateVerdictId);
+        Assert.Equal("disclosure-led-v11", facts.Paired.PrimaryStrategyName);
+
+        var warnings = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                && e.Message.Contains("gateVerdictId", StringComparison.Ordinal))
+            .ToList();
+        Assert.Single(warnings);
+        Assert.Contains("re-run efficacy", warnings[0].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Paired_TheAdditiveColumn_DoesNotShiftAnyByNameReader()
+    {
+        // The additive column must be invisible to every by-header-name reader: parsing the pre-186 and the
+        // post-186 artifact must produce the SAME gate context apart from the identity itself.
+        await WriteAsync(
+            FileStrategyEvidenceFactsSource.PairedComparisonFileName,
+            PreSpec186PairedHeader,
+            PairedRow(verdictId: null));
+        var before = (await Source().ReadAsync(default)).Paired!;
+
+        await WriteAsync(
+            FileStrategyEvidenceFactsSource.PairedComparisonFileName, PairedHeader, PairedRow(VerdictId));
+        var after = (await Source().ReadAsync(default)).Paired!;
+
+        Assert.Equal(before with { GateVerdictId = VerdictId }, after);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     [Fact]

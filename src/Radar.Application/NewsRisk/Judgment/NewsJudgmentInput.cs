@@ -1,6 +1,6 @@
-using System.Security.Cryptography;
 using System.Text;
 
+using Radar.Application.Identity;
 using Radar.Application.NewsTyping;
 
 namespace Radar.Application.NewsRisk.Judgment;
@@ -147,6 +147,6 @@ public static class NewsJudgmentInputBuilder
                 .Append(';');
         }
 
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+        return CanonicalHash.Sha256Hex(canonical);
     }
 }

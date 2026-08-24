@@ -43,6 +43,12 @@ public interface INewsTypingGenerator
 /// legacy articles drain under <see cref="NewsTypingOptions.MaxNewTypingsPerRun"/> per reader per run. A
 /// dedicated standalone catch-up entry point (its own run mode/command) is DEFERRED — deliberately not a new
 /// <c>RunMode</c> in this slice.</item>
+/// <item><b>Retries are BOUNDED and FAIR (spec 186 §2).</b> Attempt counts are DERIVED per (cohort,
+/// observation, payload) from the insert-only store's own records; an observation that has spent
+/// <see cref="NewsTypingOptions.MaxTypingAttempts"/> hosted calls LEAVES selection (counted, warned once per
+/// cohort, and its company's typing completeness degrades). Retries occupy their own bounded FIFO lane
+/// (<see cref="NewsTypingOptions.MaxRetryTypingsPerRun"/>, oldest last-attempt first) inside the per-run cap,
+/// so neither the backlog nor the retry queue can starve the other.</item>
 /// <item><b>Run membership is approximated by the window, honestly.</b> Archive records carry no batch/run
 /// id (batch manifests hold counters, not observation ids), so "this run's new observations" is implemented
 /// as "window observations, newest first" — a superset that still guarantees this run's fresh captures are
@@ -172,9 +178,10 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             perReader.Add(pass);
         }
 
-        // Checkpoint fact families per cohort (spec 181 §4): over ALL validated facts from COMPLETED
-        // typings in the window — never only this run's new facts (which would miss duplicates typed by
-        // earlier runs).
+        // Checkpoint fact families per cohort (spec 181 §4 / 186 §4): segmentation over ALL validated facts
+        // from COMPLETED typings — never only this run's new facts (which would miss duplicates typed by
+        // earlier runs), and never only the window (which would churn the durable family id) — then the
+        // window projection that the snapshot, the decomposition and the stage-2 judge consume.
         foreach (var pass in perReader)
         {
             ct.ThrowIfCancellationRequested();
@@ -249,7 +256,12 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             {
                 var untyped = companyGroup.Count(
                     o => !pass.Completed.ContainsKey((o.ObservationId, o.PayloadHash)));
+
+                // Spec 186 §2: an exhausted untyped observation is a PERMANENT hole, not a deferral, so the
+                // company can never read Complete — and "Backlog" (deferred by the per-run cap) would be a
+                // false statement about it. It maps onto the existing degraded state, Failed.
                 completeness[companyGroup.Key] = pass.FailedCompanyIds.Contains(companyGroup.Key)
+                    || pass.ExhaustedCompanyIds.Contains(companyGroup.Key)
                     ? NewsTypingCompleteness.Failed
                     : untyped > 0
                         ? NewsTypingCompleteness.Backlog
@@ -262,7 +274,8 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             Families: pass.Families,
             FactsById: factsById,
             TypingCompletenessByCompany: completeness,
-            FactsDroppedInWindow: factsDropped);
+            FactsDroppedInWindow: factsDropped,
+            RetryExhausted: pass.ExhaustedKeys.Count);
     }
 
     private async Task<ReaderPass> RunReaderPassAsync(
@@ -275,47 +288,121 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         CancellationToken ct)
     {
         var cohortKey = reader.Identity.CohortKey;
+        var cohortRecords = allRecords
+            .Where(r => string.Equals(r.CohortKey, cohortKey, StringComparison.Ordinal))
+            .ToList();
 
         // Completed cache for this cohort keyed by (observation, payload) — deterministic winner: most
         // recent CreatedAtUtc, then lowest TypingId (the FindCompletedAsync rule, AD-3).
-        var completed = allRecords
-            .Where(r => string.Equals(r.CohortKey, cohortKey, StringComparison.Ordinal)
-                && r.IsCompletedTyping)
+        var completed = cohortRecords
+            .Where(r => r.IsCompletedTyping)
             .GroupBy(r => (r.ObservationId, r.PayloadHash))
             .ToDictionary(
                 g => g.Key,
                 g => g.OrderByDescending(r => r.CreatedAtUtc).ThenBy(r => r.TypingId).First());
 
+        // Spec 186 §2: attempt history DERIVED per (cohort, observation, payload) from the records the
+        // insert-only store already holds — no new store, no side index. This is what bounds HOSTED CALLS.
+        var attempts = cohortRecords
+            .GroupBy(r => (r.ObservationId, r.PayloadHash))
+            .ToDictionary(
+                g => g.Key,
+                g => new AttemptHistory(
+                    Count: g.Count(),
+                    LastAttemptUtc: g.Max(r => r.CreatedAtUtc),
+                    AttemptedThisRun: runId is { } thisRunId && g.Any(r => r.RunId == thisRunId)));
+
         var untyped = eligible
             .Where(o => !completed.ContainsKey((o.ObservationId, o.PayloadHash)))
             .ToList();
 
-        // Phase (a): window observations (this run's fresh captures live here), NEWEST first — then
-        // phase (b): backlog, OLDEST first. Ties break on observation id (AD-3). One overall per-reader cap.
-        var windowFirst = untyped
+        // Split the untyped set into the spec-186 §2 tiers. Order matters: EXHAUSTION is a durable property
+        // of the record set and is reported whether or not this run already touched the observation, while
+        // the same-run skip is an idempotency rule about THIS invocation.
+        var exhaustedKeys = new HashSet<(Guid ObservationId, string PayloadHash)>();
+        var exhaustedCompanyIds = new HashSet<Guid>();
+        var retryCandidates =
+            new List<(NewsTypingInputObservation Observation, DateTimeOffset LastAttemptUtc)>();
+        var firstAttempts = new List<NewsTypingInputObservation>();
+        foreach (var observation in untyped)
+        {
+            var untypedKey = (observation.ObservationId, observation.PayloadHash);
+            var history = attempts.GetValueOrDefault(untypedKey, AttemptHistory.None);
+            if (history.Count >= _options.MaxTypingAttempts)
+            {
+                exhaustedKeys.Add(untypedKey);
+                if (observation.CompanyId is { } exhaustedCompanyId
+                    && observation.FirstObservedAtUtc > windowStartUtc
+                    && observation.FirstObservedAtUtc <= asOfUtc)
+                {
+                    // Completeness is a claim about the WINDOW, so only an in-window exhausted observation
+                    // degrades it; an exhausted legacy-backlog article is counted (below) but does not
+                    // relabel this window's coverage.
+                    exhaustedCompanyIds.Add(exhaustedCompanyId);
+                }
+
+                continue;
+            }
+
+            if (history.AttemptedThisRun)
+            {
+                // Rule (a): within ONE runId an observation that already carries a persisted attempt is
+                // SKIPPED — no model call. Re-running one run costs nothing and advances nothing.
+                continue;
+            }
+
+            if (history.Count > 0)
+            {
+                retryCandidates.Add((observation, history.LastAttemptUtc));
+            }
+            else
+            {
+                firstAttempts.Add(observation);
+            }
+        }
+
+        // The RETRY LANE: bounded, and FIFO by OLDEST LAST-ATTEMPT INSTANT (then observation id, AD-3), so
+        // newly failed work queues BEHIND already-waiting work and every record in a pending snapshot is
+        // reached within ceil(pendingRetries / MaxRetryTypingsPerRun) runs. Ordering by attempt count would
+        // starve LATER attempts against a continuously replenishing attempt-1 population.
+        var retries = retryCandidates
+            .OrderBy(c => c.LastAttemptUtc)
+            .ThenBy(c => c.Observation.ObservationId)
+            .Take(Math.Min(_options.MaxRetryTypingsPerRun, _options.MaxNewTypingsPerRun))
+            .Select(c => c.Observation)
+            .ToList();
+
+        // UNUSED lane capacity returns to first attempts. Phase (a): window observations (this run's fresh
+        // captures live here), NEWEST first — then phase (b): backlog, OLDEST first. Ties break on
+        // observation id (AD-3). One overall per-reader cap across both lanes.
+        var windowFirst = firstAttempts
             .Where(o => o.FirstObservedAtUtc > windowStartUtc && o.FirstObservedAtUtc <= asOfUtc)
             .OrderByDescending(o => o.FirstObservedAtUtc)
             .ThenBy(o => o.ObservationId)
             .ToList();
-        var backlog = untyped
+        var backlog = firstAttempts
             .Except(windowFirst)
             .OrderBy(o => o.FirstObservedAtUtc)
             .ThenBy(o => o.ObservationId)
             .ToList();
-        var selected = windowFirst.Concat(backlog).Take(_options.MaxNewTypingsPerRun).ToList();
+        var selected = retries
+            .Concat(windowFirst.Concat(backlog).Take(_options.MaxNewTypingsPerRun - retries.Count))
+            .ToList();
 
         var failedCompanyIds = new HashSet<Guid>();
         var newTypings = 0;
         foreach (var observation in selected)
         {
             ct.ThrowIfCancellationRequested();
-            var record = await TypeOneAsync(reader, cohortKey, runId, observation, ct)
+            var key = (observation.ObservationId, observation.PayloadHash);
+            var attemptNumber = attempts.GetValueOrDefault(key, AttemptHistory.None).Count + 1;
+            var record = await TypeOneAsync(reader, cohortKey, runId, observation, attemptNumber, ct)
                 .ConfigureAwait(false);
             await _store.WriteAsync(record, ct).ConfigureAwait(false);
             newTypings++;
             if (record.IsCompletedTyping)
             {
-                completed[(observation.ObservationId, observation.PayloadHash)] = record;
+                completed[key] = record;
             }
             else if (observation.CompanyId is { } failedCompanyId)
             {
@@ -326,14 +413,41 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         }
 
         _logger.LogInformation(
-            "News-typing reader {Reader} ({Cohort}): {New} new typing(s) this pass "
-                + "({Untyped} untyped observation(s) remain).",
+            "News-typing reader {Reader} ({Cohort}): {New} new typing(s) this pass ({Retries} retry, "
+                + "{Untyped} untyped observation(s) remain).",
             reader.Identity.Name,
             cohortKey,
             newTypings,
+            retries.Count,
             untyped.Count - newTypings);
 
-        return new ReaderPass(reader.Identity, completed, newTypings, failedCompanyIds);
+        if (exhaustedKeys.Count > 0)
+        {
+            // ONE aggregated warning per cohort (the spec-145 precedent): exhaustion removes work from
+            // selection permanently, so it must never be silent.
+            _logger.LogWarning(
+                "News-typing reader {Reader} ({Cohort}): {Exhausted} observation(s) have spent all "
+                    + "{MaxAttempts} typing attempt(s) and have LEFT selection; they stay untyped and "
+                    + "degrade their company's typing completeness (spec 186 §2).",
+                reader.Identity.Name,
+                cohortKey,
+                exhaustedKeys.Count,
+                _options.MaxTypingAttempts);
+        }
+
+        return new ReaderPass(
+            reader.Identity, completed, newTypings, failedCompanyIds, exhaustedKeys, exhaustedCompanyIds);
+    }
+
+    /// <summary>
+    /// One (cohort, observation, payload)'s DERIVED attempt history (spec 186 §2): how many attempts the
+    /// insert-only store already holds, when the latest one was recorded (the retry lane's FIFO key), and
+    /// whether THIS run already attempted it (the same-run idempotency rule).
+    /// </summary>
+    private readonly record struct AttemptHistory(
+        int Count, DateTimeOffset LastAttemptUtc, bool AttemptedThisRun)
+    {
+        public static readonly AttemptHistory None = new(0, DateTimeOffset.MinValue, false);
     }
 
     private async Task<NewsTypingRecord> TypeOneAsync(
@@ -341,9 +455,10 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         string cohortKey,
         Guid? runId,
         NewsTypingInputObservation observation,
+        int attemptNumber,
         CancellationToken ct)
     {
-        var baseRecord = BaseRecord(reader.Identity, cohortKey, runId, observation);
+        var baseRecord = BaseRecord(reader.Identity, cohortKey, runId, observation, attemptNumber);
 
         if (!observation.HasSuppliedText)
         {
@@ -413,10 +528,11 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         NewsTypingReaderIdentity identity,
         string cohortKey,
         Guid? runId,
-        NewsTypingInputObservation observation) => new(
+        NewsTypingInputObservation observation,
+        int attemptNumber) => new(
         SchemaVersion: NewsTypingRecord.CurrentSchemaVersion,
         TypingId: NewsTypingRecord.IdentityFor(
-            cohortKey, observation.ObservationId, observation.PayloadHash, runId),
+            cohortKey, observation.ObservationId, observation.PayloadHash, runId, attemptNumber),
         RunId: runId,
         ObservationId: observation.ObservationId,
         PayloadHash: observation.PayloadHash,
@@ -452,26 +568,38 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         DateTimeOffset asOfUtc,
         CancellationToken ct)
     {
+        // Spec 186 §4: stage 1 (segmentation, which fixes each episode's DURABLE identity anchor) needs
+        // ALL qualifying validated facts — window or not — so an episode's id stops churning when its
+        // earliest member ages out of the window. Stage 2 then projects only the episodes with an in-window
+        // member. The counters keep their spec-181 WINDOW basis: a checkpoint describes its window.
         var inputs = new List<FactFamilyInputFact>();
         var withoutCompany = 0;
         var considered = 0;
         foreach (var (observation, record) in pass.CompletedWithObservations())
         {
-            if (observation.FirstObservedAtUtc <= windowStartUtc
-                || observation.FirstObservedAtUtc > asOfUtc
-                || record.Status != NewsTypingStatus.Typed)
+            if (record.Status != NewsTypingStatus.Typed)
             {
                 continue;
             }
 
+            var inWindow = observation.FirstObservedAtUtc > windowStartUtc
+                && observation.FirstObservedAtUtc <= asOfUtc;
             foreach (var fact in record.Facts)
             {
-                considered++;
+                if (inWindow)
+                {
+                    considered++;
+                }
+
                 if (observation.CompanyId is not { } companyId)
                 {
                     // A family is "the same claim about the same COMPANY" — an unattributed fact cannot
-                    // join one. Counted, never silently dropped.
-                    withoutCompany++;
+                    // join one, in or out of window. Counted (for the window), never silently dropped.
+                    if (inWindow)
+                    {
+                        withoutCompany++;
+                    }
+
                     continue;
                 }
 
@@ -487,7 +615,9 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             }
         }
 
-        var families = FactFamilyBuilder.Build(inputs);
+        // The projected WINDOW families: what the snapshot records, what the decomposition renders and what
+        // the spec-185 judge consumes (every representative resolves in this window's fact index).
+        var families = FactFamilyBuilder.Build(inputs, windowStartUtc, asOfUtc);
         pass.Families = families;
 
         var snapshot = new FactFamilySnapshot(
@@ -571,12 +701,18 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 var typedRecords = new List<(NewsTypingInputObservation Observation, NewsTypingRecord Record)>();
                 var insufficient = 0;
                 var untyped = 0;
+                var exhausted = 0;
                 foreach (var observation in modeGroup)
                 {
                     if (!pass.Completed.TryGetValue(
                         (observation.ObservationId, observation.PayloadHash), out var record))
                     {
                         untyped++;
+                        if (pass.ExhaustedKeys.Contains(
+                            (observation.ObservationId, observation.PayloadHash)))
+                        {
+                            exhausted++;
+                        }
                     }
                     else if (record.Status == NewsTypingStatus.InsufficientContent)
                     {
@@ -627,6 +763,15 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                             + $"({modeGroup.Key})"));
                 }
 
+                if (exhausted > 0)
+                {
+                    // Spec 186 §2: named separately from the backlog — a later run will NOT drain these.
+                    incompleteReasons.Add(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"typing retries exhausted: {exhausted} observation(s) will not be typed for "
+                            + $"{pass.Identity.Name} ({modeGroup.Key})"));
+                }
+
                 cohorts.Add(new NewsTypingDecompositionCohort(
                     ReaderName: pass.Identity.Name,
                     Provider: pass.Identity.Provider,
@@ -637,7 +782,8 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                     ObservationsInsufficientContent: insufficient,
                     UntypedRemaining: untyped,
                     FamilyCount: cohortFamilies.Count,
-                    Types: typeRows));
+                    Types: typeRows,
+                    RetryExhausted: exhausted));
             }
         }
 
@@ -664,12 +810,17 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         }
     }
 
-    /// <summary>One reader's per-pass state: its completed-cache view, its new-typing count and its checkpoint families.</summary>
+    /// <summary>
+    /// One reader's per-pass state: its completed-cache view, its new-typing count, its checkpoint families
+    /// and the spec-186 §2 retry-exhaustion view (which observations left selection, and whose companies).
+    /// </summary>
     private sealed class ReaderPass(
         NewsTypingReaderIdentity identity,
         Dictionary<(Guid ObservationId, string PayloadHash), NewsTypingRecord> completed,
         int newTypings,
-        HashSet<Guid> failedCompanyIds)
+        HashSet<Guid> failedCompanyIds,
+        HashSet<(Guid ObservationId, string PayloadHash)> exhaustedKeys,
+        HashSet<Guid> exhaustedCompanyIds)
     {
         public NewsTypingReaderIdentity Identity { get; } = identity;
 
@@ -680,6 +831,12 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
 
         /// <summary>Companies with at least one FAILED typing attempt this run (spec 185 §5 completeness precedence).</summary>
         public HashSet<Guid> FailedCompanyIds { get; } = failedCompanyIds;
+
+        /// <summary>Untyped observations whose typing attempts are EXHAUSTED — they left selection (spec 186 §2).</summary>
+        public HashSet<(Guid ObservationId, string PayloadHash)> ExhaustedKeys { get; } = exhaustedKeys;
+
+        /// <summary>Companies holding at least one exhausted untyped observation — never <c>Complete</c> (spec 186 §2).</summary>
+        public HashSet<Guid> ExhaustedCompanyIds { get; } = exhaustedCompanyIds;
 
         public IReadOnlyList<FactFamilyRecord> Families { get; set; } = [];
 

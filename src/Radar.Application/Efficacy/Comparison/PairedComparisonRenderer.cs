@@ -59,7 +59,7 @@ public sealed class PairedComparisonRenderer
             + "signTestZeroDeltasDropped,baselineClears,satisfiesPriceGate,gateReasons,"
             + "qualifiesUnderAd15,ad16ScreenOutcome,"
             + "eligibleJointObservations,eligibleJointCompanies,eligibleJointDates,"
-            + "observationsWithoutAsOfInstant,mismatchedAsOfInstantKeys";
+            + "observationsWithoutAsOfInstant,mismatchedAsOfInstantKeys,gateVerdictId";
 
     private const string BlocksCsvHeader = "baseline,blockDate,companies,primaryRho,baselineRho,pairedDelta";
 
@@ -71,6 +71,9 @@ public sealed class PairedComparisonRenderer
         var sb = new StringBuilder();
         sb.Append(CsvHeader).Append('\n');
 
+        // Computed ONCE per artifact: it is a RUN-level fact repeated on every row (spec 186 §3).
+        var gateVerdictId = GateVerdictIdentity.Compute(result, verdict);
+
         if (result.Baselines.Count == 0)
         {
             AppendContext(sb, result, status: "no-baselines");
@@ -78,7 +81,7 @@ public sealed class PairedComparisonRenderer
             AppendJoint(sb, result);
             // purgedBlocks .. baselineClears: empty — with no baseline there is no headline to misread.
             sb.Append(",,,,,,,,,,");
-            AppendGate(sb, result, verdict);
+            AppendGate(sb, result, verdict, gateVerdictId);
             sb.Append('\n');
             return sb.ToString();
         }
@@ -100,7 +103,7 @@ public sealed class PairedComparisonRenderer
             sb.Append(Int(baseline.SignTest.EffectiveN)).Append(',');
             sb.Append(Int(baseline.SignTest.ZeroDeltasDropped)).Append(',');
             sb.Append(Bool(baseline.ClearsGate)).Append(',');
-            AppendGate(sb, result, verdict);
+            AppendGate(sb, result, verdict, gateVerdictId);
             sb.Append('\n');
         }
 
@@ -163,7 +166,10 @@ public sealed class PairedComparisonRenderer
     }
 
     private static void AppendGate(
-        StringBuilder sb, PairedStrategyComparison result, Ad15ClaimVerdict verdict)
+        StringBuilder sb,
+        PairedStrategyComparison result,
+        Ad15ClaimVerdict verdict,
+        string gateVerdictId)
     {
         sb.Append(Bool(result.SatisfiesPriceGate)).Append(',');
         sb.Append(CsvField.Escape(string.Join("; ", verdict.Reasons.Select(r => r.Render())))).Append(',');
@@ -173,7 +179,11 @@ public sealed class PairedComparisonRenderer
         sb.Append(Int(result.EligibleJointSupport.DistinctCompanies)).Append(',');
         sb.Append(Int(result.EligibleJointSupport.DistinctAsOfDates)).Append(',');
         sb.Append(Int(result.ObservationsWithoutAsOfInstant)).Append(',');
-        sb.Append(Int(result.ObservationsWithMismatchedAsOfInstant));
+        sb.Append(Int(result.ObservationsWithMismatchedAsOfInstant)).Append(',');
+
+        // Spec 186 §3: the RUN-LEVEL semantic verdict identity, repeated on every row like the rest of the
+        // gate context. EMPTY when this artifact expresses no verdict — there is then nothing to override.
+        sb.Append(gateVerdictId);
     }
 
     public string RenderMarkdown(PairedStrategyComparison result, Ad15ClaimVerdict verdict)
@@ -389,6 +399,29 @@ public sealed class PairedComparisonRenderer
                 sb.Append(CultureInfo.InvariantCulture, $"- {Md(reason.Render())}\n");
             }
         }
+
+        AppendVerdictIdentityMarkdown(sb, result, verdict);
+    }
+
+    /// <summary>
+    /// The spec-186 §3 verdict identity, stated in the human artifact because it is what a maintainer must
+    /// copy into an operating call's <c>overridesVerdictId</c>. It is a semantic identity, not a timestamp:
+    /// an identical re-computation keeps it (so a declared override survives the daily re-write), and any
+    /// change to the admitted evidence or to either half of the verdict mints a new one (so the gate
+    /// default re-arms and the stale override is reported).
+    /// </summary>
+    private static void AppendVerdictIdentityMarkdown(
+        StringBuilder sb, PairedStrategyComparison result, Ad15ClaimVerdict verdict)
+    {
+        sb.Append('\n');
+        var id = GateVerdictIdentity.Compute(result, verdict);
+        if (id.Length == 0)
+        {
+            sb.Append("Gate verdict id: **none** — this artifact expresses no gate VERDICT (no predeclared primary, no precommitted boundary, or the gate could not yet evaluate on its merits), so there is nothing for an operating call to override.\n");
+            return;
+        }
+
+        sb.Append(CultureInfo.InvariantCulture, $"Gate verdict id: `{id}` — the semantic identity of THIS verdict (the gate contract, the admitted purged blocks and their per-block inputs, the price half, and the AD-16 prerequisite). A human operating call that overrides this verdict must bind to it by name (`overridesGate: true` plus `overridesVerdictId`, schema strategy-operating-calls-v2). Re-computing the same verdict from the same evidence keeps this id; new admitted evidence, or an AD-16 prerequisite transition alone, mints a new one and re-arms the gate default.\n");
     }
 
     /// <summary>One restrained sentence per prerequisite outcome; total, and every unmet state names its code.</summary>

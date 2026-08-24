@@ -130,6 +130,21 @@ public sealed record NewsJudgmentRecord(
 }
 
 /// <summary>
+/// The ONE definition of the judgment store's folder segment beneath the news-risk output root (spec 185
+/// §5's layout). Shared so the Infrastructure store that WRITES the path and the report that CITES it for
+/// traceability (spec 186 §1) cannot drift apart.
+/// </summary>
+public static class NewsJudgmentStoreLayout
+{
+    /// <summary>The folder segment: <c>{newsRiskRoot}/judgments/…</c>.</summary>
+    public const string JudgmentsFolder = "judgments";
+
+    /// <summary>The store root for a news-risk output root — the path the weekly report states ONCE.</summary>
+    public static string RootFor(string outputDirectory) =>
+        Path.Combine(outputDirectory, JudgmentsFolder);
+}
+
+/// <summary>
 /// The insert-only durable judgment store (spec 185 §5), implemented in Infrastructure at
 /// <c>{newsRiskRoot}/judgments/{judge-policy-segment}/{companyId}/{judgmentId}.json</c>. Write-once per
 /// deterministic id; the cache read returns only COMPLETED judgments for (cohort, company, family set) —

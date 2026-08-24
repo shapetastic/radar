@@ -156,4 +156,23 @@ public sealed class Ad15ClaimGateTests
         Assert.Equal("invalid", Ad15ClaimGate.OutcomeToken(Ad16ScreenOutcome.Invalid));
         Assert.Equal("invalid", Ad15ClaimGate.OutcomeToken((Ad16ScreenOutcome)999));
     }
+
+    /// <summary>
+    /// The merit/non-merit split (spec 186 §3) must PARTITION <see cref="Ad15GateReasonCodes.All"/>: a code
+    /// added to the vocabulary but forgotten in either list would make <c>GateVerdictIdentity.VerdictExists</c>
+    /// and <c>StrategyEvidenceStatusCalculator</c> treat a merit-plus-new-code failure as a VERDICT — a
+    /// gate-failed reading over a reason that never evaluated on its merits. Asserted, not maintained by hand.
+    /// </summary>
+    [Fact]
+    public void MeritAndNonMeritCodes_PartitionTheWholeVocabulary_WithNoOverlapAndNoOmission()
+    {
+        var merit = Ad15GateReasonCodes.MeritFailureCodes.ToHashSet(StringComparer.Ordinal);
+        var nonMerit = Ad15GateReasonCodes.NonMeritCodes.ToHashSet(StringComparer.Ordinal);
+
+        Assert.Empty(merit.Intersect(nonMerit, StringComparer.Ordinal));
+        Assert.Equal(
+            Ad15GateReasonCodes.All.Order(StringComparer.Ordinal),
+            merit.Concat(nonMerit).Order(StringComparer.Ordinal));
+        Assert.Equal(Ad15GateReasonCodes.All.Count, merit.Count + nonMerit.Count);
+    }
 }

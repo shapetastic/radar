@@ -29,27 +29,13 @@ public static class StrategyEvidenceStatusCalculator
     /// <summary>
     /// The two closed spec-170 codes that mean the price gate evaluated ON ITS MERITS and came out
     /// negative. Every other code means the gate could not (yet) evaluate — accrual, missing
-    /// predeclaration, or the AD-16 prerequisite — which is pending, never failed.
+    /// predeclaration, or the AD-16 prerequisite — which is pending, never failed. The split itself lives
+    /// in <see cref="Ad15GateReasonCodes"/> (spec 186 §3) so this calculator and the writer-side
+    /// <c>GateVerdictIdentity</c> cannot disagree about when a VERDICT exists.
     /// </summary>
-    private static readonly string[] MeritFailureCodes =
-    [
-        Ad15GateReasonCodes.MedianPairedDeltaNotPositive,
-        Ad15GateReasonCodes.IntervalLowerBoundNotPositive,
-    ];
+    private static IReadOnlyList<string> MeritFailureCodes => Ad15GateReasonCodes.MeritFailureCodes;
 
-    private static readonly string[] NonMeritCodes =
-    [
-        Ad15GateReasonCodes.NoPredeclaredPrimary,
-        Ad15GateReasonCodes.NoPrecommittedBoundary,
-        Ad15GateReasonCodes.NoBaselines,
-        Ad15GateReasonCodes.EmptyIntersection,
-        Ad15GateReasonCodes.NoEligibleBlocks,
-        Ad15GateReasonCodes.InsufficientPurgedBlocks,
-        Ad15GateReasonCodes.Ad16ScreenNotCalculated,
-        Ad15GateReasonCodes.Ad16ScreenUnavailable,
-        Ad15GateReasonCodes.Ad16ScreenPending,
-        Ad15GateReasonCodes.Ad16ScreenInvalid,
-    ];
+    private static IReadOnlyList<string> NonMeritCodes => Ad15GateReasonCodes.NonMeritCodes;
 
     /// <summary>Computes every configured strategy's status. Keys are case-insensitive strategy names.</summary>
     public static IReadOnlyDictionary<string, StrategyEvidenceStatus> Compute(
@@ -69,8 +55,9 @@ public static class StrategyEvidenceStatusCalculator
 
     /// <summary>
     /// The PERSISTED gate verdicts the operating-call reducer consumes (spec 184 §2 rule 1): one per arm
-    /// whose status is <c>GatePassed</c>/<c>GateFailed</c>, stamped with the artifact's own write instant.
-    /// A pending gate is deliberately NOT a verdict — it must not demote or promote anything.
+    /// whose status is <c>GatePassed</c>/<c>GateFailed</c>, carrying the artifact's SEMANTIC verdict
+    /// identity (spec 186 §3) — never its filesystem write instant. A pending gate is deliberately NOT a
+    /// verdict: it must not demote or promote anything.
     /// </summary>
     public static IReadOnlyList<StrategyGateVerdict> GateVerdicts(
         EfficacyEvidenceFacts facts, IReadOnlyList<ScoringStrategyDefinition> strategies)
@@ -85,12 +72,12 @@ public static class StrategyEvidenceStatusCalculator
             if (status.Kind == StrategyEvidenceStatusKind.GatePassed)
             {
                 verdicts.Add(new StrategyGateVerdict(
-                    strategy.Name, Passed: true, facts.Paired!.ArtifactWrittenAtUtc));
+                    strategy.Name, Passed: true, facts.Paired!.GateVerdictId));
             }
             else if (status.Kind == StrategyEvidenceStatusKind.GateFailed)
             {
                 verdicts.Add(new StrategyGateVerdict(
-                    strategy.Name, Passed: false, facts.Paired!.ArtifactWrittenAtUtc));
+                    strategy.Name, Passed: false, facts.Paired!.GateVerdictId));
             }
         }
 
@@ -169,7 +156,13 @@ public static class StrategyEvidenceStatusCalculator
 
 /// <summary>
 /// A PERSISTED gate verdict for one arm (spec 184 §2 reducer rule 1): the AD-15 composite gate evaluated
-/// and the outcome is on disk. <paramref name="VerdictAtUtc"/> is the artifact's write instant — the
-/// instant a human override's <c>asOfUtc</c> must post-date to count.
+/// and the outcome is on disk.
+/// <para>
+/// <paramref name="VerdictId"/> is the artifact's SEMANTIC verdict identity (spec 186 §3) — the name a
+/// human operating call must bind to (<c>overridesVerdictId</c>) for its override to apply. It replaces the
+/// pre-186 <c>VerdictAtUtc</c> write instant outright: an override is about a PARTICULAR verdict, so it
+/// binds by identity, never by timestamp. EMPTY means the identity is unavailable (a pre-186 artifact, or
+/// one carrying no verdict), and an empty id can never match an override — fail closed.
+/// </para>
 /// </summary>
-public sealed record StrategyGateVerdict(string StrategyName, bool Passed, DateTimeOffset VerdictAtUtc);
+public sealed record StrategyGateVerdict(string StrategyName, bool Passed, string VerdictId);
