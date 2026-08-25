@@ -157,7 +157,9 @@ public sealed class StrategyEvidenceStatusCalculatorTests
     }
 
     // ---------------------------------------------------------------------------------------------------
-    // Spec 187 §5 — the LEGACY (pre-186, no-id) path: exact reason CODES, fail closed, no fabricated id
+    // Spec 187 §5 — the NO-VERDICT-ID path: exact reason CODES, fail closed, no fabricated id. Reached by
+    // pre-186 artifacts AND by current artifacts whose gate has stated no verdict (spec 188 §2), so the
+    // `LegacyArtifact_` fixtures below describe an input SHAPE, never a claim that nothing current gets here.
     // ---------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -262,6 +264,110 @@ public sealed class StrategyEvidenceStatusCalculatorTests
         Assert.Equal(
             StrategyEvidenceStatusKind.GatePending,
             StrategyEvidenceStatusCalculator.Compute(prose, Strategies)["alpha"].Kind);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 188 §2 — the no-verdict-id fallback must PARSE THE WHOLE LIST before it may fail a gate
+    // ---------------------------------------------------------------------------------------------------
+
+    private static StrategyEvidenceStatusKind NoIdStatus(string reasons) =>
+        StrategyEvidenceStatusCalculator.Compute(
+            new EfficacyEvidenceFacts(
+                false, [], true, Gate(reasons: reasons, verdictId: string.Empty)),
+            Strategies)["alpha"].Kind;
+
+    private static IReadOnlyList<StrategyGateVerdict> NoIdVerdicts(string reasons) =>
+        StrategyEvidenceStatusCalculator.GateVerdicts(
+            new EfficacyEvidenceFacts(
+                false, [], true, Gate(reasons: reasons, verdictId: string.Empty)),
+            Strategies);
+
+    [Theory]
+    // THE DEFECT (spec 188 §2): the pre-188 parser DISCARDED the segment it did not recognise, so a list
+    // that was only PARTLY understood collapsed to the merit reason alone and became a negative verdict.
+    // Both orders, because "the unknown came second" must not be the reason it held.
+    [InlineData(
+        "baseline 'x': median-paired-delta-not-positive; baseline 'y': ad17-screen-from-the-future")]
+    [InlineData(
+        "baseline 'y': ad17-screen-from-the-future; baseline 'x': median-paired-delta-not-positive")]
+    // A blank / trailing segment is not a neutral absence either.
+    [InlineData("baseline 'x': median-paired-delta-not-positive; ")]
+    [InlineData(" ; baseline 'x': median-paired-delta-not-positive")]
+    // Malformed baseline syntax: the "': " delimiter Render() always emits is missing, so the segment
+    // cannot be reduced to a code at all.
+    [InlineData(
+        "baseline 'x' median-paired-delta-not-positive; "
+            + "baseline 'y': interval-lower-bound-not-positive")]
+    // Free prose beside a genuine merit reason.
+    [InlineData("median-paired-delta-not-positive; the gate could not be evaluated")]
+    public void NoIdArtifact_APartlyUnderstoodReasonList_StaysPending_AndYieldsNoVerdict(string reasons)
+    {
+        Assert.Equal(StrategyEvidenceStatusKind.GatePending, NoIdStatus(reasons));
+        Assert.Empty(NoIdVerdicts(reasons));
+    }
+
+    [Fact]
+    public void NoIdArtifact_FullyParsedMeritOnlyReasons_StillYieldGateFailed_WithTheEmptyId()
+    {
+        // The compatibility case the completeness rule must NOT break: every segment understood, every code
+        // a merit code. Details and baseline prefixes are part of the grammar, not unparsed noise.
+        const string Reasons = "baseline 'baseline-x': median-paired-delta-not-positive; "
+            + "baseline 'baseline-y': interval-lower-bound-not-positive (admitted 7, need at least 6 at 95%)";
+
+        Assert.Equal(StrategyEvidenceStatusKind.GateFailed, NoIdStatus(Reasons));
+
+        var verdict = Assert.Single(NoIdVerdicts(Reasons));
+        Assert.False(verdict.Passed);
+        Assert.Equal(string.Empty, verdict.VerdictId); // never fabricated (AD-8)
+    }
+
+    [Theory]
+    // A fully parsed NON-merit reason cannot fail a gate, alone or beside a merit one: "not enough data
+    // yet" is pending, and that rule predates spec 188 and is unchanged by it.
+    [InlineData("no-eligible-blocks")]
+    [InlineData("ad16-screen-pending (screen not yet calculated)")]
+    [InlineData("baseline 'x': median-paired-delta-not-positive; baseline 'y': insufficient-purged-blocks")]
+    public void NoIdArtifact_AnyRecognisedNonMeritReason_StaysPending(string reasons)
+    {
+        Assert.Equal(StrategyEvidenceStatusKind.GatePending, NoIdStatus(reasons));
+        Assert.Empty(NoIdVerdicts(reasons));
+    }
+
+    [Fact]
+    public void CurrentArtifact_WithAnUnknownTokenInItsDisplayReasons_IsStillGovernedOnlyByQualifies()
+    {
+        // The completeness rule must NOT leak into the structured path (spec 187 §5 stands): a non-empty
+        // GateVerdictId IS the writer's statement that a verdict exists, so rendered text — recognised,
+        // unrecognised or future — cannot move the pass/fail state either way.
+        const string Reasons = "baseline 'x': median-paired-delta-not-positive; "
+            + "baseline 'y': ad17-screen-from-the-future";
+
+        var failed = new EfficacyEvidenceFacts(
+            false, [], true, Gate(qualifies: false, reasons: Reasons));
+        var passed = new EfficacyEvidenceFacts(
+            false, [], true, Gate(qualifies: true, reasons: Reasons));
+
+        Assert.Equal(
+            StrategyEvidenceStatusKind.GateFailed,
+            StrategyEvidenceStatusCalculator.Compute(failed, Strategies)["alpha"].Kind);
+        Assert.Equal(
+            StrategyEvidenceStatusKind.GatePassed,
+            StrategyEvidenceStatusCalculator.Compute(passed, Strategies)["alpha"].Kind);
+
+        // …and both carry the artifact's real semantic identity, not the empty no-id one.
+        Assert.Equal(VerdictId, Assert.Single(
+            StrategyEvidenceStatusCalculator.GateVerdicts(failed, Strategies)).VerdictId);
+        Assert.Equal(VerdictId, Assert.Single(
+            StrategyEvidenceStatusCalculator.GateVerdicts(passed, Strategies)).VerdictId);
+    }
+
+    [Fact]
+    public void NoIdArtifact_AFutureCode_IsNotInTodaysClosedVocabulary()
+    {
+        // Guards the fixtures above: `ad17-screen-from-the-future` must genuinely be unrecognised, or the
+        // "future code" cases would be testing nothing.
+        Assert.DoesNotContain(
+            "ad17-screen-from-the-future", Ad15GateReasonCodes.All, StringComparer.Ordinal);
     }
 
     [Fact]
