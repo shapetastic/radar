@@ -335,6 +335,144 @@ public sealed class NewsJudgmentProviderTimingTests
             harness.Logger.Entries, e => e.Message.Contains("p50", StringComparison.Ordinal));
     }
 
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 188 §1 — CURRENT-PASS activity, never inferred from a record's durable duration
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>A provider failure: call-producing, NOT cacheable, so a re-entry takes the same-run branch.</summary>
+    private static Func<NewsJudgmentAnalysisRequest, NewsJudgmentAnalysisOutcome> RateLimited() =>
+        _ => new NewsJudgmentAnalysisOutcome(
+            NewsJudgmentAnalysisFailure.ProviderError, null, null, "429 rate limited");
+
+    [Fact]
+    public async Task SameRunReEntry_OverCallProducingRecords_ReportsZeroCurrentPassActivity()
+    {
+        // THE DEFECT (spec 188 §1). A same-run reused attempt keeps the duration AND the failure status of
+        // its ORIGINAL call, so reading `record.ProviderDurationMs` as "this pass called the provider"
+        // replayed five old calls, five old failures and their latency as CURRENT — on exactly the rerun
+        // path the telemetry exists to explain. The bill was still bounded; the observation was false.
+        var harness = new Harness();
+        var runId = Guid.NewGuid();
+        var generator = harness.Build(RateLimited(), _ => TimeSpan.FromMilliseconds(1234));
+
+        await generator.GenerateAsync(runId, Plan(5), Typing(runId, 5), CancellationToken.None);
+        Assert.Equal(5, harness.Analyzer!.Calls);
+        harness.Logger.Entries.Clear();
+
+        var second = await generator.GenerateAsync(
+            runId, Plan(5), Typing(runId, 5), CancellationToken.None);
+
+        // No second call, and therefore no current-pass activity of any kind.
+        Assert.Equal(5, harness.Analyzer.Calls);
+        Assert.Empty(Progress(harness));
+        Assert.Contains(
+            harness.Logger.Entries,
+            e => e.Message.Contains(
+                "provider timing: 0 provider call(s); no call latency measured this pass",
+                StringComparison.Ordinal));
+
+        // No replayed latency and no replayed provider/parse/validation failure anywhere in this pass.
+        Assert.All(harness.Logger.AllText, text =>
+        {
+            Assert.DoesNotContain("p50", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("1234", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("failures", text, StringComparison.Ordinal);
+        });
+
+        // The durable records are untouched: five call-producing attempts, each keeping its own duration.
+        Assert.Equal(5, harness.Store.Records.Count(r => r.IsCallProducingAttempt));
+        Assert.Equal(5, second!.Judgments.Count);
+    }
+
+    [Fact]
+    public async Task SameRunReusedRecord_KeepsItsOriginalDuration_AndIsTheStoredRecord()
+    {
+        // The record must NOT be cloned with a null duration to drive the counters: `ProviderDurationMs` is
+        // truthful provenance of the call that CREATED the attempt, and the presented copy may never
+        // disagree with the insert-only record on disk. Pass-local activity rides beside it, not inside it.
+        var harness = new Harness();
+        var runId = Guid.NewGuid();
+        var generator = harness.Build(RateLimited(), _ => TimeSpan.FromMilliseconds(777));
+
+        await generator.GenerateAsync(runId, Plan(1), Typing(runId, 1), CancellationToken.None);
+        var second = await generator.GenerateAsync(
+            runId, Plan(1), Typing(runId, 1), CancellationToken.None);
+
+        var stored = Assert.Single(harness.Store.Records);
+        var reused = Assert.Single(second!.Judgments);
+        Assert.Same(stored, reused);
+        Assert.Equal(777d, reused.ProviderDurationMs);
+        Assert.Equal(NewsJudgmentStatus.ProviderFailure, reused.Status);
+        Assert.Equal(stored.JudgmentId, reused.JudgmentId);
+    }
+
+    [Fact]
+    public async Task AMixedReuseAndNewCallPass_ReportsOnlyTheGenuinelyNewCall()
+    {
+        var harness = new Harness();
+        var runId = Guid.NewGuid();
+        var calls = 0;
+        var generator = harness.Build(
+            request =>
+            {
+                calls++;
+                return calls == 1 ? RateLimited()(request) : Grounded()(request);
+            },
+            call => TimeSpan.FromMilliseconds(call == 1 ? 900 : 40));
+
+        // Pass 1 spends one call on company 0 and it FAILS (900 ms) — a call-producing, uncacheable record.
+        await generator.GenerateAsync(runId, Plan(1), Typing(runId, 1), CancellationToken.None);
+        harness.Logger.Entries.Clear();
+
+        // Pass 2, SAME run: company 0 is reused without a call; company 1 is a genuinely new 40 ms call.
+        var result = await generator.GenerateAsync(
+            runId, Plan(2), Typing(runId, 2), CancellationToken.None);
+
+        Assert.Equal(2, harness.Analyzer!.Calls);
+
+        // Every number describes the NEW call alone: one attempt, no failure, its own latency.
+        var progress = Assert.Single(Progress(harness));
+        Assert.Contains("1/2 call(s) attempted", progress.Message, StringComparison.Ordinal);
+        Assert.Contains("1 persisted judged verdict(s)", progress.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "failures 0 provider / 0 parse / 0 validation", progress.Message, StringComparison.Ordinal);
+        Assert.Contains("mean call 40.0 ms", progress.Message, StringComparison.Ordinal);
+        Assert.Contains("max call 40.0 ms", progress.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            harness.Logger.Entries,
+            e => e.Message.Contains(
+                "provider timing: 1 provider call(s); p50 40.0 ms, p95 40.0 ms, max 40.0 ms, total 40.0 ms",
+                StringComparison.Ordinal));
+
+        // …while BOTH records still reach the run result, the reused one with its original 900 ms.
+        Assert.Equal(2, result!.Judgments.Count);
+        Assert.Equal(
+            [900d, 40d],
+            result.Judgments.Select(r => r.ProviderDurationMs).ToList());
+    }
+
+    [Fact]
+    public async Task ANoCallCandidateAfterTheFifthCall_CannotReEmitTheBoundary()
+    {
+        // The boundary is crossed by a CALL, so it may only be evaluated immediately after one. Evaluating
+        // it after every candidate meant any later no-call candidate — here an InsufficientFacts company,
+        // equally a same-run or cache reuse or an exhausted one — re-emitted the same `5/…` line while
+        // nothing had happened.
+        var harness = new Harness();
+        var runId = Guid.NewGuid();
+        var generator = harness.Build(Grounded(), _ => TimeSpan.FromMilliseconds(10));
+
+        // Six candidates, facts for the first five: five calls, then one no-call candidate.
+        await generator.GenerateAsync(runId, Plan(6), Typing(runId, 5), CancellationToken.None);
+
+        Assert.Equal(5, harness.Analyzer!.Calls);
+        var progress = Assert.Single(Progress(harness));
+        Assert.Contains("5/6 call(s) attempted", progress.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            harness.Store.Records,
+            r => r.Status == NewsJudgmentStatus.InsufficientFacts && r.ProviderDurationMs is null);
+    }
+
     [Fact]
     public async Task Durations_ChangeNoIdentity_NoCohortKey_NoFamilySetHash_AndNoOrdering()
     {

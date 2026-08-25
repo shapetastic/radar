@@ -1430,6 +1430,49 @@ Do not hand back broken code.
     reservation ledger for JUDGMENT, parallel provider calls / wall-clock stage cutoffs / dynamic
     throttling / automatic reader substitution, any Claude adapter or cohort, removing Ollama from the code,
     and feeding typing, trajectory, findings or markers into any score/rank/label/fingerprint calculation.
+- **Two spec-187 claims were wrong at the seam, and spec 188 corrects them at the source.** Read-side and
+  display-side only: no prompt, schema, cohort key, persisted record schema, score, rank, label, strategy,
+  marker or AD-15/AD-16 rule moves, and the pins do not move.
+  - **Durable call PROVENANCE is not current-pass ACTIVITY (§1).** `NewsJudgmentGenerator` inferred "this
+    pass called the provider" from the persisted `NewsJudgmentRecord.ProviderDurationMs`, but a same-run
+    reused attempt correctly carries the duration AND the failure status of its ORIGINAL call — so a re-run
+    replayed old latency as current latency, counted a call that never happened, replayed an old
+    provider/parse/validation failure into current totals, and let ANY later no-call candidate (same-run
+    reuse, cross-run cache reuse, `InsufficientFacts`, `AttemptsExhausted`) re-emit the same `5/…`
+    boundary. `JudgeOneAsync` now returns a private pass-local `JudgmentPassOutcome
+    { Record, TimeSpan? ProviderCallDurationThisPass }` — transient orchestration state, never persisted,
+    never a wire contract, never an identity input — set ONLY around an analyzer invocation this
+    invocation made. Every spec-187 §7 metric reads it: attempted calls, latency samples, the three failure
+    counters, `persistedJudged` (a current call producing `Judged` AND a durable `WriteAsync`), and the
+    five-call boundary, which is now evaluated only immediately after a current call. `ProviderDurationMs`
+    is UNCHANGED and a reused record keeps its original value in the store and in the run result — the
+    in-memory copy must not disagree with the insert-only record on disk. An all-reuse pass logs the
+    zero-call summary, emits no progress line and contributes no old failure. **Attempt counting and
+    idempotency are untouched**: `JudgmentAttemptHistory`, the 3-attempt default, `standalone#N`, the
+    exhaustion identity, cache identity and insert-only semantics all stand exactly as spec 187 shipped
+    them. This fixes OBSERVATION of those decisions, not the decisions.
+  - **"Partly understood" is not a verdict (§2).** The non-empty-`GateVerdictId` structured path is
+    unchanged (spec 187 §5: `Qualifies` alone decides, reasons are display detail). Only the empty-id
+    fallback changed: `ParseRenderedReasonCodes` silently DISCARDED unrecognised segments, so a list of one
+    recognised merit failure plus one malformed/future segment collapsed to merit-only and became
+    `GateFailed`. It now returns a `RenderedReasonParse { Codes, EverySegmentRecognised }`, and
+    `GateFailed` requires a nonblank list, ≥ 1 segment, EVERY segment parsed and recognised against the
+    closed `Ad15GateReasonCodes.All`, and every parsed code being a merit code — the writer-side
+    `GateVerdictIdentity.VerdictExists` test verbatim, with completeness added. Anything else (empty list,
+    blank segment, malformed baseline syntax, unrecognised/future code, prose, any non-merit code, any
+    mixture) is `GatePending` with NO fabricated verdict id. The spec-187 baseline-name and free-form-detail
+    spoof protections are retained. **The fallback is LIVE, not historical** — the method is now named
+    `NoVerdictIdStatusFromRenderedReasons` because it serves pre-186 artifacts AND every current artifact
+    whose gate has reached no verdict (every row in today's paired-comparison CSV); it is fail-closed
+    because no structured verdict identity exists there, not because nothing reaches it. No known live
+    mis-verdict existed: a well-formed current merit-only result carries an id and takes the structured
+    path.
+  - **The operational record (§3).** `scripts/run-profiles/default.json` no longer says judgment attempts
+    are bounded "the same way" as typing's. Typing's `MaxTypingAttempts 3` bounds PROVIDER CALLS because
+    every call wins a durable pre-call reservation; judgment's `MaxJudgmentAttempts 3` is separately derived
+    from durably recorded call-producing outcomes plus same-run idempotency and deliberately has NO pre-call
+    ledger, so a crash or a failed outcome write between call and persistence can spend an unrecorded
+    judgment call.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

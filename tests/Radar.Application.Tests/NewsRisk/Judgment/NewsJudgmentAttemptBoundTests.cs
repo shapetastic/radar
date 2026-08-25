@@ -181,6 +181,14 @@ public sealed class NewsJudgmentAttemptBoundTests
         Assert.Equal(
             first!.Markers!.Markers![Eose].CellText, second!.Markers!.Markers![Eose].CellText);
         Assert.Equal("? unassessed (validation-failed)", second.Markers.Markers![Eose].CellText);
+
+        // Spec 188 §1: the reused record IS the durable one — same instance, same non-null
+        // ProviderDurationMs. The pass-local "did THIS invocation call the provider?" fact rides beside the
+        // record (see NewsJudgmentProviderTimingTests) rather than being smuggled into it by nulling a
+        // field the insert-only store already persisted.
+        var stored = Assert.Single(store.Records);
+        Assert.NotNull(stored.ProviderDurationMs);
+        Assert.Same(stored, Assert.Single(second.Judgments));
     }
 
     [Fact]

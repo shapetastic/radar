@@ -87,6 +87,17 @@ public interface INewsJudgmentGenerator
 /// scope: a retry limit constrains repeated calls over the SAME input, never the evaluation of newly
 /// available evidence.
 /// </para>
+/// <para>
+/// <b>Spec 188 §1 — durable call PROVENANCE is not current-pass ACTIVITY.</b> The spec-187 §7 counters
+/// (attempted calls, latency samples, provider/parse/validation failures, persisted judged successes and
+/// the every-fifth-call progress boundary) are driven ONLY by <see cref="JudgmentPassOutcome"/>, the
+/// transient per-invocation record of whether THIS pass invoked the analyzer. They are never inferred from
+/// <see cref="NewsJudgmentRecord.ProviderDurationMs"/>: a same-run reused attempt legitimately carries the
+/// duration AND the failure status of the original call, so reading that field as "a call happened" replayed
+/// old latency and old failures as this pass's — false on exactly the rerun path the telemetry exists to
+/// explain. An all-reuse pass therefore makes no call, emits no progress line, and reports an explicit
+/// zero-call summary, while every reused record keeps its original duration for audit.
+/// </para>
 /// </summary>
 public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
 {
@@ -235,36 +246,41 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 foreach (var candidate in candidates)
                 {
                     ct.ThrowIfCancellationRequested();
-                    var record = await JudgeOneAsync(judge, cohort, candidate, runId, batch, history, ct)
-                        .ConfigureAwait(false);
+                    var outcome = await JudgeOneAsync(
+                        judge, cohort, candidate, runId, batch, history, ct).ConfigureAwait(false);
+                    var record = outcome.Record;
                     if (record.Status == NewsJudgmentStatus.AttemptsExhausted)
                     {
                         exhaustedByCohort[record.CohortKey] =
                             exhaustedByCohort.GetValueOrDefault(record.CohortKey) + 1;
                     }
 
-                    // A non-null duration IS the record of "a hosted call was made" — the same fact the
-                    // persisted field carries — so the counters and the store cannot disagree about how
-                    // many calls this pass spent (spec 187 §7).
-                    if (record.ProviderDurationMs is { } durationMs)
+                    // Spec 188 §1: CURRENT-PASS activity comes from the pass-local outcome, never from the
+                    // record's persisted duration. A same-run reused attempt legitimately carries the
+                    // non-null duration and the failure status of the ORIGINAL call, so inferring "a call
+                    // happened" from that field replayed old latency and old failures as current ones on
+                    // exactly the rerun path this telemetry exists to explain.
+                    var callDuration = outcome.ProviderCallDurationThisPass;
+                    var madeProviderCall = callDuration is not null;
+                    if (callDuration is { } measured)
                     {
-                        timings.Record(TimeSpan.FromMilliseconds(durationMs));
+                        timings.Record(measured);
                         attemptedCalls++;
-                    }
 
-                    switch (record.Status)
-                    {
-                        case NewsJudgmentStatus.ProviderFailure:
-                            providerFailures++;
-                            break;
-                        case NewsJudgmentStatus.ParseFailure:
-                            parseFailures++;
-                            break;
-                        case NewsJudgmentStatus.ValidationFailed:
-                            validationFailures++;
-                            break;
-                        default:
-                            break;
+                        switch (record.Status)
+                        {
+                            case NewsJudgmentStatus.ProviderFailure:
+                                providerFailures++;
+                                break;
+                            case NewsJudgmentStatus.ParseFailure:
+                                parseFailures++;
+                                break;
+                            case NewsJudgmentStatus.ValidationFailed:
+                                validationFailures++;
+                                break;
+                            default:
+                                break;
+                        }
                     }
 
                     // Spec 187 §1: the durable write's OUTCOME is checked. An unpersisted result is not a
@@ -284,13 +300,19 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     else
                     {
                         judgments.Add(record);
-                        if (record.Status == NewsJudgmentStatus.Judged)
+
+                        // A REUSED judged verdict still reaches the run result and presentation, but it is
+                        // not a judged verdict this pass newly produced (spec 188 §1).
+                        if (madeProviderCall && record.Status == NewsJudgmentStatus.Judged)
                         {
                             persistedJudged++;
                         }
                     }
 
-                    if (attemptedCalls > 0 && attemptedCalls % JudgmentProgressBatchSize == 0)
+                    // The boundary is evaluated ONLY immediately after a current provider call: otherwise
+                    // any later no-call candidate (same-run reuse, cache reuse, InsufficientFacts,
+                    // AttemptsExhausted) re-emitted the same `5/…` line while nothing had happened.
+                    if (madeProviderCall && attemptedCalls % JudgmentProgressBatchSize == 0)
                     {
                         LogJudgmentProgress();
                     }
@@ -346,7 +368,27 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 c => c.Reader.CohortKey, c => c.FactsDroppedInWindow, StringComparer.Ordinal));
     }
 
-    private async Task<NewsJudgmentRecord> JudgeOneAsync(
+    /// <summary>
+    /// The PASS-LOCAL outcome of one <see cref="JudgeOneAsync"/> invocation (spec 188 §1): the record to
+    /// persist/reuse/present, plus whether THIS invocation actually invoked
+    /// <see cref="INewsJudgmentAnalyzer"/> and how long that one call took.
+    /// <para>
+    /// Transient orchestration state — never persisted, never a wire contract, never an identity input.
+    /// It exists because <see cref="NewsJudgmentRecord.ProviderDurationMs"/> answers a DIFFERENT question:
+    /// it is the durable provenance of the call that CREATED that attempt, which a same-run reuse or a
+    /// completed-cache reuse correctly carries forward without spending a call. Only
+    /// <see cref="ProviderCallDurationThisPass"/> may drive this pass's counters, latency samples,
+    /// failure totals and progress boundary.
+    /// </para>
+    /// </summary>
+    private readonly record struct JudgmentPassOutcome(
+        NewsJudgmentRecord Record, TimeSpan? ProviderCallDurationThisPass)
+    {
+        /// <summary>A no-call branch: the record stands, this pass spent nothing.</summary>
+        public static JudgmentPassOutcome WithoutCall(NewsJudgmentRecord record) => new(record, null);
+    }
+
+    private async Task<JudgmentPassOutcome> JudgeOneAsync(
         NewsJudgmentReader judge,
         NewsTypingCohortRunResult cohort,
         NewsRiskCandidate candidate,
@@ -385,7 +427,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         {
             // Zero canonical families ⇒ a recorded InsufficientFacts attempt, never a model call and never
             // a "no challenge" (spec 185 §5).
-            return baseRecord with { Status = NewsJudgmentStatus.InsufficientFacts };
+            return JudgmentPassOutcome.WithoutCall(
+                baseRecord with { Status = NewsJudgmentStatus.InsufficientFacts });
         }
 
         var cached = await _store
@@ -396,7 +439,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             // The cache carries ONLY the verdict fields; every completeness dimension comes from BaseRecord
             // and is therefore always the CURRENT run's (the spec-182 rule: a cached verdict replayed under
             // different coverage circumstances never carries a stale derived state).
-            return baseRecord with
+            return JudgmentPassOutcome.WithoutCall(baseRecord with
             {
                 Status = cached.Status,
                 BusinessTrajectory = cached.BusinessTrajectory,
@@ -410,7 +453,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 RawResponseHash = cached.RawResponseHash,
                 TrajectoryFactIds = cached.TrajectoryFactIds,
                 ReusedFromJudgmentId = cached.JudgmentId,
-            };
+            });
         }
 
         // Spec 187 §1 — same-run idempotency: this run already spent a call on this exact input, so it is
@@ -424,14 +467,18 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 candidate.CompanyName,
                 cohortKey,
                 runId);
-            return sameRun;
+
+            // Spec 188 §1: the reused record keeps its ORIGINAL non-null ProviderDurationMs — it is
+            // truthful provenance of the call that created it, and the in-memory copy must not disagree
+            // with the insert-only record on disk. This pass simply made no call.
+            return JudgmentPassOutcome.WithoutCall(sameRun);
         }
 
         if (priorAttempts >= _options.MaxJudgmentAttempts)
         {
             // The bound: NO call, and a same-run record that SAYS so. It is not a completed judgment, it
             // does not itself count as an attempt, and it carries no model result.
-            return baseRecord with
+            return JudgmentPassOutcome.WithoutCall(baseRecord with
             {
                 JudgmentId = NewsJudgmentRecord.ExhaustionIdentityFor(
                     cohortKey, candidate.CompanyId, bundle.FamilySetHash, runId),
@@ -441,7 +488,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     $"attempts-exhausted: {priorAttempts} call-producing judgment attempt(s) have already "
                         + $"been recorded for this cohort/company/family set, reaching the "
                         + $"{_options.MaxJudgmentAttempts}-attempt bound; no model call was made."),
-            };
+            });
         }
 
         // The model request carries the company name/ticker and the canonical families ONLY (spec 185 §1):
@@ -475,44 +522,53 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 NewsJudgmentAnalysisFailure.ProviderError, null, null, $"{ex.GetType().Name}: {ex.Message}");
         }
 
+        // Spec 188 §1: ONE measurement, written into BOTH the durable record (provenance of this call) and
+        // the pass-local outcome (this pass's activity), so the two can never disagree.
+        var callDuration = _timeProvider.GetElapsedTime(callStartTimestamp);
         var record = baseRecord with
         {
             RawResponseHash = outcome.RawResponseHash,
-            ProviderDurationMs = _timeProvider.GetElapsedTime(callStartTimestamp).TotalMilliseconds,
+            ProviderDurationMs = callDuration.TotalMilliseconds,
         };
         switch (outcome.Failure)
         {
             case NewsJudgmentAnalysisFailure.ProviderError:
-                return record with
-                {
-                    Status = NewsJudgmentStatus.ProviderFailure,
-                    FailureDetail = outcome.FailureDetail,
-                };
+                return new JudgmentPassOutcome(
+                    record with
+                    {
+                        Status = NewsJudgmentStatus.ProviderFailure,
+                        FailureDetail = outcome.FailureDetail,
+                    },
+                    callDuration);
             case NewsJudgmentAnalysisFailure.ParseError:
-                return record with
-                {
-                    Status = NewsJudgmentStatus.ParseFailure,
-                    FailureDetail = outcome.FailureDetail,
-                };
+                return new JudgmentPassOutcome(
+                    record with
+                    {
+                        Status = NewsJudgmentStatus.ParseFailure,
+                        FailureDetail = outcome.FailureDetail,
+                    },
+                    callDuration);
             default:
             {
                 var validated = NewsJudgmentValidator.Validate(outcome.Response!, bundle.Families);
-                return record with
-                {
-                    Status = validated.Status,
-                    BusinessTrajectory = validated.BusinessTrajectory,
-                    ChallengeStrength = validated.ChallengeStrength,
-                    Findings = validated.Findings,
-                    Rationale = validated.Rationale,
-                    FindingsTotal = validated.FindingsTotal,
-                    FindingsAccepted = validated.FindingsAccepted,
-                    FindingsDropped = validated.FindingsDropped,
-                    FindingDropReasons = validated.FindingDropReasons,
-                    // Spec 187 §1: the supplied facts the judge said establish the trajectory. A v2
-                    // Judged record always carries a non-null list (empty iff Unknown); a failed
-                    // validation carries the empty set, which is honest rather than "not recorded".
-                    TrajectoryFactIds = validated.TrajectoryFactIds,
-                };
+                return new JudgmentPassOutcome(
+                    record with
+                    {
+                        Status = validated.Status,
+                        BusinessTrajectory = validated.BusinessTrajectory,
+                        ChallengeStrength = validated.ChallengeStrength,
+                        Findings = validated.Findings,
+                        Rationale = validated.Rationale,
+                        FindingsTotal = validated.FindingsTotal,
+                        FindingsAccepted = validated.FindingsAccepted,
+                        FindingsDropped = validated.FindingsDropped,
+                        FindingDropReasons = validated.FindingDropReasons,
+                        // Spec 187 §1: the supplied facts the judge said establish the trajectory. A v2
+                        // Judged record always carries a non-null list (empty iff Unknown); a failed
+                        // validation carries the empty set, which is honest rather than "not recorded".
+                        TrajectoryFactIds = validated.TrajectoryFactIds,
+                    },
+                    callDuration);
             }
         }
     }
