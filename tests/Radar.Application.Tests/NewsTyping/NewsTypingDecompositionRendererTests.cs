@@ -287,6 +287,59 @@ public sealed class NewsTypingDecompositionRendererTests
         Assert.DoesNotContain("selected this pass", markdown);
     }
 
+    /// <summary>
+    /// A re-rendered PRE-v4 artifact recorded spec 187 §2's two lanes but not spec 189 §3's retry lane or
+    /// call count, which deserialize as 0. The row must not claim "0 retry … (0 provider call(s) made)" —
+    /// a defaulted zero is not a measured zero (spec 187 §7's rule), so the unrecorded numbers are NAMED.
+    /// </summary>
+    [Fact]
+    public void PreV4Document_NamesTheUnrecordedRetryLaneAndCallCount_RatherThanRenderingAMeasuredZero()
+    {
+        var cohort = Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 0, 2, 0) with
+        {
+            CandidatePrioritySelected = 3,
+            GeneralSelected = 1,
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(
+            Document(Company(cohort)) with { SchemaVersion = "news-typing-decomposition-v3" });
+
+        Assert.Contains(
+            "selected this pass: 3 judgment-candidate priority, 1 general (retry lane and provider calls "
+                + "not recorded in news-typing-decomposition-v3)",
+            markdown);
+        Assert.DoesNotContain("0 retry", markdown);
+        Assert.DoesNotContain("provider call(s) made", markdown);
+        // The capture-inflow line is v4-only too: "(none)" would claim the run genuinely had no batch.
+        Assert.Contains(
+            "Observation capture this run: not recorded (schema news-typing-decomposition-v3)", markdown);
+        Assert.DoesNotContain("batch `(none)`", markdown);
+    }
+
+    /// <summary>
+    /// The gate is on the KNOWN pre-v4 tags, never on "equals the current tag" — a future schema must keep
+    /// rendering a real measurement rather than silently reporting it as unrecorded.
+    /// </summary>
+    [Fact]
+    public void UnrecognisedSchemaVersion_StillRendersTheRecordedDiagnostics()
+    {
+        var cohort = Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 0, 2, 0) with
+        {
+            RetrySelected = 1,
+            CandidatePrioritySelected = 3,
+            GeneralSelected = 1,
+            ProviderCallsAttempted = 4,
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(
+            Document(Company(cohort)) with { SchemaVersion = "news-typing-decomposition-v5" });
+
+        Assert.Contains(
+            "selected this pass: 1 retry, 3 judgment-candidate priority, 1 general (4 provider call(s) "
+                + "made)",
+            markdown);
+    }
+
     [Fact]
     public void IncompleteCompany_IsMarkedLoudly_WithItsReasons()
     {

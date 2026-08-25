@@ -563,9 +563,12 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         var parseFailures = 0;
         var validationFailures = 0;
 
-        // Spec 185 §5: a failed attempt THIS run degrades the company's typing completeness to Failed
-        // (precedence over Backlog). Spec 187 §3 widens "failed attempt" to include a refused reservation
-        // and a failed outcome write: a STORAGE failure must never be reported as ordinary backlog.
+        // Spec 185 §5, as amended by spec 189 §2: a failed attempt THIS run degrades the company's typing
+        // completeness to RetryableFailure ("degraded today, still eligible"), which takes precedence over
+        // Backlog and yields to RetryExhausted when an in-window observation has also spent its budget. The
+        // pre-189 token `Failed` conflated the two and is never computed here again. Spec 187 §3 widens
+        // "failed attempt" to include a refused reservation and a failed outcome write: a STORAGE failure
+        // must never be reported as ordinary backlog.
         void MarkCompanyFailed(NewsTypingInputObservation observation)
         {
             // Spec 189 §3: the observation key is recorded beside the company id, because the artifact

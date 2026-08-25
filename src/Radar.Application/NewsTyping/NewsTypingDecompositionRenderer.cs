@@ -16,6 +16,7 @@ public static class NewsTypingDecompositionRenderer
         ArgumentNullException.ThrowIfNull(document);
 
         var sb = new StringBuilder();
+        var recordsSpec189Diagnostics = RecordsSpec189Diagnostics(document);
         sb.AppendLine(string.Create(
             CultureInfo.InvariantCulture,
             $"# Attention decomposition — {document.GeneratedAtUtc:yyyy-MM-dd}"));
@@ -43,13 +44,19 @@ public static class NewsTypingDecompositionRenderer
 
         // Spec 189 §3: INFLOW beside spend. "252 captured against a 200-call budget" is the fact the
         // capacity decision turns on, and until this line existed no artifact stated it. Fail-closed: an
-        // unresolvable batch renders "not recorded", never a guessed number.
-        sb.AppendLine(string.Create(
-            CultureInfo.InvariantCulture,
-            $"Observation capture this run: batch "
-                + $"`{document.NewsObservationBatchId?.ToString("D") ?? "(none)"}` · new observations "
-                + $"{document.ObservationsCapturedThisRun?.ToString(CultureInfo.InvariantCulture)
-                    ?? "not recorded"}"));
+        // unresolvable batch renders "not recorded", never a guessed number — and a re-rendered pre-v4
+        // artifact, which carries no capture fields at ALL, says so rather than reporting "(none)" (which
+        // would claim the run genuinely had no batch).
+        sb.AppendLine(recordsSpec189Diagnostics
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"Observation capture this run: batch "
+                    + $"`{document.NewsObservationBatchId?.ToString("D") ?? "(none)"}` · new observations "
+                    + $"{document.ObservationsCapturedThisRun?.ToString(CultureInfo.InvariantCulture)
+                        ?? "not recorded"}")
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"Observation capture this run: not recorded (schema {document.SchemaVersion})"));
 
         sb.AppendLine();
         AppendReaderSummaries(sb, document);
@@ -101,15 +108,24 @@ public static class NewsTypingDecompositionRenderer
                 // Spec 189 §3 completes the triple with the RETRY lane and renders what the pass actually
                 // SPENT beside what it selected — a refused reservation is a selection that never became a
                 // call, so the two numbers are deliberately allowed to differ.
+                // A re-rendered pre-v4 artifact recorded the two spec-187 lanes but NOT the retry lane or
+                // the call count, which deserialize as 0 — and a defaulted 0 is not a measured 0. It
+                // therefore renders the two numbers it actually has and NAMES the rest as unrecorded.
                 var lanes = cohort.CandidatePrioritySelected > 0
                     || cohort.GeneralSelected > 0
                     || cohort.RetrySelected > 0
-                    ? string.Create(
-                        CultureInfo.InvariantCulture,
-                        $" · selected this pass: {cohort.RetrySelected} retry, "
-                            + $"{cohort.CandidatePrioritySelected} judgment-candidate priority, "
-                            + $"{cohort.GeneralSelected} general ({cohort.ProviderCallsAttempted} provider "
-                            + $"call(s) made)")
+                    ? recordsSpec189Diagnostics
+                        ? string.Create(
+                            CultureInfo.InvariantCulture,
+                            $" · selected this pass: {cohort.RetrySelected} retry, "
+                                + $"{cohort.CandidatePrioritySelected} judgment-candidate priority, "
+                                + $"{cohort.GeneralSelected} general ({cohort.ProviderCallsAttempted} "
+                                + $"provider call(s) made)")
+                        : string.Create(
+                            CultureInfo.InvariantCulture,
+                            $" · selected this pass: {cohort.CandidatePrioritySelected} "
+                                + $"judgment-candidate priority, {cohort.GeneralSelected} general (retry "
+                                + $"lane and provider calls not recorded in {document.SchemaVersion})")
                     : string.Empty;
                 // Spec 189 §3: a retryable failure is NAMED, separately from backlog and from exhaustion —
                 // it degraded this run's read and the observation is still eligible.
@@ -193,6 +209,28 @@ public static class NewsTypingDecompositionRenderer
                 + "company section.");
         sb.AppendLine();
     }
+
+    /// <summary>
+    /// Whether this document's schema actually RECORDS spec 189 §3's additive diagnostics — the capture
+    /// inflow fields and the per-cohort <c>RetrySelected</c> / <c>ProviderCallsAttempted</c> counters, all
+    /// of which landed in <c>-v4</c>. Re-rendering an accrued v1–v3 artifact deserializes them as 0 (and as
+    /// null), and spec 187 §7's rule holds here too: a measured zero and an unmeasured zero are different
+    /// facts, so the older document names them unrecorded instead of claiming "0 provider call(s) made".
+    /// <para>
+    /// The KNOWN pre-v4 tags are the closed set, rather than "equals the current tag": those are the
+    /// artifacts actually known to lack the fields, whereas defaulting an unrecognised tag to "not
+    /// recorded" would silently hide a real measurement the day the tag next moves.
+    /// </para>
+    /// </summary>
+    private static bool RecordsSpec189Diagnostics(NewsTypingDecompositionDocument document) =>
+        !PreSpec189SchemaVersions.Contains(document.SchemaVersion);
+
+    private static readonly HashSet<string> PreSpec189SchemaVersions = new(StringComparer.Ordinal)
+    {
+        "news-typing-decomposition-v1",
+        "news-typing-decomposition-v2",
+        "news-typing-decomposition-v3",
+    };
 
     private static string FormatInstant(DateTimeOffset instant) =>
         instant.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
