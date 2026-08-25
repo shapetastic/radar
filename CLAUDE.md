@@ -1473,6 +1473,108 @@ Do not hand back broken code.
     from durably recorded call-producing outcomes plus same-run idempotency and deliberately has NO pre-call
     ledger, so a crash or a failed outcome write between call and persistence can spend an unrecorded
     judgment call.
+- **Typing capacity is a DECLARED, falsifiable posture — 350/150/25 — and typing incompleteness finally has
+  honest names (spec 189).** Written from the first post-187 baseline (`a180298d`, 2026-08-24, 58m10s, clean).
+  Its headline result was semantic and good: MNRO moved from v1's marker-forced `Deteriorating` to a grounded
+  v2 `Unknown` while EOSE stayed `Deteriorating` with two cited findings — Radar made a call when facts
+  supported one and declined when they did not. The same run exposed the next limiting layer. Read/display
+  side only: no NewsSearch reader/collector path, `MaxRecordsPerCompany`, evidence, score, rank, label,
+  strategy, scoring fingerprint, snapshot field, marker policy or AD-15/AD-16 rule moves; the pins do not move
+  and `ScoringConfigFingerprintTests` is untouched. Nothing accrued is deleted or rewritten, and the 30-day
+  window is NOT narrowed. Rules:
+  - **The capacity call, and its measured basis (§1).** `MaxNewTypingsPerRun` **350**,
+    `MaxCandidateTypingsPerRun` **150**, `MaxRetryTypingsPerRun` **25**, `MaxTypingAttempts` **3**,
+    `LookbackDays` **30** — declared EXPLICITLY in `default.json` **and** in both the `news-typing` /
+    `news-judgment` overlays. That redundancy IS the fix: the overlays previously redeclared only the budget
+    and the window, so the two lane widths came from the code defaults and selecting an experiment overlay
+    could silently restore the pre-189 200/100 posture. Measured on `a180298d`: the 30-day window held
+    **2,411** observations — 377 `Typed`, 17 `InsufficientContent`, **2,017 still eligible/untyped** (15.6 %
+    fully typed) — the run CAPTURED **252** new observation files against a **200**-call cap (inflow exceeded
+    capacity), and the 200 calls cost **508.6 s** of serial provider time (mean 2.54 s, p95 6.32 s, max
+    32.32 s), so another 150 calls is ≈ **6m21s** — material but bounded beside a 58-minute baseline, and now
+    measurable through spec 187/188's pass-truthful telemetry. **The hypothesis is explicit and falsifiable:**
+    at ~252 captured per run and 350 durable completed outcomes, capacity exceeds inflow by roughly **98
+    observations per run**, so the 2,017 backlog clears in about **21 runs** before retries, validation
+    failures and inflow changes. That is a PREDICTION, not a promise. The **ambient code defaults stay
+    200/100** (`NewsTypingWorkerOptions` / `NewsTypingOptions.DefaultMaxCandidateTypingsPerRun`): the increase
+    is a measured operating decision for the checked-in scheduled profile, not permission for any caller that
+    merely enables typing to spend 75 % more. The three-way cross-field rule is unweakened — 150 + 25 < 350
+    reserves **≥175** general first-attempt slots — and nothing auto-tunes: no feedback controller, no
+    queue-depth/latency/failure-driven budget, no silent config mutation.
+  - **`Failed` split into `RetryableFailure` vs `RetryExhausted` (§2), ordinals frozen.** `RetryableFailure`
+    = a provider/parse/validation failure, a refused attempt reservation or an unpersisted outcome THIS pass,
+    with no in-window observation exhausted — degraded today, still eligible. `RetryExhausted` = at least one
+    IN-WINDOW observation has spent all permitted attempts: a permanent hole for that
+    `(cohort, observation, payload)`. Both are APPENDED, so `Failed = 0` / `Backlog = 1` / `Complete = 2` keep
+    their values and the zero value stays the degraded one; persistence is token-based
+    (`JsonStringEnumConverter(allowIntegerValues: false)` REJECTS integers on read), verified before relying
+    on it. `Failed` stays READABLE for accrued records and defensive hydration but is **never newly computed**,
+    and an old `Failed` judgment is **never** retro-classified into a guessed state (AD-8). Precedence is
+    total and conservative: exhaustion → retryable failure → backlog → complete. One observation may sit in
+    `UntypedRemaining` (the disjoint population partition, "work still eligible") while ALSO explaining a
+    company-level `RetryableFailure` (current-pass provenance, "why this read degraded today") — different
+    questions, deliberately not one number. **Recorded asymmetry, decided not overlooked:** the FAILURE set is
+    pass-wide (a legacy-backlog failure degrades the company too, exactly as pre-189 `Failed` did) while
+    EXHAUSTION stays window-scoped (spec 186 §2); narrowing failures to the window in the same slice that
+    splits the token would have silently UPGRADED companies to `Complete`, and degrading is the safe
+    direction. **Its one reachable edge is recorded, not fixed** (narrowing is its own decision): an
+    OUT-OF-WINDOW observation spending its FINAL attempt this pass marks the company failed (pass-wide)
+    but not exhausted (window-scoped), so that company's token reads `RetryableFailure` for an
+    observation that is really exhausted — TOKEN-only, since the artifact row projects retryable
+    failures through the exhaustion-excluding rule (its eligible-backlog count stays 0) and the marker
+    policy treats every non-`Complete` value identically. `NewsJudgmentRecord.CurrentSchemaVersion` →
+    **`news-judgment-v3`** for the widened persisted vocabulary — and ONLY that:
+    `NewsJudgmentContract.PromptVersion`/`SchemaVersion`, the stage-2 cohort key and the model request
+    are asserted unchanged (typing completeness is run provenance the judge never sees),
+    so completed cached verdicts stay reusable and carry the **current** run's token. Marker state and wording
+    are untouched: every value other than `Complete` still makes a zero-finding dot say "(typing incomplete)",
+    and the exact token is visible in the judgment appendix rather than turned into a fabricated company
+    challenge.
+  - **`news-typing-decomposition-v4` shows inflow, retries, CALLS and retryable failures (§3).** Additive and
+    trailing throughout; a v1 **or v3** by-name consumer reads a v4 document unchanged (asserted against the
+    production writer), and existing artifacts stay immutable. Document level: `NewsObservationBatchId` and
+    `ObservationsCapturedThisRun` (the batch's durable `ObservationsWritten` — **never** a timestamp-derived
+    estimate; `null` when the batch is unresolvable), plus one AUTHORITATIVE pass-wide reader summary per
+    extractor cohort (all three lane selections, provider calls attempted, completed outcomes, provider/parse/
+    validation failures, reservation refusals, failed outcome writes, `RetryExhausted`,
+    `ReservedWithoutOutcome`, `UntypedRemaining`). Per company × capture mode: `RetrySelected`,
+    `ProviderCallsAttempted`, `RetryableFailuresThisRun`. **`RetrySelected` had been missing and that is why
+    the live run read wrong**: 100 candidate + 99 general looked like an unused slot against a 200-call budget
+    when it was 100 + 99 + **1 retry** (AXGN attempt 2). **SELECTIONS and CALLS are deliberately different
+    numbers** — a refused reservation is a selection that never became a call — and both project from ONE
+    per-observation record on the pass, so the rows and the totals cannot disagree. **The pass-wide summary is
+    AUTHORITATIVE for the budget and may legitimately exceed the sum of the in-window company rows** (a
+    selected legacy-backlog observation is outside the window; a company-less observation is in no company
+    section); the artifact SAYS so in rendered text rather than silently claiming equality. The partition is
+    unchanged: `Typed + InsufficientContent + UntypedRemaining + RetryExhausted` = eligible in-window
+    observations — retry selections, calls and retryable failures are diagnostics, never extra buckets.
+    Retryable failures render their OWN named line ("typing retryable failure this run: N observation(s) …;
+    they remain in the eligible backlog"), separate from backlog and from exhaustion's permanent-hole wording.
+    The `a180298d` shape is a regression fixture built from CONSTRUCTED records (never a copy of a mutable
+    live file): 100 + 99 + 1 = 200 calls, five stage-1 validation failures over four judgment candidates,
+    `RetryExhausted` 0.
+  - **The moving candidate denominator, stated because it will otherwise be misread (§1/§4).** The live
+    candidate set held 626 in-window observations (468 untyped) and the candidate lane only rises 100→150.
+    Companies enter and leave the nominated set every run, so newly admitted untyped histories refill the lane
+    and can keep `Complete` rare even while the global backlog drains. **Continuing candidate incompleteness
+    ALONE is not evidence that the budget is too low** — the review must split RETAINED candidates from
+    entrants and exits and compare their coverage separately.
+  - **The three-run review method (§4), which has NOT happened yet.** After three successful post-189 nightly
+    runs, REVIEW rather than auto-tune: inflow versus actual typing calls and the change in
+    `UntypedRemaining`; candidate completed-typing coverage split retained/entering/exiting; candidate-set
+    churn; retryable failures and exhaustion; typing p50/p95/max/total and provider-failure rate; and the
+    observed net backlog movement against the predicted ~98/run drain — **naming the reason for any material
+    miss rather than silently revising the baseline**. That review may justify another explicit decision; this
+    spec adds no controller.
+  - **Migration: NONE.** No deletion, reset, replay or cohort migration. Existing observations, evidence,
+    signals, scores, typings, reservations, families, judgments and efficacy artifacts remain immutable; stage-1
+    typing stays in its existing cohort (no prompt/schema/taxonomy change), and the first post-189 run simply
+    starts writing v3 judgment records and v4 decomposition artifacts.
+  - **Out of scope, recorded not built**: raising `Radar:News:MaxRecordsPerCompany` or admitting more
+    NewsArticle evidence (spec 190's NewsSearch local-limit audit is a separate slice), narrowing the window
+    or ageing data early to improve a percentage, changing typing prompt/schema/taxonomy, fact-family identity
+    or judgment prompt/result-schema/cohort, changing marker state or treating incomplete typing as a company
+    challenge, parallel calls / dynamic throttling / automatic fallback, and rewriting old `Failed` judgments.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

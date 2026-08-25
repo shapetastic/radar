@@ -184,6 +184,57 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Equal(30, reloaded.Limits.MaxCompaniesPerRun);
     }
 
+    /// <summary>
+    /// Spec 189 §2: the new typing-completeness tokens persist and round-trip as TOKENS (the shared
+    /// file-store JSON options reject integers on read), and a LEGACY <c>Failed</c> file hydrates unchanged —
+    /// never re-classified into a guessed retryable/exhausted state (AD-8).
+    /// </summary>
+    [Theory]
+    [InlineData(NewsTypingCompleteness.RetryableFailure, "RetryableFailure")]
+    [InlineData(NewsTypingCompleteness.RetryExhausted, "RetryExhausted")]
+    [InlineData(NewsTypingCompleteness.Backlog, "Backlog")]
+    public async Task TypingCompleteness_PersistsAsAToken_AndRoundTrips(
+        NewsTypingCompleteness completeness, string token)
+    {
+        await NewStore()
+            .WriteAsync(Record() with { TypingCompleteness = completeness }, CancellationToken.None);
+        var file = Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(_root, "judgments"), "*.json", SearchOption.AllDirectories));
+
+        Assert.Contains(
+            $"\"typingCompleteness\": \"{token}\"",
+            await File.ReadAllTextAsync(file),
+            StringComparison.Ordinal);
+
+        var reloaded = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal(completeness, reloaded.TypingCompleteness);
+        Assert.Equal("news-judgment-v3", reloaded.SchemaVersion);
+    }
+
+    /// <summary>
+    /// Spec 189 §2 / AD-8: a pre-189 file carrying the ambiguous legacy <c>Failed</c> token stays READABLE
+    /// and keeps saying exactly that. Radar records what the run recorded; it does not retro-classify an old
+    /// degraded read into a retryable-or-exhausted state it cannot know.
+    /// </summary>
+    [Fact]
+    public async Task ALegacyFailedCompletenessFile_HydratesAsFailed_AndIsNeverReclassified()
+    {
+        await NewStore().WriteAsync(Record(), CancellationToken.None);
+        var file = Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(_root, "judgments"), "*.json", SearchOption.AllDirectories));
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(file));
+        var legacy = document.RootElement.EnumerateObject()
+            .ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
+        legacy["schemaVersion"] = JsonDocument.Parse("\"news-judgment-v2\"").RootElement.Clone();
+        legacy["typingCompleteness"] = JsonDocument.Parse("\"Failed\"").RootElement.Clone();
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(legacy));
+
+        var reloaded = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal("news-judgment-v2", reloaded.SchemaVersion);
+        Assert.Equal(NewsTypingCompleteness.Failed, reloaded.TypingCompleteness);
+    }
+
     [Fact]
     public async Task Layout_IsJudgePolicySegmentThenCompanyId()
     {

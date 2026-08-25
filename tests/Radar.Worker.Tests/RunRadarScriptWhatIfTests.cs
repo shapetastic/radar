@@ -163,6 +163,20 @@ public sealed class RunRadarScriptWhatIfTests
             arguments,
             StringComparer.Ordinal);
 
+        // (e) Spec 189 §1: the declared capacity posture survives the PRODUCTION flattener — all five typing
+        // limits reach the Worker as arguments, at 350 / 150 / 25 / 3 / 30.
+        foreach (var expected in new[]
+                 {
+                     "--Radar:NewsResearch:Typing:MaxNewTypingsPerRun=350",
+                     "--Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun=150",
+                     "--Radar:NewsResearch:Typing:MaxRetryTypingsPerRun=25",
+                     "--Radar:NewsResearch:Typing:MaxTypingAttempts=3",
+                     "--Radar:NewsResearch:Typing:LookbackDays=30",
+                 })
+        {
+            Assert.Contains(expected, arguments, StringComparer.Ordinal);
+        }
+
         // Spec 187 §8: exactly ONE shadow reader is scheduled, and it is the hosted one.
         Assert.Contains(
             "--Radar:NewsResearch:Shadow:Readers:0:Name=deepinfra-deepseek",

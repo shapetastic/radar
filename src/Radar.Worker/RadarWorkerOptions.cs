@@ -941,7 +941,12 @@ public sealed class NewsTypingWorkerOptions
     /// <summary>News-typing output root (typing records, fact-family checkpoints, decomposition artifacts). run-radar.ps1 supplies this beneath its output root.</summary>
     public string OutputDirectory { get; init; } = "data/news-typing";
 
-    /// <summary>Per-READER per-run cap on new model calls (spec 181 §6: the legacy backlog drains in low-hundreds batches). Default 200; must be positive.</summary>
+    /// <summary>
+    /// Per-READER per-run cap on new model calls (spec 181 §6: the legacy backlog drains in low-hundreds
+    /// batches). AMBIENT default 200; must be positive. The shipped baseline profile
+    /// (<c>scripts/run-profiles/default.json</c>, and both typing/judgment overlays) declares <b>350</b>
+    /// explicitly — spec 189 §1's measured capacity call, not a change to this default.
+    /// </summary>
     public int MaxNewTypingsPerRun { get; init; } = 200;
 
     /// <summary>Decomposition/checkpoint window in days: (asOf − LookbackDays, asOf]. Default 30; must be positive.</summary>
@@ -974,8 +979,9 @@ public sealed class NewsTypingWorkerOptions
     /// When judgment is ENABLED the config boundary additionally enforces
     /// <c>MaxCandidateTypingsPerRun + MaxRetryTypingsPerRun &lt; MaxNewTypingsPerRun</c>, which reserves at
     /// least one GENERAL first-attempt slot under every valid configuration even when both earlier lanes
-    /// are full (defaults: 100 + 25 &lt; 200 leaves 75). Candidate priority must never be able to stop the
-    /// legacy backlog draining.
+    /// are full (ambient defaults: 100 + 25 &lt; 200 leaves 75; the shipped spec-189 §1 baseline profile
+    /// declares 150 + 25 &lt; 350, leaving 175). Candidate priority must never be able to stop the legacy
+    /// backlog draining.
     /// </para>
     /// </summary>
     public int MaxCandidateTypingsPerRun { get; init; } =

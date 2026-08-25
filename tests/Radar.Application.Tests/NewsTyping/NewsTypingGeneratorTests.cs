@@ -744,7 +744,10 @@ public sealed class NewsTypingGeneratorTests
         // decomposition artifact rather than silently draining the budget forever.
         var cohort = Assert.Single(last!.Cohorts);
         Assert.Equal(1, cohort.RetryExhausted);
-        Assert.Equal(NewsTypingCompleteness.Failed, cohort.TypingCompletenessByCompany[CompanyId]);
+        // Spec 189 §2: exhaustion has PRECEDENCE and its own token — a permanent hole, never the ambiguous
+        // legacy `Failed` and never a retryable failure.
+        Assert.Equal(
+            NewsTypingCompleteness.RetryExhausted, cohort.TypingCompletenessByCompany[CompanyId]);
         var (_, markdown, document) = harness.ArtifactStore.Live[^1];
         var company = Assert.Single(document.Companies);
         var companyCohort = Assert.Single(company.Cohorts);
@@ -1083,8 +1086,10 @@ public sealed class NewsTypingGeneratorTests
         Assert.Empty(cohort.Families);
         Assert.Equal(1, cohort.ReservedWithoutOutcome);
 
-        // A storage failure is never reported as ordinary backlog: the company reads Failed this run.
-        Assert.Equal(NewsTypingCompleteness.Failed, cohort.TypingCompletenessByCompany[CompanyId]);
+        // A storage failure is never reported as ordinary backlog: the company reads RetryableFailure this
+        // run (spec 189 §2 — degraded today, and the observation is still eligible for a later attempt).
+        Assert.Equal(
+            NewsTypingCompleteness.RetryableFailure, cohort.TypingCompletenessByCompany[CompanyId]);
         Assert.Empty(Assert.Single(harness.FamilyStore.Snapshots).Snapshot.Families);
 
         // And the attempt IS consumed: further runs exhaust the budget at three calls, never more.
@@ -1178,9 +1183,9 @@ public sealed class NewsTypingGeneratorTests
         Assert.Empty(harness.Store.Records);
         Assert.Equal([1], harness.Ledger.Attempted.Select(r => r.AttemptOrdinal));
 
-        // A refusal is a storage failure, not backlog: the company reads Failed this run.
+        // A refusal is a storage failure, not backlog: the company reads RetryableFailure this run.
         Assert.Equal(
-            NewsTypingCompleteness.Failed,
+            NewsTypingCompleteness.RetryableFailure,
             Assert.Single(result!.Cohorts).TypingCompletenessByCompany[CompanyId]);
     }
 
@@ -1273,7 +1278,8 @@ public sealed class NewsTypingGeneratorTests
         Assert.Equal(2, harness.Extractor.ObservationsSeen.Count);
         var cohort = Assert.Single(result!.Cohorts);
         Assert.Equal(1, cohort.RetryExhausted);
-        Assert.Equal(NewsTypingCompleteness.Failed, cohort.TypingCompletenessByCompany[CompanyId]);
+        Assert.Equal(
+            NewsTypingCompleteness.RetryExhausted, cohort.TypingCompletenessByCompany[CompanyId]);
         var company = Assert.Single(harness.ArtifactStore.Live[^1].Document.Companies);
         Assert.Equal(1, Assert.Single(company.Cohorts).RetryExhausted);
         Assert.Equal(0, Assert.Single(company.Cohorts).UntypedRemaining);
@@ -1833,7 +1839,7 @@ public sealed class NewsTypingGeneratorTests
         await harness.Build().GenerateAsync(RunId, CancellationToken.None, fixture.Plan);
 
         var (_, markdown, document) = harness.ArtifactStore.Live[^1];
-        Assert.Equal("news-typing-decomposition-v3", document.SchemaVersion);
+        Assert.Equal("news-typing-decomposition-v4", document.SchemaVersion);
 
         var noisy = document.Companies.Single(c => c.CompanyId == NoisyCompanyId);
         var noisyCohort = Assert.Single(noisy.Cohorts);
@@ -1845,7 +1851,10 @@ public sealed class NewsTypingGeneratorTests
         Assert.Equal(0, nonCandidateCohort.CandidatePrioritySelected);
         Assert.Equal(2, nonCandidateCohort.GeneralSelected);
 
-        Assert.Contains("selected this pass: 31 judgment-candidate priority, 0 general", markdown);
+        Assert.Contains(
+            "selected this pass: 0 retry, 31 judgment-candidate priority, 0 general (31 provider call(s) "
+                + "made)",
+            markdown);
     }
 
     /// <summary>
@@ -2143,6 +2152,529 @@ public sealed class NewsTypingGeneratorTests
         Assert.Equal(fast.Families, slow.Families);
         Assert.NotEmpty(fast.Ids);
         Assert.NotEmpty(fast.Families);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 189 §1 — the raised capacity posture (350 / 150 / 25) and unchanged lane ordering
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>The shipped spec-189 posture, so every test below runs the numbers the baseline runs.</summary>
+    private const int Spec189PerRun = 350;
+    private const int Spec189CandidateLane = 150;
+    private const int Spec189RetryLane = 25;
+
+    private static NewsTypingGenerator BuildAtSpec189Posture(Harness harness) => harness.Build(
+        maxNewTypingsPerRun: Spec189PerRun,
+        maxRetryTypingsPerRun: Spec189RetryLane,
+        maxCandidateTypingsPerRun: Spec189CandidateLane);
+
+    /// <summary>
+    /// The GLOBAL cap still binds at the raised posture: with every lane over-subscribed, the pass spends
+    /// exactly 350 hosted calls and not one more. Raising a budget must raise the ceiling, never remove it.
+    /// </summary>
+    [Fact]
+    public async Task AtTheRaisedPosture_TheGlobalCallCapIsExactly350()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+        var fixture = SeedCandidateFixture(harness, nonCandidateWindow: 600, nonCandidateBacklog: 60);
+
+        // 30 pending retries against a 25-wide lane, 65 candidate first attempts against a 150-wide lane,
+        // and a 600-deep global window queue: every lane is over-subscribed or fully satisfied.
+        for (var i = 0; i < 30; i++)
+        {
+            SeedPriorFailure(harness, fixture.NonCandidateWindow[i], AsOf.AddDays(-1).AddMinutes(i));
+        }
+
+        var result = await BuildAtSpec189Posture(harness)
+            .GenerateAsync(RunId, CancellationToken.None, fixture.Plan);
+
+        Assert.Equal(Spec189PerRun, harness.Extractor.ObservationsSeen.Count);
+        Assert.Equal(
+            harness.Extractor.ObservationsSeen.Count,
+            harness.Extractor.ObservationsSeen.Distinct().Count());
+
+        var cohort = Assert.Single(result!.Cohorts);
+        Assert.Equal(Spec189RetryLane, cohort.RetrySelected);
+
+        // Only 65 candidate observations exist, so the 150-wide lane gives its unused capacity BACK.
+        Assert.Equal(65, cohort.CandidatePrioritySelected);
+        Assert.Equal(Spec189PerRun - Spec189RetryLane - 65, cohort.GeneralSelected);
+        Assert.Equal(
+            Spec189PerRun,
+            cohort.RetrySelected + cohort.CandidatePrioritySelected + cohort.GeneralSelected);
+    }
+
+    /// <summary>
+    /// Spec 189 §1's reservation, exercised rather than restated: with BOTH earlier lanes completely full
+    /// (25 retries + 150 candidates), at least 175 general first-attempt slots still reach the global
+    /// window/backlog queue — the raised candidate lane can never stop the ~2,000-observation legacy backlog
+    /// draining.
+    /// </summary>
+    [Fact]
+    public async Task AtTheRaisedPosture_BothEarlierLanesFull_StillLeaves175GeneralSlots()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+        var fixture = SeedCandidateFixture(harness, nonCandidateWindow: 400, nonCandidateBacklog: 60);
+
+        // Fill the candidate lane past 150 (the base fixture offers only 65).
+        for (var i = 0; i < CandidateCompanyIds.Count; i++)
+        {
+            for (var k = 0; k < 8; k++)
+            {
+                harness.Archive.Observations.Add(Observation(
+                    $"extra candidate {i}-{k}",
+                    AsOf.AddDays(-12).AddMinutes((i * 20) + k),
+                    CandidateCompanyIds[i]));
+            }
+        }
+
+        // …and the retry lane past 25.
+        for (var i = 0; i < 40; i++)
+        {
+            SeedPriorFailure(harness, fixture.NonCandidateWindow[i], AsOf.AddDays(-1).AddMinutes(i));
+        }
+
+        var result = await BuildAtSpec189Posture(harness)
+            .GenerateAsync(RunId, CancellationToken.None, fixture.Plan);
+
+        var cohort = Assert.Single(result!.Cohorts);
+        Assert.Equal(Spec189RetryLane, cohort.RetrySelected);
+        Assert.Equal(Spec189CandidateLane, cohort.CandidatePrioritySelected);
+        Assert.Equal(175, cohort.GeneralSelected);
+    }
+
+    /// <summary>
+    /// Lane ORDERING is untouched by the capacity change: retries first, then the round-robin candidate
+    /// lane, then the general fallback — asserted at the raised posture under a PARTIAL candidate lane
+    /// (unused capacity flows back) and an UNUSED one (no plan at all). The FULL case is the test above.
+    /// </summary>
+    [Fact]
+    public async Task AtTheRaisedPosture_LaneOrderingIsUnchanged_UnderPartialAndUnusedLanes()
+    {
+        // (a) PARTIAL candidate lane: the one pending retry goes FIRST, the 65 available candidate
+        // observations follow, and nothing after them is a candidate.
+        var partial = new Harness();
+        partial.RunStore.Records.Add(RunRecord());
+        var fixture = SeedCandidateFixture(partial, nonCandidateWindow: 300, nonCandidateBacklog: 20);
+        SeedPriorFailure(partial, fixture.NonCandidateWindow[0], AsOf.AddDays(-1));
+
+        var partialResult = await BuildAtSpec189Posture(partial)
+            .GenerateAsync(RunId, CancellationToken.None, fixture.Plan);
+
+        Assert.Equal(fixture.NonCandidateWindow[0].ObservationId, partial.Extractor.ObservationsSeen[0]);
+        var candidateIds = fixture.CandidateObservations.Select(o => o.ObservationId).ToHashSet();
+        Assert.All(
+            partial.Extractor.ObservationsSeen.Skip(1).Take(65),
+            id => Assert.Contains(id, candidateIds));
+        Assert.DoesNotContain(partial.Extractor.ObservationsSeen.Skip(66), candidateIds.Contains);
+        Assert.Equal(65, Assert.Single(partialResult!.Cohorts).CandidatePrioritySelected);
+
+        // (b) UNUSED candidate lane: with NO plan the selection is exactly the global order — the raised
+        // lane width is inert.
+        var unused = new Harness();
+        unused.RunStore.Records.Add(RunRecord());
+        foreach (var observation in fixture.AllObservations)
+        {
+            unused.Archive.Observations.Add(observation);
+        }
+
+        var unusedResult = await BuildAtSpec189Posture(unused).GenerateAsync(RunId, CancellationToken.None);
+
+        Assert.Equal(0, Assert.Single(unusedResult!.Cohorts).CandidatePrioritySelected);
+        Assert.Equal(
+            fixture.AllObservations
+                .Where(o => o.FirstObservedAtUtc > AsOf.AddDays(-30) && o.FirstObservedAtUtc <= AsOf)
+                .OrderByDescending(o => o.FirstObservedAtUtc)
+                .ThenBy(o => o.ObservationId)
+                .Take(10)
+                .Select(o => o.ObservationId)
+                .ToList(),
+            unused.Extractor.ObservationsSeen.Take(10).ToList());
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 189 §2 — retryable versus exhausted versus backlog
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>A stage-1 VALIDATION failure: the relevance token does not parse, so nothing survives.</summary>
+    private static NewsTypingExtractionOutcome ValidationFailure() =>
+        new(
+            NewsTypingExtractionFailure.None,
+            new NewsTypingModelResponse("NotARelevanceToken", []),
+            RawResponseHash: "raw-hash",
+            FailureDetail: null);
+
+    /// <summary>
+    /// The LIVE shape (spec 189 §2): a judgment candidate whose typing pass hit ONE validation failure while
+    /// other observations simply waited for the cap. It reads <c>RetryableFailure</c> — degraded today, still
+    /// eligible — not the ambiguous legacy <c>Failed</c> and not a permanent hole.
+    /// </summary>
+    [Fact]
+    public async Task AValidationFailureBesideOrdinaryBacklog_ReadsRetryableFailure()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+        harness.Archive.Observations.Add(Observation("newest - will fail validation", AsOf.AddDays(-1)));
+        harness.Archive.Observations.Add(Observation("waiting for the cap a", AsOf.AddDays(-2)));
+        harness.Archive.Observations.Add(Observation("waiting for the cap b", AsOf.AddDays(-3)));
+        harness.Extractor.Script = _ => ValidationFailure();
+
+        var result = await harness.Build(maxNewTypingsPerRun: 1)
+            .GenerateAsync(RunId, CancellationToken.None);
+
+        var cohort = Assert.Single(result!.Cohorts);
+        Assert.Equal(
+            NewsTypingCompleteness.RetryableFailure, cohort.TypingCompletenessByCompany[CompanyId]);
+        Assert.Equal(0, cohort.RetryExhausted);
+
+        // The artifact keeps the two facts SEPARATE: the failed observation is still eligible (so it stays
+        // in UntypedRemaining, the population partition) while ALSO explaining today's degraded read.
+        var company = Assert.Single(harness.ArtifactStore.Live[^1].Document.Companies);
+        var row = Assert.Single(company.Cohorts);
+        Assert.Equal(3, row.UntypedRemaining);
+        Assert.Equal(1, row.RetryableFailuresThisRun);
+        Assert.Equal(0, row.RetryExhausted);
+        Assert.Equal(1, row.ProviderCallsAttempted);
+        Assert.Contains(
+            company.IncompleteReasons,
+            r => r.Contains("typing retryable failure this run: 1 observation(s)", StringComparison.Ordinal)
+                && r.Contains("they remain in the eligible backlog", StringComparison.Ordinal));
+        Assert.Contains(
+            company.IncompleteReasons,
+            r => r.Contains("typing backlog: 3 observation(s)", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Precedence, asserted where it actually bites: an EXHAUSTED observation outranks a fresh retryable
+    /// failure AND ordinary backlog on the same company in the same pass. A permanent hole must never be
+    /// reported as something a later run can fix.
+    /// </summary>
+    [Fact]
+    public async Task ExhaustionOutranksARetryableFailureAndBacklog_InTheSamePass()
+    {
+        var harness = new Harness();
+        var doomed = Observation("provider always fails", AsOf.AddDays(-9));
+        harness.Archive.Observations.Add(doomed);
+        var typed = harness.Extractor.Script;
+        harness.Extractor.Script = request =>
+            request.Observation.ObservationId == doomed.ObservationId ? ProviderFailure() : typed(request);
+
+        // Spend the doomed observation's whole three-attempt budget.
+        for (var run = 0; run < 3; run++)
+        {
+            harness.Time.Advance(TimeSpan.FromHours(1));
+            await harness.Build(maxTypingAttempts: 3)
+                .GenerateAsync(NextRun(harness), CancellationToken.None);
+        }
+
+        // Now a fresh validation failure and a genuine backlog observation arrive for the SAME company.
+        harness.Archive.Observations.Add(Observation("newest - will fail validation", AsOf.AddDays(-1)));
+        harness.Archive.Observations.Add(Observation("waiting for the cap", AsOf.AddDays(-2)));
+        harness.Extractor.Script = _ => ValidationFailure();
+        harness.Time.Advance(TimeSpan.FromHours(1));
+
+        var result = await harness.Build(maxNewTypingsPerRun: 1, maxTypingAttempts: 3)
+            .GenerateAsync(NextRun(harness), CancellationToken.None);
+
+        var cohort = Assert.Single(result!.Cohorts);
+        Assert.Equal(1, cohort.RetryExhausted);
+        Assert.Equal(
+            NewsTypingCompleteness.RetryExhausted, cohort.TypingCompletenessByCompany[CompanyId]);
+
+        // Both facts stay VISIBLE in the artifact — precedence collapses the company's single completeness
+        // token, never the underlying diagnostics.
+        var row = Assert.Single(Assert.Single(harness.ArtifactStore.Live[^1].Document.Companies).Cohorts);
+        Assert.Equal(1, row.RetryExhausted);
+        Assert.Equal(1, row.RetryableFailuresThisRun);
+        Assert.Equal(2, row.UntypedRemaining);
+    }
+
+    /// <summary>
+    /// Spec 189 §2's explicit non-goal: a PRIOR run's failure must not keep a later run in
+    /// <c>RetryableFailure</c>. Without a new failure THIS pass, the company resolves from its current state
+    /// — <c>Backlog</c> while work remains, <c>Complete</c> once it does not.
+    /// </summary>
+    [Fact]
+    public async Task APriorRunFailureAlone_ResolvesToBacklogOrComplete_NeverRetryableFailure()
+    {
+        var harness = new Harness();
+        var runId = NextRun(harness);
+        harness.Archive.Observations.Add(Observation("provider fails on the first pass", AsOf.AddDays(-1)));
+        harness.Archive.Observations.Add(Observation("second observation", AsOf.AddDays(-2)));
+        harness.Extractor.Script = _ => ProviderFailure();
+
+        var first = await harness.Build(maxNewTypingsPerRun: 1).GenerateAsync(runId, CancellationToken.None);
+        Assert.Equal(
+            NewsTypingCompleteness.RetryableFailure,
+            Assert.Single(first!.Cohorts).TypingCompletenessByCompany[CompanyId]);
+
+        // Re-invoking the SAME run NEVER re-calls the failed observation (spec 187 §3's same-run
+        // idempotency); the provider is healthy again, so the pass's only call — the second observation —
+        // succeeds. This pass therefore records NO failure of its own, and the company reads Backlog (the
+        // first observation is still untyped) rather than replaying the previous pass's RetryableFailure.
+        harness.Extractor.Script = new ScriptedExtractor().Script;
+        harness.Time.Advance(TimeSpan.FromHours(1));
+        var repeat = await harness.Build(maxNewTypingsPerRun: 1)
+            .GenerateAsync(runId, CancellationToken.None);
+
+        Assert.Equal(2, harness.Extractor.ObservationsSeen.Count);
+        Assert.Equal(
+            NewsTypingCompleteness.Backlog,
+            Assert.Single(repeat!.Cohorts).TypingCompletenessByCompany[CompanyId]);
+
+        // And once a later run retries the failed observation successfully, the company reads Complete from
+        // its CURRENT state.
+        harness.Time.Advance(TimeSpan.FromHours(1));
+        var healed = await harness.Build().GenerateAsync(NextRun(harness), CancellationToken.None);
+
+        Assert.Equal(
+            NewsTypingCompleteness.Complete,
+            Assert.Single(healed!.Cohorts).TypingCompletenessByCompany[CompanyId]);
+    }
+
+    /// <summary>
+    /// The remaining precedence rungs, so the ladder is covered end to end: a fully typed company reads
+    /// <c>Complete</c>, a company with untouched work and no failure reads <c>Backlog</c>, and neither ever
+    /// reads the legacy <c>Failed</c>, which the generator no longer computes.
+    /// </summary>
+    [Fact]
+    public async Task CompleteAndBacklog_AreStillTheTwoNonDegradedRungs_AndFailedIsNeverComputed()
+    {
+        var complete = new Harness();
+        complete.RunStore.Records.Add(RunRecord());
+        complete.Archive.Observations.Add(Observation("typed a", AsOf.AddDays(-1)));
+        complete.Archive.Observations.Add(Observation("typed b", AsOf.AddDays(-2)));
+
+        var completeResult = await complete.Build().GenerateAsync(RunId, CancellationToken.None);
+        Assert.Equal(
+            NewsTypingCompleteness.Complete,
+            Assert.Single(completeResult!.Cohorts).TypingCompletenessByCompany[CompanyId]);
+
+        var backlog = new Harness();
+        backlog.RunStore.Records.Add(RunRecord());
+        backlog.Archive.Observations.Add(Observation("typed", AsOf.AddDays(-1)));
+        backlog.Archive.Observations.Add(Observation("deferred by the cap", AsOf.AddDays(-2)));
+
+        var backlogResult = await backlog.Build(maxNewTypingsPerRun: 1)
+            .GenerateAsync(RunId, CancellationToken.None);
+        Assert.Equal(
+            NewsTypingCompleteness.Backlog,
+            Assert.Single(backlogResult!.Cohorts).TypingCompletenessByCompany[CompanyId]);
+
+        Assert.DoesNotContain(
+            NewsTypingCompleteness.Failed,
+            completeResult.Cohorts.Concat(backlogResult.Cohorts)
+                .SelectMany(c => c.TypingCompletenessByCompany.Values));
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 189 §3 — the `a180298d` regression shape, from CONSTRUCTED records
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The 2026-08-24 live pass, reproduced from constructed records (never a copy of a mutable live file):
+    /// 100 candidate + 99 general + 1 retry EXPLAINS all 200 calls, five stage-1 validation failures land on
+    /// four judgment-candidate companies, and <c>RetryExhausted</c> is zero — no permanent hole.
+    /// <para>
+    /// The pre-189 v3 artifact could not state this: with no retry column, 100 + 99 read as an unused slot,
+    /// and the five failures were indistinguishable from exhaustion under one <c>Failed</c> token.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task TheLiveA180298dShape_IsFullyExplainedByTheV4Diagnostics()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+
+        // 18 judgment candidates x 6 in-window observations = 108 offers against a 100-wide lane.
+        var candidateObservations = new Dictionary<Guid, List<NewsObservationRecord>>();
+        for (var index = 0; index < CandidateCompanyIds.Count; index++)
+        {
+            var companyId = CandidateCompanyIds[index];
+            var forCompany = new List<NewsObservationRecord>();
+            for (var k = 0; k < 6; k++)
+            {
+                var observation = Observation(
+                    $"candidate {index} item {k}",
+                    AsOf.AddDays(-10).AddMinutes((index * 10) - k),
+                    companyId);
+                harness.Archive.Observations.Add(observation);
+                forCompany.Add(observation);
+            }
+
+            candidateObservations[companyId] = forCompany;
+        }
+
+        // Enough non-candidate window work to fill the general lane past 99.
+        for (var n = 0; n < 200; n++)
+        {
+            harness.Archive.Observations.Add(Observation(
+                $"non-candidate window {n}",
+                AsOf.AddDays(-2).AddMinutes(n),
+                NonCandidateCompanyIds[n % NonCandidateCompanyIds.Count]));
+        }
+
+        // Exactly ONE pending retry — the live AXGN attempt 2 after the preceding run's ValidationFailed.
+        var retried = Observation(
+            "axgn - retried after a validation failure", AsOf.AddDays(-3), NonCandidateCompanyIds[0]);
+        harness.Archive.Observations.Add(retried);
+        SeedPriorFailure(harness, retried, AsOf.AddDays(-1));
+
+        // The five stage-1 validation failures: two on the first candidate company, one each on the next
+        // three. Each company's own offer order is newest-first, so every one of them is reached.
+        var failingCompanies = CandidateCompanyIds.Take(4).ToList();
+        var failingObservationIds = new HashSet<Guid>
+        {
+            candidateObservations[failingCompanies[0]][0].ObservationId,
+            candidateObservations[failingCompanies[0]][1].ObservationId,
+            candidateObservations[failingCompanies[1]][0].ObservationId,
+            candidateObservations[failingCompanies[2]][0].ObservationId,
+            candidateObservations[failingCompanies[3]][0].ObservationId,
+        };
+        var typed = harness.Extractor.Script;
+        harness.Extractor.Script = request =>
+            failingObservationIds.Contains(request.Observation.ObservationId)
+                ? ValidationFailure()
+                : typed(request);
+
+        var result = await harness
+            .Build(maxNewTypingsPerRun: 200, maxRetryTypingsPerRun: 25, maxCandidateTypingsPerRun: 100)
+            .GenerateAsync(RunId, CancellationToken.None, CandidatePlan());
+
+        // 100 + 99 + 1 = 200, and every one of them was a provider call.
+        var cohort = Assert.Single(result!.Cohorts);
+        Assert.Equal(1, cohort.RetrySelected);
+        Assert.Equal(100, cohort.CandidatePrioritySelected);
+        Assert.Equal(99, cohort.GeneralSelected);
+        Assert.Equal(200, harness.Extractor.ObservationsSeen.Count);
+        Assert.Equal(0, cohort.RetryExhausted);
+
+        var document = harness.ArtifactStore.Live[^1].Document;
+        Assert.Equal("news-typing-decomposition-v4", document.SchemaVersion);
+
+        var summary = Assert.Single(document.ReaderSummaries!);
+        Assert.Equal(1, summary.RetrySelected);
+        Assert.Equal(100, summary.CandidatePrioritySelected);
+        Assert.Equal(99, summary.GeneralSelected);
+        Assert.Equal(200, summary.ProviderCallsAttempted);
+        Assert.Equal(
+            summary.ProviderCallsAttempted,
+            summary.RetrySelected + summary.CandidatePrioritySelected + summary.GeneralSelected);
+        Assert.Equal(5, summary.ValidationFailures);
+        Assert.Equal(195, summary.CompletedOutcomesPersisted);
+        Assert.Equal(0, summary.RetryExhausted);
+        Assert.Equal(0, summary.ReservedWithoutOutcome);
+        Assert.Equal(0, summary.ProviderFailures);
+        Assert.Equal(0, summary.ParseFailures);
+
+        // FOUR candidate companies carry a retryable failure; none is exhausted.
+        Assert.Equal(
+            failingCompanies.ToHashSet(),
+            cohort.TypingCompletenessByCompany
+                .Where(kv => kv.Value == NewsTypingCompleteness.RetryableFailure)
+                .Select(kv => kv.Key)
+                .ToHashSet());
+        Assert.DoesNotContain(
+            NewsTypingCompleteness.RetryExhausted, cohort.TypingCompletenessByCompany.Values);
+        Assert.Equal(5, document.Companies.Sum(c => c.Cohorts.Sum(r => r.RetryableFailuresThisRun)));
+    }
+
+    /// <summary>
+    /// Spec 189 §3: the pass-wide reader summary is AUTHORITATIVE for the budget, and it may legitimately
+    /// exceed the sum of the in-window company rows — here because the pass spent calls on LEGACY BACKLOG
+    /// observations, which sit outside the checkpoint window and appear in no company section. The artifact
+    /// SAYS so rather than silently claiming the two agree.
+    /// </summary>
+    [Fact]
+    public async Task ThePassWideSummary_IsAuthoritative_AndMayExceedTheWindowRows()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+        harness.Archive.Observations.Add(Observation("in window", AsOf.AddDays(-1)));
+        for (var i = 0; i < 3; i++)
+        {
+            harness.Archive.Observations.Add(Observation($"legacy backlog {i}", AsOf.AddDays(-100 + i)));
+        }
+
+        await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        var summary = Assert.Single(document.ReaderSummaries!);
+        var windowCalls = document.Companies.Sum(c => c.Cohorts.Sum(r => r.ProviderCallsAttempted));
+
+        Assert.Equal(4, summary.ProviderCallsAttempted);
+        Assert.Equal(1, windowCalls);
+        Assert.True(summary.ProviderCallsAttempted > windowCalls);
+        Assert.Contains("may legitimately differ", markdown);
+    }
+
+    /// <summary>
+    /// Spec 189 §3: capture INFLOW comes from the batch's durable <c>ObservationsWritten</c> — never a
+    /// timestamp-derived estimate — and records <c>null</c> when no batch is resolvable.
+    /// </summary>
+    [Fact]
+    public async Task CaptureInflow_ComesFromTheDurableBatchCount_AndFailsClosedWithoutOne()
+    {
+        var harness = new Harness();
+        var batchId = Guid.NewGuid();
+        harness.RunStore.Records.Add(RunRecord(batchId));
+        harness.Archive.Batch = new NewsObservationBatch(
+            BatchId: batchId,
+            RunAsOfUtc: AsOf,
+            SchemaVersion: NewsObservationRecord.CurrentSchemaVersion,
+            FullUniverse: true,
+            ObservationsAttempted: 400,
+            ObservationsWritten: 252,
+            ObservationsCrossRunDeduped: 148,
+            ObservationsFailed: 0,
+            CaptureProven: true,
+            Collectors: []);
+        harness.Archive.Observations.Add(Observation("in window", AsOf.AddDays(-1)));
+
+        await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        Assert.Equal(batchId, document.NewsObservationBatchId);
+        Assert.Equal(252, document.ObservationsCapturedThisRun);
+        Assert.Contains("new observations 252", markdown);
+
+        // No resolvable batch ⇒ NOT RECORDED, never a guess.
+        var withoutBatch = new Harness();
+        withoutBatch.RunStore.Records.Add(RunRecord());
+        withoutBatch.Archive.Observations.Add(Observation("in window", AsOf.AddDays(-1)));
+
+        await withoutBatch.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var second = withoutBatch.ArtifactStore.Live[^1].Document;
+        Assert.Null(second.NewsObservationBatchId);
+        Assert.Null(second.ObservationsCapturedThisRun);
+    }
+
+    /// <summary>
+    /// Spec 189 §3, the OTHER fail-closed branch: the run record NAMES a batch, but the manifest is
+    /// absent/unreadable. The id is still recorded (it is what the run itself claimed — losing it would hide
+    /// WHICH batch could not be resolved), while the inflow count stays <c>null</c> and renders "not
+    /// recorded" rather than a guessed number.
+    /// </summary>
+    [Fact]
+    public async Task CaptureInflow_IsNotRecorded_WhenTheNamedBatchManifestIsUnreadable()
+    {
+        var harness = new Harness();
+        var batchId = Guid.NewGuid();
+        harness.RunStore.Records.Add(RunRecord(batchId));
+
+        // The reader resolves NOTHING for this id — an absent or unreadable manifest.
+        harness.Archive.Batch = null;
+        harness.Archive.Observations.Add(Observation("in window", AsOf.AddDays(-1)));
+
+        await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        Assert.Equal(batchId, document.NewsObservationBatchId);
+        Assert.Null(document.ObservationsCapturedThisRun);
+        Assert.Contains("new observations not recorded", markdown);
     }
 
     [Fact]

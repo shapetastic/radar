@@ -41,7 +41,18 @@ public static class NewsTypingDecompositionRenderer
                     + $"attribution and appear in no company section."));
         }
 
+        // Spec 189 §3: INFLOW beside spend. "252 captured against a 200-call budget" is the fact the
+        // capacity decision turns on, and until this line existed no artifact stated it. Fail-closed: an
+        // unresolvable batch renders "not recorded", never a guessed number.
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Observation capture this run: batch "
+                + $"`{document.NewsObservationBatchId?.ToString("D") ?? "(none)"}` · new observations "
+                + $"{document.ObservationsCapturedThisRun?.ToString(CultureInfo.InvariantCulture)
+                    ?? "not recorded"}"));
+
         sb.AppendLine();
+        AppendReaderSummaries(sb, document);
 
         if (document.Companies.Count == 0)
         {
@@ -87,18 +98,32 @@ public static class NewsTypingDecompositionRenderer
                 // rendered only when this pass actually selected some — so a company whose work was all
                 // deferred (or already complete) reads unchanged, and "the leaders we were about to judge
                 // were typed first" is a visible number rather than a claim.
-                var lanes = cohort.CandidatePrioritySelected > 0 || cohort.GeneralSelected > 0
+                // Spec 189 §3 completes the triple with the RETRY lane and renders what the pass actually
+                // SPENT beside what it selected — a refused reservation is a selection that never became a
+                // call, so the two numbers are deliberately allowed to differ.
+                var lanes = cohort.CandidatePrioritySelected > 0
+                    || cohort.GeneralSelected > 0
+                    || cohort.RetrySelected > 0
                     ? string.Create(
                         CultureInfo.InvariantCulture,
-                        $" · selected this pass: {cohort.CandidatePrioritySelected} judgment-candidate "
-                            + $"priority, {cohort.GeneralSelected} general")
+                        $" · selected this pass: {cohort.RetrySelected} retry, "
+                            + $"{cohort.CandidatePrioritySelected} judgment-candidate priority, "
+                            + $"{cohort.GeneralSelected} general ({cohort.ProviderCallsAttempted} provider "
+                            + $"call(s) made)")
+                    : string.Empty;
+                // Spec 189 §3: a retryable failure is NAMED, separately from backlog and from exhaustion —
+                // it degraded this run's read and the observation is still eligible.
+                var retryable = cohort.RetryableFailuresThisRun > 0
+                    ? string.Create(
+                        CultureInfo.InvariantCulture,
+                        $" · retryable failures this run {cohort.RetryableFailuresThisRun}")
                     : string.Empty;
                 sb.AppendLine(string.Create(
                     CultureInfo.InvariantCulture,
                     $"Typed {cohort.ObservationsTyped} · insufficient-content "
                         + $"{cohort.ObservationsInsufficientContent} · untyped remaining "
                         + $"{cohort.UntypedRemaining} · same-event families "
-                        + $"{cohort.FamilyCount}{exhausted}{orphaned}{lanes}"));
+                        + $"{cohort.FamilyCount}{exhausted}{retryable}{orphaned}{lanes}"));
                 sb.AppendLine();
                 if (cohort.Types.Count > 0)
                 {
@@ -118,6 +143,55 @@ public static class NewsTypingDecompositionRenderer
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Spec 189 §3: the AUTHORITATIVE pass-wide budget table, one row per extractor cohort. Rendered ABOVE
+    /// the company sections precisely because a reviewer must not have to reconstruct a pass-wide call budget
+    /// by summing the current window's company rows — and the note under it states, rather than implies, that
+    /// the two populations differ for named reasons.
+    /// <para>
+    /// Omitted entirely when the document carries no summaries (a v1–v3 artifact re-rendered, or a pass with
+    /// no reader), so an absent measurement never renders as a table of zeroes.
+    /// </para>
+    /// </summary>
+    private static void AppendReaderSummaries(
+        StringBuilder sb, NewsTypingDecompositionDocument document)
+    {
+        if (document.ReaderSummaries is not { Count: > 0 } summaries)
+        {
+            return;
+        }
+
+        sb.AppendLine("### Typing pass totals (pass-wide, authoritative for the call budget)");
+        sb.AppendLine();
+        sb.AppendLine(
+            "| Reader | Retry | Candidate | General | Calls | Completed | Provider | Parse | Validation "
+                + "| Refused | Write-failed | Exhausted | Reserved w/o outcome | Untyped remaining |");
+        sb.AppendLine(
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: "
+                + "| ---: |");
+        foreach (var summary in summaries)
+        {
+            sb.AppendLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"| {summary.ReaderName} ({summary.Provider}:{summary.ModelId}) | {summary.RetrySelected} "
+                    + $"| {summary.CandidatePrioritySelected} | {summary.GeneralSelected} "
+                    + $"| {summary.ProviderCallsAttempted} | {summary.CompletedOutcomesPersisted} "
+                    + $"| {summary.ProviderFailures} | {summary.ParseFailures} "
+                    + $"| {summary.ValidationFailures} | {summary.ReservationsRefused} "
+                    + $"| {summary.OutcomeWritesFailed} | {summary.RetryExhausted} "
+                    + $"| {summary.ReservedWithoutOutcome} | {summary.UntypedRemaining} |"));
+        }
+
+        sb.AppendLine();
+        sb.AppendLine(
+            "The three lane columns are SELECTIONS (disjoint); `Calls` is what the pass actually spent after "
+                + "durable-reservation refusals. These totals are PASS-WIDE and the company rows below are a "
+                + "WINDOW statement, so they may legitimately differ — a selected legacy-backlog observation "
+                + "sits outside the window, and an observation with no company attribution appears in no "
+                + "company section.");
+        sb.AppendLine();
     }
 
     private static string FormatInstant(DateTimeOffset instant) =>

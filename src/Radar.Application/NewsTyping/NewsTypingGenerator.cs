@@ -207,10 +207,16 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         // Capture provenance for THIS run, resolved fail-closed: no resolvable batch manifest means
         // UNKNOWN, which the artifact renders as unproven — never as a clean batch.
         bool? captureProven = null;
+
+        // Spec 189 §3: the run's CAPTURE INFLOW, read from the SAME batch manifest, so "how much arrived"
+        // sits beside "how much we typed". Null when there is no batch or it is unreadable — never a
+        // timestamp-derived estimate, which would read as a measurement while being a guess.
+        int? observationsCapturedThisRun = null;
         if (runRecord?.NewsObservationBatchId is { } batchId)
         {
             var batch = await _batchReader.GetBatchAsync(batchId, ct).ConfigureAwait(false);
             captureProven = batch is null ? null : batch.CaptureProven && batch.FullUniverse;
+            observationsCapturedThisRun = batch?.ObservationsWritten;
         }
 
         var observations = await _observationArchive.GetAllAsync(ct).ConfigureAwait(false);
@@ -256,7 +262,15 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         }
 
         var document = BuildDecomposition(
-            runId, perReader, eligible, windowStartUtc, asOfUtc, captureProven, now);
+            runId,
+            perReader,
+            eligible,
+            windowStartUtc,
+            asOfUtc,
+            captureProven,
+            runRecord?.NewsObservationBatchId,
+            observationsCapturedThisRun,
+            now);
         await _artifactStore
             .WriteDecompositionAsync(
                 asOfDateToken, NewsTypingDecompositionRenderer.RenderMarkdown(document), document, ct)
@@ -284,10 +298,11 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
 
     /// <summary>
     /// One cohort's typed pass outcome (spec 185 §5). The fact index covers COMPLETED <c>Typed</c> window
-    /// typings (the same set the family checkpoint consumed); the per-company completeness map follows the
-    /// spec's precedence — a failed attempt this run outranks a backlog, which outranks complete — and a
-    /// company with zero in-window observations is vacuously <see cref="NewsTypingCompleteness.Complete"/>
-    /// (it also has zero facts, so the judge records <c>InsufficientFacts</c> for it anyway).
+    /// typings (the same set the family checkpoint consumed); the per-company completeness map follows spec
+    /// 189 §2's TOTAL, CONSERVATIVE precedence — exhaustion outranks a retryable failure this pass, which
+    /// outranks a backlog, which outranks complete — and a company with zero in-window observations is
+    /// vacuously <see cref="NewsTypingCompleteness.Complete"/> (it also has zero facts, so the judge records
+    /// <c>InsufficientFacts</c> for it anyway).
     /// </summary>
     private static NewsTypingCohortRunResult BuildCohortRunResult(
         ReaderPass pass, DateTimeOffset windowStartUtc, DateTimeOffset asOfUtc)
@@ -324,15 +339,29 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 var untyped = companyGroup.Count(
                     o => !pass.Completed.ContainsKey((o.ObservationId, o.PayloadHash)));
 
-                // Spec 186 §2: an exhausted untyped observation is a PERMANENT hole, not a deferral, so the
-                // company can never read Complete — and "Backlog" (deferred by the per-run cap) would be a
-                // false statement about it. It maps onto the existing degraded state, Failed.
-                completeness[companyGroup.Key] = pass.FailedCompanyIds.Contains(companyGroup.Key)
-                    || pass.ExhaustedCompanyIds.Contains(companyGroup.Key)
-                    ? NewsTypingCompleteness.Failed
-                    : untyped > 0
-                        ? NewsTypingCompleteness.Backlog
-                        : NewsTypingCompleteness.Complete;
+                // Spec 189 §2's precedence, in order. EXHAUSTION FIRST: an exhausted untyped observation is
+                // a PERMANENT hole, not a deferral, so the company can never read Complete — and "Backlog"
+                // (deferred by the per-run cap) would be a false statement about it. A retryable failure
+                // comes next: it degraded THIS pass's read, but the observation stays eligible, so calling it
+                // a permanent hole would be just as false in the other direction. The pre-189 token `Failed`
+                // conflated the two and is never computed here again.
+                //
+                // KNOWN, RECORDED LIMITATION (not fixed here — narrowing the failure set to the window is its
+                // own decision). The two sets have different scopes on purpose: `FailedCompanyIds` is
+                // PASS-WIDE, `ExhaustedCompanyIds` is WINDOW-scoped. So an OUT-OF-WINDOW observation that
+                // spends its FINAL attempt in this pass calls BOTH marks, yet only the pass-wide one records
+                // the company — and if that company also holds an in-window observation, its token here reads
+                // RetryableFailure for an observation that is in fact exhausted. The impact is bounded to the
+                // TOKEN: the artifact's per-company row uses `ReaderPass.IsRetryableFailure`, which excludes
+                // exhausted keys, so the rendered "remains in the eligible backlog" count correctly shows 0,
+                // and `NewsJudgmentMarkerPolicy` treats every non-Complete value identically.
+                completeness[companyGroup.Key] = pass.ExhaustedCompanyIds.Contains(companyGroup.Key)
+                    ? NewsTypingCompleteness.RetryExhausted
+                    : pass.FailedCompanyIds.Contains(companyGroup.Key)
+                        ? NewsTypingCompleteness.RetryableFailure
+                        : untyped > 0
+                            ? NewsTypingCompleteness.Backlog
+                            : NewsTypingCompleteness.Complete;
             }
         }
 
@@ -345,7 +374,8 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             RetryExhausted: pass.ExhaustedKeys.Count,
             ReservedWithoutOutcome: pass.OrphanedReservations.Values.Sum(),
             CandidatePrioritySelected: pass.SelectedIn(NewsTypingSelectionLane.CandidatePriority),
-            GeneralSelected: pass.SelectedIn(NewsTypingSelectionLane.General));
+            GeneralSelected: pass.SelectedIn(NewsTypingSelectionLane.General),
+            RetrySelected: pass.SelectedIn(NewsTypingSelectionLane.Retry));
     }
 
     private async Task<ReaderPass> RunReaderPassAsync(
@@ -513,6 +543,15 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         var reservationsRefused = 0;
         var outcomeWritesFailed = 0;
 
+        // Spec 189 §3: the two PER-OBSERVATION records the artifact projects from. `providerCalledKeys` is
+        // the one definition of "this pass actually invoked the provider for this observation", so the
+        // per-company rows and the pass-wide total can never disagree (a SELECTION is not a CALL: a refused
+        // reservation is selected and never called). `retryableFailureKeys` records which observations ended
+        // the pass with a failure/refusal/unpersisted outcome, so a company row can name retryable failures
+        // separately from ordinary backlog.
+        var providerCalledKeys = new HashSet<(Guid ObservationId, string PayloadHash)>();
+        var retryableFailureKeys = new HashSet<(Guid ObservationId, string PayloadHash)>();
+
         // ---- Spec 187 §7 observability. These counters and the timing accumulator influence NOTHING:
         // selection is already fixed above, no branch below reads them, and nothing here is persisted into
         // an id, cohort key or fingerprint. They exist so a live operator can tell a slow provider from a
@@ -529,6 +568,9 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         // and a failed outcome write: a STORAGE failure must never be reported as ordinary backlog.
         void MarkCompanyFailed(NewsTypingInputObservation observation)
         {
+            // Spec 189 §3: the observation key is recorded beside the company id, because the artifact
+            // reports retryable failures per (company × capture mode) while completeness is per company.
+            retryableFailureKeys.Add((observation.ObservationId, observation.PayloadHash));
             if (observation.CompanyId is { } failedCompanyId)
             {
                 failedCompanyIds.Add(failedCompanyId);
@@ -609,6 +651,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             {
                 timings.Record(TimeSpan.FromMilliseconds(durationMs));
                 attemptedCalls++;
+                providerCalledKeys.Add(key);
             }
 
             switch (record.Status)
@@ -751,7 +794,17 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             exhaustedKeys,
             exhaustedCompanyIds,
             orphanedReservations,
-            selectionLanes);
+            selectionLanes,
+            providerCalledKeys,
+            retryableFailureKeys,
+            new ReaderPassCounters(
+                PersistedCompletedOutcomes: persistedSuccesses,
+                ProviderFailures: providerFailures,
+                ParseFailures: parseFailures,
+                ValidationFailures: validationFailures,
+                ReservationsRefused: reservationsRefused,
+                OutcomeWritesFailed: outcomeWritesFailed,
+                UntypedRemaining: untypedRemaining));
     }
 
     /// <summary>
@@ -1140,6 +1193,8 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         DateTimeOffset windowStartUtc,
         DateTimeOffset asOfUtc,
         bool? captureProven,
+        Guid? newsObservationBatchId,
+        int? observationsCapturedThisRun,
         DateTimeOffset generatedAtUtc)
     {
         var windowObservations = eligible
@@ -1169,8 +1224,39 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             CaptureProvenThisRun: captureProven,
             Companies: companies,
             ObservationsWithoutCompany: windowObservations.Count(o => o.CompanyId is null),
-            GeneratedAtUtc: generatedAtUtc);
+            GeneratedAtUtc: generatedAtUtc,
+            NewsObservationBatchId: newsObservationBatchId,
+            ObservationsCapturedThisRun: observationsCapturedThisRun,
+            // Spec 189 §3: the AUTHORITATIVE pass-wide budget view, projected from the SAME per-observation
+            // lane/call records the company rows project from — so the two can never disagree about one
+            // observation, only about which population they describe (pass-wide versus this window).
+            ReaderSummaries: perReader.Select(BuildReaderSummary).ToList());
     }
+
+    /// <summary>
+    /// One reader cohort's PASS-WIDE summary (spec 189 §3). Every number is taken from the pass's own
+    /// records: the three lane counts and the provider-call count from the per-observation lane/call records,
+    /// the outcome counters threaded off the pass loop. Nothing is recomputed from the window, because the
+    /// point of this row is precisely that it is NOT a window statement.
+    /// </summary>
+    private static NewsTypingDecompositionReaderSummary BuildReaderSummary(ReaderPass pass) => new(
+        ReaderName: pass.Identity.Name,
+        Provider: pass.Identity.Provider,
+        ModelId: pass.Identity.ModelId,
+        CohortKey: pass.Identity.CohortKey,
+        RetrySelected: pass.SelectedIn(NewsTypingSelectionLane.Retry),
+        CandidatePrioritySelected: pass.SelectedIn(NewsTypingSelectionLane.CandidatePriority),
+        GeneralSelected: pass.SelectedIn(NewsTypingSelectionLane.General),
+        ProviderCallsAttempted: pass.ProviderCalledKeys.Count,
+        CompletedOutcomesPersisted: pass.Counters.PersistedCompletedOutcomes,
+        ProviderFailures: pass.Counters.ProviderFailures,
+        ParseFailures: pass.Counters.ParseFailures,
+        ValidationFailures: pass.Counters.ValidationFailures,
+        ReservationsRefused: pass.Counters.ReservationsRefused,
+        OutcomeWritesFailed: pass.Counters.OutcomeWritesFailed,
+        RetryExhausted: pass.ExhaustedKeys.Count,
+        ReservedWithoutOutcome: pass.OrphanedReservations.Values.Sum(),
+        UntypedRemaining: pass.Counters.UntypedRemaining);
 
     private static NewsTypingDecompositionCompany BuildCompany(
         Guid companyId,
@@ -1200,16 +1286,35 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 var reservedWithoutOutcome = 0;
                 var candidatePrioritySelected = 0;
                 var generalSelected = 0;
+                var retrySelected = 0;
+                var providerCallsAttempted = 0;
+                var retryableFailures = 0;
                 foreach (var observation in modeGroup)
                 {
                     var key = (observation.ObservationId, observation.PayloadHash);
                     reservedWithoutOutcome += pass.OrphanedReservations.GetValueOrDefault(key);
 
-                    // Spec 187 §2: this company's IN-WINDOW share of each first-attempt lane (the rows are
-                    // a window statement — the pass-wide totals live on the cohort run result). Retry
-                    // selections stay reported by RetryExhausted/ReservedWithoutOutcome and the pass log.
+                    // Spec 189 §3: what this pass SPENT on this observation, and whether it ended the pass
+                    // degraded-but-still-eligible. Both are projected from the pass's per-observation
+                    // records, so the pass-wide reader summary and this row cannot disagree.
+                    if (pass.ProviderCalledKeys.Contains(key))
+                    {
+                        providerCallsAttempted++;
+                    }
+
+                    if (pass.IsRetryableFailure(key))
+                    {
+                        retryableFailures++;
+                    }
+
+                    // Spec 187 §2, completed by spec 189 §3: this company's IN-WINDOW share of ALL THREE
+                    // lanes (the rows are a window statement — the pass-wide totals live on the reader
+                    // summary and the cohort run result).
                     switch (pass.SelectionLanes.GetValueOrDefault(key, NewsTypingSelectionLane.NotSelected))
                     {
+                        case NewsTypingSelectionLane.Retry:
+                            retrySelected++;
+                            break;
                         case NewsTypingSelectionLane.CandidatePriority:
                             candidatePrioritySelected++;
                             break;
@@ -1294,6 +1399,17 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                             + $"{pass.Identity.Name} ({modeGroup.Key})"));
                 }
 
+                if (retryableFailures > 0)
+                {
+                    // Spec 189 §3: named separately from BOTH — the observation failed today and is still
+                    // eligible, which is neither "deferred by the cap" nor "will never be typed". The
+                    // sentence says so explicitly rather than leaving the reader to infer the remedy.
+                    incompleteReasons.Add(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"typing retryable failure this run: {retryableFailures} observation(s) for "
+                            + $"{pass.Identity.Name} ({modeGroup.Key}); they remain in the eligible backlog"));
+                }
+
                 cohorts.Add(new NewsTypingDecompositionCohort(
                     ReaderName: pass.Identity.Name,
                     Provider: pass.Identity.Provider,
@@ -1308,7 +1424,10 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                     RetryExhausted: exhausted,
                     ReservedWithoutOutcome: reservedWithoutOutcome,
                     CandidatePrioritySelected: candidatePrioritySelected,
-                    GeneralSelected: generalSelected));
+                    GeneralSelected: generalSelected,
+                    RetrySelected: retrySelected,
+                    ProviderCallsAttempted: providerCallsAttempted,
+                    RetryableFailuresThisRun: retryableFailures));
             }
         }
 
@@ -1358,9 +1477,25 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
     }
 
     /// <summary>
+    /// One reader pass's PASS-WIDE outcome counters (spec 189 §3). They are the durable artifact equivalent
+    /// of the bounded/final log totals this pass already emitted, threaded onto the pass rather than
+    /// recomputed, so the reader summary and the log lines cannot disagree. Diagnostics only: nothing here
+    /// is hashed, and no selection, validation or family decision reads them.
+    /// </summary>
+    private readonly record struct ReaderPassCounters(
+        int PersistedCompletedOutcomes,
+        int ProviderFailures,
+        int ParseFailures,
+        int ValidationFailures,
+        int ReservationsRefused,
+        int OutcomeWritesFailed,
+        int UntypedRemaining);
+
+    /// <summary>
     /// One reader's per-pass state: its completed-cache view, its new-typing count, its checkpoint families,
-    /// the spec-186 §2 retry-exhaustion view (which observations left selection, and whose companies) and
-    /// the spec-187 §2 per-observation selection-lane record.
+    /// the spec-186 §2 retry-exhaustion view (which observations left selection, and whose companies), the
+    /// spec-187 §2 per-observation selection-lane record, and spec 189 §3's per-observation record of which
+    /// observations this pass actually CALLED the provider for and which ended it with a retryable failure.
     /// </summary>
     private sealed class ReaderPass(
         NewsTypingReaderIdentity identity,
@@ -1370,7 +1505,10 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         HashSet<(Guid ObservationId, string PayloadHash)> exhaustedKeys,
         HashSet<Guid> exhaustedCompanyIds,
         Dictionary<(Guid ObservationId, string PayloadHash), int> orphanedReservations,
-        Dictionary<(Guid ObservationId, string PayloadHash), NewsTypingSelectionLane> selectionLanes)
+        Dictionary<(Guid ObservationId, string PayloadHash), NewsTypingSelectionLane> selectionLanes,
+        HashSet<(Guid ObservationId, string PayloadHash)> providerCalledKeys,
+        HashSet<(Guid ObservationId, string PayloadHash)> retryableFailureKeys,
+        ReaderPassCounters counters)
     {
         public NewsTypingReaderIdentity Identity { get; } = identity;
 
@@ -1408,6 +1546,36 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         /// <summary>How many observations this pass selected in the given lane (pass-wide, window and backlog alike).</summary>
         public int SelectedIn(NewsTypingSelectionLane lane) =>
             SelectionLanes.Values.Count(l => l == lane);
+
+        /// <summary>
+        /// Spec 189 §3: the observations this pass actually invoked the provider for — the SAME fact
+        /// <c>NewsTypingRecord.ProviderDurationMs</c> carries, recorded at the one site that measures a call.
+        /// A SELECTION is not a CALL: a refused reservation, a completed-cache hit re-checked at the call
+        /// site and an exhausted observation are all selected-but-never-called, so the two counts are
+        /// deliberately different numbers and must never be equated.
+        /// </summary>
+        public HashSet<(Guid ObservationId, string PayloadHash)> ProviderCalledKeys { get; } =
+            providerCalledKeys;
+
+        /// <summary>
+        /// Spec 189 §3: the observations that ended this pass with a provider/parse/validation failure, a
+        /// refused attempt reservation or an outcome write that never persisted. Use
+        /// <see cref="IsRetryableFailure"/> rather than this set directly — an observation that failed AND
+        /// exhausted its budget on the same attempt is EXHAUSTED, not retryable.
+        /// </summary>
+        public HashSet<(Guid ObservationId, string PayloadHash)> RetryableFailureKeys { get; } =
+            retryableFailureKeys;
+
+        /// <summary>This pass's PASS-WIDE outcome counters (spec 189 §3) — the artifact's authoritative budget view.</summary>
+        public ReaderPassCounters Counters { get; } = counters;
+
+        /// <summary>
+        /// Whether this observation ended the pass with a RETRYABLE failure: it failed, and it has NOT spent
+        /// its attempt budget. An exhausted observation is reported by <see cref="ExhaustedKeys"/> alone, so
+        /// the two diagnostics never double-count one observation.
+        /// </summary>
+        public bool IsRetryableFailure((Guid ObservationId, string PayloadHash) key) =>
+            RetryableFailureKeys.Contains(key) && !ExhaustedKeys.Contains(key);
 
         public IReadOnlyList<FactFamilyRecord> Families { get; set; } = [];
 

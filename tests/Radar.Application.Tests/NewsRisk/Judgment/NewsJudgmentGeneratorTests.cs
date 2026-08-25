@@ -283,6 +283,52 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.NotNull(first);
     }
 
+    /// <summary>
+    /// Spec 189 §2: a completed verdict stays reusable across the widened completeness vocabulary, and the
+    /// reused record carries the CURRENT run's token — never the one the original call was made under. A
+    /// cached verdict replayed while this run's typing degraded must SAY the read degraded.
+    /// </summary>
+    [Fact]
+    public async Task AReusedVerdict_CarriesTheCurrentRunsCompletenessToken_NotTheCachedOne()
+    {
+        var typing = TypingResult(out _);
+        var analyzer = new StubAnalyzer(request => new NewsJudgmentAnalysisOutcome(
+            NewsJudgmentAnalysisFailure.None,
+            new NewsJudgmentModelResponse("Unknown", null, [], "Factual read.", []),
+            "raw-hash",
+            null));
+        var store = new InMemoryJudgmentStore();
+        var generator = Generator(analyzer, store);
+
+        await generator.GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+        Assert.Equal(NewsTypingCompleteness.Complete, store.Written[0].TypingCompleteness);
+
+        // The SAME family set (so the cache hits) under a run whose typing pass degraded for this company.
+        var degraded = typing with
+        {
+            Cohorts =
+            [
+                typing.Cohorts[0] with
+                {
+                    TypingCompletenessByCompany = new Dictionary<Guid, NewsTypingCompleteness>
+                    {
+                        [Eose] = NewsTypingCompleteness.RetryableFailure,
+                    },
+                },
+            ],
+        };
+
+        await generator.GenerateAsync(Guid.NewGuid(), Plan(), degraded, CancellationToken.None);
+
+        Assert.Single(analyzer.Requests); // still ONE model call: the verdict was reused …
+        var reused = store.Written[1];
+        Assert.Equal(store.Written[0].JudgmentId, reused.ReusedFromJudgmentId);
+        Assert.Equal(NewsJudgmentStatus.Judged, reused.Status);
+        // … while EVERY completeness dimension is this run's.
+        Assert.Equal(NewsTypingCompleteness.RetryableFailure, reused.TypingCompleteness);
+        Assert.Equal("news-judgment-v3", reused.SchemaVersion);
+    }
+
     [Fact]
     public async Task ProviderFailure_IsRecorded_AndNeverCached()
     {

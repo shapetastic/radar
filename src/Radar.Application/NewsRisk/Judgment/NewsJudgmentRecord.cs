@@ -80,9 +80,11 @@ public sealed record NewsJudgmentLimitsRecord(
 /// <see cref="ProviderDurationMs"/> (spec 187 §7) is TRAILING and NULLABLE, the repo's established
 /// convention for an additive persisted field (spec 142's <c>EvidenceQuality</c>, spec 148's
 /// <c>EffectiveScoringConfig.Window</c>, spec 186's typing limits). The schema tag is NOT bumped for it:
-/// <see cref="CurrentSchemaVersion"/> already moved to <c>news-judgment-v2</c> in this same slice for
+/// <see cref="CurrentSchemaVersion"/> moved to <c>news-judgment-v2</c> in that same slice for
 /// <see cref="TrajectoryFactIds"/> — a field that changes what a record MEANS — whereas a duration changes
 /// nothing about how any record is interpreted and its own nullability is the whole "not recorded" story.
+/// (Spec 189 §2 later moved the tag to <c>news-judgment-v3</c> for the widened
+/// <see cref="TypingCompleteness"/> vocabulary, on the same "changes what a record means" test.)
 /// </para>
 /// </summary>
 public sealed record NewsJudgmentRecord(
@@ -139,10 +141,19 @@ public sealed record NewsJudgmentRecord(
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
-    /// spec 187 §1 (the record gained <c>TrajectoryFactIds</c>); v1 records on disk stay readable and are
-    /// never rewritten (AD-8).
+    /// spec 187 §1 (the record gained <c>TrajectoryFactIds</c>) and to <c>v3</c> by spec 189 §2, because the
+    /// persisted <see cref="TypingCompleteness"/> VOCABULARY changed: a newly written record may now carry
+    /// <c>RetryableFailure</c> or <c>RetryExhausted</c> where a v2 record could only say <c>Failed</c>. v1
+    /// and v2 records on disk stay readable, are never rewritten, and are NEVER re-classified into a guessed
+    /// retryable/exhausted state (AD-8).
+    /// <para>
+    /// <b>Only the record tag moves.</b> <see cref="NewsJudgmentContract.PromptVersion"/>,
+    /// <see cref="NewsJudgmentContract.SchemaVersion"/>, the stage-2 cohort key and the model request are
+    /// UNCHANGED — typing completeness is run provenance the judge never sees, so widening it must not fork a
+    /// cohort or invalidate a cached verdict. Asserted by test.
+    /// </para>
     /// </summary>
-    public const string CurrentSchemaVersion = "news-judgment-v2";
+    public const string CurrentSchemaVersion = "news-judgment-v3";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named

@@ -227,9 +227,17 @@ public sealed class NewsJudgmentMarkerPolicyTests
         Assert.NotEqual(NewsJudgmentTrajectory.Improving, default(NewsJudgmentTrajectory));
     }
 
+    /// <summary>
+    /// Spec 189 §2 leaves marker STATE and WORDING untouched: every value other than
+    /// <see cref="NewsTypingCompleteness.Complete"/> — the two new tokens included — still makes a
+    /// zero-finding dot say "(typing incomplete)". Which KIND of incompleteness it was is visible in the
+    /// judgment appendix's exact token, not by turning one failed article into a company challenge.
+    /// </summary>
     [Theory]
     [InlineData(NewsTypingCompleteness.Backlog)]
     [InlineData(NewsTypingCompleteness.Failed)]
+    [InlineData(NewsTypingCompleteness.RetryableFailure)]
+    [InlineData(NewsTypingCompleteness.RetryExhausted)]
     public void NoChallenge_UnderIncompleteTyping_AppendsTheQualifier(NewsTypingCompleteness incomplete)
     {
         var marker = NewsJudgmentMarkerPolicy.Derive(
