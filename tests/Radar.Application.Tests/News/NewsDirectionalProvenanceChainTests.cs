@@ -8,6 +8,7 @@ using Radar.Application.NewsTyping;
 using Radar.Application.Scoring;
 using Radar.Application.Signals;
 using Radar.Application.SignalExtraction;
+using Radar.Application.Storage;
 using Radar.Application.Tests.NewsRisk;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
@@ -212,9 +213,9 @@ public sealed class NewsDirectionalProvenanceChainTests
     /// <summary>No accrued on-disk history: the previous/velocity window is empty, which is fine here.</summary>
     private sealed class NoFileHistory : ISignalFileStore
     {
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             Signal signal, Domain.Signals.SignalReview review, CancellationToken ct) =>
-            Task.FromResult(string.Empty);
+            Task.FromResult(DurableWriteResult.Succeeded(string.Empty));
 
         public Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
             Guid companyId,

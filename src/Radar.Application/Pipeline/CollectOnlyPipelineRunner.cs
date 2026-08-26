@@ -83,6 +83,12 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
             collection.Collection.SourcesFailed,
             collection.Collection.SourcesChecked);
 
+        // Spec 193 §1: say so when a durable write was lost. Separate statement on the non-zero path only, so
+        // the line above stays byte-identical for a healthy run. This pass wrote no score snapshot, so it
+        // passes null for that axis rather than a 0 it did not observe.
+        RadarPipelineRunner.LogDurableWriteShortfall(
+            _logger, collection.SignalsNotPersisted, scoreSnapshotsNotPersisted: null);
+
         // Spec 161: state the filter in the collection summary, so a partial pass reads as a partial pass in
         // the log as well as in the run record. Only the RETAINED companies are known here (the seed's total
         // is stated by the seed-source decorator's own line, above this one in the same run).
@@ -141,7 +147,13 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
             // The spec-177 news-observation batch this pass wrote — the explicit manifest↔run association.
             // A FILTERED pass may capture observations; its batch records FullUniverse=false, so it can
             // never establish the whole-universe prospective boundary.
-            NewsObservationBatchId: collection.NewsObservationBatchId);
+            NewsObservationBatchId: collection.NewsObservationBatchId,
+            // Spec 193 §1: this pass DID write signals, so its count is a measured fact. It scored nothing,
+            // so ScoreSnapshotsNotPersisted stays null ("this pass did not do that work") — a 0 would claim a
+            // clean snapshot write that never happened, the same reason Strategies/CollectorRuns are null on
+            // the passes that did not produce them.
+            SignalsNotPersisted: collection.SignalsNotPersisted,
+            ScoreSnapshotsNotPersisted: null);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

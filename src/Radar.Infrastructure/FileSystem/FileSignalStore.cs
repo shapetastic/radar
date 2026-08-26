@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Signals;
 
 namespace Radar.Infrastructure.FileSystem;
@@ -18,8 +19,10 @@ namespace Radar.Infrastructure.FileSystem;
 /// <c>{RootDirectory}/{yyyy}/{MM}/{signalId}.json</c>, preserving provenance (evidence id, resolved
 /// company id, and the embedded review whose <c>signalId</c> traces back to the signal). All file I/O
 /// is confined to Infrastructure; the Application sees only <see cref="ISignalFileStore"/> /
-/// <see cref="ISignalRepository"/>. Disk failures degrade gracefully (warn + return the attempted path)
-/// and never crash the run.
+/// <see cref="ISignalRepository"/>. Disk failures degrade gracefully (warn + return the attempted path,
+/// marked <see cref="DurableWriteOutcome.Failed"/>) and never crash the run — but they are no longer
+/// SILENT: spec 193 §1 gives the caller a typed outcome so a signal that never reached disk cannot be
+/// counted as stored.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -74,7 +77,7 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
         _logger = logger;
     }
 
-    public async Task<string> WriteAsync(Signal signal, SignalReview review, CancellationToken ct)
+    public async Task<DurableWriteResult> WriteAsync(Signal signal, SignalReview review, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(review);
@@ -97,7 +100,9 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
 
         var json = Serialize(signal, review);
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
+        var written = await GracefulFileWriter
+            .TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false);
+        if (written)
         {
             _logger.LogInformation("Wrote signal {SignalId} to {Path}.", signal.Id, path);
         }
@@ -105,9 +110,14 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
         // Keep the in-process index in step with the disk (upsert-by-Id, matching this store's
         // last-write-wins file semantics) so a write is immediately visible to a later repository read.
         // Deliberately does NOT hydrate: writes stay cheap, and hydration's TryAdd can never clobber this.
+        //
+        // SPEC 193 §1: this happens on BOTH outcomes, deliberately — the current run must still complete on
+        // what it has. What changes is the CLAIM: a failed write returns Failed, so the pipeline counts the
+        // signal as not-persisted instead of silently reporting a path that holds nothing. The next run's
+        // accrued-history read will not see it, and that fact is now recorded rather than discarded.
         _byId[signal.Id] = signal;
 
-        return path;
+        return DurableWriteResult.From(path, written);
     }
 
     public async Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(

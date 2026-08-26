@@ -29,7 +29,16 @@ public interface IScoringPass
 /// What stage 6 did: how many companies the PRIMARY strategy scored (the run record's established meaning of
 /// "companies scored"), the strategy names in run order, and which of them was primary.
 /// </summary>
+/// <param name="ScoreSnapshotsNotPersisted">
+/// Spec 193 §1: how many score snapshots this pass computed but could NOT durably persist. Counted across
+/// ALL strategies, not just the primary — deliberately, and unlike <paramref name="CompaniesScored"/>, whose
+/// established meaning is the primary strategy's company count. The reason the two differ: "how many
+/// companies were scored this run" is a statement about the series the report renders, whereas "what did
+/// this run fail to write" is a statement about the DISK, and a non-primary strategy's lost snapshot is just
+/// as lost. Trailing + defaulted to 0, the truthful value for a pass that persisted everything.
+/// </param>
 public sealed record ScoringPassResult(
     int CompaniesScored,
     IReadOnlyList<string> Strategies,
-    string PrimaryStrategy);
+    string PrimaryStrategy,
+    int ScoreSnapshotsNotPersisted = 0);

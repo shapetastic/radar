@@ -2,6 +2,7 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
+using Radar.Application.Storage;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.FileSystem;
 using Radar.TestSupport;
@@ -67,7 +68,7 @@ public sealed class FileSignalStoreTests : IDisposable
         var review = ReviewFor(signal);
 
         var store = CreateStore();
-        var path = await store.WriteAsync(signal, review, CancellationToken.None);
+        var path = (await store.WriteAsync(signal, review, CancellationToken.None)).Path;
 
         var expectedPath = Path.Combine(_tempDir, "2026", "02", signal.Id + ".json");
         Assert.Equal(expectedPath, path);
@@ -133,7 +134,7 @@ public sealed class FileSignalStoreTests : IDisposable
             .Build();
         var review = ReviewFor(signal, SignalReviewDecision.Approve);
 
-        var path = await CreateStore().WriteAsync(signal, review, CancellationToken.None);
+        var path = (await CreateStore().WriteAsync(signal, review, CancellationToken.None)).Path;
 
         await using var stream = File.OpenRead(path);
         using var doc = await JsonDocument.ParseAsync(stream);
@@ -180,11 +181,37 @@ public sealed class FileSignalStoreTests : IDisposable
 
         var store = CreateStore(rootAsFile);
 
-        var path = await store.WriteAsync(signal, review, CancellationToken.None);
+        var result = await store.WriteAsync(signal, review, CancellationToken.None);
 
         // The attempted path is returned (no throw); the in-memory copy still exists in production.
         var expectedPath = Path.Combine(rootAsFile, "2026", "02", signal.Id + ".json");
-        Assert.Equal(expectedPath, path);
+        Assert.Equal(expectedPath, result.Path);
+
+        // SPEC 193 §1: and the failure is now REPORTED rather than discarded. This is the whole slice at
+        // its source — the graceful degradation is unchanged (no throw, attempted path returned) but the
+        // caller can no longer read the return value as proof of storage.
+        Assert.Equal(DurableWriteOutcome.Failed, result.Outcome);
+        Assert.False(result.Written);
+        Assert.False(File.Exists(expectedPath));
+
+        // The in-process index entry is deliberately KEPT, so the current run completes on what it has —
+        // which is exactly the state that used to be indistinguishable from a successful write.
+        var indexed = await store.GetByIdAsync(signal.Id, CancellationToken.None);
+        Assert.NotNull(indexed);
+        Assert.Equal(signal.Id, indexed!.Id);
+    }
+
+    [Fact]
+    public async Task WriteAsync_Success_ReportsWritten()
+    {
+        // The other half of the claim: a write that really landed says so, so Failed is not vacuously true.
+        var signal = new SignalBuilder().WithObservedAtUtc(Observed).Build();
+
+        var result = await CreateStore().WriteAsync(signal, ReviewFor(signal), CancellationToken.None);
+
+        Assert.Equal(DurableWriteOutcome.Written, result.Outcome);
+        Assert.True(result.Written);
+        Assert.True(File.Exists(result.Path));
     }
 
     private static Signal SignalFor(

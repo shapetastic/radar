@@ -8,6 +8,11 @@ namespace Radar.Application.Tests.Scoring;
 /// Unit tests for the pure spec-113 assembly-time supersede: among GuidanceChange signals sharing one
 /// EvidenceId, a directional one beats the deterministic Neutral, at most one survives per EvidenceId,
 /// nothing else is touched, and the outcome is deterministic (AD-3) regardless of input order.
+/// <para>
+/// Spec 193 §2 added ACCOUNTING to the same call — every case here reads <c>.Signals</c>, and the survivor
+/// set it asserts is unchanged. The counts themselves are covered by
+/// <c>GuidanceChangeSupersedeAccountingTests</c>.
+/// </para>
 /// </summary>
 public sealed class GuidanceChangeSupersedeTests
 {
@@ -33,7 +38,7 @@ public sealed class GuidanceChangeSupersedeTests
         var neutral = Guidance(evidenceId, SignalDirection.Neutral);
         var positive = Guidance(evidenceId, SignalDirection.Positive);
 
-        var result = GuidanceChangeSupersede.Apply(new[] { neutral, positive });
+        var result = GuidanceChangeSupersede.Apply(new[] { neutral, positive }).Signals;
 
         var survivor = Assert.Single(result);
         Assert.Equal(positive.Id, survivor.Id);
@@ -46,7 +51,7 @@ public sealed class GuidanceChangeSupersedeTests
         var neutral = Guidance(evidenceId, SignalDirection.Neutral);
         var negative = Guidance(evidenceId, SignalDirection.Negative);
 
-        var result = GuidanceChangeSupersede.Apply(new[] { negative, neutral });
+        var result = GuidanceChangeSupersede.Apply(new[] { negative, neutral }).Signals;
 
         var survivor = Assert.Single(result);
         Assert.Equal(negative.Id, survivor.Id);
@@ -62,7 +67,7 @@ public sealed class GuidanceChangeSupersedeTests
         var neutralB = Guidance(evidenceId, SignalDirection.Neutral, Observed.AddHours(1));
         var positive = Guidance(evidenceId, SignalDirection.Positive);
 
-        var result = GuidanceChangeSupersede.Apply(new[] { neutralA, positive, neutralB });
+        var result = GuidanceChangeSupersede.Apply(new[] { neutralA, positive, neutralB }).Signals;
 
         var survivor = Assert.Single(result);
         Assert.Equal(positive.Id, survivor.Id);
@@ -76,7 +81,7 @@ public sealed class GuidanceChangeSupersedeTests
         var other = new SignalBuilder().WithType(SignalType.CustomerWin).Build();
         var input = new[] { neutral, other };
 
-        var result = GuidanceChangeSupersede.Apply(input);
+        var result = GuidanceChangeSupersede.Apply(input).Signals;
 
         Assert.Equal(new[] { neutral.Id, other.Id }, result.Select(s => s.Id).ToArray());
     }
@@ -92,7 +97,7 @@ public sealed class GuidanceChangeSupersedeTests
         var neutralA = Guidance(evidenceId, SignalDirection.Neutral, Observed, idA);
         var neutralB = Guidance(evidenceId, SignalDirection.Neutral, Observed, idB);
 
-        var result = GuidanceChangeSupersede.Apply(new[] { neutralB, neutralA });
+        var result = GuidanceChangeSupersede.Apply(new[] { neutralB, neutralA }).Signals;
 
         var survivor = Assert.Single(result);
         Assert.Equal(idA, survivor.Id);
@@ -107,8 +112,8 @@ public sealed class GuidanceChangeSupersedeTests
         var earlierNegative = Guidance(evidenceId, SignalDirection.Negative, Observed);
         var laterPositive = Guidance(evidenceId, SignalDirection.Positive, Observed.AddHours(2));
 
-        var forward = GuidanceChangeSupersede.Apply(new[] { earlierNegative, laterPositive });
-        var reversed = GuidanceChangeSupersede.Apply(new[] { laterPositive, earlierNegative });
+        var forward = GuidanceChangeSupersede.Apply(new[] { earlierNegative, laterPositive }).Signals;
+        var reversed = GuidanceChangeSupersede.Apply(new[] { laterPositive, earlierNegative }).Signals;
 
         Assert.Equal(earlierNegative.Id, Assert.Single(forward).Id);
         Assert.Equal(earlierNegative.Id, Assert.Single(reversed).Id);
@@ -123,7 +128,7 @@ public sealed class GuidanceChangeSupersedeTests
         var neutral = Guidance(evidenceId, SignalDirection.Neutral);
         var mixed = Guidance(evidenceId, SignalDirection.Mixed);
 
-        var result = GuidanceChangeSupersede.Apply(new[] { neutral, mixed });
+        var result = GuidanceChangeSupersede.Apply(new[] { neutral, mixed }).Signals;
 
         Assert.Equal(mixed.Id, Assert.Single(result).Id);
     }
@@ -137,7 +142,7 @@ public sealed class GuidanceChangeSupersedeTests
         var positiveA = Guidance(evidenceA, SignalDirection.Positive);
         var neutralB = Guidance(evidenceB, SignalDirection.Neutral);
 
-        var result = GuidanceChangeSupersede.Apply(new[] { positiveA, neutralB });
+        var result = GuidanceChangeSupersede.Apply(new[] { positiveA, neutralB }).Signals;
 
         Assert.Equal(new[] { positiveA.Id, neutralB.Id }, result.Select(s => s.Id).ToArray());
     }
@@ -155,7 +160,7 @@ public sealed class GuidanceChangeSupersedeTests
             .WithDirection(SignalDirection.Positive)
             .Build();
 
-        var result = GuidanceChangeSupersede.Apply(new[] { customerWin, neutral, positive });
+        var result = GuidanceChangeSupersede.Apply(new[] { customerWin, neutral, positive }).Signals;
 
         Assert.Equal(2, result.Count);
         Assert.Contains(result, s => s.Id == customerWin.Id);
@@ -172,7 +177,7 @@ public sealed class GuidanceChangeSupersedeTests
         var positive = Guidance(evidenceId, SignalDirection.Positive);
         var after = new SignalBuilder().WithType(SignalType.CustomerWin).Build();
 
-        var result = GuidanceChangeSupersede.Apply(new[] { before, neutral, positive, after });
+        var result = GuidanceChangeSupersede.Apply(new[] { before, neutral, positive, after }).Signals;
 
         Assert.Equal(new[] { before.Id, positive.Id, after.Id }, result.Select(s => s.Id).ToArray());
     }
@@ -180,8 +185,8 @@ public sealed class GuidanceChangeSupersedeTests
     [Fact]
     public void EmptyInput_ReturnsEmpty()
     {
-        Assert.Empty(GuidanceChangeSupersede.Apply(Array.Empty<Signal>()));
-        Assert.Empty(GuidanceChangeSupersede.Apply(Array.Empty<ScoringSignal>()));
+        Assert.Empty(GuidanceChangeSupersede.Apply(Array.Empty<Signal>()).Signals);
+        Assert.Empty(GuidanceChangeSupersede.Apply(Array.Empty<ScoringSignal>()).Signals);
     }
 
     [Fact]
@@ -192,9 +197,9 @@ public sealed class GuidanceChangeSupersedeTests
         var positive = Guidance(evidenceId, SignalDirection.Positive);
         var other = new SignalBuilder().WithType(SignalType.CustomerWin).Build();
 
-        var a = GuidanceChangeSupersede.Apply(new[] { neutral, positive, other });
-        var b = GuidanceChangeSupersede.Apply(new[] { other, positive, neutral });
-        var c = GuidanceChangeSupersede.Apply(new[] { positive, other, neutral });
+        var a = GuidanceChangeSupersede.Apply(new[] { neutral, positive, other }).Signals;
+        var b = GuidanceChangeSupersede.Apply(new[] { other, positive, neutral }).Signals;
+        var c = GuidanceChangeSupersede.Apply(new[] { positive, other, neutral }).Signals;
 
         static HashSet<Guid> Ids(IReadOnlyList<Signal> signals) => signals.Select(s => s.Id).ToHashSet();
 
@@ -215,7 +220,7 @@ public sealed class GuidanceChangeSupersedeTests
             new SignalBuilder().WithEvidenceId(otherEvidence.Id).WithType(SignalType.CustomerWin).Build(),
             otherEvidence);
 
-        var result = GuidanceChangeSupersede.Apply(new[] { neutral, positive, other });
+        var result = GuidanceChangeSupersede.Apply(new[] { neutral, positive, other }).Signals;
 
         Assert.Equal(2, result.Count);
         var survivingGuidance = Assert.Single(result, s => s.Signal.Type == SignalType.GuidanceChange);
@@ -235,7 +240,7 @@ public sealed class GuidanceChangeSupersedeTests
             new SignalBuilder().WithType(SignalType.CustomerWin).Build(),
         };
 
-        var result = GuidanceChangeSupersede.Apply(input);
+        var result = GuidanceChangeSupersede.Apply(input).Signals;
 
         Assert.Same(input, result);
     }

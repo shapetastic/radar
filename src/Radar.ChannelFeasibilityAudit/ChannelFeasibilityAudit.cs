@@ -200,7 +200,9 @@ public sealed class ChannelFeasibilityAudit
             return byObserved != 0 ? byObserved : a.Signal.Id.CompareTo(b.Signal.Id);
         });
 
-        var superseded = GuidanceChangeSupersede.Apply(pairs);
+        // Spec 193 §2: the supersede now returns survivors + a per-survivor removed count. This audit is a
+        // read-only diagnostic and consumes only the survivors, exactly as before.
+        var superseded = GuidanceChangeSupersede.Apply(pairs).Signals;
         var collapse = _mediaCollapse.Collapse(superseded);
         var scored = collapse.Signals.ToList();
 

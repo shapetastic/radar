@@ -2,6 +2,7 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
+using Radar.Application.Storage;
 using Radar.Domain.Scoring;
 using Radar.Infrastructure.FileSystem;
 using Radar.TestSupport;
@@ -72,7 +73,7 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
         var links = new List<ScoreEvidenceLink> { LinkFor(snapshot, signalId, evidenceId, weight: 5) };
 
         var store = CreateStore();
-        var path = await store.WriteAsync(snapshot, links, CancellationToken.None);
+        var path = (await store.WriteAsync(snapshot, links, CancellationToken.None)).Path;
 
         var expectedPath = Path.Combine(
             _tempDir, snapshot.CompanyId.ToString(), snapshot.Id + ".json");
@@ -113,8 +114,8 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
             .Build();
 
         var store = CreateStore();
-        var path = await store.WriteAsync(
-            snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        var path = (await store.WriteAsync(
+            snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None)).Path;
 
         Assert.True(File.Exists(path), $"Expected file at {path}.");
 
@@ -303,7 +304,7 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
             .Build();
 
         var store = CreateStore();
-        var path = await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        var path = (await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None)).Path;
 
         // The serialized JSON carries the camelCase scoringConfigVersion property.
         await using (var stream = File.OpenRead(path))
@@ -388,7 +389,7 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
             .Build();
 
         var store = CreateStore();
-        var path = await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        var path = (await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None)).Path;
 
         await using (var stream = File.OpenRead(path))
         {
@@ -419,7 +420,7 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
             .Build();
 
         var store = CreateStore();
-        var path = await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        var path = (await store.WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None)).Path;
 
         await using (var stream = File.OpenRead(path))
         {
@@ -501,8 +502,8 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
             .WithWindow(WindowStart, WindowEnd)
             .Build();
         // FileScoreSnapshotStore files by the snapshot's own CompanyId, so write it then move it under companyId.
-        var foreignPath = await store.WriteAsync(
-            foreignSnapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+        var foreignPath = (await store.WriteAsync(
+            foreignSnapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None)).Path;
         var misfiledPath = Path.Combine(_tempDir, companyId.ToString(), foreignSnapshot.Id + ".json");
         File.Move(foreignPath, misfiledPath);
 
@@ -638,13 +639,33 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
 
         var store = CreateStore(rootAsFile);
 
-        var path = await store.WriteAsync(
+        var result = await store.WriteAsync(
             snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
 
         // The attempted path is returned (no throw); the in-memory copy still exists in production.
         var expectedPath = Path.Combine(
             rootAsFile, snapshot.CompanyId.ToString(), snapshot.Id + ".json");
-        Assert.Equal(expectedPath, path);
+        Assert.Equal(expectedPath, result.Path);
+
+        // SPEC 193 §1: the failure is REPORTED rather than discarded — the returned path is the ATTEMPTED
+        // path in both outcomes, and only the outcome proves anything about the disk.
+        Assert.Equal(DurableWriteOutcome.Failed, result.Outcome);
+        Assert.False(result.Written);
+        Assert.False(File.Exists(expectedPath));
+    }
+
+    [Fact]
+    public async Task WriteAsync_Success_ReportsWritten()
+    {
+        // The other half of the claim, so Failed is not vacuously true.
+        var snapshot = new ScoreSnapshotBuilder().WithWindow(WindowStart, WindowEnd).Build();
+
+        var result = await CreateStore()
+            .WriteAsync(snapshot, Array.Empty<ScoreEvidenceLink>(), CancellationToken.None);
+
+        Assert.Equal(DurableWriteOutcome.Written, result.Outcome);
+        Assert.True(result.Written);
+        Assert.True(File.Exists(result.Path));
     }
 
     // ---- spec 148: the same-label overwrite probe ------------------------------------------------------
@@ -691,7 +712,7 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
 
         var companyId = Guid.NewGuid();
         var first = new ScoreSnapshotBuilder().WithCompanyId(companyId).WithWindow(WindowStart, WindowEnd).Build();
-        var path = await store.WriteAsync(first, [], CancellationToken.None);
+        var path = (await store.WriteAsync(first, [], CancellationToken.None)).Path;
         var originalBytes = await File.ReadAllTextAsync(path);
 
         // Read-only ⇒ File.WriteAllTextAsync throws UnauthorizedAccessException ⇒ GracefulFileWriter degrades.
@@ -701,7 +722,7 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
             var second = new ScoreSnapshotBuilder()
                 .WithCompanyId(companyId).WithWindow(WindowStart, WindowEnd).Build();
 
-            var attempted = await store.WriteAsync(second, [], CancellationToken.None);
+            var attempted = (await store.WriteAsync(second, [], CancellationToken.None)).Path;
 
             // Degraded, not thrown — and the original file genuinely survived, so "nothing was replaced" is
             // a fact about the disk rather than about the observer's plumbing.
@@ -723,8 +744,8 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
         var store = CreateStore();
         var snapshot = new ScoreSnapshotBuilder().WithWindow(WindowStart, WindowEnd).Build();
 
-        var path = await store.WriteAsync(snapshot, [], CancellationToken.None);
-        var second = await store.WriteAsync(snapshot, [], CancellationToken.None);
+        var path = (await store.WriteAsync(snapshot, [], CancellationToken.None)).Path;
+        var second = (await store.WriteAsync(snapshot, [], CancellationToken.None)).Path;
 
         Assert.Equal(path, second);
         Assert.Single(Directory.GetFiles(Path.Combine(_tempDir, snapshot.CompanyId.ToString()), "*.json"));
@@ -741,7 +762,7 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
             new FileScoreSnapshotStoreOptions { RootDirectory = _tempDir, SnapshotFileName = null },
             NullLogger<FileScoreSnapshotStore>.Instance);
 
-        var path = await store.WriteAsync(snapshot, [], CancellationToken.None);
+        var path = (await store.WriteAsync(snapshot, [], CancellationToken.None)).Path;
 
         Assert.Equal(
             Path.Combine(_tempDir, snapshot.CompanyId.ToString(), snapshot.Id + ".json"), path);

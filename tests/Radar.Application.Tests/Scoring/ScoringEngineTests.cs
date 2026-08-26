@@ -8,6 +8,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
@@ -144,11 +145,11 @@ public sealed class ScoringEngineTests
     {
         private readonly List<Signal> _signals = new();
 
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             Signal signal, Radar.Domain.Signals.SignalReview review, CancellationToken ct)
         {
             _signals.Add(signal);
-            return Task.FromResult("written/signal.json");
+            return Task.FromResult(DurableWriteResult.Succeeded("written/signal.json"));
         }
 
         /// <summary>Seeds a prior-run signal "on disk" only (not into the in-memory repo).</summary>

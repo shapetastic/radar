@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
@@ -12,6 +13,7 @@ using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 using Radar.Domain.Reports;
 using Radar.Domain.Signals;
@@ -189,11 +191,22 @@ public sealed class RadarPipelineRunnerTests
     {
         public List<(Signal Signal, Radar.Domain.Signals.SignalReview Review)> Written { get; } = new();
 
-        public Task<string> WriteAsync(
+        /// <summary>
+        /// Spec 193 §1: when true the durable write DEGRADES — it returns
+        /// <see cref="DurableWriteOutcome.Failed"/> without throwing, exactly as the real store does when
+        /// <c>GracefulFileWriter</c> catches a disk failure. The in-process record is still kept (the
+        /// production store keeps its in-memory index entry too), which is precisely the state that used to
+        /// read as success.
+        /// </summary>
+        public bool FailWrites { get; set; }
+
+        public Task<DurableWriteResult> WriteAsync(
             Signal signal, Radar.Domain.Signals.SignalReview review, CancellationToken ct)
         {
             Written.Add((signal, review));
-            return Task.FromResult("written/signal.json");
+            return Task.FromResult(FailWrites
+                ? DurableWriteResult.NotPersisted("written/signal.json")
+                : DurableWriteResult.Succeeded("written/signal.json"));
         }
 
         public Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
@@ -226,13 +239,18 @@ public sealed class RadarPipelineRunnerTests
         public List<(Radar.Domain.Scoring.CompanyScoreSnapshot Snapshot,
             IReadOnlyList<Radar.Domain.Scoring.ScoreEvidenceLink> Links)> Written { get; } = new();
 
-        public Task<string> WriteAsync(
+        /// <summary>Spec 193 §1: see <see cref="RecordingSignalFileStore.FailWrites"/>.</summary>
+        public bool FailWrites { get; set; }
+
+        public Task<DurableWriteResult> WriteAsync(
             Radar.Domain.Scoring.CompanyScoreSnapshot snapshot,
             IReadOnlyList<Radar.Domain.Scoring.ScoreEvidenceLink> links,
             CancellationToken ct)
         {
             Written.Add((snapshot, links));
-            return Task.FromResult("written/score.json");
+            return Task.FromResult(FailWrites
+                ? DurableWriteResult.NotPersisted("written/score.json")
+                : DurableWriteResult.Succeeded("written/score.json"));
         }
 
         public Task<Radar.Domain.Scoring.CompanyScoreSnapshot?> ReadLatestBeforeAsync(
@@ -377,6 +395,27 @@ public sealed class RadarPipelineRunnerTests
         }
     }
 
+    /// <summary>
+    /// Captures every log entry so a test can assert on the run log itself — spec 193 §1 makes the
+    /// aggregated per-store Warning and the summary shortfall statement part of the contract.
+    /// </summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
+    }
+
     private sealed class Harness
     {
         public InMemoryEvidenceRepository Evidence { get; } = new();
@@ -395,6 +434,15 @@ public sealed class RadarPipelineRunnerTests
         public StrategyScopedScoreRepositoryFactory ScoreRepositories { get; }
         public ScoringStrategySet StrategySet { get; }
         public RadarPipelineRunner Runner { get; }
+
+        // Spec 193 §1: the run log is now an assertable artifact (the aggregated per-store Warning and the
+        // summary shortfall statement), so every runner/pass in the harness logs into a capturing logger
+        // instead of NullLogger. Nothing else about the harness changes.
+        public CapturingLogger<RadarPipelineRunner> RunnerLog { get; } = new();
+        public CapturingLogger<CollectionPass> CollectionPassLog { get; } = new();
+        public CapturingLogger<ScoringPass> ScoringPassLog { get; } = new();
+        public CapturingLogger<CollectOnlyPipelineRunner> CollectOnlyLog { get; } = new();
+        public CapturingLogger<ScoreOnlyPipelineRunner> ScoreOnlyLog { get; } = new();
 
         // Spec 144: the two extracted passes and the two standalone verb runners over the SAME graph.
         public CollectionPass CollectionPass { get; }
@@ -511,10 +559,11 @@ public sealed class RadarPipelineRunnerTests
                 Companies,
                 healthValidator ?? new StubCollectionHealthValidator(),
                 time,
-                NullLogger<CollectionPass>.Instance,
+                CollectionPassLog,
                 directionalFilingSignals);
 
-            ScoringPass = new ScoringPass(strategyFactory, ScoreStores, ScoringConfigStore);
+            ScoringPass = new ScoringPass(
+                strategyFactory, ScoreStores, ScoringConfigStore, ScoringPassLog);
 
             Runner = new RadarPipelineRunner(
                 CollectionPass,
@@ -525,14 +574,14 @@ public sealed class RadarPipelineRunnerTests
                 ReportWriter,
                 RunStore,
                 options,
-                NullLogger<RadarPipelineRunner>.Instance);
+                RunnerLog);
 
             CollectOnlyRunner = new CollectOnlyPipelineRunner(
                 CollectionPass,
                 strategyFactory,
                 ScoringConfigStore,
                 RunStore,
-                NullLogger<CollectOnlyPipelineRunner>.Instance);
+                CollectOnlyLog);
         }
 
         /// <summary>
@@ -546,7 +595,7 @@ public sealed class RadarPipelineRunnerTests
                 StrategyFactory,
                 ScoringConfigStore,
                 RunStore,
-                NullLogger<CollectOnlyPipelineRunner>.Instance,
+                CollectOnlyLog,
                 filter);
 
         /// <summary>
@@ -566,7 +615,7 @@ public sealed class RadarPipelineRunnerTests
                 options,
                 new ScoringPassOptions { AsOfUtc = asOfUtc },
                 timeProvider ?? Clock,
-                NullLogger<ScoreOnlyPipelineRunner>.Instance);
+                ScoreOnlyLog);
     }
 
     /// <summary>
@@ -619,6 +668,208 @@ public sealed class RadarPipelineRunnerTests
         var ex = Assert.Throws<ArgumentException>(
             () => new Harness(Array.Empty<IEvidenceCollector>(), extractor, new PipelineOptions()));
         Assert.Equal("collectors", ex.ParamName);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // SPEC 193 §1 — a failed durable write must never read as success.
+    //
+    // Before this slice the file stores swallowed a disk failure, kept the in-memory copy and returned a
+    // path, and CollectionPass explicitly commented that "the store swallows disk errors, so this must not
+    // change any counter". The graceful degradation is kept (a disk hiccup must not crash a run, and the
+    // current run still completes on what it has); only the CLAIM changed.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FailedSignalWrite_RunCompletes_ButIsCountedAndAggregatedIntoExactlyOneWarning()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions());
+        await SeedCompanyAsync(h, companyId);
+        h.SignalStore.FailWrites = true;
+
+        // The run COMPLETES — no throw, and every pre-existing counter is unchanged: the signal really was
+        // extracted, validated and approved. What it was not is durably stored.
+        var result = await h.Runner.RunAsync(default);
+        Assert.Equal(1, result.SignalsExtracted);
+        Assert.Equal(1, result.SignalsValid);
+        Assert.Equal(1, result.SignalsApproved);
+        Assert.Equal(1, result.CompaniesScored);
+
+        // The in-memory read still returns the item, exactly as the production store keeps its index entry.
+        var signal = Assert.Single(await h.Signals.GetByCompanyAsync(companyId, default));
+        Assert.Equal(SignalReviewStatus.Approved, signal.ReviewStatus);
+
+        // The run record counts it — and does not claim the snapshot side failed too.
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(1, record.SignalsNotPersisted);
+        Assert.Equal(0, record.ScoreSnapshotsNotPersisted);
+
+        // EXACTLY ONE aggregated Warning for the store (spec 145's aggregation precedent), never one per
+        // failure, and it says what the count means.
+        var storeWarning = Assert.Single(h.CollectionPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("1 signal(s)", storeWarning.Message);
+        Assert.Contains("accrued signal history does NOT contain them", storeWarning.Message);
+
+        // And the run says so in its summary — the run must not report the signal as durably stored.
+        // A COMBINED run genuinely observed both axes, so both are rendered — including the measured zero.
+        // Pinned as the full string because the wording is a stated byte-identical criterion, and because
+        // omitting an observed 0 here is the most natural wrong generalisation of the null-axis rule.
+        var summaryShortfall = Assert.Single(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Equal(
+            "This run did NOT durably persist everything it produced: 1 signal(s) and 0 score snapshot(s) "
+                + "exist only in this process's memory. The run completed and reported on them, but they are "
+                + "absent from the accrued stores, so the next run's history read and the efficacy/replay "
+                + "reads will not see them.",
+            summaryShortfall.Message);
+    }
+
+    [Fact]
+    public async Task FailedScoreSnapshotWrite_IsCountedAcrossAllStrategies_InOneAggregatedWarning()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions());
+        await SeedCompanyAsync(h, companyId);
+        h.ScoreStore.FailWrites = true;
+
+        var result = await h.Runner.RunAsync(default);
+
+        // companiesScored keeps its established meaning: the company WAS scored (the snapshot exists in the
+        // score repository the report reads). The disk is the separate axis.
+        Assert.Equal(1, result.CompaniesScored);
+        Assert.Single(await h.Scores.GetSnapshotsForCompanyAsync(companyId, default));
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(1, record.ScoreSnapshotsNotPersisted);
+        Assert.Equal(0, record.SignalsNotPersisted);
+
+        var storeWarning = Assert.Single(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("1 score snapshot(s)", storeWarning.Message);
+        Assert.Contains("accrued score history does NOT contain them", storeWarning.Message);
+
+        // The mirror of the signal-side pin: a combined run observed the signal axis too, so its measured 0
+        // is rendered rather than dropped.
+        var summaryShortfall = Assert.Single(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("0 signal(s) and 1 score snapshot(s)", summaryShortfall.Message);
+    }
+
+    [Fact]
+    public async Task ManyFailedWrites_StillProduceExactlyOneWarningPerStore()
+    {
+        // The aggregation is the point: a bad disk must not bury the run log in one line per failure.
+        // Two distinct evidence items (each still carrying the excerpt, so each yields a real signal) and
+        // two companies, so both stores are asked to write twice.
+        var collector = new FakeEvidenceCollector([
+            BuildCollected(RawText),
+            BuildCollected(RawText + " A second, separately-collected report."),
+        ]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+        await SeedCompanyAsync(h, Guid.NewGuid(), "Contoso Robotics");
+        h.SignalStore.FailWrites = true;
+        h.ScoreStore.FailWrites = true;
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(2, record.SignalsNotPersisted);
+        Assert.Equal(2, record.ScoreSnapshotsNotPersisted);
+
+        Assert.Single(h.CollectionPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Single(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Single(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
+    }
+
+    [Fact]
+    public async Task HealthyRun_ReportsZeroNotPersisted_AndItsSummaryLineIsByteIdenticalToPre193()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(0, record.SignalsNotPersisted);
+        Assert.Equal(0, record.ScoreSnapshotsNotPersisted);
+
+        // No aggregated store Warning, no shortfall statement — and the existing summary line is
+        // BYTE-IDENTICAL to the pre-193 text. This is the pinned criterion: the counts are appended as a
+        // separate statement on the non-zero path only, never folded into this template.
+        Assert.DoesNotContain(h.CollectionPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.DoesNotContain(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.DoesNotContain(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
+
+        var summary = Assert.Single(
+            h.RunnerLog.Entries,
+            e => e.Level == LogLevel.Information && e.Message.StartsWith("Pipeline run complete:", StringComparison.Ordinal));
+        Assert.Equal(
+            "Pipeline run complete: 1/1 new evidence, 1 approved / 0 needs-review signals, "
+                + "1 companies scored by the primary of 1 strategies, 0/0 sources unreadable, report none.",
+            summary.Message);
+    }
+
+    [Fact]
+    public async Task CollectPass_RecordsItsSignalCount_ButLeavesTheSnapshotCountNull()
+    {
+        // A pass records only what it genuinely observed. A collect pass wrote no snapshot, so a 0 there
+        // would claim a clean snapshot write that never happened — the same reason Strategies is null.
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+        h.SignalStore.FailWrites = true;
+
+        await h.CollectOnlyRunner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(1, record.SignalsNotPersisted);
+        Assert.Null(record.ScoreSnapshotsNotPersisted);
+
+        var shortfall = Assert.Single(h.CollectOnlyLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("did NOT durably persist everything it produced", shortfall.Message);
+        Assert.Contains("1 signal(s)", shortfall.Message);
+
+        // ...and the summary line omits the snapshot axis ENTIRELY rather than rendering the null as "0
+        // score snapshot(s)" — that would claim a clean snapshot write this pass never attempted, the exact
+        // fabricated zero the nullable run-record counter above exists to avoid.
+        Assert.DoesNotContain("score snapshot", shortfall.Message);
+    }
+
+    [Fact]
+    public async Task ScorePass_RecordsItsSnapshotCount_ButLeavesTheSignalCountNull()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions());
+        await SeedCompanyAsync(h, companyId);
+        h.ScoreStore.FailWrites = true;
+
+        await h.ScoreOnlyRunner(new PipelineOptions()).RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Null(record.SignalsNotPersisted);
+        Assert.Equal(1, record.ScoreSnapshotsNotPersisted);
+
+        var shortfall = Assert.Single(h.ScoreOnlyLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("1 score snapshot(s)", shortfall.Message);
+
+        // Mirror of the collect-pass assertion: this pass observed no signal write, so the signal axis is
+        // omitted rather than reported as a measured "0 signal(s)".
+        Assert.DoesNotContain("signal(s)", shortfall.Message);
     }
 
     [Fact]

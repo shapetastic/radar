@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 using Radar.Domain.Scoring;
 using Radar.TestSupport;
 
@@ -35,7 +36,7 @@ public sealed class ScoreMoveDenominatorAuditGeneratorTests
             Guid companyId, CancellationToken ct) =>
             throw new NotSupportedException("The audit reads through the link-bearing projection only.");
 
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             CompanyScoreSnapshot snapshot, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct) =>
             throw new NotSupportedException("The audit must be read-only over score history.");
 

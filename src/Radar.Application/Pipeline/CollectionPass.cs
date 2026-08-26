@@ -9,6 +9,7 @@ using Radar.Application.News;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
@@ -147,6 +148,11 @@ public sealed class CollectionPass : ICollectionPass
         var signalsValid = 0;
         var signalsApproved = 0;
         var signalsNeedingReview = 0;
+
+        // Spec 193 §1: how many signals this pass held in memory but could NOT durably persist. It is a
+        // separate axis from every counter above — a not-persisted signal was still extracted, validated,
+        // reviewed and counted as such, because it really was; what it is NOT is in the accrued store.
+        var signalsNotPersisted = 0;
 
         // Stage 1 + 2: collect raw evidence over the watch universe, map each result to an immutable
         // domain EvidenceItem (normalization, hashing, quality parsing live in the mapper), then
@@ -336,8 +342,14 @@ public sealed class CollectionPass : ICollectionPass
 
                 signalsExtracted++;
 
-                switch (await MapResolveReviewStoreAsync(extracted, evidence, entry.CompanyHints, asOfUtc, ct)
-                    .ConfigureAwait(false))
+                var stored = await MapResolveReviewStoreAsync(
+                    extracted, evidence, entry.CompanyHints, asOfUtc, ct).ConfigureAwait(false);
+                if (stored.NotPersisted)
+                {
+                    signalsNotPersisted++;
+                }
+
+                switch (stored.Outcome)
                 {
                     case SignalStoreOutcome.Approved:
                         signalsValid++;
@@ -370,8 +382,14 @@ public sealed class CollectionPass : ICollectionPass
             // (defensive — every produced signal's evidence came from candidates) falls back to the
             // empty list, i.e. the CompanyMention (= filing SourceName) path.
             var directionalHints = hintsByEvidenceId.GetValueOrDefault(d.Evidence.Id, []);
-            switch (await MapResolveReviewStoreAsync(d.Signal, d.Evidence, directionalHints, asOfUtc, ct)
-                .ConfigureAwait(false))
+            var directionalStored = await MapResolveReviewStoreAsync(
+                d.Signal, d.Evidence, directionalHints, asOfUtc, ct).ConfigureAwait(false);
+            if (directionalStored.NotPersisted)
+            {
+                signalsNotPersisted++;
+            }
+
+            switch (directionalStored.Outcome)
             {
                 case SignalStoreOutcome.Approved:
                     signalsValid++;
@@ -389,6 +407,19 @@ public sealed class CollectionPass : ICollectionPass
             }
         }
 
+        // Spec 193 §1: ONE aggregated Warning per store per run (the spec-145 aggregation precedent), never
+        // one line per failure — a bad disk would otherwise bury the run log in thousands of identical lines.
+        if (signalsNotPersisted > 0)
+        {
+            _logger.LogWarning(
+                "{SignalsNotPersisted} signal(s) this run could NOT be durably persisted to the signal "
+                    + "store. They are in this process's in-memory index and were scored by this run, but "
+                    + "nothing reached disk: the accrued signal history does NOT contain them and the next "
+                    + "run's history read will not see them. The run was not aborted; see the per-write "
+                    + "Warnings above for the failing paths.",
+                signalsNotPersisted);
+        }
+
         return new CollectionPassResult(
             AsOfUtc: asOfUtc,
             EvidenceCollected: evidenceCollected,
@@ -402,7 +433,8 @@ public sealed class CollectionPass : ICollectionPass
             Collectors: CollectorNames,
             Companies: companies,
             CollectorRuns: collectorRuns,
-            NewsObservationBatchId: newsObservationBatchId);
+            NewsObservationBatchId: newsObservationBatchId,
+            SignalsNotPersisted: signalsNotPersisted);
     }
 
     /// <summary>
@@ -577,9 +609,9 @@ public sealed class CollectionPass : ICollectionPass
     /// keyword extract loop and the opt-in directional filing enrichment. The mapper owns the provenance
     /// check (excerpt must be found in the evidence) and validation — the pass does not re-validate.
     /// Returns which counters the caller should bump (kept in the caller so the run-summary locals stay in
-    /// one place).
+    /// one place), INCLUDING whether the durable mirror write failed (spec 193 §1).
     /// </summary>
-    private async Task<SignalStoreOutcome> MapResolveReviewStoreAsync(
+    private async Task<SignalStoreResult> MapResolveReviewStoreAsync(
         ExtractedSignal extracted,
         EvidenceItem evidence,
         IReadOnlyList<string> companyHints,
@@ -593,7 +625,7 @@ public sealed class CollectionPass : ICollectionPass
                 "Dropping invalid extracted signal for evidence {EvidenceId}: {Errors}",
                 evidence.Id,
                 string.Join("; ", mapping.Errors));
-            return SignalStoreOutcome.Dropped;
+            return SignalStoreResult.Of(SignalStoreOutcome.Dropped);
         }
 
         var signal = mapping.Signal!;
@@ -618,17 +650,26 @@ public sealed class CollectionPass : ICollectionPass
 
         // Mirror the stored signal + its review to the on-disk signal store (AD-8), the
         // durable twin of the in-memory repositories. Signals are upsert-by-Id (the store
-        // overwrites last-write-wins), and the store swallows disk errors, so this must not
-        // change any counter or abort the run.
-        await _signalFileStore
+        // overwrites last-write-wins).
+        //
+        // SPEC 193 §1 CORRECTS WHAT THIS COMMENT USED TO SAY. It used to read "the store swallows disk
+        // errors, so this must not change any counter" — which sanctioned reporting a signal that never
+        // reached disk as stored. The store still degrades gracefully and still does not abort the run, and
+        // the extract/valid/approved/needs-review counters above are still unaffected (the signal really was
+        // extracted, validated and reviewed). What changed: a FAILED durable write IS now counted, on its
+        // own axis, and reported in ONE aggregated Warning plus the run record and summary line. Nothing is
+        // retried or queued (out of scope) — the failure is recorded, not repaired.
+        var durable = await _signalFileStore
             .WriteAsync(outcome.ReviewedSignal, outcome.Review, ct).ConfigureAwait(false);
 
-        return outcome.ReviewedSignal.ReviewStatus switch
+        var storeOutcome = outcome.ReviewedSignal.ReviewStatus switch
         {
             SignalReviewStatus.Approved => SignalStoreOutcome.Approved,
             SignalReviewStatus.NeedsHumanReview or SignalReviewStatus.Pending => SignalStoreOutcome.NeedsReview,
             _ => SignalStoreOutcome.OtherValid,
         };
+
+        return SignalStoreResult.Of(storeOutcome, durable.Outcome == DurableWriteOutcome.Failed);
     }
 
     /// <summary>
@@ -660,6 +701,19 @@ public sealed class CollectionPass : ICollectionPass
         Approved,
         NeedsReview,
         OtherValid,
+    }
+
+    /// <summary>
+    /// What <see cref="MapResolveReviewStoreAsync"/> observed: which run-summary counter the caller should
+    /// bump, and — on its own axis (spec 193 §1) — whether the durable mirror write FAILED. The two are
+    /// independent: a signal can be Approved and not persisted, which is precisely the state that used to be
+    /// invisible. A <see cref="SignalStoreOutcome.Dropped"/> signal never reaches the store, so it can never
+    /// carry a durable-write failure.
+    /// </summary>
+    private readonly record struct SignalStoreResult(SignalStoreOutcome Outcome, bool NotPersisted)
+    {
+        public static SignalStoreResult Of(SignalStoreOutcome outcome, bool notPersisted = false) =>
+            new(outcome, notPersisted);
     }
 
     /// <summary>

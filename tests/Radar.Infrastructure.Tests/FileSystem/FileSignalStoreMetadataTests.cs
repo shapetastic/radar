@@ -69,7 +69,7 @@ public sealed class FileSignalStoreMetadataTests : IDisposable
             .Build();
 
         var store = CreateStore();
-        var path = await store.WriteAsync(signal, ReviewFor(signal), CancellationToken.None);
+        var path = (await store.WriteAsync(signal, ReviewFor(signal), CancellationToken.None)).Path;
 
         using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(path));
         Assert.Equal(Envelope, doc.RootElement.GetProperty("metadataJson").GetString());
@@ -88,7 +88,8 @@ public sealed class FileSignalStoreMetadataTests : IDisposable
             .WithObservedAtUtc(Observed)
             .Build();
 
-        var path = await CreateStore().WriteAsync(signal, ReviewFor(signal), CancellationToken.None);
+        var path = (await CreateStore()
+            .WriteAsync(signal, ReviewFor(signal), CancellationToken.None)).Path;
 
         using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(path));
         Assert.False(

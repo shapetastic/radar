@@ -1,12 +1,13 @@
 namespace Radar.Application.Signals;
 
+using Radar.Application.Storage;
 using Radar.Domain.Signals;
 
 /// <summary>
 /// On-disk mirror of a reviewed signal and its review record. Writes one JSON file per signal under
 /// the signals root, capturing provenance (evidence id, resolved company id) and the embedded review.
 /// A signal is upsert-by-Id (AD-1): an existing file for the same signal id is overwritten
-/// (last-write-wins). Returns the written path.
+/// (last-write-wins). Returns the attempted path AND whether the content actually reached it.
 /// </summary>
 /// <remarks>
 /// This store is now <b>read+write</b> (it was write-only). <see cref="ReadApprovedInWindowAsync"/> adds
@@ -22,8 +23,16 @@ public interface ISignalFileStore
     /// Mirrors the reviewed <paramref name="signal"/> and its <paramref name="review"/> to disk.
     /// The review must belong to the signal (<c>review.SignalId == signal.Id</c>), otherwise an
     /// <see cref="ArgumentException"/> is thrown to protect the review→signal provenance trace.
+    /// <para>
+    /// SPEC 193 §1: a disk failure still degrades gracefully (the run never crashes and the in-process index
+    /// entry is kept, so the current run completes on what it has) — but the failure is now RETURNED as a
+    /// <see cref="DurableWriteOutcome.Failed"/> result rather than discarded. A caller that treats the
+    /// returned path as proof of storage is wrong: the path is the ATTEMPTED path in both outcomes. A failed
+    /// write means the signal is not in the accrued store and the next run's history read will not see it,
+    /// so the pipeline counts it and says so.
+    /// </para>
     /// </summary>
-    Task<string> WriteAsync(Signal signal, SignalReview review, CancellationToken ct);
+    Task<DurableWriteResult> WriteAsync(Signal signal, SignalReview review, CancellationToken ct);
 
     /// <summary>
     /// Returns the persisted Approved signals for <paramref name="companyId"/> whose ObservedAtUtc is in

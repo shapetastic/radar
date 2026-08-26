@@ -7,6 +7,7 @@ using Radar.Application.Lifecycle;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -61,10 +62,10 @@ public sealed partial class WeeklyReportBuilderTests
     {
         public FakeScoreSnapshotFileStore() : this([]) { }
 
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             CompanyScoreSnapshot snapshot,
             IReadOnlyList<ScoreEvidenceLink> links,
-            CancellationToken ct) => Task.FromResult("unused");
+            CancellationToken ct) => Task.FromResult(DurableWriteResult.Succeeded("unused"));
 
         public Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
             Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct) =>
@@ -2120,10 +2121,10 @@ public sealed partial class WeeklyReportBuilderTests
 
         public int ReadAllForCompanyCallCount { get; private set; }
 
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             CompanyScoreSnapshot snapshot,
             IReadOnlyList<ScoreEvidenceLink> links,
-            CancellationToken ct) => Task.FromResult("unused");
+            CancellationToken ct) => Task.FromResult(DurableWriteResult.Succeeded("unused"));
 
         public Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
             Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct)

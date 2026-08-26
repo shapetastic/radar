@@ -8,6 +8,7 @@ using Radar.Application.Pipeline;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -72,9 +73,9 @@ public sealed class CollectionPassNewsObservationTests
 
     private sealed class NullSignalFileStore : ISignalFileStore
     {
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             Signal signal, Radar.Domain.Signals.SignalReview review, CancellationToken ct) =>
-            Task.FromResult("(null)");
+            Task.FromResult(DurableWriteResult.Succeeded("(null)"));
 
         public Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
             Guid companyId, DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc,

@@ -80,10 +80,10 @@ public sealed class StrategyScopedScoreSnapshotFileStoreFactoryTests : IDisposab
         var secondarySnapshot = new ScoreSnapshotBuilder()
             .WithCompanyId(companyId).WithStrategyName("low-media").Build();
 
-        var primaryPath = await factory.ForStrategy(Def("baseline", true))
-            .WriteAsync(primarySnapshot, [], CancellationToken.None);
-        var secondaryPath = await factory.ForStrategy(Def("low-media", false))
-            .WriteAsync(secondarySnapshot, [], CancellationToken.None);
+        var primaryPath = (await factory.ForStrategy(Def("baseline", true))
+            .WriteAsync(primarySnapshot, [], CancellationToken.None)).Path;
+        var secondaryPath = (await factory.ForStrategy(Def("low-media", false))
+            .WriteAsync(secondarySnapshot, [], CancellationToken.None)).Path;
 
         // The primary path is byte-identical to the pre-spec-137 layout.
         Assert.Equal(

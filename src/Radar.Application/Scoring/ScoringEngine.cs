@@ -344,7 +344,10 @@ public sealed class ScoringEngine : IScoringEngine
         // Neutral stays on disk for provenance but gets no contribution/ScoreEvidenceLink. Pure and
         // deterministic (AD-3), and deliberately NOT a fingerprint input (a correctness fix, not a
         // scoring-config change — the stamp must not move).
-        var superseded = GuidanceChangeSupersede.Apply(pairs);
+        // Spec 193 §2: the supersede now RETURNS what it removed (survivors + a per-survivor count), in the
+        // same shape the media collapse below returns. The filter itself is unchanged.
+        var supersede = GuidanceChangeSupersede.Apply(pairs);
+        var superseded = supersede.Signals;
 
         // Same-event media collapse (spec 109): many near-simultaneous outlets covering ONE event each emit a
         // MediaAttention signal, inflating the media contribution and the signal count with duplication (not
@@ -384,7 +387,8 @@ public sealed class ScoringEngine : IScoringEngine
         // on disk comes back as TWO signals — the same filing must not count twice as activity for
         // velocity. On the healthy spec-78 path only one GuidanceChange per filing ever persists, so this
         // is behaviour-identical there.
-        previousSignals = GuidanceChangeSupersede.Apply(previousSignals);
+        var previousSupersede = GuidanceChangeSupersede.Apply(previousSignals);
+        previousSignals = previousSupersede.Signals;
 
         // Spec 138, previous window too: the velocity comparison must be like-for-like. If a strategy does not
         // consume a SignalType in the CURRENT window, prior activity of that type is not this strategy's prior
@@ -472,6 +476,18 @@ public sealed class ScoringEngine : IScoringEngine
                 reason = $"{reason} (collapsed {collapsedN} same-event media items)";
             }
 
+            // Spec 193 §2: the mirror of the line above for the OTHER removal step. If this contribution's
+            // signal superseded a stale GuidanceChange over the same filing evidence, say so on its reason,
+            // so the persisted ScoreEvidenceLink records that this contribution REPLACED something rather
+            // than leaving the removal untraceable. Media collapse and supersede can never both apply to one
+            // signal (MediaAttention and GuidanceChange are different types), so the two blocks cannot
+            // interact and their order is immaterial. The formula is untouched — only the link text.
+            if (supersede.SupersededCounts.TryGetValue(contribution.SignalId, out var supersededN)
+                && supersededN > 0)
+            {
+                reason = $"{reason} (superseded {supersededN} stale GuidanceChange signal(s) for this evidence)";
+            }
+
             links.Add(new ScoreEvidenceLink(
                 Id: Guid.NewGuid(),
                 ScoreSnapshotId: snapshot.Id,
@@ -494,6 +510,22 @@ public sealed class ScoringEngine : IScoringEngine
             "Scored company {CompanyId} from {SignalCount} signal(s) using {ScoringVersion} " +
             "(strategy {StrategyName}, signal types {SignalTypes}).",
             companyId, scoredSignals.Count, scoringVersion, _strategyName ?? "(none)", _signalTypes.ToString());
+
+        // Spec 193 §2: one aggregated per-company line, at the SAME Information level as the line above, when
+        // the supersede actually removed something. Emitted separately rather than folded into that template
+        // so the healthy path's log line stays byte-identical, and aggregated per company rather than per
+        // removed signal (the spec-145 precedent). Both windows are reported: the current window's removals
+        // are the ones the contributions/evidence links reflect, while the previous window's are
+        // activity-only (velocity) and carry no provenance by design (AD-6).
+        if (supersede.TotalSuperseded > 0 || previousSupersede.TotalSuperseded > 0)
+        {
+            _logger.LogInformation(
+                "Superseded {SupersededCount} stale GuidanceChange signal(s) for company {CompanyId} in the "
+                    + "current window (and {PreviousSupersededCount} in the previous/velocity window): a "
+                    + "directional read over the same filing evidence replaced them. They stay on disk for "
+                    + "provenance and are named on the surviving signal's contribution reason.",
+                supersede.TotalSuperseded, companyId, previousSupersede.TotalSuperseded);
+        }
 
         return new CompanyScoreResult(snapshot, links);
     }

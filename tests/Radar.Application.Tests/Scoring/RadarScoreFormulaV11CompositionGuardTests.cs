@@ -4,6 +4,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
@@ -300,9 +301,9 @@ public sealed class RadarScoreFormulaV11CompositionGuardTests
     /// <summary>The previous/velocity window is deliberately empty: this fixture pins the CURRENT window.</summary>
     private sealed class NullSignalFileStore : ISignalFileStore
     {
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             Signal signal, Radar.Domain.Signals.SignalReview review, CancellationToken ct) =>
-            Task.FromResult("written/signal.json");
+            Task.FromResult(DurableWriteResult.Succeeded("written/signal.json"));
 
         public Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
             Guid companyId,
