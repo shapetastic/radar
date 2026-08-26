@@ -1575,6 +1575,68 @@ Do not hand back broken code.
     or ageing data early to improve a percentage, changing typing prompt/schema/taxonomy, fact-family identity
     or judgment prompt/result-schema/cohort, changing marker state or treating incomplete typing as a company
     challenge, parallel calls / dynamic throttling / automatic fallback, and rewriting old `Failed` judgments.
+- **The NewsSearch limit is RADAR'S OWN, and the audit measures it without admitting one extra article
+  (spec 190).** The first post-187 baseline reported `ResultLimitReached` for every judged company and every
+  NewsSearch capture row — which proved nothing, because the baseline configures
+  `Radar:News:MaxRecordsPerCompany = 25` and `HttpNewsSearchReader` simply stopped retaining there. "The
+  response held exactly 25 valid items" and "the response held more and Radar stopped reading" were
+  indistinguishable, and the durable aggregate was even named `AnyFeedHitProviderCap` while the stored fact
+  was only that Radar reached its own configured limit. **Diagnostic-only, read-side: not one additional
+  evidence item, observation candidate or scoring input is admitted**, and no score, rank, label, strategy,
+  scoring fingerprint, snapshot, marker policy or AD-15/AD-16 rule moves — the pins do not move and
+  `ScoringConfigFingerprintTests` is untouched. Rules:
+  - **The retained PREFIX is byte-identical; the tail is the SAME already-fetched body.** `Parse` no longer
+    `break`s at the requested limit: it keeps scanning the already-loaded `XDocument` under the UNCHANGED
+    absolute ceiling (100 valid items, which now bounds prefix + tail TOGETHER, deliberately not raised),
+    counting structurally valid link-bearing items under the same "no `<link>` ⇒ skip" rule and collecting
+    the beyond-prefix ones into `NewsSearchReadResult.DiagnosticTail`. Prefix and tail go through ONE
+    extracted `BuildItem` path, so a tail item is exactly what the prefix would have held — the audit
+    compares like with like. **No extra request, page, article fetch or pacing change** (asserted on a
+    counting handler: one call per feed, search endpoint only). `ObservedValidItemBeyondLocalLimit` is
+    DERIVED (`ValidItemsObserved > Items.Count`) so it cannot drift; a failure carries no diagnostics; and
+    the legacy `Success(items)` factory still works, recording "no item observed beyond the limit" — which
+    is exactly what an unscanned response can honestly claim.
+  - **The collector maps NOTHING new.** The evidence + observation loop runs over exactly the same retained
+    prefix; `MapToEvidence`/`MapToObservation` are never called for a tail item. A separate diagnostic pass
+    applies the EXISTING `IsRelevant` rule and dedupes tail URLs against **every retained-prefix URL** — all
+    of `result.Items`, **not** the evidence loop's `seenUrls`, which is incomplete because that loop breaks
+    once the per-feed cap is met — and against earlier tail items, in its own set. The output is one count:
+    additional unique company-relevant items observed and deliberately not admitted.
+  - **Three honest states, none of them a provider fact**: *possible truncation* (`HitEffectiveResultLimit`
+    — the prefix filled Radar's own limit), *confirmed local truncation* (a valid item really was observed
+    beyond it) and *below limit*. **`HitEffectiveResultLimit` and the closed `ResultLimitReached` token keep
+    their EXACT fail-closed semantics** — nothing upgrades or gates on the new confirmed fact, because
+    observing no tail still cannot prove the provider had no further results, so AD-16 / news-risk coverage
+    cannot silently upgrade.
+  - **Provenance, correctly named, trailing and nullable.** `CollectorCompanyCoverage` gains
+    `EffectiveResultLimit` / `MaxValidItemsObserved` / `ConfirmedLocalTruncation` /
+    `UnadmittedRelevantTailItemCount`; on an accrued row **`null` means NOT RECORDED, never `false`/`0`**
+    (pinned by a legacy-JSON hydration test through `FilePipelineRunStore`). `NewsObservationCollectorCapture`
+    gains `AnyFeedHitEffectiveResultLimit` + `AnyFeedConfirmedLocalTruncation` (both nullable, `null` when no
+    row recorded the diagnostic), while **`AnyFeedHitProviderCap` stays a readable non-nullable HISTORICAL
+    MISNOMER** that new captures keep MIRRORING for old readers — **the mirror is not evidence about provider
+    behaviour**, and new code reads the new fields and treats the old member only as a legacy fallback. The
+    `c with { Issues = ... }` health amend preserves the new fields (asserted, not assumed). No historical
+    batch, artifact, observation, evidence, signal, score, typing or judgment is rewritten.
+  - **One aggregated first-run audit line** (Information, deterministic, advice-free): companies at the
+    effective LOCAL limit, companies with a confirmed tail beyond it, additional unique company-relevant tail
+    items not admitted, max + median observed valid response size, and the UNCHANGED admitted evidence /
+    observation-candidate totals. The median is a small documented private helper (mean of the two central
+    values on an even count) and it is NOT reused from `AttentionArrivalScreenEvaluator.Median` — that one is
+    `internal` to `Radar.Application`, which Infrastructure cannot reach, and is defined over the efficacy
+    screen's doubles; the two agree on the even-count convention on purpose. A pass with no successful feed
+    renders `max n/a, median n/a` rather than printing an unmeasured zero as a measured one.
+  - **The two similarly named keys stay separate, and both stay 25.** Only `Radar:News:MaxRecordsPerCompany`
+    governs this path; `Radar:Gdelt:MaxRecordsPerCompany` belongs to the GDELT collector and is out of scope
+    *by configuration path and reader type*, not by current enablement. Pinned by binding the two to
+    DELIBERATELY DIFFERENT values and asserting the newssearch collector reads the `Radar:News` one, plus a
+    test holding both shipped values at 25 (code defaults and `appsettings.json`).
+  - **Out of scope, recorded not built**: raising either limit, admitting a tail item as evidence / an
+    observation candidate / a scoring input, changing request count, query construction, pagination, pacing,
+    article fetching or provider choice, upgrading `ResultLimitReached` to complete enumeration, and any
+    sidecar-only expansion. **Any later proposal to raise `Radar:News:MaxRecordsPerCompany` is its own spec**
+    and must state how the extra `NewsArticle` evidence affects scoring/fingerprints and how the extra
+    observation inflow will be typed against spec 189's budget.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

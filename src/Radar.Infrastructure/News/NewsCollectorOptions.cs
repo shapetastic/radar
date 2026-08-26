@@ -16,7 +16,11 @@ namespace Radar.Infrastructure.News;
 /// </summary>
 public sealed class NewsCollectorOptions
 {
-    /// <summary>Maximum parsed articles to collect per company per run (default 25). The reader clamps to a sane range.</summary>
+    /// <summary>
+    /// Maximum parsed articles to collect per company per run (default 25). The reader clamps to a sane
+    /// range. This is Radar's OWN effective/local retention limit — reaching it means Radar stopped
+    /// retaining, never that the provider had no more to give (spec 190).
+    /// </summary>
     public int MaxRecordsPerCompany { get; init; } = 25;
 
     /// <summary>Whether to restrict coverage to English/US (default true); the reader appends the en-US locale params to the request when set.</summary>

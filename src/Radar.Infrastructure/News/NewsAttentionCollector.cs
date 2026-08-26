@@ -110,11 +110,17 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         // configured newssearch feed is recorded as MissingFeed rather than silently absent — an absent row
         // and a clean row must never be the same thing.
         var coverage = context.Companies.ToDictionary(
-            c => c.Id, c => new CompanyCoverageAccumulator());
+            c => c.Id, c => new CompanyCoverageAccumulator(EffectiveMaxRecords));
 
-        // The EFFECTIVE clamped request limit — the same value BuildQuery sends, not the unclamped config
-        // value. A raw result count that REACHES it means the source may have had more to give.
+        // The EFFECTIVE clamped LOCAL retention limit — the same value BuildQuery sends, not the unclamped
+        // config value. A raw result count that REACHES it means Radar stopped retaining there, so more may
+        // have been available; it is never a measured provider ceiling.
         var effectiveLimit = EffectiveMaxRecords;
+
+        // SPEC 190 audit input: one entry per SUCCESSFUL feed, holding the number of structurally valid items
+        // that feed's response held (bounded by the reader's absolute parse ceiling). Feed order is
+        // deterministic, and the summary below only takes a max/median, so the audit line is run-stable (AD-3).
+        var successfulFeedObservedSizes = new List<int>();
 
         // Strictly sequential (never Task.WhenAll) + paced: a small polite pace between reads.
         var isFirstRequest = true;
@@ -171,12 +177,6 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
                 continue;
             }
 
-            // Read succeeded — and the CENSORING test uses result.Items.Count, the RAW reader count, BEFORE
-            // the relevance filter and before the per-feed dedupe/cap loop below. Equality with the effective
-            // limit means potentially truncated: the source stopped at the ceiling Radar asked for, so
-            // articles beyond it are unobserved even if relevance filtering later keeps far fewer items.
-            companyCoverage?.RecordFeedSuccess(result.Items.Count >= effectiveLimit);
-
             var hints = CollectorCompanyHints.For(feed.CompanyId, companiesById);
 
             // Dedupe within this feed by url so an article appears at most once.
@@ -210,6 +210,50 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
                 collectedForFeed++;
             }
 
+            // SPEC 190 DIAGNOSTIC-ONLY PASS over the already-fetched response tail. It maps nothing: the
+            // evidence/observation loop above ran over exactly the retained prefix, as it always has. This
+            // only counts how many ADDITIONAL unique company-relevant items the same response held beyond
+            // Radar's own local retention limit, so "the response contained exactly N valid items" can be
+            // told apart from "the response contained more and Radar stopped reading". Tail URLs are deduped
+            // against EVERY retained-prefix URL (result.Items, not the loop's `seenUrls` — that set is
+            // incomplete because the loop breaks once the per-feed cap is met) and against earlier tail
+            // items, in a SEPARATE set so the evidence path's dedupe state is untouched.
+            var unadmittedRelevantTail = 0;
+            if (result.DiagnosticTail.Count > 0)
+            {
+                var tailSeenUrls = new HashSet<string>(
+                    result.Items.Select(a => a.Url), StringComparer.OrdinalIgnoreCase);
+
+                foreach (var article in result.DiagnosticTail)
+                {
+                    if (!IsRelevant(article.Title, target))
+                    {
+                        continue;
+                    }
+
+                    if (!tailSeenUrls.Add(article.Url))
+                    {
+                        continue;
+                    }
+
+                    unadmittedRelevantTail++;
+                }
+            }
+
+            // Coverage is recorded from the RAW reader counts, BEFORE the relevance filter and the per-feed
+            // dedupe/cap loop. Reaching the effective limit means POSSIBLY truncated — Radar stopped
+            // retaining at the limit IT asked for, so articles beyond it are unadmitted even when relevance
+            // filtering later keeps far fewer items. `ObservedValidItemBeyondLocalLimit` upgrades that to
+            // CONFIRMED local truncation; it never downgrades the fail-closed possible-truncation token, and
+            // it is never a statement about the provider's own result set.
+            companyCoverage?.RecordFeedSuccess(
+                hitEffectiveResultLimit: result.Items.Count >= effectiveLimit,
+                validItemsObserved: result.ValidItemsObserved,
+                confirmedLocalTruncation: result.ObservedValidItemBeyondLocalLimit,
+                unadmittedRelevantTailItemCount: unadmittedRelevantTail);
+
+            successfulFeedObservedSizes.Add(result.ValidItemsObserved);
+
             _logger.LogInformation(
                 "News search feed '{FeedName}' (phrase '{QueryPhrase}'): kept {Kept} of {Returned} article(s).",
                 feed.Name,
@@ -224,6 +268,31 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
             feedsChecked,
             feedsFailed,
             results.Count);
+
+        // SPEC 190 §4 — ONE aggregated, deterministic, advice-free audit line. Everything in it is read off
+        // the SAME already-fetched responses: no extra request, page or article fetch produced any of it,
+        // and not one tail item became evidence or an observation candidate. "At the effective local limit"
+        // is Radar's own retention limit being reached (possible truncation), NOT a measured provider
+        // ceiling; "confirmed a response tail" is the stronger, observed fact.
+        _logger.LogInformation(
+            "News search local-limit audit (diagnostic only; no response-tail item was admitted): "
+                + "{AtLimitCompanies} company/companies reached the effective LOCAL retention limit of "
+                + "{EffectiveLimit}; {ConfirmedTailCompanies} confirmed a response tail beyond it; "
+                + "{UnadmittedRelevantTailItems} additional unique company-relevant tail item(s) observed but "
+                + "not admitted; observed valid response size across {SuccessfulFeeds} successful feed(s): "
+                + "max {MaxObservedResponseSize}, median {MedianObservedResponseSize}; admitted under the "
+                + "retained prefix (unchanged): {EvidenceItems} evidence item(s), "
+                + "{ObservationCandidates} observation candidate(s).",
+            coverage.Values.Count(a => a.HitEffectiveResultLimit),
+            effectiveLimit,
+            coverage.Values.Count(a => a.ConfirmedLocalTruncation),
+            coverage.Values.Sum(a => a.UnadmittedRelevantTailItemCount),
+            successfulFeedObservedSizes.Count,
+            FormatStat(
+                successfulFeedObservedSizes.Count == 0 ? null : (double)successfulFeedObservedSizes.Max()),
+            FormatStat(Median(successfulFeedObservedSizes)),
+            results.Count,
+            observations.Count);
 
         var summary = new CollectionSummary(
             feedsChecked, feedsChecked - feedsFailed, feedsFailed, results.Count, failures.ToArray());
@@ -295,22 +364,48 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
     /// durable <see cref="CollectorCompanyCoverage"/> row. Kept as a tiny mutable accumulator (rather than
     /// rebuilding an immutable record per feed) so the loop reads as what it is: three counters plus a flag.
     /// </summary>
-    private sealed class CompanyCoverageAccumulator
+    private sealed class CompanyCoverageAccumulator(int effectiveResultLimit)
     {
         private int _expected;
         private int _succeeded;
         private bool _failed;
         private bool _hitLimit;
+        private int _maxValidItemsObserved;
+        private bool _confirmedLocalTruncation;
+        private int _unadmittedRelevantTailItems;
 
         public void RecordExpectedFeed() => _expected++;
 
         public void RecordFeedFailure() => _failed = true;
 
-        public void RecordFeedSuccess(bool hitEffectiveResultLimit)
+        /// <summary>
+        /// Records one SUCCESSFUL feed. <paramref name="hitEffectiveResultLimit"/> keeps its exact pre-190
+        /// fail-closed meaning (possible truncation); the three spec-190 diagnostics are additive and
+        /// observational — the MAX observed valid response size across the company's feeds, whether any feed
+        /// CONFIRMED local truncation, and the SUM of unique company-relevant tail items observed but
+        /// deliberately not admitted.
+        /// </summary>
+        public void RecordFeedSuccess(
+            bool hitEffectiveResultLimit,
+            int validItemsObserved,
+            bool confirmedLocalTruncation,
+            int unadmittedRelevantTailItemCount)
         {
             _succeeded++;
             _hitLimit |= hitEffectiveResultLimit;
+            _maxValidItemsObserved = Math.Max(_maxValidItemsObserved, validItemsObserved);
+            _confirmedLocalTruncation |= confirmedLocalTruncation;
+            _unadmittedRelevantTailItems += unadmittedRelevantTailItemCount;
         }
+
+        /// <summary>True when at least one of this company's feeds reached the effective LOCAL retention limit.</summary>
+        public bool HitEffectiveResultLimit => _hitLimit;
+
+        /// <summary>True when at least one feed's response held a valid item BEYOND that local limit.</summary>
+        public bool ConfirmedLocalTruncation => _confirmedLocalTruncation;
+
+        /// <summary>Unique company-relevant tail items observed for this company but deliberately not admitted.</summary>
+        public int UnadmittedRelevantTailItemCount => _unadmittedRelevantTailItems;
 
         public CollectorCompanyCoverage ToCoverage(Guid companyId)
         {
@@ -340,9 +435,48 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
                 ExpectedFeedCount: _expected,
                 SuccessfulFeedCount: _succeeded,
                 HitEffectiveResultLimit: _hitLimit,
-                Issues: CollectionCoverageIssues.Canonicalize(issues));
+                Issues: CollectionCoverageIssues.Canonicalize(issues),
+                // Spec 190 diagnostics. Recorded on EVERY row this collector writes (including a
+                // MissingFeed/failed row, where the observed counts are honestly zero) — this collector does
+                // record them, so `null` stays reserved for rows written by something that does not.
+                EffectiveResultLimit: effectiveResultLimit,
+                MaxValidItemsObserved: _maxValidItemsObserved,
+                ConfirmedLocalTruncation: _confirmedLocalTruncation,
+                UnadmittedRelevantTailItemCount: _unadmittedRelevantTailItems);
         }
     }
+
+    /// <summary>
+    /// The median observed response size, deterministic by construction: the input is sorted and, on an EVEN
+    /// count, the answer is the MEAN of the two central values (stated because the convention is otherwise
+    /// ambiguous). An empty input has no median.
+    /// <para>
+    /// It deliberately does NOT reuse <c>AttentionArrivalScreenEvaluator.Median</c>: that helper is
+    /// <c>internal</c> to <c>Radar.Application</c> — Infrastructure cannot reach it — and it is defined over
+    /// the efficacy screen's <c>double</c> δ values, a different quantity from a count of response items.
+    /// Sharing it would mean either widening an Application internal for a log line or moving an efficacy
+    /// primitive into Infrastructure; both are worse than eight documented lines. The two definitions agree
+    /// on the even-count convention on purpose.
+    /// </para>
+    /// </summary>
+    private static double? Median(IReadOnlyList<int> values)
+    {
+        if (values.Count == 0)
+        {
+            return null;
+        }
+
+        var sorted = values.Order().ToArray();
+        var mid = sorted.Length / 2;
+        return sorted.Length % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
+    }
+
+    /// <summary>
+    /// Renders an audit statistic invariantly, or <c>n/a</c> when there was nothing to measure — a measured
+    /// zero and an unmeasured one are different facts, so the line never prints one as the other.
+    /// </summary>
+    private static string FormatStat(double? value) =>
+        value is { } v ? v.ToString("0.##", CultureInfo.InvariantCulture) : "n/a";
 
     /// <summary>
     /// True when the whitespace-normalised, case-insensitive article title contains the company query phrase

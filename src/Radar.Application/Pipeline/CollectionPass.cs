@@ -448,8 +448,15 @@ public sealed class CollectionPass : ICollectionPass
                     CollectorName: c.CollectorName,
                     CompanyCoverage: c.Result.CompanyCoverage,
                     ProviderFailures: c.Result.Summary.Failures,
+                    // LEGACY COMPATIBILITY MIRROR (spec 190): the member is historically misnamed and
+                    // non-nullable, so it keeps carrying the EFFECTIVE/LOCAL-limit fact verbatim for readers
+                    // written before the rename. It is NOT evidence about provider behaviour.
                     AnyFeedHitProviderCap:
-                        c.Result.CompanyCoverage?.Any(cov => cov.HitEffectiveResultLimit) ?? false)),
+                        c.Result.CompanyCoverage?.Any(cov => cov.HitEffectiveResultLimit) ?? false,
+                    AnyFeedHitEffectiveResultLimit:
+                        c.Result.CompanyCoverage?.Any(cov => cov.HitEffectiveResultLimit),
+                    AnyFeedConfirmedLocalTruncation:
+                        AnyConfirmedLocalTruncation(c.Result.CompanyCoverage))),
             ]);
 
         if (failed > 0)
@@ -483,6 +490,17 @@ public sealed class CollectionPass : ICollectionPass
 
         return batch.BatchId;
     }
+
+    /// <summary>
+    /// The spec-190 confirmed-local-truncation aggregate over one collector's coverage rows: <c>true</c> when
+    /// any row confirms it, <c>false</c> when at least one row RECORDED the diagnostic and none confirmed it,
+    /// and <c>null</c> when no row recorded it at all. The <c>null</c> branch is the point — "not recorded"
+    /// must never be rendered as "no truncation".
+    /// </summary>
+    private static bool? AnyConfirmedLocalTruncation(IReadOnlyList<CollectorCompanyCoverage>? coverage) =>
+        coverage is { Count: > 0 } rows && rows.Any(r => r.ConfirmedLocalTruncation.HasValue)
+            ? rows.Any(r => r.ConfirmedLocalTruncation == true)
+            : null;
 
     /// <summary>
     /// Projects one collector's UNMERGED <see cref="CollectionResult"/> into the durable
