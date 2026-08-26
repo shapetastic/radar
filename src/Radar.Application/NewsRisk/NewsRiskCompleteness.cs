@@ -37,10 +37,14 @@ public enum NewsRiskSearchEnumeration
     /// <summary>A KNOWN failure: no declared feed, feed failures, or recorded coverage issues.</summary>
     Failed,
 
-    /// <summary>The provider result list was capped — enumeration ran but is known possibly truncated.</summary>
+    /// <summary>
+    /// The result list reached Radar's own EFFECTIVE/LOCAL retention limit (spec 190) — enumeration ran but
+    /// is known POSSIBLY truncated. It is not a measured provider ceiling, and the converse is equally weak:
+    /// observing no item beyond the limit still cannot prove the provider had no further results.
+    /// </summary>
     Truncated,
 
-    /// <summary>Every declared feed succeeded with no cap contact and no recorded issue.</summary>
+    /// <summary>Every declared feed succeeded without reaching the local retention limit and with no recorded issue.</summary>
     Complete,
 }
 
@@ -172,7 +176,9 @@ public static class NewsRiskCoverageEvaluator
 
         if (row.HitEffectiveResultLimit)
         {
-            issues.Add("result-limit-reached: the newssearch result list was capped (possible truncation)");
+            issues.Add(
+                "result-limit-reached: the newssearch result list reached Radar's effective local retention "
+                    + "limit (possible truncation; not a proven provider ceiling)");
             enumeration = Worse(enumeration, NewsRiskSearchEnumeration.Truncated);
         }
 

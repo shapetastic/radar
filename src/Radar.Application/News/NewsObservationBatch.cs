@@ -44,16 +44,38 @@ public sealed record NewsObservationBatch(
 /// <summary>
 /// One observation-emitting collector's capture provenance inside a batch: its spec-169 per-company/query
 /// coverage rows (which carry the <c>MissingFeed</c> / <c>SourceFailure</c> / <c>ResultLimitReached</c>
-/// vocabulary) and its per-source provider failures — whose typed detail strings are where the provider
-/// cap / malformed / unreachable / rate-limit outcomes live. Captured from the UNMERGED per-collector
-/// result, for the same structural reason spec 169 captures coverage there: the merge discards attribution.
+/// vocabulary) and its per-source provider failures — whose typed detail strings are where the malformed /
+/// unreachable / rate-limit outcomes live. Captured from the UNMERGED per-collector result, for the same
+/// structural reason spec 169 captures coverage there: the merge discards attribution.
+/// <para>
+/// <b>Spec 190 naming note:</b> a "result limit reached" here is Radar's own EFFECTIVE/LOCAL retention
+/// limit, not a proven provider ceiling — see <see cref="AnyFeedHitProviderCap"/>.
+/// </para>
 /// </summary>
 /// <param name="CollectorName">The collector's stable provenance name.</param>
 /// <param name="CompanyCoverage">The collector's spec-169 per-company coverage rows; <c>null</c> = not recorded ⇒ unproven.</param>
 /// <param name="ProviderFailures">Per-source failures (feed name, token, typed reason — e.g. "HTTP 429 (rate limited)", "malformed XML").</param>
-/// <param name="AnyFeedHitProviderCap">True when any feed's raw result count reached the effective provider cap (potential truncation).</param>
+/// <param name="AnyFeedHitProviderCap">
+/// <b>HISTORICAL MISNAMER, retained only so existing artifacts stay readable.</b> The fact it has always
+/// carried is that some feed's raw result count reached Radar's own EFFECTIVE/LOCAL retention limit — never
+/// a measured provider ceiling. It is non-nullable, so new captures keep MIRRORING the effective-limit fact
+/// into it for old readers; <b>that mirror is not evidence about provider behaviour</b>. New code reads
+/// <see cref="AnyFeedHitEffectiveResultLimit"/> and treats this member only as a legacy fallback.
+/// </param>
+/// <param name="AnyFeedHitEffectiveResultLimit">
+/// Spec 190, correctly named: true when any of this collector's feeds reached the effective clamped LOCAL
+/// retention limit (POSSIBLE truncation). <c>null</c> = not recorded (a pre-190 artifact or a collector that
+/// records no per-company coverage) — never <c>false</c>.
+/// </param>
+/// <param name="AnyFeedConfirmedLocalTruncation">
+/// Spec 190: true when at least one feed's already-fetched response held a structurally valid item BEYOND
+/// that local limit, so Radar's own discard is CONFIRMED rather than suspected. <c>false</c> means no such
+/// item was observed — it does NOT prove the provider had no further results. <c>null</c> = not recorded.
+/// </param>
 public sealed record NewsObservationCollectorCapture(
     string CollectorName,
     IReadOnlyList<CollectorCompanyCoverage>? CompanyCoverage,
     IReadOnlyList<SourceFailure> ProviderFailures,
-    bool AnyFeedHitProviderCap);
+    bool AnyFeedHitProviderCap,
+    bool? AnyFeedHitEffectiveResultLimit = null,
+    bool? AnyFeedConfirmedLocalTruncation = null);

@@ -439,4 +439,113 @@ public sealed class FilePipelineRunStoreTests : IDisposable
         Assert.Null(read.CompanyFilter);
         Assert.Equal(["newssearch"], read.Collectors);
     }
+    /// <summary>
+    /// Spec 190: the trailing nullable local-limit diagnostics survive the durable round-trip, so the audit
+    /// is readable from the run log rather than only from a log line.
+    /// </summary>
+    [Fact]
+    public async Task CollectorRuns_RoundTripTheSpec190LocalLimitDiagnostics()
+    {
+        var store = CreateStore();
+        var companyId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+
+        var record = RecordAt(BaseInstant) with
+        {
+            CollectorRuns =
+            [
+                new CollectorRunRecord(
+                    CollectorName: "newssearch",
+                    SourcesChecked: 1,
+                    SourcesSucceeded: 1,
+                    SourcesFailed: 0,
+                    ItemsCollected: 25,
+                    Failures: [],
+                    CompanyCoverage:
+                    [
+                        new CollectorCompanyCoverage(
+                            companyId, 1, 1, HitEffectiveResultLimit: true,
+                            Issues: [CollectionCoverageIssues.ResultLimitReached],
+                            EffectiveResultLimit: 25,
+                            MaxValidItemsObserved: 31,
+                            ConfirmedLocalTruncation: true,
+                            UnadmittedRelevantTailItemCount: 4),
+                    ]),
+            ],
+        };
+
+        await store.WriteAsync(record, CancellationToken.None);
+
+        var read = Assert.Single(await store.ReadRecentAsync(10, CancellationToken.None));
+        var coverage = Assert.Single(Assert.Single(read.CollectorRuns!).CompanyCoverage!);
+
+        Assert.Equal(25, coverage.EffectiveResultLimit);
+        Assert.Equal(31, coverage.MaxValidItemsObserved);
+        Assert.True(coverage.ConfirmedLocalTruncation);
+        Assert.Equal(4, coverage.UnadmittedRelevantTailItemCount);
+        // The fail-closed possible-truncation facts are untouched by the new diagnostics.
+        Assert.True(coverage.HitEffectiveResultLimit);
+        Assert.Equal([CollectionCoverageIssues.ResultLimitReached], coverage.Issues);
+    }
+
+    /// <summary>
+    /// Spec 190: an ACCRUED pre-190 coverage row carries none of the diagnostic properties. It must hydrate
+    /// with all four as <c>null</c> — "not recorded" — and never as <c>false</c>/<c>0</c>, which would be a
+    /// fabricated claim that Radar observed no response tail.
+    /// </summary>
+    [Fact]
+    public async Task LegacyCoverageRowWithoutSpec190Diagnostics_HydratesAsNotRecorded_NeverFalse()
+    {
+        var directory = Path.Combine(_tempDir, "2026", "02");
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "run-legacy-coverage.json"),
+            """
+            {
+              "id": "66666666-6666-6666-6666-666666666666",
+              "createdAtUtc": "2026-02-08T12:00:00+00:00",
+              "collectors": [ "newssearch" ],
+              "evidenceCollected": 1,
+              "evidenceNew": 1,
+              "signalsExtracted": 1,
+              "signalsValid": 1,
+              "signalsApproved": 1,
+              "signalsNeedingReview": 0,
+              "companiesScored": 1,
+              "sourcesChecked": 1,
+              "sourcesFailed": 0,
+              "reportId": null,
+              "collectorRuns": [
+                {
+                  "collectorName": "newssearch",
+                  "sourcesChecked": 1,
+                  "sourcesSucceeded": 1,
+                  "sourcesFailed": 0,
+                  "itemsCollected": 25,
+                  "failures": [],
+                  "companyCoverage": [
+                    {
+                      "companyId": "77777777-7777-7777-7777-777777777777",
+                      "expectedFeedCount": 1,
+                      "successfulFeedCount": 1,
+                      "hitEffectiveResultLimit": true,
+                      "issues": [ "ResultLimitReached" ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        var read = Assert.Single(await CreateStore().ReadRecentAsync(10, CancellationToken.None));
+        var coverage = Assert.Single(Assert.Single(read.CollectorRuns!).CompanyCoverage!);
+
+        Assert.Null(coverage.EffectiveResultLimit);
+        Assert.Null(coverage.MaxValidItemsObserved);
+        Assert.Null(coverage.ConfirmedLocalTruncation);
+        Assert.Null(coverage.UnadmittedRelevantTailItemCount);
+        // Everything the legacy row DID record still reads exactly as it did.
+        Assert.True(coverage.HitEffectiveResultLimit);
+        Assert.Equal([CollectionCoverageIssues.ResultLimitReached], coverage.Issues);
+    }
+
 }

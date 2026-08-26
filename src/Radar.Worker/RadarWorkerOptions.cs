@@ -435,7 +435,12 @@ public sealed class GdeltWorkerOptions
 /// </summary>
 public sealed class NewsWorkerOptions
 {
-    /// <summary>Maximum surviving (relevance-filtered, deduped) articles to collect per company per run. Defaults to 25.</summary>
+    /// <summary>
+    /// Maximum surviving (relevance-filtered, deduped) articles to collect per company per run. Defaults to
+    /// 25. It is Radar's OWN effective/local retention limit, not a provider ceiling (spec 190), and it is
+    /// bound from <c>Radar:News</c> — the similarly named <c>Radar:Gdelt:MaxRecordsPerCompany</c> is a
+    /// different collector's knob.
+    /// </summary>
     public int MaxRecordsPerCompany { get; init; } = 25;
 
     /// <summary>Whether to restrict coverage to English/US. Defaults to true.</summary>

@@ -30,6 +30,13 @@ namespace Radar.Infrastructure.News;
 /// <see cref="NewsSearchReadOutcome.Malformed"/>.
 /// </para>
 /// <para>
+/// <b>Spec 190 (diagnostic only):</b> the parse keeps returning the same retained <c>Items</c> prefix, and
+/// additionally scans the REST of the same already-loaded document — under the unchanged absolute ceiling —
+/// to report how many structurally valid items the response held and which of them Radar's own local
+/// retention limit discarded (<see cref="NewsSearchReadResult.DiagnosticTail"/>). No extra request, page,
+/// article fetch or pacing change is involved, and a tail item is never evidence.
+/// </para>
+/// <para>
 /// <b>Rate-limit posture (verified from this environment):</b> unlike GDELT's per-IP DOC-API quota, Google
 /// News RSS is NOT per-IP throttled — back-to-back keyless requests succeed with no key/User-Agent. A 429 is
 /// therefore not expected, but it remains a distinct <see cref="NewsSearchReadOutcome.RateLimited"/> outcome
@@ -48,6 +55,12 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
     // the token so the two rules cannot drift).
     private const string TitleSuffixSeparator = GoogleNewsHeadline.PublisherSuffixSeparator;
     private const int MinRecords = 1;
+
+    /// <summary>
+    /// The ABSOLUTE safety ceiling on valid items read out of ONE response — the requested
+    /// <see cref="NewsSearchQuery.MaxRecords"/> is clamped to it, and since spec 190 it also bounds the
+    /// retained prefix plus the diagnostic tail TOGETHER. It is a parsing bound, not a provider fact.
+    /// </summary>
     private const int MaxRecords = 100;
 
     /// <summary>
@@ -205,6 +218,14 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
         var maxRecords = Math.Clamp(query.MaxRecords, MinRecords, MaxRecords);
         var items = new List<NewsArticleItem>();
 
+        // SPEC 190 — the bounded DIAGNOSTIC tail over the SAME already-parsed document. Scanning past the
+        // retained prefix issues no request, fetches no page and follows no article URL; it only answers a
+        // question the old early `break` made unanswerable: "did the response contain exactly maxRecords
+        // valid items, or more that Radar itself discarded?". The retained prefix below is byte-identical to
+        // the pre-190 behaviour — same items, same order, same cap, same per-item construction path.
+        var diagnosticTail = new List<NewsArticleItem>();
+        var validItemsObserved = 0;
+
         // One retrieval instant per response (all items of one read were observed together), from the
         // injected TimeProvider — never an inline clock (AD-3).
         var retrievedAt = _timeProvider.GetUtcNow();
@@ -222,31 +243,58 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
             if (string.IsNullOrWhiteSpace(url))
             {
                 // No landing page → unattributable/undedupable; skip rather than fabricate provenance.
+                // A skipped item is not a structurally valid observation, so it counts towards neither the
+                // observed count nor the diagnostic tail.
                 continue;
             }
 
-            var title = GetChildValue(element, "title");
-            var (descriptionRaw, descriptionText, descriptionTruncated) =
-                ParseDescription(element);
+            validItemsObserved++;
 
-            items.Add(new NewsArticleItem(
-                Url: url.Trim(),
-                Title: title,
-                SourceName: ResolveSourceName(element, title),
-                PublishedAt: ParsePubDate(GetChildValue(element, "pubDate")),
-                DescriptionRaw: descriptionRaw,
-                DescriptionText: descriptionText,
-                DescriptionTruncated: descriptionTruncated,
-                PublisherSiteUrl: ResolvePublisherSiteUrl(element),
-                RetrievedAt: retrievedAt));
+            // ONE per-item construction path for the prefix and the tail, so the diagnostic can never drift
+            // from what a retained item would have been.
+            var item = BuildItem(element, url, retrievedAt);
 
-            if (items.Count >= maxRecords)
+            if (items.Count < maxRecords)
             {
+                items.Add(item);
+            }
+            else
+            {
+                diagnosticTail.Add(item);
+            }
+
+            if (validItemsObserved >= MaxRecords)
+            {
+                // The pre-existing ABSOLUTE safety ceiling (100 valid items), unchanged and NOT raised: it
+                // previously bounded the retained prefix (via the clamp) and now bounds prefix + tail
+                // together, so the diagnostic scan can never walk an unbounded document.
                 break;
             }
         }
 
-        return NewsSearchReadResult.Success(items);
+        return NewsSearchReadResult.Success(items, validItemsObserved, diagnosticTail);
+    }
+
+    /// <summary>
+    /// Builds ONE <see cref="NewsArticleItem"/> from a validated (link-bearing) RSS <c>&lt;item&gt;</c>. The
+    /// retained prefix and the spec-190 diagnostic tail both go through here, so a tail item is exactly the
+    /// item the prefix would have held had the limit been higher — the audit compares like with like.
+    /// </summary>
+    private static NewsArticleItem BuildItem(XElement element, string url, DateTimeOffset retrievedAt)
+    {
+        var title = GetChildValue(element, "title");
+        var (descriptionRaw, descriptionText, descriptionTruncated) = ParseDescription(element);
+
+        return new NewsArticleItem(
+            Url: url.Trim(),
+            Title: title,
+            SourceName: ResolveSourceName(element, title),
+            PublishedAt: ParsePubDate(GetChildValue(element, "pubDate")),
+            DescriptionRaw: descriptionRaw,
+            DescriptionText: descriptionText,
+            DescriptionTruncated: descriptionTruncated,
+            PublisherSiteUrl: ResolvePublisherSiteUrl(element),
+            RetrievedAt: retrievedAt);
     }
 
     /// <summary>

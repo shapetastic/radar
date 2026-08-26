@@ -25,9 +25,13 @@ public static class CollectionCoverageIssues
     public const string MissingFeed = "MissingFeed";
 
     /// <summary>
-    /// At least one of the company's feeds returned a raw result count that REACHED the effective clamped
-    /// request limit. Equality means potentially truncated — the source may have had more to give — so the
-    /// window is not provably complete even when a later client-side relevance filter kept fewer items.
+    /// At least one of the company's feeds returned a raw result count that REACHED the EFFECTIVE LOCAL
+    /// retention limit Radar itself requested (never a proven provider-side ceiling). Equality means
+    /// POSSIBLY truncated — Radar stopped retaining there, so the window is not provably complete even when
+    /// a later client-side relevance filter kept fewer items. Deliberately unchanged and fail-closed by
+    /// spec 190: the diagnostic fields on <see cref="CollectorCompanyCoverage"/> may CONFIRM truncation, but
+    /// nothing may downgrade this token, because the absence of an observed tail still cannot prove the
+    /// provider had no further results.
     /// </summary>
     public const string ResultLimitReached = "ResultLimitReached";
 
@@ -69,15 +73,34 @@ public static class CollectionCoverageIssues
 /// Purely observational (AD-14 discipline): it references no evidence, carries no label or score, and is not
 /// an evidence/signal/score/fingerprint input.
 /// </para>
+/// <para>
+/// <b>Spec 190 — three honest states, and none of them is a provider fact.</b> The trailing nullable
+/// diagnostic fields distinguish <i>possible truncation</i> (<see cref="HitEffectiveResultLimit"/>: the
+/// retained prefix filled Radar's own EFFECTIVE/LOCAL retention limit), <i>confirmed local truncation</i>
+/// (<see cref="ConfirmedLocalTruncation"/>: a structurally valid item really was observed beyond that limit
+/// and discarded by Radar) and <i>below limit</i>. Even a full scan that observes no item beyond the limit
+/// cannot prove the provider had no further results, so the fail-closed
+/// <see cref="CollectionCoverageIssues.ResultLimitReached"/> semantics are unchanged and AD-16 / news-risk
+/// coverage never silently upgrade. Every diagnostic field is <c>null</c> on a row written before spec 190
+/// (or by a collector that records none) — <b><c>null</c> means NOT RECORDED, never <c>false</c></b>.
+/// </para>
 /// </summary>
 /// <param name="CompanyId">The company this row describes. One row per company in the collection context.</param>
 /// <param name="ExpectedFeedCount">How many of this collector's feeds are configured for the company. Zero is a legitimate, recorded state (<see cref="CollectionCoverageIssues.MissingFeed"/>), not an omission.</param>
 /// <param name="SuccessfulFeedCount">How many of those feeds parsed AND read successfully.</param>
-/// <param name="HitEffectiveResultLimit">True when any successful feed's RAW reader result count reached the effective clamped request limit — i.e. the result set may have been truncated.</param>
+/// <param name="HitEffectiveResultLimit">True when any successful feed's RAW reader result count reached the effective clamped LOCAL request limit — i.e. the result set may have been truncated. Not a claim about the provider.</param>
 /// <param name="Issues">The ordinally sorted issue set; EMPTY means complete at this checkpoint.</param>
+/// <param name="EffectiveResultLimit">The effective clamped LOCAL retention limit this collector requested per feed; <c>null</c> = not recorded.</param>
+/// <param name="MaxValidItemsObserved">The MAXIMUM number of structurally valid response items observed across the company's successful feeds (bounded by the reader's absolute parse ceiling); <c>null</c> = not recorded.</param>
+/// <param name="ConfirmedLocalTruncation">True when at least one successful feed's response held a valid item BEYOND <paramref name="EffectiveResultLimit"/>, so the discard is confirmed rather than suspected; <c>false</c> means no such item was observed (NOT that the provider had none); <c>null</c> = not recorded.</param>
+/// <param name="UnadmittedRelevantTailItemCount">How many additional UNIQUE company-relevant items were observed in the diagnostic tail and deliberately NOT admitted by the current collection contract; <c>null</c> = not recorded. Purely observational — no such item became evidence, an observation candidate or a scoring input.</param>
 public sealed record CollectorCompanyCoverage(
     Guid CompanyId,
     int ExpectedFeedCount,
     int SuccessfulFeedCount,
     bool HitEffectiveResultLimit,
-    IReadOnlyList<string> Issues);
+    IReadOnlyList<string> Issues,
+    int? EffectiveResultLimit = null,
+    int? MaxValidItemsObserved = null,
+    bool? ConfirmedLocalTruncation = null,
+    int? UnadmittedRelevantTailItemCount = null);

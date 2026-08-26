@@ -94,6 +94,22 @@ public sealed class CollectionPassNewsObservationTests
             Task.FromResult(CollectionHealthReport.Empty);
     }
 
+    /// <summary>Reports one shrunk-inventory warning for the feed type, so the run record's coverage amend runs.</summary>
+    private sealed class ShrunkInventoryHealthValidator(string feedType) : ICollectionHealthValidator
+    {
+        public Task<CollectionHealthReport> ValidateAsync(CollectionContext context, CancellationToken ct) =>
+            Task.FromResult(new CollectionHealthReport(
+            [
+                new CollectionHealthWarning(
+                    Code: "FeedInventoryShrank",
+                    Severity: CollectionHealthSeverity.Warning,
+                    FeedType: feedType,
+                    DeclaredInSeed: 2,
+                    ReachedCollectors: 1,
+                    Message: "feed inventory shrank between seed and collectors"),
+            ]));
+    }
+
     private sealed class FixedTime(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
@@ -104,7 +120,8 @@ public sealed class CollectionPassNewsObservationTests
             IReadOnlyList<IEvidenceCollector> collectors,
             InMemoryNewsObservationArchive? archive = null,
             NewsObservationCaptureOptions? captureOptions = null,
-            InMemoryEvidenceRepository? evidenceRepository = null)
+            InMemoryEvidenceRepository? evidenceRepository = null,
+            ICollectionHealthValidator? healthValidator = null)
     {
         var companies = new InMemoryCompanyRepository();
         var evidence = evidenceRepository ?? new InMemoryEvidenceRepository();
@@ -123,7 +140,7 @@ public sealed class CollectionPassNewsObservationTests
             new InMemorySignalReviewRepository(),
             new NullSignalFileStore(),
             companies,
-            new CleanHealthValidator(),
+            healthValidator ?? new CleanHealthValidator(),
             new FixedTime(FixedNow),
             NullLogger<CollectionPass>.Instance,
             directionalFilingSignals: null,
@@ -298,4 +315,153 @@ public sealed class CollectionPassNewsObservationTests
         Assert.Null(result.NewsObservationBatchId);
         Assert.Equal(1, result.EvidenceNew);
     }
+    // -------------------------------------------------------------------------------------------------
+    // Spec 190: the capture aggregates are correctly named, and "not recorded" never renders as "false".
+    // -------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A capped feed that CONFIRMED local truncation: the correctly named nullable aggregates carry the
+    /// current provenance, and the historically misnamed non-nullable member is still MIRRORED so a reader
+    /// written before the rename keeps working. The mirror is compatibility, not a provider claim.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ConfirmedLocalTruncation_SetsTheNewAggregates_AndStillMirrorsTheLegacyMember()
+    {
+        var coverage = new CollectorCompanyCoverage(
+            CompanyId: CompanyId,
+            ExpectedFeedCount: 1,
+            SuccessfulFeedCount: 1,
+            HitEffectiveResultLimit: true,
+            Issues: CollectionCoverageIssues.Canonicalize([CollectionCoverageIssues.ResultLimitReached]),
+            EffectiveResultLimit: 25,
+            MaxValidItemsObserved: 31,
+            ConfirmedLocalTruncation: true,
+            UnadmittedRelevantTailItemCount: 4);
+
+        var collector = new FakeCollector(
+            "newssearch",
+            new CollectionResult([Evidence()], CollectionSummary.Empty, [coverage], [Candidate()]));
+        var (pass, archive, _) = CreatePass([collector]);
+
+        await pass.RunAsync(CancellationToken.None);
+
+        var capture = Assert.Single(Assert.Single(archive.Batches).Collectors);
+        Assert.True(capture.AnyFeedHitEffectiveResultLimit);
+        Assert.True(capture.AnyFeedConfirmedLocalTruncation);
+        Assert.True(capture.AnyFeedHitProviderCap); // legacy mirror, unchanged for old readers
+    }
+
+    /// <summary>
+    /// At the limit but with NO item observed beyond it: possible truncation stays fail-closed while
+    /// confirmed truncation is honestly false — the two facts are distinguishable, which is the whole point.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_AtLimitWithoutAnObservedTail_SeparatesPossibleFromConfirmedTruncation()
+    {
+        var coverage = new CollectorCompanyCoverage(
+            CompanyId: CompanyId,
+            ExpectedFeedCount: 1,
+            SuccessfulFeedCount: 1,
+            HitEffectiveResultLimit: true,
+            Issues: CollectionCoverageIssues.Canonicalize([CollectionCoverageIssues.ResultLimitReached]),
+            EffectiveResultLimit: 25,
+            MaxValidItemsObserved: 25,
+            ConfirmedLocalTruncation: false,
+            UnadmittedRelevantTailItemCount: 0);
+
+        var collector = new FakeCollector(
+            "newssearch",
+            new CollectionResult([Evidence()], CollectionSummary.Empty, [coverage], [Candidate()]));
+        var (pass, archive, _) = CreatePass([collector]);
+
+        await pass.RunAsync(CancellationToken.None);
+
+        var capture = Assert.Single(Assert.Single(archive.Batches).Collectors);
+        Assert.True(capture.AnyFeedHitEffectiveResultLimit);
+        Assert.False(capture.AnyFeedConfirmedLocalTruncation);
+        Assert.True(capture.AnyFeedHitProviderCap);
+    }
+
+    /// <summary>
+    /// A coverage row that RECORDS no spec-190 diagnostic (a pre-190 row, or a collector that records none)
+    /// must aggregate to <c>null</c> — "not recorded" is a different fact from "no truncation".
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_CoverageWithoutSpec190Diagnostics_AggregatesConfirmedTruncationAsNull()
+    {
+        var coverage = new CollectorCompanyCoverage(
+            CompanyId: CompanyId,
+            ExpectedFeedCount: 1,
+            SuccessfulFeedCount: 1,
+            HitEffectiveResultLimit: false,
+            Issues: []);
+
+        var collector = new FakeCollector(
+            "newssearch",
+            new CollectionResult([Evidence()], CollectionSummary.Empty, [coverage], [Candidate()]));
+        var (pass, archive, _) = CreatePass([collector]);
+
+        await pass.RunAsync(CancellationToken.None);
+
+        var capture = Assert.Single(Assert.Single(archive.Batches).Collectors);
+        Assert.False(capture.AnyFeedHitEffectiveResultLimit);   // recorded: no feed reached the limit
+        Assert.Null(capture.AnyFeedConfirmedLocalTruncation);   // NOT recorded — never rendered as false
+        Assert.False(capture.AnyFeedHitProviderCap);
+    }
+
+    /// <summary>
+    /// No coverage rows at all: both new aggregates are <c>null</c> (unproven), while the legacy
+    /// non-nullable member keeps its historical <c>false</c>.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_NoCoverageRows_LeavesBothNewAggregatesNull()
+    {
+        var collector = new FakeCollector(
+            "newssearch",
+            new CollectionResult([Evidence()], CollectionSummary.Empty, null, [Candidate()]));
+        var (pass, archive, _) = CreatePass([collector]);
+
+        await pass.RunAsync(CancellationToken.None);
+
+        var capture = Assert.Single(Assert.Single(archive.Batches).Collectors);
+        Assert.Null(capture.AnyFeedHitEffectiveResultLimit);
+        Assert.Null(capture.AnyFeedConfirmedLocalTruncation);
+        Assert.False(capture.AnyFeedHitProviderCap);
+    }
+
+    /// <summary>
+    /// The run record's health-mismatch amend rebuilds each coverage row with <c>c with { Issues = ... }</c>.
+    /// A positional-record <c>with</c> preserves trailing members by construction — asserted rather than
+    /// assumed, because losing them here would silently erase the audit from the durable run log.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_HealthMismatchAmend_PreservesTheSpec190CoverageDiagnostics()
+    {
+        var coverage = new CollectorCompanyCoverage(
+            CompanyId: CompanyId,
+            ExpectedFeedCount: 1,
+            SuccessfulFeedCount: 1,
+            HitEffectiveResultLimit: true,
+            Issues: CollectionCoverageIssues.Canonicalize([CollectionCoverageIssues.ResultLimitReached]),
+            EffectiveResultLimit: 25,
+            MaxValidItemsObserved: 31,
+            ConfirmedLocalTruncation: true,
+            UnadmittedRelevantTailItemCount: 4);
+
+        var collector = new FakeCollector(
+            "newssearch",
+            new CollectionResult([Evidence()], CollectionSummary.Empty, [coverage], [Candidate()]));
+        var (pass, _, _) = CreatePass(
+            [collector], healthValidator: new ShrunkInventoryHealthValidator("newssearch"));
+
+        var result = await pass.RunAsync(CancellationToken.None);
+
+        var row = Assert.Single(Assert.Single(result.CollectorRuns).CompanyCoverage!);
+        Assert.Contains(CollectionCoverageIssues.CollectionHealthMismatch, row.Issues);
+        Assert.Equal(25, row.EffectiveResultLimit);
+        Assert.Equal(31, row.MaxValidItemsObserved);
+        Assert.True(row.ConfirmedLocalTruncation);
+        Assert.Equal(4, row.UnadmittedRelevantTailItemCount);
+    }
+
 }
