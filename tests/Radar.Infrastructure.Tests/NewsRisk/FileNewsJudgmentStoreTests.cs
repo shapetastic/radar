@@ -125,6 +125,44 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Null(legacy.ProviderDurationMs);
     }
 
+    /// <summary>
+    /// Spec 192 §2: the rationale-length facts persist and round-trip, and a pre-192 file hydrates with
+    /// BOTH as <c>null</c> — "not recorded", never a fabricated <c>false</c>/<c>0</c> that would read as "a
+    /// short rationale was measured". Mirrors the spec-187 §7 duration test above, deliberately: it is the
+    /// same trailing-nullable contract (spec 142's <c>EvidenceQuality</c>, spec 148's
+    /// <c>EffectiveScoringConfig.Window</c>), and the schema tag does NOT move for it.
+    /// </summary>
+    [Fact]
+    public async Task RationaleLengthFacts_RoundTrip_AndAPreSpec192FileHydratesAsNotRecorded()
+    {
+        var record = Record() with
+        {
+            Rationale = new string('x', 1_228),
+            RationaleLength = 1_228,
+            RationaleOverSoftLimit = true,
+        };
+        Assert.True(await NewStore().WriteAsync(record, CancellationToken.None));
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal(1_228, hydrated.RationaleLength);
+        Assert.True(hydrated.RationaleOverSoftLimit);
+        Assert.Equal(1_228, hydrated.Rationale!.Length); // the full text, never truncated on the way out
+        Assert.Equal("news-judgment-v3", hydrated.SchemaVersion); // spec 192 does NOT bump the tag
+
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
+        Assert.True(document.Remove("rationaleLength"));
+        Assert.True(document.Remove("rationaleOverSoftLimit"));
+        await File.WriteAllTextAsync(file, document.ToJsonString());
+
+        var legacy = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Null(legacy.RationaleLength);
+        Assert.Null(legacy.RationaleOverSoftLimit);
+        // …and the rest of the record still reads correctly.
+        Assert.Equal(NewsJudgmentTrajectory.Mixed, legacy.BusinessTrajectory);
+        Assert.Equal(1_228, legacy.Rationale!.Length);
+    }
+
     [Fact]
     public async Task WriteAndHydrate_RoundTripsThroughAFreshInstance()
     {

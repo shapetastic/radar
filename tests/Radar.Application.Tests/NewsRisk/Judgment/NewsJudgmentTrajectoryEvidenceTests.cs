@@ -144,7 +144,7 @@ public sealed class NewsJudgmentTrajectoryEvidenceTests
         Assert.Equal(strong.RepresentativeFactId, Assert.Single(result.TrajectoryFactIds));
     }
 
-    // ── The rationale rule ───────────────────────────────────────────────────────────────────────────
+    // ── The rationale rule (LENGTH is spec 192's; see NewsJudgmentRationaleLengthTests) ───────
 
     [Theory]
     [InlineData(null)]
@@ -164,31 +164,20 @@ public sealed class NewsJudgmentTrajectoryEvidenceTests
         var result = NewsJudgmentValidator.Validate(response, [family]);
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
-        Assert.Contains(result.FindingDropReasons, r => r.Contains("rationale-missing"));
-    }
-
-    [Fact]
-    public void OverLongRationale_IsValidationFailed_NeverTruncated()
-    {
-        var family = NewsJudgmentTestData.Family(
-            assertionStatus: NewsFactAssertionStatus.ConfirmedFiling);
-        var response = NewsJudgmentTestData.Response(
-            trajectory: "Improving",
-            strength: null,
-            findings: [],
-            rationale: new string('x', NewsJudgmentValidator.MaxRationaleLength + 1),
-            trajectoryFactIds: [family.RepresentativeFactId.ToString("D")]);
-
-        var result = NewsJudgmentValidator.Validate(response, [family]);
-
-        Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
-        Assert.Contains(result.FindingDropReasons, r => r.Contains("rationale-too-long"));
-        // Truncating would silently change what the judge said, so nothing is kept.
+        // Spec 192 §1 leaves this rule alone, so the reason string is pinned BYTE-IDENTICALLY: only the
+        // LENGTH rule moved, and a genuinely absent explanation must keep failing exactly as it did.
+        Assert.Equal(
+            "rationale-missing: a judged response requires a non-blank factual rationale",
+            Assert.Single(result.FindingDropReasons));
         Assert.Null(result.Rationale);
+        // Nothing survived to be measured, and 0 says exactly that (never "not recorded", which on a
+        // persisted record means "written before spec 192").
+        Assert.Equal(0, result.RationaleLength);
+        Assert.False(result.RationaleOverSoftLimit);
     }
 
     [Fact]
-    public void RationaleExactlyAtTheBound_IsAccepted()
+    public void RationaleExactlyAtTheSoftBound_IsAcceptedAndNotFlagged()
     {
         var family = NewsJudgmentTestData.Family(
             assertionStatus: NewsFactAssertionStatus.ConfirmedFiling);
@@ -202,6 +191,8 @@ public sealed class NewsJudgmentTrajectoryEvidenceTests
         var result = NewsJudgmentValidator.Validate(response, [family]);
 
         Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
+        Assert.Equal(NewsJudgmentValidator.MaxRationaleLength, result.RationaleLength);
+        Assert.False(result.RationaleOverSoftLimit); // the soft bound is inclusive
     }
 
     // ── The live failure shapes (spec 187 §1's explicit list) ────────────────────────────────────────

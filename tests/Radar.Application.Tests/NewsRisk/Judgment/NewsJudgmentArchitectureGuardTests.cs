@@ -152,18 +152,24 @@ public sealed class NewsJudgmentArchitectureGuardTests
         // Trailing and NULLABLE: a v1 record has no such field, and null reads as "not recorded under v1".
         Assert.Equal(typeof(IReadOnlyList<Guid>), persisted!.PropertyType);
         // The TRAILING-NULLABLE block, pinned by position. Spec 187 §7 appended a second member to it
-        // (ProviderDurationMs — observational latency provenance), so TrajectoryFactIds is no longer the
-        // very last parameter. What the pin protects is unchanged and is asserted directly: every member
-        // after the required block is optional and nullable, so a v1 record on disk still hydrates
-        // losslessly with "not recorded" for each of them.
+        // (ProviderDurationMs — observational latency provenance) and spec 192 §2 a third and fourth
+        // (the rationale-length facts), so TrajectoryFactIds is no longer the very last parameter. What the
+        // pin protects is unchanged and is asserted directly: every member after the required block is
+        // optional and nullable, so a v1 record on disk still hydrates losslessly with "not recorded" for
+        // each of them.
         var trailing = typeof(NewsJudgmentRecord)
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(2)
+            .TakeLast(4)
             .ToList();
         Assert.Equal(
-            [nameof(NewsJudgmentRecord.TrajectoryFactIds), nameof(NewsJudgmentRecord.ProviderDurationMs)],
+            [
+                nameof(NewsJudgmentRecord.TrajectoryFactIds),
+                nameof(NewsJudgmentRecord.ProviderDurationMs),
+                nameof(NewsJudgmentRecord.RationaleLength),
+                nameof(NewsJudgmentRecord.RationaleOverSoftLimit),
+            ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));
         Assert.All(trailing, p => Assert.Null(p.DefaultValue));
@@ -174,6 +180,17 @@ public sealed class NewsJudgmentArchitectureGuardTests
             .GetProperty(nameof(NewsJudgmentRecord.ProviderDurationMs));
         Assert.NotNull(duration);
         Assert.Equal(typeof(double?), duration!.PropertyType);
+
+        // Spec 192 §2: the rationale-length facts are observational too — an int? and a bool?, so neither
+        // can carry model prose, and both are nullable so a pre-192 record reads as "not recorded" rather
+        // than as a fabricated false/0.
+        Assert.Equal(
+            typeof(int?),
+            typeof(NewsJudgmentRecord).GetProperty(nameof(NewsJudgmentRecord.RationaleLength))!.PropertyType);
+        Assert.Equal(
+            typeof(bool?),
+            typeof(NewsJudgmentRecord)
+                .GetProperty(nameof(NewsJudgmentRecord.RationaleOverSoftLimit))!.PropertyType);
 
         // The marker vocabulary is DISPLAY metadata and stays free of any judgment type, so nothing
         // presentation-side can leak back into the request/response contract.

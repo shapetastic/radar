@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.News;
@@ -6,6 +7,7 @@ using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Application.Tests.Ai;
 using Radar.Application.Tests.NewsRisk;
 
 namespace Radar.Application.Tests.NewsRisk.Judgment;
@@ -64,7 +66,10 @@ public sealed class NewsJudgmentGeneratorTests
     }
 
     private static NewsJudgmentGenerator Generator(
-        StubAnalyzer analyzer, InMemoryJudgmentStore store, string judgeName = "deepinfra-deepseek") =>
+        StubAnalyzer analyzer,
+        InMemoryJudgmentStore store,
+        string judgeName = "deepinfra-deepseek",
+        ILogger<NewsJudgmentGenerator>? logger = null) =>
         new(
             new NullBatchReader(),
             new NewsJudgmentReaderSet(
@@ -75,7 +80,7 @@ public sealed class NewsJudgmentGeneratorTests
             store,
             JudgmentOptions(),
             TimeProvider.System,
-            NullLogger<NewsJudgmentGenerator>.Instance);
+            logger ?? NullLogger<NewsJudgmentGenerator>.Instance);
 
     private static NewsJudgmentOptions JudgmentOptions() => new(
         outputDirectory: "unused",
@@ -384,5 +389,131 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.NotNull(result);
         Assert.Null(result!.Markers);
         Assert.Single(store.Written); // judgments still persist — only the marker source is withheld
+    }
+
+    // ── Spec 192 §2: the rationale-length facts, and the aggregated per-cohort signal ─────────────
+
+    /// <summary>Ordinary prose of an exact length — no advice language, no trailing space to be trimmed.</summary>
+    private static string Rationale(int length)
+    {
+        const string Prose =
+            "The single supplied family is a plaintiff-firm solicitation, which is reported but not "
+            + "confirmed, so it qualifies rather than establishes the direction. ";
+        var text = new System.Text.StringBuilder();
+        while (text.Length < length)
+        {
+            text.Append(Prose);
+        }
+
+        var exact = text.ToString(0, length);
+        return char.IsWhiteSpace(exact[^1]) ? string.Concat(exact.AsSpan(0, length - 1), ".") : exact;
+    }
+
+    private static NewsJudgmentAnalysisOutcome Judged(string rationale) => new(
+        NewsJudgmentAnalysisFailure.None,
+        new NewsJudgmentModelResponse("Unknown", null, [], rationale, []),
+        "raw-hash",
+        null);
+
+    private static IReadOnlyList<string> OverSoftLimitLines(
+        CapturingLogger<NewsJudgmentGenerator> logger) =>
+        [.. logger.Entries
+            .Where(e => e.Message.Contains("soft bound", StringComparison.Ordinal))
+            .Select(e => e.Message)];
+
+    [Fact]
+    public async Task AnOverLongRationale_IsStillJudged_AndTheRecordCarriesTheMeasuredFacts()
+    {
+        // Spec 192: the pre-192 validator would have failed this response outright and nulled the text.
+        var typing = TypingResult(out _);
+        var rationale = Rationale(1_228);
+        var analyzer = new StubAnalyzer(_ => Judged(rationale));
+        var store = new InMemoryJudgmentStore();
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+
+        await Generator(analyzer, store, logger: logger)
+            .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+
+        var record = Assert.Single(store.Written);
+        Assert.Equal(NewsJudgmentStatus.Judged, record.Status);
+        Assert.Equal(rationale, record.Rationale); // persisted IN FULL, never truncated
+        Assert.Equal(1_228, record.RationaleLength);
+        Assert.True(record.RationaleOverSoftLimit);
+
+        // ONE aggregated Information line for the cohort (the spec-145 precedent), not one per judgment.
+        var line = Assert.Single(OverSoftLimitLines(logger));
+        Assert.Contains("1 judgment(s)", line, StringComparison.Ordinal);
+        Assert.Contains(record.CohortKey, line, StringComparison.Ordinal);
+        Assert.Equal(
+            LogLevel.Information,
+            Assert.Single(logger.Entries, e => e.Message.Contains("soft bound", StringComparison.Ordinal))
+                .Level);
+    }
+
+    [Fact]
+    public async Task AWithinBoundRationale_RecordsTheLengthAndNoFlag_AndSaysNothingInTheSummary()
+    {
+        var typing = TypingResult(out _);
+        var rationale = Rationale(120);
+        var analyzer = new StubAnalyzer(_ => Judged(rationale));
+        var store = new InMemoryJudgmentStore();
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+
+        await Generator(analyzer, store, logger: logger)
+            .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+
+        var record = Assert.Single(store.Written);
+        Assert.Equal(120, record.RationaleLength);
+        Assert.False(record.RationaleOverSoftLimit); // recorded false, which is NOT "not recorded"
+        Assert.Empty(OverSoftLimitLines(logger));
+    }
+
+    /// <summary>
+    /// Spec 192 §2 with spec 188 §1: a REUSED verdict carries the cached rationale facts (otherwise a
+    /// replayed judgment would read as "not recorded" beside the very rationale it carries forward) — but
+    /// it is NOT counted as this pass's activity, because no provider call was made.
+    /// </summary>
+    [Fact]
+    public async Task AReusedVerdict_CarriesTheCachedRationaleFacts_ButIsNotCountedAsThisPassesActivity()
+    {
+        var typing = TypingResult(out _);
+        var rationale = Rationale(1_095);
+        var analyzer = new StubAnalyzer(_ => Judged(rationale));
+        var store = new InMemoryJudgmentStore();
+
+        var firstLogger = new CapturingLogger<NewsJudgmentGenerator>();
+        await Generator(analyzer, store, logger: firstLogger)
+            .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+        Assert.Single(OverSoftLimitLines(firstLogger));
+
+        var secondLogger = new CapturingLogger<NewsJudgmentGenerator>();
+        await Generator(analyzer, store, logger: secondLogger)
+            .GenerateAsync(Guid.NewGuid(), Plan(), typing, CancellationToken.None);
+
+        Assert.Single(analyzer.Requests); // served from the completed-judgment cache
+        var reused = store.Written[1];
+        Assert.NotNull(reused.ReusedFromJudgmentId);
+        Assert.Equal(1_095, reused.RationaleLength);
+        Assert.True(reused.RationaleOverSoftLimit);
+        // …and the second pass, which called nothing, reports nothing.
+        Assert.Empty(OverSoftLimitLines(secondLogger));
+    }
+
+    [Fact]
+    public async Task AProviderFailure_LeavesTheRationaleFactsNotRecorded()
+    {
+        // No validated response existed, so there was nothing to measure: `null` is the honest value, and
+        // it is the same "not recorded" a pre-192 record on disk hydrates with.
+        var typing = TypingResult(out _);
+        var analyzer = new StubAnalyzer(_ => new NewsJudgmentAnalysisOutcome(
+            NewsJudgmentAnalysisFailure.ProviderError, null, null, "HttpRequestException: down"));
+        var store = new InMemoryJudgmentStore();
+
+        await Generator(analyzer, store).GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+
+        var record = Assert.Single(store.Written);
+        Assert.Equal(NewsJudgmentStatus.ProviderFailure, record.Status);
+        Assert.Null(record.RationaleLength);
+        Assert.Null(record.RationaleOverSoftLimit);
     }
 }

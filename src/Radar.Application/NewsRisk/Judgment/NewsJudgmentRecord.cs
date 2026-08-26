@@ -137,7 +137,17 @@ public sealed record NewsJudgmentRecord(
     // or marker decision reads it (AD-3). `null` means NO CALL WAS MADE (a cache reuse, InsufficientFacts,
     // AttemptsExhausted), never "a call took no time"; a provider, parse or validation failure that
     // reached the provider RETAINS its duration, because a slow failure is worth seeing.
-    double? ProviderDurationMs = null)
+    double? ProviderDurationMs = null,
+    // Spec 192 §2: the rationale-length facts, so the soft bound still MEANS something now that it flags
+    // instead of discarding the response's findings. TRAILING and NULLABLE per the repo's established
+    // convention for an additive persisted field (spec 142's EvidenceQuality, spec 148's
+    // EffectiveScoringConfig.Window): `null` means NOT RECORDED — a pre-192 record, or an attempt that
+    // never produced a validated response (a provider or parse failure) — and NEVER a fabricated `false`
+    // or a fabricated 0. RationaleLength is the length of the rationale AS PERSISTED (trimmed and
+    // advice-scrubbed), so it can never disagree with the text beside it. Observational provenance only:
+    // neither field enters an id, a cohort key, a marker decision, a score or any fingerprint.
+    int? RationaleLength = null,
+    bool? RationaleOverSoftLimit = null)
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
@@ -151,6 +161,13 @@ public sealed record NewsJudgmentRecord(
     /// <see cref="NewsJudgmentContract.SchemaVersion"/>, the stage-2 cohort key and the model request are
     /// UNCHANGED — typing completeness is run provenance the judge never sees, so widening it must not fork a
     /// cohort or invalidate a cached verdict. Asserted by test.
+    /// </para>
+    /// <para>
+    /// <b>Spec 192 does NOT bump it</b>, and the distinction is the same one v3 was granted on: it removes
+    /// no field, re-means no field and widens no persisted vocabulary. It only APPENDS
+    /// <see cref="RationaleLength"/> and <see cref="RationaleOverSoftLimit"/>, both trailing and nullable,
+    /// whose own nullability is the entire "not recorded on a pre-192 record" story — the spec-142
+    /// <c>EvidenceQuality</c> / spec-148 <c>EffectiveScoringConfig.Window</c> precedent.
     /// </para>
     /// </summary>
     public const string CurrentSchemaVersion = "news-judgment-v3";

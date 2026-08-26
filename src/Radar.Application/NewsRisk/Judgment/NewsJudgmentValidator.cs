@@ -16,7 +16,14 @@ public sealed record NewsJudgmentValidationResult(
     IReadOnlyList<string> FindingDropReasons,
     // Spec 187 §1: the validated supplied FactIds that ESTABLISH the trajectory. Always non-null on a
     // Judged result (empty iff Unknown); empty on a failure, where no claim survived to be evidenced.
-    IReadOnlyList<Guid> TrajectoryFactIds);
+    IReadOnlyList<Guid> TrajectoryFactIds,
+    // Spec 192 §2: the rationale-length facts, ALWAYS measured (this type is only ever produced by
+    // Validate, so "not recorded" is unrepresentable here — that state exists only on a pre-192 record on
+    // disk). The length is that of the rationale AS CARRIED FORWARD: trimmed and advice-scrubbed, hence 0
+    // whenever none survived. `RationaleOverSoftLimit` is the measured flag the soft bound now produces
+    // INSTEAD of discarding the response; it never suppresses a finding.
+    int RationaleLength,
+    bool RationaleOverSoftLimit);
 
 /// <summary>
 /// Mechanical validation of one judge response (spec 185 §2, made STRICT by spec 187 §1), pure and
@@ -31,9 +38,13 @@ public sealed record NewsJudgmentValidationResult(
 /// least one cited fact must be at-or-above <c>reported</c> assertion status
 /// (<see cref="IsBelowReported"/>, the SAME boundary the caveat rule uses); and the cited set may not be
 /// made ENTIRELY of families confined to <see cref="NewsJudgmentContextOnlyEventTypes"/>;</item>
-/// <item><b>spec 187 §1 — a <c>Judged</c> response requires a non-blank factual rationale of at most
-/// <see cref="MaxRationaleLength"/> characters</b>. Missing, over-length, or scrubbed-to-empty by the
-/// advice guard all FAIL the whole response — never a clean-looking zero-finding judgment;</item>
+/// <item><b>spec 187 §1 — a <c>Judged</c> response requires a non-blank factual rationale</b>. Missing,
+/// or scrubbed-to-empty by the advice guard, FAILS the whole response — never a clean-looking
+/// zero-finding judgment. <b>Spec 192 §1 separates the rationale verdict from the FINDINGS verdict</b>:
+/// exceeding <see cref="MaxRationaleLength"/> is now a recorded FLAG, not a failure (the rationale is
+/// persisted IN FULL and never truncated), and only <see cref="MaxRationaleHardLimit"/> — genuine
+/// malformation — still fails the response, with its own reason and only AFTER the findings have been
+/// validated and counted;</item>
 /// <item>per finding: category/severity parse against the REUSED spec-179 vocabularies, confidence in
 /// [0,1], at least one cited FactId, and every cited FactId in the supplied set — an invalid finding is
 /// dropped with a named reason, never silently;</item>
@@ -75,11 +86,36 @@ public sealed record NewsJudgmentValidationResult(
 public static class NewsJudgmentValidator
 {
     /// <summary>
-    /// The bound on a <c>Judged</c> response's rationale (spec 187 §1). It is a short factual explanation
-    /// carried into Radar-surfaced artifacts, not an essay; an over-length one FAILS the response rather
-    /// than being truncated, because truncating would silently change what the judge said.
+    /// The SOFT bound on a <c>Judged</c> response's rationale (spec 187 §1, amended by spec 192 §1). It is
+    /// the length a short factual explanation carried into Radar-surfaced artifacts should keep to, and it
+    /// is still stated in the judge prompt — but exceeding it NO LONGER FAILS the response. It records
+    /// <see cref="NewsJudgmentValidationResult.RationaleOverSoftLimit"/> instead.
+    /// <para>
+    /// The measured reason (spec 192): the failure returned BEFORE the findings loop, so an over-long
+    /// rationale discarded its response's findings UNREAD — their citations, attribution caveats and
+    /// context-only class were never checked. On 2026-08-25 that lost up to three findings per judgment
+    /// across 22 % of the pass, over rationales clustered at 1,095-1,228 characters. ABSENCE of an
+    /// explanation justifies discarding a judgment; VERBOSITY of one does not. The rationale is persisted
+    /// IN FULL and never truncated — a shortened rationale is a fabricated explanation.
+    /// </para>
     /// </summary>
     public const int MaxRationaleLength = 1_000;
+
+    /// <summary>
+    /// The HARD ceiling (spec 192 §1): above it the response is treated as genuinely malformed — a runaway
+    /// or non-prose completion rather than a verbose explanation — and fails with
+    /// <see cref="RationaleExceedsHardLimitReason"/>. The check runs AFTER the findings loop so the
+    /// finding-level drop reasons and <see cref="NewsJudgmentValidationResult.FindingsTotal"/> are still
+    /// reported, and the (over-long) rationale is still carried onto the failed result: the spec-192
+    /// complaint is precisely that nulling it left the text unrecoverable.
+    /// </summary>
+    public const int MaxRationaleHardLimit = 4_000;
+
+    /// <summary>
+    /// The named whole-response failure reason for a rationale above <see cref="MaxRationaleHardLimit"/>
+    /// (spec 192 §1). Distinct from the soft bound, which no longer fails anything.
+    /// </summary>
+    public const string RationaleExceedsHardLimitReason = "rationale-exceeds-hard-limit";
 
     /// <summary>
     /// The named drop reason for a finding standing entirely on context-only evidence (spec 187 §1). A
@@ -108,16 +144,10 @@ public static class NewsJudgmentValidator
         var dropReasons = new List<string>();
         var rawFindings = response.Findings ?? [];
 
-        // Rationale: trimmed and scrubbed through the ONE shared advice-language guard.
+        // Rationale: trimmed, then scrubbed through the ONE shared advice-language guard, and only THEN
+        // measured (spec 192 §1's ordering fix — the scrub used to run AFTER the length check, so the one
+        // kind of rationale that most needed scrubbing was the one never scrubbed at all).
         var rationale = response.Rationale?.Trim();
-        if (rationale is { Length: > MaxRationaleLength })
-        {
-            dropReasons.Add(
-                $"rationale-too-long: {rationale.Length} characters exceeds the {MaxRationaleLength}-"
-                    + "character bound on a factual judgment rationale");
-            return Failed(rawFindings.Count, rationale: null, dropReasons);
-        }
-
         if (!string.IsNullOrEmpty(rationale) && AdviceLanguageGuard.ContainsAdviceLanguage(rationale))
         {
             dropReasons.Add("rationale-advice-language: rationale contained advice language and was dropped");
@@ -128,22 +158,26 @@ public static class NewsJudgmentValidator
         {
             // Spec 187 §1: a judgment Radar cannot explain is not a judgment. A missing (or
             // advice-scrubbed) rationale fails the WHOLE response rather than rendering a clean-looking
-            // zero-finding read with nothing behind it.
+            // zero-finding read with nothing behind it. Unchanged by spec 192: only the LENGTH rule moved.
             dropReasons.Add("rationale-missing: a judged response requires a non-blank factual rationale");
-            return Failed(rawFindings.Count, rationale: null, dropReasons);
+            return Failed(rawFindings.Count, rationale: null, dropReasons, rationaleLength: 0);
         }
+
+        // The measured fact the soft bound now produces INSTEAD of a failure. It travels onto the record so
+        // the bound stays meaningful (spec 192 §2) without destroying the work it measures.
+        var rationaleLength = rationale.Length;
 
         if (!NewsTypingTokens.TryParse<NewsJudgmentTrajectory>(response.BusinessTrajectory, out var trajectory))
         {
             dropReasons.Add(
                 $"trajectory-token-invalid: '{response.BusinessTrajectory}' is not a defined trajectory");
-            return Failed(rawFindings.Count, rationale, dropReasons);
+            return Failed(rawFindings.Count, rationale, dropReasons, rationaleLength);
         }
 
         if (!TryValidateTrajectoryEvidence(
             response.TrajectoryFactIds, trajectory, familyByFactId, dropReasons, out var trajectoryFactIds))
         {
-            return Failed(rawFindings.Count, rationale, dropReasons);
+            return Failed(rawFindings.Count, rationale, dropReasons, rationaleLength);
         }
 
         var accepted = new List<NewsJudgmentValidatedFinding>();
@@ -242,10 +276,23 @@ public static class NewsJudgmentValidator
         var total = rawFindings.Count;
         var dropped = total - accepted.Count;
 
+        // Spec 192 §1 — the HARD ceiling, deliberately HERE rather than before the loop: findings are
+        // validated on their own merits in EVERY path, so their named drop reasons and their total are
+        // still reported even when the prose that accompanied them is malformed. The rationale itself is
+        // still carried onto the failed result — unrecoverable text is what this slice exists to stop.
+        if (rationaleLength > MaxRationaleHardLimit)
+        {
+            dropReasons.Add(
+                $"{RationaleExceedsHardLimitReason}: {rationaleLength} characters exceeds the "
+                    + $"{MaxRationaleHardLimit}-character hard ceiling, so the response is treated as "
+                    + "malformed rather than as a verbose factual rationale");
+            return Failed(total, rationale, dropReasons, rationaleLength);
+        }
+
         if (total > 0 && accepted.Count == 0)
         {
             // Every finding failed: fail closed. NEVER the no-challenge/supportive read.
-            return Failed(total, rationale, dropReasons);
+            return Failed(total, rationale, dropReasons, rationaleLength);
         }
 
         int? strength;
@@ -258,7 +305,7 @@ public static class NewsJudgmentValidator
                         + $"{accepted.Count} surviving finding(s)");
                 // The whole response fails, so the individually-accepted findings are discarded with it:
                 // FindingsAccepted must equal Findings.Count (0), never a pre-failure count.
-                return Failed(total, rationale, dropReasons);
+                return Failed(total, rationale, dropReasons, rationaleLength);
             }
 
             strength = s;
@@ -279,7 +326,9 @@ public static class NewsJudgmentValidator
             FindingsAccepted: accepted.Count,
             FindingsDropped: dropped,
             FindingDropReasons: dropReasons,
-            TrajectoryFactIds: trajectoryFactIds);
+            TrajectoryFactIds: trajectoryFactIds,
+            RationaleLength: rationaleLength,
+            RationaleOverSoftLimit: rationaleLength > MaxRationaleLength);
     }
 
     /// <summary>
@@ -380,7 +429,7 @@ public static class NewsJudgmentValidator
     }
 
     private static NewsJudgmentValidationResult Failed(
-        int total, string? rationale, List<string> dropReasons) =>
+        int total, string? rationale, List<string> dropReasons, int rationaleLength) =>
         new(
             NewsJudgmentStatus.ValidationFailed,
             BusinessTrajectory: null,
@@ -391,5 +440,9 @@ public static class NewsJudgmentValidator
             FindingsAccepted: 0,
             FindingsDropped: total,
             FindingDropReasons: dropReasons,
-            TrajectoryFactIds: []);
+            TrajectoryFactIds: [],
+            // Measured on a failure too: a failed attempt's rationale length is exactly the number a
+            // prompt-tuning read needs, and 0 honestly describes a rationale that did not survive.
+            RationaleLength: rationaleLength,
+            RationaleOverSoftLimit: rationaleLength > MaxRationaleLength);
 }
