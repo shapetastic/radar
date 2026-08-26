@@ -1,12 +1,13 @@
 namespace Radar.Application.Scoring;
 
+using Radar.Application.Storage;
 using Radar.Domain.Scoring;
 
 /// <summary>
 /// On-disk mirror of a company score snapshot and the evidence links that trace it back to the
 /// contributing signals/evidence. Writes one JSON file per snapshot, grouped by company. A snapshot is
 /// upsert-by-Id (AD-1): an existing file for the same snapshot id is overwritten (last-write-wins).
-/// Returns the written path.
+/// Returns the attempted path AND whether the content actually reached it.
 /// </summary>
 /// <remarks>
 /// Provenance invariant: every provided link must belong to the provided snapshot
@@ -23,7 +24,17 @@ using Radar.Domain.Scoring;
 /// </remarks>
 public interface IScoreSnapshotFileStore
 {
-    Task<string> WriteAsync(
+    /// <summary>
+    /// Mirrors <paramref name="snapshot"/> and its <paramref name="links"/> to disk.
+    /// <para>
+    /// SPEC 193 §1: a disk failure still degrades gracefully (the run never crashes; the in-memory score
+    /// repository copy still exists) — but the failure is now RETURNED as a
+    /// <see cref="DurableWriteOutcome.Failed"/> result rather than discarded, so the pipeline can count it
+    /// and stop reporting a snapshot that never reached disk as durably stored. The returned path is the
+    /// ATTEMPTED path in both outcomes; <see cref="DurableWriteResult.Outcome"/> is the only proof.
+    /// </para>
+    /// </summary>
+    Task<DurableWriteResult> WriteAsync(
         CompanyScoreSnapshot snapshot,
         IReadOnlyList<ScoreEvidenceLink> links,
         CancellationToken ct);

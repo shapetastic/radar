@@ -1,4 +1,7 @@
+using Microsoft.Extensions.Logging;
+
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 using Radar.Domain.Companies;
 
 namespace Radar.Application.Pipeline;
@@ -16,19 +19,23 @@ public sealed class ScoringPass : IScoringPass
     private readonly IScoringStrategyFactory _scoringStrategies;
     private readonly IScoreSnapshotFileStoreFactory _scoreFileStores;
     private readonly IScoringConfigStore _scoringConfigStore;
+    private readonly ILogger<ScoringPass> _logger;
 
     public ScoringPass(
         IScoringStrategyFactory scoringStrategies,
         IScoreSnapshotFileStoreFactory scoreFileStores,
-        IScoringConfigStore scoringConfigStore)
+        IScoringConfigStore scoringConfigStore,
+        ILogger<ScoringPass> logger)
     {
         ArgumentNullException.ThrowIfNull(scoringStrategies);
         ArgumentNullException.ThrowIfNull(scoreFileStores);
         ArgumentNullException.ThrowIfNull(scoringConfigStore);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _scoringStrategies = scoringStrategies;
         _scoreFileStores = scoreFileStores;
         _scoringConfigStore = scoringConfigStore;
+        _logger = logger;
     }
 
     public async Task<ScoringPassResult> RunAsync(
@@ -38,6 +45,10 @@ public sealed class ScoringPass : IScoringPass
         ct.ThrowIfCancellationRequested();
 
         var companiesScored = 0;
+
+        // Spec 193 §1: snapshots computed but NOT durably persisted, summed across EVERY strategy (see
+        // ScoringPassResult for why this axis is not primary-only).
+        var snapshotsNotPersisted = 0;
 
         // Stage 6: score every company at asOfUtc, once PER CONFIGURED STRATEGY (spec 137) — strategies ×
         // companies. EVERYTHING ABOVE THIS POINT RUNS EXACTLY ONCE: collection, the AI directional read,
@@ -84,7 +95,12 @@ public sealed class ScoringPass : IScoringPass
 
                 var result = await strategy.Engine
                     .ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
-                await scoreFileStore.WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
+                var durable = await scoreFileStore
+                    .WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
+                if (durable.Outcome == DurableWriteOutcome.Failed)
+                {
+                    snapshotsNotPersisted++;
+                }
 
                 if (strategy.Definition.IsPrimary)
                 {
@@ -93,9 +109,25 @@ public sealed class ScoringPass : IScoringPass
             }
         }
 
+        // Spec 193 §1: ONE aggregated Warning for the score-snapshot store per run (the spec-145 aggregation
+        // precedent), never one line per failure.
+        if (snapshotsNotPersisted > 0)
+        {
+            _logger.LogWarning(
+                "{ScoreSnapshotsNotPersisted} score snapshot(s) this run could NOT be durably persisted to "
+                    + "the score snapshot store (counted across all {StrategyCount} strategies). They exist "
+                    + "in this process's score repository — so this run's report still sees the primary "
+                    + "series — but nothing reached disk: the accrued score history does NOT contain them, "
+                    + "and the efficacy/replay reads will not see them. The run was not aborted; see the "
+                    + "per-write Warnings above for the failing paths.",
+                snapshotsNotPersisted,
+                strategies.Count);
+        }
+
         return new ScoringPassResult(
             CompaniesScored: companiesScored,
             Strategies: [.. strategies.Select(s => s.Definition.Name)],
-            PrimaryStrategy: _scoringStrategies.Primary.Definition.Name);
+            PrimaryStrategy: _scoringStrategies.Primary.Definition.Name,
+            ScoreSnapshotsNotPersisted: snapshotsNotPersisted);
     }
 }

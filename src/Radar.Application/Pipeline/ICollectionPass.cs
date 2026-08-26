@@ -60,4 +60,11 @@ public sealed record CollectionPassResult(
     // The spec-177 news-observation batch this pass wrote, or null when capture is disabled / no collector
     // emitted an observation sidecar. Trailing + defaulted so every existing construction site is
     // unchanged. It is the EXPLICIT manifest↔run association the run record carries — never a time join.
-    Guid? NewsObservationBatchId = null);
+    Guid? NewsObservationBatchId = null,
+    // Spec 193 §1: how many of this pass's signals were held in memory but NOT durably persisted (the
+    // signal file store's write degraded gracefully). Its own axis, deliberately: those signals were still
+    // extracted, validated, reviewed and counted as such — what they are not is in the accrued store, so the
+    // next run's history read will not see them. Trailing + defaulted to 0, which is the truthful value for
+    // a pass that persisted everything; the "not recorded" distinction lives on the durable
+    // PipelineRunRecord, not on this in-process result.
+    int SignalsNotPersisted = 0);

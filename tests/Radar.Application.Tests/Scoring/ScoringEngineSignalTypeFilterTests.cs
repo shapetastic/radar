@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -69,11 +70,11 @@ public sealed class ScoringEngineSignalTypeFilterTests
     {
         private readonly List<Signal> _signals = new();
 
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             Signal signal, Radar.Domain.Signals.SignalReview review, CancellationToken ct)
         {
             _signals.Add(signal);
-            return Task.FromResult("written/signal.json");
+            return Task.FromResult(DurableWriteResult.Succeeded("written/signal.json"));
         }
 
         public void Seed(Signal signal) => _signals.Add(signal);

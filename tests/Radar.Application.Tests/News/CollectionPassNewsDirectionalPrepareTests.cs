@@ -11,6 +11,7 @@ using Radar.Application.Pipeline;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -229,11 +230,11 @@ public sealed class CollectionPassNewsDirectionalPrepareTests
     {
         public List<Signal> Written { get; } = [];
 
-        public Task<string> WriteAsync(
+        public Task<DurableWriteResult> WriteAsync(
             Signal signal, Domain.Signals.SignalReview review, CancellationToken ct)
         {
             Written.Add(signal);
-            return Task.FromResult("(memory)");
+            return Task.FromResult(DurableWriteResult.Succeeded("(memory)"));
         }
 
         public Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(

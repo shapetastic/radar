@@ -159,6 +159,12 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
             asOfUtc,
             reportId?.ToString() ?? "none");
 
+        // Spec 193 §1: say so when a durable write was lost. Separate statement on the non-zero path only, so
+        // the line above stays byte-identical for a healthy run. This pass extracted no signal, so it passes
+        // null for that axis rather than a 0 it did not observe.
+        RadarPipelineRunner.LogDurableWriteShortfall(
+            _logger, signalsNotPersisted: null, scoring.ScoreSnapshotsNotPersisted);
+
         var pipelineResult = new RadarPipelineResult(
             // Nothing was collected this pass: every collection counter is honestly zero and the collection
             // summary is Empty. A reader of the run log sees "0 sources checked", not "0 sources failed out
@@ -201,7 +207,12 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
             // Null is the record's "not recorded" value and reads downstream as UNPROVEN — which is exactly
             // right: a score pass observed nothing and must never be able to supply a coverage checkpoint.
             // An empty list would claim that zero collectors ran cleanly.
-            CollectorRuns: null);
+            CollectorRuns: null,
+            // Spec 193 §1: no signal was extracted or written this pass, so SignalsNotPersisted stays null
+            // ("this pass did not do that work") rather than a 0 that would claim a clean signal write.
+            // The snapshot count IS observed here and is recorded even when it is zero.
+            SignalsNotPersisted: null,
+            ScoreSnapshotsNotPersisted: scoring.ScoreSnapshotsNotPersisted);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;

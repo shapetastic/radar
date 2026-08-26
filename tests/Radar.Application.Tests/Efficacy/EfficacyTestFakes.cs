@@ -3,6 +3,7 @@ using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Prices;
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 using Radar.Domain.Companies;
 using Radar.Domain.Scoring;
 
@@ -59,7 +60,7 @@ internal sealed class FakeScoreSnapshotFileStore : IScoreSnapshotFileStore
             ? list
             : []);
 
-    public Task<string> WriteAsync(
+    public Task<DurableWriteResult> WriteAsync(
         CompanyScoreSnapshot snapshot, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct)
     {
         WriteCount++;

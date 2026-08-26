@@ -128,6 +128,12 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             collection.Collection.SourcesChecked,
             reportId?.ToString() ?? "none");
 
+        // Spec 193 §1: a run that lost a durable write must SAY SO in its summary. Appended as a SEPARATE
+        // statement on the non-zero path only, deliberately: the existing line above must stay byte-identical
+        // for the healthy run (a pinned criterion), so the counts are not folded into its template.
+        LogDurableWriteShortfall(
+            _logger, collection.SignalsNotPersisted, scoring.ScoreSnapshotsNotPersisted);
+
         // The run id is minted ONCE (spec 179 §2): the SAME value is written to the durable run record
         // below and returned on the pipeline result, so the shadow step's persisted assessments reference
         // exactly the run record that exists on disk — never a second id for the same run.
@@ -180,9 +186,37 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             // discarded collector identity. Observational only — see PipelineRunRecord.CollectorRuns.
             CollectorRuns: collection.CollectorRuns,
             // The spec-177 news-observation batch this pass wrote — the explicit manifest↔run association.
-            NewsObservationBatchId: collection.NewsObservationBatchId);
+            NewsObservationBatchId: collection.NewsObservationBatchId,
+            // Spec 193 §1: the combined run did BOTH kinds of work, so it genuinely observed both counts —
+            // 0 here is a measured zero, not a fabricated one.
+            SignalsNotPersisted: collection.SignalsNotPersisted,
+            ScoreSnapshotsNotPersisted: scoring.ScoreSnapshotsNotPersisted);
         await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
 
         return pipelineResult;
+    }
+
+    /// <summary>
+    /// The ONE rendering of spec 193 §1's summary-line shortfall statement, shared by every runner that can
+    /// observe one, so the three cannot drift into three different wordings of the same fact. Emitted only
+    /// when something really was lost: a healthy run's log is byte-identical to pre-193 output, which is a
+    /// pinned criterion, and a "0 not persisted" line on every run would be noise that trains the reader to
+    /// skip it. Null means the pass did not do that kind of work and is never rendered as a zero.
+    /// </summary>
+    internal static void LogDurableWriteShortfall(
+        ILogger logger, int? signalsNotPersisted, int? scoreSnapshotsNotPersisted)
+    {
+        if (signalsNotPersisted is not > 0 && scoreSnapshotsNotPersisted is not > 0)
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "This run did NOT durably persist everything it produced: {SignalsNotPersisted} signal(s) and "
+                + "{ScoreSnapshotsNotPersisted} score snapshot(s) exist only in this process's memory. The "
+                + "run completed and reported on them, but they are absent from the accrued stores, so the "
+                + "next run's history read and the efficacy/replay reads will not see them.",
+            signalsNotPersisted ?? 0,
+            scoreSnapshotsNotPersisted ?? 0);
     }
 }

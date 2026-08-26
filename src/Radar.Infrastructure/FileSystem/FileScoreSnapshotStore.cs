@@ -16,8 +16,10 @@ namespace Radar.Infrastructure.FileSystem;
 /// <see cref="FileScoreSnapshotStoreOptions.SnapshotFileName"/> selector supplies), grouping by company so
 /// a single company's score history is trivial to browse once multiple runs accumulate. All file I/O is
 /// confined to Infrastructure; the Application sees only <see cref="IScoreSnapshotFileStore"/>. Disk
-/// failures degrade gracefully (warn + return the attempted path) and never crash the run; the in-memory
-/// score repository copy still exists.
+/// failures degrade gracefully (warn + return the attempted path, marked
+/// <see cref="DurableWriteOutcome.Failed"/>) and never crash the run; the in-memory score repository copy
+/// still exists — but the failure is no longer SILENT (spec 193 §1): the typed outcome lets the scoring
+/// pass count a snapshot that never reached disk instead of reporting it as durably stored.
 /// </summary>
 /// <remarks>
 /// <b>Overwrite-allowed (upsert-by-Id, last-write-wins).</b> This deliberately DIFFERS from the
@@ -47,7 +49,7 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore, IScoreSnap
         _logger = logger;
     }
 
-    public async Task<string> WriteAsync(
+    public async Task<DurableWriteResult> WriteAsync(
         CompanyScoreSnapshot snapshot,
         IReadOnlyList<ScoreEvidenceLink> links,
         CancellationToken ct)
@@ -82,10 +84,13 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore, IScoreSnap
 
         var json = Serialize(snapshot, links);
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
+        var written = await GracefulFileWriter
+            .TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false);
+        if (written)
         {
             // The write succeeded, so the earlier file really is gone (upsert-by-Id / last-write-wins,
-            // unchanged). Now, and only now, is the observer told.
+            // unchanged). Now, and only now, is the observer told. Spec 193 does not touch this: the
+            // overwrite observer must still fire ONLY on a successful write.
             if (willReplaceExisting)
             {
                 _options.OnSnapshotOverwritten!(snapshot);
@@ -98,7 +103,10 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore, IScoreSnap
                 path);
         }
 
-        return path;
+        // Spec 193 §1: the attempted path, plus whether anything reached it. A failed write leaves the
+        // in-memory score repository copy (so the run completes) but nothing on disk — the scoring pass
+        // counts it rather than reporting the snapshot as durably stored.
+        return DurableWriteResult.From(path, written);
     }
 
     public async Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(

@@ -58,7 +58,7 @@ public sealed class ReplayScopedScoreSnapshotFileStoreFactoryTests : IDisposable
         var companyId = Guid.NewGuid();
         var store = CreateFactory().ForStrategy("my-run", Strategy("broad", isPrimary: true));
 
-        var path = await store.WriteAsync(Snapshot(companyId, WindowEnd), [], CancellationToken.None);
+        var path = (await store.WriteAsync(Snapshot(companyId, WindowEnd), [], CancellationToken.None)).Path;
 
         Assert.Equal(
             Path.Combine(_tempDir, "my-run", "strategies", "broad", companyId.ToString(), "20260601T000000Z.json"),
@@ -74,7 +74,7 @@ public sealed class ReplayScopedScoreSnapshotFileStoreFactoryTests : IDisposable
         var companyId = Guid.NewGuid();
         var store = CreateFactory().ForStrategy("run", Strategy("primary-one", isPrimary: true));
 
-        var path = await store.WriteAsync(Snapshot(companyId, WindowEnd), [], CancellationToken.None);
+        var path = (await store.WriteAsync(Snapshot(companyId, WindowEnd), [], CancellationToken.None)).Path;
 
         Assert.Contains(Path.Combine("run", "strategies", "primary-one"), path, StringComparison.Ordinal);
     }
@@ -118,9 +118,9 @@ public sealed class ReplayScopedScoreSnapshotFileStoreFactoryTests : IDisposable
         var companyId = Guid.NewGuid();
         var store = CreateFactory().ForStrategy("run", Strategy("broad"));
 
-        var first = await store.WriteAsync(Snapshot(companyId, WindowEnd), [], CancellationToken.None);
-        var second = await store.WriteAsync(
-            Snapshot(companyId, WindowEnd.AddMilliseconds(500)), [], CancellationToken.None);
+        var first = (await store.WriteAsync(Snapshot(companyId, WindowEnd), [], CancellationToken.None)).Path;
+        var second = (await store.WriteAsync(
+            Snapshot(companyId, WindowEnd.AddMilliseconds(500)), [], CancellationToken.None)).Path;
 
         Assert.NotEqual(first, second);
 

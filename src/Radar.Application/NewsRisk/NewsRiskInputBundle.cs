@@ -36,17 +36,44 @@ public sealed record NewsRiskInputArticle(
 /// dropped volume is itself information. It is NOT a <see cref="BundleHash"/> input — the hash stays over
 /// the supplied articles only, so the assessment cache key does not move.
 /// </summary>
+/// <param name="SyndicatedDuplicateCount">
+/// SPEC 193 §3: how many ADMITTED observations the duplicate-normalized-headline collapse removed — i.e.
+/// N − 1 for each headline with N admitted copies, summed over headlines. Population: the observations that
+/// passed the window/cutoff admission filters, BEFORE the article cap (the collapse runs before the cap, so
+/// this number is independent of it). Zero means nothing collapsed. Without it, a company with 40 syndicated
+/// copies of one story is indistinguishable from one with a single article, and syndication breadth is
+/// itself a presence measurement.
+/// </param>
+/// <param name="SyndicatedDistinctPublisherCount">
+/// SPEC 193 §3: the number of distinct <c>Publisher</c> values (ordinal) across the admitted observations
+/// belonging to a normalized-headline group with MORE THAN ONE copy — i.e. the syndication breadth of the
+/// stories that collapsed. Population: those groups' observations INCLUDING the surviving copy, so N copies
+/// from M publishers reports M — the story's full syndication breadth — rather than M − 1. That is the
+/// deliberate choice: the question this answers is "how widely was the collapsed story carried", and the
+/// survivor's own publisher is part of that breadth. It is 0 when nothing collapsed, and it is NOT a count
+/// of publishers whose article was dropped.
+/// <para>
+/// NEITHER count is a <see cref="BundleHash"/> input, for exactly the reason
+/// <paramref name="QualifyingArticleCount"/> is not: the hash stays over the SUPPLIED articles only, so the
+/// assessment cache key does not move and no cohort forks. Neither feeds
+/// <see cref="Completeness"/> either — <c>Capped</c> is about the bundle bound, and a dedupe collapse is not
+/// a cap drop (spec 182 §2).
+/// </para>
+/// </param>
 public sealed record NewsRiskInputBundle(
     IReadOnlyList<NewsRiskInputArticle> Articles,
     DateTimeOffset SelectionAsOfUtc,
     DateTimeOffset AssessmentCutoffUtc,
     string BundleHash,
-    int QualifyingArticleCount)
+    int QualifyingArticleCount,
+    int SyndicatedDuplicateCount,
+    int SyndicatedDistinctPublisherCount)
 {
     /// <summary>
     /// The spec-182 model-input completeness dimension: <c>Capped</c> when qualifying observations were
     /// dropped by the bundle bound. Computed, so a <c>with</c>-copy (e.g. live body attachment) can never
-    /// carry a stale value.
+    /// carry a stale value. Spec 193 §3 deliberately does NOT fold the syndication counts in: a
+    /// duplicate-headline collapse is not a cap drop, and <c>Capped</c> keeps its exact pre-193 meaning.
     /// </summary>
     public NewsRiskAssessmentBundle Completeness =>
         QualifyingArticleCount > Articles.Count
@@ -101,18 +128,48 @@ public static class NewsRiskInputBundleBuilder
             .ThenBy(o => o.ObservationId)
             .ToList();
 
+        // Spec 193 §3: measure the syndication the collapse below is about to discard, BEFORE discarding it.
+        // Only the surviving article's own Publisher travels into the bundle — the earlier comment here
+        // claimed "publisher diversity and exact ids stay visible on the surviving article", which was not
+        // accurate: one article carries one publisher, and every other copy's publisher and id are gone. So
+        // the two facts worth keeping are counted here: how many copies collapsed, and across how many
+        // distinct publishers the collapsed STORIES were carried (see NewsRiskInputBundle for the exact
+        // populations). Pure and deterministic — a grouping over the already-ordered admitted list.
+        var syndicatedDuplicateCount = 0;
+        var syndicatedPublishers = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in admitted.GroupBy(o => NormalizeHeadline(o.Headline), StringComparer.Ordinal))
+        {
+            var copies = 0;
+            foreach (var o in group)
+            {
+                copies++;
+            }
+
+            if (copies <= 1)
+            {
+                continue;
+            }
+
+            syndicatedDuplicateCount += copies - 1;
+            foreach (var o in group)
+            {
+                syndicatedPublishers.Add(o.Publisher);
+            }
+        }
+
         // Collapse exact duplicate normalized headlines: the comparison key is suffix-stripped + trimmed,
-        // ordinal — the FIRST (newest) copy survives. Publisher diversity and exact ids stay visible on the
-        // surviving article; nothing else is normalized. Enumeration continues PAST the article cap (without
-        // adding) so the bundle can report how many QUALIFYING observations exist — a dedupe-collapsed
-        // duplicate is not a cap drop (spec 182 §2).
+        // ordinal — the FIRST (newest) copy survives. Only the surviving article's OWN Publisher, id and
+        // stored headline travel into the bundle; every collapsed copy's publisher and id are dropped, which
+        // is why the two counts above exist. Nothing else is normalized. Enumeration continues PAST the
+        // article cap (without adding) so the bundle can report how many QUALIFYING observations exist — a
+        // dedupe-collapsed duplicate is not a cap drop (spec 182 §2).
         var seenHeadlines = new HashSet<string>(StringComparer.Ordinal);
         var articles = new List<NewsRiskInputArticle>();
         var qualifying = 0;
         var fetchedAttached = 0;
         foreach (var o in admitted)
         {
-            var normalized = (GoogleNewsHeadline.StripPublisherSuffix(o.Headline) ?? string.Empty).Trim();
+            var normalized = NormalizeHeadline(o.Headline);
             if (!seenHeadlines.Add(normalized))
             {
                 continue;
@@ -155,9 +212,22 @@ public static class NewsRiskInputBundleBuilder
             Articles: articles,
             SelectionAsOfUtc: selectionAsOfUtc,
             AssessmentCutoffUtc: ComputeCutoff(selectionAsOfUtc, articles),
+            // Unchanged: the hash is over the SUPPLIED articles only, so neither syndication count below can
+            // move the assessment cache key (spec 193 §3).
             BundleHash: ComputeBundleHash(articles),
-            QualifyingArticleCount: qualifying);
+            QualifyingArticleCount: qualifying,
+            SyndicatedDuplicateCount: syndicatedDuplicateCount,
+            SyndicatedDistinctPublisherCount: syndicatedPublishers.Count);
     }
+
+    /// <summary>
+    /// The ONE duplicate-collapse comparison key: the already-defined Google publisher-suffix strip plus a
+    /// trim, ordinal. Shared by the syndication measurement and the collapse itself so the two can never
+    /// group differently — a divergent second copy would make the counts describe a collapse that did not
+    /// happen.
+    /// </summary>
+    private static string NormalizeHeadline(string headline) =>
+        (GoogleNewsHeadline.StripPublisherSuffix(headline) ?? string.Empty).Trim();
 
     /// <summary>
     /// The honest assessment cutoff (spec 179 §4): <c>max(D, every supplied input's retrieval instant)</c>.

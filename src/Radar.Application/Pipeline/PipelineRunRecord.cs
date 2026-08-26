@@ -56,4 +56,20 @@ public sealed record PipelineRunRecord(
     // association the spec demands — never a nearest-time join), or null when capture was disabled, no
     // collector emitted observations, or the record predates the archive. Trailing + optional so every
     // existing on-disk run JSON still deserializes; observational only, read by no scoring/report path.
-    Guid? NewsObservationBatchId = null);
+    Guid? NewsObservationBatchId = null,
+    // Spec 193 §1: how many signals / score snapshots this run held in memory but could NOT durably persist
+    // (the file store's write degraded gracefully). Trailing + NULLABLE, and null means NOT RECORDED — a run
+    // record written before this contract existed, or a pass that did not do that kind of work at all. Never
+    // a fabricated 0: "this run persisted everything" and "nobody was counting" are different facts, and the
+    // first is a claim the second cannot make (the spec-190 CollectorCompanyCoverage precedent).
+    //
+    // WHICH RUNNER RECORDS WHICH: a value is written only where the pass genuinely observed it. The combined
+    // run records both. A `collect` pass records SignalsNotPersisted and leaves ScoreSnapshotsNotPersisted
+    // null — it wrote no snapshot, so 0 would claim a clean snapshot write that never happened. A `score`
+    // pass is the mirror: ScoreSnapshotsNotPersisted recorded, SignalsNotPersisted null.
+    //
+    // Observational only — never an evidence, signal, score, fingerprint or strategy-comparability input,
+    // and RecentRunSummary does not read it. It is not backfilled onto existing records (heal forward,
+    // AD-8).
+    int? SignalsNotPersisted = null,
+    int? ScoreSnapshotsNotPersisted = null);

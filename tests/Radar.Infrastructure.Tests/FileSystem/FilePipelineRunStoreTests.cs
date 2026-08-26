@@ -548,4 +548,75 @@ public sealed class FilePipelineRunStoreTests : IDisposable
         Assert.Equal([CollectionCoverageIssues.ResultLimitReached], coverage.Issues);
     }
 
+    /// <summary>
+    /// Spec 193 §1: an ACCRUED pre-193 run record carries neither not-persisted count. Both must hydrate as
+    /// <c>null</c> — "not recorded" — and never as <c>0</c>, which would be a fabricated claim that the run
+    /// durably persisted everything it produced. Nobody was counting; that is a different fact.
+    /// </summary>
+    [Fact]
+    public async Task LegacyRunJsonWithoutSpec193Counts_HydratesAsNotRecorded_NeverZero()
+    {
+        var directory = Path.Combine(_tempDir, "2026", "02");
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "run-legacy-durable-writes.json"),
+            """
+            {
+              "id": "88888888-8888-8888-8888-888888888888",
+              "createdAtUtc": "2026-02-08T12:00:00+00:00",
+              "collectors": [ "newssearch" ],
+              "evidenceCollected": 3,
+              "evidenceNew": 2,
+              "signalsExtracted": 2,
+              "signalsValid": 2,
+              "signalsApproved": 2,
+              "signalsNeedingReview": 0,
+              "companiesScored": 1,
+              "sourcesChecked": 1,
+              "sourcesFailed": 0,
+              "reportId": null
+            }
+            """);
+
+        var read = Assert.Single(await CreateStore().ReadRecentAsync(10, CancellationToken.None));
+
+        Assert.Null(read.SignalsNotPersisted);
+        Assert.Null(read.ScoreSnapshotsNotPersisted);
+        // Everything the legacy record DID carry still reads exactly as it did.
+        Assert.Equal(Guid.Parse("88888888-8888-8888-8888-888888888888"), read.Id);
+        Assert.Equal(2, read.SignalsApproved);
+        Assert.Equal(1, read.CompaniesScored);
+    }
+
+    /// <summary>
+    /// Spec 193 §1: and a MEASURED zero round-trips as a zero, so "everything persisted" stays sayable and
+    /// is distinguishable from the legacy null above.
+    /// </summary>
+    [Fact]
+    public async Task Spec193Counts_RoundTripThroughTheDurableRecord()
+    {
+        var store = CreateStore();
+        var record = new PipelineRunRecord(
+            Id: Guid.NewGuid(),
+            CreatedAtUtc: new DateTimeOffset(2026, 2, 8, 12, 0, 0, TimeSpan.Zero),
+            Collectors: ["newssearch"],
+            EvidenceCollected: 1,
+            EvidenceNew: 1,
+            SignalsExtracted: 1,
+            SignalsValid: 1,
+            SignalsApproved: 1,
+            SignalsNeedingReview: 0,
+            CompaniesScored: 1,
+            SourcesChecked: 1,
+            SourcesFailed: 0,
+            ReportId: null,
+            SignalsNotPersisted: 3,
+            ScoreSnapshotsNotPersisted: 0);
+
+        await store.WriteAsync(record, CancellationToken.None);
+
+        var read = Assert.Single(await CreateStore().ReadRecentAsync(10, CancellationToken.None));
+        Assert.Equal(3, read.SignalsNotPersisted);
+        Assert.Equal(0, read.ScoreSnapshotsNotPersisted);
+    }
 }
