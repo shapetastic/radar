@@ -85,7 +85,7 @@ public sealed class SignalSourceDescriptorTests
         // future edit can reintroduce it by accident.
         var identity = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v7;", identity);
+        Assert.Equal("rules=radar-keyword-rules-v8;", identity);
         Assert.DoesNotContain("collectors=", identity, StringComparison.Ordinal);
         Assert.DoesNotContain("usaspending", identity, StringComparison.Ordinal);
     }
@@ -148,7 +148,7 @@ public sealed class SignalSourceDescriptorTests
         var descriptor = DescriptorFor("rss");
 
         Assert.Contains(KeywordSignalExtractor.RuleSetVersion, descriptor, StringComparison.Ordinal);
-        Assert.Contains("radar-keyword-rules-v7", descriptor, StringComparison.Ordinal);
+        Assert.Contains("radar-keyword-rules-v8", descriptor, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -320,7 +320,7 @@ public sealed class SignalSourceDescriptorTests
         // segment.
         var descriptor = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v7;", descriptor);
+        Assert.Equal("rules=radar-keyword-rules-v8;", descriptor);
         Assert.DoesNotContain("ai=", descriptor, StringComparison.Ordinal);
     }
 
@@ -333,7 +333,7 @@ public sealed class SignalSourceDescriptorTests
         // side (spec 141): it carries per-signal magnitudes and the reading model, which change signal
         // DIRECTION — that is scoring identity, not a collector set.
         Assert.Equal(
-            "rules=radar-keyword-rules-v7;ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;",
+            "rules=radar-keyword-rules-v8;ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;",
             DescriptorWithAi("directional-filing:str=6;nov=6;minconf=0.6", "rss", "sec", "usaspending"));
     }
 
@@ -355,7 +355,7 @@ public sealed class SignalSourceDescriptorTests
         // cannot collide with a different descriptor (injectivity, AD-3).
         var descriptor = DescriptorWithAi("a=b;c,d%e", "rss");
 
-        Assert.Equal("rules=radar-keyword-rules-v7;ai=a%3Db%3Bc%2Cd%25e;", descriptor);
+        Assert.Equal("rules=radar-keyword-rules-v8;ai=a%3Db%3Bc%2Cd%25e;", descriptor);
     }
 
     [Fact]

@@ -2813,42 +2813,12 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<INewsJudgmentCandidatePlanner, NewsJudgmentCandidatePlanner>();
         services.AddSingleton<INewsJudgmentGenerator, NewsJudgmentGenerator>();
         services.TryAddSingleton<IWeeklyReportJudgmentRerenderer, WeeklyReportJudgmentRerenderer>();
-        // SPEC 191 — the ONE seam through which the news read reaches the signal layer, registered HERE and
-        // only here, under exactly the gate that registers the judgment step. Without judgment there is no
-        // presentation cohort and therefore nothing to admit, so the extractor's optional dependency stays
-        // null and the NewsArticle branch is byte-identical to pre-191.
-        //
-        // The presentation cohort key is composed from the SAME reader identities the marker path uses
-        // (NewsJudgmentReaderIdentity.CohortKeyFor over NewsTypingReaderIdentity.CohortKey) rather than
-        // re-derived from config, so the SCORED cohort and the DISPLAYED cohort cannot drift. The judgment
-        // step requires typing (the composition root enforces it unconditionally), so the typing reader set
-        // is always registered when this factory runs; a presentation name that resolves to no reader is
-        // already a startup failure (ValidateJudgmentPresentationCohort), so this throws only if that
-        // invariant is broken.
-        services.AddSingleton(sp =>
-        {
-            var judge = sp.GetRequiredService<NewsJudgmentReaderSet>().Readers.FirstOrDefault(
-                j => string.Equals(
-                    j.Identity.Name, options.PresentationJudge, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException(
-                    $"Radar:NewsResearch:Judgment:PresentationCohort:Judge '{options.PresentationJudge}' "
-                        + "resolves to no registered judge reader; the spec-191 directional news read has "
-                        + "no cohort to admit judgments from.");
-            var extractor = sp.GetRequiredService<NewsTypingReaderSet>().Readers.FirstOrDefault(
-                r => string.Equals(
-                    r.Identity.Name, options.PresentationExtractor, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException(
-                    $"Radar:NewsResearch:Judgment:PresentationCohort:Extractor "
-                        + $"'{options.PresentationExtractor}' resolves to no registered typing reader; the "
-                        + "spec-191 directional news read has no stage-1 cohort to admit judgments from.");
-
-            return new NewsDirectionalReadOptions(judge.Identity.CohortKeyFor(extractor.Identity.CohortKey));
-        });
-        // ONE singleton, TWO consumers: CollectionPass calls PrepareAsync once per run (with that run
-        // captured asOfUtc), and KeywordSignalExtractor calls TryReadAsync per news evidence item. Both
-        // take it as an optional trailing dependency, so a composition without judgment resolves null in
-        // both places.
-        services.AddSingleton<INewsDirectionalReadSource, NewsDirectionalReadSource>();
+        // SPEC 194 — the spec-191 INewsDirectionalReadSource seam that used to be registered here is
+        // RETIRED. It let KeywordSignalExtractor take a news article's DIRECTION from a company-level
+        // judgment while extracting it, but the stage-2 judge runs AFTER collection, so the only judgment
+        // such a read could see was one produced from earlier articles it had never read. Direction is now
+        // carried by its own judgment-derived signal, materialized after the judgment exists and anchored to
+        // the evidence that judgment actually cited; ordinary news extraction is Neutral again.
         services.TryAddSingleton(TimeProvider.System);
         return services;
     }

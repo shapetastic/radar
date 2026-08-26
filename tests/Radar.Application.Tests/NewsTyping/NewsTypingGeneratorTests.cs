@@ -2435,6 +2435,95 @@ public sealed class NewsTypingGeneratorTests
     }
 
     /// <summary>
+    /// SPEC 194 3 / 4.10 - an OUT-OF-WINDOW backlog failure cannot alter an in-window company's
+    /// completeness token. Before spec 194 the retryable test read a PASS-WIDE set of company ids while the
+    /// checkpoint itself is a 30-day WINDOW statement, so this exact shape - every in-window observation
+    /// typed successfully, one legacy-backlog observation failing - reported <c>RetryableFailure</c>. Spec
+    /// 189 recorded that as a token-only cost. It stopped being token-only when spec 191 made completeness a
+    /// SCORING input: <c>NewsTrajectorySignalRules.StrengthFor</c> pays a complete-typing bonus, so the false
+    /// token silently cost a strength point on the company's judgment-derived signal.
+    /// <para>
+    /// MUTATION CHECK: reverting the predicate in <c>BuildCohortRunResult</c> to a pass-wide company-id set
+    /// turns this test red (it reports <c>RetryableFailure</c>) while the in-window sibling below stays
+    /// green - so the two together pin the SCOPE, not merely the outcome.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AnOutOfWindowBacklogFailure_LeavesInWindowCompletenessComplete()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+
+        // The 30-day window holds exactly one observation, and it types successfully.
+        var inWindow = Observation("in-window article, types fine", AsOf.AddDays(-2));
+
+        // A legacy-backlog article, far outside the window, whose provider call fails this pass. It is
+        // still SELECTED (window first, then backlog oldest-first) so the failure is real, not hypothetical.
+        var outOfWindow = Observation("legacy backlog article, provider fails", AsOf.AddDays(-90));
+        harness.Archive.Observations.AddRange([inWindow, outOfWindow]);
+
+        var typed = harness.Extractor.Script;
+        harness.Extractor.Script = request =>
+            request.Observation.ObservationId == outOfWindow.ObservationId
+                ? ProviderFailure()
+                : typed(request);
+
+        var result = await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var cohort = Assert.Single(result!.Cohorts);
+
+        // The failure genuinely happened: both observations were called, and the pass-wide reader summary
+        // still reports it. Only the WINDOW token is unaffected.
+        Assert.Equal(2, harness.Extractor.ObservationsSeen.Count);
+        Assert.Equal(
+            NewsTypingCompleteness.Complete, cohort.TypingCompletenessByCompany[CompanyId]);
+        Assert.Equal(0, cohort.RetryExhausted);
+
+        var summary = Assert.Single(harness.ArtifactStore.Live[^1].Document.ReaderSummaries!);
+        Assert.Equal(1, summary.ProviderFailures);
+
+        // The company's in-window row agrees with the token by construction: no in-window observation is
+        // untyped and none failed, so nothing here reads degraded either.
+        var row = Assert.Single(Assert.Single(harness.ArtifactStore.Live[^1].Document.Companies).Cohorts);
+        Assert.Equal(0, row.UntypedRemaining);
+        Assert.Equal(0, row.RetryableFailuresThisRun);
+        Assert.Equal(0, row.RetryExhausted);
+    }
+
+    /// <summary>
+    /// SPEC 194 3 / 4.10, the other half: a REAL IN-WINDOW failure still degrades the company. The fix
+    /// narrows the scope of the retryable test; it does not weaken it, and a company whose window coverage
+    /// really was degraded today must not be flattered to <c>Complete</c>.
+    /// </summary>
+    [Fact]
+    public async Task AnInWindowFailure_StillReadsRetryableFailure()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+
+        var inWindowOk = Observation("in-window article, types fine", AsOf.AddDays(-2));
+        var inWindowFails = Observation("in-window article, provider fails", AsOf.AddDays(-1));
+        var outOfWindow = Observation("legacy backlog article, types fine", AsOf.AddDays(-90));
+        harness.Archive.Observations.AddRange([inWindowOk, inWindowFails, outOfWindow]);
+
+        var typed = harness.Extractor.Script;
+        harness.Extractor.Script = request =>
+            request.Observation.ObservationId == inWindowFails.ObservationId
+                ? ProviderFailure()
+                : typed(request);
+
+        var result = await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var cohort = Assert.Single(result!.Cohorts);
+        Assert.Equal(
+            NewsTypingCompleteness.RetryableFailure, cohort.TypingCompletenessByCompany[CompanyId]);
+
+        var row = Assert.Single(Assert.Single(harness.ArtifactStore.Live[^1].Document.Companies).Cohorts);
+        Assert.Equal(1, row.RetryableFailuresThisRun);
+        Assert.Equal(1, row.UntypedRemaining);
+    }
+
+    /// <summary>
     /// The remaining precedence rungs, so the ladder is covered end to end: a fully typed company reads
     /// <c>Complete</c>, a company with untouched work and no failure reads <c>Backlog</c>, and neither ever
     /// reads the legacy <c>Failed</c>, which the generator no longer computes.

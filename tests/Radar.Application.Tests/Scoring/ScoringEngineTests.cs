@@ -1150,7 +1150,7 @@ public sealed class ScoringEngineTests
 
         // The IDENTITY descriptor (the fingerprint input) carries the rule-set identity and nothing about
         // which collectors are registered.
-        Assert.Equal("rules=radar-keyword-rules-v7;", resolved.CanonicalDescriptor());
+        Assert.Equal("rules=radar-keyword-rules-v8;", resolved.CanonicalDescriptor());
     }
 
     [Fact]

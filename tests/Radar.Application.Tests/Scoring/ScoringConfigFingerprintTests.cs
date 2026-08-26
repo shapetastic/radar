@@ -22,12 +22,16 @@ public sealed class ScoringConfigFingerprintTests
     // 7-collector default — which meant enabling an eighth collector re-stamped every strategy's identity
     // even when its scores were bit-for-bit identical. The enabled-collector set is now recorded per-snapshot
     // as `CollectionProvenance` (see SignalSourceDescriptorTests) and hashed into NOTHING, so it is correctly
-    // absent here. SPEC 191 moved the rule-set identity to radar-keyword-rules-v7: the NewsArticle branch is
-    // no longer unconditionally Neutral — it takes its DIRECTION and a scaled Strength from the admitted
-    // stage-2 news judgment — which is a rule-STRUCTURE change and therefore re-stamps all four pins below.
+    // absent here. SPEC 191 moved the rule-set identity to radar-keyword-rules-v7 (the NewsArticle branch
+    // took its DIRECTION from the admitted stage-2 news judgment) and SPEC 194 §1.1 moves it again, to
+    // radar-keyword-rules-v8: that read consulted a company judgment WHILE extracting an article the
+    // judgment had never seen, so the seam is retired and ordinary news extraction is the pre-191 Neutral
+    // media-attention event once more. v8 is a CORRECTION, not a rollback to v6 — the emitted signal matches
+    // v6's but the regime does not, because direction now rides a separate judgment-derived signal — and it
+    // is a rule-STRUCTURE change, so it re-stamps every pin below.
     // (v6 was spec 130's TrademarkActivity group; spec 129 added RegulatoryApproval; spec 127 added
     // PatentActivity; spec 103 added HiringActivity.)
-    private const string SourceDescriptor = "rules=radar-keyword-rules-v7;";
+    private const string SourceDescriptor = "rules=radar-keyword-rules-v8;";
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -145,24 +149,33 @@ public sealed class ScoringConfigFingerprintTests
         // input was a code default. The window is not: this pin is computed at the ScoringOptions CODE
         // DEFAULT of 30 days (DefaultWindow, above), while the live baseline runs at
         // Radar:ScoringWindowDays = 60 (RadarWorkerOptions/appsettings.json; scripts/run-profiles/default.json
-        // does not override it) and therefore stamps radar-scoring-fp-58c289cd0113 (spec 191; it was
-        // radar-scoring-fp-4eb2fe5d3cdf from spec 148 until this slice). The live pair is recorded in
-        // default.json's own comment, which is the operator-facing record; this pin is the unit-level
-        // change-detector. Both are correct at their own window — do not "reconcile" them.
+        // does not override it) and therefore stamps radar-scoring-fp-06e4781f86bb (spec 194; it was
+        // radar-scoring-fp-58c289cd0113 under spec 191, and radar-scoring-fp-4eb2fe5d3cdf from spec 148
+        // before that). The live pair is recorded in default.json's own comment, which is the operator-facing
+        // record; this pin is the unit-level change-detector. Both are correct at their own window — do not
+        // "reconcile" them.
         //
-        // SPEC 191 MOVED THIS PIN, DELIBERATELY: radar-scoring-fp-0c46e07b94db → the value below. The cause
-        // is the KeywordSignalExtractor.RuleSetVersion bump v6 → v7 — the NewsArticle branch is no longer
-        // unconditionally Neutral; it takes its DIRECTION (and a Strength scaled by the judge's finding count
-        // and typing completeness) from the admitted stage-2 news judgment. That is a rule-STRUCTURE change,
-        // which is exactly what this identity exists to pin, so the move IS the deliverable. Unlike specs
-        // 127/129/130 — rule groups that were opt-in-OFF, so scoring math was byte-identical — this one
-        // CHANGES SCORES on the shipped baseline: news was 98.4% Neutral / 96.75% MediaAttention over a
-        // 4,000-signal sample and was therefore scored as VOLUME. The score series takes a discontinuity;
-        // history is deliberately NOT regenerated, rewritten or backfilled (AD-8/AD-1). No _formula.Version
-        // bump, no weight edit. StrategyIdentityGuard will trip on the next run until every configured
-        // strategy's data/scoring-configs/strategies/{name}.json record is consciously re-recorded or
-        // deleted (that path is git-ignored, so it cannot be committed from a worktree).
-        Assert.Equal("radar-scoring-fp-be417df3b731", DefaultFingerprint());
+        // SPEC 191 MOVED THIS PIN (radar-scoring-fp-0c46e07b94db → radar-scoring-fp-be417df3b731) for the
+        // RuleSetVersion bump v6 → v7, which made the NewsArticle branch take its DIRECTION from the admitted
+        // stage-2 news judgment.
+        //
+        // SPEC 194 MOVES IT AGAIN, DELIBERATELY: radar-scoring-fp-be417df3b731 → the value below, for the
+        // RuleSetVersion bump v7 → v8. The v7 read ran DURING collection while the stage-2 judge runs AFTER
+        // it, so a newly collected article could only ever inherit a judgment produced from EARLIER articles
+        // it had never read — one verdict multiplied by however many later headlines arrived, which is the
+        // volume/size proxy spec 191 set out to remove, reintroduced through stale direction. The seam is
+        // retired and ordinary news extraction is the pre-191 Neutral media-attention event again; direction
+        // will ride its own judgment-derived signal (spec 194 §1.2), materialized after the judgment exists.
+        // v8 is a CORRECTION, not a rollback: the emitted signal matches v6's but the regime does not.
+        //
+        // TWO INTENTIONAL SCORING-IDENTITY MOVES IN THE SAME WEEK, and therefore THREE semantic regimes with
+        // two close discontinuities: pre-191 Neutral news, spec-191 inherited direction (known DEFECTIVE and
+        // NOT a valid control cohort), and post-194 grounded judgment signals. History is deliberately NOT
+        // regenerated, rewritten or backfilled (AD-8/AD-1). No _formula.Version bump, no weight edit.
+        // StrategyIdentityGuard will trip on the next run until every configured strategy's
+        // data/scoring-configs/strategies/{name}.json record is consciously re-recorded or deleted (that path
+        // is git-ignored, so it cannot be committed from a worktree). That halt is correct; do not bypass it.
+        Assert.Equal("radar-scoring-fp-023b1af1e3d4", DefaultFingerprint());
     }
 
     [Fact]
@@ -188,11 +201,19 @@ public sealed class ScoringConfigFingerprintTests
         // source. What remains true, and is what this test now guards, is that a change to the signal-source
         // IDENTITY descriptor — the extractor rule STRUCTURE identity, which does change what is scored —
         // still re-stamps. The perturbation target is deliberately kept one version AHEAD of the shipped
-        // RuleSetVersion (spec 191 moved the default to v7, so this perturbs to v8) — a perturbation equal to
-        // the default would make this test vacuous.
-        Assert.NotEqual(
-            DefaultFingerprint(),
-            DefaultFingerprint(sourceDescriptor: "rules=radar-keyword-rules-v8;"));
+        // RuleSetVersion (spec 194 §1.1 moved the default to v8, so this perturbs to v9) — a perturbation
+        // equal to the default would make this test VACUOUS, which is exactly what happened when the shipped
+        // version caught up with a perturbation literal that was not moved with it. Whoever bumps
+        // KeywordSignalExtractor.RuleSetVersion next must move this literal in the same slice.
+        const string perturbed = "rules=radar-keyword-rules-v9;";
+
+        // Non-vacuity, guarded against the SHIPPED const rather than against this file's own literal: the day
+        // production bumps to v9 this fails here, naming the reason, instead of silently asserting that a
+        // fingerprint differs from itself.
+        Assert.DoesNotContain(KeywordSignalExtractor.RuleSetVersion, perturbed, StringComparison.Ordinal);
+        Assert.NotEqual(SourceDescriptor, perturbed);
+
+        Assert.NotEqual(DefaultFingerprint(), DefaultFingerprint(sourceDescriptor: perturbed));
     }
 
     [Fact]
@@ -289,7 +310,7 @@ public sealed class ScoringConfigFingerprintTests
         // descriptor is untouched; only the rules= segment moved. See the AI-OFF pin above for the
         // discontinuity/lineage statement and the StrategyIdentityGuard remedy.
         Assert.Equal(
-            "radar-scoring-fp-4d1cd1a1528c",
+            "radar-scoring-fp-ef9104b7b2b9",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -321,10 +342,10 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-0a7058d94582 → radar-scoring-fp-5d89d6ce1668) — a rules= change folds in with or
         // without the AI descriptor.
         Assert.Equal(
-            "radar-scoring-fp-3670cdb74652",
+            "radar-scoring-fp-7a4cd9d409ed",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-c9fe86a19073",
+            "radar-scoring-fp-759835b624ca",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 

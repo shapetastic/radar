@@ -66,17 +66,18 @@ public sealed class ReplayRunnerTests
     }
 
     /// <summary>
-    /// Spec 191 — THE SAME INVARIANT over a DIRECTIONAL news signal. The spec-191 read gives a
-    /// <see cref="SignalType.MediaAttention"/> signal a direction, a scaled strength and a provenance
-    /// envelope AT EXTRACTION TIME; replay never re-extracts, so it reads the very signal the forward pass
-    /// persisted and must reproduce the forward snapshot field for field (excluding the per-call minted
-    /// Guids, which two consecutive forward runs differ in too).
+    /// Specs 191/194 — THE SAME INVARIANT over a DIRECTIONAL news signal. Replay never re-extracts: it reads
+    /// the very signals the forward pass persisted, so an accrued directional
+    /// <see cref="SignalType.MediaAttention"/> signal carrying a judgment provenance envelope must reproduce
+    /// the forward snapshot field for field (excluding the per-call minted Guids, which two consecutive
+    /// forward runs differ in too).
     /// <para>
-    /// The point-in-time honesty spec 191 §3 requires lives on the FORWARD side — the read admits only a
-    /// judgment with <c>CreatedAtUtc &lt;= asOf</c>, asserted by
-    /// <c>NewsDirectionalReadSourceTests.AJudgmentCreatedAfterTheAsOfInstant_IsInvisible</c> — and the
-    /// replay side is protected by spec 136's existing signal predicate, asserted below. The two compose:
-    /// nothing in the replay path can reach a judgment at all.
+    /// The signals seeded below are the SPEC-191 accrued shape — directional media attention with a judgment
+    /// envelope. Spec 194 §1.1 stopped MINTING them (extraction is judgment-blind again, and direction now
+    /// rides a separate judgment-derived signal), but it deliberately deletes and rewrites nothing, so those
+    /// records remain on disk and remain replayable. Point-in-time honesty lives on the FORWARD side; the
+    /// replay side is protected by spec 136's existing signal predicate, asserted below. Nothing in the
+    /// replay path can reach a judgment at all.
     /// </para>
     /// </summary>
     [Fact]
