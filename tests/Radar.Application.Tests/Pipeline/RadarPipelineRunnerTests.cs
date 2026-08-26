@@ -714,9 +714,16 @@ public sealed class RadarPipelineRunnerTests
         Assert.Contains("accrued signal history does NOT contain them", storeWarning.Message);
 
         // And the run says so in its summary — the run must not report the signal as durably stored.
+        // A COMBINED run genuinely observed both axes, so both are rendered — including the measured zero.
+        // Pinned as the full string because the wording is a stated byte-identical criterion, and because
+        // omitting an observed 0 here is the most natural wrong generalisation of the null-axis rule.
         var summaryShortfall = Assert.Single(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
-        Assert.Contains("did NOT durably persist everything it produced", summaryShortfall.Message);
-        Assert.Contains("1 signal(s)", summaryShortfall.Message);
+        Assert.Equal(
+            "This run did NOT durably persist everything it produced: 1 signal(s) and 0 score snapshot(s) "
+                + "exist only in this process's memory. The run completed and reported on them, but they are "
+                + "absent from the accrued stores, so the next run's history read and the efficacy/replay "
+                + "reads will not see them.",
+            summaryShortfall.Message);
     }
 
     [Fact]
@@ -745,8 +752,10 @@ public sealed class RadarPipelineRunnerTests
         Assert.Contains("1 score snapshot(s)", storeWarning.Message);
         Assert.Contains("accrued score history does NOT contain them", storeWarning.Message);
 
+        // The mirror of the signal-side pin: a combined run observed the signal axis too, so its measured 0
+        // is rendered rather than dropped.
         var summaryShortfall = Assert.Single(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
-        Assert.Contains("1 score snapshot(s)", summaryShortfall.Message);
+        Assert.Contains("0 signal(s) and 1 score snapshot(s)", summaryShortfall.Message);
     }
 
     [Fact]
@@ -830,6 +839,12 @@ public sealed class RadarPipelineRunnerTests
 
         var shortfall = Assert.Single(h.CollectOnlyLog.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("did NOT durably persist everything it produced", shortfall.Message);
+        Assert.Contains("1 signal(s)", shortfall.Message);
+
+        // ...and the summary line omits the snapshot axis ENTIRELY rather than rendering the null as "0
+        // score snapshot(s)" — that would claim a clean snapshot write this pass never attempted, the exact
+        // fabricated zero the nullable run-record counter above exists to avoid.
+        Assert.DoesNotContain("score snapshot", shortfall.Message);
     }
 
     [Fact]
@@ -851,6 +866,10 @@ public sealed class RadarPipelineRunnerTests
 
         var shortfall = Assert.Single(h.ScoreOnlyLog.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("1 score snapshot(s)", shortfall.Message);
+
+        // Mirror of the collect-pass assertion: this pass observed no signal write, so the signal axis is
+        // omitted rather than reported as a measured "0 signal(s)".
+        Assert.DoesNotContain("signal(s)", shortfall.Message);
     }
 
     [Fact]

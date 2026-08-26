@@ -118,6 +118,10 @@ public sealed class GuidanceChangeSupersedeAccountingTests
         Assert.Same(input, result.Signals);
         Assert.Empty(result.SupersededCounts);
         Assert.Equal(0, result.TotalSuperseded);
+
+        // That empty map is SHARED across every fast-path result, so it must also be immutable: a consumer
+        // casting the interface back to a mutable dictionary would otherwise poison every other result.
+        Assert.IsNotType<Dictionary<Guid, int>>(result.SupersededCounts);
     }
 
     [Fact]

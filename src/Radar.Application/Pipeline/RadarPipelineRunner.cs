@@ -211,12 +211,32 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             return;
         }
 
+        // Only the axes this pass actually OBSERVED are rendered. A null axis means the pass did no work of
+        // that kind, and printing it as "0 score snapshot(s)" would state a clean write that never happened —
+        // the same fabricated zero the nullable run-record counters exist to avoid. A measured 0 beside a
+        // non-zero sibling IS rendered, because a combined run genuinely observed it.
+        const string Lead = "This run did NOT durably persist everything it produced: ";
+        const string Tail = " exist only in this process's memory. The run completed and reported on them, "
+            + "but they are absent from the accrued stores, so the next run's history read and the "
+            + "efficacy/replay reads will not see them.";
+
+        if (signalsNotPersisted is null)
+        {
+            logger.LogWarning(
+                Lead + "{ScoreSnapshotsNotPersisted} score snapshot(s)" + Tail,
+                scoreSnapshotsNotPersisted);
+            return;
+        }
+
+        if (scoreSnapshotsNotPersisted is null)
+        {
+            logger.LogWarning(Lead + "{SignalsNotPersisted} signal(s)" + Tail, signalsNotPersisted);
+            return;
+        }
+
         logger.LogWarning(
-            "This run did NOT durably persist everything it produced: {SignalsNotPersisted} signal(s) and "
-                + "{ScoreSnapshotsNotPersisted} score snapshot(s) exist only in this process's memory. The "
-                + "run completed and reported on them, but they are absent from the accrued stores, so the "
-                + "next run's history read and the efficacy/replay reads will not see them.",
-            signalsNotPersisted ?? 0,
-            scoreSnapshotsNotPersisted ?? 0);
+            Lead + "{SignalsNotPersisted} signal(s) and {ScoreSnapshotsNotPersisted} score snapshot(s)" + Tail,
+            signalsNotPersisted,
+            scoreSnapshotsNotPersisted);
     }
 }

@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+
 using Radar.Domain.Signals;
 
 namespace Radar.Application.Scoring;
@@ -175,8 +177,13 @@ public sealed record GuidanceChangeSupersedeResult<T>(
     IReadOnlyList<T> Signals,
     IReadOnlyDictionary<Guid, int> SupersededCounts)
 {
-    /// <summary>The shared empty map, so the untouched fast path allocates no dictionary.</summary>
-    internal static readonly IReadOnlyDictionary<Guid, int> NoCounts = new Dictionary<Guid, int>();
+    /// <summary>
+    /// The shared empty map, so the untouched fast path allocates no dictionary. It is a
+    /// <see cref="FrozenDictionary{TKey,TValue}"/> rather than a bare <see cref="Dictionary{TKey,TValue}"/>
+    /// precisely BECAUSE it is shared: a consumer that cast the interface back to the concrete type could
+    /// otherwise mutate every past and future fast-path result at once.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<Guid, int> NoCounts = FrozenDictionary<Guid, int>.Empty;
 
     /// <summary>
     /// The fast path: no supersede could apply, so the INPUT INSTANCE is handed back unchanged (no list
