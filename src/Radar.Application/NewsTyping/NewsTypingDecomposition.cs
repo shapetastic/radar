@@ -2,7 +2,17 @@ using Radar.Application.News;
 
 namespace Radar.Application.NewsTyping;
 
-/// <summary>The JSON side of the attention-decomposition artifact (spec 181 §5) — one document per run day, mirrored by the rendered markdown.</summary>
+/// <summary>
+/// The JSON side of the attention-decomposition artifact (spec 181 §5) — one document per run day, mirrored
+/// by the rendered markdown.
+/// <para>
+/// Spec 189 §3 adds the run's CAPTURE INFLOW (<see cref="NewsObservationBatchId"/> +
+/// <see cref="ObservationsCapturedThisRun"/>) and the AUTHORITATIVE pass-wide
+/// <see cref="ReaderSummaries"/>, all TRAILING and nullable so a v1–v3 reader is unaffected. Inflow beside
+/// spend is the number the capacity decision turns on: the 2026-08-24 baseline captured 252 new observations
+/// against a 200-call budget, and no artifact said so.
+/// </para>
+/// </summary>
 public sealed record NewsTypingDecompositionDocument(
     string SchemaVersion,
     Guid? RunId,
@@ -13,7 +23,16 @@ public sealed record NewsTypingDecompositionDocument(
     bool? CaptureProvenThisRun,
     IReadOnlyList<NewsTypingDecompositionCompany> Companies,
     int ObservationsWithoutCompany,
-    DateTimeOffset GeneratedAtUtc)
+    DateTimeOffset GeneratedAtUtc,
+    // Spec 189 §3: the spec-177 observation batch this run captured, and how many NEW observation files it
+    // wrote. Both are NULLABLE and fail closed: a standalone (no-run) invocation has no batch, and an
+    // unreadable/absent batch manifest records `null` — NEVER a timestamp-derived estimate, which would look
+    // like a measurement while being a guess.
+    Guid? NewsObservationBatchId = null,
+    int? ObservationsCapturedThisRun = null,
+    // Spec 189 §3: one AUTHORITATIVE pass-wide summary per extractor cohort. A reviewer must not have to
+    // reconstruct a pass-wide call budget by summing the current window's company rows.
+    IReadOnlyList<NewsTypingDecompositionReaderSummary>? ReaderSummaries = null)
 {
     /// <summary>
     /// The decomposition schema tag. Bumped to <c>-v2</c> by spec 186 §2 for the ADDITIVE per-cohort
@@ -29,10 +48,18 @@ public sealed record NewsTypingDecompositionDocument(
     /// document: the spec attributes the single bump jointly to §2 and §4, so the tag stays at v3 rather
     /// than moving twice for one release.
     /// </para>
-    /// Readers are by-NAME, so a v1/v2 consumer reads a v3 document unchanged (asserted), and existing v1/v2
-    /// artifacts on disk stay readable and untouched.
+    /// <para>
+    /// Bumped to <c>-v4</c> by spec 189 §3 for the ADDITIVE capture-inflow fields, the authoritative pass-wide
+    /// <see cref="ReaderSummaries"/> and the three per-cohort diagnostics
+    /// (<see cref="NewsTypingDecompositionCohort.RetrySelected"/>,
+    /// <see cref="NewsTypingDecompositionCohort.ProviderCallsAttempted"/>,
+    /// <see cref="NewsTypingDecompositionCohort.RetryableFailuresThisRun"/>). Nothing existing changed
+    /// meaning — unlike the v3 bump, which also corrected <c>UntypedRemaining</c>.
+    /// </para>
+    /// Readers are by-NAME, so a v1/v2/v3 consumer reads a v4 document unchanged (asserted), and existing
+    /// v1–v3 artifacts on disk stay readable and untouched.
     /// </summary>
-    public const string CurrentSchemaVersion = "news-typing-decomposition-v3";
+    public const string CurrentSchemaVersion = "news-typing-decomposition-v4";
 
     /// <summary>The §5 caveat, VERBATIM per the spec — carried by every decomposition artifact.</summary>
     public const string Caveat181 =
@@ -85,6 +112,17 @@ public sealed record NewsTypingDecompositionCompany(
 /// first" is visible rather than asserted. The cohort's pass-wide totals (window and backlog alike) ride
 /// <c>NewsTypingCohortRunResult</c>; both are projected from the SAME per-observation lane record.
 /// </para>
+/// <para>
+/// <b>Spec 189 §3 completes the picture with three more DIAGNOSTICS</b> (again, not partition members).
+/// <c>RetrySelected</c> is the THIRD lane, and it had been missing: the live 2026-08-24 pass allocated 100
+/// candidate + 99 general + 1 retry, and without a retry column that reads as an unused slot rather than as
+/// the retry it was. <c>ProviderCallsAttempted</c> is what the pass actually SPENT on this company —
+/// deliberately a different number from the selection counts, because a refused attempt reservation is a
+/// selection that never became a call. <c>RetryableFailuresThisRun</c> counts the in-window observations
+/// that ended this pass with a provider/parse/validation, reservation-refusal or unpersisted-outcome failure
+/// and have NOT exhausted their budget — so "degraded today, still eligible" is named separately from both
+/// ordinary backlog and permanent exhaustion.
+/// </para>
 /// </summary>
 public sealed record NewsTypingDecompositionCohort(
     string ReaderName,
@@ -100,7 +138,54 @@ public sealed record NewsTypingDecompositionCohort(
     int RetryExhausted,
     int ReservedWithoutOutcome = 0,
     int CandidatePrioritySelected = 0,
-    int GeneralSelected = 0);
+    int GeneralSelected = 0,
+    int RetrySelected = 0,
+    int ProviderCallsAttempted = 0,
+    int RetryableFailuresThisRun = 0);
+
+/// <summary>
+/// Spec 189 §3: ONE pass-wide summary per extractor cohort — the durable artifact equivalent of the
+/// bounded/final log totals, and the AUTHORITATIVE view of how the per-run hosted-call budget was allocated
+/// and spent.
+/// <para>
+/// <b>These totals are pass-wide; the per-company rows are a WINDOW statement.</b> They may legitimately
+/// differ, and the difference is never silently called equality. Named reasons: a selected observation from
+/// the legacy BACKLOG sits outside the checkpoint window and appears in no company row; and an observation
+/// with no company attribution appears in no company section at all (the document's
+/// <c>ObservationsWithoutCompany</c> counts those). When a reviewer needs "what did this pass spend", this
+/// record answers it; when they need "how well is this company covered", the company rows do.
+/// </para>
+/// <para>
+/// <c>RetrySelected + CandidatePrioritySelected + GeneralSelected</c> is what the queue ALLOCATED (the three
+/// lanes are disjoint, so no observation is counted twice); <c>ProviderCallsAttempted</c> is what was
+/// actually spent after durable-reservation races/refusals. The distinction is intentional — equating them
+/// would hide exactly the storage failures <c>ReservationsRefused</c> / <c>OutcomeWritesFailed</c> /
+/// <c>ReservedWithoutOutcome</c> exist to surface.
+/// </para>
+/// <para>
+/// <c>UntypedRemaining</c> keeps spec 187 §4's meaning — STILL ELIGIBLE work a later run can drain, with
+/// exhausted observations excluded and unpersisted outcomes included. Diagnostics only: nothing here is
+/// hashed into any cohort key, fact, family, score or fingerprint.
+/// </para>
+/// </summary>
+public sealed record NewsTypingDecompositionReaderSummary(
+    string ReaderName,
+    string Provider,
+    string ModelId,
+    string CohortKey,
+    int RetrySelected,
+    int CandidatePrioritySelected,
+    int GeneralSelected,
+    int ProviderCallsAttempted,
+    int CompletedOutcomesPersisted,
+    int ProviderFailures,
+    int ParseFailures,
+    int ValidationFailures,
+    int ReservationsRefused,
+    int OutcomeWritesFailed,
+    int RetryExhausted,
+    int ReservedWithoutOutcome,
+    int UntypedRemaining);
 
 /// <summary>
 /// One event type's row: how many typed observations carried it as <c>DerivedPrimaryType</c>, the distinct

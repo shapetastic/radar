@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 using Microsoft.Extensions.Configuration;
@@ -294,7 +295,7 @@ public sealed class DefaultRunProfileTests
         // The delta: typing on, hosted DeepSeek reader, no second (local) reader — spec 181 §1's measured
         // verdict (0.0% hosted vs 19.2% local citation-drop) makes the local model no solo typing reader.
         Assert.Equal("True", configuration["Radar:NewsResearch:Typing:Enabled"]);
-        Assert.Equal("200", configuration["Radar:NewsResearch:Typing:MaxNewTypingsPerRun"]);
+        Assert.Equal("350", configuration["Radar:NewsResearch:Typing:MaxNewTypingsPerRun"]);
         Assert.Equal(
             "openai", configuration["Radar:NewsResearch:Typing:Readers:0:Provider"]);
         Assert.Null(configuration["Radar:NewsResearch:Typing:Readers:1:Name"]);
@@ -327,6 +328,82 @@ public sealed class DefaultRunProfileTests
         Assert.Equal(
             "deepinfra-deepseek", configuration["Radar:NewsResearch:Shadow:Readers:0:Name"]);
         Assert.Null(configuration["Radar:NewsResearch:Shadow:Readers:1:Name"]);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 189 §1 — the declared typing capacity posture: 350 total / 150 candidate / 25 retry
+    // ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The BASELINE capacity call, pinned against the committed profiles. Measured basis (2026-08-24
+    /// baseline run <c>a180298d</c>): the 30-day window held 2,411 observations of which only 377 were typed,
+    /// the run CAPTURED 252 new observations against a 200-call cap, and the 200 calls cost 508.6s of serial
+    /// provider time — so inflow exceeded capacity while the runtime cost of another 150 calls (~6m21s at the
+    /// observed 2.54s mean) stays bounded beside a 58-minute baseline.
+    /// <para>
+    /// All FIVE limits are asserted in ALL THREE profiles, and that redundancy is the point: before spec 189
+    /// the profiles declared only the budget and the window, so the two lane widths came from the code
+    /// defaults and selecting an experiment overlay could silently restore the pre-189 200/100 posture.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("news-typing")]
+    [InlineData("news-judgment")]
+    public void EveryTypingProfile_DeclaresAllFiveLimitsExplicitly_AtThe350And150And25Posture(
+        string? overlayProfile)
+    {
+        var configuration = BindProfiles(overlayProfile);
+
+        Assert.Equal("350", configuration["Radar:NewsResearch:Typing:MaxNewTypingsPerRun"]);
+        Assert.Equal("150", configuration["Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun"]);
+        Assert.Equal("25", configuration["Radar:NewsResearch:Typing:MaxRetryTypingsPerRun"]);
+        Assert.Equal("3", configuration["Radar:NewsResearch:Typing:MaxTypingAttempts"]);
+        Assert.Equal("30", configuration["Radar:NewsResearch:Typing:LookbackDays"]);
+    }
+
+    /// <summary>
+    /// The cross-field reservation, computed from the profile rather than restated: 150 + 25 &lt; 350 leaves
+    /// at least 175 GENERAL first-attempt slots even when both earlier lanes fill completely — candidate
+    /// priority must never be able to stop the ~2,000-observation legacy backlog draining.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("news-typing")]
+    [InlineData("news-judgment")]
+    public void EveryTypingProfile_ReservesAtLeast175GeneralFirstAttemptSlots(string? overlayProfile)
+    {
+        var configuration = BindProfiles(overlayProfile);
+
+        var perRun = int.Parse(
+            configuration["Radar:NewsResearch:Typing:MaxNewTypingsPerRun"]!,
+            CultureInfo.InvariantCulture);
+        var candidate = int.Parse(
+            configuration["Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun"]!,
+            CultureInfo.InvariantCulture);
+        var retry = int.Parse(
+            configuration["Radar:NewsResearch:Typing:MaxRetryTypingsPerRun"]!,
+            CultureInfo.InvariantCulture);
+
+        Assert.True(candidate + retry < perRun, "candidate + retry must stay strictly below the budget.");
+        Assert.Equal(175, perRun - candidate - retry);
+    }
+
+    /// <summary>
+    /// Spec 189 §1: the lookback window is NOT narrowed to manufacture a better completeness percentage. The
+    /// objective is to read more relevant evidence, not to make missing evidence disappear from the
+    /// denominator — so the 30-day window is pinned beside the raised budget.
+    /// </summary>
+    [Fact]
+    public void DefaultProfile_KeepsThe30DayTypingWindow_WhileRaisingTheBudget()
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(DefaultProfilePath()));
+        var typing = doc.RootElement
+            .GetProperty("Radar").GetProperty("NewsResearch").GetProperty("Typing");
+
+        Assert.Equal(30, typing.GetProperty("LookbackDays").GetInt32());
+        Assert.Equal(350, typing.GetProperty("MaxNewTypingsPerRun").GetInt32());
+        Assert.Equal(3, typing.GetProperty("MaxTypingAttempts").GetInt32());
     }
 
     // ---------------------------------------------------------------------------------------------------

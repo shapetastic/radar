@@ -132,14 +132,145 @@ public sealed class NewsTypingDecompositionRendererTests
         {
             CandidatePrioritySelected = 3,
             GeneralSelected = 1,
+            ProviderCallsAttempted = 4,
         };
 
         var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(
             Document(Company(cohort)));
 
         Assert.Contains(
-            "same-event families 2 · selected this pass: 3 judgment-candidate priority, 1 general",
+            "same-event families 2 · selected this pass: 0 retry, 3 judgment-candidate priority, 1 general "
+                + "(4 provider call(s) made)",
             markdown);
+    }
+
+    /// <summary>
+    /// Spec 189 §3: the RETRY lane is the third selection column, and what the pass actually SPENT renders
+    /// beside what it selected. The live 2026-08-24 pass allocated 100 candidate + 99 general + 1 retry
+    /// against a 200-call budget, and without a retry column that reads as an unused slot.
+    /// </summary>
+    [Fact]
+    public void RetryLaneAndProviderCalls_RenderBesideTheSelectionCounts()
+    {
+        var cohort = Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 0, 2, 0) with
+        {
+            RetrySelected = 1,
+            CandidatePrioritySelected = 3,
+            GeneralSelected = 1,
+            // Deliberately BELOW the five selections: one reservation was refused, so a selection was never
+            // spent. Equating the two numbers is exactly the error the separate column exists to prevent.
+            ProviderCallsAttempted = 4,
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(Document(Company(cohort)));
+
+        Assert.Contains(
+            "selected this pass: 1 retry, 3 judgment-candidate priority, 1 general (4 provider call(s) "
+                + "made)",
+            markdown);
+    }
+
+    /// <summary>
+    /// Spec 189 §3: a retryable failure is NAMED separately from backlog and from exhaustion, and only when
+    /// it happened — so an untouched company row is unchanged.
+    /// </summary>
+    [Fact]
+    public void RetryableFailures_RenderSeparatelyFromBacklogAndExhaustion()
+    {
+        var cohort = Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 2, 2, 0) with
+        {
+            RetryableFailuresThisRun = 1,
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(Document(Company(cohort)));
+
+        Assert.Contains("untyped remaining 2", markdown);
+        Assert.Contains("retryable failures this run 1", markdown);
+        Assert.DoesNotContain("retries exhausted", markdown);
+
+        // And it is absent when it did not happen.
+        Assert.DoesNotContain(
+            "retryable failures this run",
+            NewsTypingDecompositionRenderer.RenderMarkdown(Document(Company(
+                Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 2, 2, 0)))));
+    }
+
+    /// <summary>
+    /// Spec 189 §3: capture INFLOW renders beside the pass, because "252 captured against a 200-call budget"
+    /// is the fact the capacity decision turns on. An unresolvable batch renders "not recorded" — never a
+    /// guessed number.
+    /// </summary>
+    [Fact]
+    public void CaptureInflow_Renders_AndFailsClosedWhenTheBatchIsUnresolvable()
+    {
+        var withBatch = Document() with
+        {
+            NewsObservationBatchId = new Guid("bbbbbbbb-0000-0000-0000-000000000001"),
+            ObservationsCapturedThisRun = 252,
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(withBatch);
+        Assert.Contains(
+            "Observation capture this run: batch `bbbbbbbb-0000-0000-0000-000000000001` · new observations "
+                + "252",
+            markdown);
+
+        var unresolvable = NewsTypingDecompositionRenderer.RenderMarkdown(Document());
+        Assert.Contains(
+            "Observation capture this run: batch `(none)` · new observations not recorded", unresolvable);
+    }
+
+    /// <summary>
+    /// Spec 189 §3: the AUTHORITATIVE pass-wide reader summary renders as its own table, and the note under
+    /// it STATES that pass-wide totals and the window's company rows may legitimately differ — it never
+    /// silently claims they are equal.
+    /// </summary>
+    [Fact]
+    public void PassWideReaderSummary_RendersAsTheAuthoritativeBudgetView_WithItsHonestyNote()
+    {
+        var document = Document() with
+        {
+            ReaderSummaries =
+            [
+                new NewsTypingDecompositionReaderSummary(
+                    ReaderName: "a",
+                    Provider: "openai",
+                    ModelId: "model-a",
+                    CohortKey: NewsTypingContract.CohortKey("openai", "model-a"),
+                    RetrySelected: 1,
+                    CandidatePrioritySelected: 150,
+                    GeneralSelected: 199,
+                    ProviderCallsAttempted: 350,
+                    CompletedOutcomesPersisted: 345,
+                    ProviderFailures: 0,
+                    ParseFailures: 0,
+                    ValidationFailures: 5,
+                    ReservationsRefused: 0,
+                    OutcomeWritesFailed: 0,
+                    RetryExhausted: 0,
+                    ReservedWithoutOutcome: 0,
+                    UntypedRemaining: 2_017),
+            ],
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(document);
+
+        Assert.Contains("### Typing pass totals (pass-wide, authoritative for the call budget)", markdown);
+        Assert.Contains("| a (openai:model-a) | 1 | 150 | 199 | 350 | 345 | 0 | 0 | 5 | 0 | 0 | 0 | 0 "
+            + "| 2017 |", markdown);
+        Assert.Contains("may legitimately differ", markdown);
+    }
+
+    /// <summary>
+    /// A document carrying NO reader summaries (a re-rendered pre-189 artifact) omits the table entirely
+    /// rather than rendering a row of zeroes — an absent measurement must never look like a measured zero.
+    /// </summary>
+    [Fact]
+    public void PassWideReaderSummary_IsOmittedEntirely_WhenNoneWasRecorded()
+    {
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(Document());
+
+        Assert.DoesNotContain("Typing pass totals", markdown);
     }
 
     /// <summary>
@@ -154,6 +285,59 @@ public sealed class NewsTypingDecompositionRendererTests
             Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 0, 2, 0))));
 
         Assert.DoesNotContain("selected this pass", markdown);
+    }
+
+    /// <summary>
+    /// A re-rendered PRE-v4 artifact recorded spec 187 §2's two lanes but not spec 189 §3's retry lane or
+    /// call count, which deserialize as 0. The row must not claim "0 retry … (0 provider call(s) made)" —
+    /// a defaulted zero is not a measured zero (spec 187 §7's rule), so the unrecorded numbers are NAMED.
+    /// </summary>
+    [Fact]
+    public void PreV4Document_NamesTheUnrecordedRetryLaneAndCallCount_RatherThanRenderingAMeasuredZero()
+    {
+        var cohort = Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 0, 2, 0) with
+        {
+            CandidatePrioritySelected = 3,
+            GeneralSelected = 1,
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(
+            Document(Company(cohort)) with { SchemaVersion = "news-typing-decomposition-v3" });
+
+        Assert.Contains(
+            "selected this pass: 3 judgment-candidate priority, 1 general (retry lane and provider calls "
+                + "not recorded in news-typing-decomposition-v3)",
+            markdown);
+        Assert.DoesNotContain("0 retry", markdown);
+        Assert.DoesNotContain("provider call(s) made", markdown);
+        // The capture-inflow line is v4-only too: "(none)" would claim the run genuinely had no batch.
+        Assert.Contains(
+            "Observation capture this run: not recorded (schema news-typing-decomposition-v3)", markdown);
+        Assert.DoesNotContain("batch `(none)`", markdown);
+    }
+
+    /// <summary>
+    /// The gate is on the KNOWN pre-v4 tags, never on "equals the current tag" — a future schema must keep
+    /// rendering a real measurement rather than silently reporting it as unrecorded.
+    /// </summary>
+    [Fact]
+    public void UnrecognisedSchemaVersion_StillRendersTheRecordedDiagnostics()
+    {
+        var cohort = Cohort("a", "model-a", NewsObservationCaptureMode.ProspectiveRss, 4, 0, 2, 0) with
+        {
+            RetrySelected = 1,
+            CandidatePrioritySelected = 3,
+            GeneralSelected = 1,
+            ProviderCallsAttempted = 4,
+        };
+
+        var markdown = NewsTypingDecompositionRenderer.RenderMarkdown(
+            Document(Company(cohort)) with { SchemaVersion = "news-typing-decomposition-v5" });
+
+        Assert.Contains(
+            "selected this pass: 1 retry, 3 judgment-candidate priority, 1 general (4 provider call(s) "
+                + "made)",
+            markdown);
     }
 
     [Fact]

@@ -217,7 +217,10 @@ public sealed class NewsJudgmentInputBuilderTests
             NewsJudgmentRecord.IdentityFor(v1Key, companyId, "hash", runId: null),
             NewsJudgmentRecord.IdentityFor(v2Key, companyId, "hash", runId: null));
 
-        // …and newly written records stamp the v2 store schema while v1 files keep theirs.
-        Assert.Equal("news-judgment-v2", NewsJudgmentRecord.CurrentSchemaVersion);
+        // …and newly written records stamp the CURRENT store schema while v1 files keep theirs. Spec 189 §2
+        // moved that tag to v3 for the widened typing-completeness vocabulary — which is a RECORD change,
+        // not a cohort change: the two cohort keys above are unaffected by it (asserted in
+        // NewsJudgmentCompletenessSchemaTests).
+        Assert.Equal("news-judgment-v3", NewsJudgmentRecord.CurrentSchemaVersion);
     }
 }

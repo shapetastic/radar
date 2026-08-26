@@ -3,19 +3,37 @@ using Radar.Application.News;
 namespace Radar.Application.NewsTyping;
 
 /// <summary>
-/// Per-company per-cohort typing coverage (spec 185 §5): whether every in-window supplied-text observation
-/// for a company has a completed typing in one extractor cohort. The zero value is DELIBERATELY the degraded
-/// state (the spec-182 convention): a consumer that never receives a computed value must read "failed",
-/// never "complete". A deferred article (the spec-181 <c>MaxNewTypingsPerRun</c> cap) is an untyped fact
-/// source, so "found no challenge" over a backlogged company is a weaker statement — and says so.
+/// Per-company per-cohort typing coverage (spec 185 §5, split by spec 189 §2): whether every in-window
+/// supplied-text observation for a company has a completed typing in one extractor cohort. The zero value is
+/// DELIBERATELY the degraded state (the spec-182 convention): a consumer that never receives a computed value
+/// must read "failed", never "complete". A deferred article (the spec-181 <c>MaxNewTypingsPerRun</c> cap) is
+/// an untyped fact source, so "found no challenge" over a backlogged company is a weaker statement — and
+/// says so.
+/// <para>
+/// <b>The computation precedence (spec 189 §2) is total and conservative</b>, and the generator applies it in
+/// this order: (1) any in-window EXHAUSTED observation ⇒ <see cref="RetryExhausted"/>; (2) otherwise any
+/// failure/refusal/unpersisted outcome in this pass ⇒ <see cref="RetryableFailure"/>; (3) otherwise any
+/// eligible untyped observation ⇒ <see cref="Backlog"/>; (4) otherwise <see cref="Complete"/>. One
+/// observation may remain in the artifact's <c>UntypedRemaining</c> population while ALSO explaining a
+/// company-level <see cref="RetryableFailure"/>: the former is the disjoint population partition ("work still
+/// eligible"), the latter is current-pass provenance ("why this company's read degraded today").
+/// </para>
+/// <para>
+/// <b>Ordinals are frozen.</b> The two spec-189 values are APPENDED, so <c>Failed = 0</c>,
+/// <c>Backlog = 1</c> and <c>Complete = 2</c> keep their numeric values. Nothing depends on the numbers —
+/// every persisted record carries the string TOKEN (the shared file-store JSON options use
+/// <c>JsonStringEnumConverter(allowIntegerValues: false)</c>, so an integer is REJECTED on read) — but the
+/// ordinals stay put so the zero value remains the degraded one.
+/// </para>
 /// </summary>
 public enum NewsTypingCompleteness
 {
     /// <summary>
-    /// At least one typing attempt for the company FAILED this run (provider/parse/validation), OR the
-    /// company holds an in-window observation whose typing attempts are EXHAUSTED (spec 186 §2 — retries
-    /// are bounded, and an exhausted observation will never be typed in this cohort, so it is a permanent
-    /// hole, not a deferral). Takes precedence over Backlog.
+    /// LEGACY / UNCLASSIFIED degraded coverage, and the defensive zero value. Before spec 189 this single
+    /// token meant BOTH "an attempt failed this pass" and "an observation exhausted its attempts", which are
+    /// different facts with different remedies — so it is still READABLE (existing records hydrate unchanged
+    /// and are never rewritten, AD-8) but is NEVER newly computed by the generator, which always knows which
+    /// of <see cref="RetryableFailure"/> / <see cref="RetryExhausted"/> occurred.
     /// </summary>
     Failed = 0,
 
@@ -24,6 +42,38 @@ public enum NewsTypingCompleteness
 
     /// <summary>Every in-window supplied-text observation for the company has a completed typing in this cohort.</summary>
     Complete,
+
+    /// <summary>
+    /// Spec 189 §2: at least one of this company's observations had a provider/parse/validation failure, a
+    /// refused attempt reservation or an outcome write that never persisted IN THIS PASS, and NO in-window
+    /// observation has exhausted its attempt budget. The failed observation stays eligible, so a later run
+    /// can still type it — this is a degraded read TODAY, not a permanent hole.
+    /// <para>
+    /// The failure set is PASS-WIDE (a failure on a legacy-backlog observation degrades the company too),
+    /// deliberately keeping the pre-189 <c>Failed</c> semantics exactly rather than narrowing them to the
+    /// window in the same slice that splits the token: degrading is the safe direction, and a company must
+    /// never be silently upgraded to <see cref="Complete"/> by a rename. Exhaustion, by contrast, stays
+    /// WINDOW-scoped (spec 186 §2) — an exhausted backlog article is counted as a permanent cost but does not
+    /// relabel this window's coverage. The per-cohort/pass-wide split lives in the decomposition artifact.
+    /// </para>
+    /// <para>
+    /// KNOWN, RECORDED LIMITATION of that scope asymmetry (recorded, not fixed): an OUT-OF-WINDOW observation
+    /// that spends its FINAL attempt in a pass is marked failed (pass-wide) but not exhausted (window-scoped),
+    /// so a company holding one reads <c>RetryableFailure</c> for an observation that is really exhausted. It
+    /// affects THIS TOKEN only — the decomposition artifact's per-company row projects retryable failures
+    /// through the exhaustion-excluding rule, so its eligible-backlog count stays correct, and the leaders
+    /// marker policy treats every non-<see cref="Complete"/> value identically.
+    /// </para>
+    /// </summary>
+    RetryableFailure,
+
+    /// <summary>
+    /// Spec 189 §2: at least one IN-WINDOW observation has spent all permitted attempts without a durable
+    /// completed typing (spec 186 §2's bound, enforced by spec 187 §3's durable pre-call reservations). It is
+    /// a PERMANENT hole for the current <c>(cohort, observation, payload)</c> — a later run will not drain it
+    /// — so it takes precedence over every other state, <see cref="RetryableFailure"/> included.
+    /// </summary>
+    RetryExhausted,
 }
 
 /// <summary>
@@ -55,12 +105,13 @@ public sealed record NewsTypingFactRef(
 /// failure must never read as ordinary deferred work.
 /// </para>
 /// <para>
-/// <c>CandidatePrioritySelected</c> and <c>GeneralSelected</c> (spec 187 §2) are this cohort's PASS-WIDE
-/// first-attempt lane split: how many hosted calls went, round-robin, to the companies this run was about
-/// to judge, and how many flowed back to the global window/backlog queue. Retry-lane selections are
-/// reported separately (the per-cohort log line and <c>RetryExhausted</c>); the three lanes are disjoint,
-/// so no observation is counted twice. Diagnostics only — nothing here changes typing content, validation,
-/// cohort identity or fact-family membership.
+/// <c>RetrySelected</c>, <c>CandidatePrioritySelected</c> and <c>GeneralSelected</c> (spec 187 §2, completed
+/// by spec 189 §3) are this cohort's PASS-WIDE lane split: how many hosted calls went to the bounded FIFO
+/// retry lane, how many went round-robin to the companies this run was about to judge, and how many flowed
+/// back to the global window/backlog queue. The three lanes are disjoint, so no observation is counted
+/// twice — and the retry count is reported explicitly because without it a 100 + 99 split against a 200-call
+/// budget reads as an unused slot rather than as the one retry it actually was. Diagnostics only — nothing
+/// here changes typing content, validation, cohort identity or fact-family membership.
 /// </para>
 /// Exposes the generator's existing in-memory join instead of adding a read seam to the write-only family
 /// snapshot store.
@@ -74,7 +125,8 @@ public sealed record NewsTypingCohortRunResult(
     int RetryExhausted,
     int ReservedWithoutOutcome = 0,
     int CandidatePrioritySelected = 0,
-    int GeneralSelected = 0);
+    int GeneralSelected = 0,
+    int RetrySelected = 0);
 
 /// <summary>
 /// The typed outcome of one typing pass (spec 185 §5), returned by <see cref="INewsTypingGenerator"/> so the

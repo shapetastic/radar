@@ -218,6 +218,42 @@ public sealed class RunProfileNewsResearchGuardTests
         Assert.Equal(typingReader.Name, options.Judgment.PresentationCohort.Extractor);
     }
 
+    /// <summary>
+    /// Spec 189 §1: every shipped profile RESOLVES the declared capacity posture through the REAL
+    /// composition root — 350 hosted calls per reader per run, a 150-wide candidate lane, a 25-wide retry
+    /// lane, a three-attempt lifetime bound and the unchanged 30-day window — and the three-way cross-field
+    /// rule (enforced by that same composition root while judgment is enabled) leaves at least 175 GENERAL
+    /// first-attempt slots. Binding it rather than reading the JSON is what proves the raised budget
+    /// actually starts up.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ComposableProfiles))]
+    public void EveryShippedProfile_ResolvesThe350And150And25TypingPosture(string? overlayProfileName)
+    {
+        using var key = new HostedKeyScope();
+        using var root = new TempRoot();
+        using var provider = BuildWorkerGraph(Compose(overlayProfileName, root.Path));
+
+        var options = provider.GetRequiredService<NewsTypingOptions>();
+
+        Assert.Equal(350, options.MaxNewTypingsPerRun);
+        Assert.Equal(150, options.MaxCandidateTypingsPerRun);
+        Assert.Equal(25, options.MaxRetryTypingsPerRun);
+        Assert.Equal(3, options.MaxTypingAttempts);
+        Assert.Equal(30, options.LookbackDays);
+
+        // The general-slot reservation, computed rather than restated.
+        Assert.Equal(
+            175,
+            options.MaxNewTypingsPerRun
+                - options.MaxCandidateTypingsPerRun
+                - options.MaxRetryTypingsPerRun);
+
+        // …and the limits actually recorded on each typing attempt are those same five numbers.
+        Assert.Equal(
+            new NewsTypingLimitsRecord(350, 30, 3, 25, 150), options.ToLimitsRecord());
+    }
+
     [Theory]
     [MemberData(nameof(ComposableProfiles))]
     public void EveryShippedProfile_ComposedAsRunRadarDoes_PassesEveryNewsResearchGuard(

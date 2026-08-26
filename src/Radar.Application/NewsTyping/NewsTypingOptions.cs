@@ -32,10 +32,14 @@ public sealed record NewsTypingOptions
     }
 
     /// <summary>
-    /// The shipped default candidate-lane width (spec 187 §2). Declared HERE and referenced by the Worker
+    /// The AMBIENT default candidate-lane width (spec 187 §2). Declared HERE and referenced by the Worker
     /// options so the documented default lives in one place. It is deliberately NOT a default on the
     /// constructor parameter: every limit on this type is required, so a composition root that forgets one
     /// fails to compile rather than silently resolving a lane width nobody configured.
+    /// <para>
+    /// Spec 189 §1 raised the checked-in baseline PROFILE to 150 (inside a 350-call budget) while leaving
+    /// this ambient default at 100 — see <see cref="MaxNewTypingsPerRun"/> for why the two differ.
+    /// </para>
     /// </summary>
     public const int DefaultMaxCandidateTypingsPerRun = 100;
 
@@ -45,6 +49,12 @@ public sealed record NewsTypingOptions
     /// <summary>
     /// The per-READER per-run cap on NEW model calls (spec 181 §6: the 13k legacy backlog drains
     /// incrementally under this cap, sized from §1's measured ~21 s/read — never in one unbounded pass).
+    /// <para>
+    /// <b>The AMBIENT code default stays 200; the shipped baseline PROFILE declares 350</b> (spec 189 §1).
+    /// The increase is a measured operating decision for the checked-in scheduled profile — the 2026-08-24
+    /// baseline captured 252 new observations against a 200-call cap while 2,017 in-window observations sat
+    /// untyped — not permission for an arbitrary caller that merely enables typing to spend 75 % more.
+    /// </para>
     /// </summary>
     public int MaxNewTypingsPerRun { get; }
 
