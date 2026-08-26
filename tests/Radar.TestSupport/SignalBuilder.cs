@@ -18,6 +18,7 @@ public sealed class SignalBuilder
     private SignalReviewStatus _reviewStatus = SignalReviewStatus.Pending;
     private DateTimeOffset _observedAtUtc = new(2026, 1, 15, 9, 30, 0, TimeSpan.Zero);
     private DateTimeOffset _createdAtUtc = new(2026, 1, 16, 12, 0, 0, TimeSpan.Zero);
+    private string? _metadataJson;
 
     public SignalBuilder WithId(Guid id) { _id = id; return this; }
     public SignalBuilder WithEvidenceId(Guid v) { _evidenceId = v; return this; }
@@ -34,6 +35,9 @@ public sealed class SignalBuilder
     public SignalBuilder WithObservedAtUtc(DateTimeOffset v) { _observedAtUtc = v; return this; }
     public SignalBuilder WithCreatedAtUtc(DateTimeOffset v) { _createdAtUtc = v; return this; }
 
+    /// <summary>Spec 191: the optional signal provenance envelope (<c>null</c> == not recorded).</summary>
+    public SignalBuilder WithMetadataJson(string? v) { _metadataJson = v; return this; }
+
     public Signal Build() => new(
         Id: _id,
         EvidenceId: _evidenceId,
@@ -48,5 +52,6 @@ public sealed class SignalBuilder
         Reason: _reason,
         ReviewStatus: _reviewStatus,
         ObservedAtUtc: _observedAtUtc,
-        CreatedAtUtc: _createdAtUtc);
+        CreatedAtUtc: _createdAtUtc,
+        MetadataJson: _metadataJson);
 }

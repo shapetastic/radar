@@ -12,6 +12,18 @@ namespace Radar.Application.Tests.NewsRisk;
 /// evidence/signal pipeline and the score formulas can never reach a NewsRisk type; the LIVE news-risk
 /// generator can never reach a price type (only the §9 evaluator may); and the guards carry positive
 /// controls so they cannot pass vacuously.
+/// <para>
+/// <b>SPEC 191 did NOT weaken this guard.</b> The stage-2 news JUDGMENT is now a scoring input — but it
+/// crosses through exactly ONE seam, <c>Radar.Application.SignalExtraction.INewsDirectionalReadSource</c>,
+/// whose request/response types reference Domain and BCL types ONLY. The judgment record, its status, its
+/// trajectory enum and the judgment store all stay on the far side: the direction arrives as a
+/// <c>Radar.Domain.Signals.SignalDirection</c> and the trajectory as an already-rendered display TOKEN, so
+/// no scoring/extraction/pipeline type graph can reach <c>Radar.Application.NewsRisk*</c> and the ban below
+/// is unchanged.
+/// <see cref="Radar.Application.Tests.SignalExtraction.NewsDirectionalReadBoundaryTests"/> asserts the seam
+/// from the other direction, with a positive control proving the implementation really does reach the
+/// judgment store.
+/// </para>
 /// </summary>
 public sealed class NewsRiskArchitectureGuardTests
 {

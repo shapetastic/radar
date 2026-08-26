@@ -13,6 +13,18 @@ namespace Radar.Application.Tests.News;
 /// reference the news-observation archive or the content reader. The archive is observational — it must be
 /// structurally impossible for a score, an extraction or a review to read it, or the point-in-time record
 /// would quietly become a scoring input and AD-14-style honesty would erode.
+/// <para>
+/// <b>SPEC 191 did NOT weaken this guard, and the distinction matters.</b> The news read now genuinely
+/// reaches the signal layer — but through exactly ONE seam,
+/// <c>Radar.Application.SignalExtraction.INewsDirectionalReadSource</c>, whose request/response types carry
+/// Domain and BCL types ONLY (the established
+/// <c>Radar.Application.Filings.IDirectionalFilingSignalSource</c> pattern for an AI-derived scoring input).
+/// The concrete implementation lives on the FAR side of that seam, in <c>Radar.Application.News</c> beside
+/// <c>NewsObservationMigration</c>, so the archive still cannot be reached from a scoring/extraction type
+/// graph. <see cref="Radar.Application.Tests.SignalExtraction.NewsDirectionalReadBoundaryTests"/> asserts
+/// the seam's shape from the other direction, WITH a positive control proving the implementation really does
+/// reach the archive and the judgment store — a boundary that holds because nobody looked is worthless.
+/// </para>
 /// </summary>
 public sealed class NewsObservationArchitectureGuardTests
 {

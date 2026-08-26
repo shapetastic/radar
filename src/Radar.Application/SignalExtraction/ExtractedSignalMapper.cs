@@ -53,7 +53,9 @@ public static partial class ExtractedSignalMapper
             Reason: (extracted.Reason ?? string.Empty).Trim(),
             ReviewStatus: SignalReviewStatus.Pending,
             ObservedAtUtc: observedAtUtc,
-            CreatedAtUtc: createdAtUtc);
+            CreatedAtUtc: createdAtUtc,
+            // Spec 191: threaded through verbatim. Null in, null out — the mapper never invents a bag.
+            MetadataJson: extracted.MetadataJson);
 
         errors.AddRange(SignalValidation.Validate(candidate));
 

@@ -2,8 +2,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
+using Radar.Application.News;
 using Radar.Application.NewsRisk.Judgment;
+using Radar.Application.NewsTyping;
 using Radar.Application.Reporting;
+using Radar.Application.SignalExtraction;
 
 namespace Radar.Worker.Tests;
 
@@ -81,6 +84,46 @@ public sealed class NewsJudgmentWorkerOptionsTests
         Assert.Contains("news-judgment-prompt-v2", key);
         Assert.Contains("stage1=stage1-key", key);
         Assert.Contains("families=fact-family-v2", key);
+    }
+
+    [Fact]
+    public void Default_RegistersNoDirectionalNewsReadSource_SoTheExtractorIsUnchanged()
+    {
+        // Spec 191: the read seam is registered ONLY under the judgment gate. Without it,
+        // KeywordSignalExtractor's optional dependency resolves to null and the NewsArticle branch is
+        // byte-identical to its pre-191 self.
+        using var provider = BuildProvider();
+
+        Assert.Null(provider.GetService<INewsDirectionalReadSource>());
+        Assert.NotNull(provider.GetRequiredService<ISignalExtractor>());
+    }
+
+    [Theory]
+    [InlineData("score")]
+    [InlineData("collect")]
+    public void NonFullModes_RegisterNoDirectionalNewsReadSource(string mode)
+    {
+        using var provider = BuildProvider(EnabledWithAmbientOllama(("Radar:RunMode", mode)));
+
+        Assert.Null(provider.GetService<INewsDirectionalReadSource>());
+    }
+
+    [Fact]
+    public void EnabledInFullMode_RegistersTheDirectionalNewsReadSource_OnThePresentationCohort()
+    {
+        // Spec 191 §3: the SCORED cohort is the DISPLAYED cohort — the source's admitted-judgment index is
+        // keyed on exactly the key the leaders marker resolves, composed from the SAME reader identities.
+        using var provider = BuildProvider(EnabledWithAmbientOllama());
+
+        Assert.NotNull(provider.GetService<INewsDirectionalReadSource>());
+
+        var judge = Assert.Single(provider.GetRequiredService<NewsJudgmentReaderSet>().Readers);
+        var extractor = Assert.Single(provider.GetRequiredService<NewsTypingReaderSet>().Readers);
+        var expected = judge.Identity.CohortKeyFor(extractor.Identity.CohortKey);
+
+        Assert.Equal(
+            expected,
+            provider.GetRequiredService<NewsDirectionalReadOptions>().PresentationCohortKey);
     }
 
     [Fact]

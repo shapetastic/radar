@@ -66,6 +66,72 @@ public sealed class ReplayRunnerTests
     }
 
     /// <summary>
+    /// Spec 191 — THE SAME INVARIANT over a DIRECTIONAL news signal. The spec-191 read gives a
+    /// <see cref="SignalType.MediaAttention"/> signal a direction, a scaled strength and a provenance
+    /// envelope AT EXTRACTION TIME; replay never re-extracts, so it reads the very signal the forward pass
+    /// persisted and must reproduce the forward snapshot field for field (excluding the per-call minted
+    /// Guids, which two consecutive forward runs differ in too).
+    /// <para>
+    /// The point-in-time honesty spec 191 §3 requires lives on the FORWARD side — the read admits only a
+    /// judgment with <c>CreatedAtUtc &lt;= asOf</c>, asserted by
+    /// <c>NewsDirectionalReadSourceTests.AJudgmentCreatedAfterTheAsOfInstant_IsInvisible</c> — and the
+    /// replay side is protected by spec 136's existing signal predicate, asserted below. The two compose:
+    /// nothing in the replay path can reach a judgment at all.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ADirectionalNewsSignal_ReplaysIdenticallyToTheForwardScoreAtD()
+    {
+        const string envelope =
+            """{"metadata":{"newsJudgmentId":"22222222-0000-0000-0000-000000000002","newsJudgmentCohortKey":"cohort","newsObservationId":"11111111-0000-0000-0000-000000000001"},"companyHints":[]}""";
+
+        using var harness = ReplayTestHarness.Create(SinglePointPlan(D));
+        var companyId = await harness.SeedCompanyAsync();
+
+        // A Positive and a Negative directional MediaAttention (spec 191), beside an ordinary signal — so
+        // the Trajectory term sees real directional mass from news rather than the pre-191 Neutral zero.
+        await harness.SeedSignalAsync(
+            companyId,
+            SignalType.MediaAttention,
+            D.AddDays(-6),
+            D.AddDays(-6),
+            EvidenceQuality.Medium,
+            SignalDirection.Positive,
+            strength: 7,
+            metadataJson: envelope);
+        await harness.SeedSignalAsync(
+            companyId,
+            SignalType.MediaAttention,
+            D.AddDays(-3),
+            D.AddDays(-3),
+            EvidenceQuality.Medium,
+            SignalDirection.Negative,
+            strength: 5,
+            metadataJson: envelope);
+        await harness.SeedSignalAsync(
+            companyId, SignalType.CustomerWin, D.AddDays(-10), D.AddDays(-10));
+
+        var primary = harness.LiveStrategies.Primary;
+        var forward = await primary.Engine.ScoreCompanyAsync(companyId, D, CancellationToken.None);
+        await harness.LiveScoreFileStores
+            .ForStrategy(primary.Definition)
+            .WriteAsync(forward.Snapshot, forward.Links, CancellationToken.None);
+
+        var result = await harness.ReplayRunner.RunAsync(CancellationToken.None);
+        Assert.Equal(1, result.SnapshotsWritten);
+
+        var replayed = Assert.Single(
+            ReadReplayedSnapshots(harness, "run", primary.Definition.Name, companyId));
+
+        AssertScoringEquivalent(forward.Snapshot, replayed.Snapshot);
+        AssertLinksEquivalent(forward.Links, replayed.Links);
+
+        // The directional news signals really did contribute — otherwise the assertion above would be
+        // comparing two identical no-ops and the test would pass vacuously.
+        Assert.Contains(forward.Links, l => l.ContributionReason.Contains("MediaAttention", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// The spec-136 predicate, exercised THROUGH the replay path: a signal that entered the store AFTER the
     /// as-of instant is invisible to a replay at that instant — in the current window and in the
     /// previous/velocity window alike. Without this, replay would manufacture hindsight and every downstream

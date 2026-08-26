@@ -22,10 +22,12 @@ public sealed class ScoringConfigFingerprintTests
     // 7-collector default — which meant enabling an eighth collector re-stamped every strategy's identity
     // even when its scores were bit-for-bit identical. The enabled-collector set is now recorded per-snapshot
     // as `CollectionProvenance` (see SignalSourceDescriptorTests) and hashed into NOTHING, so it is correctly
-    // absent here. The rule-set identity is UNCHANGED at radar-keyword-rules-v6 (spec 130 added the
-    // TrademarkActivity group; spec 129 added RegulatoryApproval; spec 127 added PatentActivity; spec 103
-    // added HiringActivity).
-    private const string SourceDescriptor = "rules=radar-keyword-rules-v6;";
+    // absent here. SPEC 191 moved the rule-set identity to radar-keyword-rules-v7: the NewsArticle branch is
+    // no longer unconditionally Neutral — it takes its DIRECTION and a scaled Strength from the admitted
+    // stage-2 news judgment — which is a rule-STRUCTURE change and therefore re-stamps all four pins below.
+    // (v6 was spec 130's TrademarkActivity group; spec 129 added RegulatoryApproval; spec 127 added
+    // PatentActivity; spec 103 added HiringActivity.)
+    private const string SourceDescriptor = "rules=radar-keyword-rules-v7;";
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -143,10 +145,24 @@ public sealed class ScoringConfigFingerprintTests
         // input was a code default. The window is not: this pin is computed at the ScoringOptions CODE
         // DEFAULT of 30 days (DefaultWindow, above), while the live baseline runs at
         // Radar:ScoringWindowDays = 60 (RadarWorkerOptions/appsettings.json; scripts/run-profiles/default.json
-        // does not override it) and therefore stamps radar-scoring-fp-4eb2fe5d3cdf. The live pair is recorded
-        // in default.json's own comment, which is the operator-facing record; this pin is the unit-level
+        // does not override it) and therefore stamps radar-scoring-fp-58c289cd0113 (spec 191; it was
+        // radar-scoring-fp-4eb2fe5d3cdf from spec 148 until this slice). The live pair is recorded in
+        // default.json's own comment, which is the operator-facing record; this pin is the unit-level
         // change-detector. Both are correct at their own window — do not "reconcile" them.
-        Assert.Equal("radar-scoring-fp-0c46e07b94db", DefaultFingerprint());
+        //
+        // SPEC 191 MOVED THIS PIN, DELIBERATELY: radar-scoring-fp-0c46e07b94db → the value below. The cause
+        // is the KeywordSignalExtractor.RuleSetVersion bump v6 → v7 — the NewsArticle branch is no longer
+        // unconditionally Neutral; it takes its DIRECTION (and a Strength scaled by the judge's finding count
+        // and typing completeness) from the admitted stage-2 news judgment. That is a rule-STRUCTURE change,
+        // which is exactly what this identity exists to pin, so the move IS the deliverable. Unlike specs
+        // 127/129/130 — rule groups that were opt-in-OFF, so scoring math was byte-identical — this one
+        // CHANGES SCORES on the shipped baseline: news was 98.4% Neutral / 96.75% MediaAttention over a
+        // 4,000-signal sample and was therefore scored as VOLUME. The score series takes a discontinuity;
+        // history is deliberately NOT regenerated, rewritten or backfilled (AD-8/AD-1). No _formula.Version
+        // bump, no weight edit. StrategyIdentityGuard will trip on the next run until every configured
+        // strategy's data/scoring-configs/strategies/{name}.json record is consciously re-recorded or
+        // deleted (that path is git-ignored, so it cannot be committed from a worktree).
+        Assert.Equal("radar-scoring-fp-be417df3b731", DefaultFingerprint());
     }
 
     [Fact]
@@ -171,10 +187,12 @@ public sealed class ScoringConfigFingerprintTests
         // leave a strategy's identity untouched, which SignalSourceDescriptorTests asserts directly at the
         // source. What remains true, and is what this test now guards, is that a change to the signal-source
         // IDENTITY descriptor — the extractor rule STRUCTURE identity, which does change what is scored —
-        // still re-stamps.
+        // still re-stamps. The perturbation target is deliberately kept one version AHEAD of the shipped
+        // RuleSetVersion (spec 191 moved the default to v7, so this perturbs to v8) — a perturbation equal to
+        // the default would make this test vacuous.
         Assert.NotEqual(
             DefaultFingerprint(),
-            DefaultFingerprint(sourceDescriptor: "rules=radar-keyword-rules-v7;"));
+            DefaultFingerprint(sourceDescriptor: "rules=radar-keyword-rules-v8;"));
     }
 
     [Fact]
@@ -227,7 +245,7 @@ public sealed class ScoringConfigFingerprintTests
         //
         // ⚠ NOT the live stamp any more — see the AI-OFF pin above. Since spec 148 the window is hashed, and
         // the live baseline runs at Radar:ScoringWindowDays = 60, where the AI-ON value is
-        // radar-scoring-fp-5ffa8c9e25f0 since spec 160 (recorded in default.json's comment and asserted by
+        // radar-scoring-fp-3670cdb74652 since spec 191 (recorded in default.json's comment and asserted by
         // Compute_LiveWindowAiOnStamps_ArePinned below). This pin is the unit-level change-detector at the
         // code default; that one is the operator-facing live record.
         //
@@ -264,8 +282,14 @@ public sealed class ScoringConfigFingerprintTests
         // only when the AI source is registered — asserted by the AI-OFF pin above staying put). No
         // _formula.Version bump, no KeywordSignalExtractor.RuleSetVersion bump; cmpscan-v1 is its own
         // parallel structure token.
+        // → SPEC 191 (radar-scoring-fp-ebd7d11a58d0 → the value below): the RuleSetVersion v6 → v7 bump for
+        // the DIRECTIONAL NewsArticle branch. Unlike specs 127/129/130 this bump changes scores on the
+        // shipped baseline — the AI-ON path is where it lands hardest, since default.json enables the
+        // spec-185 judgment step whose verdicts are the direction's source. The AI directional-filing
+        // descriptor is untouched; only the rules= segment moved. See the AI-OFF pin above for the
+        // discontinuity/lineage statement and the StrategyIdentityGuard remedy.
         Assert.Equal(
-            "radar-scoring-fp-ebd7d11a58d0",
+            "radar-scoring-fp-4d1cd1a1528c",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -287,14 +311,20 @@ public sealed class ScoringConfigFingerprintTests
     {
         // The OPERATOR-FACING live stamps at the two windows real runs use (spec 148 broke pin == live stamp:
         // the window is hashed, the unit pins above are computed at the 30-day CODE default the Worker never
-        // uses). Recomputed here for spec 160 (the cmpscan/cmpcap descriptor fields) so the values recorded in
+        // uses). Recomputed here for spec 160 (the cmpscan/cmpcap descriptor fields) and again for SPEC 191
+        // (the RuleSetVersion v6 → v7 bump for the directional NewsArticle branch) so the values recorded in
         // scripts/run-profiles/default.json's comment are asserted rather than transcribed: 60 days is the
         // live baseline (Radar:ScoringWindowDays=60), 120 days is -Profile long-window.
+        // Spec 191 lineage: 60d radar-scoring-fp-5ffa8c9e25f0 → radar-scoring-fp-3670cdb74652;
+        // 120d radar-scoring-fp-19fecdb64e3a → radar-scoring-fp-c9fe86a19073. The AI-OFF live values moved
+        // too (60d radar-scoring-fp-4eb2fe5d3cdf → radar-scoring-fp-58c289cd0113; 120d
+        // radar-scoring-fp-0a7058d94582 → radar-scoring-fp-5d89d6ce1668) — a rules= change folds in with or
+        // without the AI descriptor.
         Assert.Equal(
-            "radar-scoring-fp-5ffa8c9e25f0",
+            "radar-scoring-fp-3670cdb74652",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-19fecdb64e3a",
+            "radar-scoring-fp-c9fe86a19073",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
