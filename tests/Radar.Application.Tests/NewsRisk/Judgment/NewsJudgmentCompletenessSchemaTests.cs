@@ -34,6 +34,37 @@ public sealed class NewsJudgmentCompletenessSchemaTests
     }
 
     /// <summary>
+    /// Spec 192 §2 rides the SAME conclusion for a different reason, so it is pinned in the same place: it
+    /// APPENDS two trailing nullable fields and re-means nothing, so neither the record tag nor the judge's
+    /// contract nor the stage-2 cohort key moves — which is what keeps every already-completed verdict
+    /// reusable through the cache instead of forcing the whole candidate set to be re-judged.
+    /// </summary>
+    [Fact]
+    public void Spec192_AppendedTrailingNullableFields_MovedNeitherTheTagNorTheContract()
+    {
+        Assert.Equal("news-judgment-v3", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-prompt-v2", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-schema-v2", NewsJudgmentContract.SchemaVersion);
+
+        // The fields exist, are nullable, and are the LAST two constructor parameters — so a pre-192 file
+        // hydrates losslessly with "not recorded" for both.
+        var trailing = typeof(NewsJudgmentRecord)
+            .GetConstructors()
+            .Single()
+            .GetParameters()
+            .TakeLast(2)
+            .ToList();
+        Assert.Equal(
+            [
+                nameof(NewsJudgmentRecord.RationaleLength),
+                nameof(NewsJudgmentRecord.RationaleOverSoftLimit),
+            ],
+            trailing.Select(p => p.Name).ToList());
+        Assert.All(trailing, p => Assert.True(p.IsOptional));
+        Assert.All(trailing, p => Assert.Null(p.DefaultValue));
+    }
+
+    /// <summary>
     /// Spec 189 §2: the two new values are APPENDED, so the existing ordinals are frozen and the ZERO value
     /// stays the degraded one (the spec-182 convention). Persistence is token-based, so nothing depends on
     /// the numbers — but a reordering would silently re-mean every defensively-defaulted value in memory.

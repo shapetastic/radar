@@ -207,6 +207,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         var judgments = new List<NewsJudgmentRecord>();
         var unpersisted = new HashSet<(Guid CompanyId, string CohortKey)>();
         var exhaustedByCohort = new Dictionary<string, int>(StringComparer.Ordinal);
+        var overSoftLimitRationalesByCohort = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var cohort in typing.Cohorts)
         {
             foreach (var judge in _judges.Readers)
@@ -283,6 +284,18 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         }
                     }
 
+                    // Spec 192 §2: the soft rationale bound no longer discards findings, so it becomes a
+                    // MEASURED prompt-quality signal instead — aggregated per cohort (the spec-145
+                    // precedent), never one line per judgment. Counted ONLY for a judgment this pass
+                    // actually called the provider for (spec 188 §1): a reused verdict legitimately carries
+                    // the ORIGINAL call's rationale length, and replaying it here would report old prose as
+                    // current activity on exactly the re-run path this telemetry exists to explain.
+                    if (madeProviderCall && record.RationaleOverSoftLimit == true)
+                    {
+                        overSoftLimitRationalesByCohort[record.CohortKey] =
+                            overSoftLimitRationalesByCohort.GetValueOrDefault(record.CohortKey) + 1;
+                    }
+
                     // Spec 187 §1: the durable write's OUTCOME is checked. An unpersisted result is not a
                     // durable judgment: it never joins the run result and never reaches a leaders row as a
                     // judged/challenged state — the row says `not-persisted` instead.
@@ -347,6 +360,22 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 cohortKey,
                 exhausted,
                 _options.MaxJudgmentAttempts);
+        }
+
+        // Spec 192 §2: one Information line per cohort that produced one — Information, not Warning,
+        // because a long rationale is a prompt-tuning fact, not a fault: the findings were validated on
+        // their own merits and the full text is on the record. Cohorts with none say nothing.
+        foreach (var (cohortKey, overLong) in overSoftLimitRationalesByCohort.OrderBy(
+            e => e.Key, StringComparer.Ordinal))
+        {
+            _logger.LogInformation(
+                "News-judgment cohort {Cohort}: {OverLong} judgment(s) called this pass carried a rationale "
+                    + "longer than the {SoftLimit}-character soft bound. The full rationale is PERSISTED, "
+                    + "findings were validated on their own merits, and nothing was truncated — this is a "
+                    + "prompt-tuning signal, not a failure.",
+                cohortKey,
+                overLong,
+                NewsJudgmentValidator.MaxRationaleLength);
         }
 
         var markers = BuildPresentationMarkers(judgments, typing, runId, candidates, unpersisted);
@@ -452,6 +481,11 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 FindingDropReasons = cached.FindingDropReasons,
                 RawResponseHash = cached.RawResponseHash,
                 TrajectoryFactIds = cached.TrajectoryFactIds,
+                // Spec 192 §2: the replayed verdict's OWN rationale facts travel with it. Leaving them at
+                // the BaseRecord default would make a reused judgment read as "not recorded" beside the
+                // very rationale it carries forward.
+                RationaleLength = cached.RationaleLength,
+                RationaleOverSoftLimit = cached.RationaleOverSoftLimit,
                 ReusedFromJudgmentId = cached.JudgmentId,
             });
         }
@@ -567,6 +601,11 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         // Judged record always carries a non-null list (empty iff Unknown); a failed
                         // validation carries the empty set, which is honest rather than "not recorded".
                         TrajectoryFactIds = validated.TrajectoryFactIds,
+                        // Spec 192 §2: the validator MEASURED these, so they are recorded rather than left
+                        // null. Only an attempt that never produced a validated response (provider/parse
+                        // failure, or no call at all) leaves them "not recorded".
+                        RationaleLength = validated.RationaleLength,
+                        RationaleOverSoftLimit = validated.RationaleOverSoftLimit,
                     },
                     callDuration);
             }

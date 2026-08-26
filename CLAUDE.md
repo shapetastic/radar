@@ -1322,7 +1322,11 @@ Do not hand back broken code.
     spec-185 attribution-caveat rule already used, so the two cannot drift; and the cited set may not be
     made ENTIRELY of `NewsJudgmentContextOnlyEventTypes` (price/analyst/ownership/promotional context is not
     business direction — the YORW shape). A `Judged` response additionally requires a non-blank factual
-    rationale ≤ 1,000 chars, and a finding standing only on context-only evidence is dropped individually as
+    rationale ~~≤ 1,000 chars~~ (⚠ **AMENDED BY SPEC 192 §1 — the 1,000-character bound no longer FAILS
+    anything**: it is a recorded SOFT flag, the rationale is persisted in full, and only the new
+    4,000-character HARD ceiling rejects the response — checked AFTER the findings loop. The NON-BLANK
+    requirement, and the advice-language rule beside it, are untouched; see the spec-192 bullet), and a
+    finding standing only on context-only evidence is dropped individually as
     `non-business-context-only`. **Deliberately NOT built: a prose polarity scanner over the rationale.**
     Grepping "declined"/"improved" would be a second, weaker judge with no provenance — the fix is a CITED
     contract at the structured seam, not string matching. It does not make the model infallible: a v2 call
@@ -1637,6 +1641,72 @@ Do not hand back broken code.
     sidecar-only expansion. **Any later proposal to raise `Radar:News:MaxRecordsPerCompany` is its own spec**
     and must state how the extra `NewsArticle` evidence affects scoring/fingerprints and how the extra
     observation inflow will be typed against spec 189's budget.
+- **An over-long rationale must not discard a judgment's findings — the length gate returned BEFORE the
+  findings loop (spec 192).** `NewsJudgmentValidator.Validate` rejected the WHOLE response when the
+  rationale exceeded `MaxRationaleLength` (1,000), with the `return` placed ahead of the findings loop, so
+  the findings were not judged invalid — they were **never examined at all**: no citation check, no
+  attribution-caveat rule, no context-only gate. Measured on the live store: **4 of 18 judgments failed
+  validation on 2026-08-25 (22 %), three for length alone**, over rationales clustered at **1,095–1,228**
+  characters — CVLT lost **3** findings, LBRT **2** — and the text was NULLED rather than persisted, so only
+  `rawResponseHash` survived. Those rows rendered `? unassessed (validation-failed)`, which reads as "Radar
+  has nothing on this company" when it had produced specific findings: the omission-bias shape one seam past
+  where spec 186 closed it, a FORMATTING gate suppressing PRESENCE claims. It also suppressed the input spec
+  191 wires into scoring, which is why this slice went first. Read/display side only: no prompt version,
+  result schema, stage-2 cohort key, fact-family identity, marker state/vocabulary/policy, score, rank,
+  label, strategy, snapshot field or scoring fingerprint moves; the pins do not move and
+  `ScoringConfigFingerprintTests` is untouched. Rules:
+  - **The soft bound FLAGS; it never discards (§1).** `MaxRationaleLength` (1,000) stays as the named
+    constant and is still what the judge prompt asks for — the prompt is UNCHANGED — but exceeding it now
+    records `RationaleOverSoftLimit` and nothing else. The rationale is persisted **IN FULL and deliberately
+    never truncated**: a shortened rationale is a FABRICATED explanation, and spec 187 §1's "a judgment Radar
+    cannot explain is not a judgment" requires the real one. **ABSENCE of an explanation justifies discarding
+    a response; VERBOSITY of one does not**, and the pre-192 validator treated the two identically.
+  - **A hard ceiling still rejects genuine malformation — AFTER the findings are validated and counted
+    (§1).** `MaxRationaleHardLimit` **4,000** with its own reason code **`rationale-exceeds-hard-limit`**,
+    whose text names the ACTUAL length. It is checked after the findings loop on purpose, so the accumulated
+    per-finding drop reasons and `FindingsTotal` are still reported, and the over-long rationale is still
+    carried onto the FAILED result rather than nulled — unrecoverable text is precisely the complaint.
+  - **The ordering bug is fixed, and it was its own defect (§1).** The advice-language scrub ran AFTER the
+    length check, so an over-long rationale was returned unscrubbed — the rationale most in need of the house
+    rule was the one exempt from it. Order is now trim → `AdviceLanguageGuard` scrub → blank check → measure.
+  - **`rationale-missing` and the advice-language rule are UNCHANGED and still fail the whole response.**
+    The reason string is pinned BYTE-IDENTICALLY by test; a scrubbed-to-empty rationale still fails as
+    `rationale-missing`, never as a clean-looking zero-finding read. Spec 185's fail-closed
+    all-findings-invalid ⇒ `ValidationFailed` rule is untouched: findings failing on their OWN merits are
+    never rendered as "no challenge found". Only the LENGTH rule moved.
+  - **`RationaleLength` / `RationaleOverSoftLimit` are TRAILING and NULLABLE, and the tag does NOT bump
+    (§2).** `null` means NOT RECORDED — a pre-192 record, or an attempt that never produced a validated
+    response (provider/parse failure) — never a fabricated `false`/`0`. `RationaleLength` is the length of
+    the rationale **as persisted** (trimmed and advice-scrubbed), so it can never disagree with the text
+    beside it. `NewsJudgmentRecord.CurrentSchemaVersion` stays **`news-judgment-v3`** on the same test v3
+    itself was granted on: no field is removed or re-meant and no persisted VOCABULARY changes (spec 189
+    bumped because the completeness vocabulary widened; nothing comparable happens here) — the
+    trailing-nullable precedent of spec 142's `EvidenceQuality` and spec 148's
+    `EffectiveScoringConfig.Window`. A reused verdict carries the CACHED values, so a replayed judgment
+    never reads as "not recorded" beside the very rationale it carries forward.
+  - **The bound becomes a MEASURED signal instead of a silent destroyer (§2).** One aggregated per-cohort
+    **Information** line (the spec-145 precedent — not one line per judgment), rendered only for a cohort
+    with a non-zero count, saying the full rationale is persisted and the findings were validated on their
+    own merits. Information, not Warning: a long rationale is a prompt-tuning fact, not a fault. It counts
+    ONLY judgments this pass actually called the provider for (**spec 188 §1** pass-truthfulness) — a reused
+    verdict legitimately carries the ORIGINAL call's rationale length, and replaying it would report old
+    prose as current activity on exactly the re-run path that telemetry exists to explain.
+  - **Previously-failed judgments retry NATURALLY; nothing is rewritten.** `ValidationFailed` is not a
+    completed status (spec 181), so CVLT, LBRT, CASS and GTY re-enter selection and are re-judged under the
+    corrected validator, bounded by spec 187's `MaxJudgmentAttempts = 3`. Existing records stay exactly as
+    they are (insert-only, AD-8) — no backfill, no migration, no re-judge of the whole candidate set (the
+    cohort key is `judge|prompt|schema|stage1|families`; validator RULES are not one of its inputs). The
+    four lost rationales are unrecoverable: only their response hashes were kept. **Intended effect: more
+    judgments reach `Judged`, so more leaders rows carry a real marker instead of
+    `? unassessed (validation-failed)`.**
+  - **Mutation-proven, not asserted.** Restoring the pre-192 ordering turns the CVLT-shaped fixture (a
+    1,228-character rationale with three valid findings) red — it reports `ValidationFailed` with zero
+    findings and a null rationale — along with 7 of the other 9 spec-192 tests; the ordering fix has its own
+    proof (advice language inside a long rationale is scrubbed FIRST, then fails as `rationale-missing`).
+  - **Out of scope, recorded not built**: truncating or summarising a rationale, changing the judge prompt /
+    result schema / taxonomy / fact-family identity / any cohort key, re-judging or rewriting historical
+    records, reviving the four lost rationales, changing the marker vocabulary or policy, and spec 191's
+    wiring of the judgment into scoring — this slice only stops suppressing its input.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,
