@@ -56,6 +56,12 @@ public sealed class CollectionPass : ICollectionPass
     private readonly INewsObservationArchive? _newsObservationArchive;
     private readonly NewsObservationCaptureOptions _newsObservationCaptureOptions;
 
+    // OPT-IN directional news read (spec 191), the news twin of _directionalFilingSignals above. Null when
+    // the spec-185 judgment step is not registered, in which case nothing below changes and the NewsArticle
+    // branch of the extractor stays byte-for-byte its pre-191 self. .NET DI supplies the null default when
+    // the service is not registered.
+    private readonly INewsDirectionalReadSource? _newsDirectionalReads;
+
     public CollectionPass(
         IEnumerable<IEvidenceCollector> collectors,
         CollectedEvidenceMapper mapper,
@@ -73,7 +79,8 @@ public sealed class CollectionPass : ICollectionPass
         ILogger<CollectionPass> logger,
         IDirectionalFilingSignalSource? directionalFilingSignals = null,
         INewsObservationArchive? newsObservationArchive = null,
-        NewsObservationCaptureOptions? newsObservationCaptureOptions = null)
+        NewsObservationCaptureOptions? newsObservationCaptureOptions = null,
+        INewsDirectionalReadSource? newsDirectionalReads = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
         ArgumentNullException.ThrowIfNull(mapper);
@@ -124,6 +131,7 @@ public sealed class CollectionPass : ICollectionPass
         _directionalFilingSignals = directionalFilingSignals;
         _newsObservationArchive = newsObservationArchive;
         _newsObservationCaptureOptions = newsObservationCaptureOptions ?? new NewsObservationCaptureOptions();
+        _newsDirectionalReads = newsDirectionalReads;
     }
 
     /// <summary>The collector names that will run, in the stable order fixed in the constructor.</summary>
@@ -285,6 +293,18 @@ public sealed class CollectionPass : ICollectionPass
                 .Where(d => d.Signal.SignalType == nameof(SignalType.GuidanceChange))
                 .Select(d => d.Evidence.Id)
                 .ToHashSet();
+        }
+
+        // OPT-IN directional news read (spec 191): prepare the seam ONCE for this run, at the SAME asOfUtc
+        // captured above and stamped as every signal CreatedAtUtc below — the per-run preparation pattern
+        // the directional filing read already establishes. It is what makes the point-in-time predicate
+        // (judgment.CreatedAtUtc <= asOfUtc) the RUN instant rather than a second clock read, and what keeps
+        // a looping Worker (Radar:RunOnce=false) from freezing the news read at the first run state: each
+        // run prepares at its own instant, so judgments written by the previous run become visible. Skipped
+        // entirely when unregistered, in which case the extractor emits exactly the pre-191 Neutral signal.
+        if (_newsDirectionalReads is not null)
+        {
+            await _newsDirectionalReads.PrepareAsync(asOfUtc, ct).ConfigureAwait(false);
         }
 
         // Stage 4 + 3 + 5: extract → resolve → review → store, per new evidence, in order. Each

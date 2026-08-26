@@ -326,9 +326,14 @@ public sealed class RadarScoreFormulaV10CompositionGuardTests
     }
 
     /// <summary>
-    /// The default AI-OFF signal-source identity descriptor (the same <c>rules=radar-keyword-rules-v6;</c>
-    /// string <c>ScoringConfigFingerprintTests</c> pins against), with an asymmetric enabled-collector
-    /// vocabulary so the ran/not-run split is pinned too. Neither is a scoring input.
+    /// A FIXED AI-OFF signal-source identity descriptor, with an asymmetric enabled-collector vocabulary so
+    /// the ran/not-run split is pinned too. Neither is a scoring input.
+    /// <para>
+    /// The literal is deliberately FROZEN at <c>radar-keyword-rules-v6</c> and is NOT read from
+    /// <c>KeywordSignalExtractor.RuleSetVersion</c>: this file pins a FORMULA COMPOSITION, so an unrelated
+    /// extractor rule-set bump (spec 191 moved the shipped value to <c>v7</c>) must not move the fingerprint
+    /// pinned below. <c>ScoringConfigFingerprintTests</c> is where the SHIPPED rule-set identity is pinned.
+    /// </para>
     /// </summary>
     private sealed class StubSourceDescriptor : ISignalSourceDescriptor
     {

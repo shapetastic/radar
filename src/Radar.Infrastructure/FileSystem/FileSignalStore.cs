@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 using Microsoft.Extensions.Logging;
 
@@ -434,7 +435,9 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
         // a signal "known as early as it was observed", which is exactly the pre-136 include-it behaviour
         // the window read documents; that history is NOT replay-honest and cannot be — the fact was never
         // recorded.
-        CreatedAtUtc: parsed.CreatedAt ?? parsed.ObservedAt);
+        CreatedAtUtc: parsed.CreatedAt ?? parsed.ObservedAt,
+        // Spec 191: absent on every pre-191 file ⇒ null ⇒ NOT RECORDED.
+        MetadataJson: parsed.MetadataJson);
 
     /// <summary>
     /// Yields the <c>{RootDirectory}/{yyyy}/{MM}</c> partition directories that the
@@ -491,7 +494,8 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
                 Decision: review.Decision,
                 Summary: review.Summary,
                 IssuesJson: review.IssuesJson,
-                ReviewedAt: review.ReviewedAtUtc));
+                ReviewedAt: review.ReviewedAtUtc),
+            MetadataJson: signal.MetadataJson);
 
         return JsonSerializer.Serialize(file, RadarFileStoreJson.Options);
     }
@@ -519,7 +523,14 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
         SignalReviewStatus ReviewStatus,
         DateTimeOffset ObservedAt,
         DateTimeOffset? CreatedAt,
-        SignalReviewFile Review);
+        SignalReviewFile Review,
+        // Spec 191: the signal provenance envelope. TRAILING and NULLABLE, and OMITTED WHEN NULL
+        // (JsonIgnoreCondition.WhenWritingNull) so every already-written file and every signal that carries
+        // no metadata serializes byte-identically to pre-191 output. On read, absent ⇒ null ⇒ NOT RECORDED —
+        // never an empty bag (the spec-142 EvidenceQuality / spec-148 EffectiveScoringConfig.Window
+        // precedent).
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? MetadataJson = null);
 
     /// <summary>
     /// The embedded review shape. Its <c>signalId</c> traces back to the parent signal (provenance).

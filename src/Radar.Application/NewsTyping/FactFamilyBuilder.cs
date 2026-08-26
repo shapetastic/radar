@@ -68,7 +68,15 @@ namespace Radar.Application.NewsTyping;
 public static class FactFamilyBuilder
 {
     public const string BuilderVersion = "fact-family-v2";
-    public const string NormalizationVersion = "statement-normalization-v1";
+
+    /// <summary>
+    /// The versioned statement normalization, owned by the shared <see cref="NewsTextNormalization"/>
+    /// (extracted by spec 191 §1 so the join key and the claim key cannot drift). Re-exported here because
+    /// it is a documented part of this builder's identity; the VALUE is the shared one, never a second
+    /// literal.
+    /// </summary>
+    public const string NormalizationVersion = NewsTextNormalization.Version;
+
     public const string SimilarityMetric = "token-set-jaccard";
     public const double SimilarityThreshold = 0.6;
     public const int TemporalWindowDays = 7;
@@ -129,12 +137,15 @@ public static class FactFamilyBuilder
     /// every non-letter/digit character becomes a space, whitespace collapsed. Negation tokens and numbers
     /// survive BY CONSTRUCTION — they are letters/digits — because stripping them would erase exactly the
     /// distinctions the contradiction rule protects.
+    /// <para>
+    /// Spec 191 §1 EXTRACTED the rule into <see cref="NewsTextNormalization"/> so the news
+    /// observation ↔ evidence join uses the same primitive rather than a second copy. This member survives
+    /// as the fact layer's name for it and is byte-identical in behaviour (asserted by test) — the
+    /// builder's <see cref="IdentityString"/> must not move.
+    /// </para>
     /// </summary>
-    public static string NormalizeStatement(string statement)
-    {
-        ArgumentNullException.ThrowIfNull(statement);
-        return string.Join(' ', NormalizedTokens(statement));
-    }
+    public static string NormalizeStatement(string statement) =>
+        NewsTextNormalization.Normalize(statement);
 
     /// <summary>
     /// The durable family identity (spec 186 §4): builder version + company + capture mode + the
@@ -290,14 +301,8 @@ public static class FactFamilyBuilder
         return union == 0 ? 0.0 : (double)intersection / union;
     }
 
-    private static HashSet<string> NormalizedTokens(string statement)
-    {
-        var chars = statement.ToLowerInvariant()
-            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : ' ');
-        return new string([.. chars])
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToHashSet(StringComparer.Ordinal);
-    }
+    private static HashSet<string> NormalizedTokens(string statement) =>
+        NewsTextNormalization.Tokens(statement);
 
     /// <summary>
     /// Projects one episode onto its in-window members: the id comes from the episode's durable

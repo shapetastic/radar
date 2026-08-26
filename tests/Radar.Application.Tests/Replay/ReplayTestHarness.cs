@@ -142,7 +142,8 @@ internal sealed class ReplayTestHarness : IDisposable
         DateTimeOffset createdAtUtc,
         EvidenceQuality quality = EvidenceQuality.High,
         SignalDirection direction = SignalDirection.Positive,
-        int strength = 6)
+        int strength = 6,
+        string? metadataJson = null)
     {
         var evidence = new EvidenceBuilder()
             .WithId(Guid.NewGuid())
@@ -161,6 +162,8 @@ internal sealed class ReplayTestHarness : IDisposable
             .WithReviewStatus(SignalReviewStatus.Approved)
             .WithObservedAtUtc(observedAtUtc)
             .WithCreatedAtUtc(createdAtUtc)
+            // Spec 191: the optional signal provenance envelope (null == not recorded, the default).
+            .WithMetadataJson(metadataJson)
             .Build();
 
         await Evidence.AddIfNewAsync(evidence, CancellationToken.None);
