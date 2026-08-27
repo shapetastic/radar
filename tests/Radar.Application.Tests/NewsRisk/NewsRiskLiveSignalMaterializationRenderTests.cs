@@ -22,18 +22,19 @@ public sealed class NewsRiskLiveSignalMaterializationRenderTests
     [Fact]
     public void ANullSummary_RendersAByteIdenticalDocument()
     {
-        var without = Document(summary: null);
-        var with = Document(summary: null);
+        var withoutSummary = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(summary: null));
+        var withSummary = NewsRiskLiveArtifactRenderer.RenderMarkdown(
+            Document(NewsJudgmentSignalMaterializationSummary.Empty));
 
         // The pin: a document whose materialization member is `null` renders exactly what a pre-194
         // document rendered — nothing is appended, and no header, blank line or trailing whitespace moves.
-        Assert.Equal(
-            NewsRiskLiveArtifactRenderer.RenderMarkdown(without),
-            NewsRiskLiveArtifactRenderer.RenderMarkdown(with));
-        Assert.DoesNotContain(
-            "Judgment-derived news signals",
-            NewsRiskLiveArtifactRenderer.RenderMarkdown(without),
-            StringComparison.Ordinal);
+        // Asserted against the SAME document carrying a summary, because "trailing and nullable" is only a
+        // compatibility guarantee if the section is genuinely appended at the END: the summary render must
+        // begin with the null render byte for byte, and the null render must stop there.
+        Assert.DoesNotContain("Judgment-derived news signals", withoutSummary, StringComparison.Ordinal);
+        Assert.StartsWith(withoutSummary, withSummary, StringComparison.Ordinal);
+        Assert.Contains("Judgment-derived news signals", withSummary, StringComparison.Ordinal);
+        Assert.NotEqual(withoutSummary, withSummary);
     }
 
     [Fact]
