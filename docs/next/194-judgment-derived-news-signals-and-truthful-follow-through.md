@@ -1,5 +1,32 @@
 # Task: Make news direction follow the judgment it came from
 
+## ⚠ STATUS — PART 1 IS SHIPPED; THIS SPEC NOW COVERS THE REMAINDER ONLY
+
+**Shipped 2026-08-27 as PR #198, merged `85c6f5f`** (branch `feature/judgment-derived-news-signals`):
+
+- **§1.1 — DONE.** The `NewsArticle` branch is back to the pre-191 Neutral `MediaAttention` event (proven
+  character-identical against the pre-191 source). `INewsDirectionalReadSource`, `NewsDirectionalRead`,
+  `NewsDirectionalReadSource` and `NewsDirectionalReadOptions` are deleted, with a reflection guard asserting
+  none survives dormant. `NewsObservationEvidenceJoin`, `NewsTrajectorySignalRules` and
+  `NewsDirectionalSignalMetadata` are RETAINED for the sections below.
+  `KeywordSignalExtractor.RuleSetVersion` is now **`radar-keyword-rules-v8`**.
+- **§3 — DONE.** Retryable typing failure is scoped to in-window `(ObservationId, PayloadHash)` membership.
+- Live pins are now **60d AI-OFF `radar-scoring-fp-06e4781f86bb` / AI-ON `radar-scoring-fp-7a4cd9d409ed`**
+  (30d `023b1af1e3d4`/`ef9104b7b2b9`; 120d `5cb9dc71f309`/`759835b624ca`). The identity records under
+  `data/scoring-configs/strategies/` were cleared on 2026-08-27 and re-record at the v8 values.
+
+**REMAINING WORK — this is what a dispatch of this spec must implement: §1.2, §1.3, §1.4, §1.5 and §2.**
+Do NOT re-do §1.1 or §3; verify they are present and move on.
+
+**Recommended order, highest value first.** §1.4 is the priority: 16 accrued v7 directional signals sit
+inside the live 60-day window and CONTINUE to be scored with an inherited direction, and `AddIfNewAsync`
+rejects already-seen evidence so they can never be re-extracted as Neutral. §1.4 is the only thing that
+stops that, and it is independent of the materializer. Then §1.2 + §1.3 (news regains direction, properly
+grounded), then §2 (closes the AD-10 hole), then §1.5.
+
+If a dispatch cannot complete all of it, ship §1.4 alone as its own reviewed PR rather than leaving a
+half-built materializer uncommitted.
+
 ## Overview
 
 Specs 177–193 finally gave Radar a grounded company-level `BusinessTrajectory` and then wired it into
