@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
+using Radar.Application.News;
 using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
 using Radar.Application.Reporting;
@@ -66,6 +67,28 @@ public sealed class NewsJudgmentWorkerOptionsTests
         Assert.NotNull(provider.GetService<INewsJudgmentGenerator>());
         Assert.NotNull(provider.GetService<INewsJudgmentStore>());
         Assert.NotNull(provider.GetService<IWeeklyReportJudgmentRerenderer>());
+    }
+
+    [Fact]
+    public void Default_RegistersNoJudgmentSignalMaterializer()
+    {
+        // SPEC 194 §1.2: the materializer is registered WITH judgment. Its ABSENCE is what makes the Worker
+        // skip the step and leave NewsJudgmentRunResult.SignalMaterialization null ("not attempted") rather
+        // than an all-zero summary claiming a pass that never ran.
+        using var provider = BuildProvider();
+
+        Assert.Null(provider.GetService<INewsJudgmentSignalMaterializer>());
+    }
+
+    [Fact]
+    public void EnabledInFullMode_RegistersTheJudgmentSignalMaterializer_Resolvable()
+    {
+        // Resolved, not merely registered: it depends on the signal repositories, the file store and the
+        // reviewer, so a missing registration anywhere in that chain must fail here rather than at 3am in
+        // a scheduled run.
+        using var provider = BuildProvider(EnabledWithAmbientOllama());
+
+        Assert.NotNull(provider.GetService<INewsJudgmentSignalMaterializer>());
     }
 
     [Fact]

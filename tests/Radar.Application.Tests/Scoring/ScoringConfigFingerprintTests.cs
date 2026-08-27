@@ -1,5 +1,8 @@
 using System.Globalization;
 using System.Reflection;
+using Radar.Application.News;
+using Radar.Application.NewsRisk.Judgment;
+using Radar.Application.NewsTyping;
 using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Infrastructure.Attention;
@@ -31,7 +34,26 @@ public sealed class ScoringConfigFingerprintTests
     // is a rule-STRUCTURE change, so it re-stamps every pin below.
     // (v6 was spec 130's TrademarkActivity group; spec 129 added RegulatoryApproval; spec 127 added
     // PatentActivity; spec 103 added HiringActivity.)
-    private const string SourceDescriptor = "rules=radar-keyword-rules-v8;";
+    //
+    // SPEC 194 §2 APPENDS A SECOND SEGMENT: the news-read identity, ALWAYS present, rendered here in its
+    // DISABLED form because this constant is the code-default composition — nothing optional registered, the
+    // same reason it carries no ai= segment. Built through the real NewsJudgmentScoringIdentity rather than
+    // written as a literal, so it cannot drift from what SignalSourceDescriptor actually emits.
+    private static readonly string SourceDescriptor =
+        "rules=radar-keyword-rules-v8;" + NewsJudgmentScoringIdentity.Disabled.Segment;
+
+    // The live baseline's news-read identity: scripts/run-profiles/default.json enables the stage-2 judgment
+    // and designates the DeepInfra DeepSeek reader as BOTH the presentation judge and the presentation
+    // stage-1 extractor. Composed through the real NewsJudgmentPresentationCohort.ComposeCohortKey — the
+    // very method the run-time resolution and the config-time resolution both call — so this is byte-
+    // identical to what a live run stamps, in the same way AiOnSourceDescriptor is built through the real
+    // escaping rather than hand-written. The provider/model literals mirror default.json, exactly as
+    // AiDirectionalDescriptor's model= field does.
+    private static readonly string LiveNewsJudgmentSegment = NewsJudgmentScoringIdentityFactory
+        .ForPresentationCohort(NewsJudgmentPresentationCohort.ComposeCohortKey(
+            new NewsJudgmentReaderIdentity("deepinfra-deepseek", "openai", "deepseek-ai/DeepSeek-V4-Flash"),
+            new NewsTypingReaderIdentity("deepinfra-deepseek", "openai", "deepseek-ai/DeepSeek-V4-Flash")))
+        .Segment;
 
     // The insider-materiality descriptor of the default config (spec 96): the config-tunable buy/sell tiers +
     // cluster boost, folded into the fingerprint after the signal-source descriptor. Computed from the record
@@ -39,7 +61,7 @@ public sealed class ScoringConfigFingerprintTests
     private static readonly string InsiderDescriptor = new InsiderMaterialityWeights().CanonicalDescriptor();
 
     // The media-collapse descriptor of the default config (spec 109): the same-event media-attention collapse
-    // structure (media-collapse-v1) + the tunable window (default 3 days), folded into the fingerprint after
+    // structure (media-collapse-v2 since spec 194 §1.5) + the tunable window (default 3 days), folded in after
     // the insider-materiality descriptor. Computed from the default so it can't drift from the code default.
     private static readonly string MediaCollapseDescriptor =
         new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor();
@@ -149,9 +171,12 @@ public sealed class ScoringConfigFingerprintTests
         // input was a code default. The window is not: this pin is computed at the ScoringOptions CODE
         // DEFAULT of 30 days (DefaultWindow, above), while the live baseline runs at
         // Radar:ScoringWindowDays = 60 (RadarWorkerOptions/appsettings.json; scripts/run-profiles/default.json
-        // does not override it) and therefore stamps radar-scoring-fp-06e4781f86bb (spec 194; it was
-        // radar-scoring-fp-58c289cd0113 under spec 191, and radar-scoring-fp-4eb2fe5d3cdf from spec 148
-        // before that). The live pair is recorded in default.json's own comment, which is the operator-facing
+        // does not override it) and therefore stamps radar-scoring-fp-2cbbd056ffe5 (spec 194 §2; it was
+        // radar-scoring-fp-61891b37e429 after spec 194 §1.5, radar-scoring-fp-06e4781f86bb after spec 194
+        // §1.1, radar-scoring-fp-58c289cd0113 under spec 191, and radar-scoring-fp-4eb2fe5d3cdf from spec
+        // 148 before that; the 120-day -Profile long-window AI-OFF value moved with it at every step,
+        // radar-scoring-fp-5cb9dc71f309 → f160ee8faaa6 → radar-scoring-fp-f68e6481b136). The
+        // live pair is recorded in default.json's own comment, which is the operator-facing
         // record; this pin is the unit-level change-detector. Both are correct at their own window — do not
         // "reconcile" them.
         //
@@ -159,23 +184,61 @@ public sealed class ScoringConfigFingerprintTests
         // RuleSetVersion bump v6 → v7, which made the NewsArticle branch take its DIRECTION from the admitted
         // stage-2 news judgment.
         //
-        // SPEC 194 MOVES IT AGAIN, DELIBERATELY: radar-scoring-fp-be417df3b731 → the value below, for the
-        // RuleSetVersion bump v7 → v8. The v7 read ran DURING collection while the stage-2 judge runs AFTER
-        // it, so a newly collected article could only ever inherit a judgment produced from EARLIER articles
-        // it had never read — one verdict multiplied by however many later headlines arrived, which is the
-        // volume/size proxy spec 191 set out to remove, reintroduced through stale direction. The seam is
-        // retired and ordinary news extraction is the pre-191 Neutral media-attention event again; direction
-        // will ride its own judgment-derived signal (spec 194 §1.2), materialized after the judgment exists.
-        // v8 is a CORRECTION, not a rollback: the emitted signal matches v6's but the regime does not.
+        // SPEC 194 §1.1 MOVED IT AGAIN, DELIBERATELY: radar-scoring-fp-be417df3b731 →
+        // radar-scoring-fp-023b1af1e3d4, for the RuleSetVersion bump v7 → v8. The v7 read ran DURING
+        // collection while the stage-2 judge runs AFTER it, so a newly collected article could only ever
+        // inherit a judgment produced from EARLIER articles it had never read — one verdict multiplied by
+        // however many later headlines arrived, which is the volume/size proxy spec 191 set out to remove,
+        // reintroduced through stale direction. The seam is retired and ordinary news extraction is the
+        // pre-191 Neutral media-attention event again; direction now rides its own judgment-derived signal
+        // (spec 194 §1.2), materialized after the judgment exists. v8 is a CORRECTION, not a rollback: the
+        // emitted signal matches v6's but the regime does not.
         //
-        // TWO INTENTIONAL SCORING-IDENTITY MOVES IN THE SAME WEEK, and therefore THREE semantic regimes with
-        // two close discontinuities: pre-191 Neutral news, spec-191 inherited direction (known DEFECTIVE and
-        // NOT a valid control cohort), and post-194 grounded judgment signals. History is deliberately NOT
-        // regenerated, rewritten or backfilled (AD-8/AD-1). No _formula.Version bump, no weight edit.
-        // StrategyIdentityGuard will trip on the next run until every configured strategy's
-        // data/scoring-configs/strategies/{name}.json record is consciously re-recorded or deleted (that path
-        // is git-ignored, so it cannot be committed from a worktree). That halt is correct; do not bypass it.
-        Assert.Equal("radar-scoring-fp-023b1af1e3d4", DefaultFingerprint());
+        // SPEC 194 §1.5 MOVES IT ONCE MORE, TO THE VALUE BELOW: radar-scoring-fp-023b1af1e3d4 →
+        // radar-scoring-fp-a47076995bf5, for the MediaAttentionCollapse.Version bump media-collapse-v1 →
+        // media-collapse-v2. That descriptor is a hashed field in its own right (mediaCollapseDescriptor),
+        // so the bump re-stamps with no RuleSetVersion or _formula.Version change. v2 keeps v1's greedy
+        // event-window BOUNDARIES byte-for-byte and changes only which real member of a completed bucket
+        // represents it: a grounded news-judgment-signal-v1 direction now outranks an earlier ordinary
+        // Neutral member, so a validated read can no longer be de-noised away by an unread duplicate. An
+        // all-ordinary bucket still produces v1's exact result — the structure version moves because the
+        // RULE changed, not because every outcome did.
+        //
+        // SPEC 194 §2 MOVES IT ONE FINAL TIME, TO THE VALUE BELOW: radar-scoring-fp-a47076995bf5 →
+        // radar-scoring-fp-5036d7f73af3, for the news-read scoring identity (NewsJudgmentScoringIdentity)
+        // now appended to SignalSourceDescriptor.CanonicalDescriptor() as a `news=…;` segment AFTER the
+        // existing rules= and optional ai= segments. This closes the recorded AD-10 hole: judgment off/on,
+        // the judge MODEL, the prospectively designated presentation cohort, the news-judgment materializer
+        // identity, the trajectory→direction mapping with every strength constant, the legacy-inheritance
+        // neutralization rule version and the judgment-signal supersede rule version were ALL hashed into
+        // nothing, so two materially different scorings shared one stamp and ScoreSeriesKey pooled them into
+        // one series. The segment is UNCONDITIONAL — a disabled judgment renders `news=disabled:…;` rather
+        // than nothing — which is why this AI-OFF pin moves too; a silent absence would be byte-identical to
+        // a pre-194 composition, and "judgment off" and "a Radar that predates the judgment read" are
+        // different facts (spec 147's `collectors=;` reasoning). Cost controls (API keys, call budgets,
+        // retry caps) are deliberately NOT folded in: they change what Radar spends, never what a judgment
+        // means.
+        //
+        // SPEC 194 MOVED THE PINS TWICE ON ITS OWN BRANCH — once for media-collapse-v2 (§1.5) and once for
+        // this segment (§2). The values in this file are the FINAL post-194 values; every earlier value
+        // named above is historical lineage, kept for reconciling accrued snapshots and nothing else.
+        //
+        // TWO INTENTIONAL SCORING-IDENTITY MOVES IN THE SAME WEEK (spec 191's v6 → v7, then spec 194's
+        // v7 → v8 plus media-collapse-v2 plus this segment), and therefore THREE semantic regimes with two
+        // close discontinuities: pre-191 Neutral news, spec-191 inherited direction (known DEFECTIVE and NOT
+        // a valid control cohort — do not pool it across the boundary or use it as a control), and post-194
+        // grounded judgment signals. History is deliberately NOT regenerated, rewritten or backfilled
+        // (AD-8/AD-1). No _formula.Version bump, no RuleSetVersion bump (it stays radar-keyword-rules-v8),
+        // no weight edit.
+        //
+        // OPERATOR ACTION, and the ORDER is load-bearing: (1) do not touch the ignored identity records
+        // while a pre-194 baseline is running; (2) after merge and BEFORE the first post-194 baseline,
+        // consciously delete or re-record every configured data/scoring-configs/strategies/{name}.json;
+        // (3) verify the first run reports the expected new fingerprint before treating subsequent snapshots
+        // as the corrected series. That path is git-ignored, so those records cannot be committed from a
+        // worktree and must not be fabricated. If step 2 is missed, StrategyIdentityGuard halts the run
+        // before collection — that halt is CORRECT and must not be bypassed.
+        Assert.Equal("radar-scoring-fp-5036d7f73af3", DefaultFingerprint());
     }
 
     [Fact]
@@ -205,13 +268,16 @@ public sealed class ScoringConfigFingerprintTests
         // equal to the default would make this test VACUOUS, which is exactly what happened when the shipped
         // version caught up with a perturbation literal that was not moved with it. Whoever bumps
         // KeywordSignalExtractor.RuleSetVersion next must move this literal in the same slice.
-        const string perturbed = "rules=radar-keyword-rules-v9;";
+        // SPEC 194 §2: the perturbation carries the SAME news segment as the default, so the only thing that
+        // differs is the rules= token — otherwise this would prove that two descriptors differing in two
+        // places hash differently, which is a weaker claim.
+        var perturbed = "rules=radar-keyword-rules-v9;" + NewsJudgmentScoringIdentity.Disabled.Segment;
 
         // Non-vacuity, guarded against the SHIPPED const rather than against this file's own literal: the day
         // production bumps to v9 this fails here, naming the reason, instead of silently asserting that a
         // fingerprint differs from itself.
         Assert.DoesNotContain(KeywordSignalExtractor.RuleSetVersion, perturbed, StringComparison.Ordinal);
-        Assert.NotEqual(SourceDescriptor, perturbed);
+        Assert.NotEqual(perturbed, SourceDescriptor);
 
         Assert.NotEqual(DefaultFingerprint(), DefaultFingerprint(sourceDescriptor: perturbed));
     }
@@ -238,13 +304,30 @@ public sealed class ScoringConfigFingerprintTests
     private const string AiDirectionalDescriptor =
         "directional-filing:str=8;nov=6;minconf=0.6;model=openai:deepseek-ai/DeepSeek-V4-Flash;cmpscan=cmpscan-v1;cmpcap=0.65";
 
-    // The AI-ON signal-source descriptor (spec 106): the AI-OFF SourceDescriptor with the directional-filing
+    // The AI-ON signal-source descriptor (spec 106): the rules= identity with the directional-filing
     // descriptor appended as an ESCAPED ai=… segment. Built through the real DescriptorEscaping (not a hand-written
     // literal) so this is byte-identical to what SignalSourceDescriptor actually produces when the opt-in AI path is
     // registered — the pre-spec-119 literal omitted that escaping, so the old AI-ON pin was not the value a live
     // AI-ON run stamped; spec 119 corrects that at the same time as folding the model in.
+    //
+    // SPEC 194 §2: this side carries the LIVE news-read identity, and the split from the AI-OFF descriptor's
+    // DISABLED one is deliberate. "AI-ON" here has always meant "the live baseline's optional reads are
+    // registered" — scripts/run-profiles/default.json enables the AI filing read AND the stage-2 judgment
+    // together — and the 60-day AI-ON pin's job is to be the operator-facing live stamp. Splitting the two
+    // optional reads into four pins per window would quadruple the pin family without adding a
+    // change-detector the dedicated off/on, model/cohort and strength-constant tests below do not already
+    // provide directly.
+    //
+    // NOTE the segment ORDER: rules= then ai= then news=. The news segment is appended LAST by
+    // SignalSourceDescriptor precisely so the pre-194 prefix stays byte-stable, and it must be composed in
+    // that order here or this literal would stop describing production.
+    private static string AiOnSourceDescriptorWith(string aiDirectionalDescriptor) =>
+        "rules=radar-keyword-rules-v8;"
+            + $"ai={DescriptorEscaping.Escape(aiDirectionalDescriptor)};"
+            + LiveNewsJudgmentSegment;
+
     private static readonly string AiOnSourceDescriptor =
-        SourceDescriptor + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptor)};";
+        AiOnSourceDescriptorWith(AiDirectionalDescriptor);
 
     [Fact]
     public void Compute_AiOnSourceDescriptor_DiffersFromAiOff()
@@ -266,7 +349,7 @@ public sealed class ScoringConfigFingerprintTests
         //
         // ⚠ NOT the live stamp any more — see the AI-OFF pin above. Since spec 148 the window is hashed, and
         // the live baseline runs at Radar:ScoringWindowDays = 60, where the AI-ON value is
-        // radar-scoring-fp-3670cdb74652 since spec 191 (recorded in default.json's comment and asserted by
+        // radar-scoring-fp-b9543f441717 since spec 194 §2 (recorded in default.json's comment and asserted by
         // Compute_LiveWindowAiOnStamps_ArePinned below). This pin is the unit-level change-detector at the
         // code default; that one is the operator-facing live record.
         //
@@ -303,14 +386,25 @@ public sealed class ScoringConfigFingerprintTests
         // only when the AI source is registered — asserted by the AI-OFF pin above staying put). No
         // _formula.Version bump, no KeywordSignalExtractor.RuleSetVersion bump; cmpscan-v1 is its own
         // parallel structure token.
-        // → SPEC 191 (radar-scoring-fp-ebd7d11a58d0 → the value below): the RuleSetVersion v6 → v7 bump for
-        // the DIRECTIONAL NewsArticle branch. Unlike specs 127/129/130 this bump changes scores on the
-        // shipped baseline — the AI-ON path is where it lands hardest, since default.json enables the
-        // spec-185 judgment step whose verdicts are the direction's source. The AI directional-filing
-        // descriptor is untouched; only the rules= segment moved. See the AI-OFF pin above for the
-        // discontinuity/lineage statement and the StrategyIdentityGuard remedy.
+        // → SPEC 191 (radar-scoring-fp-ebd7d11a58d0 → radar-scoring-fp-ef9104b7b2b9): the RuleSetVersion
+        // v6 → v7 bump for the DIRECTIONAL NewsArticle branch, then SPEC 194 §1.1's v7 → v8 correction.
+        // Unlike specs 127/129/130 those bumps change scores on the shipped baseline — the AI-ON path is
+        // where it lands hardest, since default.json enables the spec-185 judgment step whose verdicts were
+        // that direction's source. The AI directional-filing descriptor is untouched; only the rules=
+        // segment moved.
+        // → SPEC 194 §1.5 (radar-scoring-fp-ef9104b7b2b9 → radar-scoring-fp-fce77b299c76): the
+        // media-collapse-v1 → media-collapse-v2 bump. It re-stamps BOTH the AI-OFF and the AI-ON default
+        // automatically, because mediaCollapseDescriptor is its own hashed field and is folded whether or
+        // not the AI source is registered.
+        // → SPEC 194 §2 (radar-scoring-fp-fce77b299c76 → the value below): the news-read scoring identity.
+        // On THIS side the segment carries the ENABLED form — the live baseline designates the DeepInfra
+        // DeepSeek reader as both presentation judge and presentation stage-1 extractor — so a judge-model
+        // or presentation-cohort change now moves this pin, exactly as the earnings-read model has moved it
+        // since spec 119. See the AI-OFF pin above for what the segment contains, why it is unconditional,
+        // the two-moves-in-one-week / three-regime discontinuity statement, and the ordered operator action
+        // for the ignored strategy identity records.
         Assert.Equal(
-            "radar-scoring-fp-ef9104b7b2b9",
+            "radar-scoring-fp-5ef6508adc5d",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -319,8 +413,8 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Spec 160: the comparability confidence cap is folded by value (cmpcap=) — tuning it re-stamps the
         // fingerprint automatically, so runs under different caps are never falsely comparable (AD-10).
-        var changed = SourceDescriptor
-            + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptor.Replace("cmpcap=0.65", "cmpcap=0.5", StringComparison.Ordinal))};";
+        var changed = AiOnSourceDescriptorWith(
+            AiDirectionalDescriptor.Replace("cmpcap=0.65", "cmpcap=0.5", StringComparison.Ordinal));
 
         Assert.NotEqual(
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),
@@ -332,21 +426,40 @@ public sealed class ScoringConfigFingerprintTests
     {
         // The OPERATOR-FACING live stamps at the two windows real runs use (spec 148 broke pin == live stamp:
         // the window is hashed, the unit pins above are computed at the 30-day CODE default the Worker never
-        // uses). Recomputed here for spec 160 (the cmpscan/cmpcap descriptor fields) and again for SPEC 191
-        // (the RuleSetVersion v6 → v7 bump for the directional NewsArticle branch) so the values recorded in
-        // scripts/run-profiles/default.json's comment are asserted rather than transcribed: 60 days is the
-        // live baseline (Radar:ScoringWindowDays=60), 120 days is -Profile long-window.
+        // uses). Recomputed here for spec 160 (the cmpscan/cmpcap descriptor fields), for SPEC 191 (the
+        // RuleSetVersion v6 → v7 bump), for SPEC 194 §1.1 (v7 → v8, withdrawing that read), for SPEC 194
+        // §1.5 (media-collapse-v1 → v2) and finally for SPEC 194 §2 (the news-read scoring identity), so the
+        // values recorded in scripts/run-profiles/default.json's comment are asserted rather than
+        // transcribed: 60 days is the live baseline (Radar:ScoringWindowDays=60), 120 days is
+        // -Profile long-window.
         // Spec 191 lineage: 60d radar-scoring-fp-5ffa8c9e25f0 → radar-scoring-fp-3670cdb74652;
-        // 120d radar-scoring-fp-19fecdb64e3a → radar-scoring-fp-c9fe86a19073. The AI-OFF live values moved
-        // too (60d radar-scoring-fp-4eb2fe5d3cdf → radar-scoring-fp-58c289cd0113; 120d
-        // radar-scoring-fp-0a7058d94582 → radar-scoring-fp-5d89d6ce1668) — a rules= change folds in with or
-        // without the AI descriptor.
+        // 120d radar-scoring-fp-19fecdb64e3a → radar-scoring-fp-c9fe86a19073. Spec 194 §1.1: 60d
+        // → radar-scoring-fp-7a4cd9d409ed; 120d → radar-scoring-fp-759835b624ca. Spec 194 §1.5: 60d
+        // → radar-scoring-fp-162df0f4c62b; 120d → radar-scoring-fp-b8ce14dea17a. Spec 194 §2 moves them to
+        // the values below. The AI-OFF live values moved at every one of those steps too (60d
+        // radar-scoring-fp-4eb2fe5d3cdf → 58c289cd0113 → 06e4781f86bb → 61891b37e429 →
+        // radar-scoring-fp-2cbbd056ffe5; 120d radar-scoring-fp-0a7058d94582 → 5d89d6ce1668 → 5cb9dc71f309 →
+        // f160ee8faaa6 → radar-scoring-fp-f68e6481b136) — a rules=, media-collapse or news= change folds in
+        // with or without the AI descriptor.
+        // These are the FINAL post-194 values; everything named above them is history.
         Assert.Equal(
-            "radar-scoring-fp-7a4cd9d409ed",
+            "radar-scoring-fp-b9543f441717",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-759835b624ca",
+            "radar-scoring-fp-901129153cd1",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
+    }
+
+    [Fact]
+    public void Compute_LiveWindowAiOffStamps_ArePinned()
+    {
+        // The AI-OFF counterparts of the two live-window stamps above. Until spec 194 §2 they lived ONLY in
+        // prose — in this file's pin comments and in scripts/run-profiles/default.json's operator comment —
+        // so nothing asserted them and a transcription error could survive indefinitely. They are what a run
+        // with Radar:Ai unconfigured stamps at the two windows real runs use; pinning them makes all six
+        // recorded values change-detected instead of four of them.
+        Assert.Equal("radar-scoring-fp-2cbbd056ffe5", DefaultFingerprint(window: TimeSpan.FromDays(60)));
+        Assert.Equal("radar-scoring-fp-f68e6481b136", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }
 
     [Fact]
@@ -354,8 +467,8 @@ public sealed class ScoringConfigFingerprintTests
     {
         // Tuning the AI signal's Strength re-stamps the fingerprint by value (spec 106) — the deferred Strength
         // recalibration cannot silently produce falsely-comparable snapshots.
-        var changed = SourceDescriptor
-            + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptor.Replace("str=8", "str=9", StringComparison.Ordinal))};";
+        var changed = AiOnSourceDescriptorWith(
+            AiDirectionalDescriptor.Replace("str=8", "str=9", StringComparison.Ordinal));
 
         Assert.NotEqual(
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),
@@ -374,8 +487,7 @@ public sealed class ScoringConfigFingerprintTests
 
         Assert.NotEqual(
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),
-            DefaultFingerprint(
-                sourceDescriptor: SourceDescriptor + $"ai={DescriptorEscaping.Escape(previousModel)};"));
+            DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWith(previousModel)));
     }
 
     [Fact]

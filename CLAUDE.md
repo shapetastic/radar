@@ -1735,8 +1735,8 @@ Do not hand back broken code.
     **DELETED** — as are `NewsDirectionalReadBoundaryTests`, `NewsDirectionalReadSourceTests`,
     `CollectionPassNewsDirectionalPrepareTests`, `NewsDirectionalProvenanceChainTests` and
     `KeywordSignalExtractorNewsDirectionTests`. The replacement — one judgment-DERIVED signal anchored to the
-    evidence the judgment actually cited — is spec 194 §1.2 and is **NOT built** (see the REMAINING GAP
-    bullet).
+    evidence the judgment actually cited — is spec 194 §1.2, and it is **SHIPPED** (see its own bullet
+    below).
   - **The join is DERIVED ON READ, company-scoped and FAIL-CLOSED — and NOTHING is persisted. RETAINED:
     `NewsObservationEvidenceJoin` survives 194 §1.1 intact** (it is consumed by `NewsTypingGenerator`, not
     only by the deleted read) and is the observation↔evidence primitive spec 194 §1.2 builds the
@@ -1794,85 +1794,298 @@ Do not hand back broken code.
     extraction-side boundary test 191 added was deleted with the seam it described, because a guard over a
     type that no longer exists is a claim about nothing. `NewsObservationArchitectureGuardTests` and
     `NewsRiskArchitectureGuardTests` still hold the standing claims.
-  - ⚠ **Recorded interaction, DORMANT until spec 194 §1.2 mints a directional news signal again: the
-    spec-109 `media-collapse-v1` same-event
-    collapse is direction-BLIND.** It buckets `MediaAttention` signals by observation-time proximity and
-    keeps the **earliest-observed** representative, so a bucket holding one directional and one Neutral news
-    signal may keep the Neutral one. Because the trajectory is COMPANY-level, every directional news signal
-    for one company in one window carries the same direction, so a bucket is never internally contradictory —
-    but a directional read can still be de-noised away by an earlier unread article. Making the
-    representative choice direction-aware would change the collapse STRUCTURE (a `media-collapse-v2` bump,
-    re-stamping again) and needs its own decision and its own evidence; it is out of scope here.
+  - ✅ **§1.5 IS SHIPPED — `media-collapse-v2`: a grounded direction now survives the same-event collapse.**
+    The gap spec 191 recorded as DORMANT went live the moment §1.2 minted a directional news signal: the
+    spec-109 collapse buckets `MediaAttention` signals by observation-time proximity and v1 kept the
+    **earliest-observed** representative, so a bucket holding the grounded signal and an earlier unread
+    Neutral duplicate kept the Neutral one — Radar would hold a validated read and score the company's news
+    as plain attention. `MediaAttentionCollapse.Version` is now **`media-collapse-v2`** and only the choice
+    of representative INSIDE each completed bucket changed: (1) a structurally valid
+    `news-judgment-signal-v1` signal beats an ordinary media signal; (2) among materialized signals the
+    latest `CreatedAtUtc`, then lowest `Id` (the SAME rule §1.3 applies, so the two steps can never disagree
+    about which grounded read is current); (3) with no materialized signal in the bucket, the EXACT v1
+    earliest-observed/lowest-id rule — pinned instance-for-instance, so an all-ordinary bucket is
+    byte-identical to v1. **The greedy event-window BOUNDARIES are unchanged and asserted, not assumed:** the
+    window is still measured from each bucket's EARLIEST member, never from the chosen representative —
+    otherwise the existence of a judgment could widen or shrink a bucket and silently move the collapsed
+    counts (mutation-proven: anchoring the window on the representative turns the boundary test red). The
+    collapsed count stays exact (every other member of the bucket) and is keyed by the representative; the
+    representative is always a REAL persisted signal, never a synthesized composite.
   - **Wiring was gated on judgment; after 194 §1.1 there is nothing to wire.** 191 registered the seam inside
     `AddRadarNewsJudgment`, under the unfiltered-full-mode + typing-enabled + resolvable-judge gate; that
     registration is deleted, so `KeywordSignalExtractor` has no news-read dependency in ANY composition.
     `scripts/run-profiles/default.json` still has Typing and Judgment `Enabled: true` — the judge still runs
     and still feeds the leaders marker; it just no longer reaches the signal layer.
-  - ⚠ **THE PINS MOVED TWICE, AND THE SCORE SERIES TAKES TWO DISCONTINUITIES.**
+  - ✅ **§2 IS SHIPPED — the AD-10 news-read hole is CLOSED.** `NewsJudgmentScoringIdentity`
+    (`Radar.Application.Scoring`) renders one canonical **`news=…;` segment**, appended by
+    `SignalSourceDescriptor.CanonicalDescriptor()` **AFTER** the existing `rules=` and optional `ai=`
+    segments so the pre-194 prefix stays byte-stable and a pin move is unambiguously attributable. It
+    distinguishes: judgment **disabled vs enabled**; the exact **resolved presentation cohort key** (hence
+    provider + exact judge model + judge prompt/schema + the whole stage-1 extractor cohort identity + the
+    fact-family builder identity); the **`news-judgment-signal-v1`** materializer identity; the
+    **trajectory→direction mapping and every strength constant** (`BaseStrength` 4, `MaxFindingContribution`
+    3, `CompleteTypingBonus` 1, `Novelty` 4, `Confidence` 0.5 — encoded by value, in fixed order, invariant
+    culture); and the **`legacy-news-inheritance-v1`** (§1.4) + **`news-judgment-supersede-v1`** (§1.3) rule
+    versions. Rules:
+    - **It holds STRINGS AND NUMBERS — the spec-147 `EnabledCollectorVocabulary` posture, and it is
+      structural.** It cannot call a judge, cannot construct a provider client and references nothing that
+      can, so a spec-144 `score` pass and a spec-139 replay compose the SAME identity a `full` run composes
+      from the same configuration **without registering the judgment step at all** (asserted through the real
+      composed Worker graphs, in the style of spec 147's full-vs-score fingerprint test). This deliberately
+      does NOT repeat spec 144's shape, where the whole AI seam had to be registered in score mode because
+      `ScoringDescriptor()` could only be obtained from the live source. It is also what keeps the
+      spec-177/179 architecture guards intact: `Radar.Application.Scoring` may reach neither
+      `Radar.Application.News` nor `Radar.Application.NewsRisk`, so the mapping and the constants are
+      composed on the far side by `NewsJudgmentScoringIdentityFactory` (`Radar.Application.News`) and arrive
+      here already rendered. **Do not invert that by taking the trajectory enum or the rules type as a
+      parameter.**
+    - **The segment is UNCONDITIONAL; disabled renders `news=disabled:…;`.** Rendering nothing when disabled
+      would be byte-identical to a pre-194 composition, so "judgment off" and "a Radar that predates the
+      judgment read" would share a stamp — the ambiguity spec 147 removed from `collectors=;`. Consequence,
+      accepted: the AI-OFF pins move too. A composition that never configured the judgment resolves to
+      `Disabled`, which is exactly what it scores as.
+    - **Cost controls are deliberately NOT in it** — reader API keys (the value *and* the env-var name),
+      call budgets and retry caps: `MaxCompaniesPerRun`, `MaxFamiliesPerJudgment`, `MaxJudgmentAttempts` and
+      the typing budgets are each asserted NOT to move the stamp. They change what Radar spends discovering
+      a judgment, never what a judgment means; folding them in would re-stamp a whole series for a throttle
+      change (spec 141: a fingerprint records identity, not operational posture). Reader NAMES are likewise
+      out (the spec-179 rule) while provider and model are in.
+    - **`EscapeNested`, not `Escape`** — the segment has internal `:`/`|` structure and the cohort key
+      legitimately contains `:`, `|` and `=`, so escaping only the outer delimiters would let a cohort key
+      impersonate a field; widening the shared `Escape` instead would move the AI-ON pin for the wrong
+      reason (the spec-146 argument verbatim).
+    - **ONE cohort-key composition.** `NewsJudgmentPresentationCohort.ComposeCohortKey` was EXTRACTED from
+      the run-time `TryResolve` and is called by both it and the new config-time resolution, so the
+      CONFIGURED cohort and the PRODUCED cohort cannot drift. `media-collapse-v2` is folded through
+      `MediaAttentionCollapse.CanonicalDescriptor()` and is **asserted to appear exactly once** across the
+      hashed inputs — never duplicated inside the news segment.
+    - **Behaviour change, deliberate, the spec-147 precedent:** when judgment is enabled the judge/typing
+      reader lists and the presentation-cohort designation are now read and validated in **every** run mode,
+      because that designation IS the recorded identity. A misconfigured cohort therefore fails startup in
+      `score`/`replay` too, and a judge reader's API-key environment variable must be set in those modes —
+      the same posture spec 144 established for `Radar:Ai`.
+  - ⚠ **THE PINS MOVED TWICE IN ONE WEEK, AND THE SCORE SERIES TAKES TWO DISCONTINUITIES.**
     `KeywordSignalExtractor.RuleSetVersion` went **`radar-keyword-rules-v6` → `radar-keyword-rules-v7`
     (spec 191)** and then **`radar-keyword-rules-v7` → `radar-keyword-rules-v8` (spec 194 §1.1)** — both
     rule-STRUCTURE changes under CLAUDE.md checklist item 7, both folded into `ScoringConfigVersion` via
     `SignalSourceDescriptor`. Unlike specs 127/129/130 — opt-in-OFF rule groups whose scoring math was
-    byte-identical — **both of these change scores**. **CURRENT values (v8, `radar-keyword-rules-v8`),
-    independently recomputed and confirmed twice:**
-    30d code-default (the unit pins) AI-OFF **`radar-scoring-fp-023b1af1e3d4`** / AI-ON
-    **`radar-scoring-fp-ef9104b7b2b9`**;
-    **60d LIVE baseline** AI-OFF **`radar-scoring-fp-06e4781f86bb`** / AI-ON
-    **`radar-scoring-fp-7a4cd9d409ed`**;
-    120d `-Profile long-window` AI-OFF **`radar-scoring-fp-5cb9dc71f309`** / AI-ON
-    **`radar-scoring-fp-759835b624ca`**.
-    **HISTORY — the spec-191 v7 values, superseded, recorded for reconciling accrued snapshots ONLY:** 30d
-    `be417df3b731` / `4d1cd1a1528c`; 60d `58c289cd0113` / `3670cdb74652`; 120d `5d89d6ce1668` /
-    `c9fe86a19073` (themselves succeeding the spec-148/160 v6 values 30d `0c46e07b94db` / `ebd7d11a58d0`,
-    60d `4eb2fe5d3cdf` / `5ffa8c9e25f0`, 120d `0a7058d94582` / `19fecdb64e3a`). The window-dependence rule
-    stands unchanged — **the three pairs are three correct answers at three windows; do not reconcile them
-    onto one value**, and match an accrued stamp against the pair for the window that run actually used. No
-    `_formula.Version` bump, no weight edit, no new strategy, no arm renamed, no Lead change. **History is
-    deliberately NOT regenerated, rewritten or backfilled (AD-8/AD-1)**: snapshots on either side of each
-    bump mean different things, exactly as spec 148 took its discontinuity.
-  - ⚠ **OPERATOR ACTION — REQUIRED BEFORE THE FIRST POST-194 BASELINE RUN.** `StrategyIdentityGuard` compares
-    each strategy's computed fingerprint against `data/scoring-configs/strategies/{name}.json` as the FIRST
-    statement of the run, and **will throw**, naming the strategy and both fingerprints — the value it now
-    computes is the **v8** pair **`radar-scoring-fp-06e4781f86bb` (AI-OFF) / `radar-scoring-fp-7a4cd9d409ed`
-    (AI-ON)** at the live 60-day window, not the superseded v7 pair `58c289cd0113` / `3670cdb74652` a
-    pre-194 record holds. That path is **git-ignored**, so those records can never be updated by a PR and
-    cannot ride along in this change — fabricating them would be worse than the guard's own message.
-    **Delete `data/scoring-configs/strategies/*.json` manually, consciously, for every configured strategy
-    before the next baseline run**, or the run halts before collection. The move is recorded in
+    byte-identical — **both of these change scores**. **Spec 194 then moved every pin TWICE MORE on its own
+    branch**: once for `MediaAttentionCollapse.Version` **`media-collapse-v1` → `media-collapse-v2`** (§1.5,
+    a hashed field in its own right — `mediaCollapseDescriptor`) and once for the **news-judgment identity
+    segment** (§2). Neither needed a `RuleSetVersion` or `_formula.Version` change.
+    **CURRENT, FINAL post-194 values (`radar-keyword-rules-v8` + `media-collapse-v2` + `news=…;`),
+    independently recomputed and confirmed twice — once through `ScoringConfigFingerprint.Compute` over a
+    REAL `SignalSourceDescriptor`, and once by re-deriving the canonical string and its SHA-256 outside
+    .NET:**
+    30d code-default (the unit pins) AI-OFF **`radar-scoring-fp-5036d7f73af3`** / AI-ON
+    **`radar-scoring-fp-5ef6508adc5d`**;
+    **60d LIVE baseline** AI-OFF **`radar-scoring-fp-2cbbd056ffe5`** / AI-ON
+    **`radar-scoring-fp-b9543f441717`**;
+    120d `-Profile long-window` AI-OFF **`radar-scoring-fp-f68e6481b136`** / AI-ON
+    **`radar-scoring-fp-901129153cd1`**.
+    On the AI-ON side the news segment carries the LIVE **enabled** cohort (`default.json` designates the
+    DeepInfra DeepSeek reader as both presentation judge and stage-1 extractor); on the AI-OFF side it
+    carries the **disabled** form — AI-OFF has always meant "the code-default composition, nothing optional
+    registered". Both AI-OFF live-window values are now **asserted** rather than only recorded in prose.
+    **The three composition-guard pins did NOT move with them** (`RadarScoreFormulaV10CompositionGuardTests`
+    `412ba7a0b6f5`, `V11` `173e8e705e77`, `RadarBaselineActivityFormulaV1` `a8bda5680a46`, all set by §1.5):
+    those files substitute a deliberately FROZEN `StubSourceDescriptor`, so an identity move cannot disturb a
+    FORMULA-COMPOSITION pin. That isolation is the feature — do not "fix" it by pointing the stub at the
+    real descriptor.
+    **HISTORY — superseded values, recorded for reconciling accrued snapshots ONLY:** the spec-194 §1.5
+    (v8 + `media-collapse-v2`, no news segment) pairs 30d `a47076995bf5` / `fce77b299c76`, 60d
+    `61891b37e429` / `162df0f4c62b`, 120d `f160ee8faaa6` / `b8ce14dea17a`; the spec-194 §1.1 v8 +
+    `media-collapse-v1` pairs 30d `023b1af1e3d4` / `ef9104b7b2b9`, 60d `06e4781f86bb` / `7a4cd9d409ed`, 120d
+    `5cb9dc71f309` / `759835b624ca`; the spec-191 v7 pairs 30d `be417df3b731` / `4d1cd1a1528c`, 60d
+    `58c289cd0113` / `3670cdb74652`, 120d `5d89d6ce1668` / `c9fe86a19073`; and the spec-148/160 v6 values
+    30d `0c46e07b94db` / `ebd7d11a58d0`, 60d `4eb2fe5d3cdf` / `5ffa8c9e25f0`, 120d `0a7058d94582` /
+    `19fecdb64e3a`. The window-dependence rule stands unchanged — **the three pairs are three correct
+    answers at three windows; do not reconcile them onto one value**, and match an accrued stamp against the
+    pair for the window that run actually used.
+    **THREE SEMANTIC REGIMES, two close discontinuities:** pre-191 Neutral news; spec-191 inherited
+    direction (**known DEFECTIVE — NOT a valid control cohort; do not pool it across the boundary or use it
+    as evidence for post-194 efficacy**); and post-194 grounded judgment signals. No `_formula.Version`
+    bump, no weight edit, no new strategy, no arm renamed, no Lead change. **History is deliberately NOT
+    regenerated, rewritten or backfilled (AD-8/AD-1)**: snapshots on either side of each bump mean different
+    things, exactly as spec 148 took its discontinuity.
+  - ⚠ **OPERATOR ACTION — REQUIRED BEFORE THE FIRST POST-194 BASELINE RUN, AND THE ORDER IS LOAD-BEARING.**
+    `StrategyIdentityGuard` compares each strategy's computed fingerprint against
+    `data/scoring-configs/strategies/{name}.json` as the FIRST statement of the run, and **will throw**,
+    naming the strategy and both fingerprints — the value it now computes is the FINAL post-194 pair
+    **`radar-scoring-fp-2cbbd056ffe5` (AI-OFF) / `radar-scoring-fp-b9543f441717` (AI-ON)** at the live
+    60-day window, not `61891b37e429` / `162df0f4c62b` (spec 194 §1.5), `06e4781f86bb` / `7a4cd9d409ed`
+    (§1.1) or `58c289cd0113` / `3670cdb74652` (spec 191) that a pre-194 record holds. The order:
+    **(1)** do NOT touch the ignored identity records while a pre-194 baseline is running; **(2)** after
+    merge and BEFORE the first post-194 baseline, consciously **delete or re-record every configured
+    `data/scoring-configs/strategies/{name}.json`**; **(3)** verify the first run reports the expected new
+    fingerprint before treating subsequent snapshots as the corrected series. That path is **git-ignored**,
+    so those records can never be updated by a PR and cannot ride along in this change — **fabricating them
+    would be worse than the guard's own message**. If step 2 is missed the run halts before collection:
+    **that halt is CORRECT and must not be bypassed.** The move is recorded in
     `ScoringConfigFingerprintTests`' pin comments and in `scripts/run-profiles/default.json`'s
     operator-facing `_comment`.
   - **`replay ⊆ forward` still holds field-for-field.** Replay never re-extracts — it reads the signals the
-    forward pass persisted — so the 24 accrued v7 directional `MediaAttention` signals replay exactly as they
-    were written, inherited direction and all. Nothing in the replay path can reach a judgment at all, and
-    after 194 §1.1 nothing in the FORWARD path can either.
-  - ⚠ **REMAINING GAP — the trunk is NOT fully corrected. Spec 194 §1.2–§1.5 and §2 are NOT implemented;
-    this worktree carries §1.1 alone.** Consequences, stated so the next coder does not read silence as
-    completion:
-    - **§1.2–§1.3 (the judgment-DERIVED signal anchored to the evidence the judgment actually cited, and its
-      versioned envelope) do not exist.** News currently reaches scoring as Neutral VOLUME again — the
-      pre-191 state, which is the honest one, not the desired one.
-    - **§1.4's legacy-inheritance neutralization is ABSENT, and this is the live one.** The **24 accrued v7
-      directional signals on disk — 16 of them inside the live 60-day window, written by the 2026-08-26
-      22:53 baseline run — CONTINUE to be scored with their inherited direction.** They are not neutralized
-      on read, and `AddIfNewAsync` rejects already-seen evidence, so they will **never** be re-extracted as
-      Neutral. **They are NOT a valid control cohort** and no comparison should treat them as one.
-    - **§2 is not done, so the AD-10 hole recorded below is still OPEN**: judgment enablement, the judge
-      MODEL and the designated presentation cohort still contribute **nothing** to `ScoringConfigVersion`.
-  - ⚠ **STILL OPEN — the recorded AD-10 honesty gap: there is NO news-read scoring descriptor.** The filing
-    seam carries `ScoringDescriptor()`, which `SignalSourceDescriptor` folds into `ScoringConfigVersion` as
-    the `ai=` segment; **the news read has no analogue and is hashed into nothing.** 194 §1.1 did not close
-    this — closing it is **spec 194 §2**, which is not implemented. The consequence, stated plainly and still
-    true: two runs differing only in `Radar:NewsResearch:Judgment:Enabled`, in the judge MODEL, in the
-    designated `PresentationCohort`, or in `NewsTrajectorySignalRules`' strength constants stamp the
-    **IDENTICAL** `ScoringConfigVersion` — so `StrategyIdentityGuard` cannot see the difference and
-    `ScoreSeriesKey` pools both cohorts into one series. **Snapshots across a judgment on/off or judge-model
-    change are NOT comparable, and nothing in the system will tell you.** This contradicts the spec-141/148
-    rule that the reading model belongs on the identity side; folding it moves all six pins again.
-  - **Out of scope of this worktree, recorded not built**: everything in spec 194 §1.2–§1.5 and §2 (above);
-    backfilling/regenerating/rewriting any historical signal, snapshot or efficacy artifact; giving typed
-    facts a per-fact direction (spec 181's reflection-guarded rule stands — the COMPANY-level trajectory is
-    the input); persisting the join as a side index; changing the judge prompt, result schema, taxonomy,
-    fact-family identity or any cohort key; and retiring v8/v9/v10/v11 or changing which arm is Lead.
+    forward pass persisted — so the 24 accrued v7 directional `MediaAttention` signals stay on disk exactly
+    as they were written, inherited direction and all. Since §1.4 (below) both the forward pass and replay
+    admit them through the SAME `ScoringEngine` transform, so both see them Neutral and the invariant is
+    untouched. Nothing in the replay path can reach a judgment at all, and after 194 §1.1 nothing in the
+    FORWARD path can either.
+  - ✅ **§1.4 IS SHIPPED — the accrued v7 directions now fail CLOSED to Neutral on read.**
+    `LegacyNewsInheritanceNeutralization` (`Radar.Application.Scoring`, versioned
+    **`legacy-news-inheritance-v1`**) is a pure, deterministic (AD-3), read-side admission transform applied
+    in `ScoringEngine.ScoreCompanyAsync` **before** the spec-113 supersede and the spec-109 media collapse,
+    to the current-window `ScoringSignal` pairs **and** the previous/velocity-window `Signal` list. Rules:
+    - **The match is the exact legacy metadata SHAPE, never `Direction != Neutral`.** A directional
+      `MediaAttention` signal qualifies iff its `MetadataJson` parses through the shared `EvidenceMetadata`
+      reader (never a second parser), carries spec 191's `newsJudgmentId` + `newsJudgmentCohortKey` +
+      `newsObservationId`, and does NOT carry `newsJudgmentSignalVersion = news-judgment-signal-v1` (both
+      key and value now declared as consts on `NewsDirectionalSignalMetadata`; §1.2 will WRITE them).
+      Matching on direction alone would swallow the §1.2 judgment-derived signal this correction exists to
+      make room for — mutation-proven, not asserted.
+    - **A malformed v1 envelope fails closed TOO, on its own count axis.** Unreadable JSON, or a
+      `news-judgment-signal-v1` claim missing judgment id / cohort key / trajectory, is a direction whose
+      grounding cannot be verified. Counted separately from the legacy residue, because a CURRENT writer
+      producing unverifiable provenance is a different and more urgent fact.
+    - **The substitution is the exact pre-191 Neutral media-attention event**: `Direction = Neutral`,
+      `Strength = NewsTrajectorySignalRules.BaseStrength` (4 — sourced from there so the two cannot drift).
+      Everything else (id, evidence id, novelty, confidence, excerpt, reason, both instants, the metadata
+      envelope itself) is carried through, so the signal is still walkable back to the record on disk.
+    - **Read-side only, and nothing is written**: the persisted signal, its review and its file stay
+      byte-identical (append-only, AD-8). Nothing is deleted, rewritten or backfilled.
+    - **Never silent**: each current-window suppression is named on that signal's `ScoreEvidenceLink`
+      contribution reason (the spec-109/193 precedent), and one aggregated per-company **Warning** reports
+      both axes for both windows (the spec-145 aggregation precedent). A run with nothing to suppress logs
+      nothing new and is byte-identical to before — the untouched fast path returns the INPUT INSTANCE.
+    - **No pin moved.** `legacy-news-inheritance-v1` is declared public precisely so **§2** can fold it into
+      `SignalSourceDescriptor.CanonicalDescriptor()` in its own pass; it is hashed into nothing today, and
+      `ScoringConfigFingerprintTests`, `KeywordSignalExtractor.RuleSetVersion` and
+      `MediaAttentionCollapse.Version` are untouched.
+    - ⚠ **The accrued cohort is STILL NOT a valid control cohort** — its scores before this change used an
+      ungrounded direction, and it is now scored as plain attention volume. Do not pool across the boundary.
+  - ✅ **§1.2 IS SHIPPED — the JUDGMENT now creates its own grounded signal, and no later article borrows
+    it.** `INewsJudgmentSignalMaterializer` / `NewsJudgmentSignalMaterializer` (`Radar.Application.News`),
+    invoked by the Worker immediately AFTER `RunNewsJudgmentAsync` and BEFORE `RunNewsRiskShadowAsync`, over
+    the current `NewsJudgmentRunResult` and the EXACT `NewsTypingRunResult` instance the judge consumed. It
+    makes **no model call** and re-ranks no candidates. Rules:
+    - **Eligibility is ALL-OR-NOTHING**: the designated presentation cohort (resolved STRUCTURALLY through
+      the new shared `NewsJudgmentPresentationCohort`, which `NewsJudgmentGenerator.BuildPresentationMarkers`
+      was routed onto rather than copied — so the cohort whose direction is SCORED and the cohort whose
+      marker is DISPLAYED cannot drift), `Status == Judged`, an `Improving`/`Deteriorating` trajectory
+      (`Mixed`/`Unknown` are honest non-directions via `NewsTrajectorySignalRules.DirectionFor`), a non-empty
+      `TrajectoryFactIds`, and **every** cited fact resolving through the stage-1 cohort's `FactsById` to a
+      source observation that resolves through `NewsObservationEvidenceJoin` to exactly one news evidence
+      item **for the same company**. A partially resolvable citation set records a NAMED skip and creates no
+      signal: scoring the resolvable part would rest a company-level verdict on a subset of the evidence that
+      produced it, invisibly.
+    - **The join gained a REVERSE lookup, not a second join.** `TryMatchByObservation` maps **every**
+      observation on a joined key (not just the lowest-id representative) onto that key's single match, so a
+      cited fact whose observation is not the representative resolves. The forward `TryMatch`, the
+      representative rule and the three observation counts are asserted byte-unchanged. No fuzzy second join,
+      no side index (spec 151's precedent).
+    - **ONE signal per judgment** — not one per citation, not one per later article.
+      `Id = DeterministicGuid.FromCanonicalString("radar:news-judgment-signal:news-judgment-signal-v1:{judgmentId:D}")`;
+      `EvidenceId` = the deterministic primary anchor (latest cited `PublishedAtUtc ?? CollectedAtUtc`, then
+      lowest evidence id); `CompanyId`/`CompanyMention` from the JUDGMENT record (no resolver call);
+      `Type = MediaAttention` (a new `SignalType` would fall outside every declared `SignalTypes` filter and
+      every channel budget); strength `NewsTrajectorySignalRules.StrengthFor(findings, typingComplete)`;
+      Novelty **4** / Confidence **0.5** retained from spec 191 and now declared as consts beside the rules.
+    - **`CreatedAtUtc` is the MATERIALIZATION instant, never the judgment's** — even for a reused judgment.
+      Backdating would let a spec-136 replay see a signal Radar did not have; the one-run score lag is the
+      honest cost, and is asserted against `ISignalFileStore.ReadApprovedInWindowAsync`'s
+      `CreatedAtUtc <= knownAsOfUtc` predicate. `ObservedAtUtc` is the anchor evidence's own instant.
+    - **The excerpt is a CITATION** — the first, in the record's persisted `TrajectoryFactIds` order and each
+      fact's own citation order, that passes the mapper's excerpt-in-evidence guard against the ANCHOR
+      evidence. That guard was EXTRACTED as `ExtractedSignalMapper.IsExcerptSupportedByEvidence` and
+      `ToSignal` routes through it, so the pre-check and the verdict cannot disagree. None passing ⇒ the
+      named `excerpt-not-in-evidence` skip and no signal.
+    - **One versioned envelope, one parser.** `NewsDirectionalSignalMetadata.ComposeJudgmentSignal` writes
+      `newsJudgmentSignalVersion` + `newsJudgmentId` + `newsJudgmentCohortKey` + the trajectory + the ordered
+      distinct fact / observation / evidence id lists, through the SHARED `EvidenceMetadata.Compose`. GUID
+      lists are lowercase `D`, distinct, ordinally ordered, joined by the declared `GuidListDelimiter` (`,`),
+      with `ParseGuidList` as the matching read side. ⚠ **Deliberate deviation from the spec's §1.2 prose:**
+      the trajectory rides the EXISTING `newsBusinessTrajectory` key, not a new `newsTrajectory` — the key was
+      already declared and is already read by §1.4's validity gate, and a second spelling would be exactly
+      the duplicate-parser failure the same section forbids two sentences later.
+    - **The creation path is the collection pass's, not a second one**: map → (deterministic id set BEFORE
+      review, so `review.SignalId == signal.Id` and the file store's provenance guard holds) → review →
+      `ISignalRepository` + `ISignalReviewRepository` + `ISignalFileStore`. An existing deterministic id is
+      `AlreadyMaterialized` — **never reviewed again and never overwritten**. A failed durable write follows
+      spec 193: COUNTED, not reported as materialized, no retry queue (the next process may safely retry,
+      because no durable signal with that id exists).
+    - **`NewsJudgmentSignalMaterializationSummary`** (eligible / materialized / already-materialized /
+      validation-rejected / write-failed + counts keyed by the CLOSED `NewsJudgmentSignalSkipReason`
+      vocabulary) rides `NewsJudgmentRunResult.SignalMaterialization` — **trailing and nullable, `null` =
+      NOT ATTEMPTED**, never an all-zero summary — is logged ONCE per pass (spec-145 aggregation) and renders
+      as an additive trailing section of the live news-risk artifact (a `null` summary renders a
+      byte-identical document; the schema tag does not move). One unexpected company failure is counted on
+      its own `UnexpectedFailure` axis and the rest still materialize; cancellation propagates.
+    - **No pin moved.** Nothing on the scoring-identity side was touched: no `SignalSourceDescriptor` change,
+      no `RuleSetVersion` bump, no `MediaAttentionCollapse.Version` bump, `ScoringConfigFingerprintTests`
+      untouched. The materializer is registered WITH judgment, so a judgment-disabled graph is unchanged.
+  - ✅ **§1.3 IS SHIPPED — the grounded signal REPLACES the ordinary article event; the cited article is not
+    counted twice.** `NewsJudgmentSignalSupersede` (`Radar.Application.Scoring`, versioned
+    **`news-judgment-supersede-v1`**) follows `GuidanceChangeSupersede`'s established shape exactly (generic
+    core + two overloads, an untouched fast path returning the **INPUT INSTANCE**, survivors + per-winner
+    counts in `NewsJudgmentSupersedeResult<T>`), and is applied in `ScoringEngine.ScoreCompanyAsync` to
+    **both** the current-window `ScoringSignal` pairs and the previous/velocity-window `Signal` list, before
+    formula/filter consumption. Rules:
+    - **The rule**: among `MediaAttention` signals sharing one `EvidenceId`, a structurally valid
+      `news-judgment-signal-v1` signal beats the ordinary Neutral article signal **and** any accrued
+      spec-191 v7 directional article signal; among materialized signals the **latest `CreatedAtUtc`** wins,
+      then the **lowest `Signal.Id`** (deliberately the opposite of the guidance supersede's
+      earliest-observed tie-break — `ObservedAtUtc` on a materialized signal is the ARTICLE's instant and is
+      identical across re-materializations, so only the creation instant distinguishes two grounded reads).
+      **Without a valid materialized signal NOTHING is removed** — an evidence id carrying only
+      ordinary/legacy media signals is completely untouched, because de-noising ordinary news volume is the
+      same-event collapse's job and widening a supersede into a second collapse would drop attention events
+      no judgment ever replaced. That is true BY CONSTRUCTION: the winner map is built from the valid v1
+      signals alone, so an evidence id with no materialized signal simply has no entry.
+    - **ASSEMBLY ORDER, and why.** `LegacyNewsInheritanceNeutralization` (§1.4) → `GuidanceChangeSupersede`
+      → `NewsJudgmentSignalSupersede` (§1.3) → `MediaAttentionCollapse` (§1.5). It runs **after** §1.4
+      because it reads §1.4's output: a neutralized legacy signal must arrive as a LOSING ordinary signal,
+      never as a rival direction. It runs **before** the collapse so the collapse buckets the post-supersede
+      media set (the removed duplicate must not first be counted as a collapsed same-event item) and so the
+      surviving grounded signal is what v2 then prefers as its bucket representative. Its order relative to
+      `GuidanceChangeSupersede` is behaviourally **irrelevant, and that is a checked fact, not an
+      assumption**: the two operate on disjoint `SignalType`s (`GuidanceChange` vs `MediaAttention`), so
+      neither can see the other's removals. `ScoringInput.PreCollapseSignals` was repointed at the
+      post-supersede set, so the spec-122 collapsed-breadth credit cannot re-admit the replaced signal's
+      publisher through the back door.
+    - **The ONE valid-v1 predicate, three call sites.** The "structurally valid `news-judgment-signal-v1`"
+      question was EXTRACTED out of §1.4's private classifier into
+      `NewsDirectionalSignalMetadata.ClassifyProvenance` / `IsJudgmentDerived` (total, deterministic, one
+      parse through the shared `EvidenceMetadata.TryRead`), and §1.3, §1.4 and §1.5 all route through it.
+      A second copy would let a signal be "valid enough to supersede" while "malformed enough to
+      neutralize" — a score that both keeps and disowns the same direction. A malformed or unreadable v1
+      envelope therefore loses the supersede as well as failing closed to Neutral.
+    - **Never silent, and beside the existing accounting.** The winning contribution's `Reason` gains
+      `(superseded N ordinary media attention signal(s) for this evidence: the judgment-derived direction
+      replaces the attention event)` in the same block that carries the spec-109 collapse note and the
+      spec-193 GuidanceChange note, and ONE aggregated per-company **Information** line (the spec-145
+      precedent) reports both windows. A run with nothing to supersede logs nothing new and is byte-identical
+      to before.
+    - **The healthy path replaces one attention event with one grounded attention event — asserted through
+      the real engine on a CONSTRUCTED pre/post pin** (no fixture copies live data): removing the
+      materialized signal restores the ordinary Neutral result exactly, adding it leaves `AttentionScore`,
+      `EvidenceConfidenceScore` and `SignalVelocityScore` unchanged in both windows and moves only the
+      trajectory contribution and the linked provenance.
+  - ✅ **SPEC 194 IS COMPLETE — §1.1, §1.2, §1.3, §1.4, §1.5, §2 and §3 have all shipped.** The AD-10
+    news-read honesty gap that stood open through the whole 177–193 arc — "the filing seam carries
+    `ScoringDescriptor()` and the news read has no analogue, so judgment on/off, the judge MODEL, the
+    designated `PresentationCohort` and `NewsTrajectorySignalRules`' strength constants are hashed into
+    NOTHING" — is **CLOSED** by the `news=…;` segment described above. The three rule versions this arc
+    introduced (`legacy-news-inheritance-v1`, `news-judgment-supersede-v1`, `news-judgment-signal-v1`) are
+    public precisely so §2 could fold them in, and it does. `media-collapse-v2` stays folded through
+    `MediaAttentionCollapse.CanonicalDescriptor()` alone and is asserted NOT to be duplicated inside the news
+    segment. **Snapshots across a judgment on/off or judge-model change are now stamped differently, so
+    `StrategyIdentityGuard` trips and `ScoreSeriesKey` no longer pools them.**
+  - **Out of scope, recorded not built**: backfilling/regenerating/rewriting any historical signal, snapshot
+    or efficacy artifact; giving typed facts a per-fact direction (spec 181's reflection-guarded rule stands
+    — the COMPANY-level trajectory is the input); persisting the observation↔evidence join as a side index;
+    changing the judge prompt, result schema, taxonomy, fact-family identity or any cohort key; making the
+    news-trajectory strength constants configurable (§2 hashes them by value; a test perturbs a CONSTRUCTED
+    identity fixture instead); folding call budgets or retry caps into the identity; and retiring
+    v8/v9/v10/v11 or changing which arm is Lead.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

@@ -57,12 +57,15 @@ public sealed record NewsObservationEvidenceMatch(Guid EvidenceId, Guid CompanyI
 public sealed class NewsObservationEvidenceJoin
 {
     private readonly Dictionary<Guid, NewsObservationEvidenceMatch> _byEvidenceId;
+    private readonly Dictionary<Guid, NewsObservationEvidenceMatch> _byObservationId;
 
     private NewsObservationEvidenceJoin(
         Dictionary<Guid, NewsObservationEvidenceMatch> byEvidenceId,
+        Dictionary<Guid, NewsObservationEvidenceMatch> byObservationId,
         NewsObservationEvidenceJoinCounts counts)
     {
         _byEvidenceId = byEvidenceId;
+        _byObservationId = byObservationId;
         Counts = counts;
     }
 
@@ -134,6 +137,7 @@ public sealed class NewsObservationEvidenceJoin
         }
 
         var byEvidenceId = new Dictionary<Guid, NewsObservationEvidenceMatch>();
+        var matchByKey = new Dictionary<string, NewsObservationEvidenceMatch>(StringComparer.Ordinal);
         var joinedKeys = new HashSet<string>(StringComparer.Ordinal);
         var ambiguousKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (key, companies) in companiesByKey)
@@ -150,10 +154,12 @@ public sealed class NewsObservationEvidenceJoin
             }
 
             joinedKeys.Add(key);
-            byEvidenceId[evidenceIds[0]] = new NewsObservationEvidenceMatch(
+            var match = new NewsObservationEvidenceMatch(
                 EvidenceId: evidenceIds[0],
                 CompanyId: companies.Single(),
                 ObservationId: lowestObservationByKey[key]);
+            byEvidenceId[evidenceIds[0]] = match;
+            matchByKey[key] = match;
         }
 
         // Counts are per OBSERVATION (the spec's pilot counted observations): each supplied observation
@@ -161,6 +167,7 @@ public sealed class NewsObservationEvidenceJoin
         var joined = 0;
         var ambiguous = 0;
         var noMatch = 0;
+        var byObservationId = new Dictionary<Guid, NewsObservationEvidenceMatch>();
         foreach (var observation in observations)
         {
             var key = observation.CompanyId is null
@@ -170,6 +177,14 @@ public sealed class NewsObservationEvidenceJoin
             if (key.Length > 0 && joinedKeys.Contains(key))
             {
                 joined++;
+
+                // SPEC 194 §1.2 — the REVERSE index, populated for EVERY observation on a joined key, not
+                // only for the lowest-id representative the forward match reports. A cited fact's source
+                // observation is whichever observation the typing pass happened to type; if only the
+                // representative resolved, a citation would fail provenance resolution for a reason that is
+                // an artifact of the representative rule rather than a real gap in the evidence chain. The
+                // forward index, its lowest-id rule and the counts above are all untouched by this.
+                byObservationId[observation.ObservationId] = matchByKey[key];
             }
             else if (key.Length > 0 && ambiguousKeys.Contains(key))
             {
@@ -183,10 +198,34 @@ public sealed class NewsObservationEvidenceJoin
 
         return new NewsObservationEvidenceJoin(
             byEvidenceId,
+            byObservationId,
             new NewsObservationEvidenceJoinCounts(joined, noMatch, ambiguous));
     }
 
     /// <summary>The match for one evidence id, or <c>null</c> when that evidence did not join.</summary>
     public NewsObservationEvidenceMatch? TryMatch(Guid evidenceId) =>
         _byEvidenceId.GetValueOrDefault(evidenceId);
+
+    /// <summary>
+    /// SPEC 194 §1.2 — the REVERSE direction: the match for one OBSERVATION id, or <c>null</c> when that
+    /// observation did not participate in a joined key. The judgment-signal materializer needs
+    /// observation → evidence (it starts from the fact ids the judge CITED, which resolve to observations),
+    /// whereas the forward lookup exists for the evidence → observation direction.
+    /// <para>
+    /// <b>Every</b> observation on a joined key resolves here, not just the lowest-id representative the
+    /// forward match reports — a cited fact's own observation is whichever one the typing pass typed, and
+    /// failing to resolve it because a SIBLING capture of the same article sorted lower would be a
+    /// provenance gap invented by a tie-break rule.
+    /// </para>
+    /// <para>
+    /// The returned instance is the very same <see cref="NewsObservationEvidenceMatch"/> the forward lookup
+    /// hands out, so its <see cref="NewsObservationEvidenceMatch.ObservationId"/> is the KEY'S lowest-id
+    /// representative and is NOT necessarily <paramref name="observationId"/>. That is deliberate: the
+    /// representative rule is the join's one definition of "which observation stands for this article", and
+    /// duplicating it into a second per-observation shape would be a second answer to the same question.
+    /// Callers that need the observation they asked about already hold it.
+    /// </para>
+    /// </summary>
+    public NewsObservationEvidenceMatch? TryMatchByObservation(Guid observationId) =>
+        _byObservationId.GetValueOrDefault(observationId);
 }

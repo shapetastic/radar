@@ -78,6 +78,7 @@ public sealed class Worker : BackgroundService
     private readonly INewsRiskEvaluationGenerator? _newsRiskEvaluationGenerator;
     private readonly INewsTypingGenerator? _newsTypingGenerator;
     private readonly INewsJudgmentGenerator? _newsJudgmentGenerator;
+    private readonly INewsJudgmentSignalMaterializer? _newsJudgmentSignalMaterializer;
     private readonly IWeeklyReportJudgmentRerenderer? _judgmentRerenderer;
     private readonly INewsJudgmentCandidatePlanner? _candidatePlanner;
     private readonly IOperatingCallStartupValidator? _operatingCallValidator;
@@ -103,7 +104,8 @@ public sealed class Worker : BackgroundService
         INewsTypingGenerator? newsTypingGenerator = null,
         INewsJudgmentGenerator? newsJudgmentGenerator = null,
         IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null,
-        INewsJudgmentCandidatePlanner? candidatePlanner = null)
+        INewsJudgmentCandidatePlanner? candidatePlanner = null,
+        INewsJudgmentSignalMaterializer? newsJudgmentSignalMaterializer = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -130,6 +132,7 @@ public sealed class Worker : BackgroundService
         _newsRiskEvaluationGenerator = newsRiskEvaluationGenerator;
         _newsTypingGenerator = newsTypingGenerator;
         _newsJudgmentGenerator = newsJudgmentGenerator;
+        _newsJudgmentSignalMaterializer = newsJudgmentSignalMaterializer;
         _judgmentRerenderer = judgmentRerenderer;
         _candidatePlanner = candidatePlanner;
         _operatingCallValidator = operatingCallValidator;
@@ -247,6 +250,12 @@ public sealed class Worker : BackgroundService
         var candidatePlan = _candidatePlanner?.Plan(result.StrategySections);
         var typing = await RunNewsTypingAsync(result, candidatePlan, ct).ConfigureAwait(false);
         var judgment = await RunNewsJudgmentAsync(result, candidatePlan, typing, ct).ConfigureAwait(false);
+        // Spec 194 §1.2: immediately after the judgment pass and BEFORE the shadow (whose live artifact
+        // renders the summary). This ordering is the entire correction — the judgment exists first, and
+        // then creates its OWN grounded directional signal, instead of an article at collection time
+        // borrowing whatever company verdict happened to predate it.
+        judgment = await RunNewsJudgmentSignalMaterializationAsync(judgment, typing, ct)
+            .ConfigureAwait(false);
         await RunNewsRiskShadowAsync(result, judgment, ct).ConfigureAwait(false);
         await RunEfficacyReportAsync(ct).ConfigureAwait(false);
     }
@@ -328,6 +337,46 @@ public sealed class Worker : BackgroundService
             _logger.LogError(
                 ex, "News-judgment step failed unexpectedly; the Radar run itself is unaffected.");
             return null;
+        }
+    }
+
+    // Spec 194 §1.2: the judgment-derived news signal step — a SEPARATE step AFTER the judgment pass whose
+    // result it consumes and BEFORE the news-risk shadow whose live artifact renders its summary, OUTSIDE
+    // IRadarPipeline. It makes NO model call and re-ranks nothing: it re-reads the judgments this pass just
+    // produced, resolves each directional presentation-cohort verdict back through its CITED facts to the
+    // evidence that produced it, and creates at most one deterministic signal per judgment.
+    //
+    // Skipped entirely (dependency null) unless judgment is enabled — and it returns the judgment result
+    // UNCHANGED in that case, so SignalMaterialization stays null, meaning NOT ATTEMPTED rather than
+    // "attempted and produced nothing". The materializer owns its own per-company failure handling; the
+    // belt-and-braces catch here keeps even an unexpected escape from aborting the host loop, and leaves
+    // the summary null rather than claiming a materialization that did not complete.
+    private async Task<NewsJudgmentRunResult?> RunNewsJudgmentSignalMaterializationAsync(
+        NewsJudgmentRunResult? judgment, NewsTypingRunResult? typing, CancellationToken ct)
+    {
+        if (_newsJudgmentSignalMaterializer is null || judgment is null || typing is null)
+        {
+            return judgment;
+        }
+
+        try
+        {
+            var summary = await _newsJudgmentSignalMaterializer
+                .MaterializeAsync(judgment, typing, ct)
+                .ConfigureAwait(false);
+            return judgment with { SignalMaterialization = summary };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "News-judgment signal materialization failed unexpectedly; the Radar run itself is "
+                    + "unaffected and no materialization summary is claimed.");
+            return judgment;
         }
     }
 

@@ -13,7 +13,14 @@ public sealed record NewsRiskLiveDocument(
     IReadOnlyList<string> Readers,
     string? Diagnostic,
     IReadOnlyList<NewsRiskLiveCompany> Companies,
-    DateTimeOffset GeneratedAtUtc)
+    DateTimeOffset GeneratedAtUtc,
+    // Spec 194 §1.2 (additive, TRAILING and NULLABLE): what the judgment-signal materializer did this run.
+    // `null` means the step was NOT ATTEMPTED — a pre-194 document, or a run with no materializer registered
+    // — never "attempted and produced nothing", which is an all-zero summary. The schema tag deliberately
+    // does NOT move: no field is removed or re-meant, and the member's own nullability carries the whole
+    // "not recorded" story (the spec-142 EvidenceQuality / spec-148 EffectiveScoringConfig.Window
+    // trailing-nullable precedent). A v3 consumer reading the existing fields BY NAME is unaffected.
+    NewsJudgmentSignalMaterializationSummary? SignalMaterialization = null)
 {
     // v3 (spec 185): additive per-company two-stage judgment sections + the presentation-cohort marker
     // state. A v2 JSON document deserializes safely — the new members are trailing and nullable.

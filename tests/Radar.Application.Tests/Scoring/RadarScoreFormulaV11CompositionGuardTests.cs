@@ -229,8 +229,24 @@ public sealed class RadarScoreFormulaV11CompositionGuardTests
     /// produces. It moves if the composition revision moves, if a hashed weight moves, or if the budget
     /// moves — which is exactly the coupling the revision mechanism exists to create. Budget-dependent, like
     /// every channel strategy's stamp.
+    /// <para>
+    /// It also moves when a hashed field OUTSIDE this file moves, and it just did: SPEC 194 §1.5 bumped
+    /// <c>MediaAttentionCollapse.Version</c> <c>media-collapse-v1</c> → <c>media-collapse-v2</c> (a grounded
+    /// judgment-derived direction now outranks an earlier ordinary Neutral member as a bucket's
+    /// representative), and the media-collapse descriptor is a hashed field, so EVERY strategy re-stamps at
+    /// once — radar-scoring-fp-1d56885bbd3f → the value below. ⚠ Spec 194 §2 will move it again when the
+    /// news-judgment scoring identity is folded in; that pass is deliberately not part of this one.
+    /// </para>
+    /// <para>
+    /// ⚠ THAT FORECAST WAS WRONG, and the reason is worth recording. SPEC 194 §2 folds the news-read
+    /// identity into <c>SignalSourceDescriptor.CanonicalDescriptor()</c> — which this file does NOT use: it
+    /// substitutes <c>StubSourceDescriptor</c>, whose value is deliberately frozen (see that type's remarks)
+    /// so an unrelated identity move cannot disturb a FORMULA-COMPOSITION pin. So §2 moved the six
+    /// <c>ScoringConfigFingerprintTests</c> pins and left this one exactly where §1.5 put it. The isolation
+    /// is the feature; do not "fix" it by pointing the stub at the real descriptor.
+    /// </para>
     /// </summary>
-    private const string PinnedScoringConfigVersion = "radar-scoring-fp-1d56885bbd3f";
+    private const string PinnedScoringConfigVersion = "radar-scoring-fp-173e8e705e77";
 
     private static (Guid SignalId, Guid EvidenceId, string Reason, int Weight)[] PinnedLinks =>
     [
