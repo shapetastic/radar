@@ -220,7 +220,10 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             Readers: readerLabels,
             Diagnostic: null,
             Companies: companies,
-            GeneratedAtUtc: _timeProvider.GetUtcNow());
+            GeneratedAtUtc: _timeProvider.GetUtcNow(),
+            // Spec 194 §1.2: carried straight through from the judgment run result the Worker attached it
+            // to. `null` (the judgment step did not run, or predates the materializer) renders nothing.
+            SignalMaterialization: judgment?.SignalMaterialization);
 
         await _artifactStore
             .WriteLiveAsync(

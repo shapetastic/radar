@@ -31,8 +31,7 @@ public static partial class ExtractedSignalMapper
         // Emptiness is validated by SignalValidation below; the mapper only owns the
         // provenance check (excerpt must be traceable to the evidence title or body).
         var supportingExcerpt = (extracted.SupportingExcerpt ?? string.Empty).Trim();
-        var searchableText = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);
-        if (supportingExcerpt.Length > 0 && !ExcerptIsInEvidence(supportingExcerpt, searchableText))
+        if (supportingExcerpt.Length > 0 && !IsExcerptSupportedByEvidence(evidence, supportingExcerpt))
         {
             errors.Add("Supporting excerpt not found in evidence.");
         }
@@ -98,8 +97,25 @@ public static partial class ExtractedSignalMapper
         return true;
     }
 
-    private static bool ExcerptIsInEvidence(string excerpt, string? searchableText) =>
-        Normalize(searchableText).Contains(Normalize(excerpt), StringComparison.Ordinal);
+    /// <summary>
+    /// The provenance guard: is <paramref name="excerpt"/> traceable to <paramref name="evidence"/>'s own
+    /// composed searchable text (title + body), compared whitespace-collapsed and case-insensitively?
+    /// <para>
+    /// SPEC 194 §1.2 EXPOSED this: the judgment-signal materializer must pick the first CITED text that
+    /// this guard will accept against the anchor evidence, so that it can report an honest
+    /// <c>excerpt-not-in-evidence</c> skip instead of discovering the failure as an anonymous mapping error
+    /// beside a dozen other possible ones. It is the same predicate <see cref="ToSignal"/> applies —
+    /// EXTRACTED, not copied — so the materializer's pre-check and the mapper's verdict cannot disagree.
+    /// </para>
+    /// </summary>
+    public static bool IsExcerptSupportedByEvidence(EvidenceItem evidence, string excerpt)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+
+        return excerpt is not null
+            && Normalize(EvidenceSearchableText.Compose(evidence.Title, evidence.RawText))
+                .Contains(Normalize(excerpt), StringComparison.Ordinal);
+    }
 
     private static string Normalize(string? text)
     {

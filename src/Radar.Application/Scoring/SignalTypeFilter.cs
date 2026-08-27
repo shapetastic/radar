@@ -15,9 +15,11 @@ namespace Radar.Application.Scoring;
 /// <see cref="SignalType"/>" are the SAME strategy — they all consume everything — so
 /// <see cref="Create(IEnumerable{SignalType}?)"/> collapses all three onto the single <see cref="All"/>
 /// instance. <see cref="Describe(string)"/> then returns its input verbatim for <see cref="All"/>, which is
-/// what keeps the pinned default fingerprints (AI-OFF <c>radar-scoring-fp-6b2f468041b9</c> / AI-ON
-/// <c>radar-scoring-fp-57356123e09b</c>) byte-identical: the default strategy hashes exactly the descriptor
-/// it hashed before this type existed.
+/// what kept the pinned default fingerprints byte-identical when spec 138 shipped (they were AI-OFF
+/// <c>radar-scoring-fp-6b2f468041b9</c> / AI-ON <c>radar-scoring-fp-57356123e09b</c> then; they have moved
+/// several times since for reasons unrelated to this type — <c>ScoringConfigFingerprintTests</c> holds the
+/// current values and the lineage). The property this passthrough guarantees is unchanged: the default
+/// strategy hashes exactly the descriptor it hashed before this type existed.
 /// </para>
 /// </summary>
 public sealed class SignalTypeFilter : IEquatable<SignalTypeFilter>

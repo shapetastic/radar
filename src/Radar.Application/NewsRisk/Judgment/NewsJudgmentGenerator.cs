@@ -22,7 +22,13 @@ public sealed record NewsJudgmentRunResult(
     // Stage-1 fact-drop counts per extractor cohort key (spec 185 §3): the extraction side of the
     // newly-localizable extraction-vs-judgment error split, rendered beside each judgment cohort's own
     // finding-drop counts in the live artifact.
-    IReadOnlyDictionary<string, int> Stage1FactsDroppedByCohort);
+    IReadOnlyDictionary<string, int> Stage1FactsDroppedByCohort,
+    // Spec 194 §1.2: what the judgment-signal materializer did with THIS pass's judgments. TRAILING and
+    // NULLABLE — `null` means the step was NOT ATTEMPTED (a pre-194 composition, or a graph that registers
+    // no INewsJudgmentSignalMaterializer), never "attempted and produced nothing", which is an all-zero
+    // summary. The generator itself never sets it: materialization happens AFTER the judgment pass, so the
+    // Worker attaches the summary to the returned result before the live artifact is built.
+    NewsJudgmentSignalMaterializationSummary? SignalMaterialization = null);
 
 /// <summary>
 /// The in-process stage-2 direction-judge step (spec 185 §5), invoked by the Worker AFTER the typing pass
@@ -682,11 +688,10 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         IReadOnlyList<NewsRiskCandidate> candidates,
         IReadOnlySet<(Guid CompanyId, string CohortKey)> unpersisted)
     {
-        var extractorCohort = typing.Cohorts.FirstOrDefault(c => string.Equals(
-            c.Reader.Name, _options.PresentationExtractor, StringComparison.OrdinalIgnoreCase));
-        var judge = _judges.Readers.FirstOrDefault(j => string.Equals(
-            j.Identity.Name, _options.PresentationJudge, StringComparison.OrdinalIgnoreCase));
-        if (extractorCohort is null || judge is null)
+        // SPEC 194 §1.2: resolved through the SHARED NewsJudgmentPresentationCohort, which the
+        // judgment-signal materializer also calls. One resolution, so the cohort whose direction is SCORED
+        // and the cohort whose marker is DISPLAYED cannot drift apart.
+        if (NewsJudgmentPresentationCohort.TryResolve(_options, _judges, typing) is not { } presentation)
         {
             _logger.LogError(
                 "News-judgment presentation cohort (judge '{Judge}', extractor '{Extractor}') was not "
@@ -697,7 +702,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             return null;
         }
 
-        var presentationCohortKey = judge.Identity.CohortKeyFor(extractorCohort.Reader.CohortKey);
+        var presentationCohortKey = presentation.CohortKey;
         var markers = new Dictionary<Guid, NewsJudgmentLeaderMarker>(candidates.Count);
         foreach (var candidate in candidates)
         {

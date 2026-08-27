@@ -5,8 +5,8 @@ namespace Radar.Application.Scoring;
 /// which many near-simultaneous <see cref="Radar.Domain.Signals.SignalType.MediaAttention"/> signals for one
 /// company are treated as coverage of ONE event and collapsed to a single representative. Bound from
 /// <c>Radar:Scoring:MediaCollapse:*</c> (like <see cref="ScoringWeights"/>); the collapse *structure* (greedy
-/// same-window bucketing, earliest representative) is the versioned part —
-/// <see cref="MediaAttentionCollapse.Version"/> (<c>media-collapse-v1</c>).
+/// same-window bucketing, plus the spec-194 §1.5 representative rule) is the versioned part —
+/// <see cref="MediaAttentionCollapse.Version"/> (<c>media-collapse-v2</c>).
 ///
 /// <para>
 /// <see cref="EventWindowDays"/> is expressed as a raw number of days so it binds cleanly from an

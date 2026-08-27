@@ -848,6 +848,27 @@ internal static class RadarWorkerServices
                     + "the judgment.");
         }
 
+        // SPEC 194 §2 — the news-read SCORING IDENTITY, resolved in EVERY mode from validated configuration
+        // and registered before anything can resolve ISignalSourceDescriptor (whose factory reads it
+        // lazily). This is what makes a spec-144 `score` pass and a spec-139 replay stamp the SAME
+        // ScoringConfigVersion a `full` run stamps over the same config, even though neither registers the
+        // judgment step: the identity holds strings, so knowing the cohort costs no client and no request.
+        //
+        // Deliberately NOT the spec-144 shape. That slice had to REGISTER the whole AI seam in score mode
+        // because IDirectionalFilingSignalSource.ScoringDescriptor() is a fingerprint input and the
+        // descriptor could only be obtained from the live source; it is recorded there as an operational
+        // cost (a score pass needs the AI config and key even though it issues no request). A plain resolved
+        // value object avoids repeating it here.
+        //
+        // BEHAVIOUR CHANGE, deliberate and following spec 147's precedent exactly: when judgment is ENABLED
+        // the judge/typing reader lists and the presentation-cohort designation are now read and validated
+        // in EVERY mode, not only in the full-mode run that registers the step — because that designation
+        // IS the recorded scoring identity. A misconfigured cohort therefore fails startup in score/replay
+        // mode too, which is the correct trade: the alternative is a score pass stamping an identity it
+        // cannot justify. It also means a judge reader's API-key environment variable must be set in those
+        // modes (the same posture spec 144 already established for Radar:Ai).
+        services.AddSingleton(ResolveNewsJudgmentScoringIdentity(options, judgment, typing));
+
         if (string.IsNullOrWhiteSpace(research.ObservationDirectory))
         {
             throw new InvalidOperationException(
@@ -1000,8 +1021,10 @@ internal static class RadarWorkerServices
 
         if (registerJudgment)
         {
+            // The presentation-cohort referential validation already ran, unconditionally, as part of
+            // resolving the spec-194 §2 scoring identity above — so it now fails in every mode rather than
+            // only this one, and re-running it here would just repeat the same check.
             var judges = BuildNewsJudgmentReaderRegistrations(options);
-            ValidateJudgmentPresentationCohort(judgment, typing, judges);
             services.AddRadarNewsJudgment(
                 new NewsJudgmentOptions(
                     // Judgments persist under the news-risk root (spec 185 §5:
@@ -1055,6 +1078,38 @@ internal static class RadarWorkerServices
                     + $"{NewsJudgmentOptions.DefaultMaxJudgmentAttempts}). Zero would mean 'never judge', "
                     + "which is what disabling the step expresses.");
         }
+    }
+
+    /// <summary>
+    /// SPEC 194 §2 — resolves the news-read scoring identity for THIS process's configuration, in any run
+    /// mode. Disabled judgment yields <see cref="NewsJudgmentScoringIdentity.Disabled"/>, which still
+    /// renders an explicit <c>news=disabled:…;</c> segment; an enabled judgment resolves the designated
+    /// presentation cohort through the SAME reader-normalization and cohort-key composition the judgment
+    /// step itself uses (<see cref="InfrastructureServiceCollectionExtensions.ResolveNewsJudgmentScoringIdentity"/>).
+    /// <para>
+    /// The referential validation is re-run here rather than relied on from the registration path, because
+    /// that path runs only in full mode and this method runs in all of them — and a blank/unknown
+    /// designation must fail with the SAME message wherever it is detected.
+    /// </para>
+    /// </summary>
+    private static NewsJudgmentScoringIdentity ResolveNewsJudgmentScoringIdentity(
+        RadarWorkerOptions options,
+        NewsJudgmentWorkerOptions judgment,
+        NewsTypingWorkerOptions typing)
+    {
+        if (!judgment.Enabled)
+        {
+            return NewsJudgmentScoringIdentity.Disabled;
+        }
+
+        var judges = BuildNewsJudgmentReaderRegistrations(options);
+        ValidateJudgmentPresentationCohort(judgment, typing, judges);
+
+        return InfrastructureServiceCollectionExtensions.ResolveNewsJudgmentScoringIdentity(
+            judges,
+            BuildNewsTypingReaderRegistrations(options),
+            judgment.PresentationCohort.Judge.Trim(),
+            judgment.PresentationCohort.Extractor.Trim());
     }
 
     /// <summary>

@@ -14,6 +14,12 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     private const string AttentionDescriptor = "attn:v1;unknown=0.4";
     private const string SignalSourceDescriptor = "rules=radar-keyword-rules-v6;collectors=sec-edgar;";
     private const string InsiderMaterialityDescriptor = "buy=5000000:8;sell=5000000:8;cluster=1;";
+    // Deliberately a LEGACY descriptor value, and left at v1 by spec 194 §1.5 (which bumped the live one to
+    // media-collapse-v2). This store is content-addressed: it round-trips whatever descriptor string it is
+    // handed and verifies the fingerprint recomputes from the persisted record, so the fixture's job is to be
+    // a stable arbitrary value — exactly like the radar-formula-v7 / radar-keyword-rules-v6 constants beside
+    // it. Accrued config records on disk genuinely carry v1; tracking the current version here would assert
+    // nothing extra and would have to be re-edited on every structure bump.
     private const string MediaCollapseDescriptor = "media-collapse-v1;window=3;";
 
     // Spec 148: the recent-signal window is a hashed field AND is carried verbatim on the persisted record,

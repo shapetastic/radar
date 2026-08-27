@@ -9,10 +9,11 @@ namespace Radar.Application.Scoring;
 /// composed signal-source set.
 /// <list type="bullet">
 /// <item><description>
-/// <b>Identity</b> (<see cref="CanonicalDescriptor"/>) — <c>rules=&lt;RuleSetVersion&gt;;[ai=…;]</c>: the
-/// deterministic extractor's rule-set identity (<see cref="KeywordSignalExtractor.RuleSetVersion"/>) plus,
-/// when the opt-in AI directional-filing path is registered, that source's per-signal magnitudes (its
-/// <see cref="IDirectionalFilingSignalSource.ScoringDescriptor"/>, escaped). This is what the
+/// <b>Identity</b> (<see cref="CanonicalDescriptor"/>) — <c>rules=&lt;RuleSetVersion&gt;;[ai=…;]news=…;</c>:
+/// the deterministic extractor's rule-set identity (<see cref="KeywordSignalExtractor.RuleSetVersion"/>);
+/// then, when the opt-in AI directional-filing path is registered, that source's per-signal magnitudes (its
+/// <see cref="IDirectionalFilingSignalSource.ScoringDescriptor"/>, escaped); then, ALWAYS, the spec-194 §2
+/// news-read identity (<see cref="NewsJudgmentScoringIdentity"/>). This is what the
 /// <c>ScoringConfigVersion</c> fingerprint hashes.
 /// </description></item>
 /// <item><description>
@@ -59,7 +60,8 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         EnabledCollectorVocabulary collectors,
         IDirectionalFilingSignalSource? aiFilingSource = null,
         CollectionPassOptions? collectionPass = null,
-        CollectorAttributionOptions? attribution = null)
+        CollectorAttributionOptions? attribution = null,
+        NewsJudgmentScoringIdentity? newsJudgment = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
 
@@ -123,6 +125,20 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         {
             descriptor += $"ai={DescriptorEscaping.Escape(aiFilingSource.ScoringDescriptor())};";
         }
+
+        // SPEC 194 §2: the NEWS read's identity, appended LAST so the existing rules=/ai= prefix stays
+        // byte-stable and a pin move is unambiguously attributable. Unlike the ai= segment it is
+        // UNCONDITIONAL — a disabled judgment renders `news=disabled:…;` rather than nothing, because a
+        // silent absence would be byte-identical to a pre-194 composition and the two are different facts
+        // (spec 147's `collectors=;` reasoning). A composition that never registered the identity at all is
+        // treated as disabled: it scores exactly as a disabled one does.
+        //
+        // Why the news read belongs on the IDENTITY side and not beside CollectionProvenance: judgment
+        // enablement, the judge MODEL and the designated presentation cohort change signal DIRECTION — the
+        // same argument that put the AI filing read's model in the ai= segment (spec 119). What is
+        // deliberately NOT in it: API keys, call budgets and retry caps, which change only how much Radar
+        // spends looking.
+        descriptor += (newsJudgment ?? NewsJudgmentScoringIdentity.Disabled).Segment;
 
         _identityDescriptor = descriptor;
     }

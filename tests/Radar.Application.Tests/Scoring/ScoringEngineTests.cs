@@ -1148,9 +1148,12 @@ public sealed class ScoringEngineTests
             "collectors=newssearch,rss,sec-form4,usaspending;",
             resolved.CollectionProvenance());
 
-        // The IDENTITY descriptor (the fingerprint input) carries the rule-set identity and nothing about
-        // which collectors are registered.
-        Assert.Equal("rules=radar-keyword-rules-v8;", resolved.CanonicalDescriptor());
+        // The IDENTITY descriptor (the fingerprint input) carries the rule-set identity and — since spec
+        // 194 §2 — the news-read identity, but nothing about which collectors are registered. This
+        // composition never configured the stage-2 judgment, so the news segment is the disabled form.
+        Assert.Equal(
+            "rules=radar-keyword-rules-v8;" + NewsJudgmentScoringIdentity.Disabled.Segment,
+            resolved.CanonicalDescriptor());
     }
 
     [Fact]

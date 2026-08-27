@@ -35,6 +35,24 @@ internal static class NewsTrajectorySignalRules
     /// <summary>The bonus for a judgment whose stage-1 typing was COMPLETE (nothing deferred, nothing failed).</summary>
     internal const int CompleteTypingBonus = 1;
 
+    /// <summary>
+    /// The Novelty a news attention signal carries. Spec 194 §1.2 requires the judgment-derived signal to
+    /// retain spec 191's declared values, and 191 declared them by inheriting the ordinary news branch's:
+    /// verified against <c>KeywordSignalExtractor</c>'s spec-191 news branch, which set
+    /// <c>Novelty: 4, Confidence: 0.5m</c> on BOTH its Neutral and its directional signal.
+    /// <para>
+    /// Declared here, beside the direction/strength rules, so every magnitude a judgment-derived news
+    /// signal carries is readable in one place — and so spec 194 §2 can fold the whole set into the scoring
+    /// identity. It deliberately does NOT edit the extractor to read this const: §1.1 restored that branch
+    /// to a byte-identical pre-191 form and proving it stays that way is worth more than sharing a literal.
+    /// If the ordinary news branch's magnitudes ever move, move these with them.
+    /// </para>
+    /// </summary>
+    internal const int Novelty = 4;
+
+    /// <summary>The Confidence a news attention signal carries — see <see cref="Novelty"/> for provenance.</summary>
+    internal const decimal Confidence = 0.5m;
+
     /// <summary>The direction, or <c>null</c> when the trajectory carries none.</summary>
     internal static SignalDirection? DirectionFor(NewsJudgmentTrajectory trajectory) => trajectory switch
     {

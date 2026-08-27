@@ -58,6 +58,13 @@ public sealed class SignalSourceDescriptorTests
     private static string DescriptorWithAi(string aiDescriptor, params string[] names) =>
         BuildWithAi(aiDescriptor, names).CanonicalDescriptor();
 
+    /// <summary>
+    /// The spec-194 §2 news-read segment every identity descriptor now ends with. Taken from the real type
+    /// rather than written as a literal, so these expectations describe the composition rather than restating
+    /// the segment's internals (which <see cref="NewsJudgmentScoringIdentityTests"/> pins directly).
+    /// </summary>
+    private static readonly string NewsDisabled = NewsJudgmentScoringIdentity.Disabled.Segment;
+
     [Fact]
     public void CollectorToggle_LeavesIdentityUnchanged_MovesOnlyCollectionProvenance()
     {
@@ -85,7 +92,7 @@ public sealed class SignalSourceDescriptorTests
         // future edit can reintroduce it by accident.
         var identity = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;", identity);
+        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled, identity);
         Assert.DoesNotContain("collectors=", identity, StringComparison.Ordinal);
         Assert.DoesNotContain("usaspending", identity, StringComparison.Ordinal);
     }
@@ -320,7 +327,7 @@ public sealed class SignalSourceDescriptorTests
         // segment.
         var descriptor = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;", descriptor);
+        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled, descriptor);
         Assert.DoesNotContain("ai=", descriptor, StringComparison.Ordinal);
     }
 
@@ -333,7 +340,8 @@ public sealed class SignalSourceDescriptorTests
         // side (spec 141): it carries per-signal magnitudes and the reading model, which change signal
         // DIRECTION — that is scoring identity, not a collector set.
         Assert.Equal(
-            "rules=radar-keyword-rules-v8;ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;",
+            "rules=radar-keyword-rules-v8;ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;"
+                + NewsDisabled,
             DescriptorWithAi("directional-filing:str=6;nov=6;minconf=0.6", "rss", "sec", "usaspending"));
     }
 
@@ -355,7 +363,7 @@ public sealed class SignalSourceDescriptorTests
         // cannot collide with a different descriptor (injectivity, AD-3).
         var descriptor = DescriptorWithAi("a=b;c,d%e", "rss");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;ai=a%3Db%3Bc%2Cd%25e;", descriptor);
+        Assert.Equal("rules=radar-keyword-rules-v8;ai=a%3Db%3Bc%2Cd%25e;" + NewsDisabled, descriptor);
     }
 
     [Fact]
@@ -367,4 +375,79 @@ public sealed class SignalSourceDescriptorTests
             DescriptorFor("rss"),
             DescriptorWithAi("directional-filing:str=6;nov=6;minconf=0.6", "rss"));
     }
+
+    // ---- spec 194 §2: the news read is in the identity, and it is appended LAST ------------------------
+
+    private static SignalSourceDescriptor BuildWithNews(
+        NewsJudgmentScoringIdentity news, params string[] names) =>
+        new(Vocabulary(names), null, null, null, news);
+
+    [Fact]
+    public void NewsSegment_IsAlwaysPresent_EvenWhenJudgmentIsDisabled()
+    {
+        // A disabled judgment renders an EXPLICIT `news=disabled:…;` rather than nothing. Rendering nothing
+        // would make "judgment off" byte-identical to a pre-194 composition, which is exactly the ambiguity
+        // spec 147 removed from `collectors=;`. It also means an omitted identity — a library composition
+        // that never configured the judgment — renders the same disabled segment, because that is what it
+        // scores as.
+        var omitted = DescriptorFor("rss");
+        var explicitlyDisabled = BuildWithNews(NewsJudgmentScoringIdentity.Disabled, "rss")
+            .CanonicalDescriptor();
+
+        Assert.Equal(omitted, explicitlyDisabled);
+        Assert.Contains("news=disabled:", omitted, StringComparison.Ordinal);
+        Assert.EndsWith(";", omitted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NewsSegment_IsAppendedAfterRulesAndAi_SoThePrefixStaysByteStable()
+    {
+        // Segment ORDER is load-bearing: rules= then ai= then news=. Appending LAST keeps the pre-194 prefix
+        // byte-stable, so a moved pin is unambiguously attributable to the new segment rather than to a
+        // reshuffle of the old ones.
+        var descriptor = new SignalSourceDescriptor(
+            Vocabulary("rss"),
+            new FakeAiFilingSource("directional-filing:str=6"),
+            null,
+            null,
+            NewsJudgmentScoringIdentity.Disabled).CanonicalDescriptor();
+
+        var rules = descriptor.IndexOf("rules=", StringComparison.Ordinal);
+        var ai = descriptor.IndexOf("ai=", StringComparison.Ordinal);
+        var news = descriptor.IndexOf("news=", StringComparison.Ordinal);
+
+        Assert.Equal(0, rules);
+        Assert.True(rules < ai && ai < news, descriptor);
+        Assert.StartsWith("rules=radar-keyword-rules-v8;ai=", descriptor, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NewsJudgmentEnabled_ChangesIdentity_ButNotCollectionProvenance()
+    {
+        // THE spec-194 §2 acceptance criterion at the descriptor: turning the news judgment on is a change to
+        // what is scored (a validated judgment can mint a directional signal), so it must move the identity —
+        // while leaving the collector provenance, which is about collection and not about reading, untouched.
+        var off = BuildWithNews(NewsJudgmentScoringIdentity.Disabled, "rss");
+        var on = BuildWithNews(EnabledIdentity("cohort-a"), "rss");
+
+        Assert.NotEqual(off.CanonicalDescriptor(), on.CanonicalDescriptor());
+        Assert.Equal(off.CollectionProvenance(), on.CollectionProvenance());
+        Assert.DoesNotContain("news=", on.CollectionProvenance(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NewsSegment_DoesNotRepeatTheMediaCollapseVersion()
+    {
+        // spec 194 §2, stated explicitly: media-collapse-v2 is already folded through
+        // MediaAttentionCollapse.CanonicalDescriptor() as its OWN hashed field, so duplicating it inside the
+        // news segment would hash one fact twice and make a future media-collapse bump look like two changes.
+        Assert.DoesNotContain(
+            MediaAttentionCollapse.Version,
+            BuildWithNews(EnabledIdentity("cohort-a"), "rss").CanonicalDescriptor(),
+            StringComparison.Ordinal);
+    }
+
+    private static NewsJudgmentScoringIdentity EnabledIdentity(string cohortKey) =>
+        NewsJudgmentScoringIdentity.ForPresentationCohort(
+            cohortKey, "news-judgment-signal-v1", ["Improving>Positive"], 4, 3, 1, 4, 0.5m);
 }

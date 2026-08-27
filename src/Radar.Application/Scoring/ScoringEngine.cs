@@ -336,6 +336,20 @@ public sealed class ScoringEngine : IScoringEngine
             return byObserved != 0 ? byObserved : a.Signal.Id.CompareTo(b.Signal.Id);
         });
 
+        // Legacy news-inheritance neutralization (spec 194 §1.4), FIRST of the four assembly transforms.
+        // Spec 191 persisted directional MediaAttention signals whose direction was taken from the company's
+        // latest judgment — a judgment produced from earlier articles that had never read the one being
+        // extracted. That producer is deleted (§1.1), but its signals are on disk, the stores are
+        // append-only (AD-8) and already-seen evidence is never re-extracted, so they would otherwise keep
+        // asserting an ungrounded direction on every future run. This transform admits them with the exact
+        // pre-191 Neutral media-attention direction/strength instead. It runs BEFORE both supersedes and the
+        // collapse deliberately: everything downstream — including PreCollapseSignals below, which is the
+        // POST-supersede/PRE-collapse set and therefore derives from this one — then sees a single,
+        // consistent admitted set, and no step can score a direction a later step has already disowned.
+        // Read-side only: nothing is written, and the persisted signal/review/file stay byte-identical.
+        var legacyNews = LegacyNewsInheritanceNeutralization.Apply(pairs);
+        var admitted = legacyNews.Signals;
+
         // GuidanceChange supersede (spec 113): a filing first collected while the directional earnings read
         // failed has its deterministic Neutral GuidanceChange already persisted; the signal stores are
         // append-only (AD-8), so we supersede at read/assembly time instead of deleting — when the set
@@ -346,8 +360,31 @@ public sealed class ScoringEngine : IScoringEngine
         // scoring-config change — the stamp must not move).
         // Spec 193 §2: the supersede now RETURNS what it removed (survivors + a per-survivor count), in the
         // same shape the media collapse below returns. The filter itself is unchanged.
-        var supersede = GuidanceChangeSupersede.Apply(pairs);
+        var supersede = GuidanceChangeSupersede.Apply(admitted);
         var superseded = supersede.Signals;
+
+        // Judgment-derived news supersede (spec 194 §1.3): §1.2 materializes ONE grounded MediaAttention
+        // signal per validated judgment, anchored to the evidence that judgment actually cited — but that
+        // article's ordinary Neutral attention signal is already on disk, so without this step the cited
+        // article would contribute TWO attention signals over ONE evidence id and the media channel would
+        // grow purely because Radar formed a judgment. The grounded signal REPLACES the ordinary (and any
+        // accrued spec-191 v7 directional) signal over the same evidence: one attention event in, one out.
+        //
+        // PLACEMENT, deliberately:
+        //   * AFTER LegacyNewsInheritanceNeutralization (§1.4), whose OUTPUT this reads. A neutralized legacy
+        //     signal must arrive here as a LOSING ordinary signal, not as a rival direction — running the two
+        //     in the other order would let an ungrounded inherited direction contend with a grounded one.
+        //   * BEFORE the media collapse, so the collapse buckets the post-supersede media set: the duplicate
+        //     the supersede removed must not first be counted as a collapsed same-event item, and the
+        //     surviving grounded signal is what media-collapse-v2 then prefers as its bucket representative.
+        //   * Relative to GuidanceChangeSupersede the order is behaviourally IRRELEVANT, and that is a
+        //     checked fact rather than an assumption: the guidance supersede only ever removes
+        //     SignalType.GuidanceChange signals and passes every other type through untouched, while this one
+        //     only ever removes SignalType.MediaAttention signals. The two operate on disjoint types, so
+        //     neither can see the other's removals. It is placed second simply to keep the pre-194 steps
+        //     adjacent and their diffs small.
+        var newsSupersede = NewsJudgmentSignalSupersede.Apply(superseded);
+        var newsSuperseded = newsSupersede.Signals;
 
         // Same-event media collapse (spec 109): many near-simultaneous outlets covering ONE event each emit a
         // MediaAttention signal, inflating the media contribution and the signal count with duplication (not
@@ -355,7 +392,7 @@ public sealed class ScoringEngine : IScoringEngine
         // signal-count de-noising transform, not a formula change). Provenance is preserved: the representative
         // is a real signal keeping its evidence link, and the collapsed count is surfaced on its contribution
         // reason below. Non-MediaAttention signals and the activity-only previousSignals are untouched.
-        var collapse = _mediaCollapse.Collapse(superseded);
+        var collapse = _mediaCollapse.Collapse(newsSuperseded);
         var scoredSignals = collapse.Signals.ToList();
 
         // The immediately-preceding window of the same length, now sourced from the ON-DISK signal store
@@ -382,6 +419,14 @@ public sealed class ScoringEngine : IScoringEngine
             .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, windowEndUtc, ct)
             .ConfigureAwait(false);
 
+        // Spec 194 §1.4, previous window too, and in the SAME relative position (before the supersede): an
+        // accrued inherited direction must not be allowed to misdirect the velocity comparison either. The
+        // previous window is activity-only and builds no contributions or evidence links (AD-6), so the
+        // suppression there is reported through the result and the aggregated log line rather than through a
+        // contribution reason.
+        var previousLegacyNews = LegacyNewsInheritanceNeutralization.Apply(previousSignals);
+        previousSignals = previousLegacyNews.Signals;
+
         // Spec 113, previous window too (no double-count, ever): the read's cross-run dedupe key includes
         // Direction (spec 85), so a filing whose stale Neutral AND directional GuidanceChange both persist
         // on disk comes back as TWO signals — the same filing must not count twice as activity for
@@ -389,6 +434,15 @@ public sealed class ScoringEngine : IScoringEngine
         // is behaviour-identical there.
         var previousSupersede = GuidanceChangeSupersede.Apply(previousSignals);
         previousSignals = previousSupersede.Signals;
+
+        // Spec 194 §1.3, previous window too, and in the SAME relative position (after §1.4's neutralization
+        // and the guidance supersede, before the signal-type filter): if the cited article's ordinary signal
+        // AND its grounded companion both counted as previous-window activity, velocity would read the
+        // company as accelerating purely because a judgment was formed in the earlier window. The previous
+        // window is activity-only and builds no contributions or evidence links (AD-6), so its removals are
+        // reported through the aggregated log line rather than through a contribution reason.
+        var previousNewsSupersede = NewsJudgmentSignalSupersede.Apply(previousSignals);
+        previousSignals = previousNewsSupersede.Signals;
 
         // Spec 138, previous window too: the velocity comparison must be like-for-like. If a strategy does not
         // consume a SignalType in the CURRENT window, prior activity of that type is not this strategy's prior
@@ -411,12 +465,17 @@ public sealed class ScoringEngine : IScoringEngine
         // outlets it dropped alongside the duplicate volume it is meant to remove. Hand the formula the
         // PRE-collapse set as well so it can credit those collapsed-away publishers back into the Attention
         // breadth term (tier-weighted, scaled by ScoringWeights.CollapsedBreadthCredit) while the media COUNT
-        // it consumes stays post-collapse. The collapse transform itself is untouched (media-collapse-v1) —
-        // this only reads the set the engine already had in hand.
+        // it consumes stays post-collapse. The collapse transform's bucket boundaries are untouched by spec
+        // 194 §1.5 — only which real member of a bucket represents it changed (media-collapse-v2).
+        // Spec 194, verified rather than assumed: `newsSuperseded` is the output of BOTH news transforms —
+        // §1.4 neutralized, then §1.3's judgment-derived supersede — so the pre-collapse breadth set the
+        // formula reads here is ALREADY corrected. No accrued inherited direction can re-enter scoring
+        // through this back door, and the ordinary signal a grounded judgment replaced cannot be credited
+        // back as extra breadth for the very article it was replaced over.
         var input = new ScoringInput(
             companyId, windowStartUtc, windowEndUtc, scoredSignals, previousSignals, followingTier)
         {
-            PreCollapseSignals = superseded,
+            PreCollapseSignals = newsSuperseded,
             // Spec 146: what RAN this process, as provenance the formula may record but must never score on.
             EnabledCollectors = _enabledCollectors,
         };
@@ -488,6 +547,33 @@ public sealed class ScoringEngine : IScoringEngine
                 reason = $"{reason} (superseded {supersededN} stale GuidanceChange signal(s) for this evidence)";
             }
 
+            // Spec 194 §1.3: the third member of the same accounting block. If this contribution's signal is
+            // a grounded judgment-derived news signal that replaced the ordinary attention event(s) over the
+            // same article evidence, say so on its reason — otherwise the snapshot would show one attention
+            // contribution where the store holds two signals, with nothing anywhere explaining which one was
+            // scored or why. A MediaAttention signal can carry BOTH this note and the collapse note above (it
+            // may also represent an event bucket), but never the GuidanceChange one, since those are
+            // different types. Appended after the collapse note so that text stays byte-identical.
+            if (newsSupersede.SupersededCounts.TryGetValue(contribution.SignalId, out var newsSupersededN)
+                && newsSupersededN > 0)
+            {
+                reason =
+                    $"{reason} (superseded {newsSupersededN} ordinary media attention signal(s) for this "
+                    + "evidence: the judgment-derived direction replaces the attention event)";
+            }
+
+            // Spec 194 §1.4: if this contribution's signal had its persisted direction suppressed, SAY SO on
+            // the link. Without this the snapshot would score a MediaAttention signal as Neutral while the
+            // record on disk reads Positive/Negative, and nothing anywhere would explain the difference — a
+            // score must never silently disagree with its own provenance. Appended last so the two blocks
+            // above keep byte-identical text; a neutralized signal is a MediaAttention one, so it CAN also
+            // carry the collapse note (it may be a bucket representative) but never the GuidanceChange one.
+            if (legacyNews.NeutralizedKinds.TryGetValue(contribution.SignalId, out var neutralizedKind))
+            {
+                reason =
+                    $"{reason} ({LegacyNewsInheritanceNeutralization.ProvenanceNoteFor(neutralizedKind)})";
+            }
+
             links.Add(new ScoreEvidenceLink(
                 Id: Guid.NewGuid(),
                 ScoreSnapshotId: snapshot.Id,
@@ -525,6 +611,52 @@ public sealed class ScoringEngine : IScoringEngine
                     + "directional read over the same filing evidence replaced them. They stay on disk for "
                     + "provenance and are named on the surviving signal's contribution reason.",
                 supersede.TotalSuperseded, companyId, previousSupersede.TotalSuperseded);
+        }
+
+        // Spec 194 §1.3: ONE aggregated per-company line, beside the guidance-supersede line above and at the
+        // same Information level, when a grounded judgment-derived news signal actually replaced an ordinary
+        // attention event. Emitted separately rather than folded into the line above so the healthy path's
+        // log stays byte-identical and the two removals are never pooled into one number — they mean
+        // different things. Aggregated per company rather than per removed signal (the spec-145 precedent).
+        // Both windows are reported: the current window's removals are the ones the contributions/evidence
+        // links reflect, while the previous window's are activity-only (velocity) and carry no provenance by
+        // design (AD-6). Information, not Warning: replacing the ordinary event with the grounded one is the
+        // intended healthy behaviour, not a fault — it is how the attention count stays flat when judgment
+        // is added.
+        if (newsSupersede.TotalSuperseded > 0 || previousNewsSupersede.TotalSuperseded > 0)
+        {
+            _logger.LogInformation(
+                "Superseded {NewsSupersededCount} ordinary media attention signal(s) for company {CompanyId} "
+                    + "in the current window (and {PreviousNewsSupersededCount} in the previous/velocity "
+                    + "window): a judgment-derived news signal grounded in the same article evidence replaced "
+                    + "them, so the attention count does not grow because a judgment exists. They stay on "
+                    + "disk for provenance and are named on the surviving signal's contribution reason.",
+                newsSupersede.TotalSuperseded, companyId, previousNewsSupersede.TotalSuperseded);
+        }
+
+        // Spec 194 §1.4: ONE aggregated per-company line when a persisted direction was actually suppressed
+        // (the spec-145 aggregation precedent — never one line per signal). A Warning rather than the
+        // Information the two removal steps above use, because this is not routine de-noising: it is Radar
+        // scoring a signal differently from the way it is recorded, and the operator should be able to watch
+        // that count fall to zero as the accrued cohort ages out of the window. The two axes are reported
+        // separately in both windows — a MALFORMED envelope means a CURRENT writer is producing
+        // unverifiable provenance, which is a different and more urgent fact than the known spec-191
+        // residue. A run with nothing to suppress logs nothing new at all.
+        if (legacyNews.TotalNeutralized > 0 || previousLegacyNews.TotalNeutralized > 0)
+        {
+            _logger.LogWarning(
+                "Neutralized {LegacyCount} accrued spec-191 inherited news direction(s) and "
+                    + "{MalformedCount} unverifiable judgment-signal envelope(s) for company {CompanyId} in "
+                    + "the current window (and {PreviousLegacyCount} / {PreviousMalformedCount} in the "
+                    + "previous/velocity window): those signals are scored as Neutral media attention "
+                    + "because their direction was never grounded in the matched article. They stay on disk "
+                    + "unchanged (append-only) and each current-window suppression is named on that "
+                    + "signal's contribution reason.",
+                legacyNews.LegacyInheritanceCount,
+                legacyNews.MalformedEnvelopeCount,
+                companyId,
+                previousLegacyNews.LegacyInheritanceCount,
+                previousLegacyNews.MalformedEnvelopeCount);
         }
 
         return new CompanyScoreResult(snapshot, links);

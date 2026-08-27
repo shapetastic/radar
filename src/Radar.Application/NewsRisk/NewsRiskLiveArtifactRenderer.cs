@@ -133,7 +133,53 @@ public static class NewsRiskLiveArtifactRenderer
             AppendJudgmentCategoryComparison(sb, company);
         }
 
+        AppendSignalMaterialization(sb, document);
+
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// SPEC 194 §1.2 — the judgment-signal materialization summary, rendered LAST and only when the step
+    /// ran. It is a RUN-level fact (one pass over every judgment), so it sits at the document level rather
+    /// than being repeated under each company.
+    /// <para>
+    /// <b>Additive and trailing by construction:</b> a <c>null</c> summary appends nothing at all, so every
+    /// pre-194 composition — and every run with no materializer registered — renders a byte-identical
+    /// artifact. Nothing above this line reads the new member.
+    /// </para>
+    /// <para>
+    /// The skip detail is rendered even when it is long, because the named reasons ARE the finding: a run
+    /// that grounded no direction has to say which precondition was missing, or "0 materialized" reads as
+    /// "the judge found nothing" when it may mean "the provenance chain was incomplete".
+    /// </para>
+    /// </summary>
+    private static void AppendSignalMaterialization(StringBuilder sb, NewsRiskLiveDocument document)
+    {
+        if (document.SignalMaterialization is not { } summary)
+        {
+            return;
+        }
+
+        sb.AppendLine("## Judgment-derived news signals (spec 194 §1.2)");
+        sb.AppendLine();
+        sb.AppendLine(
+            "One validated presentation-cohort judgment may create ONE directional media-attention signal, "
+                + "anchored to the evidence that judgment cited. A later article never inherits it, and the "
+                + "signal becomes score-visible only from a later run (its knowledge time is the "
+                + "materialization instant, never the judgment's).");
+        sb.AppendLine();
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Judgments considered: {summary.JudgmentsConsidered} · eligible: {summary.Eligible} · "
+                + $"materialized: {summary.Materialized} · already materialized: "
+                + $"{summary.AlreadyMaterialized} · validation-rejected: {summary.ValidationRejected} · "
+                + $"not durably persisted: {summary.WriteFailed}"));
+
+        var skips = summary.DescribeSkips();
+        sb.AppendLine(skips.Length > 0
+            ? "Not materialized, by reason: " + skips
+            : "Not materialized, by reason: none.");
+        sb.AppendLine();
     }
 
     /// <summary>

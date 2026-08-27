@@ -149,11 +149,17 @@ public static class InfrastructureServiceCollectionExtensions
         // lazy-resolved INSIDE the factory (RESOLUTION time), so this sees the vocabulary AND the AI source
         // even though the Worker registers the AI seam AFTER AddRadarApplicationServices. TryAdd lets a
         // composition root substitute its own descriptor.
+        // Spec 194 §2 adds the news-read identity as a fourth folded input, resolved OPTIONALLY for the same
+        // reason the AI source is: a library composition that never configured the stage-2 judgment gets
+        // NewsJudgmentScoringIdentity.Disabled, which is exactly what it scores as. The Worker registers the
+        // config-derived instance in EVERY scoring-capable mode (full/score/replay) — it holds strings, so a
+        // score pass composes the same identity a full pass does WITHOUT registering the judgment step.
         services.TryAddSingleton<ISignalSourceDescriptor>(sp => new SignalSourceDescriptor(
             sp.GetRequiredService<EnabledCollectorVocabulary>(),
             sp.GetService<IDirectionalFilingSignalSource>(),
             sp.GetRequiredService<CollectionPassOptions>(),
-            sp.GetRequiredService<CollectorAttributionOptions>()));
+            sp.GetRequiredService<CollectorAttributionOptions>(),
+            sp.GetService<NewsJudgmentScoringIdentity>()));
         // Multi-strategy scoring (spec 137). One ScoringEngine instance IS one strategy (it resolves its whole
         // effective config + fingerprint once in its constructor), so plural strategies are purely a
         // COMPOSITION concern: the factory builds one engine per strategy over the SAME shared collection
@@ -2819,8 +2825,85 @@ public static class InfrastructureServiceCollectionExtensions
         // such a read could see was one produced from earlier articles it had never read. Direction is now
         // carried by its own judgment-derived signal, materialized after the judgment exists and anchored to
         // the evidence that judgment actually cited; ordinary news extraction is Neutral again.
+        //
+        // SPEC 194 §1.2 — that materializer, registered WITH judgment on purpose: it consumes the judgment
+        // pass's own result and the exact typing result the judge consumed, so it is meaningless without
+        // both. Its ABSENCE is what makes the Worker skip the step entirely, exactly as the typing and
+        // judgment steps are skipped, and what leaves NewsJudgmentRunResult.SignalMaterialization null
+        // ("not attempted") rather than an all-zero summary.
+        services.AddSingleton<INewsJudgmentSignalMaterializer, NewsJudgmentSignalMaterializer>();
         services.TryAddSingleton(TimeProvider.System);
         return services;
+    }
+
+    /// <summary>
+    /// SPEC 194 §2 — resolves the news-read SCORING IDENTITY from validated configuration alone, with NO
+    /// provider client constructed and no request issued.
+    /// <para>
+    /// It lives here, beside <see cref="AddRadarNewsTyping"/>/<see cref="AddRadarNewsJudgment"/>, because it
+    /// must normalize the reader registrations through the SAME
+    /// <see cref="ValidateReaderRegistrations"/> path those two use. If it normalized differently — a
+    /// trimmed model id here, an untrimmed one there — the identity a <c>score</c> pass stamps would
+    /// silently disagree with the cohort key the judge actually writes on its records, which is worse than
+    /// having no identity at all.
+    /// </para>
+    /// <para>
+    /// The composition itself is <see cref="NewsJudgmentPresentationCohort.ComposeCohortKey"/> — the same
+    /// method the run-time resolution calls — so the CONFIGURED cohort and the PRODUCED cohort cannot drift.
+    /// Callers pass the designated names already trimmed; the composition root has validated referentially
+    /// that both name a configured reader, and the fail-fast below is the defensive backstop for a caller
+    /// that skipped it.
+    /// </para>
+    /// </summary>
+    /// <param name="judges">The resolved judge reader registrations (never empty when judgment is enabled).</param>
+    /// <param name="typingReaders">The resolved typing reader registrations.</param>
+    /// <param name="presentationJudge">The prospectively designated judge reader NAME.</param>
+    /// <param name="presentationExtractor">The prospectively designated stage-1 extractor reader NAME.</param>
+    public static NewsJudgmentScoringIdentity ResolveNewsJudgmentScoringIdentity(
+        IReadOnlyList<NewsRiskReaderRegistration> judges,
+        IReadOnlyList<NewsRiskReaderRegistration> typingReaders,
+        string presentationJudge,
+        string presentationExtractor)
+    {
+        ArgumentNullException.ThrowIfNull(judges);
+        ArgumentNullException.ThrowIfNull(typingReaders);
+        ArgumentException.ThrowIfNullOrWhiteSpace(presentationJudge);
+        ArgumentException.ThrowIfNullOrWhiteSpace(presentationExtractor);
+
+        var normalizedJudges = ValidateReaderRegistrations("News-judgment", judges);
+        var normalizedReaders = ValidateReaderRegistrations("News-typing", typingReaders);
+
+        var judge = FindDesignated(normalizedJudges, presentationJudge, "judge", "Judge");
+        var extractor = FindDesignated(normalizedReaders, presentationExtractor, "typing reader", "Extractor");
+
+        // The reader NAME is deliberately absent from both cohort keys (the spec-179 rule: names are
+        // provenance labels), so it is supplied here only to satisfy the identity records' shape.
+        var cohortKey = NewsJudgmentPresentationCohort.ComposeCohortKey(
+            new NewsJudgmentReaderIdentity(judge.Name, judge.Client.Provider, judge.Client.Model),
+            new NewsTypingReaderIdentity(extractor.Name, extractor.Client.Provider, extractor.Client.Model));
+
+        return NewsJudgmentScoringIdentityFactory.ForPresentationCohort(cohortKey);
+    }
+
+    private static (string Name, string ConfigPath, AiClientOptions Client) FindDesignated(
+        IReadOnlyList<(string Name, string ConfigPath, AiClientOptions Client)> readers,
+        string designatedName,
+        string kind,
+        string configKey)
+    {
+        foreach (var reader in readers)
+        {
+            if (string.Equals(reader.Name, designatedName, StringComparison.OrdinalIgnoreCase))
+            {
+                return reader;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Radar:NewsResearch:Judgment:PresentationCohort:{configKey} is '{designatedName}', which names "
+                + $"no configured {kind} (configured: {string.Join(", ", readers.Select(r => r.Name))}). "
+                + "Since spec 194 §2 that designation is a SCORING IDENTITY input, so it must resolve in "
+                + "every scoring-capable run mode — not only in the full-mode run that registers the judge.");
     }
 
     /// <summary>
