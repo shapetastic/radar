@@ -59,6 +59,12 @@ public sealed class StrategyScopedScoreSnapshotFileStoreFactory : IScoreSnapshot
                 new FileScoreSnapshotStoreOptions
                 {
                     RootDirectory = Path.Combine(_options.RootDirectory, StrategiesSegment, name),
+                    // Spec 195 §1: every store this factory hands out is written through by ScoringPass,
+                    // which counts the Failed outcomes into ONE aggregated Warning — so the per-file
+                    // Warning is substituted, not added to. Set explicitly (not inherited from _options,
+                    // which is only consulted for the root) so this decision is visible at the site that
+                    // knows the consumer.
+                    FailureLogging = GracefulFileWriteFailureLogging.CallerAggregates,
                 },
                 _storeLogger));
     }

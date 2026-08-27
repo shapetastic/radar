@@ -351,7 +351,13 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             Judgments: BuildJudgmentSections(candidate.CompanyId, judgment),
             JudgmentMarker: judgment is null
                 ? null
-                : NewsJudgmentMarkerReportModel.MarkerCellFor(judgment.Markers, candidate.CompanyId));
+                : NewsJudgmentMarkerReportModel.MarkerCellFor(judgment.Markers, candidate.CompanyId),
+            // Spec 195 §2: THIS run's freshly built bundle, deliberately. `AttachLiveBodiesAsync` returns a
+            // `bundle with { ... }`, so both counts survive body attachment unchanged, and a reader result
+            // reused from the assessment cache never supplies them — an old run's syndication breadth
+            // displayed as current would be exactly the stale-provenance failure the spec forbids.
+            SyndicatedDuplicateCount: bundle.SyndicatedDuplicateCount,
+            SyndicatedDistinctPublisherCount: bundle.SyndicatedDistinctPublisherCount);
     }
 
     /// <summary>

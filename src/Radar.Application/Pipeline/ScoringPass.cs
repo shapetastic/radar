@@ -118,8 +118,10 @@ public sealed class ScoringPass : IScoringPass
                     + "the score snapshot store (counted across all {StrategyCount} strategies). They exist "
                     + "in this process's score repository — so this run's report still sees the primary "
                     + "series — but nothing reached disk: the accrued score history does NOT contain them, "
-                    + "and the efficacy/replay reads will not see them. The run was not aborted; see the "
-                    + "per-write Warnings above for the failing paths.",
+                    + "and the efficacy/replay reads will not see them. The run was not aborted. This "
+                    + "Warning is the ONLY report of these failures (spec 195 §1): the store no longer logs "
+                    + "a Warning per failed file, so raise the score-snapshot-store log level to Debug to "
+                    + "see the attempted paths.",
                 snapshotsNotPersisted,
                 strategies.Count);
         }

@@ -814,4 +814,161 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Null(company.Judgments);
         Assert.Null(company.JudgmentMarker);
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // SPEC 195 §2 — the pre-collapse syndication measurement reaches the live artifact.
+    //
+    // Spec 193 computed the counts onto the TRANSIENT bundle and nothing read them, so after the pass forty
+    // syndicated copies of one story were indistinguishable from one article. The values recorded here are
+    // THIS run's freshly-built bundle's, never a cached assessment record's: the surviving supplied articles
+    // (and therefore BundleHash) can be identical while syndication breadth has changed, and reusing a
+    // cached record's breadth would display an old run's enumeration as current.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// N syndicated copies of one headline across M publishers produce N−1 collapsed / M publishers in the
+    /// transient bundle, in the v4 live document AND in the rendered markdown — the same numbers at all
+    /// three places, so "the artifact names the same values" is asserted rather than assumed.
+    /// </summary>
+    [Fact]
+    public async Task SyndicationCounts_ReachTheLiveDocumentAndMarkdown_WithTheBundlesOwnValues()
+    {
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+
+        // N = 4 copies of ONE story across M = 3 distinct publishers ⇒ 3 collapsed / 3 publishers.
+        archive.Observations.Add(NewsRiskTestData.Observation(
+            Company, "Test Co wins contract - Reuters", AsOf.AddDays(-1), publisher: "Reuters"));
+        archive.Observations.Add(NewsRiskTestData.Observation(
+            Company, "Test Co wins contract - Yahoo Finance", AsOf.AddDays(-2), publisher: "Yahoo Finance"));
+        archive.Observations.Add(NewsRiskTestData.Observation(
+            Company, "Test Co wins contract - MarketWatch", AsOf.AddDays(-3), publisher: "MarketWatch"));
+        archive.Observations.Add(NewsRiskTestData.Observation(
+            Company, "Test Co wins contract - Reuters", AsOf.AddDays(-4), publisher: "Reuters"));
+
+        var artifacts = new FakeArtifactStore();
+        await Build(
+                runStore, archive, new InMemoryAssessmentStore(), artifacts,
+                Reader("a", "model-a", new ScriptedAnalyzer(ThesisChallengedOutcome)))
+            .GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        var company = Assert.Single(artifacts.LiveDocument!.Companies);
+
+        // One survivor supplied to the reader — the collapse itself is unchanged by spec 195.
+        Assert.Single(company.Articles);
+
+        Assert.Equal(3, company.SyndicatedDuplicateCount);
+        Assert.Equal(3, company.SyndicatedDistinctPublisherCount);
+        Assert.Equal("news-risk-live-v4", artifacts.LiveDocument.SchemaVersion);
+
+        Assert.Contains(
+            "Syndication before collapse: 3 duplicate cop", artifacts.LiveMarkdown!, StringComparison.Ordinal);
+        Assert.Contains(
+            "across 3 distinct publisher(s)", artifacts.LiveMarkdown, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A company with nothing to collapse records a MEASURED ZERO — not <c>null</c>. The distinction is the
+    /// whole point of the trailing-nullable member: "this run enumerated and nothing collapsed" is a fact,
+    /// and "not recorded" is a different one.
+    /// </summary>
+    [Fact]
+    public async Task NoSyndication_RecordsAMeasuredZeroRatherThanNull()
+    {
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.Add(NewsRiskTestData.Observation(
+            Company, "Test Co flags doubt", AsOf.AddDays(-1), publisher: "Reuters"));
+
+        var artifacts = new FakeArtifactStore();
+        await Build(
+                runStore, archive, new InMemoryAssessmentStore(), artifacts,
+                Reader("a", "model-a", new ScriptedAnalyzer(ThesisChallengedOutcome)))
+            .GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        var company = Assert.Single(artifacts.LiveDocument!.Companies);
+        Assert.Equal(0, company.SyndicatedDuplicateCount);
+        Assert.Equal(0, company.SyndicatedDistinctPublisherCount);
+    }
+
+    /// <summary>
+    /// THE compatibility criterion (spec §4 item 6): changing ONLY syndication breadth leaves the surviving
+    /// articles, the <c>BundleHash</c>, the assessment cache choice, the model request and completeness
+    /// byte-identical, while the v4 current-run fields change. Syndication is enumeration provenance sitting
+    /// BESIDE a possibly cached reader result — never a reason to call the model again.
+    /// </summary>
+    [Fact]
+    public async Task ChangingOnlySyndicationBreadth_MovesOnlyTheV4Fields()
+    {
+        // The SAME surviving observation in both runs, so the supplied article set cannot differ.
+        var survivor = NewsRiskTestData.Observation(
+            Company, "Test Co wins contract - Reuters", AsOf.AddDays(-1), publisher: "Reuters");
+
+        var plain = await RunAsync(survivor);
+        var syndicated = await RunAsync(
+            survivor,
+            NewsRiskTestData.Observation(
+                Company, "Test Co wins contract - Yahoo Finance", AsOf.AddDays(-2), publisher: "Yahoo Finance"),
+            NewsRiskTestData.Observation(
+                Company, "Test Co wins contract - MarketWatch", AsOf.AddDays(-3), publisher: "MarketWatch"));
+
+        var plainCompany = Assert.Single(plain.Artifacts.LiveDocument!.Companies);
+        var syndicatedCompany = Assert.Single(syndicated.Artifacts.LiveDocument!.Companies);
+
+        // Identical supplied articles …
+        Assert.Equal(
+            plainCompany.Articles.Select(a => a.ObservationId),
+            syndicatedCompany.Articles.Select(a => a.ObservationId));
+
+        // … identical input-bundle hash, so the assessment CACHE KEY does not move …
+        var plainRecord = Assert.Single(plain.Assessments.Records);
+        var syndicatedRecord = Assert.Single(syndicated.Assessments.Records);
+        Assert.Equal(plainRecord.InputBundleHash, syndicatedRecord.InputBundleHash);
+        Assert.Equal(plainRecord.CohortKey, syndicatedRecord.CohortKey);
+
+        // … identical completeness, and an identical MODEL REQUEST (the judge/reader never sees syndication).
+        Assert.Equal(plainRecord.AssessmentBundle, syndicatedRecord.AssessmentBundle);
+        Assert.Equal(plainCompany.QualifyingArticleCount, syndicatedCompany.QualifyingArticleCount);
+        Assert.Equal(
+            RequestShape(plain.Analyzer.Requests), RequestShape(syndicated.Analyzer.Requests));
+
+        // … while ONLY the current-run enumeration provenance moves.
+        Assert.Equal(0, plainCompany.SyndicatedDuplicateCount);
+        Assert.Equal(2, syndicatedCompany.SyndicatedDuplicateCount);
+        Assert.Equal(0, plainCompany.SyndicatedDistinctPublisherCount);
+        Assert.Equal(3, syndicatedCompany.SyndicatedDistinctPublisherCount);
+    }
+
+    /// <summary>The model request's whole observable shape — asserted equal, not merely spot-checked.</summary>
+    private static string RequestShape(IEnumerable<NewsRiskAnalysisRequest> requests) => string.Join(
+        "\n",
+        requests.Select(r => string.Join(
+            "|",
+            r.CompanyName,
+            r.Ticker,
+            string.Join(
+                ";",
+                r.Articles.Select(a => $"{a.Headline}/{a.DescriptionText}/{a.BodyText}")))));
+
+    private sealed record SyndicationRun(
+        FakeArtifactStore Artifacts, InMemoryAssessmentStore Assessments, ScriptedAnalyzer Analyzer);
+
+    private static async Task<SyndicationRun> RunAsync(params NewsObservationRecord[] observations)
+    {
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.AddRange(observations);
+
+        var assessments = new InMemoryAssessmentStore();
+        var artifacts = new FakeArtifactStore();
+        var analyzer = new ScriptedAnalyzer(ThesisChallengedOutcome);
+
+        await Build(runStore, archive, assessments, artifacts, Reader("a", "model-a", analyzer))
+            .GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        return new SyndicationRun(artifacts, assessments, analyzer);
+    }
 }

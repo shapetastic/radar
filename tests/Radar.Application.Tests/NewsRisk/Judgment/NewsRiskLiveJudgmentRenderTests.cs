@@ -90,10 +90,15 @@ public sealed class NewsRiskLiveJudgmentRenderTests
             Companies: [company],
             GeneratedAtUtc: Now));
 
+    /// <summary>
+    /// Spec 195 §2 moved the tag on from the v3 this file originally pinned: the live company row now
+    /// carries the current run's pre-collapse syndication measurement, and a reader has to be able to tell a
+    /// v3 document (NOT RECORDED, hydrating null) from a v4 document that measured an honest zero.
+    /// </summary>
     [Fact]
-    public void SchemaVersion_IsBumpedToV3()
+    public void SchemaVersion_IsBumpedToV4()
     {
-        Assert.Equal("news-risk-live-v3", NewsRiskLiveDocument.CurrentSchemaVersion);
+        Assert.Equal("news-risk-live-v4", NewsRiskLiveDocument.CurrentSchemaVersion);
     }
 
     [Fact]

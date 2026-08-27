@@ -19,10 +19,20 @@ namespace Radar.Infrastructure.FileSystem;
 /// <c>{RootDirectory}/{yyyy}/{MM}/{signalId}.json</c>, preserving provenance (evidence id, resolved
 /// company id, and the embedded review whose <c>signalId</c> traces back to the signal). All file I/O
 /// is confined to Infrastructure; the Application sees only <see cref="ISignalFileStore"/> /
-/// <see cref="ISignalRepository"/>. Disk failures degrade gracefully (warn + return the attempted path,
-/// marked <see cref="DurableWriteOutcome.Failed"/>) and never crash the run — but they are no longer
-/// SILENT: spec 193 §1 gives the caller a typed outcome so a signal that never reached disk cannot be
-/// counted as stored.
+/// <see cref="ISignalRepository"/>. Disk failures degrade gracefully (return the attempted path, marked
+/// <see cref="DurableWriteOutcome.Failed"/>) and never crash the run — but they are no longer SILENT:
+/// spec 193 §1 gives the caller a typed outcome so a signal that never reached disk cannot be counted as
+/// stored, and spec 195 §1 moves the FAILURE LOG to that caller
+/// (<see cref="GracefulFileWriteFailureLogging.CallerAggregates"/>) so <c>CollectionPass</c>'s one
+/// aggregated Warning replaces the per-file Warnings instead of being added to them.
+/// <para>
+/// <b>"Aggregated by <c>CollectionPass</c>" does not mean CollectionPass is the only writer.</b> The
+/// second <see cref="ISignalFileStore.WriteAsync"/> consumer is
+/// <c>Radar.Application.News.NewsJudgmentSignalMaterializer</c> (spec 194 §1.2), and it reports its own
+/// failures: one per-signal Warning naming the company and judgment, PLUS a per-pass aggregate
+/// (<c>WriteFailed</c> on its materialization summary). So nothing goes silent on that path either — which
+/// is the standing condition for this mode, not an accident of who happens to call.
+/// </para>
 /// </summary>
 /// <remarks>
 /// <para>
@@ -100,8 +110,18 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
 
         var json = Serialize(signal, review);
 
+        // Spec 195 §1: CallerAggregates, because CollectionPass emits ONE aggregated
+        // "{SignalsNotPersisted} signal(s) could NOT be durably persisted" Warning for exactly these
+        // failures. Without this the batch path logged N per-file Warnings PLUS that aggregate.
         var written = await GracefulFileWriter
-            .TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false);
+            .TryWriteAllTextAsync(
+                path,
+                json,
+                _logger,
+                ct,
+                encoding: null,
+                failureLogging: GracefulFileWriteFailureLogging.CallerAggregates)
+            .ConfigureAwait(false);
         if (written)
         {
             _logger.LogInformation("Wrote signal {SignalId} to {Path}.", signal.Id, path);

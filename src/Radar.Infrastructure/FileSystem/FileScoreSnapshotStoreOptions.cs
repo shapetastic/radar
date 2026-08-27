@@ -48,4 +48,31 @@ public sealed class FileScoreSnapshotStoreOptions
     /// </para>
     /// </summary>
     public Action<CompanyScoreSnapshot>? OnSnapshotOverwritten { get; init; }
+
+    /// <summary>
+    /// How this store reports a graceful write failure (spec 195 §1). The default,
+    /// <see cref="GracefulFileWriteFailureLogging.Immediate"/>, keeps the per-file Warning — the safe
+    /// direction, so a NEW construction site gets its failures reported rather than silenced by inheritance.
+    /// <para>
+    /// It is a PER-INSTANCE option, not a class-wide constant, because this store has two kinds of consumer
+    /// and only one of them owns an aggregate. <c>ScoringPass</c> counts every
+    /// <see cref="Radar.Application.Storage.DurableWriteOutcome.Failed"/> result and emits one aggregated
+    /// "{ScoreSnapshotsNotPersisted} score snapshot(s) could NOT be durably persisted" Warning, so those
+    /// instances (the <c>AddFileScoreStore</c> registration and
+    /// <see cref="StrategyScopedScoreSnapshotFileStoreFactory"/>) set
+    /// <see cref="GracefulFileWriteFailureLogging.CallerAggregates"/>. <c>ReplayRunner</c> DISCARDS the
+    /// write result and counts every point as written, so a replay-scoped store
+    /// (<see cref="ReplayScopedScoreSnapshotFileStoreFactory"/>) deliberately keeps
+    /// <see cref="GracefulFileWriteFailureLogging.Immediate"/>: its per-file Warning is the ONLY report a
+    /// failed replay write has. (Replay's one aggregated Warning is spec 148's OVERWRITE warning — a
+    /// different fact.)
+    /// </para>
+    /// <para>
+    /// Internal because the mode itself is an Infrastructure concern
+    /// (<see cref="GracefulFileWriteFailureLogging"/> is internal): only a construction site inside this
+    /// assembly, which can see the caller's aggregate, is in a position to choose it.
+    /// </para>
+    /// </summary>
+    internal GracefulFileWriteFailureLogging FailureLogging { get; init; } =
+        GracefulFileWriteFailureLogging.Immediate;
 }

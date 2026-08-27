@@ -24,7 +24,13 @@ public sealed record NewsRiskLiveDocument(
 {
     // v3 (spec 185): additive per-company two-stage judgment sections + the presentation-cohort marker
     // state. A v2 JSON document deserializes safely — the new members are trailing and nullable.
-    public const string CurrentSchemaVersion = "news-risk-live-v3";
+    //
+    // v4 (spec 195 §§2): the per-company pre-collapse syndication measurement. The tag DOES move here,
+    // unlike the spec-194 SignalMaterialization addition, because the new members are the artifact's only
+    // record of a measurement the run performed and then discarded: a reader has to be able to tell a v3
+    // document (measurement NOT RECORDED, hydrating null) from a v4 document that measured an honest zero.
+    // Nothing is removed or re-meant, so a by-name v3 consumer is unaffected.
+    public const string CurrentSchemaVersion = "news-risk-live-v4";
 
     /// <summary>The §1 live caveat, verbatim — carried by every live artifact.</summary>
     public const string LiveCaveat =
@@ -59,7 +65,21 @@ public sealed record NewsRiskLiveCompany(
     // rendered independently, never pooled — and the PRESENTATION cohort's semantic-read marker text as
     // rendered on the leaders. Null when the judgment step did not run this pass.
     IReadOnlyList<NewsRiskLiveJudgment>? Judgments = null,
-    string? JudgmentMarker = null);
+    string? JudgmentMarker = null,
+    // Spec 195 §2 (v4, additive, TRAILING and NULLABLE): THIS RUN's pre-collapse syndication measurement,
+    // taken from the freshly built input bundle — never from a cached assessment record, whose surviving
+    // supplied articles (and therefore BundleHash) can be identical while syndication breadth has changed;
+    // reusing it would display an old run's breadth as current.
+    //
+    // `null` means NOT RECORDED (a pre-v4 document, hydrated) and is deliberately NOT the same fact as a
+    // measured 0, which means "this run enumerated the articles and nothing collapsed". Every company row a
+    // v4 run writes carries measured integers, including that honest zero.
+    //
+    // Neither value enters BundleHash, an assessment id, a cohort key, completeness, the model request,
+    // scoring or any fingerprint: it is enumeration provenance sitting BESIDE a possibly cached reader
+    // result, and it is never a reason to call the model again.
+    int? SyndicatedDuplicateCount = null,
+    int? SyndicatedDistinctPublisherCount = null);
 
 /// <summary>
 /// One stage-2 judgment cohort's result for one company (spec 185 §5): the judge and its upstream stage-1
