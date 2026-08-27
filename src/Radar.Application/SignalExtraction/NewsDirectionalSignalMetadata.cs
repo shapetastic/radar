@@ -1,13 +1,19 @@
-using Radar.Application.Collectors;
-
 namespace Radar.Application.SignalExtraction;
 
 /// <summary>
-/// The ONE definition of the provenance a directional news signal carries (spec 191 §2: "a signal whose
-/// provenance cannot be recorded is not emitted directionally"). Keys are declared here and nowhere else,
-/// and the envelope is composed through the SHARED <see cref="EvidenceMetadata.Compose"/> / read back
-/// through <see cref="EvidenceMetadata.TryRead"/> — the repo's single metadata-envelope definition — rather
+/// The ONE definition of the provenance keys a judgment-derived news signal carries. Keys are declared here
+/// and nowhere else, and the envelope is composed through the SHARED <c>EvidenceMetadata.Compose</c> / read
+/// back through <c>EvidenceMetadata.TryRead</c> — the repo's single metadata-envelope definition — rather
 /// than a second hand-rolled JSON composer.
+/// <para>
+/// <b>SPEC 194 — these keys are now READ before they are written.</b> Spec 191 wrote them onto directional
+/// news signals minted during extraction, from a company judgment that had never read the matched article.
+/// That producer is retired and its <c>Compose</c> overload with it, but the keys survive deliberately: the
+/// signals it wrote are on disk, they are append-only, and they must not be deleted or rewritten. They are
+/// the shape the spec-194 §1.4 legacy-inheritance admission transform matches on in order to fail those
+/// accrued directions CLOSED to Neutral, and the shape the §1.2 materializer's versioned envelope extends
+/// with <c>newsJudgmentSignalVersion</c>. Do not add a second metadata parser beside this one.
+/// </para>
 /// <para>
 /// The envelope's <c>companyHints</c> array is written EMPTY: a signal carries no collector company hints.
 /// That one artifact is the price of having exactly one envelope definition instead of two, and it keeps a
@@ -27,23 +33,4 @@ public static class NewsDirectionalSignalMetadata
 
     /// <summary>The judge's business-trajectory display token, so the direction's REASON is legible on the signal.</summary>
     public const string TrajectoryKey = "newsBusinessTrajectory";
-
-    /// <summary>
-    /// Composes the provenance envelope for <paramref name="read"/>. Guids render invariant
-    /// (<c>D</c> format) so the value round-trips through <see cref="Guid.Parse(string)"/> exactly.
-    /// </summary>
-    public static string Compose(NewsDirectionalRead read)
-    {
-        ArgumentNullException.ThrowIfNull(read);
-
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [JudgmentIdKey] = read.JudgmentId.ToString("D"),
-            [JudgmentCohortKeyKey] = read.JudgmentCohortKey,
-            [ObservationIdKey] = read.ObservationId.ToString("D"),
-            [TrajectoryKey] = read.TrajectoryToken,
-        };
-
-        return EvidenceMetadata.Compose(metadata, []);
-    }
 }

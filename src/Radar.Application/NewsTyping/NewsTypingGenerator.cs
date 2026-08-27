@@ -303,6 +303,13 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
     /// outranks a backlog, which outranks complete — and a company with zero in-window observations is
     /// vacuously <see cref="NewsTypingCompleteness.Complete"/> (it also has zero facts, so the judge records
     /// <c>InsufficientFacts</c> for it anyway).
+    /// <para>
+    /// SPEC 194 §3: every input to that precedence is WINDOW-scoped. Both the exhaustion test and the
+    /// retryable-failure test are answered from this company's IN-WINDOW observations, so an out-of-window
+    /// legacy-backlog failure can no longer relabel the window's coverage. It matters beyond display now:
+    /// spec 191 made completeness a scoring input through
+    /// <c>NewsTrajectorySignalRules</c>' complete-typing strength bonus.
+    /// </para>
     /// </summary>
     private static NewsTypingCohortRunResult BuildCohortRunResult(
         ReaderPass pass, DateTimeOffset windowStartUtc, DateTimeOffset asOfUtc)
@@ -346,18 +353,27 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 // a permanent hole would be just as false in the other direction. The pre-189 token `Failed`
                 // conflated the two and is never computed here again.
                 //
-                // KNOWN, RECORDED LIMITATION (not fixed here — narrowing the failure set to the window is its
-                // own decision). The two sets have different scopes on purpose: `FailedCompanyIds` is
-                // PASS-WIDE, `ExhaustedCompanyIds` is WINDOW-scoped. So an OUT-OF-WINDOW observation that
-                // spends its FINAL attempt in this pass calls BOTH marks, yet only the pass-wide one records
-                // the company — and if that company also holds an in-window observation, its token here reads
-                // RetryableFailure for an observation that is in fact exhausted. The impact is bounded to the
-                // TOKEN: the artifact's per-company row uses `ReaderPass.IsRetryableFailure`, which excludes
-                // exhausted keys, so the rendered "remains in the eligible backlog" count correctly shows 0,
-                // and `NewsJudgmentMarkerPolicy` treats every non-Complete value identically.
+                // SPEC 194 §3 — BOTH TESTS ARE NOW WINDOW-SCOPED, OVER OBSERVATION KEYS. Until spec 194 the
+                // retryable test read a PASS-WIDE set of company ids while this whole loop derives a WINDOW
+                // checkpoint, so a company whose in-window observations were all typed successfully was
+                // still marked RetryableFailure because an unrelated LEGACY-BACKLOG observation of its own
+                // (outside the window entirely) failed an attempt in the same pass. Spec 189 recorded that
+                // as a deliberate, TOKEN-ONLY limitation. It is no longer token-only: spec 191 made typing
+                // completeness a SCORING input — `NewsTrajectorySignalRules.StrengthFor` pays a
+                // complete-typing bonus — so a falsely non-Complete company silently loses a strength point
+                // on its judgment-derived signal. The test is therefore membership of an IN-WINDOW
+                // (ObservationId, PayloadHash) key in this pass's retryable-failure set, through the SAME
+                // `ReaderPass.IsRetryableFailure` predicate the artifact's per-company row uses (it excludes
+                // a key that exhausted on the same attempt), so the token and the rendered row cannot
+                // disagree. An out-of-window backlog failure stays fully visible in the pass-wide reader
+                // summary and the lane accounting — it just cannot relabel this window's coverage, exactly
+                // as an out-of-window EXHAUSTION already could not.
+                var retryableInWindow = companyGroup.Any(
+                    o => pass.IsRetryableFailure((o.ObservationId, o.PayloadHash)));
+
                 completeness[companyGroup.Key] = pass.ExhaustedCompanyIds.Contains(companyGroup.Key)
                     ? NewsTypingCompleteness.RetryExhausted
-                    : pass.FailedCompanyIds.Contains(companyGroup.Key)
+                    : retryableInWindow
                         ? NewsTypingCompleteness.RetryableFailure
                         : untyped > 0
                             ? NewsTypingCompleteness.Backlog
@@ -538,7 +554,6 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 NewsTypingSelectionLane.General;
         }
 
-        var failedCompanyIds = new HashSet<Guid>();
         var newTypings = 0;
         var reservationsRefused = 0;
         var outcomeWritesFailed = 0;
@@ -569,15 +584,17 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         // pre-189 token `Failed` conflated the two and is never computed here again. Spec 187 §3 widens
         // "failed attempt" to include a refused reservation and a failed outcome write: a STORAGE failure
         // must never be reported as ordinary backlog.
-        void MarkCompanyFailed(NewsTypingInputObservation observation)
+        //
+        // SPEC 194 §3: the OBSERVATION KEY is the only thing recorded. The pass-wide company-id set this
+        // helper also used to fill is DELETED, not merely unread — it was the mechanism by which an
+        // out-of-window backlog failure relabelled an otherwise-complete in-window company, and completeness
+        // is now a scoring input rather than a display token. `BuildCohortRunResult` intersects these keys
+        // with the window itself, so no pass-wide company set is left to reach for by mistake.
+        void MarkRetryableFailure(NewsTypingInputObservation observation)
         {
-            // Spec 189 §3: the observation key is recorded beside the company id, because the artifact
-            // reports retryable failures per (company × capture mode) while completeness is per company.
+            // Spec 189 §3: the artifact reports retryable failures per (company × capture mode) and
+            // completeness is per company, so BOTH project from this one per-observation record.
             retryableFailureKeys.Add((observation.ObservationId, observation.PayloadHash));
-            if (observation.CompanyId is { } failedCompanyId)
-            {
-                failedCompanyIds.Add(failedCompanyId);
-            }
         }
 
         void LogTypingProgress() => _logger.LogInformation(
@@ -636,7 +653,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 // pass — deliberately NOT the following ordinal, which would mint a second concurrent call
                 // for the same input and overspend the very budget the ledger exists to bound.
                 reservationsRefused++;
-                MarkCompanyFailed(observation);
+                MarkRetryableFailure(observation);
                 continue;
             }
 
@@ -683,7 +700,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 }
                 else
                 {
-                    MarkCompanyFailed(observation);
+                    MarkRetryableFailure(observation);
                 }
             }
             else
@@ -693,7 +710,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
                 // stage-2 judge.
                 outcomeWritesFailed++;
                 orphanedReservations[key] = orphanedReservations.GetValueOrDefault(key) + 1;
-                MarkCompanyFailed(observation);
+                MarkRetryableFailure(observation);
             }
 
             // ---- Spec 187 §4: the final permitted attempt that left no durably completed typing exhausts
@@ -793,7 +810,6 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             reader.Identity,
             completed,
             newTypings,
-            failedCompanyIds,
             exhaustedKeys,
             exhaustedCompanyIds,
             orphanedReservations,
@@ -1504,7 +1520,6 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         NewsTypingReaderIdentity identity,
         Dictionary<(Guid ObservationId, string PayloadHash), NewsTypingRecord> completed,
         int newTypings,
-        HashSet<Guid> failedCompanyIds,
         HashSet<(Guid ObservationId, string PayloadHash)> exhaustedKeys,
         HashSet<Guid> exhaustedCompanyIds,
         Dictionary<(Guid ObservationId, string PayloadHash), int> orphanedReservations,
@@ -1519,9 +1534,6 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             completed;
 
         public int NewTypings { get; } = newTypings;
-
-        /// <summary>Companies with at least one FAILED typing attempt this run (spec 185 §5 completeness precedence).</summary>
-        public HashSet<Guid> FailedCompanyIds { get; } = failedCompanyIds;
 
         /// <summary>Untyped observations whose typing attempts are EXHAUSTED — they left selection (spec 186 §2).</summary>
         public HashSet<(Guid ObservationId, string PayloadHash)> ExhaustedKeys { get; } = exhaustedKeys;

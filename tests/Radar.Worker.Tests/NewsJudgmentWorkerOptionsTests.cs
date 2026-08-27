@@ -2,7 +2,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
-using Radar.Application.News;
 using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
 using Radar.Application.Reporting;
@@ -87,43 +86,34 @@ public sealed class NewsJudgmentWorkerOptionsTests
     }
 
     [Fact]
-    public void Default_RegistersNoDirectionalNewsReadSource_SoTheExtractorIsUnchanged()
+    public void EnabledInFullMode_TheComposedSignalExtractor_StillReachesNoNewsSubsystemType()
     {
-        // Spec 191: the read seam is registered ONLY under the judgment gate. Without it,
-        // KeywordSignalExtractor's optional dependency resolves to null and the NewsArticle branch is
-        // byte-identical to its pre-191 self.
-        using var provider = BuildProvider();
-
-        Assert.Null(provider.GetService<INewsDirectionalReadSource>());
-        Assert.NotNull(provider.GetRequiredService<ISignalExtractor>());
-    }
-
-    [Theory]
-    [InlineData("score")]
-    [InlineData("collect")]
-    public void NonFullModes_RegisterNoDirectionalNewsReadSource(string mode)
-    {
-        using var provider = BuildProvider(EnabledWithAmbientOllama(("Radar:RunMode", mode)));
-
-        Assert.Null(provider.GetService<INewsDirectionalReadSource>());
-    }
-
-    [Fact]
-    public void EnabledInFullMode_RegistersTheDirectionalNewsReadSource_OnThePresentationCohort()
-    {
-        // Spec 191 §3: the SCORED cohort is the DISPLAYED cohort — the source's admitted-judgment index is
-        // keyed on exactly the key the leaders marker resolves, composed from the SAME reader identities.
+        // SPEC 194 §1.1. Spec 191 registered an INewsDirectionalReadSource here and handed it to
+        // KeywordSignalExtractor as an optional dependency, so the extractor could take a news article's
+        // DIRECTION from a company judgment produced BEFORE that article existed. The seam is gone, and the
+        // claim worth pinning in the composition root is the one a future re-introduction would break:
+        // even with judgment fully enabled, the extractor the Worker actually resolves cannot reach the
+        // news observation archive, the judgment store or any typing type. The Application-side regression
+        // (KeywordSignalExtractorNewsNeutralityTests) pins the same boundary on the type graph directly.
         using var provider = BuildProvider(EnabledWithAmbientOllama());
 
-        Assert.NotNull(provider.GetService<INewsDirectionalReadSource>());
+        // The judgment step IS registered, so this is not passing vacuously.
+        Assert.NotNull(provider.GetService<INewsJudgmentGenerator>());
 
-        var judge = Assert.Single(provider.GetRequiredService<NewsJudgmentReaderSet>().Readers);
-        var extractor = Assert.Single(provider.GetRequiredService<NewsTypingReaderSet>().Readers);
-        var expected = judge.Identity.CohortKeyFor(extractor.Identity.CohortKey);
+        var extractor = provider.GetRequiredService<ISignalExtractor>();
+        var leaks = extractor.GetType()
+            .GetConstructors()
+            .SelectMany(c => c.GetParameters())
+            .Select(pi => pi.ParameterType)
+            .Where(t => t.Namespace is not null
+                && t.Namespace.StartsWith("Radar.Application.News", StringComparison.Ordinal))
+            .Select(t => t.FullName)
+            .ToList();
 
-        Assert.Equal(
-            expected,
-            provider.GetRequiredService<NewsDirectionalReadOptions>().PresentationCohortKey);
+        Assert.True(
+            leaks.Count == 0,
+            "The composed signal extractor must take no news-subsystem dependency (spec 194 §1.1), "
+                + "but it takes: " + string.Join(", ", leaks));
     }
 
     [Fact]

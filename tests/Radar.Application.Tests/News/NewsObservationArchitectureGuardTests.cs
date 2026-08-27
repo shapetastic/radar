@@ -14,16 +14,14 @@ namespace Radar.Application.Tests.News;
 /// structurally impossible for a score, an extraction or a review to read it, or the point-in-time record
 /// would quietly become a scoring input and AD-14-style honesty would erode.
 /// <para>
-/// <b>SPEC 191 did NOT weaken this guard, and the distinction matters.</b> The news read now genuinely
-/// reaches the signal layer — but through exactly ONE seam,
-/// <c>Radar.Application.SignalExtraction.INewsDirectionalReadSource</c>, whose request/response types carry
-/// Domain and BCL types ONLY (the established
-/// <c>Radar.Application.Filings.IDirectionalFilingSignalSource</c> pattern for an AI-derived scoring input).
-/// The concrete implementation lives on the FAR side of that seam, in <c>Radar.Application.News</c> beside
-/// <c>NewsObservationMigration</c>, so the archive still cannot be reached from a scoring/extraction type
-/// graph. <see cref="Radar.Application.Tests.SignalExtraction.NewsDirectionalReadBoundaryTests"/> asserts
-/// the seam's shape from the other direction, WITH a positive control proving the implementation really does
-/// reach the archive and the judgment store — a boundary that holds because nobody looked is worthless.
+/// <b>SPEC 194 RESTORED this guard to its strongest form.</b> Spec 191 let the news read reach the signal
+/// layer through one seam in <c>Radar.Application.SignalExtraction</c> whose request/response types carried
+/// Domain and BCL types ONLY, with the implementation on the FAR side in <c>Radar.Application.News</c>.
+/// Spec 194 §1.1 deleted that seam outright: an article was taking its direction from a company judgment
+/// produced BEFORE it existed, so the direction now rides its own judgment-derived signal materialized after
+/// the judgment. The extraction type graph therefore reaches nothing here at all.
+/// <see cref="Radar.Application.Tests.SignalExtraction.KeywordSignalExtractorNewsNeutralityTests"/> asserts
+/// that from the extraction side, WITH a positive control so it cannot pass because nobody looked.
 /// </para>
 /// </summary>
 public sealed class NewsObservationArchitectureGuardTests

@@ -18,10 +18,10 @@ namespace Radar.Application.SignalExtraction;
 /// scoring model; the real AI extractor is a later, human-owned slice.
 /// <para>
 /// Beyond pure keyword scanning it is <b>source/metadata-aware in exactly three defined ways</b>:
-/// (1) <see cref="EvidenceSourceType.NewsArticle"/> evidence emits exactly one
-/// <see cref="SignalType.MediaAttention"/> signal — the directional keyword rules are suppressed for news,
-/// since third-party coverage is an attention event, not the company's own disclosure (spec 70) — the one
-/// and only <see cref="EvidenceItem.SourceType"/>-driven branch; and TWO <b>metadata-driven</b>
+/// (1) <see cref="EvidenceSourceType.NewsArticle"/> evidence emits exactly one <b>Neutral
+/// <see cref="SignalType.MediaAttention"/></b> signal — the directional keyword rules are suppressed for
+/// news, since third-party coverage is an attention event, not the company's own disclosure (spec 70) —
+/// the one and only <see cref="EvidenceItem.SourceType"/>-driven branch; and TWO <b>metadata-driven</b>
 /// materiality reads that scale an already-fired signal's <b>Strength</b> through one generic mechanism:
 /// (2) a <see cref="SignalType.GovernmentContract"/> Positive signal by the <c>awardAmount</c> key (spec 66),
 /// and (3) a <see cref="SignalType.InsiderBuying"/> Positive-or-Negative signal by the <c>insiderNetValue</c>
@@ -42,25 +42,17 @@ namespace Radar.Application.SignalExtraction;
 /// branch + two metadata reads" invariant stays intact.
 /// </para>
 /// <para>
-/// <b>SPEC 191 — the NewsArticle branch is no longer unconditionally Neutral.</b> It is still the ONE
-/// <see cref="EvidenceSourceType"/> branch and still emits exactly one
-/// <see cref="SignalType.MediaAttention"/> signal (a new signal type would silently fall outside every
-/// strategy's declared <c>SignalTypes</c> filter and every v9/v10 channel budget). What changed is that
-/// when the OPT-IN <see cref="INewsDirectionalReadSource"/> is registered AND it admits a directional read
-/// for this exact evidence — joined to a point-in-time observation whose company carries a
-/// <c>Judged</c> stage-2 news judgment from the prospectively designated presentation cohort — the signal
-/// carries that judgment's DIRECTION and a scaled Strength, plus the mandatory provenance envelope
-/// (<see cref="NewsDirectionalSignalMetadata"/>). Everything else about the branch — CompanyMention,
-/// Novelty 4, Confidence 0.5, the excerpt and the output summary — is unchanged, and with no source
-/// registered, or no admitted read, the signal is BYTE-IDENTICAL to the pre-191 Neutral one. Measured
-/// motivation: over a 4,000-signal sample of 2026/08 signals, 98.4% of signals were Neutral and 96.75%
-/// were <see cref="SignalType.MediaAttention"/> — scoring consumed news as VOLUME.
-/// <para>
-/// ⚠ Recorded interaction, deliberately unchanged by spec 191: the spec-109 <c>media-collapse-v1</c>
-/// same-event collapse downstream is direction-BLIND (earliest-observed representative per time bucket), so
-/// a directional news signal can be de-noised away by an earlier unread article in the same bucket. The
-/// trajectory is COMPANY-level, so a bucket is never internally contradictory. Making the representative
-/// choice direction-aware is a collapse-STRUCTURE change (<c>media-collapse-v2</c>) needing its own spec.
+/// <b>SPEC 194 — this extractor NEVER consults a company judgment while extracting an article.</b> Spec 191
+/// briefly gave the <see cref="EvidenceSourceType.NewsArticle"/> branch a DIRECTION taken from an optional
+/// <c>INewsDirectionalReadSource</c> seam. That seam ran at the wrong lifecycle point: the stage-2 judge runs
+/// <i>after</i> extraction, so the only judgment available to a newly collected article was one produced from
+/// EARLIER articles it had never read — a Tuesday headline inherited Monday's verdict, and one call was
+/// multiplied by however many later headlines arrived. Spec 194 retires the seam (there is no dependency left
+/// here to consult) and restores exactly the pre-191 Neutral <see cref="SignalType.MediaAttention"/> event:
+/// same direction, strength, novelty, confidence, excerpt, reason and (absent) metadata. Direction now
+/// arrives as its OWN judgment-derived signal, materialized after the judgment exists and anchored to the
+/// evidence that judgment actually cited. <see cref="RuleSetVersion"/> is therefore <c>v8</c>, not a
+/// rollback to <c>v6</c>.
 /// </para>
 /// <para>
 /// WATCH-ITEM: the InsiderBuying read (3) is <b>metadata-driven, not <see cref="EvidenceSourceType"/>-driven</b>,
@@ -88,13 +80,21 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // v6 (spec 130): adds the TrademarkActivity rule group (the USPTO trademark collector's fixed
     // "trademark activity (recent filings)" phrase, NEUTRAL at routine strength) — a rule-STRUCTURE change,
     // hence the bump. (Spec 128 (FCC) never merged, so this bump is v5 → v6, not v6 → v7.)
-    // v7 (spec 191): the NewsArticle branch gains a DIRECTION from the admitted stage-2 news judgment —
-    // Improving -> Positive, Deteriorating -> Negative, with Strength scaled by the judge's finding count
-    // and typing completeness; Mixed/Unknown/unjoined/unread keep today's Neutral. The phrase table is
-    // untouched, but the direction+strength a NewsArticle produces is exactly what this identity exists to
-    // pin, so it is a rule-STRUCTURE change, hence the bump. It moves all four spec-148/160 fingerprint
-    // pins and re-stamps every strategy — deliberately; see the spec-191 lineage note in CLAUDE.md.
-    public const string RuleSetVersion = "radar-keyword-rules-v7";
+    // v7 (spec 191): the NewsArticle branch took its DIRECTION from the admitted stage-2 news judgment, read
+    // through an optional INewsDirectionalReadSource seam consulted WHILE extracting an article.
+    // v8 (spec 194): that seam is RETIRED and the NewsArticle branch is once again exactly the pre-191
+    // Neutral MediaAttention event. This is a scoring-rule CORRECTION, NOT a silent rollback to v6, and the
+    // distinct version is the point: v7 attached a company-level judgment to an article the judgment had
+    // never read (the judge runs AFTER extraction, so a Tuesday article inherited Monday's verdict and
+    // multiplied one call into N units of directional mass). Under v8 the extractor NEVER consults a company
+    // judgment while extracting an article — there is no seam left for it to consult — and the direction
+    // instead arrives as its OWN judgment-derived signal, materialized after the judgment exists and
+    // grounded in the facts/observations/evidence that judgment actually cited. v6 and v8 produce the same
+    // NewsArticle signal but do NOT mean the same thing: v8 sits downstream of a live judgment layer, so the
+    // history has three semantic regimes (pre-191 Neutral news, spec-191 inherited direction — known
+    // defective — and post-194 grounded judgment signals). It moves every ScoringConfigVersion pin and
+    // re-stamps every strategy, deliberately; see the spec-194 lineage note in CLAUDE.md.
+    public const string RuleSetVersion = "radar-keyword-rules-v8";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
@@ -322,77 +322,44 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     private readonly ILogger<KeywordSignalExtractor> _logger;
     private readonly InsiderMaterialityWeights _insiderWeights;
 
-    // OPT-IN directional news read (spec 191), mirroring CollectionPass's optional AI-filing seam. Null
-    // when the spec-185 judgment step is not registered — in which case the NewsArticle branch below is
-    // byte-for-byte its pre-191 self. .NET DI supplies the null default when the service is absent.
-    private readonly INewsDirectionalReadSource? _newsDirectionalReads;
-
-    public KeywordSignalExtractor(
-        ILogger<KeywordSignalExtractor> logger,
-        InsiderMaterialityWeights insiderWeights,
-        INewsDirectionalReadSource? newsDirectionalReads = null)
+    public KeywordSignalExtractor(ILogger<KeywordSignalExtractor> logger, InsiderMaterialityWeights insiderWeights)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(insiderWeights);
         insiderWeights.Validate();
         _logger = logger;
         _insiderWeights = insiderWeights;
-        _newsDirectionalReads = newsDirectionalReads;
     }
 
-    public async Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence, CancellationToken ct)
+    public Task<ExtractSignalsOutput> ExtractAsync(EvidenceItem evidence, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(evidence);
 
         // Third-party news coverage is inherently a source-type signal, not a phrase signal: the EXISTENCE of
-        // NewsArticle evidence is the attention event (spec 70). Emit exactly one MediaAttention signal and
-        // return, deliberately SUPPRESSING the directional keyword rules for news (news framing != the
+        // NewsArticle evidence is the attention event (spec 70). Emit exactly one Neutral MediaAttention signal
+        // and return, deliberately SUPPRESSING the directional keyword rules for news (news framing != the
         // company's own disclosure; avoids double-counting a press release + its news echo — see spec 70).
         // This is the one and only EvidenceSourceType-driven branch in this deterministic extractor. (The
         // spec 66 GovernmentContract and spec 93 InsiderBuying reads are metadata-driven, not source-type-driven,
         // so they do NOT count as source-type branches — see the class XML doc.) All keyword behaviour for other
         // sources is unchanged below.
-        //
-        // Spec 191: the DIRECTION of that one signal now comes from the admitted stage-2 news judgment when
-        // Radar has actually read this article; without an admitted read the signal is byte-identical to the
-        // pre-191 Neutral one. Novelty (4), Confidence (0.5), CompanyMention, the excerpt and the summary are
-        // unchanged on BOTH paths — the read scales Strength and sets Direction, nothing else.
         if (evidence.SourceType == EvidenceSourceType.NewsArticle)
         {
             var searchable = EvidenceSearchableText.Compose(evidence.Title, evidence.RawText);
             var excerpt = BuildExcerpt(searchable, matchIndex: 0, phraseLength: 0);   // verbatim provenance slice
-
-            var read = _newsDirectionalReads is null
-                ? null
-                : await _newsDirectionalReads.TryReadAsync(evidence, ct).ConfigureAwait(false);
-
-            var signal = read is null
-                ? new ExtractedSignal(
-                    CompanyMention: evidence.SourceName,
-                    SignalType: SignalType.MediaAttention.ToString(),
-                    Direction: SignalDirection.Neutral.ToString(),
-                    Strength: 4,
-                    Novelty: 4,
-                    Confidence: 0.5m,
-                    SupportingExcerpt: excerpt,
-                    Reason: "Third-party news coverage (media attention)")
-                : new ExtractedSignal(
-                    CompanyMention: evidence.SourceName,
-                    SignalType: SignalType.MediaAttention.ToString(),
-                    Direction: read.Direction.ToString(),
-                    Strength: read.Strength,
-                    Novelty: 4,
-                    Confidence: 0.5m,
-                    SupportingExcerpt: excerpt,
-                    Reason: NewsDirectionalReason(read.TrajectoryToken),
-                    // Provenance is MANDATORY for a directional news signal (spec 191 §2): judgment id,
-                    // judge cohort key and matched observation id, so a score walks back to the article.
-                    MetadataJson: NewsDirectionalSignalMetadata.Compose(read));
-
-            return new ExtractSignalsOutput(
+            var signal = new ExtractedSignal(
+                CompanyMention: evidence.SourceName,
+                SignalType: SignalType.MediaAttention.ToString(),
+                Direction: SignalDirection.Neutral.ToString(),
+                Strength: 4,
+                Novelty: 4,
+                Confidence: 0.5m,
+                SupportingExcerpt: excerpt,
+                Reason: "Third-party news coverage (media attention)");
+            return Task.FromResult(new ExtractSignalsOutput(
                 new List<ExtractedSignal> { signal },
-                "1 media-attention signal extracted from news coverage.");
+                "1 media-attention signal extracted from news coverage."));
         }
 
         // Provenance: search and excerpt from the composed searchable text (Title + "\n" + RawText).
@@ -492,16 +459,8 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
             evidence.Title);
 
         var summary = $"{signals.Count} signal(s) extracted by keyword rules.";
-        return new ExtractSignalsOutput(signals, summary);
+        return Task.FromResult(new ExtractSignalsOutput(signals, summary));
     }
-
-    /// <summary>
-    /// The deterministic, advice-free reason a DIRECTIONAL news signal carries (spec 191 §2). It states the
-    /// factual basis — the judged business-trajectory token — and nothing else; Radar never renders advice
-    /// vocabulary on a signal.
-    /// </summary>
-    private static string NewsDirectionalReason(string trajectoryToken) =>
-        $"Third-party news coverage (media attention; judged business trajectory: {trajectoryToken})";
 
     // Returns a deterministic, verbatim slice of the original-cased searchable text around the match
     // so the excerpt survives the mapper's provenance check.

@@ -49,20 +49,23 @@ public enum NewsTypingCompleteness
     /// observation has exhausted its attempt budget. The failed observation stays eligible, so a later run
     /// can still type it — this is a degraded read TODAY, not a permanent hole.
     /// <para>
-    /// The failure set is PASS-WIDE (a failure on a legacy-backlog observation degrades the company too),
-    /// deliberately keeping the pre-189 <c>Failed</c> semantics exactly rather than narrowing them to the
-    /// window in the same slice that splits the token: degrading is the safe direction, and a company must
-    /// never be silently upgraded to <see cref="Complete"/> by a rename. Exhaustion, by contrast, stays
-    /// WINDOW-scoped (spec 186 §2) — an exhausted backlog article is counted as a permanent cost but does not
-    /// relabel this window's coverage. The per-cohort/pass-wide split lives in the decomposition artifact.
+    /// <b>SPEC 194 §3 — the failure set is WINDOW-SCOPED, matching exhaustion.</b> The computed value is
+    /// <c>RetryableFailure</c> only when an IN-WINDOW <c>(ObservationId, PayloadHash)</c> is in this pass's
+    /// retryable-failure set. Spec 189 deliberately kept the pre-189 pass-wide scope — degrading is the safe
+    /// direction — and recorded the resulting asymmetry (a failure on a LEGACY-BACKLOG observation degraded
+    /// an otherwise-complete in-window company, and an out-of-window observation spending its final attempt
+    /// read retryable rather than exhausted) as a token-only limitation. It stopped being token-only when
+    /// spec 191 made completeness a SCORING input: <c>NewsTrajectorySignalRules.StrengthFor</c> pays a
+    /// complete-typing bonus, so a false non-<see cref="Complete"/> value silently costs a strength point on
+    /// the judgment-derived signal. Completeness is a claim about THE WINDOW, so it is now derived from the
+    /// window alone, through the same exhaustion-excluding predicate the decomposition artifact's per-company
+    /// row uses — the token and the rendered row cannot disagree.
     /// </para>
     /// <para>
-    /// KNOWN, RECORDED LIMITATION of that scope asymmetry (recorded, not fixed): an OUT-OF-WINDOW observation
-    /// that spends its FINAL attempt in a pass is marked failed (pass-wide) but not exhausted (window-scoped),
-    /// so a company holding one reads <c>RetryableFailure</c> for an observation that is really exhausted. It
-    /// affects THIS TOKEN only — the decomposition artifact's per-company row projects retryable failures
-    /// through the exhaustion-excluding rule, so its eligible-backlog count stays correct, and the leaders
-    /// marker policy treats every non-<see cref="Complete"/> value identically.
+    /// An out-of-window backlog failure is NOT lost: it stays fully visible in the pass-wide reader summary
+    /// and the lane accounting in the decomposition artifact, where it is a statement about the pass rather
+    /// than about a company's window coverage. Exhaustion has been window-scoped since spec 186 §2, so the
+    /// two now share one scope and the spec-189 asymmetry is gone rather than merely documented.
     /// </para>
     /// </summary>
     RetryableFailure,
