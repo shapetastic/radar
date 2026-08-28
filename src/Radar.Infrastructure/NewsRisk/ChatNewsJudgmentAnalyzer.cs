@@ -28,7 +28,7 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
 {
     /// <summary>
     /// Fixed, deterministic system instruction carrying the §2 judgment contract, FORKED to
-    /// <c>news-judgment-prompt-v2</c> by spec 187 §1. The FIXED rubric is verbatim ("the company's recent
+    /// <c>news-judgment-prompt-v3</c> by spec 197 §2.1 (and to <c>v2</c> by spec 187 §1). The FIXED rubric is verbatim ("the company's recent
     /// business trajectory" — Radar's founding question); the attribution weighting rule is a PROMPT rule,
     /// not post-hoc (a plaintiff-firm solicitation is a weaker basis than a confirmed filing; "may face" is
     /// weaker than "was charged"); and the vocabularies are rendered from the same closed sets the
@@ -41,6 +41,15 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
     /// improvement inferred from one institutional investment; and a 52-week share-price low converted into
     /// a business-execution finding. Every rule below is stated as a RULE, not buried in commentary,
     /// because the v1 instruction's implicit expectations are exactly what the model optimised away.
+    /// </para>
+    /// <para>
+    /// <b>The v3 rule (10)</b> exists because five of nineteen calls on baseline run
+    /// <c>0b48b865-76b8-4485-996c-9b9139b694aa</c> cited EIGHT-CHARACTER PREFIXES of supplied FactIds
+    /// (<c>11e52ee0</c>, <c>2f4bd2fd</c>, …) and lost their whole response — findings included — to
+    /// validation. v2 said "verbatim" in passing; v3 states the requirement as its own rule, names the
+    /// complete 36-character hyphenated form, shows one, and applies it explicitly to BOTH citation lists.
+    /// Wording is not a recovery mechanism, so <see cref="NewsJudgmentCitationResolver"/> recovers a unique
+    /// prefix deterministically — but the instruction is where the pressure should stop being generated.
     /// </para>
     /// <para>
     /// This text is PINNED by test. Changing it is a prompt-policy change: bump
@@ -86,14 +95,19 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             + "solicitation\"). "
             + "(9) Never give investment instructions or advice language; the Rationale is bounded and "
             + "factual. "
+            + "(10) EVERY FactId you cite must be the COMPLETE 36-character hyphenated identifier exactly "
+            + "as supplied, for example 11e52ee0-2b7c-4c0e-9f0a-3d5c8a1b4e62. Copy it character for "
+            + "character. NEVER abbreviate, truncate, shorten, paraphrase, reformat or invent an id, and "
+            + "never cite only its first few characters. This rule applies to BOTH TrajectoryFactIds AND "
+            + "every finding's FactIds. "
             + "Return: BusinessTrajectory (\"Improving\" | \"Deteriorating\" | \"Mixed\" | "
             + "\"Unknown\" — a factual read over the families); TrajectoryFactIds (the supplied FactIds "
-            + "that establish that trajectory; at least one for Improving, Deteriorating or Mixed; EMPTY "
-            + "for Unknown; no duplicates); ChallengeStrength (0-100, or null when you record no "
+            + "that establish that trajectory, each the COMPLETE 36-character value; at least one for "
+            + "Improving, Deteriorating or Mixed; EMPTY for Unknown; no duplicates); ChallengeStrength (0-100, or null when you record no "
             + "findings); Findings, each with: Category (one of: "
             + string.Join(", ", Enum.GetNames<NewsRiskCategory>())
             + "); Severity (Low | Medium | High); Confidence (number in [0,1]); FactIds (one or more "
-            + "supplied fact ids); AttributionCaveat (required per rule 8, otherwise optional); and a "
+            + "supplied fact ids, each the COMPLETE 36-character value); AttributionCaveat (required per rule 8, otherwise optional); and a "
             + "REQUIRED non-blank factual Rationale of at most "
             + NewsJudgmentValidator.MaxRationaleLength.ToString(CultureInfo.InvariantCulture)
             + " characters.";
@@ -181,8 +195,10 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
         sb.AppendLine(
             "Canonical fact families follow. Cite FactIds from this set only — in TrajectoryFactIds for "
                 + "the facts that establish the trajectory, and in each finding's FactIds for the facts "
-                + "that support it. Member/publisher counts measure syndicated REPORTING of one claim, "
-                + "never independent facts.");
+                + "that support it. Copy each FactId as the COMPLETE 36-character hyphenated value printed "
+                + "below, character for character; never abbreviate, truncate, paraphrase or invent an id, "
+                + "in either TrajectoryFactIds or a finding's FactIds. Member/publisher counts measure "
+                + "syndicated REPORTING of one claim, never independent facts.");
         sb.AppendLine();
         foreach (var family in request.Families)
         {

@@ -182,7 +182,7 @@ public sealed class NewsJudgmentInputBuilderTests
         var stage1 = NewsTypingContract.CohortKey("openai", "deepseek-ai/DeepSeek-V4-Flash");
         var key = NewsJudgmentContract.CohortKey("openai", "judge-model", stage1);
 
-        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v2|news-judgment-schema-v2|", key);
+        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v3|news-judgment-schema-v3|", key);
         Assert.Contains("stage1=" + stage1, key);
         Assert.Contains("families=" + FactFamilyBuilder.IdentityString, key);
         // The stage-1 cohort key carries the extractor model, prompt/schema AND taxonomy version — so a
@@ -195,32 +195,42 @@ public sealed class NewsJudgmentInputBuilderTests
     }
 
     [Fact]
-    public void V1AndV2Judgments_CanNeverBeReusedOrPooled()
+    public void EarlierContractGenerations_CanNeverBeReusedOrPooledWithTheCurrentOne()
     {
-        // Spec 187 §1: the fork is enforced by the cohort key itself, not by a migration. A v1 record on
-        // disk carries the v1 prompt/schema versions in its CohortKey field, so the v2 cache lookup
-        // (cohortKey, company, family set) can never hit it — and no artifact groups them together.
-        // Existing v1 records stay readable and are never rewritten (AD-8).
+        // Spec 187 §1 / spec 197 §2.2: the fork is enforced by the cohort key itself, not by a migration.
+        // A v1 or v2 record on disk carries ITS prompt/schema versions in its CohortKey field, so the
+        // current cache lookup (cohortKey, company, family set) can never hit it — and no artifact groups
+        // them together. Existing records stay readable and are never rewritten (AD-8).
         var stage1 = NewsTypingContract.CohortKey("openai", "deepseek-ai/DeepSeek-V4-Flash");
-        var v2Key = NewsJudgmentContract.CohortKey("openai", "judge-model", stage1);
+        var currentKey = NewsJudgmentContract.CohortKey("openai", "judge-model", stage1);
         var v1Key =
             $"openai:judge-model|news-judgment-prompt-v1|news-judgment-schema-v1|stage1={stage1}"
                 + $"|families={FactFamilyBuilder.IdentityString}";
+        var v2Key =
+            $"openai:judge-model|news-judgment-prompt-v2|news-judgment-schema-v2|stage1={stage1}"
+                + $"|families={FactFamilyBuilder.IdentityString}";
 
-        Assert.NotEqual(v1Key, v2Key);
-        Assert.DoesNotContain("news-judgment-prompt-v1", v2Key, StringComparison.Ordinal);
-        Assert.DoesNotContain("news-judgment-schema-v1", v2Key, StringComparison.Ordinal);
+        Assert.NotEqual(v1Key, currentKey);
+        Assert.NotEqual(v2Key, currentKey);
+        Assert.DoesNotContain("news-judgment-prompt-v1", currentKey, StringComparison.Ordinal);
+        Assert.DoesNotContain("news-judgment-schema-v1", currentKey, StringComparison.Ordinal);
+        // Spec 197 §2.2: the five accrued v2 ValidationFailed attempts must earn a FRESH budget, so a v2
+        // attempt is never reused as a v3 one.
+        Assert.DoesNotContain("news-judgment-prompt-v2", currentKey, StringComparison.Ordinal);
+        Assert.DoesNotContain("news-judgment-schema-v2", currentKey, StringComparison.Ordinal);
 
-        // The per-attempt identity folds the cohort key, so the two cohorts cannot collide on disk either.
+        // The per-attempt identity folds the cohort key, so the cohorts cannot collide on disk either.
         var companyId = Guid.Parse("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
         Assert.NotEqual(
             NewsJudgmentRecord.IdentityFor(v1Key, companyId, "hash", runId: null),
-            NewsJudgmentRecord.IdentityFor(v2Key, companyId, "hash", runId: null));
+            NewsJudgmentRecord.IdentityFor(currentKey, companyId, "hash", runId: null));
+        Assert.NotEqual(
+            NewsJudgmentRecord.IdentityFor(v2Key, companyId, "hash", runId: null),
+            NewsJudgmentRecord.IdentityFor(currentKey, companyId, "hash", runId: null));
 
-        // …and newly written records stamp the CURRENT store schema while v1 files keep theirs. Spec 189 §2
-        // moved that tag to v3 for the widened typing-completeness vocabulary — which is a RECORD change,
-        // not a cohort change: the two cohort keys above are unaffected by it (asserted in
-        // NewsJudgmentCompletenessSchemaTests).
-        Assert.Equal("news-judgment-v3", NewsJudgmentRecord.CurrentSchemaVersion);
+        // …and newly written records stamp the CURRENT store schema while older files keep theirs. Spec 197
+        // §2.2 moved that tag to v4 for FactIdPrefixExpansionCount — a RECORD change, not a cohort change:
+        // the cohort keys above are unaffected by it (asserted in NewsJudgmentCompletenessSchemaTests).
+        Assert.Equal("news-judgment-v4", NewsJudgmentRecord.CurrentSchemaVersion);
     }
 }

@@ -18,6 +18,13 @@ namespace Radar.Application.SignalExtraction;
 /// with <c>newsJudgmentSignalVersion</c>. Do not add a second metadata parser beside this one.
 /// </para>
 /// <para>
+/// <b>SPEC 197 §1.3 — the materializer identity is now VERSIONED, not singular.</b> The current token is
+/// <c>news-judgment-signal-v2</c> and <c>news-judgment-signal-v1</c> is retired but still ACCEPTED: v1
+/// signals are on disk, they were grounded in the evidence their judgment cited, and they remain valid. One
+/// classifier answers for both; a PRESENT but unsupported (or blank) token fails closed as malformed rather
+/// than falling through as an unrelated bag.
+/// </para>
+/// <para>
 /// The envelope's <c>companyHints</c> array is written EMPTY: a signal carries no collector company hints.
 /// That one artifact is the price of having exactly one envelope definition instead of two, and it keeps a
 /// signal's metadata readable by the same reader every evidence item already uses.
@@ -47,12 +54,37 @@ public static class NewsDirectionalSignalMetadata
     public const string JudgmentSignalVersionKey = "newsJudgmentSignalVersion";
 
     /// <summary>
-    /// The one value <see cref="JudgmentSignalVersionKey"/> currently carries. A signal claiming this
-    /// version is asserting the full §1.2 provenance chain (judgment → cited facts → observations →
-    /// evidence); a signal claiming it without carrying that provenance is malformed, and the §1.4 transform
-    /// fails it closed to Neutral rather than trusting the claim.
+    /// SPEC 197 §1.3 — the RETIRED first materializer identity. Accrued signals on disk carry it, they are
+    /// valid grounded judgment signals, and they are append-only: nothing overwrites, rewrites or deletes
+    /// them (AD-8/AD-1). It is declared as its own const — never as a stale copy of
+    /// <see cref="JudgmentSignalVersionValue"/> — because two different questions are asked of it: the
+    /// classifier ACCEPTS it as well-formed provenance, and the materializer derives the retired
+    /// deterministic signal id from it to check prior-version occupancy before minting a v2 duplicate.
     /// </summary>
-    public const string JudgmentSignalVersionValue = "news-judgment-signal-v1";
+    public const string RetiredJudgmentSignalVersionV1 = "news-judgment-signal-v1";
+
+    /// <summary>
+    /// The value <see cref="JudgmentSignalVersionKey"/> currently carries — advanced to
+    /// <c>news-judgment-signal-v2</c> by spec 197 §1.3, because the observation→evidence match ladder
+    /// changed WHICH judgments can produce a scoring input, and that is not a silent fix under the v1
+    /// identity. A signal claiming this version is asserting the full §1.2 provenance chain (judgment →
+    /// cited facts → observations → evidence); a signal claiming it without carrying that provenance is
+    /// malformed, and the §1.4 transform fails it closed to Neutral rather than trusting the claim.
+    /// </summary>
+    public const string JudgmentSignalVersionValue = "news-judgment-signal-v2";
+
+    /// <summary>
+    /// Every materializer identity a well-formed judgment-derived envelope may claim: the current one and
+    /// every retired one. A PRESENT token outside this set — or a blank one — is
+    /// <see cref="NewsJudgmentSignalProvenance.MalformedJudgmentEnvelope"/> and fails closed; it must never
+    /// fall through as "an unrelated metadata bag", because a claim Radar cannot verify is worth less than
+    /// no claim at all.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SupportedJudgmentSignalVersions =
+    [
+        RetiredJudgmentSignalVersionV1,
+        JudgmentSignalVersionValue,
+    ];
 
     /// <summary>The ordered distinct fact ids the judge said ESTABLISH the trajectory (spec 187 §1's <c>TrajectoryFactIds</c>).</summary>
     public const string TrajectoryFactIdsKey = "newsJudgmentTrajectoryFactIds";
@@ -205,21 +237,29 @@ public static class NewsDirectionalSignalMetadata
             return NewsJudgmentSignalProvenance.MalformedJudgmentEnvelope;
         }
 
-        if (metadata.TryGetValue(JudgmentSignalVersionKey, out var version)
-            && string.Equals(version, JudgmentSignalVersionValue, StringComparison.Ordinal))
+        if (metadata.TryGetValue(JudgmentSignalVersionKey, out var version))
         {
-            // A spec-194 §1.2 judgment-DERIVED signal — or something claiming to be one. A claim without the
-            // provenance the version promises is worth less than no claim at all, so it fails closed onto the
-            // malformed axis rather than being trusted.
+            // SPEC 197 §1.3 — the token is PRESENT, so this envelope has declared itself a judgment-derived
+            // signal and can never be treated as an unrelated bag again. A supported version (the current
+            // one, or any retired one whose signals are still on disk) is judged on its provenance; an
+            // unsupported or blank version is MALFORMED and fails closed, because Radar cannot verify a
+            // claim written by a producer it does not know.
+            if (!SupportedJudgmentSignalVersions.Contains(version, StringComparer.Ordinal))
+            {
+                return NewsJudgmentSignalProvenance.MalformedJudgmentEnvelope;
+            }
+
+            // A judgment-DERIVED signal — or something claiming to be one. A claim without the provenance
+            // the version promises is worth less than no claim at all, so it fails closed onto the malformed
+            // axis rather than being trusted.
             return IsWellFormedJudgmentSignal(metadata)
                 ? NewsJudgmentSignalProvenance.JudgmentDerived
                 : NewsJudgmentSignalProvenance.MalformedJudgmentEnvelope;
         }
 
-        // No v1 token (or a token that is not v1). This is the accrued spec-191 shape iff it carries that
-        // retired producer's three provenance keys. Anything else — an unrelated metadata bag, a future
-        // directional family with its own keys — is NONE, which is what "never match on Direction alone"
-        // means in practice.
+        // NO version token at all. This is the accrued spec-191 shape iff it carries that retired producer's
+        // three provenance keys. Anything else — an unrelated metadata bag, a future directional family with
+        // its own keys — is NONE, which is what "never match on Direction alone" means in practice.
         return HasLegacyInheritanceKeys(metadata)
             ? NewsJudgmentSignalProvenance.LegacyInheritance
             : NewsJudgmentSignalProvenance.None;
@@ -227,7 +267,7 @@ public static class NewsDirectionalSignalMetadata
 
     /// <summary>
     /// The single question §1.3's supersede and §1.5's collapse ask: is this a structurally valid
-    /// <c>news-judgment-signal-v1</c> signal — i.e. a direction grounded in the evidence a judgment actually
+    /// judgment-derived signal — under the CURRENT materializer identity or any retired one — i.e. a direction grounded in the evidence a judgment actually
     /// cited, rather than an ordinary article event, an accrued spec-191 inherited direction or an
     /// unverifiable claim? Expressed in terms of <see cref="ClassifyProvenance"/> so there is exactly one
     /// definition; a caller needing to distinguish the failure modes calls the classifier directly.
@@ -249,8 +289,8 @@ public static class NewsDirectionalSignalMetadata
         && HasValue(metadata, ObservationIdKey);
 
     /// <summary>
-    /// "Well formed" for the purposes of a SCORING admission: the envelope parses, claims
-    /// <c>news-judgment-signal-v1</c> (already established by the caller) and carries the judgment identity,
+    /// "Well formed" for the purposes of a SCORING admission: the envelope parses, claims a SUPPORTED
+    /// materializer version (already established by the caller) and carries the judgment identity,
     /// its cohort and the trajectory that produced the direction. <see cref="ComposeJudgmentSignal"/> writes a
     /// richer envelope than this (the ordered cited fact/observation/evidence id lists); validating those is
     /// the materializer's job at the point of CREATION. This gate is the minimum an admission needs in order
@@ -287,22 +327,24 @@ public enum NewsJudgmentSignalProvenance
     None = 0,
 
     /// <summary>
-    /// A structurally valid <c>news-judgment-signal-v1</c> signal: its direction is grounded in the evidence
+    /// A structurally valid judgment-derived signal (current or retired materializer version): its
+    /// direction is grounded in the evidence
     /// the cited judgment actually read. This is the signal that supersedes the ordinary article event
     /// (§1.3) and that represents its event bucket ahead of an earlier Neutral member (§1.5).
     /// </summary>
     JudgmentDerived = 1,
 
     /// <summary>
-    /// An envelope that could not be read, or that claims <c>news-judgment-signal-v1</c> without carrying the
-    /// provenance that version promises. Fails closed everywhere: it neither keeps its direction (§1.4) nor
+    /// An envelope that could not be read, that claims an UNSUPPORTED or blank materializer version, or
+    /// that claims a supported one without carrying the provenance that version promises. Fails closed
+    /// everywhere: it neither keeps its direction (§1.4) nor
     /// wins anything (§1.3/§1.5).
     /// </summary>
     MalformedJudgmentEnvelope = 2,
 
     /// <summary>
     /// An accrued spec-191 directional news signal: the retired producer's judgment/cohort/observation
-    /// provenance with no <c>news-judgment-signal-v1</c> token, so its direction came from a company-level
+    /// provenance with NO <c>newsJudgmentSignalVersion</c> token at all, so its direction came from a company-level
     /// judgment that had never read the matched article.
     /// </summary>
     LegacyInheritance = 3,

@@ -147,7 +147,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Equal(1_228, hydrated.RationaleLength);
         Assert.True(hydrated.RationaleOverSoftLimit);
         Assert.Equal(1_228, hydrated.Rationale!.Length); // the full text, never truncated on the way out
-        Assert.Equal("news-judgment-v3", hydrated.SchemaVersion); // spec 192 does NOT bump the tag
+        Assert.Equal("news-judgment-v4", hydrated.SchemaVersion); // spec 197 §2.2 moved the tag
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -223,6 +223,47 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
     }
 
     /// <summary>
+    /// Spec 197 §2.2: the citation-recovery count round-trips, and a PRE-197 file (no such property)
+    /// hydrates as <c>null</c> — "not recorded", never a fabricated 0 that would read as "this response
+    /// quoted every id in full". The same trailing-nullable contract the rationale facts above use.
+    /// </summary>
+    [Fact]
+    public async Task FactIdPrefixExpansionCount_RoundTrips_AndAPreSpec197FileHydratesAsNotRecorded()
+    {
+        var record = Record() with { FactIdPrefixExpansionCount = 4 };
+        Assert.True(await NewStore().WriteAsync(record, CancellationToken.None));
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal(4, hydrated.FactIdPrefixExpansionCount);
+        Assert.Equal("news-judgment-v4", hydrated.SchemaVersion);
+
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
+        Assert.True(document.Remove("factIdPrefixExpansionCount"));
+        await File.WriteAllTextAsync(file, document.ToJsonString());
+
+        var legacy = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Null(legacy.FactIdPrefixExpansionCount);
+        // …and the rest of the record still reads correctly.
+        Assert.Equal(NewsJudgmentTrajectory.Mixed, legacy.BusinessTrajectory);
+    }
+
+    /// <summary>
+    /// A MEASURED zero persists and hydrates as zero — distinguishable on disk from the absent property
+    /// above. This is the whole reason the field is nullable rather than a plain <c>int</c>.
+    /// </summary>
+    [Fact]
+    public async Task AMeasuredZeroExpansionCount_PersistsAndHydratesAsZero_NotAsNotRecorded()
+    {
+        await NewStore().WriteAsync(
+            Record() with { FactIdPrefixExpansionCount = 0 }, CancellationToken.None);
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal(0, hydrated.FactIdPrefixExpansionCount);
+        Assert.NotNull(hydrated.FactIdPrefixExpansionCount);
+    }
+
+    /// <summary>
     /// Spec 189 §2: the new typing-completeness tokens persist and round-trip as TOKENS (the shared
     /// file-store JSON options reject integers on read), and a LEGACY <c>Failed</c> file hydrates unchanged —
     /// never re-classified into a guessed retryable/exhausted state (AD-8).
@@ -246,7 +287,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var reloaded = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(completeness, reloaded.TypingCompleteness);
-        Assert.Equal("news-judgment-v3", reloaded.SchemaVersion);
+        Assert.Equal("news-judgment-v4", reloaded.SchemaVersion);
     }
 
     /// <summary>

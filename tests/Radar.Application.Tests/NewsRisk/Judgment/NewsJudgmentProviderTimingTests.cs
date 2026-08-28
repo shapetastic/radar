@@ -28,92 +28,18 @@ public sealed class NewsJudgmentProviderTimingTests
 {
     private static readonly DateTimeOffset AsOf = new(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
 
-    private static Guid CompanyId(int index) =>
-        Guid.Parse(FormattableString.Invariant($"c0000000-0000-4000-8000-{index:D12}"));
+    // The fixture builders live in JudgmentPassFixture (ONE definition, shared with the spec-197 §2.2
+    // citation-recovery suite); these are thin delegations that keep the call sites here readable.
+    private static Guid CompanyId(int index) => JudgmentPassFixture.CompanyId(index);
 
-    private static Guid FactId(int index) =>
-        Guid.Parse(FormattableString.Invariant($"f0000000-0000-4000-8000-{index:D12}"));
+    private static Guid FactId(int index) => JudgmentPassFixture.FactId(index);
 
-    private static NewsJudgmentOptions Options() => new(
-        outputDirectory: "unused",
-        maxCompaniesPerRun: 50,
-        maxFamiliesPerJudgment: 50,
-        maxJudgmentAttempts: 3,
-        presentationJudge: "deepinfra-deepseek",
-        presentationExtractor: "deepinfra-deepseek",
-        newsSearchCollectorName: "newssearch");
+    private static NewsJudgmentOptions Options() => JudgmentPassFixture.Options();
 
-    /// <summary>
-    /// A plan of exactly <paramref name="companies"/> candidates. The spec-179 selector takes at most
-    /// <see cref="NewsRiskCandidateSelector.RowsPerSection"/> (5) rows per Research section, so a larger
-    /// candidate set is expressed the way a real multi-strategy run expresses it: more sections, the first
-    /// primary and the rest ordinary Research arms.
-    /// </summary>
-    private static NewsJudgmentCandidatePlan Plan(int companies)
-    {
-        var sections = new List<StrategyReportSection>();
-        for (var start = 0; start < companies; start += NewsRiskCandidateSelector.RowsPerSection)
-        {
-            var rows = Enumerable
-                .Range(start, Math.Min(NewsRiskCandidateSelector.RowsPerSection, companies - start))
-                .Select(i => NewsRiskTestData.Row(
-                    i - start + 1, CompanyId(i), FormattableString.Invariant($"Company {i}"), "TST"))
-                .ToArray();
-            sections.Add(NewsRiskTestData.Section(
-                FormattableString.Invariant($"arm-{start / NewsRiskCandidateSelector.RowsPerSection}"),
-                isPrimary: start == 0,
-                StrategyPurpose.Research,
-                rows));
-        }
+    private static NewsJudgmentCandidatePlan Plan(int companies) => JudgmentPassFixture.Plan(companies);
 
-        return new NewsJudgmentCandidatePlanner(Options()).Plan(sections);
-    }
-
-    /// <summary>One validated fact (and therefore one canonical family) per candidate company.</summary>
-    private static NewsTypingRunResult Typing(Guid? runId, int companies)
-    {
-        var factsById = new Dictionary<Guid, NewsTypingFactRef>();
-        var inputs = new List<FactFamilyInputFact>();
-        for (var i = 0; i < companies; i++)
-        {
-            var statement = FormattableString.Invariant(
-                $"A regulator confirmed a filing against Company {i}.");
-            var factRef = NewsJudgmentTestData.FactRef(
-                CompanyId(i),
-                FactId(i),
-                statement,
-                assertionStatus: NewsFactAssertionStatus.ConfirmedFiling,
-                attribution: NewsFactAttribution.Regulator);
-            factsById[factRef.Fact.FactId] = factRef;
-            inputs.Add(new FactFamilyInputFact(
-                FactId: factRef.Fact.FactId,
-                CompanyId: CompanyId(i),
-                EventTypes: factRef.Fact.EventTypes,
-                Statement: statement,
-                FirstObservedAtUtc: NewsJudgmentTestData.ObservedAt,
-                Publisher: "Outlet",
-                ObservationId: factRef.ObservationId,
-                CaptureMode: NewsObservationCaptureMode.ProspectiveRss));
-        }
-
-        return new NewsTypingRunResult(
-            RunId: runId,
-            WindowStartUtc: NewsJudgmentTestData.ObservedAt.AddDays(-30),
-            WindowEndUtc: NewsJudgmentTestData.ObservedAt.AddDays(1),
-            NewsObservationBatchId: null,
-            Cohorts:
-            [
-                new NewsTypingCohortRunResult(
-                    Reader: new NewsTypingReaderIdentity(
-                        "deepinfra-deepseek", "openai", "deepseek-ai/DeepSeek-V4-Flash"),
-                    Families: FactFamilyBuilder.Build(inputs),
-                    FactsById: factsById,
-                    TypingCompletenessByCompany: Enumerable.Range(0, companies).ToDictionary(
-                        CompanyId, _ => NewsTypingCompleteness.Complete),
-                    FactsDroppedInWindow: 0,
-                    RetryExhausted: 0),
-            ]);
-    }
+    private static NewsTypingRunResult Typing(Guid? runId, int companies) =>
+        JudgmentPassFixture.Typing(runId, companies);
 
     /// <summary>A judgment the v2 validator accepts: a directional call citing the supplied fact.</summary>
     private static Func<NewsJudgmentAnalysisRequest, NewsJudgmentAnalysisOutcome> Grounded(
@@ -132,48 +58,14 @@ public sealed class NewsJudgmentProviderTimingTests
             "raw-hash",
             null);
 
-    private sealed class Harness
-    {
-        public MutableTimeProvider Time { get; } = new(AsOf);
-
-        public InsertOnlyStore Store { get; } = new();
-
-        public CapturingLogger<NewsJudgmentGenerator> Logger { get; } = new();
-
-        public CountingAnalyzer? Analyzer { get; private set; }
-
-        /// <summary>Builds the generator with a scripted per-call latency, advanced from INSIDE the fake.</summary>
-        public NewsJudgmentGenerator Build(
-            Func<NewsJudgmentAnalysisRequest, NewsJudgmentAnalysisOutcome> respond,
-            Func<int, TimeSpan> latency)
-        {
-            Analyzer = new CountingAnalyzer(respond)
-            {
-                OnCall = call => Time.AdvanceTimestamp(latency(call)),
-            };
-
-            return new NewsJudgmentGenerator(
-                new NullBatchReader(),
-                new NewsJudgmentReaderSet(
-                [
-                    new NewsJudgmentReader(
-                        new NewsJudgmentReaderIdentity("deepinfra-deepseek", "openai", "judge-model"),
-                        Analyzer),
-                ]),
-                Store,
-                Options(),
-                Time,
-                Logger);
-        }
-    }
-
-    private static List<(LogLevel Level, string Message, string? Exception)> Progress(Harness harness) =>
+    private static List<(LogLevel Level, string Message, string? Exception)> Progress(
+        JudgmentPassHarness harness) =>
         [.. harness.Logger.Entries.Where(e => e.Message.Contains("progress:", StringComparison.Ordinal))];
 
     [Fact]
     public async Task ProviderDuration_IsMeasuredMonotonically_AndPersistedOnEveryCallRecord()
     {
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var generator = harness.Build(Grounded(), call => TimeSpan.FromMilliseconds(call * 100));
 
@@ -191,7 +83,7 @@ public sealed class NewsJudgmentProviderTimingTests
     [Fact]
     public async Task ProviderDuration_IsRetained_WhenTheCallFails()
     {
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var generator = harness.Build(
             Grounded("429 rate limited"), _ => TimeSpan.FromMilliseconds(4200));
@@ -208,7 +100,7 @@ public sealed class NewsJudgmentProviderTimingTests
     {
         // A cache REUSE, an InsufficientFacts non-result and an AttemptsExhausted marker all persist a
         // record without spending a call — `null` says exactly that, and is never "a call took no time".
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var generator = harness.Build(Grounded(), _ => TimeSpan.FromMilliseconds(50));
 
         var first = Guid.NewGuid();
@@ -244,7 +136,7 @@ public sealed class NewsJudgmentProviderTimingTests
     public async Task ProgressLines_FireAtEveryFifthCall_PlusTheFinalPartialBatch(
         int companies, int expectedProgressLines)
     {
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var generator = harness.Build(Grounded(), _ => TimeSpan.FromMilliseconds(10));
 
@@ -263,7 +155,7 @@ public sealed class NewsJudgmentProviderTimingTests
     [Fact]
     public async Task ProgressLine_ReportsCompletedCandidatesPersistedFailuresElapsedMeanAndMax()
     {
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var calls = 0;
         var generator = harness.Build(
@@ -292,7 +184,7 @@ public sealed class NewsJudgmentProviderTimingTests
     [Fact]
     public async Task FinalSummary_ReportsNearestRankPercentilesOverThisPassCallsOnly()
     {
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
 
         // Ascending [10, 20, 30, 2000]: rank(p50) = ceil(0.50 × 4) = 2 ⇒ 20 ms;
@@ -314,7 +206,7 @@ public sealed class NewsJudgmentProviderTimingTests
     [Fact]
     public async Task ACacheOnlyPass_MakesNoCall_AndTheSummaryReportsZeroCalls()
     {
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var generator = harness.Build(Grounded(), _ => TimeSpan.FromMilliseconds(80));
 
         var first = Guid.NewGuid();
@@ -351,7 +243,7 @@ public sealed class NewsJudgmentProviderTimingTests
         // its ORIGINAL call, so reading `record.ProviderDurationMs` as "this pass called the provider"
         // replayed five old calls, five old failures and their latency as CURRENT — on exactly the rerun
         // path the telemetry exists to explain. The bill was still bounded; the observation was false.
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var generator = harness.Build(RateLimited(), _ => TimeSpan.FromMilliseconds(1234));
 
@@ -390,7 +282,7 @@ public sealed class NewsJudgmentProviderTimingTests
         // The record must NOT be cloned with a null duration to drive the counters: `ProviderDurationMs` is
         // truthful provenance of the call that CREATED the attempt, and the presented copy may never
         // disagree with the insert-only record on disk. Pass-local activity rides beside it, not inside it.
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var generator = harness.Build(RateLimited(), _ => TimeSpan.FromMilliseconds(777));
 
@@ -409,7 +301,7 @@ public sealed class NewsJudgmentProviderTimingTests
     [Fact]
     public async Task AMixedReuseAndNewCallPass_ReportsOnlyTheGenuinelyNewCall()
     {
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var calls = 0;
         var generator = harness.Build(
@@ -458,7 +350,7 @@ public sealed class NewsJudgmentProviderTimingTests
         // it after every candidate meant any later no-call candidate — here an InsufficientFacts company,
         // equally a same-run or cache reuse or an exhausted one — re-emitted the same `5/…` line while
         // nothing had happened.
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var generator = harness.Build(Grounded(), _ => TimeSpan.FromMilliseconds(10));
 
@@ -479,7 +371,7 @@ public sealed class NewsJudgmentProviderTimingTests
         async Task<(List<Guid> Ids, List<string> Cohorts, List<string> Hashes, List<Guid> Order)> RunAsync(
             Func<int, TimeSpan> latency)
         {
-            var harness = new Harness();
+            var harness = new JudgmentPassHarness(AsOf);
             var runId = Guid.Parse("11111111-2222-3333-4444-555555555555");
             var generator = harness.Build(Grounded(), latency);
             var result = await generator.GenerateAsync(
@@ -507,7 +399,7 @@ public sealed class NewsJudgmentProviderTimingTests
         const string Secret = "sk-RECOGNISABLE-SECRET-0123456789";
         const string ModelText = "RECOGNISABLE-RATIONALE-the regulator confirmed a filing";
 
-        var harness = new Harness();
+        var harness = new JudgmentPassHarness(AsOf);
         var runId = Guid.NewGuid();
         var generator = harness.Build(
             _ => new NewsJudgmentAnalysisOutcome(

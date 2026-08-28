@@ -331,7 +331,7 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal(NewsJudgmentStatus.Judged, reused.Status);
         // … while EVERY completeness dimension is this run's.
         Assert.Equal(NewsTypingCompleteness.RetryableFailure, reused.TypingCompleteness);
-        Assert.Equal("news-judgment-v3", reused.SchemaVersion);
+        Assert.Equal("news-judgment-v4", reused.SchemaVersion);
     }
 
     [Fact]

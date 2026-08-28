@@ -13,6 +13,7 @@ using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Persistence.InMemory;
+using Radar.TestSupport;
 
 namespace Radar.Application.Tests.News;
 
@@ -279,7 +280,10 @@ public sealed class NewsJudgmentSignalMaterializerTests
             scenario.RunResult, scenario.Typing, CancellationToken.None);
 
         Assert.Equal(1, summary.Eligible);
-        Assert.Equal(1, summary.SkipCount(NewsJudgmentSignalSkipReason.UnresolvedObservation));
+        // SPEC 197 §1.2 — the no-match half of the split reason: Radar holds no news evidence for the cited
+        // article, which is a coverage gap rather than a refused identity.
+        Assert.Equal(1, summary.SkipCount(NewsJudgmentSignalSkipReason.ObservationNoMatch));
+        Assert.Equal(0, summary.SkipCount(NewsJudgmentSignalSkipReason.ObservationAmbiguous));
         Assert.Empty(scenario.FileStore.Writes);
     }
 
@@ -621,6 +625,320 @@ public sealed class NewsJudgmentSignalMaterializerTests
         Assert.NotEqual(summary.JudgmentsConsidered, PerRecordGates(summary) + summary.Eligible);
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // SPEC 197 §1.2 — the all-or-nothing citation rule, over the typed join dispositions.
+    // ---------------------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task OneUnresolvedTrajectoryObservation_PreventsTheEntireSignal(bool ambiguous)
+    {
+        // THE RULE SPEC 197 DELIBERATELY DID NOT WEAKEN. The judgment cites TWO articles; one resolves
+        // perfectly and the other does not — either because Radar holds no evidence for it (no-match) or
+        // because Radar refused an ambiguous identity. Materializing on the resolvable half would rest a
+        // company-level verdict on a SUBSET of the evidence that produced it, invisibly. Nothing is written,
+        // and the reason is named on the axis that says WHICH kind of failure it was.
+        var companyId = Guid.NewGuid();
+        var judgmentId = Guid.NewGuid();
+        var resolvedFactId = Guid.NewGuid();
+        var unresolvedFactId = Guid.NewGuid();
+
+        const string SecondHeadline = "Acme delays its plant expansion";
+
+        var citedEvidence = MaterializerFixture.NewsEvidence(
+            MondayHeadline, MondayBody, MaterializerFixture.Monday);
+        var citedObservation = MaterializerFixture.Observation(
+            companyId, MondayHeadline, MaterializerFixture.Monday);
+
+        // The second cited article. When `ambiguous` it is claimed by a SECOND company (the join's
+        // cross-company rule); otherwise Radar simply holds no evidence carrying that headline.
+        var secondObservation = MaterializerFixture.Observation(
+            companyId, SecondHeadline, MaterializerFixture.Tuesday);
+        var otherCompanysObservation = MaterializerFixture.Observation(
+            Guid.NewGuid(), SecondHeadline, MaterializerFixture.Tuesday);
+
+        var observations = ambiguous
+            ? new[] { citedObservation, secondObservation, otherCompanysObservation }
+            : [citedObservation, secondObservation];
+
+        var evidence = new InMemoryEvidenceRepository();
+        await evidence.AddIfNewAsync(citedEvidence, CancellationToken.None);
+        if (ambiguous)
+        {
+            // The evidence EXISTS for the ambiguous case — the refusal is about identity, not coverage.
+            await evidence.AddIfNewAsync(
+                MaterializerFixture.NewsEvidence(
+                    SecondHeadline, "Acme said the expansion would slip.", MaterializerFixture.Tuesday),
+                CancellationToken.None);
+        }
+
+        var facts = new Dictionary<Guid, NewsTypingFactRef>
+        {
+            [resolvedFactId] = MaterializerFixture.FactRef(
+                resolvedFactId,
+                companyId,
+                citedObservation.ObservationId,
+                "Acme reported an 18% revenue decline",
+                MondayCitation),
+            [unresolvedFactId] = MaterializerFixture.FactRef(
+                unresolvedFactId,
+                companyId,
+                secondObservation.ObservationId,
+                "Acme delayed its expansion",
+                "the expansion would slip"),
+        };
+
+        var record = MaterializerFixture.Judgment(
+            companyId,
+            MaterializerFixture.PresentationCohortKey(),
+            NewsJudgmentTrajectory.Deteriorating,
+            [resolvedFactId, unresolvedFactId],
+            judgmentId: judgmentId);
+
+        var fileStore = new RecordingSignalFileStore();
+        var clock = new FixedClock(MaterializerFixture.Now);
+        var materializer = new NewsJudgmentSignalMaterializer(
+            new FakeObservationArchive(observations),
+            evidence,
+            new InMemorySignalRepository(),
+            new InMemorySignalReviewRepository(),
+            fileStore,
+            new DeterministicSignalReviewer(clock, NullLogger<DeterministicSignalReviewer>.Instance),
+            MaterializerFixture.Options(),
+            MaterializerFixture.Judges(),
+            clock,
+            NullLogger<NewsJudgmentSignalMaterializer>.Instance);
+
+        var summary = await materializer.MaterializeAsync(
+            MaterializerFixture.RunResult(record),
+            MaterializerFixture.Typing(facts),
+            CancellationToken.None);
+
+        Assert.Equal(1, summary.Eligible);
+        Assert.Equal(0, summary.Materialized);
+        Assert.Empty(fileStore.Writes);
+        Assert.Equal(
+            1,
+            summary.SkipCount(ambiguous
+                ? NewsJudgmentSignalSkipReason.ObservationAmbiguous
+                : NewsJudgmentSignalSkipReason.ObservationNoMatch));
+        Assert.Equal(
+            0,
+            summary.SkipCount(ambiguous
+                ? NewsJudgmentSignalSkipReason.ObservationNoMatch
+                : NewsJudgmentSignalSkipReason.ObservationAmbiguous));
+
+        // The accounting still reconciles with the split reason in place.
+        Assert.Equal(summary.Eligible, EligibleOutcomes(summary));
+    }
+
+    [Fact]
+    public async Task TheJoinMeasurement_IsReported_WhenTheJoinRan_AndIsNullWhenItDidNot()
+    {
+        // Current-run diagnostic provenance: a measured zero is a measurement, "not attempted" is not. The
+        // buckets are read off the SAME join the materializer resolved citations through — never a second
+        // computation.
+        var attempted = Scenario.Build();
+        var attemptedSummary = await attempted.Materializer().MaterializeAsync(
+            attempted.RunResult, attempted.Typing, CancellationToken.None);
+
+        var counts = attemptedSummary.JoinCounts;
+        Assert.NotNull(counts);
+        // Monday's and Tuesday's captures both resolve; the fixture's URLs differ from the evidence's, so
+        // they land on the unique-headline tier.
+        Assert.Equal(2, counts!.Observations);
+        Assert.Equal(2, counts.Joined);
+        Assert.Equal(0, counts.UnjoinedNoMatch);
+        Assert.Equal(0, counts.UnjoinedAmbiguous);
+
+        // Nothing eligible ⇒ neither store was read ⇒ NOT ATTEMPTED, which is not an all-zero measurement.
+        var skipped = Scenario.Build(trajectory: NewsJudgmentTrajectory.Mixed);
+        var skippedSummary = await skipped.Materializer(
+                evidenceRepository: new ThrowingEvidenceRepository())
+            .MaterializeAsync(skipped.RunResult, skipped.Typing, CancellationToken.None);
+
+        Assert.Null(skippedSummary.JoinCounts);
+    }
+
+    [Fact]
+    public async Task TheJoinMeasurement_IsDiagnosticOnly_AndChangesNothingAboutTheSignalItExplains()
+    {
+        // SPEC 197 §1.2 — the buckets are current-run provenance and enter NO signal, envelope, cache key
+        // or score. Asserted by MEASURING two passes whose join counts genuinely differ (the second adds an
+        // unrelated observation another company claims, which lands in a different bucket) and pinning that
+        // everything the materializer produced is byte-identical.
+        var first = Scenario.Build();
+        var second = Scenario.Build();
+
+        var firstSummary = await first.Materializer().MaterializeAsync(
+            first.RunResult, first.Typing, CancellationToken.None);
+
+        // Same judgment, same facts, same evidence — plus one extra observation that no evidence carries.
+        var extra = MaterializerFixture.Observation(
+            Guid.NewGuid(), "An unrelated headline nothing carries", MaterializerFixture.Tuesday);
+        var archive = new FakeObservationArchive(
+            second.MondayObservation, extra);
+        var clock = new FixedClock(MaterializerFixture.Now);
+        var fileStore = new RecordingSignalFileStore();
+        var materializer = new NewsJudgmentSignalMaterializer(
+            archive,
+            second.Evidence,
+            new InMemorySignalRepository(),
+            new InMemorySignalReviewRepository(),
+            fileStore,
+            new DeterministicSignalReviewer(clock, NullLogger<DeterministicSignalReviewer>.Instance),
+            MaterializerFixture.Options(),
+            MaterializerFixture.Judges(),
+            clock,
+            NullLogger<NewsJudgmentSignalMaterializer>.Instance);
+
+        var secondSummary = await materializer.MaterializeAsync(
+            second.RunResult, second.Typing, CancellationToken.None);
+
+        // The measurements genuinely differ — otherwise the pin below would be vacuous.
+        Assert.NotEqual(firstSummary.JoinCounts, secondSummary.JoinCounts);
+        Assert.Equal(1, secondSummary.JoinCounts!.UnjoinedNoMatch);
+
+        var firstSignal = Assert.Single(first.FileStore.Writes).Signal;
+        var secondSignal = Assert.Single(fileStore.Writes).Signal;
+
+        // Everything the judgment produced is identical apart from the ids the two SCENARIOS minted
+        // independently (company, judgment, evidence) — the join measurement touched none of it.
+        Assert.Equal(
+            NewsJudgmentSignalMaterializer.SignalIdFor(first.JudgmentId), firstSignal.Id);
+        Assert.Equal(
+            NewsJudgmentSignalMaterializer.SignalIdFor(second.JudgmentId), secondSignal.Id);
+        Assert.Equal(firstSignal.Direction, secondSignal.Direction);
+        Assert.Equal(firstSignal.Strength, secondSignal.Strength);
+        Assert.Equal(firstSignal.Novelty, secondSignal.Novelty);
+        Assert.Equal(firstSignal.Confidence, secondSignal.Confidence);
+        Assert.Equal(firstSignal.SupportingExcerpt, secondSignal.SupportingExcerpt);
+        Assert.Equal(firstSignal.Reason, secondSignal.Reason);
+
+        // The persisted envelope carries the provenance chain and NOTHING about the measurement.
+        Assert.True(EvidenceMetadata.TryRead(secondSignal.MetadataJson, out var metadata, out _));
+        Assert.DoesNotContain("exactArticle", secondSignal.MetadataJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("joinCounts", secondSignal.MetadataJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            NewsDirectionalSignalMetadata.JudgmentSignalVersionValue,
+            metadata[NewsDirectionalSignalMetadata.JudgmentSignalVersionKey]);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // SPEC 197 §1.3 — the version fork must not mint the same judgment twice.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AnExistingValidV1Signal_PreventsADuplicateV2_AndIsCountedOnItsOwnAxis()
+    {
+        // The migration path. The judgment was already materialized under news-judgment-signal-v1; the
+        // token fork moved the deterministic id, so without this check the same verdict would mint a SECOND
+        // signal and double its directional mass. The v1 file is neither overwritten nor deleted.
+        var scenario = Scenario.Build();
+        var repository = new InMemorySignalRepository();
+        await repository.AddAsync(
+            RetiredV1Signal(scenario, wellFormed: true), CancellationToken.None);
+
+        var reviewer = new CountingReviewer(new FixedClock(MaterializerFixture.Now));
+        var summary = await scenario
+            .Materializer(reviewer: reviewer, signalRepository: repository)
+            .MaterializeAsync(scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(1, summary.Eligible);
+        Assert.Equal(1, summary.PriorVersionOccupied);
+        Assert.Equal(0, summary.Materialized);
+        Assert.Equal(0, summary.AlreadyMaterialized);
+
+        // Nothing was reviewed a second time and nothing was written — including no v2 signal.
+        Assert.Equal(0, reviewer.Calls);
+        Assert.Empty(scenario.FileStore.Writes);
+        Assert.Null(await repository.GetByIdAsync(
+            NewsJudgmentSignalMaterializer.SignalIdFor(scenario.JudgmentId), CancellationToken.None));
+
+        // Counted on its OWN axis, not hidden inside AlreadyMaterialized or a generic skip — it is a
+        // one-time migration that must be seen to drain.
+        Assert.Equal(summary.Eligible, EligibleOutcomes(summary));
+    }
+
+    [Fact]
+    public async Task AMalformedRecordAtTheV1Id_IsNotOccupancy_AndAnHonestV2StillMaterializes()
+    {
+        // A record at the retired id whose envelope claims the version without carrying its promised
+        // provenance is NOT a grounded direction. Treating it as occupancy would suppress the corrected
+        // signal forever on the strength of an unverifiable claim.
+        var scenario = Scenario.Build();
+        var repository = new InMemorySignalRepository();
+        await repository.AddAsync(
+            RetiredV1Signal(scenario, wellFormed: false), CancellationToken.None);
+
+        var summary = await scenario
+            .Materializer(signalRepository: repository)
+            .MaterializeAsync(scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(0, summary.PriorVersionOccupied);
+        Assert.Equal(1, summary.Materialized);
+        Assert.Equal(
+            NewsJudgmentSignalMaterializer.SignalIdFor(scenario.JudgmentId),
+            Assert.Single(scenario.FileStore.Writes).Signal.Id);
+    }
+
+    [Fact]
+    public async Task NoRecordAtTheV1Id_IsNotOccupancy_AndTheV2SignalCarriesTheV2Token()
+    {
+        var scenario = Scenario.Build();
+
+        var summary = await scenario.Materializer().MaterializeAsync(
+            scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(0, summary.PriorVersionOccupied);
+        Assert.Equal(1, summary.Materialized);
+
+        var signal = Assert.Single(scenario.FileStore.Writes).Signal;
+        Assert.Equal(NewsJudgmentSignalMaterializer.SignalIdFor(scenario.JudgmentId), signal.Id);
+        Assert.True(EvidenceMetadata.TryRead(signal.MetadataJson, out var metadata, out _));
+        Assert.Equal(
+            "news-judgment-signal-v2",
+            metadata[NewsDirectionalSignalMetadata.JudgmentSignalVersionKey]);
+    }
+
+    /// <summary>
+    /// A signal sitting at the RETIRED v1 deterministic id for this scenario's judgment. The well-formed
+    /// variant carries the exact v1 envelope an accrued signal carries; the malformed one claims the version
+    /// without the cohort key it promises.
+    /// </summary>
+    private static Signal RetiredV1Signal(Scenario scenario, bool wellFormed)
+    {
+        var metadata = new Dictionary<string, string>
+        {
+            [NewsDirectionalSignalMetadata.JudgmentSignalVersionKey] =
+                NewsDirectionalSignalMetadata.RetiredJudgmentSignalVersionV1,
+            [NewsDirectionalSignalMetadata.JudgmentIdKey] = scenario.JudgmentId.ToString("D"),
+            [NewsDirectionalSignalMetadata.TrajectoryKey] = "deteriorating",
+        };
+
+        if (wellFormed)
+        {
+            metadata[NewsDirectionalSignalMetadata.JudgmentCohortKeyKey] = scenario.CohortKey;
+        }
+
+        return new SignalBuilder()
+            .WithId(NewsJudgmentSignalMaterializer.RetiredV1SignalIdFor(scenario.JudgmentId))
+            .WithCompanyId(scenario.CompanyId)
+            .WithEvidenceId(scenario.MondayEvidence.Id)
+            .WithType(SignalType.MediaAttention)
+            .WithDirection(SignalDirection.Negative)
+            .WithStrength(4)
+            .WithNovelty(4)
+            .WithConfidence(0.5m)
+            .WithSupportingExcerpt(MondayCitation)
+            .WithReason("An accrued news-judgment-signal-v1 signal.")
+            .WithObservedAtUtc(MaterializerFixture.Monday)
+            .WithCreatedAtUtc(MaterializerFixture.Monday)
+            .WithMetadataJson(EvidenceMetadata.Compose(metadata, []))
+            .Build();
+    }
+
     /// <summary>
     /// Everything that can happen to a judgment AFTER it passed the eligibility gates: the four outcome
     /// counters plus the per-record provenance skips.
@@ -628,10 +946,17 @@ public sealed class NewsJudgmentSignalMaterializerTests
     private static int EligibleOutcomes(NewsJudgmentSignalMaterializationSummary summary) =>
         summary.Materialized
         + summary.AlreadyMaterialized
+        + summary.PriorVersionOccupied
         + summary.ValidationRejected
         + summary.WriteFailed
         + summary.SkipCount(NewsJudgmentSignalSkipReason.UnresolvedFact)
+        // The pre-197 generic reason is retained in the vocabulary for accrued artifacts and is never newly
+        // produced; it stays in this sum so a regression that resurrected it would still reconcile rather
+        // than silently break the identity.
         + summary.SkipCount(NewsJudgmentSignalSkipReason.UnresolvedObservation)
+        + summary.SkipCount(NewsJudgmentSignalSkipReason.ObservationNoMatch)
+        + summary.SkipCount(NewsJudgmentSignalSkipReason.ObservationAmbiguous)
+        + summary.SkipCount(NewsJudgmentSignalSkipReason.JoinedEvidenceMissing)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.CompanyMismatch)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.ExcerptNotInEvidence)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.UnexpectedFailure);
@@ -738,13 +1063,14 @@ public sealed class NewsJudgmentSignalMaterializerTests
             NewsJudgmentOptions? options = null,
             ISignalReviewer? reviewer = null,
             ISignalFileStore? fileStore = null,
-            Abstractions.Persistence.IEvidenceRepository? evidenceRepository = null)
+            Abstractions.Persistence.IEvidenceRepository? evidenceRepository = null,
+            Abstractions.Persistence.ISignalRepository? signalRepository = null)
         {
             var clock = new FixedClock(MaterializerFixture.Now);
             return new NewsJudgmentSignalMaterializer(
                 Archive,
                 evidenceRepository ?? Evidence,
-                new InMemorySignalRepository(),
+                signalRepository ?? new InMemorySignalRepository(),
                 new InMemorySignalReviewRepository(),
                 fileStore ?? FileStore,
                 reviewer ?? new DeterministicSignalReviewer(

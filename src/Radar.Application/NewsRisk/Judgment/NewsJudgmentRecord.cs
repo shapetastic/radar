@@ -147,7 +147,18 @@ public sealed record NewsJudgmentRecord(
     // advice-scrubbed), so it can never disagree with the text beside it. Observational provenance only:
     // neither field enters an id, a cohort key, a marker decision, a score or any fingerprint.
     int? RationaleLength = null,
-    bool? RationaleOverSoftLimit = null)
+    bool? RationaleOverSoftLimit = null,
+    // Spec 197 §2.2: how many RAW CITATION OCCURRENCES the shared citation resolver deterministically
+    // expanded from a hexadecimal prefix to the complete supplied FactId, across trajectory plus findings.
+    // TRAILING and NULLABLE, and the three states are DIFFERENT FACTS:
+    //   null     = no validated model response was examined under this contract (a provider or parse
+    //              failure, InsufficientFacts, AttemptsExhausted), or a PRE-197 record — never a
+    //              fabricated 0;
+    //   0        = a response WAS examined and every accepted citation was already complete;
+    //   positive = that many raw citation occurrences were expanded, INCLUDING expansions observed before
+    //              a different validation error failed the response.
+    // Observational provenance only: it enters no id, cohort key, marker decision, score or fingerprint.
+    int? FactIdPrefixExpansionCount = null)
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
@@ -169,8 +180,17 @@ public sealed record NewsJudgmentRecord(
     /// whose own nullability is the entire "not recorded on a pre-192 record" story — the spec-142
     /// <c>EvidenceQuality</c> / spec-148 <c>EffectiveScoringConfig.Window</c> precedent.
     /// </para>
+    /// <para>
+    /// <b>Spec 197 §2.2 moves it to <c>v4</c></b> for <see cref="FactIdPrefixExpansionCount"/>. The bump is
+    /// owed on the "changes what a record MEANS" test that granted v2 and v3: a v4 record's validated
+    /// citation set may contain ids the model never spelled in full, recovered by the shared citation
+    /// resolver, and a reader must be able to tell a v3 record — where that recovery was IMPOSSIBLE, so
+    /// every persisted citation was quoted completely — from a v4 record that measured an honest 0. Every
+    /// pre-v4 record stays readable, is never rewritten, and hydrates the new field as <c>null</c> = NOT
+    /// RECORDED (AD-8).
+    /// </para>
     /// </summary>
-    public const string CurrentSchemaVersion = "news-judgment-v3";
+    public const string CurrentSchemaVersion = "news-judgment-v4";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named

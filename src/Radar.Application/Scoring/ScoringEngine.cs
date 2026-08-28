@@ -291,16 +291,17 @@ public sealed class ScoringEngine : IScoringEngine
 
         var pairs = new List<ScoringSignal>();
 
-        // Dropped-signal accounting, AGGREGATED PER COMPANY (spec 145). This used to emit one Warning per
-        // dropped signal — ~9,500 per run PER STRATEGY on the live store, because pre-145 evidence identity
-        // was minted fresh per run and so a signal's EvidenceId rarely matched any persisted evidence.
-        // Spec 145 heals that FORWARD only (accrued history is deliberately left as-is), so the legacy
-        // residue does not go away and the flood would not either. Silencing it is not an option — an
-        // unresolvable evidence chain is a real provenance defect — so it is aggregated instead: ONE Warning
-        // per company carrying the dropped count and the distinct-evidence-id count (those two differing
-        // tells you whether it is N signals off one evidence item or N separate items), with the per-signal
-        // detail demoted to Debug. The HashSet is allocated only if something actually drops, so the healthy
-        // path costs nothing.
+        // Dropped-signal accounting (spec 145, RE-HOMED BY SPEC 197 §3). Spec 145 replaced a per-signal
+        // Warning (~9,500 per run PER STRATEGY on the live store) with ONE Warning per company carrying the
+        // dropped count and the distinct-evidence-id count. But this engine IS one strategy, so "per company"
+        // was really per strategy × company: the live baseline run 0b48b865 still emitted 397 of these lines
+        // and buried two genuine RSS transport failures. Silencing it is not an option — an unresolvable
+        // evidence chain is a real provenance defect, and spec 145 heals evidence identity FORWARD only, so
+        // the accrued residue does not go away. So the counts are RETURNED on ScoreAssemblyDiagnostics and
+        // the Warning is emitted ONCE per operation by the caller that can see the whole strategy × company
+        // grid (ScoringPass / ReplayRunner, both through ScoreAssemblyDiagnosticsAggregator). Nothing is
+        // discarded without being counted; the per-signal detail stays at Debug exactly as spec 145 left it.
+        // The HashSet is allocated only if something actually drops, so the healthy path costs nothing.
         var droppedSignalCount = 0;
         HashSet<Guid>? droppedEvidenceIds = null;
 
@@ -319,14 +320,6 @@ public sealed class ScoringEngine : IScoringEngine
             }
 
             pairs.Add(new ScoringSignal(signal, evidence));
-        }
-
-        if (droppedSignalCount > 0)
-        {
-            _logger.LogWarning(
-                "Dropped {DroppedSignalCount} signal(s) for company {CompanyId} whose evidence could not be "
-                    + "resolved, across {DistinctEvidenceCount} distinct evidence id(s); per-signal detail at Debug.",
-                droppedSignalCount, companyId, droppedEvidenceIds!.Count);
         }
 
         // Deterministic ordering so the formula input and resulting links are stable across runs.
@@ -634,31 +627,53 @@ public sealed class ScoringEngine : IScoringEngine
                 newsSupersede.TotalSuperseded, companyId, previousNewsSupersede.TotalSuperseded);
         }
 
-        // Spec 194 §1.4: ONE aggregated per-company line when a persisted direction was actually suppressed
-        // (the spec-145 aggregation precedent — never one line per signal). A Warning rather than the
-        // Information the two removal steps above use, because this is not routine de-noising: it is Radar
-        // scoring a signal differently from the way it is recorded, and the operator should be able to watch
-        // that count fall to zero as the accrued cohort ages out of the window. The two axes are reported
-        // separately in both windows — a MALFORMED envelope means a CURRENT writer is producing
-        // unverifiable provenance, which is a different and more urgent fact than the known spec-191
-        // residue. A run with nothing to suppress logs nothing new at all.
-        if (legacyNews.TotalNeutralized > 0 || previousLegacyNews.TotalNeutralized > 0)
+        // Spec 194 §1.4's neutralization counts and spec 145's dropped-signal counts, RETURNED rather than
+        // logged as Warnings (spec 197 §3). This engine is ONE STRATEGY: a per-company Warning here is a
+        // per-strategy × per-company Warning in a multi-strategy run, and on the live baseline the two
+        // categories together produced ~460 lines. Ownership of the operator-facing Warning therefore moves
+        // to the caller — ScoringPass for a forward/standalone pass, ReplayRunner for a replay invocation —
+        // which is the only place that can see the whole grid and label the population honestly (incidences,
+        // not globally distinct signals). Nothing is lost: every number that used to be logged is on this
+        // record, and the four neutralization axes stay separate so a malformed CURRENT envelope can never
+        // disappear inside the expected spec-191 residue.
+        var diagnostics = new ScoreAssemblyDiagnostics(
+            UnresolvedEvidenceSignalCount: droppedSignalCount,
+            // The `?? 0` here is a MEASURED zero, not a defaulted one: the set is allocated lazily on the
+            // first drop, so `null` means "nothing dropped" and can only ever coincide with
+            // droppedSignalCount == 0. There is no state in which a real distinct-evidence count is
+            // rendered as zero.
+            UnresolvedEvidenceDistinctEvidenceCount: droppedEvidenceIds?.Count ?? 0,
+            CurrentWindowLegacyInheritanceNeutralized: legacyNews.LegacyInheritanceCount,
+            CurrentWindowMalformedEnvelopeNeutralized: legacyNews.MalformedEnvelopeCount,
+            PreviousWindowLegacyInheritanceNeutralized: previousLegacyNews.LegacyInheritanceCount,
+            PreviousWindowMalformedEnvelopeNeutralized: previousLegacyNews.MalformedEnvelopeCount);
+
+        // ONE bounded Debug line per AFFECTED strategy-company evaluation, so the per-cell detail the
+        // aggregate necessarily pools is still recoverable by raising this category to Debug. Debug, not
+        // Warning: the operator-facing statement about the whole operation is the caller's aggregate, and two
+        // levels reporting the same fact would reintroduce exactly the flood this slice removes. An
+        // unaffected evaluation logs nothing at all.
+        if (diagnostics.HasAny)
         {
-            _logger.LogWarning(
-                "Neutralized {LegacyCount} accrued spec-191 inherited news direction(s) and "
-                    + "{MalformedCount} unverifiable judgment-signal envelope(s) for company {CompanyId} in "
-                    + "the current window (and {PreviousLegacyCount} / {PreviousMalformedCount} in the "
-                    + "previous/velocity window): those signals are scored as Neutral media attention "
-                    + "because their direction was never grounded in the matched article. They stay on disk "
-                    + "unchanged (append-only) and each current-window suppression is named on that "
-                    + "signal's contribution reason.",
-                legacyNews.LegacyInheritanceCount,
-                legacyNews.MalformedEnvelopeCount,
+            _logger.LogDebug(
+                "Score assembly diagnostics for company {CompanyId} (strategy {StrategyName}) at "
+                    + "{WindowEndUtc:o}: {DroppedSignalCount} signal(s) dropped for unresolved evidence "
+                    + "across {DistinctEvidenceCount} distinct evidence id(s); neutralized {LegacyCount} "
+                    + "accrued spec-191 inherited news direction(s) and {MalformedCount} unverifiable "
+                    + "judgment-signal envelope(s) in the current window (and {PreviousLegacyCount} / "
+                    + "{PreviousMalformedCount} in the previous/velocity window). Reported to the operator "
+                    + "as one aggregated Warning per category at the pass boundary.",
                 companyId,
-                previousLegacyNews.LegacyInheritanceCount,
-                previousLegacyNews.MalformedEnvelopeCount);
+                _strategyName ?? "(none)",
+                windowEndUtc,
+                diagnostics.UnresolvedEvidenceSignalCount,
+                diagnostics.UnresolvedEvidenceDistinctEvidenceCount,
+                diagnostics.CurrentWindowLegacyInheritanceNeutralized,
+                diagnostics.CurrentWindowMalformedEnvelopeNeutralized,
+                diagnostics.PreviousWindowLegacyInheritanceNeutralized,
+                diagnostics.PreviousWindowMalformedEnvelopeNeutralized);
         }
 
-        return new CompanyScoreResult(snapshot, links);
+        return new CompanyScoreResult(snapshot, links, diagnostics);
     }
 }

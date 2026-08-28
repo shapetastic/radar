@@ -26,7 +26,7 @@ public sealed class NewsJudgmentScoringIdentityTests
     // duplicated here on purpose: NewsTrajectorySignalRules' values reaching this file through
     // NewsJudgmentScoringIdentityFactory is what the "current" cases assert, and a fixture that reused the
     // same constants for its perturbation baseline could not tell the two apart.
-    private const string CurrentMaterializerVersion = "news-judgment-signal-v1";
+    private const string CurrentMaterializerVersion = "news-judgment-signal-v2";
     private const int CurrentBaseStrength = 4;
     private const int CurrentMaxFindingContribution = 3;
     private const int CurrentCompleteTypingBonus = 1;
@@ -124,7 +124,10 @@ public sealed class NewsJudgmentScoringIdentityTests
             "completeBonus" => Enabled(completeTypingBonus: CurrentCompleteTypingBonus + 1),
             "novelty" => Enabled(novelty: CurrentNovelty + 1),
             "confidence" => Enabled(confidence: CurrentConfidence + 0.1m),
-            "materializer" => Enabled(materializerVersion: "news-judgment-signal-v2"),
+            // A future materializer identity — deliberately NOT the retired v1, which is a value the
+            // classifier still ACCEPTS, and deliberately not the shipped current one (spec 197 §1.3 moved
+            // that on to v2).
+            "materializer" => Enabled(materializerVersion: "news-judgment-signal-v3"),
             // Improving → Negative: the mapping ITSELF, not a magnitude. A silent inversion here would flip
             // the sign of every judgment-derived signal while leaving the stamp untouched.
             _ => Enabled(mapping: ["Unknown>none", "Improving>Negative", "Deteriorating>Positive", "Mixed>none"]),

@@ -2257,6 +2257,182 @@ Do not hand back broken code.
     own measurement.** It does not touch the curated per-company `FollowingTier`. It does not change collection
     (no feed, cap, collector or admission rule; no evidence or observation added, removed or re-mapped). It does
     not rewrite history. No new strategy, arm, formula class, signal type, label or Lead change.
+- **The judgment-to-score path is COMPLETE — exact article identity, recoverable citations and a pass-level
+  diagnostic (spec 197).** Spec 194 made the news direction HONEST (only the judgment that cited an
+  article's facts can create a direction); the first full post-194 baseline
+  (`0b48b865-76b8-4485-996c-9b9139b694aa`, 2026-08-27) proved it was honest and, at two mechanical seams,
+  so fail-closed that most legitimate calls never reached scoring: the materializer considered 19
+  judgments, **9 were eligible and directional and only 2 materialized** (7 failed observation→evidence
+  resolution, EOSE among them despite five grounded trajectory facts); all five stage-2 `ValidationFailed`
+  responses cited **eight-character prefixes** (`11e52ee0`) instead of the supplied 36-character FactIds;
+  and the otherwise-green run emitted ~**462 Warnings** (397 unresolved-evidence + 63 spec-191
+  neutralization lines) that buried two genuine RSS transport failures. §1 and §2 were specified together
+  deliberately — each changes which judgments produce a scoring input, so separating them would have cost
+  two identity moves and two operator resets. Rules:
+  - **§1 — the join is a deterministic FAIL-CLOSED LADDER, not a title guess.** `NewsObservationEvidenceJoin`
+    stays derived-on-read and pure (no side index, no store mutation, no fuzzy matching — spec 151's
+    precedent) and its single normalized-title key becomes three ordered tiers: **`ExactArticleInstant`**
+    (non-blank `GoogleLandingUrl == SourceUrl` under `StringComparer.Ordinal` + equal non-blank normalized
+    headline + both publication instants present and equal in UTC), **`ExactArticleUrl`** (same URL +
+    headline when one side carries no usable instant) and **`UniqueHeadlineFallback`** (the pre-197 rule).
+    Each tier requires exactly ONE evidence item and ONE distinct company. **Precedence is load-bearing:
+    zero candidates may fall through, AMBIGUITY MAY NOT** — a stronger tier finding two evidence items or
+    two companies stops there, because falling through to a weaker key makes the ambiguity disappear rather
+    than resolve it. The URL bytes are used as persisted: **no canonicalization, tracking-parameter
+    stripping, redirect following, casefolding or timestamp tolerance** (§6 non-goals — each widens identity
+    and needs its own measured evidence).
+  - **§1.2 — every observation has ONE typed disposition and the partition conserves exactly.**
+    `NewsObservationEvidenceDisposition` is total (`NoMatch = 0`, the degraded zero; `Ambiguous`; plus the
+    three joined routes) and `NewsObservationEvidenceJoinCounts` DERIVES `Joined` from the three route
+    counts rather than storing it beside them, so
+    `ExactArticleInstant + ExactArticleUrl + UniqueHeadlineFallback + UnjoinedNoMatch + UnjoinedAmbiguous ==
+    Observations` is structurally unbreakable instead of being an invariant a future edit could violate
+    silently. `NewsObservationEvidenceResolution` enforces "`Match` non-null ⟺ a joined route" by private
+    ctor + factories (the spec-196 `AttentionSourceResolution` precedent). The materializer's generic
+    `UnresolvedObservation` skip **splits** into `ObservationNoMatch` (Radar holds no evidence for that
+    article — a coverage gap) and `ObservationAmbiguous` (Radar REFUSED the identity — a policy decision),
+    with the old token retained read-only so a pre-197 artifact still deserializes (the spec-189 `Failed`
+    precedent) and `JoinedEvidenceMissing` kept as its own defence-in-depth axis. Counts ride
+    `NewsJudgmentSignalMaterializationSummary.JoinCounts` **trailing + nullable** (`null` = the join was NOT
+    ATTEMPTED; a measured zero stays zero) and render in the live artifact, which advances
+    **`news-risk-live-v4 → v5`**. Current-run diagnostic provenance only: it enters no bundle hash, cache
+    key, cohort, judgment, signal or score. **The all-or-nothing citation rule is UNCHANGED** — one
+    `NoMatch` or `Ambiguous` trajectory observation still creates no signal. This slice improves identity;
+    it does not weaken provenance.
+  - **§1.3 — `news-judgment-signal-v1 → v2`, with prior-version occupancy COUNTED rather than hidden.**
+    Because the ladder changes which judgments produce scoring inputs, it is not a silent fix under v1: the
+    materializer/metadata token advances, v2 ids derive from the v2 token + `JudgmentId` (one signal per
+    judgment, existing idempotency preserved), and v2 folds into `NewsJudgmentScoringIdentity`. **Accrued v1
+    signals remain valid, immutable grounded judgment signals** — the ONE shared
+    `NewsDirectionalSignalMetadata` classifier accepts well-formed v1 AND v2, while a present but
+    blank/unsupported `newsJudgmentSignalVersion` is a malformed envelope and fails closed (never falling
+    through as an unrelated metadata bag); supersede, media collapse and legacy neutralization all keep
+    routing through that one classifier, never three copied version checks. Before reviewing or writing v2
+    the materializer checks BOTH ids: an existing v2 is the ordinary `AlreadyMaterialized` path; an existing
+    structurally valid v1 is **`PriorVersionOccupied`** — its own summary axis, because it measures a
+    one-time migration that must DRAIN rather than persist — and a missing or malformed record at the v1 id
+    is **not** occupancy and never suppresses an honest v2 retry. No v1 file is overwritten or deleted, and
+    the one-run knowledge-time rule stands: v2 is never backdated to the judgment instant.
+  - ✅ **THE LIVE AUDIT — measured read-only over the current stores, no mutation and no model call**
+    ("no measure ships without its live distribution"). **The premise FIRST, because it was §1.1's
+    highest-risk assumption:** all **3,194 of 3,194** observations (100 %) have an exact ordinal
+    `GoogleLandingUrl == SourceUrl` twin among the **14,574** news evidence records — equal to the
+    title-twin rate and MORE discriminating (**2,138** unique URL twins vs **2,095** unique title twins), so
+    tiers 1–2 are universally eligible rather than dead-fire branches. **Ladder over the live store:**
+    ExactArticleInstant **3,185** / ExactArticleUrl **0** / UniqueHeadlineFallback **0** / NoMatch **0** /
+    Ambiguous **9**, against the pre-197 title-only Joined **2,095** / NoMatch **0** / Ambiguous **1,099**.
+    **Judgment replay of baseline `0b48b865-76b8-4485-996c-9b9139b694aa`:** 9 eligible directional, **2
+    materializable before, 9 after, 0 remaining unresolved**. **EOSE explicitly:** its cited observation
+    `6f2625a2-4f1a-a2d3-5880-c08b33d75cc0` (published `2026-06-30T07:00:00Z`) has 2 evidence in its title
+    bucket AND 2 in its (url, title) bucket but exactly **1** in its (url, title, instant) bucket, resolving
+    to evidence `9c885176-ccd5-4597-b438-f4a4b61258ef` — the concrete shape the whole ladder was written
+    for. **Stated honestly: `ExactArticleUrl` and `UniqueHeadlineFallback` measured ZERO on today's
+    corpus.** They are not dead code and their zero is a MEASURED zero, not an assumed one: they are the
+    fail-closed fallbacks for records lacking a usable instant, and today's corpus has none.
+  - **§2 — prompt/schema v3 and ONE shared fail-closed citation resolver.** The fixed system instruction and
+    the per-request family preamble now say plainly: copy the **complete 36-character hyphenated FactId**,
+    never abbreviate/truncate/paraphrase/invent, for `TrajectoryFactIds` **and** every finding's `FactIds`.
+    Wording alone is not a recovery mechanism, so `NewsJudgmentCitationResolver` — used by BOTH trajectory
+    and finding validation, one implementation and never two — accepts a parseable GUID only when it is in
+    the SUPPLIED representative-fact set, and otherwise recovers a token only when it is **8–31 ASCII hex
+    characters with no hyphens** and an ordinal-ignore-case **prefix of the canonical 32-character `N`
+    rendering of exactly ONE supplied fact**. Zero matches, two-or-more matches, a prefix under eight
+    characters, a suffix/substring or any other malformed token fails with a **distinct named reason**
+    (`Malformed = 0` as the degraded zero, `NotSupplied`, `PrefixTooShort`, `PrefixUnmatched`,
+    `PrefixAmbiguous`), and **distinctness is checked AFTER expansion**, so a full GUID and its own prefix
+    in one list are a duplicate rather than two citations. **This is not fuzzy inference:** the scoped
+    supplied set has one deterministic referent or the response fails — no prefix matched against the global
+    fact store, no first-collision pick, and no relaxation of the supplied-set, assertion-strength,
+    context-only, finding-category, attribution or rationale gates.
+  - **§2.2 — the contract FORKS, and the recovery pressure becomes MEASURABLE instead of silently repairing
+    the provider forever.** `news-judgment-prompt-v2 → v3` and `news-judgment-schema-v2 → v3`: the JSON
+    property shape is unchanged, but FactId's accepted GRAMMAR is part of the result schema, and both
+    versions enter the stage-2 cohort key, so the new contract earns a fresh retry budget and no v2 attempt
+    is reused. `FactIdPrefixExpansionCount` is **trailing + nullable** on `NewsJudgmentRecord`
+    (**`news-judgment-v3 → v4`**) with three distinct meanings: **`null`** = no validated response was
+    examined under this contract, or a pre-197 record; **`0`** = a response WAS examined and every accepted
+    citation was already complete; **positive** = raw citation occurrences deterministically expanded across
+    trajectory plus findings, *including* expansions observed before a different validation error failed the
+    response. It is carried through `NewsJudgmentValidationResult`, persisted on both `Judged` and
+    `ValidationFailed` call-producing records, aggregated once per cohort at **Information** —
+    **pass-truthfully (spec 188 §1): a cache/same-run reuse retains its original durable count and is never
+    reported as a new current-pass normalization** — and rendered on `NewsRiskLiveJudgment` in the v5
+    artifact with measured zero, positive and not-recorded distinguishable. **Measured basis:** all **44**
+    distinct 8+-hex tokens across the five live `ValidationFailed` rationales (IOSP `f160ab52`, LBRT
+    `2f4bd2fd`, CAT `97c73714`, CASS `11e52ee0`, WDFC `252d42b5`) expand to exactly ONE supplied fact
+    against 24–35-fact supplied sets: **0 unmatched, 0 ambiguous**.
+  - ⚠ **THE ONE-TIME RE-JUDGE, stated as specs 186 and 194 stated theirs.** Forking the stage-2 cohort key
+    means **every candidate company is re-judged ONCE** on the first post-197 run — roughly **19 hosted
+    judge calls** at the current candidate count — and the five accrued `ValidationFailed` attempts are
+    **not reused**. That is the intended effect: they earn fresh attempts under a contract that can accept
+    their citations. It drains within the configured `MaxCompaniesPerRun`; **no provider, budget or
+    retry-count change was requested** (§6).
+  - **§3 — the two repeated engine Warnings move to the boundary that can see the whole operation, and
+    NOTHING is silenced.** `ScoringEngine` is ONE strategy, so its "one Warning per company" (spec 145's
+    unresolved evidence, spec 194 §1.4's neutralization) was really one per strategy × company — the ~462
+    lines above. A transient `ScoreAssemblyDiagnostics` now rides `CompanyScoreResult` carrying the
+    unresolved-evidence signal count + that evaluation's distinct-evidence count and the four neutralization
+    axes (current/previous window × accrued-legacy/malformed-envelope, **never pooled**, because a CURRENT
+    writer producing unverifiable provenance must not disappear inside the expected spec-191 residue). It is
+    never persisted, never a wire contract, never a cache/cohort key, never an identity input and **hashed
+    into nothing**. The engine emits **no Warning** for these two categories (a bounded Debug line only) and
+    its filtering, neutralization, supersede, collapse, contribution-reason, evidence-link, snapshot and
+    persistence behaviour is untouched. Both production callers aggregate through the ONE shared
+    `ScoreAssemblyDiagnosticsAggregator` — `ScoringPass` emits at most one Warning per category across the
+    combined/standalone pass, `ReplayRunner` the same bounded pair across the complete replay invocation, so
+    moving the line out of the shared engine cannot make replay silent. **The population is labelled
+    HONESTLY:** a count summed across engines is signal-evaluation **INCIDENCES**, not globally distinct
+    signals, so every line carries affected strategy-company evaluations, distinct companies, distinct
+    strategies (and distinct as-of instants for replay), and the per-evaluation distinct-evidence counts
+    render as an explicit sum, never as a global distinct total. An unaffected operation logs nothing at
+    all. **§3 alone moves no score and no pin.** Other engine Warnings/Information lines are out of scope —
+    no real provider, RSS, file-write or snapshot-write failure is suppressed, and spec 195's file-writer
+    logging modes are undisturbed.
+  - ⚠ **THE PINS MOVED ON THE AI-ON SIDE ONLY, AND THE THREE AI-OFF VALUES ARE PROVEN UNCHANGED — that
+    non-move is an ASSERTED DELIVERABLE, not an omission.** §4 predicted the split in advance: the AI-ON
+    `news=enabled:…` segment carries the resolved presentation cohort (hence prompt/schema v3) and the
+    materializer identity (hence `news-judgment-signal-v2`), while the AI-OFF segment
+    `news=disabled:legacy-news-inheritance-v1:news-judgment-supersede-v1;` carries **neither**, so neither
+    cause can reach it — a disabled pin moving here would indicate **scope leakage**, not a deliverable.
+    **CURRENT values: 30d code-default (the unit pins)** AI-OFF **`radar-scoring-fp-54e845330f96`
+    (UNCHANGED)** / AI-ON `radar-scoring-fp-420b31ba0753` → **`radar-scoring-fp-e7317fd038ac`**; **60d LIVE
+    baseline** AI-OFF **`radar-scoring-fp-8daa662a57a6` (UNCHANGED)** / AI-ON
+    `radar-scoring-fp-65eb592d0354` → **`radar-scoring-fp-81a397434756`**; **120d `-Profile long-window`**
+    AI-OFF **`radar-scoring-fp-f610244e23c6` (UNCHANGED)** / AI-ON `radar-scoring-fp-a89b6d9ad0a5` →
+    **`radar-scoring-fp-e9d9819a2b41`**. **Verified TWICE, and the second check is the useful one:** each
+    value was computed through `ScoringConfigFingerprint.Compute` over the real descriptors AND re-derived
+    outside .NET by rebuilding the canonical string and hashing it with a different SHA-256 implementation
+    (the spec-194/196 precedent). The standing rule holds: **the three window pairs are three correct
+    answers at three windows — do NOT reconcile them onto one value**; match an accrued stamp against the
+    pair for the window that run actually used. No `_formula.Version` bump, no `RuleSetVersion` bump (still
+    `radar-keyword-rules-v8`), no `MediaAttentionCollapse.Version` bump (still `media-collapse-v2`), no
+    supersede/neutralization rule-version bump, no attention-tier edit, no weight edit. The three
+    **composition-guard** pins did NOT move (`RadarScoreFormulaV10` `70e32b77f1c4`, `V11` `32a50355b568`,
+    `RadarBaselineActivityFormulaV1` `7af921a7ae84`): those files substitute a frozen
+    `StubSourceDescriptor`, which is exactly why an identity move cannot disturb a formula-COMPOSITION pin.
+  - ⚠ **OPERATOR ACTION — REQUIRED BEFORE THE FIRST POST-197 BASELINE, AND THE ORDER IS LOAD-BEARING. This
+    is the THIRD close identity boundary in a row (194, 196, 197).** `data/scoring-configs/` is git-ignored,
+    so the identity records cannot ride in a PR and **must NEVER be fabricated**: **(1)** do not touch them
+    while a pre-197 baseline is running; **(2)** after merge and before the first post-197 baseline,
+    consciously **delete or re-record every configured `data/scoring-configs/strategies/{name}.json`**;
+    **(3)** verify the first run reports **`radar-scoring-fp-81a397434756`** (the shipped profile is AI-ON
+    at 60 days) before treating later snapshots as the corrected series. If step 2 is missed,
+    `StrategyIdentityGuard` runs as the FIRST statement of the run and halts before collection — **that halt
+    is CORRECT and must not be bypassed.**
+  - ⚠ **THE DISCONTINUITY, stated precisely.** Post-194/v1 scores fail closed **correctly** but
+    **materially UNDER-ADMIT grounded judgments**, because the title-only join rejected stronger exact
+    identity (2 of 9 eligible directional judgments admitted on the measured baseline). Post-197/v2 scores
+    admit only citations resolved by the stronger deterministic ladder. History is preserved and **never
+    regenerated, rewritten or backfilled** (AD-8/AD-1) — and **the pre-197 sparse-join segment must NOT be
+    presented as equivalent judgment coverage** when interpreting news-direction efficacy.
+  - **Out of scope, recorded not built (§6)**: fuzzy headline similarity, URL canonicalization, redirect
+    resolution and timestamp tolerance; partial citation materialization and any "best available evidence"
+    guess; relaxing the business-trajectory, assertion-status, context-only, finding or advice-language
+    gates; any additional provider, judge, call budget or retry count (the v3 cohort receives the existing
+    configured budget); same-run score backdating (a newly materialized signal stays score-visible only from
+    a later run); deleting or rewriting v1 signals, v2 judgments or pre-197 snapshots; and any formula,
+    weight, attention-tier, strategy-arm, Lead, marker-vocabulary or collection change — spec 195's
+    file-write diagnostics and spec 196's attention calibration are untouched.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

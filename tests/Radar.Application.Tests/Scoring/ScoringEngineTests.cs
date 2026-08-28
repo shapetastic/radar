@@ -370,16 +370,17 @@ public sealed class ScoringEngineTests
     }
 
     // -------------------------------------------------------------------------------------------------
-    // Dropped-signal provenance warnings: AGGREGATED PER COMPANY (spec 145).
+    // Dropped-signal provenance: RETURNED, not warned (spec 145's counts, spec 197 §3's ownership).
     // -------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task DroppedSignals_LogExactlyOneAggregatedWarningPerCompany_WithBothCounts()
+    public async Task DroppedSignals_AreReturnedOnTheDiagnostics_AndTheEngineEmitsNoWarning()
     {
-        // The old per-signal Warning emitted ~9,500 lines per run PER STRATEGY on the live store. Spec 145
-        // heals evidence identity FORWARD only — accrued history is deliberately left as-is — so the legacy
-        // residue (89.5% of accrued signals) does not go away and neither would the flood. It is aggregated
-        // rather than silenced: an unresolvable evidence chain is a real provenance defect.
+        // Spec 145 replaced a per-signal Warning (~9,500 lines per run PER STRATEGY on the live store) with
+        // one per COMPANY. But this engine IS one strategy, so that was still one line per strategy ×
+        // company — 397 of them on the live baseline. Spec 197 §3 keeps every count and moves the Warning to
+        // the caller that can see the whole grid. Nothing is silenced: an unresolvable evidence chain is a
+        // real provenance defect and both numbers are on the returned record.
         var logger = new CapturingLogger<ScoringEngine>();
         var harness = new Harness(logger: logger);
         var companyId = Guid.NewGuid();
@@ -401,21 +402,34 @@ public sealed class ScoringEngineTests
         // Only the resolvable signal is scored — the drop behaviour itself is unchanged.
         Assert.Equal(resolvable.signal.Id, Assert.Single(result.Links).SignalId);
 
-        var warning = Assert.Single(
-            logger.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Message));
-        Assert.Contains("Dropped 3 signal(s)", warning, StringComparison.Ordinal);
-        Assert.Contains("2 distinct evidence id(s)", warning, StringComparison.Ordinal);
-        Assert.Contains(companyId.ToString(), warning, StringComparison.Ordinal);
+        // Both counts survive, on the transient diagnostics record.
+        Assert.Equal(3, result.Diagnostics.UnresolvedEvidenceSignalCount);
+        Assert.Equal(2, result.Diagnostics.UnresolvedEvidenceDistinctEvidenceCount);
+        Assert.True(result.Diagnostics.HasUnresolvedEvidence);
+        Assert.False(result.Diagnostics.HasNeutralization);
 
-        // Per-signal detail is retained, at Debug — nothing is silenced, only re-levelled.
+        // The engine itself warns about NOTHING here — that is the whole point of §3.
+        Assert.DoesNotContain(logger.Entries, e => e.Level == LogLevel.Warning);
+
+        // Per-signal detail is retained, at Debug — nothing is silenced, only re-levelled (spec 145).
         Assert.Equal(
             3,
             logger.Entries.Count(e => e.Level == LogLevel.Debug
                 && e.Message.Contains("Dropping signal", StringComparison.Ordinal)));
+
+        // …plus ONE bounded per-evaluation Debug summary, so the pooled aggregate stays recoverable.
+        var debugSummary = Assert.Single(
+            logger.Entries
+                .Where(e => e.Level == LogLevel.Debug
+                    && e.Message.StartsWith("Score assembly diagnostics", StringComparison.Ordinal))
+                .Select(e => e.Message));
+        Assert.Contains("3 signal(s) dropped for unresolved evidence", debugSummary, StringComparison.Ordinal);
+        Assert.Contains("2 distinct evidence id(s)", debugSummary, StringComparison.Ordinal);
+        Assert.Contains(companyId.ToString(), debugSummary, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task NoDroppedSignals_LogsNoWarningAtAll()
+    public async Task NoDroppedSignals_ReportsNothing_AndLogsNoWarningOrDiagnosticLine()
     {
         var logger = new CapturingLogger<ScoringEngine>();
         var harness = new Harness(logger: logger);
@@ -423,9 +437,16 @@ public sealed class ScoringEngineTests
 
         await harness.SeedPairAsync(companyId, WindowEnd.AddDays(-3));
 
-        await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
 
+        Assert.Equal(ScoreAssemblyDiagnostics.None, result.Diagnostics);
+        Assert.False(result.Diagnostics.HasAny);
         Assert.DoesNotContain(logger.Entries, e => e.Level == LogLevel.Warning);
+
+        // The unaffected path logs nothing new at all — not even the bounded Debug summary.
+        Assert.DoesNotContain(
+            logger.Entries,
+            e => e.Message.StartsWith("Score assembly diagnostics", StringComparison.Ordinal));
     }
 
     private sealed class CapturingLogger<T> : ILogger<T>

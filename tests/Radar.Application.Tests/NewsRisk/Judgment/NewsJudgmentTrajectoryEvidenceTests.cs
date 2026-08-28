@@ -94,6 +94,11 @@ public sealed class NewsJudgmentTrajectoryEvidenceTests
         Assert.Contains(result.FindingDropReasons, r => r.Contains("trajectory-fact-not-supplied"));
     }
 
+    /// <summary>
+    /// Spec 197 §2.1 sharpened the NAME without weakening the rule: a paraphrase is neither a parseable
+    /// GUID nor a hyphen-free hexadecimal prefix, so it fails as <c>fact-id-malformed</c> rather than as
+    /// "not supplied". It is still never coerced onto a supplied fact.
+    /// </summary>
     [Fact]
     public void UnparseableTrajectoryFactId_IsValidationFailed_NeverCoerced()
     {
@@ -105,7 +110,8 @@ public sealed class NewsJudgmentTrajectoryEvidenceTests
         var result = NewsJudgmentValidator.Validate(response, [family]);
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
-        Assert.Contains(result.FindingDropReasons, r => r.Contains("trajectory-fact-not-supplied"));
+        Assert.Contains(result.FindingDropReasons, r => r.Contains("trajectory-fact-id-malformed"));
+        Assert.Empty(result.TrajectoryFactIds);
     }
 
     [Fact]
