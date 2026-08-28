@@ -65,7 +65,8 @@ Estimated time: ~1–1.5 days.
 
 Today `UnknownWeight = 0.25` and an explicit entry is required to be *discounted*. That is the wrong way
 round for this universe: genuine outlets are a short, enumerable list, while content mills and syndication
-are an unbounded long tail. Requiring enumeration of the tail is unwinnable — 353 publishers and counting.
+are an unbounded long tail. Requiring enumeration of the tail is unwinnable — ~300 unclassified
+publishers and counting.
 
 Change the contract so an explicit entry is required to **count as notice**:
 
@@ -103,16 +104,22 @@ this spec exists to fix. Define the tiers first, then classify against them.
   gatekept. **The audit determines publisher MEMBERSHIP, never the tier's weight.**
 - **`Genuine` (1.0)** — independent reporting or editorial selection.
 
-**Classify by sampled audit, not by reputation — and make the audit reproducible.** For each high-volume
-publisher, sample **up to the ten most-recent in-corpus items, across distinct companies**, and record what
-each actually was. State the rule so a later reader can re-run it and get the same sample.
-**Commit the resulting audit table to the repository** (beside the tier options, or under `docs/cohorts/`)
-— a PR body is not a durable record, and this table is the justification for a hashed scoring input. Cover at minimum: Yahoo Finance
-(478 — 16.7 % of the corpus on its own), Seeking Alpha (64), Quiver Quantitative (51), Sahm (31),
-vinanet.vn (31), Kalkine Media (27), The Globe and Mail (19), Revelio Labs (17), TradingKey (17), plus
-**MarketWatch, Morningstar and the Business Journals**, which the reviewer correctly identified as
-meaningful unknown-tail sources. Record the sample and the resulting tier in the PR body so the assignment
-is auditable rather than asserted.
+**Classify by sampled audit, not by reputation.** No publisher is hard-coded on the strength of its
+reputation; each is classified from what it actually published in this corpus.
+
+**Sampling rule, fully reproducible:** for each publisher take the **most-recent in-corpus item per
+company**, ordered by `PublishedAtUtc` then `ObservationId`, up to **ten companies**. Same corpus, same
+sample, every time.
+
+**Cover at minimum:** Yahoo Finance (478 — 16.7 % of the corpus on its own), Seeking Alpha (64), Quiver
+Quantitative (51), Sahm (31), vinanet.vn (31), Kalkine Media (27), The Globe and Mail (19), Revelio Labs
+(17), TradingKey (17), plus **MarketWatch, Morningstar and the Business Journals**, which the reviewer
+correctly identified as meaningful unknown-tail sources.
+
+**The COMMITTED audit table is the authority** (beside the tier options, or under `docs/cohorts/`): each
+sampled item and its resulting tier is recorded there, so the assignment is auditable rather than asserted.
+It is the justification for a hashed scoring input, so it must live in the repository — the PR **links** to
+it and does not restate it, because a PR body is not a durable record.
 
 Wires to classify from the measured tail: **PR Newswire (41), GlobeNewswire (31), Business Wire (29)**.
 
@@ -175,7 +182,7 @@ differ: this counts attempted candidates in one collection pass, whereas scoring
 it must not be read, or described, as the attention input. §7 measures the scoring unit separately.
 
 Emit the same summary as one aggregated log line per run — the spec-145 precedent, never one line per
-publisher. Report: observations and share per tier including unclassified, and the top N unclassified
+publisher. Report: observations and share per tier including unclassified, and the **top 10** unclassified
 publishers by volume. **Do not auto-classify from it** — the tier map stays curated policy (AD-5); this only makes the
 gap legible so the next drift is a number someone sees rather than something discovered by asking why a
 familiar company scored 75.
@@ -215,8 +222,10 @@ Recorded so the next reader does not assume more was decided than was:
   and a configured override wins.
 - Each newly classified publisher resolves to its intended tier, `Wire` included, with the wire tier
   strictly below `Mill`.
-- The measured alias failures are pinned: `marketscreener.com` and `Investing.com Nigeria` resolve to
-  `Mill`, and a genuinely unrelated publisher does not collide with a classified family.
+- **Normalization and alias cases** are pinned (note: `marketscreener.com` was never a failure — it already
+  resolves via TLD stripping, and this test guards that it continues to): `marketscreener.com` resolves by
+  normalization, `Investing.com Nigeria` resolves by its new alias, and a genuinely unrelated publisher does
+  not collide with a classified family.
 - `CanonicalDescriptor()` is deterministic under reordering and culture, and the recomputed pins match.
 - The diagnostic reports tier shares that sum to the observation count, and names unclassified publishers by
   descending volume.
@@ -272,8 +281,10 @@ better-looking spread.
 - [ ] The four tiers are DEFINED by principle (`Wire` company-originated / `Mill` no independent selection /
       `Platform` contributor analysis with weak gatekeeping / `Genuine` editorial selection) before any
       publisher is assigned, and Seeking Alpha and The Motley Fool land in the SAME tier.
-- [ ] Every high-volume publisher hard-coded in this slice is backed by a recorded sampled audit in the PR
-      body, including Yahoo Finance, MarketWatch, Morningstar and the Business Journals.
+- [ ] Every high-volume publisher hard-coded in this slice is backed by a sampled audit in the COMMITTED
+      audit table (the PR links to it, never restates it), including Yahoo Finance, MarketWatch, Morningstar
+      and the Business Journals. Sampling is the most-recent item per company by `PublishedAtUtc` then
+      `ObservationId`, up to ten companies.
 - [ ] `marketscreener.com` is NOT "fixed" — it already resolves. `Investing.com Nigeria` gains an explicit
       alias, pinned by test, without broadening `Normalize`.
 - [ ] One typed resolver carries `TierName`, `Weight`, `IsExplicitlyMapped` and `NormalizedPublisher`;
@@ -285,8 +296,8 @@ better-looking spread.
       `ObservationsAttempted`, asserted; null = not recorded on pre-196 batches; and it is labelled a
       capture-flow diagnostic, never the `AttentionScore` input.
 - [ ] `Platform = 0.3` ships as declared here, with Seeking Alpha and The Motley Fool in it; the sampled
-      audit (≤10 most-recent items across distinct companies per publisher) is COMMITTED to the repo and
-      determines membership only, never a tier weight.
+      audit (most-recent item per company by `PublishedAtUtc` then `ObservationId`, up to ten companies) is
+      COMMITTED to the repo as the authority and determines membership only, never a tier weight.
 - [ ] An ambiguous publisher — one normalized key in two tiers — throws at construction naming both tiers,
       rather than resolving by ordinal last-wins.
 - [ ] The counterfactual reports BOTH raw observation coverage AND the distinct publisher/company breadth
