@@ -402,8 +402,10 @@ public sealed class CollectionPass : ICollectionPass
                 "{SignalsNotPersisted} signal(s) this run could NOT be durably persisted to the signal "
                     + "store. They are in this process's in-memory index and were scored by this run, but "
                     + "nothing reached disk: the accrued signal history does NOT contain them and the next "
-                    + "run's history read will not see them. The run was not aborted; see the per-write "
-                    + "Warnings above for the failing paths.",
+                    + "run's history read will not see them. The run was not aborted. This Warning is the "
+                    + "ONLY report of these failures (spec 195 §1): the store no longer logs a Warning per "
+                    + "failed file, so raise the signal-store log level to Debug to see the attempted "
+                    + "paths.",
                 signalsNotPersisted);
         }
 

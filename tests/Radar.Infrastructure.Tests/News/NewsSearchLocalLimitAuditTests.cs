@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
+using Radar.Application.News;
 using Radar.Domain.Companies;
 using Radar.Infrastructure.News;
 
@@ -35,6 +36,12 @@ public sealed class NewsSearchLocalLimitAuditTests
     private const string MrcyToken = "query=Mercury Systems&ticker=MRCY";
     private const string RklbPhrase = "Rocket Lab";
     private const string RklbToken = "query=Rocket Lab&ticker=RKLB";
+
+    // Spec 195 §3: a SECOND feed for the SAME company, under a different query phrase, so the fake reader
+    // can answer the company's two feeds differently. "Mercury" matches the fixture headlines under the
+    // unchanged IsRelevant rule, so relevance is never the variable a company-wide-uniqueness test measures.
+    private const string SecondPhrase = "Mercury";
+    private const string SecondToken = "query=Mercury&ticker=MRCY";
 
     /// <summary>The shipped effective local retention limit this audit is written against.</summary>
     private const int ShippedLimit = 25;
@@ -338,8 +345,15 @@ public sealed class NewsSearchLocalLimitAuditTests
 
     /// <summary>
     /// Across a company's feeds the observed response size accumulates as a MAXIMUM (the biggest response
-    /// that company produced) while the unadmitted relevant tail accumulates as a SUM (every item Radar
-    /// declined to admit). The two rules answer different questions and are asserted side by side.
+    /// that company produced) while the unadmitted relevant tail is COMPANY-WIDE UNIQUE.
+    /// <para>
+    /// This test originally asserted 4 here, because spec 190 deduped the tail inside each feed and then
+    /// SUMMED the per-feed integers — so two feeds answering with the same two tail items counted them
+    /// twice. Spec 195 §3 replaced the sum with company-scoped URL sets, so the correct answer for this
+    /// fixture is 2: the two feeds observed the SAME two unadmitted articles, and Radar declined to admit
+    /// two articles, not four. The two accumulation rules still answer different questions and are still
+    /// asserted side by side.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task Collect_MaxObservedIsTheMaximumAcrossACompanysFeeds()
@@ -371,7 +385,7 @@ public sealed class NewsSearchLocalLimitAuditTests
         var coverage = Assert.Single(result.CompanyCoverage!);
         Assert.Equal(2, coverage.SuccessfulFeedCount);
         Assert.Equal(4, coverage.MaxValidItemsObserved);              // MAX across the company's feeds …
-        Assert.Equal(4, coverage.UnadmittedRelevantTailItemCount);    // … while the tail count SUMS.
+        Assert.Equal(2, coverage.UnadmittedRelevantTailItemCount);    // … while the tail is company-unique.
     }
 
     [Fact]
@@ -505,6 +519,230 @@ public sealed class NewsSearchLocalLimitAuditTests
         }
 
         Assert.Equal(messages[0], messages[1]);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // SPEC 195 §3 — the unadmitted relevant tail is COMPANY-WIDE UNIQUE, not a sum of per-feed counts.
+    //
+    // Spec 190 deduped inside each feed and then summed the per-feed integers, which overcounted twice:
+    // the same relevant tail URL returned by two feeds counted twice, and a URL in feed A's tail counted
+    // as unadmitted even when feed B admitted that URL in its retained prefix. The accumulator now holds
+    // company-scoped sets and differences them once, so the answer is a property of the COMPANY and cannot
+    // depend on feed iteration order.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The same relevant tail URL observed by TWO of a company's feeds is ONE unadmitted article. Radar
+    /// declined to admit one thing, and saying two would overstate what it discarded.
+    /// </summary>
+    [Fact]
+    public async Task Collect_TailUrlObservedByTwoOfACompanysFeeds_IsCountedOnce()
+    {
+        var reader = new FakeNewsSearchReader
+        {
+            // Feed A: retains item 1, observes item 9 in its tail.
+            [MrcyPhrase] = Read(
+                prefix: [Article(ItemUrl(1), "Mercury Systems wins a radar contract - Reuters")],
+                tail: [Article(ItemUrl(9), "Mercury Systems opens a facility - Yahoo Finance")]),
+            // Feed B: a different query, retaining a different article, but its tail holds the SAME item 9.
+            [SecondPhrase] = Read(
+                prefix: [Article(ItemUrl(2), "Mercury Systems expands production - SpaceNews")],
+                tail: [Article(ItemUrl(9), "Mercury Systems opens a facility - Yahoo Finance")]),
+        };
+
+        var coverage = await CollectTwoFeedCoverage(reader, maxRecords: 1);
+
+        Assert.Equal(1, coverage.UnadmittedRelevantTailItemCount);
+    }
+
+    /// <summary>
+    /// A URL in one feed's TAIL that another feed RETAINED in its prefix is not unadmitted — some feed
+    /// admitted it. Asserted in BOTH feed orders, because "independent of feed iteration order" is a claim
+    /// that has to be measured rather than commented: under the per-feed sum the answer depended on whether
+    /// the admitting feed ran first.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Collect_TailUrlAdmittedInAnotherFeedsPrefix_CountsZero_RegardlessOfFeedOrder(
+        bool reverseFeedOrder)
+    {
+        var reader = new FakeNewsSearchReader
+        {
+            // Feed A observes item 7 only in its TAIL …
+            [MrcyPhrase] = Read(
+                prefix: [Article(ItemUrl(1), "Mercury Systems wins a radar contract - Reuters")],
+                tail: [Article(ItemUrl(7), "Mercury Systems names a CFO - MarketBeat")]),
+            // … while feed B RETAINS item 7 in its prefix, so the company did admit that article.
+            [SecondPhrase] = Plain([Article(ItemUrl(7), "Mercury Systems names a CFO - MarketBeat")]),
+        };
+
+        var coverage = await CollectTwoFeedCoverage(reader, maxRecords: 1, reverseFeedOrder);
+
+        Assert.Equal(0, coverage.UnadmittedRelevantTailItemCount);
+    }
+
+    /// <summary>
+    /// The general order-independence property over a mixed fixture (overlapping tails, a cross-feed
+    /// prefix admission and one genuinely unadmitted article): every feed permutation reports the same
+    /// count, and it is the count of DISTINCT tail URLs no feed retained.
+    /// </summary>
+    [Fact]
+    public async Task Collect_UnadmittedTailCount_IsTheSameInEitherFeedOrder()
+    {
+        static FakeNewsSearchReader NewReader() => new()
+        {
+            [MrcyPhrase] = Read(
+                prefix: [Article(ItemUrl(1), "Mercury Systems wins a radar contract - Reuters")],
+                tail:
+                [
+                    Article(ItemUrl(7), "Mercury Systems names a CFO - MarketBeat"),   // admitted by feed B
+                    Article(ItemUrl(9), "Mercury Systems opens a facility - Yahoo Finance"), // shared tail
+                ]),
+            [SecondPhrase] = Read(
+                prefix: [Article(ItemUrl(7), "Mercury Systems names a CFO - MarketBeat")],
+                tail:
+                [
+                    Article(ItemUrl(9), "Mercury Systems opens a facility - Yahoo Finance"), // shared tail
+                    Article(ItemUrl(8), "Mercury Systems raises guidance - Reuters"),   // genuinely unadmitted
+                ]),
+        };
+
+        var forward = await CollectTwoFeedCoverage(NewReader(), maxRecords: 1);
+        var reversed = await CollectTwoFeedCoverage(NewReader(), maxRecords: 1, reverseFeedOrder: true);
+
+        // Items 9 and 8 are unadmitted; item 7 was retained by a feed, so it is not.
+        Assert.Equal(2, forward.UnadmittedRelevantTailItemCount);
+        Assert.Equal(forward.UnadmittedRelevantTailItemCount, reversed.UnadmittedRelevantTailItemCount);
+    }
+
+    /// <summary>
+    /// An IRRELEVANT tail article is still excluded, in exactly spec 190's terms: the company-scoped set is
+    /// populated through the SAME <c>IsRelevant</c> predicate, and this slice introduces no canonicalization,
+    /// tracking-query stripping or wider semantic duplicate rule.
+    /// </summary>
+    [Fact]
+    public async Task Collect_IrrelevantTailArticles_AreStillExcludedFromTheCompanySet()
+    {
+        var reader = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] = Read(
+                prefix: [Article(ItemUrl(1), "Mercury Systems wins a radar contract - Reuters")],
+                tail:
+                [
+                    Article(ItemUrl(9), "An unrelated company restructures - Reuters"),
+                    Article(ItemUrl(10), "Mercury Systems opens a facility - Yahoo Finance"),
+                ]),
+        };
+
+        var coverage = await CollectOneCompanyCoverage(reader, maxRecords: 1);
+
+        Assert.Equal(1, coverage.UnadmittedRelevantTailItemCount);
+    }
+
+    /// <summary>
+    /// THE non-goal, pinned: the tail diagnostics are OBSERVATIONAL. Two fixtures differing ONLY in the
+    /// diagnostic tail produce record-for-record identical evidence and observation candidates and identical
+    /// collection counters — only the diagnostic number moves. Nothing here admits one extra item or raises
+    /// a cap.
+    /// </summary>
+    [Fact]
+    public async Task Collect_TailDiagnostics_ChangeNoAdmittedEvidenceObservationOrCounter()
+    {
+        var prefix = new[]
+        {
+            Article(ItemUrl(1), "Mercury Systems wins a radar contract - Reuters"),
+            Article(ItemUrl(2), "Mercury Systems expands production - SpaceNews"),
+        };
+
+        // Identical retained prefixes; one fixture additionally observes a tail the other never saw.
+        var withoutTail = new FakeNewsSearchReader { [MrcyPhrase] = Plain(prefix) };
+        var withTail = new FakeNewsSearchReader
+        {
+            [MrcyPhrase] = Read(
+                prefix: prefix,
+                tail:
+                [
+                    Article(ItemUrl(3), "Mercury Systems opens a facility - Yahoo Finance"),
+                    Article(ItemUrl(4), "Mercury Systems names a CFO - MarketBeat"),
+                ]),
+        };
+
+        var feed = FeedBinding("eeeeeeee-0000-0000-0000-000000000001", MrcyId, MrcyToken);
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var plain = await CreateCollector(withoutTail, maxRecords: 2).CollectAsync(context, CancellationToken.None);
+        var tailed = await CreateCollector(withTail, maxRecords: 2).CollectAsync(context, CancellationToken.None);
+
+        // Record for record, field for field — a new evidence field is therefore covered the day it lands.
+        Assert.Equal(EvidenceFields(plain.Evidence), EvidenceFields(tailed.Evidence));
+        Assert.Equal(ObservationFields(plain.Observations!), ObservationFields(tailed.Observations!));
+
+        // Collection counters are untouched; ONLY the diagnostic moves.
+        Assert.Equal(plain.Summary.SourcesChecked, tailed.Summary.SourcesChecked);
+        Assert.Equal(plain.Summary.SourcesFailed, tailed.Summary.SourcesFailed);
+        Assert.Equal(0, Assert.Single(plain.CompanyCoverage!).UnadmittedRelevantTailItemCount);
+        Assert.Equal(2, Assert.Single(tailed.CompanyCoverage!).UnadmittedRelevantTailItemCount);
+    }
+
+    private static object[] EvidenceFields(IEnumerable<CollectedEvidence> evidence) =>
+    [
+        .. evidence.Select(object (e) => new
+        {
+            e.SourceType,
+            e.SourceName,
+            e.SourceUrl,
+            e.Title,
+            e.RawText,
+            e.PublishedAt,
+            e.CollectedAt,
+            Metadata = string.Join("|", e.Metadata.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => kv.Key + "=" + kv.Value)),
+            CompanyHints = string.Join("|", e.CompanyHints),
+        })
+    ];
+
+    private static object[] ObservationFields(IEnumerable<NewsObservationCandidate> observations) =>
+    [
+        .. observations.Select(object (o) => new
+        {
+            o.CompanyId,
+            o.Ticker,
+            o.Collector,
+            o.QueryPhrase,
+            o.FeedId,
+            o.FeedName,
+            o.GoogleLandingUrl,
+            o.Publisher,
+            o.PublisherSiteUrl,
+            o.Headline,
+            o.DescriptionRaw,
+            o.DescriptionText,
+            o.DescriptionTruncated,
+            o.PublishedAtUtc,
+            o.RetrievedAtUtc,
+        })
+    ];
+
+    /// <summary>
+    /// Two feeds bound to the SAME company but carrying DIFFERENT query phrases, so the fake reader can
+    /// answer them with different responses. Both phrases match the fixture headlines under the unchanged
+    /// <c>IsRelevant</c> rule, so relevance is never what a §3 test is measuring.
+    /// </summary>
+    private static async Task<CollectorCompanyCoverage> CollectTwoFeedCoverage(
+        FakeNewsSearchReader reader, int maxRecords, bool reverseFeedOrder = false)
+    {
+        var feedA = FeedBinding("cccccccc-0000-0000-0000-0000000000a1", MrcyId, MrcyToken, "Mercury — News A");
+        var feedB = FeedBinding(
+            "cccccccc-0000-0000-0000-0000000000b1", MrcyId, SecondToken, "Mercury — News B");
+
+        var feeds = reverseFeedOrder ? new[] { feedB, feedA } : [feedA, feedB];
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], feeds);
+
+        var result = await CreateCollector(reader, maxRecords)
+            .CollectAsync(context, CancellationToken.None);
+
+        return Assert.Single(result.CompanyCoverage!);
     }
 
     // ---------------------------------------------------------------------------------------------

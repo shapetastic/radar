@@ -212,32 +212,29 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
 
             // SPEC 190 DIAGNOSTIC-ONLY PASS over the already-fetched response tail. It maps nothing: the
             // evidence/observation loop above ran over exactly the retained prefix, as it always has. This
-            // only counts how many ADDITIONAL unique company-relevant items the same response held beyond
-            // Radar's own local retention limit, so "the response contained exactly N valid items" can be
-            // told apart from "the response contained more and Radar stopped reading". Tail URLs are deduped
-            // against EVERY retained-prefix URL (result.Items, not the loop's `seenUrls` — that set is
-            // incomplete because the loop breaks once the per-feed cap is met) and against earlier tail
-            // items, in a SEPARATE set so the evidence path's dedupe state is untouched.
-            var unadmittedRelevantTail = 0;
-            if (result.DiagnosticTail.Count > 0)
+            // only records which ADDITIONAL company-relevant items the same response held beyond Radar's own
+            // local retention limit, so "the response contained exactly N valid items" can be told apart from
+            // "the response contained more and Radar stopped reading".
+            //
+            // SPEC 195 §3: the URLs are handed to the COMPANY-level accumulator rather than deduped and
+            // counted per feed. Per-feed counting overcounted twice — the same relevant tail URL returned by
+            // two feeds counted twice, and a URL in feed A's tail counted as unadmitted even when feed B
+            // admitted it in its retained prefix — because the per-feed integers were then SUMMED. The
+            // accumulator now unions the retained prefixes and the relevant tails across every feed and takes
+            // the difference once, which is also what makes the answer independent of feed iteration order.
+            // Both sets live on the accumulator, deliberately SEPARATE from the evidence loop's `seenUrls`,
+            // so the admission path's dedupe state is untouched. The URL strings, the OrdinalIgnoreCase
+            // comparer and the `IsRelevant` predicate are exactly spec 190's — no canonicalization, no
+            // tracking-query stripping, no wider semantic duplicate rule.
+            var relevantTailUrls = new List<string>();
+            foreach (var article in result.DiagnosticTail)
             {
-                var tailSeenUrls = new HashSet<string>(
-                    result.Items.Select(a => a.Url), StringComparer.OrdinalIgnoreCase);
-
-                foreach (var article in result.DiagnosticTail)
+                if (!IsRelevant(article.Title, target))
                 {
-                    if (!IsRelevant(article.Title, target))
-                    {
-                        continue;
-                    }
-
-                    if (!tailSeenUrls.Add(article.Url))
-                    {
-                        continue;
-                    }
-
-                    unadmittedRelevantTail++;
+                    continue;
                 }
+
+                relevantTailUrls.Add(article.Url);
             }
 
             // Coverage is recorded from the RAW reader counts, BEFORE the relevance filter and the per-feed
@@ -250,7 +247,10 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
                 hitEffectiveResultLimit: result.Items.Count >= effectiveLimit,
                 validItemsObserved: result.ValidItemsObserved,
                 confirmedLocalTruncation: result.ObservedValidItemBeyondLocalLimit,
-                unadmittedRelevantTailItemCount: unadmittedRelevantTail);
+                // EVERY retained-prefix URL (result.Items, not the evidence loop's `seenUrls` — that set is
+                // incomplete because the loop breaks once the per-feed cap is met).
+                observedPrefixUrls: result.Items.Select(a => a.Url),
+                relevantTailUrls: relevantTailUrls);
 
             successfulFeedObservedSizes.Add(result.ValidItemsObserved);
 
@@ -372,7 +372,15 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         private bool _hitLimit;
         private int _maxValidItemsObserved;
         private bool _confirmedLocalTruncation;
-        private int _unadmittedRelevantTailItems;
+
+        // Spec 195 §3: company-scoped, NOT per-feed. `_observedPrefixUrls` is the union of every successful
+        // feed's retained reader prefix; `_relevantTailUrls` is the union of every company-relevant URL seen
+        // in any diagnostic tail. The unadmitted count is their set difference, taken ONCE at projection
+        // time, so it counts each URL once across the whole company and cannot depend on feed iteration
+        // order. Both are diagnostic-only: nothing here is shared with, or mutates, the evidence/observation
+        // admission loop's own dedupe set. The comparer is spec 190's OrdinalIgnoreCase URL equality.
+        private readonly HashSet<string> _observedPrefixUrls = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _relevantTailUrls = new(StringComparer.OrdinalIgnoreCase);
 
         public void RecordExpectedFeed() => _expected++;
 
@@ -380,22 +388,32 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
 
         /// <summary>
         /// Records one SUCCESSFUL feed. <paramref name="hitEffectiveResultLimit"/> keeps its exact pre-190
-        /// fail-closed meaning (possible truncation); the three spec-190 diagnostics are additive and
+        /// fail-closed meaning (possible truncation); the spec-190 diagnostics are additive and
         /// observational — the MAX observed valid response size across the company's feeds, whether any feed
-        /// CONFIRMED local truncation, and the SUM of unique company-relevant tail items observed but
-        /// deliberately not admitted.
+        /// CONFIRMED local truncation, and (spec 195 §3) the company-wide union of retained-prefix URLs and of
+        /// company-relevant diagnostic-tail URLs, differenced once at projection time.
         /// </summary>
         public void RecordFeedSuccess(
             bool hitEffectiveResultLimit,
             int validItemsObserved,
             bool confirmedLocalTruncation,
-            int unadmittedRelevantTailItemCount)
+            IEnumerable<string> observedPrefixUrls,
+            IEnumerable<string> relevantTailUrls)
         {
             _succeeded++;
             _hitLimit |= hitEffectiveResultLimit;
             _maxValidItemsObserved = Math.Max(_maxValidItemsObserved, validItemsObserved);
             _confirmedLocalTruncation |= confirmedLocalTruncation;
-            _unadmittedRelevantTailItems += unadmittedRelevantTailItemCount;
+
+            foreach (var url in observedPrefixUrls)
+            {
+                _observedPrefixUrls.Add(url);
+            }
+
+            foreach (var url in relevantTailUrls)
+            {
+                _relevantTailUrls.Add(url);
+            }
         }
 
         /// <summary>True when at least one of this company's feeds reached the effective LOCAL retention limit.</summary>
@@ -404,8 +422,14 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         /// <summary>True when at least one feed's response held a valid item BEYOND that local limit.</summary>
         public bool ConfirmedLocalTruncation => _confirmedLocalTruncation;
 
-        /// <summary>Unique company-relevant tail items observed for this company but deliberately not admitted.</summary>
-        public int UnadmittedRelevantTailItemCount => _unadmittedRelevantTailItems;
+        /// <summary>
+        /// Unique company-relevant tail URLs observed for this company but deliberately not admitted:
+        /// <c>relevantTailUrls EXCEPT observedPrefixUrls</c>, counted once across the whole company (spec
+        /// 195 §3). A tail URL that ANY feed retained in its prefix is NOT unadmitted — some feed admitted
+        /// it — and a URL seen in two feeds' tails counts once.
+        /// </summary>
+        public int UnadmittedRelevantTailItemCount =>
+            _relevantTailUrls.Count(url => !_observedPrefixUrls.Contains(url));
 
         public CollectorCompanyCoverage ToCoverage(Guid companyId)
         {
@@ -442,7 +466,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
                 EffectiveResultLimit: effectiveResultLimit,
                 MaxValidItemsObserved: _maxValidItemsObserved,
                 ConfirmedLocalTruncation: _confirmedLocalTruncation,
-                UnadmittedRelevantTailItemCount: _unadmittedRelevantTailItems);
+                UnadmittedRelevantTailItemCount: UnadmittedRelevantTailItemCount);
         }
     }
 

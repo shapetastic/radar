@@ -86,6 +86,13 @@ public sealed class ReplayScopedScoreSnapshotFileStoreFactory : IReplayScoreSnap
                             StrategyScopedScoreSnapshotFileStoreFactory.StrategiesSegment,
                             strategy.Name),
                         SnapshotFileName = AsOfSnapshotFileName,
+                        // Spec 195 §1: DELIBERATELY the default Immediate. ReplayRunner discards the
+                        // DurableWriteResult and counts every as-of point as written, so this store's
+                        // per-file Warning is the ONLY report a failed replay write has; suppressing it
+                        // would let an unwritable replay directory look like a successful replay. The
+                        // aggregated warning below is spec 148's OVERWRITE warning — a different fact.
+                        // (ScoringPass-owned stores DO carry CallerAggregates; the mode is per-instance.)
+
                         // Spec 148: bookkeeping only. The store computes the target path and probes it; this
                         // callback just counts, so the runner can warn ONCE per (label, strategy).
                         OnSnapshotOverwritten = _ => scoped.RecordOverwrite(),

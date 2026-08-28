@@ -59,6 +59,8 @@ public static class NewsRiskLiveArtifactRenderer
                 sb.AppendLine("Coverage issues: " + string.Join("; ", company.CoverageIssues));
             }
 
+            AppendCompanySyndication(sb, company);
+
             sb.AppendLine();
 
             if (company.Articles.Count > 0)
@@ -133,9 +135,83 @@ public static class NewsRiskLiveArtifactRenderer
             AppendJudgmentCategoryComparison(sb, company);
         }
 
+        AppendSyndicationTotals(sb, document);
         AppendSignalMaterialization(sb, document);
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// SPEC 195 §2 — the compact per-company pre-collapse syndication line, rendered ONLY when this run
+    /// measured a non-zero duplicate count. A measured zero is still written to the JSON (that is where the
+    /// honest zero lives); repeating "0 duplicate copies" under every company would bury the companies that
+    /// actually syndicated. A `null` count is NOT RECORDED (a v3 document) and renders nothing, so an
+    /// accrued artifact re-rendered through this renderer is byte-identical to before.
+    /// </summary>
+    private static void AppendCompanySyndication(StringBuilder sb, NewsRiskLiveCompany company)
+    {
+        if (company.SyndicatedDuplicateCount is not { } duplicates || duplicates == 0)
+        {
+            return;
+        }
+
+        var publishers = company.SyndicatedDistinctPublisherCount ?? 0;
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Syndication before collapse: {duplicates} duplicate cop(y/ies) removed by the "
+                + $"duplicate-headline collapse, across {publishers} distinct publisher(s) carrying the "
+                + $"collapsed stories. Current-run enumeration provenance; not a scoring, cohort, cache or "
+                + $"model input."));
+    }
+
+    /// <summary>
+    /// SPEC 195 §2 — the artifact-level syndication totals, labelled as CURRENT-RUN PRE-COLLAPSE
+    /// ENUMERATION PROVENANCE. Rendered only when at least one company carries a recorded measurement, so a
+    /// v3 document (every count null) renders a byte-identical artifact.
+    /// <para>
+    /// <b>Why the publisher figure is named an incidence sum and not a distinct total.</b> Only the
+    /// per-company COUNTS reach this renderer — the publisher NAMES are not on the document — so a
+    /// globally distinct publisher figure is not computable here: one publisher syndicating a story to three
+    /// companies contributes 3 to this sum. Summing and calling the result "distinct publishers" would be a
+    /// false label on a real number, so the sum is reported under the name it actually has. Computing a true
+    /// global distinct count would mean carrying publisher names onto the document, which is a wider change
+    /// than this slice, and inventing one from these counts is not possible.
+    /// </para>
+    /// </summary>
+    private static void AppendSyndicationTotals(StringBuilder sb, NewsRiskLiveDocument document)
+    {
+        var measured = document.Companies
+            .Where(c => c.SyndicatedDuplicateCount is not null)
+            .ToList();
+        if (measured.Count == 0)
+        {
+            return;
+        }
+
+        var collapsedCopies = measured.Sum(c => c.SyndicatedDuplicateCount ?? 0);
+        var publisherIncidence = measured.Sum(c => c.SyndicatedDistinctPublisherCount ?? 0);
+        var companiesWithSyndication = measured.Count(c => c.SyndicatedDuplicateCount > 0);
+
+        sb.AppendLine("## Syndication before collapse (current-run enumeration provenance)");
+        sb.AppendLine();
+        sb.AppendLine(
+            "Measured on THIS run's article enumeration, before the duplicate-headline collapse, and "
+                + "recorded beside reader results that may themselves be cached. It is never a scoring, "
+                + "cohort, cache-key, completeness or model input, and no direction is read into it: forty "
+                + "syndicated copies of one story are neither good news nor bad news, they are one story "
+                + "carried widely.");
+        sb.AppendLine();
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Collapsed copies: {collapsedCopies} across {companiesWithSyndication} of "
+                + $"{measured.Count} company(ies) with a recorded measurement."));
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Company-publisher incidence sum: {publisherIncidence} — each syndicating publisher counted "
+                + $"ONCE PER COMPANY and summed across companies. This is NOT a globally distinct publisher "
+                + $"count: only per-company counts are recorded on this artifact, so one publisher carrying "
+                + $"a story for three companies contributes 3."));
+        sb.AppendLine();
     }
 
     /// <summary>

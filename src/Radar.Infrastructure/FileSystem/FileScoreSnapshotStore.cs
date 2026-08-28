@@ -16,10 +16,23 @@ namespace Radar.Infrastructure.FileSystem;
 /// <see cref="FileScoreSnapshotStoreOptions.SnapshotFileName"/> selector supplies), grouping by company so
 /// a single company's score history is trivial to browse once multiple runs accumulate. All file I/O is
 /// confined to Infrastructure; the Application sees only <see cref="IScoreSnapshotFileStore"/>. Disk
-/// failures degrade gracefully (warn + return the attempted path, marked
+/// failures degrade gracefully (return the attempted path, marked
 /// <see cref="DurableWriteOutcome.Failed"/>) and never crash the run; the in-memory score repository copy
 /// still exists — but the failure is no longer SILENT (spec 193 §1): the typed outcome lets the scoring
 /// pass count a snapshot that never reached disk instead of reporting it as durably stored.
+/// <para>
+/// <b>Where the failure is REPORTED is per-instance</b>, chosen by
+/// <see cref="FileScoreSnapshotStoreOptions.FailureLogging"/> (spec 195 §1) — never a class-wide constant,
+/// because this store has two kinds of consumer and only one of them owns an aggregate. On the instances
+/// <c>ScoringPass</c> writes through (the <c>AddFileScoreStore</c> registration and
+/// <see cref="StrategyScopedScoreSnapshotFileStoreFactory"/>) the mode is
+/// <see cref="GracefulFileWriteFailureLogging.CallerAggregates"/>, so that pass's one aggregated Warning
+/// replaces the per-file Warnings instead of being added to them. A replay-scoped instance
+/// (<see cref="ReplayScopedScoreSnapshotFileStoreFactory"/>) keeps the default
+/// <see cref="GracefulFileWriteFailureLogging.Immediate"/>: <c>ReplayRunner</c> discards the write result
+/// and counts every as-of point as written, so the per-file Warning is the ONLY report a failed replay
+/// write has.
+/// </para>
 /// </summary>
 /// <remarks>
 /// <b>Overwrite-allowed (upsert-by-Id, last-write-wins).</b> This deliberately DIFFERS from the
@@ -84,8 +97,20 @@ public sealed class FileScoreSnapshotStore : IScoreSnapshotFileStore, IScoreSnap
 
         var json = Serialize(snapshot, links);
 
+        // Spec 195 §1: the mode is the INSTANCE's, never a class-wide constant. A ScoringPass-owned store
+        // is CallerAggregates, because that pass emits ONE aggregated "{ScoreSnapshotsNotPersisted} score
+        // snapshot(s) could NOT be durably persisted" Warning for exactly these failures (without it the
+        // batch path logged N per-file Warnings PLUS that aggregate). A replay-scoped store keeps the
+        // default Immediate, because ReplayRunner discards this result and has no aggregate to substitute.
         var written = await GracefulFileWriter
-            .TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false);
+            .TryWriteAllTextAsync(
+                path,
+                json,
+                _logger,
+                ct,
+                encoding: null,
+                failureLogging: _options.FailureLogging)
+            .ConfigureAwait(false);
         if (written)
         {
             // The write succeeded, so the earlier file really is gone (upsert-by-Id / last-write-wins,

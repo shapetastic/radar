@@ -3383,7 +3383,15 @@ public static class InfrastructureServiceCollectionExtensions
     public static IServiceCollection AddFileScoreStore(
         this IServiceCollection services, string rootDirectory)
     {
-        services.AddSingleton(new FileScoreSnapshotStoreOptions { RootDirectory = rootDirectory });
+        // Spec 195 §1: this is the store ScoringPass writes the PRIMARY strategy's snapshots through, and
+        // that pass counts every Failed outcome into one aggregated Warning — so the per-file Warning is
+        // substituted here rather than added to it. The mode is per-instance: a replay-scoped store keeps
+        // the default Immediate, because ReplayRunner owns no such aggregate.
+        services.AddSingleton(new FileScoreSnapshotStoreOptions
+        {
+            RootDirectory = rootDirectory,
+            FailureLogging = GracefulFileWriteFailureLogging.CallerAggregates,
+        });
         services.AddSingleton<IScoreSnapshotFileStore, FileScoreSnapshotStore>();
         services.TryAddSingleton<IScoreSnapshotFileStoreFactory, StrategyScopedScoreSnapshotFileStoreFactory>();
         return services;
