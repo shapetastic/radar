@@ -222,6 +222,26 @@ Do not hand back broken code.
 - **Provenance is sacred.** Evidence is the source of truth. Signals must reference
   evidence; scores must trace back to contributing signals and evidence; reports must
   reference score snapshots and evidence. A score without evidence is invalid.
+- **Nothing may be discarded without being counted.** If a code path drops, collapses, caps, skips,
+  supersedes, defaults or fails a thing, the count is surfaced — on a record, in an artifact, or as an
+  aggregated log line (one per company/store/cohort, never one per item). A silent `continue`, a swallowed
+  `catch`, a discarded `bool` outcome, a `?? 0` over a nullable-meaningful value, or a `Take(n)` whose
+  remainder is invisible are all defects, **including in log lines and rendered text** — a defaulted zero
+  must never render as a measured zero, and `null` means "not recorded", never `0` or `false`. This is
+  "provenance is sacred" pointed the other way: provenance says know where a number came from, this says
+  know what did not make it in. Found the hard way — specs 191/192/193/194 each closed one instance
+  (findings binned unread over a rationale's length; a failed durable write reported as stored; signals
+  superseded with no trace; syndication collapsed uncounted).
+- **No measure ships without its live distribution.** A spec that introduces or materially changes a score
+  component, classifier, weight table or threshold must report what that thing actually produces **across
+  the live universe** — the distribution, not a unit-test fixture — and the reviewer must check it. **A
+  measure that comes out near-constant is a defect even when the code is perfect**, because a near-constant
+  discriminates nothing while looking precise. The failure this exists to prevent: rigour about internal
+  consistency (fingerprints, immutability, mutation-proven tests) with none about external validity, so a
+  number can be provably correct and mean nothing. Measured instances: `MediaAttention` was 98.4% Neutral,
+  so news reached scoring as pure volume (spec 191/194); `AttentionScore` classified 25 of 368 live
+  publishers and came out 73.4 ± a few for every company, discounting every score by an unvalidated
+  constant (spec 196). Both shipped green and were only found by looking at live data.
 - **Layering:** `Radar.Domain` references nothing; `Radar.Application` references Domain;
   `Radar.Infrastructure` references Application + Domain; `Radar.Worker` references
   Application + Infrastructure. Nothing references Worker.
