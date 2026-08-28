@@ -34,7 +34,8 @@ public sealed class NewsRiskLiveJudgmentRenderTests
         NewsJudgmentStatus status = NewsJudgmentStatus.Judged,
         IReadOnlyList<NewsJudgmentValidatedFinding>? findings = null,
         NewsTypingCompleteness typing = NewsTypingCompleteness.Backlog,
-        IReadOnlyList<Guid>? trajectoryFactIds = null) => new(
+        IReadOnlyList<Guid>? trajectoryFactIds = null,
+        int? factIdPrefixExpansions = null) => new(
         JudgeName: "judge-a",
         Provider: "openai",
         ModelId: "judge-model",
@@ -56,7 +57,8 @@ public sealed class NewsRiskLiveJudgmentRenderTests
         TypingCompleteness: typing,
         FamilyBundle: NewsJudgmentFamilyBundle.Capped,
         Families: [new NewsJudgmentFamilyRef(Guid.NewGuid(), Guid.NewGuid(), 3, 2)],
-        TrajectoryFactIds: trajectoryFactIds);
+        TrajectoryFactIds: trajectoryFactIds,
+        FactIdPrefixExpansionCount: factIdPrefixExpansions);
 
     private static NewsRiskLiveCompany Company(
         IReadOnlyList<NewsRiskLiveJudgment>? judgments, string? marker) => new(
@@ -91,14 +93,15 @@ public sealed class NewsRiskLiveJudgmentRenderTests
             GeneratedAtUtc: Now));
 
     /// <summary>
-    /// Spec 195 §2 moved the tag on from the v3 this file originally pinned: the live company row now
-    /// carries the current run's pre-collapse syndication measurement, and a reader has to be able to tell a
-    /// v3 document (NOT RECORDED, hydrating null) from a v4 document that measured an honest zero.
+    /// Spec 195 §2 moved the tag on from the v3 this file originally pinned, and spec 197 §1.2 moved it
+    /// again: the materialization block now carries the run's observation-to-evidence join measurement, and
+    /// a reader has to be able to tell a v4 document (NOT RECORDED, hydrating null) from a v5 document that
+    /// measured an honest zero.
     /// </summary>
     [Fact]
-    public void SchemaVersion_IsBumpedToV4()
+    public void SchemaVersion_IsBumpedToV5()
     {
-        Assert.Equal("news-risk-live-v4", NewsRiskLiveDocument.CurrentSchemaVersion);
+        Assert.Equal("news-risk-live-v5", NewsRiskLiveDocument.CurrentSchemaVersion);
     }
 
     [Fact]
@@ -207,5 +210,22 @@ public sealed class NewsRiskLiveJudgmentRenderTests
 
         Assert.DoesNotContain("Trajectory evidence:", markdown, StringComparison.Ordinal);
         Assert.Contains("Status: **AttemptsExhausted**", markdown, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Spec 197 §2.2: the citation-recovery measurement's THREE states render DISTINCTLY. A defaulted zero
+    /// must never read as a measured zero, and "not recorded" must never read as "nothing was expanded".
+    /// </summary>
+    [Theory]
+    [InlineData(null, "FactId prefix expansions: not recorded")]
+    [InlineData(0, "FactId prefix expansions: 0 (measured")]
+    [InlineData(3, "FactId prefix expansions: 3 shortened citation(s)")]
+    public void FactIdPrefixExpansions_RenderMeasuredZeroPositiveAndNotRecorded_Distinctly(
+        int? expansions, string expected)
+    {
+        var markdown = Render(Company(
+            [Judgment(factIdPrefixExpansions: expansions)], marker: null));
+
+        Assert.Contains(expected, markdown, StringComparison.Ordinal);
     }
 }

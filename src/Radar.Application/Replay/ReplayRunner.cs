@@ -55,6 +55,15 @@ namespace Radar.Application.Replay;
 /// changed since the old output was written, the two are not comparable, and a new label keeps both.
 /// </para>
 /// <para>
+/// <b>SCORE-ASSEMBLY DIAGNOSTICS ARE AGGREGATED FOR THE WHOLE INVOCATION (spec 197 §3).</b> The engine no
+/// longer warns per company about unresolved evidence or neutralized accrued news directions; it returns the
+/// counts on <see cref="CompanyScoreResult.Diagnostics"/>. Replay is exactly where the old shape was worst —
+/// strategies × as-of points × companies — so it aggregates through the SAME
+/// <see cref="ScoreAssemblyDiagnosticsAggregator"/> the forward pass uses and emits at most ONE Warning per
+/// category across the entire replay, with the distinct as-of count as a fourth honesty axis. Moving the
+/// Warning out of the shared engine must not make replay silent.
+/// </para>
+/// <para>
 /// DETERMINISTIC (AD-3). The nesting is fixed — strategies in configured order, then as-of instants
 /// ascending, then companies in repository order — and nothing in the scoring path reads a wall clock or a
 /// random source. Two identical replays over an unchanged signal store therefore produce identical output,
@@ -154,6 +163,15 @@ public sealed class ReplayRunner : IReplayRunner
 
         var snapshotsWritten = 0;
 
+        // Spec 197 §3: the engine no longer emits its own per-company Warnings for unresolved evidence
+        // (spec 145) or neutralized accrued news directions (spec 194 §1.4) — it returns the counts. Replay
+        // is the WORST case for the old shape: strategies × as-of points × companies, so a real series would
+        // have produced thousands of lines. Moving the Warning out of the shared engine must not make replay
+        // SILENT, so the same bounded pair is emitted here, once for the COMPLETE invocation, with the as-of
+        // axis included because a replay legitimately spans many instants.
+        var assemblyDiagnostics =
+            new ScoreAssemblyDiagnosticsAggregator($"Replay '{_plan.Label}'", reportAsOfAxis: true);
+
         // Fixed, deterministic nesting (AD-3): strategy → as-of instant (ascending) → company. Strategy
         // outermost so each strategy's store is resolved once and its whole series is written contiguously.
         foreach (var strategy in strategies)
@@ -186,6 +204,8 @@ public sealed class ReplayRunner : IReplayRunner
                     // THE point of the slice: the live engine, the live read seam, a historical as-of.
                     var result = await strategy.Engine
                         .ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
+                    assemblyDiagnostics.Record(
+                        strategy.Definition.Name, company.Id, asOfUtc, result.Diagnostics);
                     await scoreFileStore
                         .WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
                     snapshotsWritten++;
@@ -218,6 +238,10 @@ public sealed class ReplayRunner : IReplayRunner
                 strategy.Definition.Name,
                 series.Count);
         }
+
+        // Spec 197 §3: at most one Warning per diagnostic category for the COMPLETE replay invocation —
+        // never per strategy, per as-of point or per company.
+        assemblyDiagnostics.LogAggregates(_logger);
 
         _logger.LogInformation(
             "Replay '{Label}' complete: {SnapshotsWritten} snapshot(s) written across {StrategyCount} "

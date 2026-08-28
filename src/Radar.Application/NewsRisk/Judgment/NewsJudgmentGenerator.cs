@@ -214,6 +214,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         var unpersisted = new HashSet<(Guid CompanyId, string CohortKey)>();
         var exhaustedByCohort = new Dictionary<string, int>(StringComparer.Ordinal);
         var overSoftLimitRationalesByCohort = new Dictionary<string, int>(StringComparer.Ordinal);
+        var prefixExpansionsByCohort = new Dictionary<string, (int Expansions, int Judgments)>(
+            StringComparer.Ordinal);
         foreach (var cohort in typing.Cohorts)
         {
             foreach (var judge in _judges.Readers)
@@ -302,6 +304,19 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                             overSoftLimitRationalesByCohort.GetValueOrDefault(record.CohortKey) + 1;
                     }
 
+                    // Spec 197 §2.2: the citation-recovery pressure, aggregated ONCE per cohort (the
+                    // spec-145 precedent). Counted ONLY for a judgment this pass actually called the
+                    // provider for (spec 188 §1): a reused or cached verdict legitimately carries the
+                    // ORIGINAL call's expansion count, and replaying it here would report an old provider's
+                    // shorthand as current behaviour on exactly the re-run path this telemetry explains.
+                    if (madeProviderCall && record.FactIdPrefixExpansionCount is { } expansions
+                        && expansions > 0)
+                    {
+                        var running = prefixExpansionsByCohort.GetValueOrDefault(record.CohortKey);
+                        prefixExpansionsByCohort[record.CohortKey] =
+                            (running.Expansions + expansions, running.Judgments + 1);
+                    }
+
                     // Spec 187 §1: the durable write's OUTCOME is checked. An unpersisted result is not a
                     // durable judgment: it never joins the run result and never reaches a leaders row as a
                     // judged/challenged state — the row says `not-persisted` instead.
@@ -382,6 +397,28 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 cohortKey,
                 overLong,
                 NewsJudgmentValidator.MaxRationaleLength);
+        }
+
+        // Spec 197 §2.2: one Information line per cohort that expanded at least one citation — Information,
+        // not Warning, because a recovered citation is a measured PROMPT-CONTRACT signal, not a fault: the
+        // referent was deterministic in the supplied set or the citation would have failed. A cohort whose
+        // judge quoted every id in full says nothing, so silence here means "measured zero", and the
+        // per-record count says so durably.
+        foreach (var (cohortKey, measured) in prefixExpansionsByCohort.OrderBy(
+            e => e.Key, StringComparer.Ordinal))
+        {
+            _logger.LogInformation(
+                "News-judgment cohort {Cohort}: {Expansions} FactId citation(s) across {Judgments} "
+                    + "judgment(s) called this pass were shortened by the judge and deterministically "
+                    + "expanded to the single supplied fact each prefixed (minimum "
+                    + "{MinimumPrefixLength} hexadecimal characters, one referent or the citation fails). "
+                    + "Prompt {PromptVersion} asks for complete 36-character FactIds; a persistent count "
+                    + "here is prompt-tuning evidence, not a silent repair.",
+                cohortKey,
+                measured.Expansions,
+                measured.Judgments,
+                NewsJudgmentCitationResolver.MinimumPrefixLength,
+                NewsJudgmentContract.PromptVersion);
         }
 
         var markers = BuildPresentationMarkers(judgments, typing, runId, candidates, unpersisted);
@@ -492,6 +529,10 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 // very rationale it carries forward.
                 RationaleLength = cached.RationaleLength,
                 RationaleOverSoftLimit = cached.RationaleOverSoftLimit,
+                // Spec 197 §2.2: the replayed verdict keeps its ORIGINAL durable expansion count — it is
+                // truthful provenance of the call that produced it. It is NOT reported as a current-pass
+                // normalization: the aggregate below counts only judgments this pass actually called for.
+                FactIdPrefixExpansionCount = cached.FactIdPrefixExpansionCount,
                 ReusedFromJudgmentId = cached.JudgmentId,
             });
         }
@@ -612,6 +653,10 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         // failure, or no call at all) leaves them "not recorded".
                         RationaleLength = validated.RationaleLength,
                         RationaleOverSoftLimit = validated.RationaleOverSoftLimit,
+                        // Spec 197 §2.2: MEASURED whenever a response was examined — including a response
+                        // that then failed for an unrelated reason — so 0 means "every accepted citation
+                        // was already complete", never "not recorded".
+                        FactIdPrefixExpansionCount = validated.FactIdPrefixExpansionCount,
                     },
                     callDuration);
             }

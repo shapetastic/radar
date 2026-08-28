@@ -46,7 +46,7 @@ public sealed class NewsObservationEvidenceJoinTests
         Assert.Equal(evidenceId, match.EvidenceId);
         Assert.Equal(CompanyA, match.CompanyId);
         Assert.Equal(observationId, match.ObservationId);
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(1, 0, 0), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 1, 0, 0), join.Counts);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public sealed class NewsObservationEvidenceJoinTests
             [News(Id(3), "A completely different headline")]);
 
         Assert.Null(join.TryMatch(Id(3)));
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 1, 0), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 0, 1, 0), join.Counts);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public sealed class NewsObservationEvidenceJoinTests
 
         Assert.Null(join.TryMatch(Id(4)));
         Assert.Null(join.TryMatch(Id(5)));
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 1), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 0, 0, 1), join.Counts);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public sealed class NewsObservationEvidenceJoinTests
             [News(evidenceId, "Sector index rises")]);
 
         Assert.Null(join.TryMatch(evidenceId));
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 2), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 0, 0, 2), join.Counts);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public sealed class NewsObservationEvidenceJoinTests
 
         Assert.Equal(CompanyA, join.TryMatch(aEvidence)?.CompanyId);
         Assert.Null(join.TryMatch(bEvidence));
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(1, 1, 0), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 1, 1, 0), join.Counts);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public sealed class NewsObservationEvidenceJoinTests
         var join = NewsObservationEvidenceJoin.Build([observation], [News(evidenceId, "Acme wins order")]);
 
         Assert.Null(join.TryMatch(evidenceId));
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 1, 0), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 0, 1, 0), join.Counts);
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public sealed class NewsObservationEvidenceJoinTests
             [News(evidenceId, "***")]);
 
         Assert.Null(join.TryMatch(evidenceId));
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 1, 0), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 0, 1, 0), join.Counts);
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public sealed class NewsObservationEvidenceJoinTests
         Assert.Equal(low, forward.TryMatch(evidenceId)?.ObservationId);
         Assert.Equal(low, reversed.TryMatch(evidenceId)?.ObservationId);
         // BOTH observations count as joined: the buckets partition OBSERVATIONS.
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(2, 0, 0), forward.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 2, 0, 0), forward.Counts);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public sealed class NewsObservationEvidenceJoinTests
             ],
             [News(Id(12), "Joined headline"), News(Id(13), "Ambiguous headline")]);
 
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(1, 1, 2), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 1, 1, 2), join.Counts);
         Assert.Equal(
             4,
             join.Counts.Joined + join.Counts.UnjoinedNoMatch + join.Counts.UnjoinedAmbiguous);
@@ -196,7 +196,7 @@ public sealed class NewsObservationEvidenceJoinTests
     {
         var join = NewsObservationEvidenceJoin.Build([], []);
 
-        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 0), join.Counts);
+        Assert.Equal(new NewsObservationEvidenceJoinCounts(0, 0, 0, 0, 0), join.Counts);
         Assert.Null(join.TryMatch(Id(14)));
     }
 }

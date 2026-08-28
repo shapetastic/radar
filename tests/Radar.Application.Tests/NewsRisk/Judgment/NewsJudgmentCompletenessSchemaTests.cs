@@ -4,60 +4,63 @@ using Radar.Application.NewsTyping;
 namespace Radar.Application.Tests.NewsRisk.Judgment;
 
 /// <summary>
-/// Spec 189 §2: the persisted typing-completeness VOCABULARY widened, so the judgment RECORD tag moved to
-/// <c>news-judgment-v3</c> — and NOTHING else did. Typing completeness is run provenance the judge never
-/// sees, so widening it must not fork a stage-2 cohort, change a prompt, change a result schema or
-/// invalidate a cached verdict. Pinned here so a future edit to either side is a conscious act.
+/// The judgment record tag, the judge CONTRACT versions and the stage-2 cohort key, pinned together so a
+/// move to any of them is a conscious act.
+/// <para>
+/// Spec 189 §2 moved the RECORD tag alone (the persisted typing-completeness vocabulary widened) and
+/// deliberately moved neither contract version nor the cohort key — typing completeness is run provenance
+/// the judge never sees. Spec 192 §2 moved NOTHING (two appended trailing nullable fields).
+/// <b>Spec 197 §2.2 moves BOTH sides, deliberately and for different reasons</b>: the FactId grammar the
+/// validator accepts is part of the result contract, so <c>prompt-v3</c>/<c>schema-v3</c> fork the stage-2
+/// cohort (earning the accrued v2 validation failures a fresh budget and guaranteeing no v2 attempt is
+/// reused as a v3 one), and the record gained <c>FactIdPrefixExpansionCount</c>, whose presence changes what
+/// a persisted citation set MEANS — hence <c>news-judgment-v4</c>.
+/// </para>
 /// </summary>
 public sealed class NewsJudgmentCompletenessSchemaTests
 {
     [Fact]
-    public void OnlyTheRecordTagMoved_TheContractAndTheCohortKeyDidNot()
+    public void TheRecordTagAndTheContractVersions_ArePinned_AndTheTagIsNeverACohortKeyInput()
     {
-        Assert.Equal("news-judgment-v3", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-v4", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-prompt-v3", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-schema-v3", NewsJudgmentContract.SchemaVersion);
 
-        // The judge's own contract is UNCHANGED by spec 189 — the model request is byte-identical.
-        Assert.Equal("news-judgment-prompt-v2", NewsJudgmentContract.PromptVersion);
-        Assert.Equal("news-judgment-schema-v2", NewsJudgmentContract.SchemaVersion);
-
-        // …and so is the stage-2 cohort key it composes, asserted against the literal composition rather
-        // than against itself: the record tag is deliberately NOT one of its inputs.
+        // The stage-2 cohort key, asserted against the literal composition rather than against itself: the
+        // record tag is deliberately NOT one of its inputs, so widening a persisted field can never fork a
+        // cohort or invalidate a cached verdict.
         const string Stage1 = "openai:extractor-model|p|s|news-event-taxonomy-v1";
         var cohortKey = NewsJudgmentContract.CohortKey("openai", "judge-model", Stage1);
 
         Assert.Equal(
-            "openai:judge-model|news-judgment-prompt-v2|news-judgment-schema-v2|"
+            "openai:judge-model|news-judgment-prompt-v3|news-judgment-schema-v3|"
                 + $"stage1={Stage1}|families={FactFamilyBuilder.IdentityString}",
             cohortKey);
+        Assert.DoesNotContain("news-judgment-v4", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v3", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v2", cohortKey, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Spec 192 §2 rides the SAME conclusion for a different reason, so it is pinned in the same place: it
-    /// APPENDS two trailing nullable fields and re-means nothing, so neither the record tag nor the judge's
-    /// contract nor the stage-2 cohort key moves — which is what keeps every already-completed verdict
-    /// reusable through the cache instead of forcing the whole candidate set to be re-judged.
+    /// Spec 192 §2's two fields, and spec 197 §2.2's one, are all TRAILING and NULLABLE — so every pre-192
+    /// and pre-197 file on disk hydrates losslessly with "not recorded" rather than a fabricated 0/false
+    /// (AD-8). The ORDER matters as much as the nullability: an appended field must never displace an
+    /// existing positional parameter.
     /// </summary>
     [Fact]
-    public void Spec192_AppendedTrailingNullableFields_MovedNeitherTheTagNorTheContract()
+    public void TheAppendedProvenanceFields_AreTrailingAndNullable_SoOldFilesHydrateAsNotRecorded()
     {
-        Assert.Equal("news-judgment-v3", NewsJudgmentRecord.CurrentSchemaVersion);
-        Assert.Equal("news-judgment-prompt-v2", NewsJudgmentContract.PromptVersion);
-        Assert.Equal("news-judgment-schema-v2", NewsJudgmentContract.SchemaVersion);
-
-        // The fields exist, are nullable, and are the LAST two constructor parameters — so a pre-192 file
-        // hydrates losslessly with "not recorded" for both.
         var trailing = typeof(NewsJudgmentRecord)
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(2)
+            .TakeLast(3)
             .ToList();
         Assert.Equal(
             [
                 nameof(NewsJudgmentRecord.RationaleLength),
                 nameof(NewsJudgmentRecord.RationaleOverSoftLimit),
+                nameof(NewsJudgmentRecord.FactIdPrefixExpansionCount),
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

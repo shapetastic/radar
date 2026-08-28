@@ -69,13 +69,14 @@ public sealed class NewsRiskLiveSyndicationPersistenceTests
     }
 
     /// <summary>
-    /// A v4 document carries the measured values in the JSON — including an honest ZERO, which is a
-    /// measurement and must not be omitted into indistinguishability from "not recorded".
+    /// A current-schema document carries the measured values in the JSON — including an honest ZERO, which
+    /// is a measurement and must not be omitted into indistinguishability from "not recorded".
     /// </summary>
     [Theory]
     [InlineData(3, 4)]
     [InlineData(0, 0)]
-    public void V4Document_AlwaysWritesTheMeasuredValues_AndRoundTripsThem(int duplicates, int publishers)
+    public void CurrentDocument_AlwaysWritesTheMeasuredValues_AndRoundTripsThem(
+        int duplicates, int publishers)
     {
         var document = Document(Company(duplicates, publishers));
 
@@ -90,7 +91,7 @@ public sealed class NewsRiskLiveSyndicationPersistenceTests
 
         Assert.Equal(duplicates, company.SyndicatedDuplicateCount);
         Assert.Equal(publishers, company.SyndicatedDistinctPublisherCount);
-        Assert.Equal("news-risk-live-v4", round.SchemaVersion);
+        Assert.Equal("news-risk-live-v5", round.SchemaVersion);
     }
 
     private static NewsRiskLiveCompany Company(int? duplicates, int? publishers) => new(

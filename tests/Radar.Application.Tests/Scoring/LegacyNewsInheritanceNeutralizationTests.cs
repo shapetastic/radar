@@ -305,16 +305,30 @@ public sealed class LegacyNewsInheritanceNeutralizationTests
         Assert.Equal(
             "MediaAttention (Neutral), strength 4, confidence 0.50", honestLink.ContributionReason);
 
-        // One aggregated per-company Warning naming both axes and both windows (spec-145 precedent).
+        // Spec 197 §3: the counts are RETURNED on the transient diagnostics record, with the two axes and
+        // the two windows kept separate, and the ENGINE emits no Warning at all — the operator-facing
+        // Warning belongs to the caller that can see the whole strategy × company grid.
+        Assert.Equal(1, legacyResult.Diagnostics.CurrentWindowLegacyInheritanceNeutralized);
+        Assert.Equal(0, legacyResult.Diagnostics.CurrentWindowMalformedEnvelopeNeutralized);
+        Assert.Equal(0, legacyResult.Diagnostics.PreviousWindowLegacyInheritanceNeutralized);
+        Assert.Equal(0, legacyResult.Diagnostics.PreviousWindowMalformedEnvelopeNeutralized);
+        Assert.True(legacyResult.Diagnostics.HasNeutralization);
+        Assert.DoesNotContain(legacyLogger.Entries, e => e.Level == LogLevel.Warning);
+
+        // ONE bounded Debug line per affected evaluation, so the per-cell detail stays recoverable.
         var line = Assert.Single(
-            legacyLogger.Entries, e => e.Message.StartsWith("Neutralized ", StringComparison.Ordinal));
-        Assert.Equal(LogLevel.Warning, line.Level);
-        Assert.Contains("Neutralized 1 accrued spec-191 inherited news direction(s)", line.Message);
+            legacyLogger.Entries,
+            e => e.Message.StartsWith("Score assembly diagnostics", StringComparison.Ordinal));
+        Assert.Equal(LogLevel.Debug, line.Level);
+        Assert.Contains("neutralized 1 accrued spec-191 inherited news direction(s)", line.Message);
         Assert.Contains("0 unverifiable judgment-signal envelope(s)", line.Message);
 
-        // A run with nothing to suppress logs nothing new at all.
+        // A run with nothing to suppress reports nothing and logs nothing new at all.
+        Assert.Equal(ScoreAssemblyDiagnostics.None, honestResult.Diagnostics);
         Assert.DoesNotContain(
-            honestLogger.Entries, e => e.Message.StartsWith("Neutralized ", StringComparison.Ordinal));
+            honestLogger.Entries,
+            e => e.Message.StartsWith("Score assembly diagnostics", StringComparison.Ordinal));
+        Assert.DoesNotContain(honestLogger.Entries, e => e.Level == LogLevel.Warning);
     }
 
     // ---------------------------------------------------------------------------------------------

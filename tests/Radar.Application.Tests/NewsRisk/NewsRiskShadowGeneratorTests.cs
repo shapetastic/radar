@@ -860,7 +860,7 @@ public sealed class NewsRiskShadowGeneratorTests
 
         Assert.Equal(3, company.SyndicatedDuplicateCount);
         Assert.Equal(3, company.SyndicatedDistinctPublisherCount);
-        Assert.Equal("news-risk-live-v4", artifacts.LiveDocument.SchemaVersion);
+        Assert.Equal("news-risk-live-v5", artifacts.LiveDocument.SchemaVersion);
 
         Assert.Contains(
             "Syndication before collapse: 3 duplicate cop", artifacts.LiveMarkdown!, StringComparison.Ordinal);

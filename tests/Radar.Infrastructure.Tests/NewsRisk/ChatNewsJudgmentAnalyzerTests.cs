@@ -87,19 +87,19 @@ public sealed class ChatNewsJudgmentAnalyzerTests
     // is that Radar ASKED for the right thing, in rules rather than in commentary.
 
     [Fact]
-    public void SystemInstruction_IsPinned_SoAWordingChangeCannotStayInsidePromptV2()
+    public void SystemInstruction_IsPinned_SoAWordingChangeCannotStayInsideTheCurrentPromptVersion()
     {
         // A prompt edit that keeps the same PromptVersion would silently pool incomparable judgments in one
         // cohort. This hash is the change-detector: if it fails, either revert the wording or bump
         // NewsJudgmentContract.PromptVersion (which forks the cohort) in the SAME change.
-        const string Pinned = "c77ec39fca69c58764eea509d8cdba46622f147e12475a2d453e52470f789013";
+        const string Pinned = "2564720dce46cf109e82bf1f195a2c58ae5428cc520661945c3d428dfd33c4cf";
         var actual = CanonicalHash.Sha256Hex(ChatNewsJudgmentAnalyzer.SystemInstruction);
         var matchesPin = string.Equals(Pinned, actual, StringComparison.Ordinal);
 
         Assert.True(
             matchesPin,
             $"The stage-2 judge system instruction changed (pinned {Pinned}, actual {actual}). A wording "
-                + "change may NOT stay inside news-judgment-prompt-v2: bump "
+                + $"change may NOT stay inside {NewsJudgmentContract.PromptVersion}: bump "
                 + "NewsJudgmentContract.PromptVersion in the SAME change — it forks the stage-2 cohort key, "
                 + "so old and new judgments can never be reused for each other or pooled — and update this "
                 + "pin to the new hash. If the change was unintended, revert it.");
@@ -212,6 +212,55 @@ public sealed class ChatNewsJudgmentAnalyzerTests
 
         Assert.Contains(
             "Cite FactIds from this set only — in TrajectoryFactIds", message, StringComparison.Ordinal);
+    }
+
+    // ── Spec 197 §2.1: the v3 prompt CONTRACT — cite the COMPLETE id ─────────────────────────────────
+    //
+    // Five of nineteen calls on baseline run 0b48b865-… shortened supplied FactIds to eight characters and
+    // lost their whole response — findings included — to validation. v2 said "verbatim" in passing; v3
+    // states the requirement as its own rule, names the complete 36-character hyphenated form and applies
+    // it explicitly to BOTH citation lists. The resolver recovers a unique prefix deterministically, but
+    // the instruction is where the pressure should stop being generated.
+
+    [Fact]
+    public void SystemInstruction_DemandsTheCompleteFactId_ForBothCitationLists()
+    {
+        var instruction = ChatNewsJudgmentAnalyzer.SystemInstruction;
+
+        Assert.Contains(
+            "must be the COMPLETE 36-character hyphenated identifier exactly as supplied",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "NEVER abbreviate, truncate, shorten, paraphrase, reformat or invent an id",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "never cite only its first few characters", instruction, StringComparison.Ordinal);
+        Assert.Contains(
+            "applies to BOTH TrajectoryFactIds AND every finding's FactIds",
+            instruction,
+            StringComparison.Ordinal);
+
+        // The forked contract, so the wording and the cohort it forks cannot drift apart.
+        Assert.Equal("news-judgment-prompt-v3", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-schema-v3", NewsJudgmentContract.SchemaVersion);
+    }
+
+    [Fact]
+    public void UserMessage_RepeatsTheCompleteFactIdRule_BesideTheSuppliedFamilies()
+    {
+        var message = ChatNewsJudgmmentUserMessage(Family());
+
+        Assert.Contains(
+            "Copy each FactId as the COMPLETE 36-character hyphenated value printed below",
+            message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "never abbreviate, truncate, paraphrase or invent an id", message, StringComparison.Ordinal);
+        // …and the ids beside it are printed in exactly that complete form.
+        Assert.Contains(
+            "FactId: 22222222-2222-2222-2222-222222222222", message, StringComparison.Ordinal);
     }
 
     private static string ChatNewsJudgmmentUserMessage(NewsJudgmentInputFamily family) =>

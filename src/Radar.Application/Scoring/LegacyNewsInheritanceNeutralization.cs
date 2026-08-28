@@ -34,15 +34,16 @@ namespace Radar.Application.Scoring;
 /// <b>The match is on the exact legacy metadata SHAPE, never on <c>Direction != Neutral</c>.</b> Testing
 /// direction alone would silently suppress any future directional media family — including the spec-194
 /// §1.2 judgment-DERIVED signal this correction exists to make room for. So a signal qualifies only when it
-/// carries the spec-191 provenance keys declared on <see cref="NewsDirectionalSignalMetadata"/> and does NOT
-/// carry the §1.2 materializer token
-/// <see cref="NewsDirectionalSignalMetadata.JudgmentSignalVersionValue"/>. A <c>MediaAttention</c> signal
-/// with no metadata, or with metadata that is not this shape, passes through as the very same instance.
+/// carries the spec-191 provenance keys declared on <see cref="NewsDirectionalSignalMetadata"/> and carries
+/// NO <see cref="NewsDirectionalSignalMetadata.JudgmentSignalVersionKey"/> token at all — the current
+/// <c>news-judgment-signal-v2</c> identity and the retired-but-still-valid v1 one are BOTH judgment-derived
+/// and both pass through untouched (spec 197 §1.3). A <c>MediaAttention</c> signal with no metadata, or with
+/// metadata that is not this shape, passes through as the very same instance.
 /// </para>
 /// <para>
 /// <b>A malformed v1 envelope also fails closed, and is counted on its OWN axis.</b> A directional
-/// <c>MediaAttention</c> signal whose envelope cannot be read, or which claims
-/// <c>news-judgment-signal-v1</c> while missing the provenance that version promises, is asserting a
+/// <c>MediaAttention</c> signal whose envelope cannot be read, which claims an UNSUPPORTED materializer
+/// version, or which claims a supported one while missing the provenance that version promises, is asserting a
 /// direction whose grounding Radar cannot verify. Suppressing it follows the same rule as the legacy case —
 /// a score must never use a direction it cannot trace — but it is a DIFFERENT fact (a broken writer, versus
 /// a known-defective retired one), so the two are never pooled into one number.

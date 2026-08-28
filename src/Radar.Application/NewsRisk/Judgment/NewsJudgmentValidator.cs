@@ -23,7 +23,13 @@ public sealed record NewsJudgmentValidationResult(
     // whenever none survived. `RationaleOverSoftLimit` is the measured flag the soft bound now produces
     // INSTEAD of discarding the response; it never suppresses a finding.
     int RationaleLength,
-    bool RationaleOverSoftLimit);
+    bool RationaleOverSoftLimit,
+    // Spec 197 §2.2: how many RAW CITATION OCCURRENCES the shared citation resolver deterministically
+    // expanded from a hexadecimal prefix to the complete supplied FactId, across trajectory plus findings.
+    // ALWAYS measured here (this type is only ever produced by Validate, so "not recorded" is
+    // unrepresentable — that state exists only on a pre-197 record on disk), and it INCLUDES expansions
+    // performed before a later, unrelated validation error failed the response.
+    int FactIdPrefixExpansionCount);
 
 /// <summary>
 /// Mechanical validation of one judge response (spec 185 §2, made STRICT by spec 187 §1), pure and
@@ -66,6 +72,16 @@ public sealed record NewsJudgmentValidationResult(
 /// <item>a validated response with ZERO emitted findings and a parsed trajectory IS the supportive read
 /// (<see cref="NewsJudgmentStatus.Judged"/> with no findings) — expressed factually, never as "safe".</item>
 /// </list>
+/// <para>
+/// <b>Spec 197 §2.1 — every FactId citation, trajectory and finding alike, goes through ONE
+/// <see cref="NewsJudgmentCitationResolver"/></b>. A complete supplied GUID is accepted exactly as before;
+/// a hyphen-free hexadecimal token of 8-31 characters that prefixes exactly ONE supplied representative
+/// FactId is expanded to it (the live provider shortened ids to eight characters on 5 of 19 calls, and the
+/// responses' real findings were then never examined); and zero matches, two-or-more matches, a too-short
+/// prefix, a suffix/substring and any other malformed token each fail with their own NAMED reason. The
+/// supplied-set rule itself is not relaxed: recovery is scoped to the families this company's judge was
+/// actually handed, so the referent is deterministic or the citation fails.
+/// </para>
 /// <para>
 /// <b>Assertion status and event types are read from the REPRESENTATIVE fact actually supplied to the
 /// judge</b> (<see cref="NewsJudgmentInputFamily"/>), never from an unprovided family member. That is
@@ -144,6 +160,12 @@ public static class NewsJudgmentValidator
         var dropReasons = new List<string>();
         var rawFindings = response.Findings ?? [];
 
+        // Spec 197 §2.1 — ONE resolver, shared by the trajectory gate and the finding loop below, scoped to
+        // the families ACTUALLY supplied to the judge for this company. It also owns the single expansion
+        // counter, so "raw citation occurrences expanded across trajectory plus findings" has exactly one
+        // definition and one accumulation point.
+        var citations = new NewsJudgmentCitationResolver(familyByFactId.Keys);
+
         // Rationale: trimmed, then scrubbed through the ONE shared advice-language guard, and only THEN
         // measured (spec 192 §1's ordering fix — the scrub used to run AFTER the length check, so the one
         // kind of rationale that most needed scrubbing was the one never scrubbed at all).
@@ -160,7 +182,12 @@ public static class NewsJudgmentValidator
             // advice-scrubbed) rationale fails the WHOLE response rather than rendering a clean-looking
             // zero-finding read with nothing behind it. Unchanged by spec 192: only the LENGTH rule moved.
             dropReasons.Add("rationale-missing: a judged response requires a non-blank factual rationale");
-            return Failed(rawFindings.Count, rationale: null, dropReasons, rationaleLength: 0);
+            return Failed(
+                rawFindings.Count,
+                rationale: null,
+                dropReasons,
+                rationaleLength: 0,
+                citations.ExpansionCount);
         }
 
         // The measured fact the soft bound now produces INSTEAD of a failure. It travels onto the record so
@@ -171,13 +198,18 @@ public static class NewsJudgmentValidator
         {
             dropReasons.Add(
                 $"trajectory-token-invalid: '{response.BusinessTrajectory}' is not a defined trajectory");
-            return Failed(rawFindings.Count, rationale, dropReasons, rationaleLength);
+            return Failed(rawFindings.Count, rationale, dropReasons, rationaleLength, citations.ExpansionCount);
         }
 
         if (!TryValidateTrajectoryEvidence(
-            response.TrajectoryFactIds, trajectory, familyByFactId, dropReasons, out var trajectoryFactIds))
+            response.TrajectoryFactIds,
+            trajectory,
+            familyByFactId,
+            citations,
+            dropReasons,
+            out var trajectoryFactIds))
         {
-            return Failed(rawFindings.Count, rationale, dropReasons, rationaleLength);
+            return Failed(rawFindings.Count, rationale, dropReasons, rationaleLength, citations.ExpansionCount);
         }
 
         var accepted = new List<NewsJudgmentValidatedFinding>();
@@ -213,14 +245,19 @@ public static class NewsJudgmentValidator
             var citedOk = true;
             foreach (var rawId in finding.FactIds ?? [])
             {
-                if (!Guid.TryParse(rawId, out var id) || !familyByFactId.ContainsKey(id))
+                // Spec 197 §2.1: the SAME resolver the trajectory gate uses. A complete supplied GUID is
+                // accepted unchanged; a unique 8-31 character hexadecimal prefix of exactly one supplied
+                // FactId expands to it; everything else drops the finding with its OWN named reason.
+                var resolution = citations.Resolve(rawId);
+                if (!resolution.Resolved)
                 {
-                    dropReasons.Add($"finding[{i}] cited-fact-not-supplied: '{rawId}'");
+                    dropReasons.Add(
+                        $"finding[{i}] cited-{resolution.ReasonCode}: '{rawId}' {resolution.ReasonDetail}");
                     citedOk = false;
                     break;
                 }
 
-                citedIds.Add(id);
+                citedIds.Add(resolution.FactId);
             }
 
             if (!citedOk)
@@ -286,13 +323,13 @@ public static class NewsJudgmentValidator
                 $"{RationaleExceedsHardLimitReason}: {rationaleLength} characters exceeds the "
                     + $"{MaxRationaleHardLimit}-character hard ceiling, so the response is treated as "
                     + "malformed rather than as a verbose factual rationale");
-            return Failed(total, rationale, dropReasons, rationaleLength);
+            return Failed(total, rationale, dropReasons, rationaleLength, citations.ExpansionCount);
         }
 
         if (total > 0 && accepted.Count == 0)
         {
             // Every finding failed: fail closed. NEVER the no-challenge/supportive read.
-            return Failed(total, rationale, dropReasons, rationaleLength);
+            return Failed(total, rationale, dropReasons, rationaleLength, citations.ExpansionCount);
         }
 
         int? strength;
@@ -305,7 +342,7 @@ public static class NewsJudgmentValidator
                         + $"{accepted.Count} surviving finding(s)");
                 // The whole response fails, so the individually-accepted findings are discarded with it:
                 // FindingsAccepted must equal Findings.Count (0), never a pre-failure count.
-                return Failed(total, rationale, dropReasons, rationaleLength);
+                return Failed(total, rationale, dropReasons, rationaleLength, citations.ExpansionCount);
             }
 
             strength = s;
@@ -328,7 +365,8 @@ public static class NewsJudgmentValidator
             FindingDropReasons: dropReasons,
             TrajectoryFactIds: trajectoryFactIds,
             RationaleLength: rationaleLength,
-            RationaleOverSoftLimit: rationaleLength > MaxRationaleLength);
+            RationaleOverSoftLimit: rationaleLength > MaxRationaleLength,
+            FactIdPrefixExpansionCount: citations.ExpansionCount);
     }
 
     /// <summary>
@@ -350,6 +388,7 @@ public static class NewsJudgmentValidator
         IReadOnlyList<string>? rawTrajectoryFactIds,
         NewsJudgmentTrajectory trajectory,
         IReadOnlyDictionary<Guid, NewsJudgmentInputFamily> familyByFactId,
+        NewsJudgmentCitationResolver citations,
         List<string> dropReasons,
         out IReadOnlyList<Guid> trajectoryFactIds)
     {
@@ -359,22 +398,26 @@ public static class NewsJudgmentValidator
         var seen = new HashSet<Guid>();
         foreach (var rawId in rawTrajectoryFactIds ?? [])
         {
-            // Guid.TryParse IS the ordinal-preserving normalization: two spellings of one id canonicalise
-            // onto the same value, so "distinct" cannot be defeated by casing or brace/hyphen formatting.
-            if (!Guid.TryParse(rawId, out var id) || !familyByFactId.ContainsKey(id))
+            // Spec 197 §2.1 — the SHARED resolver (never a second copy): a complete supplied GUID is
+            // accepted unchanged, a unique hexadecimal prefix of exactly one SUPPLIED representative FactId
+            // expands to it, and every other shorthand fails with its own named reason.
+            var resolution = citations.Resolve(rawId);
+            if (!resolution.Resolved)
             {
                 dropReasons.Add(
-                    $"trajectory-fact-not-supplied: '{rawId}' is not a supplied representative fact id");
+                    $"trajectory-{resolution.ReasonCode}: '{rawId}' {resolution.ReasonDetail}");
                 return false;
             }
 
-            if (!seen.Add(id))
+            // Rule 5: distinctness is checked AFTER expansion, so a complete GUID and its own prefix in one
+            // list are ONE citation cited twice — a duplicate, not two independent citations.
+            if (!seen.Add(resolution.FactId))
             {
                 dropReasons.Add($"trajectory-fact-duplicate: '{rawId}' was cited more than once");
                 return false;
             }
 
-            ids.Add(id);
+            ids.Add(resolution.FactId);
         }
 
         if (trajectory == NewsJudgmentTrajectory.Unknown)
@@ -429,7 +472,11 @@ public static class NewsJudgmentValidator
     }
 
     private static NewsJudgmentValidationResult Failed(
-        int total, string? rationale, List<string> dropReasons, int rationaleLength) =>
+        int total,
+        string? rationale,
+        List<string> dropReasons,
+        int rationaleLength,
+        int factIdPrefixExpansionCount) =>
         new(
             NewsJudgmentStatus.ValidationFailed,
             BusinessTrajectory: null,
@@ -444,5 +491,8 @@ public static class NewsJudgmentValidator
             // Measured on a failure too: a failed attempt's rationale length is exactly the number a
             // prompt-tuning read needs, and 0 honestly describes a rationale that did not survive.
             RationaleLength: rationaleLength,
-            RationaleOverSoftLimit: rationaleLength > MaxRationaleLength);
+            RationaleOverSoftLimit: rationaleLength > MaxRationaleLength,
+            // Spec 197 §2.2: expansions performed BEFORE the failure are still real, measured pressure on
+            // the citation contract — they are recorded on the failed record, not discarded with it.
+            FactIdPrefixExpansionCount: factIdPrefixExpansionCount);
 }

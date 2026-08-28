@@ -73,6 +73,91 @@ public sealed class NewsRiskLiveSignalMaterializationRenderTests
     }
 
     [Fact]
+    public void TheJoinMeasurement_RendersEveryRoute_AndSaysSoWhenItWasNotAttempted()
+    {
+        // SPEC 197 §1.2 — the run's observation→evidence ladder measurement, rendered beside the
+        // materialization it explains. The three joined ROUTES are named separately: pooling them would
+        // hide a regression in the strong tiers behind the weak one's count.
+        var measured = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(
+            new NewsJudgmentSignalMaterializationSummary(
+                JudgmentsConsidered: 9,
+                Eligible: 9,
+                Materialized: 9,
+                AlreadyMaterialized: 0,
+                ValidationRejected: 0,
+                WriteFailed: 0,
+                Skips: new Dictionary<NewsJudgmentSignalSkipReason, int>(),
+                PriorVersionOccupied: 0,
+                JoinCounts: new NewsObservationEvidenceJoinCounts(3185, 0, 0, 0, 9))));
+
+        Assert.Contains("Observations: 3194", measured, StringComparison.Ordinal);
+        Assert.Contains("joined: 3185", measured, StringComparison.Ordinal);
+        Assert.Contains("exact article + instant: 3185", measured, StringComparison.Ordinal);
+        Assert.Contains("exact article URL: 0", measured, StringComparison.Ordinal);
+        Assert.Contains("unique-headline fallback: 0", measured, StringComparison.Ordinal);
+        Assert.Contains("no match: 0", measured, StringComparison.Ordinal);
+        Assert.Contains(
+            "ambiguous (identity refused, never guessed): 9", measured, StringComparison.Ordinal);
+
+        // NOT ATTEMPTED is a different fact from a measured zero, and the artifact says which one it is —
+        // a defaulted zero must never render as a measured zero.
+        var notAttempted = NewsRiskLiveArtifactRenderer.RenderMarkdown(
+            Document(NewsJudgmentSignalMaterializationSummary.Empty));
+
+        Assert.Contains("Not attempted this run", notAttempted, StringComparison.Ordinal);
+        Assert.Contains("This is NOT a measured zero.", notAttempted, StringComparison.Ordinal);
+        Assert.DoesNotContain("Observations: 0", notAttempted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AMeasuredZeroJoin_RendersItsZeros_RatherThanTheNotAttemptedSentence()
+    {
+        var markdown = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(
+            new NewsJudgmentSignalMaterializationSummary(
+                JudgmentsConsidered: 1,
+                Eligible: 1,
+                Materialized: 0,
+                AlreadyMaterialized: 0,
+                ValidationRejected: 0,
+                WriteFailed: 0,
+                Skips: new Dictionary<NewsJudgmentSignalSkipReason, int>
+                {
+                    [NewsJudgmentSignalSkipReason.ObservationNoMatch] = 1,
+                },
+                PriorVersionOccupied: 0,
+                JoinCounts: NewsObservationEvidenceJoinCounts.Empty)));
+
+        Assert.Contains("Observations: 0", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("Not attempted this run", markdown, StringComparison.Ordinal);
+
+        // The split reason is rendered by its own name, so a future run can tell missing evidence from a
+        // deliberately refused identity.
+        Assert.Contains(
+            "Not materialized, by reason: observation-no-match 1", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ThePriorVersionOccupancyCount_IsRendered_OnItsOwnAxis()
+    {
+        // SPEC 197 §1.3 — the one-time migration across the news-judgment-signal-v1 → v2 fork must be
+        // visible enough to be seen draining, not hidden inside AlreadyMaterialized.
+        var markdown = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(
+            new NewsJudgmentSignalMaterializationSummary(
+                JudgmentsConsidered: 3,
+                Eligible: 3,
+                Materialized: 1,
+                AlreadyMaterialized: 0,
+                ValidationRejected: 0,
+                WriteFailed: 0,
+                Skips: new Dictionary<NewsJudgmentSignalSkipReason, int>(),
+                PriorVersionOccupied: 2,
+                JoinCounts: NewsObservationEvidenceJoinCounts.Empty)));
+
+        Assert.Contains(
+            "already held under the retired v1 identity: 2", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AnEmptySkipMapRendersNoneRatherThanAnEmptyList()
     {
         var markdown = NewsRiskLiveArtifactRenderer.RenderMarkdown(

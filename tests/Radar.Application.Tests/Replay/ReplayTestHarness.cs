@@ -134,6 +134,11 @@ internal sealed class ReplayTestHarness : IDisposable
     /// Seeds one Approved signal + its evidence into the in-memory repositories AND the on-disk signal store,
     /// mirroring exactly what the pipeline persists for a signal. <paramref name="createdAtUtc"/> is the
     /// spec-136 knowledge date — when Radar learned this, as opposed to when it happened.
+    /// <para>
+    /// Set <paramref name="persistEvidence"/> to false to reproduce the accrued shape spec 145 heals only
+    /// FORWARD: a signal whose <c>EvidenceId</c> resolves to nothing, which the engine must drop and count
+    /// rather than score.
+    /// </para>
     /// </summary>
     public async Task<(Signal Signal, EvidenceItem Evidence)> SeedSignalAsync(
         Guid companyId,
@@ -143,7 +148,8 @@ internal sealed class ReplayTestHarness : IDisposable
         EvidenceQuality quality = EvidenceQuality.High,
         SignalDirection direction = SignalDirection.Positive,
         int strength = 6,
-        string? metadataJson = null)
+        string? metadataJson = null,
+        bool persistEvidence = true)
     {
         var evidence = new EvidenceBuilder()
             .WithId(Guid.NewGuid())
@@ -166,7 +172,11 @@ internal sealed class ReplayTestHarness : IDisposable
             .WithMetadataJson(metadataJson)
             .Build();
 
-        await Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+        if (persistEvidence)
+        {
+            await Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+        }
+
         await Signals.AddAsync(signal, CancellationToken.None);
         await SignalFileStore.WriteAsync(signal, ReviewFor(signal), CancellationToken.None);
 

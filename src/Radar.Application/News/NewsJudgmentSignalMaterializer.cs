@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Abstractions.Persistence;
@@ -129,11 +131,22 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
     /// Public because it IS the idempotency contract, not an implementation detail: a caller asking whether
     /// a judgment has already been materialized asks this, never a heuristic over stored signals.
     /// </summary>
-    public static Guid SignalIdFor(Guid judgmentId) => DeterministicGuid.FromCanonicalString(
-        "radar:news-judgment-signal:"
-            + NewsDirectionalSignalMetadata.JudgmentSignalVersionValue
-            + ":"
-            + judgmentId.ToString("D"));
+    public static Guid SignalIdFor(Guid judgmentId) =>
+        SignalIdFor(NewsDirectionalSignalMetadata.JudgmentSignalVersionValue, judgmentId);
+
+    /// <summary>
+    /// SPEC 197 §1.3 — the id the RETIRED <c>news-judgment-signal-v1</c> materializer would have minted for
+    /// the same judgment. Public and declared here, beside the current derivation and sharing its one
+    /// canonical-string shape, so the prior-version occupancy check has exactly ONE definition: a second
+    /// hand-rolled copy would let "already materialized under v1" and "mint a v2" disagree, which is the
+    /// duplicate this fork exists to prevent.
+    /// </summary>
+    public static Guid RetiredV1SignalIdFor(Guid judgmentId) =>
+        SignalIdFor(NewsDirectionalSignalMetadata.RetiredJudgmentSignalVersionV1, judgmentId);
+
+    private static Guid SignalIdFor(string materializerVersion, Guid judgmentId) =>
+        DeterministicGuid.FromCanonicalString(
+            "radar:news-judgment-signal:" + materializerVersion + ":" + judgmentId.ToString("D"));
 
     public async Task<NewsJudgmentSignalMaterializationSummary> MaterializeAsync(
         NewsJudgmentRunResult judgment, NewsTypingRunResult typing, CancellationToken ct)
@@ -151,6 +164,8 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
         if (NewsJudgmentPresentationCohort.TryResolve(_options, _judges, typing) is not { } presentation)
         {
             skips[NewsJudgmentSignalSkipReason.PresentationCohortUnresolved] = 1;
+            // JoinCounts stays NULL: the join was not attempted at all (neither store was read), which is a
+            // different fact from a join that measured zero (spec 197 §1.2).
             var unresolved = new NewsJudgmentSignalMaterializationSummary(
                 JudgmentsConsidered: judgment.Judgments.Count,
                 Eligible: 0,
@@ -208,6 +223,8 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
 
         if (candidates.Count == 0)
         {
+            // Again NOT ATTEMPTED, deliberately: no candidate survived the cheap gates, so the observation
+            // archive and evidence store were never read and there is no measurement to report.
             var nothing = new NewsJudgmentSignalMaterializationSummary(
                 JudgmentsConsidered: judgment.Judgments.Count,
                 Eligible: 0,
@@ -237,6 +254,7 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
 
         var materialized = 0;
         var alreadyMaterialized = 0;
+        var priorVersionOccupied = 0;
         var validationRejected = 0;
         var writeFailed = 0;
 
@@ -256,6 +274,9 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
                         break;
                     case MaterializationOutcome.AlreadyMaterialized:
                         alreadyMaterialized++;
+                        break;
+                    case MaterializationOutcome.PriorVersionOccupied:
+                        priorVersionOccupied++;
                         break;
                     case MaterializationOutcome.ValidationRejected:
                         validationRejected++;
@@ -293,7 +314,11 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
             AlreadyMaterialized: alreadyMaterialized,
             ValidationRejected: validationRejected,
             WriteFailed: writeFailed,
-            Skips: skips);
+            Skips: skips,
+            PriorVersionOccupied: priorVersionOccupied,
+            // The join WAS attempted on this path, so its measured buckets are reported — including an
+            // honest zero (spec 197 §1.2).
+            JoinCounts: join.Counts);
         LogSummary(summary, presentation.CohortKey);
         return summary;
     }
@@ -339,13 +364,23 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
         var evidenceIds = new List<Guid>(observationIds.Count);
         foreach (var observationId in observationIds)
         {
-            // The REVERSE join direction (spec 194 §1.2): a cited fact names its observation, and the
-            // observation must resolve to exactly one news evidence item. Every fail-closed rule the join
-            // already enforces — blank key, no match, two evidence items, two companies — surfaces here as
-            // a null match, which is why there is no second, looser join anywhere in this class.
-            if (join.TryMatchByObservation(observationId) is not { } match)
+            // The REVERSE join direction (spec 194 §1.2, typed by spec 197 §1.2): a cited fact names its
+            // observation, and the observation must resolve to exactly one news evidence item through the
+            // ladder. Every fail-closed rule the join enforces — blank key, no candidate at any tier, two
+            // evidence items, two companies — surfaces here as a non-joined DISPOSITION, which is why there
+            // is no second, looser join anywhere in this class.
+            //
+            // The two non-joined outcomes are counted apart because they mean different things: no-match is
+            // a coverage gap (Radar holds no evidence for the cited article) while ambiguous is a decision
+            // (Radar refused to guess which of several articles the judgment cited).
+            var resolution = join.Resolve(observationId);
+            if (resolution.Match is not { } match)
             {
-                Count(skips, NewsJudgmentSignalSkipReason.UnresolvedObservation);
+                Count(
+                    skips,
+                    resolution.Disposition == NewsObservationEvidenceDisposition.Ambiguous
+                        ? NewsJudgmentSignalSkipReason.ObservationAmbiguous
+                        : NewsJudgmentSignalSkipReason.ObservationNoMatch);
                 return MaterializationOutcome.Skipped;
             }
 
@@ -358,9 +393,10 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
             if (!evidenceById.ContainsKey(match.EvidenceId))
             {
                 // Defence in depth: the join is built FROM this same evidence list, so a joined evidence id
-                // is always present. Treated as an unresolved observation rather than trusted, because a
-                // signal referencing evidence this pass cannot read is a provenance claim Radar cannot make.
-                Count(skips, NewsJudgmentSignalSkipReason.UnresolvedObservation);
+                // is always present. Counted on its OWN axis rather than trusted, because a signal
+                // referencing evidence this pass cannot read is a provenance claim Radar cannot make — and
+                // an impossible state must never be readable as an ordinary coverage gap.
+                Count(skips, NewsJudgmentSignalSkipReason.JoinedEvidenceMissing);
                 return MaterializationOutcome.Skipped;
             }
 
@@ -388,6 +424,22 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
         if (await _signalRepository.GetByIdAsync(signalId, ct).ConfigureAwait(false) is not null)
         {
             return MaterializationOutcome.AlreadyMaterialized;
+        }
+
+        // SPEC 197 §1.3 — PRIOR-VERSION OCCUPANCY. The materializer identity forked to
+        // news-judgment-signal-v2, which changes the deterministic id; without this check every judgment
+        // already materialized under v1 would mint a SECOND signal for the same verdict, doubling its
+        // directional mass. The v1 signal is not overwritten, not rewritten and not deleted (AD-8/AD-1) — it
+        // is simply honoured as this judgment's signal.
+        //
+        // Only a STRUCTURALLY VALID v1 record counts as occupancy: the shared classifier is the one
+        // definition of that (it accepts every supported materializer version), and a missing or malformed
+        // record at the v1 id is NOT a grounded direction, so it must not suppress an honest v2 attempt.
+        var retiredId = RetiredV1SignalIdFor(record.JudgmentId);
+        var retired = await _signalRepository.GetByIdAsync(retiredId, ct).ConfigureAwait(false);
+        if (retired is not null && NewsDirectionalSignalMetadata.IsJudgmentDerived(retired))
+        {
+            return MaterializationOutcome.PriorVersionOccupied;
         }
 
         // The supporting excerpt is a CITATION, taken in the validated facts' persisted order and, within a
@@ -542,18 +594,30 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
     private void LogSummary(NewsJudgmentSignalMaterializationSummary summary, string? cohortKey)
     {
         var skipDetail = summary.DescribeSkips();
+        var join = summary.JoinCounts is { } counts
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"{counts.Observations} observation(s): exact-article-instant {counts.ExactArticleInstant}, "
+                    + $"exact-article-url {counts.ExactArticleUrl}, unique-headline-fallback "
+                    + $"{counts.UniqueHeadlineFallback}, no-match {counts.UnjoinedNoMatch}, ambiguous "
+                    + $"{counts.UnjoinedAmbiguous}")
+            : "not attempted";
+
         _logger.LogInformation(
             "Judgment-derived news signals: {Considered} judgment(s) considered, {Eligible} eligible, "
                 + "{Materialized} materialized, {AlreadyMaterialized} already materialized, "
+                + "{PriorVersionOccupied} already held under the retired v1 identity, "
                 + "{ValidationRejected} validation-rejected, {WriteFailed} not durably persisted; "
-                + "skips: {Skips}. Presentation cohort: {CohortKey}.",
+                + "skips: {Skips}. Observation-to-evidence join: {Join}. Presentation cohort: {CohortKey}.",
             summary.JudgmentsConsidered,
             summary.Eligible,
             summary.Materialized,
             summary.AlreadyMaterialized,
+            summary.PriorVersionOccupied,
             summary.ValidationRejected,
             summary.WriteFailed,
             skipDetail.Length > 0 ? skipDetail : "none",
+            join,
             cohortKey ?? "(unresolved)");
     }
 
@@ -567,6 +631,9 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
         Skipped,
         Materialized,
         AlreadyMaterialized,
+
+        /// <summary>SPEC 197 §1.3 — a structurally valid signal already exists under the retired v1 identity.</summary>
+        PriorVersionOccupied,
         ValidationRejected,
         WriteFailed,
     }

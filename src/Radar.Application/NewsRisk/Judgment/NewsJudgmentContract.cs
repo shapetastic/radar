@@ -16,14 +16,29 @@ public static class NewsJudgmentContract
     /// <c>BusinessTrajectory</c>, and the instruction states the absence/price/marker rules the first live
     /// run showed a v1 judge violating. A forked prompt version forks the cohort key, so a v1 judgment can
     /// never be reused for, or pooled with, a v2 one.
+    /// <para>
+    /// <b>Spec 197 §2.2 forked it again to <c>v3</c>.</b> The instruction now states, as a rule rather than
+    /// as the word "verbatim", that a citation must be the COMPLETE 36-character hyphenated FactId — never
+    /// abbreviated, truncated, paraphrased or invented — for <c>TrajectoryFactIds</c> AND every finding's
+    /// <c>FactIds</c>. Five of nineteen live v2 calls shortened ids to eight characters and lost their whole
+    /// response to validation as a result.
+    /// </para>
     /// </summary>
-    public const string PromptVersion = "news-judgment-prompt-v2";
+    public const string PromptVersion = "news-judgment-prompt-v3";
 
     /// <summary>
     /// Spec 187 §1 forked this to <c>v2</c>: the structured response gained <c>TrajectoryFactIds</c>, so
     /// the v1 and v2 result shapes are not interchangeable and must not share a cohort.
+    /// <para>
+    /// <b>Spec 197 §2.2 forked it to <c>v3</c>.</b> The JSON property SHAPE is unchanged, but a FactId's
+    /// ACCEPTED GRAMMAR is part of the result schema: v3 additionally admits a unique 8-31 character
+    /// hexadecimal prefix of a supplied representative FactId (<see cref="NewsJudgmentCitationResolver"/>),
+    /// so a v2 and a v3 response are not judged by the same rules and must not share a cohort. Forking
+    /// earns the accrued v2 failures a FRESH attempt budget under a contract that can accept their
+    /// citations, and guarantees no completed-or-failed v2 attempt is reused as a v3 one.
+    /// </para>
     /// </summary>
-    public const string SchemaVersion = "news-judgment-schema-v2";
+    public const string SchemaVersion = "news-judgment-schema-v3";
 
     /// <summary>
     /// The ONE stage-2 cohort-identity composition (spec 185 §3): judge provider + exact model id + this

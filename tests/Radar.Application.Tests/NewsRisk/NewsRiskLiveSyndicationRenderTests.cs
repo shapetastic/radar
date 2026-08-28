@@ -63,11 +63,14 @@ public sealed class NewsRiskLiveSyndicationRenderTests
         Companies: companies,
         GeneratedAtUtc: Now);
 
-    /// <summary>The tag moved BECAUSE the company row gained the measurement (spec 195 §2).</summary>
+    /// <summary>
+    /// The tag moved BECAUSE the company row gained the measurement (spec 195 §2), and again because the
+    /// materialization block gained the join measurement (spec 197 §1.2).
+    /// </summary>
     [Fact]
-    public void SchemaVersion_IsV4()
+    public void SchemaVersion_IsV5()
     {
-        Assert.Equal("news-risk-live-v4", NewsRiskLiveDocument.CurrentSchemaVersion);
+        Assert.Equal("news-risk-live-v5", NewsRiskLiveDocument.CurrentSchemaVersion);
     }
 
     /// <summary>A company that syndicated renders its compact line, naming both measured numbers.</summary>

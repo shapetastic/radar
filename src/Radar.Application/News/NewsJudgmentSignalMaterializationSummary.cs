@@ -36,7 +36,13 @@ public enum NewsJudgmentSignalSkipReason
     /// <summary>A cited fact id does not resolve in the presentation cohort's stage-1 fact index.</summary>
     UnresolvedFact,
 
-    /// <summary>A cited fact's source observation does not resolve to exactly one news evidence item through the join.</summary>
+    /// <summary>
+    /// RETAINED FOR ACCRUED ARTIFACTS ONLY — spec 197 §1.2 split this generic reason into
+    /// <see cref="ObservationNoMatch"/> and <see cref="ObservationAmbiguous"/>, because "Radar collected no
+    /// evidence for the cited article" and "Radar deliberately refused an ambiguous identity" are different
+    /// facts and only the second is a policy decision. It is never newly produced; it stays declared so a
+    /// pre-197 live artifact carrying the token still deserializes (the spec-189 <c>Failed</c> precedent).
+    /// </summary>
     UnresolvedObservation,
 
     /// <summary>A cited fact or its joined evidence belongs to a DIFFERENT company than the judgment — Radar never attaches one company's verdict to another's article.</summary>
@@ -50,6 +56,29 @@ public enum NewsJudgmentSignalSkipReason
 
     /// <summary>An unexpected error occurred for this company. Counted rather than thrown, so one bad record cannot silence the rest of the pass.</summary>
     UnexpectedFailure,
+
+    /// <summary>
+    /// SPEC 197 §1.2 — a cited fact's source observation matched NO evidence at any tier of the join's
+    /// ladder. Radar holds no news evidence for that article: a collection/coverage gap, not an identity
+    /// decision.
+    /// </summary>
+    ObservationNoMatch,
+
+    /// <summary>
+    /// SPEC 197 §1.2 — a cited fact's source observation matched two or more evidence items, or a key two
+    /// or more companies claim, at the strongest tier that matched at all. Radar REFUSED the identity rather
+    /// than guessing which article the judgment cited; the ladder never falls through to a weaker key to
+    /// make ambiguity disappear.
+    /// </summary>
+    ObservationAmbiguous,
+
+    /// <summary>
+    /// Defence in depth: the observation joined, but the evidence id it joined to is absent from the
+    /// evidence this pass read. Impossible by construction (the join is built FROM that same list), and
+    /// counted on its own axis rather than folded into <see cref="ObservationNoMatch"/> so that an
+    /// impossible state can never be read as an ordinary coverage gap.
+    /// </summary>
+    JoinedEvidenceMissing,
 }
 
 /// <summary>
@@ -61,10 +90,12 @@ public enum NewsJudgmentSignalSkipReason
 /// <see cref="Materialized"/> is how many became a DURABLE signal; <see cref="AlreadyMaterialized"/> is the
 /// idempotent no-op (the deterministic id already existed, so nothing was reviewed and nothing was
 /// overwritten); and the rest are the named ways an eligible judgment did not produce one.
-/// <see cref="Materialized"/> + <see cref="AlreadyMaterialized"/> + <see cref="ValidationRejected"/> +
-/// <see cref="WriteFailed"/> + the per-record skips
+/// <see cref="Materialized"/> + <see cref="AlreadyMaterialized"/> + <see cref="PriorVersionOccupied"/> +
+/// <see cref="ValidationRejected"/> + <see cref="WriteFailed"/> + the per-record skips
 /// (<see cref="NewsJudgmentSignalSkipReason.UnresolvedFact"/>,
-/// <see cref="NewsJudgmentSignalSkipReason.UnresolvedObservation"/>,
+/// <see cref="NewsJudgmentSignalSkipReason.ObservationNoMatch"/>,
+/// <see cref="NewsJudgmentSignalSkipReason.ObservationAmbiguous"/>,
+/// <see cref="NewsJudgmentSignalSkipReason.JoinedEvidenceMissing"/>,
 /// <see cref="NewsJudgmentSignalSkipReason.CompanyMismatch"/>,
 /// <see cref="NewsJudgmentSignalSkipReason.ExcerptNotInEvidence"/> and
 /// <see cref="NewsJudgmentSignalSkipReason.UnexpectedFailure"/>) equals <see cref="Eligible"/> on EVERY
@@ -92,6 +123,19 @@ public enum NewsJudgmentSignalSkipReason
 /// retry queue is introduced.
 /// </para>
 /// </summary>
+/// <param name="PriorVersionOccupied">
+/// SPEC 197 §1.3 — eligible judgments that already hold a structurally valid signal under the RETIRED
+/// <c>news-judgment-signal-v1</c> identity, so no v2 duplicate was minted. Counted on its OWN axis rather
+/// than inside <see cref="AlreadyMaterialized"/> or a generic skip: it measures the one-time migration
+/// across the version fork, and it must drain rather than persist. A MISSING or MALFORMED record at the v1
+/// id is NOT occupancy and never lands here — it lets an honest v2 retry proceed.
+/// </param>
+/// <param name="JoinCounts">
+/// SPEC 197 §1.2 — this run's observation→evidence ladder measurement, TRAILING and NULLABLE. <c>null</c>
+/// means the join was NOT ATTEMPTED (the presentation cohort was unresolvable, or no judgment survived the
+/// cheap gates, so neither store was read); a measured zero stays zero. Current-run diagnostic provenance
+/// only: it enters no bundle hash, cache key, cohort key, judgment, signal or score.
+/// </param>
 public sealed record NewsJudgmentSignalMaterializationSummary(
     int JudgmentsConsidered,
     int Eligible,
@@ -99,7 +143,9 @@ public sealed record NewsJudgmentSignalMaterializationSummary(
     int AlreadyMaterialized,
     int ValidationRejected,
     int WriteFailed,
-    IReadOnlyDictionary<NewsJudgmentSignalSkipReason, int> Skips)
+    IReadOnlyDictionary<NewsJudgmentSignalSkipReason, int> Skips,
+    int PriorVersionOccupied = 0,
+    NewsObservationEvidenceJoinCounts? JoinCounts = null)
 {
     /// <summary>The empty summary — a pass that considered nothing. Shared, and frozen so it cannot be mutated through a cast.</summary>
     public static readonly NewsJudgmentSignalMaterializationSummary Empty = new(

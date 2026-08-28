@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text;
 
+using Radar.Application.News;
+
 namespace Radar.Application.NewsRisk;
 
 /// <summary>
@@ -248,13 +250,50 @@ public static class NewsRiskLiveArtifactRenderer
             CultureInfo.InvariantCulture,
             $"Judgments considered: {summary.JudgmentsConsidered} · eligible: {summary.Eligible} · "
                 + $"materialized: {summary.Materialized} · already materialized: "
-                + $"{summary.AlreadyMaterialized} · validation-rejected: {summary.ValidationRejected} · "
+                + $"{summary.AlreadyMaterialized} · already held under the retired v1 identity: "
+                + $"{summary.PriorVersionOccupied} · validation-rejected: {summary.ValidationRejected} · "
                 + $"not durably persisted: {summary.WriteFailed}"));
 
         var skips = summary.DescribeSkips();
         sb.AppendLine(skips.Length > 0
             ? "Not materialized, by reason: " + skips
             : "Not materialized, by reason: none.");
+        sb.AppendLine();
+        AppendJoinCounts(sb, summary.JoinCounts);
+    }
+
+    /// <summary>
+    /// SPEC 197 §1.2 — this run's observation-to-evidence ladder measurement, rendered beside the
+    /// materialization it explains. Every observation falls in exactly one bucket, and the three JOINED
+    /// routes are named separately because "resolved by exact URL + headline + publication instant" and
+    /// "resolved because one headline happened to be unique" are different strengths of evidence.
+    /// <para>
+    /// <c>null</c> means the join was NOT ATTEMPTED this run — a pre-v5 document, or a pass in which no
+    /// judgment survived the cheap gates so neither store was read. It renders as that sentence rather than
+    /// as zeros, because a defaulted zero must never read as a measured one.
+    /// </para>
+    /// </summary>
+    private static void AppendJoinCounts(StringBuilder sb, NewsObservationEvidenceJoinCounts? counts)
+    {
+        sb.AppendLine("Observation-to-evidence join (spec 197 §1.1 ladder):");
+        if (counts is null)
+        {
+            sb.AppendLine();
+            sb.AppendLine(
+                "Not attempted this run — no judgment survived the eligibility gates, so neither the "
+                    + "observation archive nor the evidence store was read. This is NOT a measured zero.");
+            sb.AppendLine();
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Observations: {counts.Observations} · joined: {counts.Joined} "
+                + $"(exact article + instant: {counts.ExactArticleInstant} · exact article URL: "
+                + $"{counts.ExactArticleUrl} · unique-headline fallback: "
+                + $"{counts.UniqueHeadlineFallback}) · no match: {counts.UnjoinedNoMatch} · ambiguous "
+                + $"(identity refused, never guessed): {counts.UnjoinedAmbiguous}"));
         sb.AppendLine();
     }
 
@@ -324,6 +363,19 @@ public static class NewsRiskLiveArtifactRenderer
                         : "Trajectory evidence: none cited (an Unknown trajectory establishes no direction)"
                     : "Trajectory evidence: not recorded under news-judgment-v1");
             }
+
+            // Spec 197 §2.2: the citation-recovery measurement, with its THREE states rendered distinctly —
+            // a defaulted zero must never read as a measured zero.
+            sb.AppendLine(judgment.FactIdPrefixExpansionCount is { } expansions
+                ? expansions > 0
+                    ? "FactId prefix expansions: "
+                        + expansions.ToString(CultureInfo.InvariantCulture)
+                        + " shortened citation(s) were deterministically expanded to the single supplied "
+                        + "fact each prefixed"
+                    : "FactId prefix expansions: 0 (measured — every accepted citation was already the "
+                        + "complete supplied FactId)"
+                : "FactId prefix expansions: not recorded (no validated response was examined under this "
+                    + "contract)");
 
             foreach (var family in judgment.Families)
             {

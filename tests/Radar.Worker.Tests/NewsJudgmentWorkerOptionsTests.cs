@@ -103,7 +103,7 @@ public sealed class NewsJudgmentWorkerOptionsTests
         Assert.Equal("llama3.1", identity.ModelId);
         // The stage-2 cohort key composes the stage-1 cohort AND the family-builder identity.
         var key = identity.CohortKeyFor("stage1-key");
-        Assert.Contains("news-judgment-prompt-v2", key);
+        Assert.Contains("news-judgment-prompt-v3", key);
         Assert.Contains("stage1=stage1-key", key);
         Assert.Contains("families=fact-family-v2", key);
     }

@@ -265,6 +265,29 @@ public sealed class ScoringConfigFingerprintTests
         // as the corrected series. That path is git-ignored, so those records cannot be committed from a
         // worktree and must not be fabricated. If step 2 is missed, StrategyIdentityGuard halts the run
         // before collection — that halt is CORRECT and must not be bypassed.
+        //
+        // ⚠ SPEC 197 DELIBERATELY DID NOT MOVE THIS PIN, NOR EITHER OF THE TWO AI-OFF LIVE-WINDOW PINS
+        // (Compute_LiveWindowAiOffStamps_ArePinned) — AND THAT NON-MOVE IS AN ASSERTED DELIVERABLE, NOT AN
+        // OMISSION. Spec 197 moved the three AI-ON pins for two reasons folded into ONE recomputation:
+        // news-judgment-signal-v2 (§1.3 — the materializer/metadata identity fork, because the
+        // observation→evidence match ladder changes WHICH judgments can produce a scoring input) and
+        // news-judgment-prompt-v3 / news-judgment-schema-v3 (§2.2 — the forked citation grammar, which
+        // enters the resolved PRESENTATION COHORT KEY). Both reach the hash through the ALREADY-HASHED
+        // spec-194 §2 `news=` segment, and neither is reachable from this side: the AI-OFF descriptor
+        // renders NewsJudgmentScoringIdentity.Disabled, i.e.
+        // `news=disabled:legacy-news-inheritance-v1:news-judgment-supersede-v1;`, which carries NEITHER the
+        // presentation cohort NOR the materializer version. A disabled pin moving here would therefore
+        // indicate SCOPE LEAKAGE — some spec-197 change escaping into an input it has no business touching —
+        // rather than a deliverable, which is exactly why §4 states the expected split in advance and why
+        // this test is the check for it.
+        //
+        // Nothing else moved either: no _formula.Version bump, no KeywordSignalExtractor.RuleSetVersion bump
+        // (still radar-keyword-rules-v8), no MediaAttentionCollapse.Version bump (still media-collapse-v2),
+        // no NewsJudgmentSignalSupersede/LegacyNewsInheritanceNeutralization version bump, no attention tier
+        // edit and no weight edit. Spec 197 §3 (moving the two repeated engine Warnings to an aggregated
+        // pass-level pair) is transient diagnostic state hashed into nothing and would move NOTHING on its
+        // own. See Compute_AiOnDefault_MatchesPinnedFingerprint for the AI-ON lineage and the ordered
+        // post-197 operator action.
         Assert.Equal("radar-scoring-fp-54e845330f96", DefaultFingerprint());
     }
 
@@ -376,7 +399,7 @@ public sealed class ScoringConfigFingerprintTests
         //
         // ⚠ NOT the live stamp any more — see the AI-OFF pin above. Since spec 148 the window is hashed, and
         // the live baseline runs at Radar:ScoringWindowDays = 60, where the AI-ON value is
-        // radar-scoring-fp-65eb592d0354 since spec 196 (recorded in default.json's comment and asserted by
+        // radar-scoring-fp-81a397434756 since spec 197 (recorded in default.json's comment and asserted by
         // Compute_LiveWindowAiOnStamps_ArePinned below). This pin is the unit-level change-detector at the
         // code default; that one is the operator-facing live record.
         //
@@ -428,14 +451,54 @@ public sealed class ScoringConfigFingerprintTests
         // the DeepInfra DeepSeek reader as both presentation judge and presentation stage-1 extractor — so a
         // judge-model or presentation-cohort change now moves this pin, exactly as the earnings-read model
         // has moved it since spec 119.
-        // → SPEC 196 (radar-scoring-fp-5ef6508adc5d → the value below): the attention publisher TIER MAP —
-        // the inverted unknown default (0.25 → 0.1) plus the four-tier policy and its audited membership.
-        // It re-stamps BOTH the AI-OFF and the AI-ON default automatically, because attnDesc is its own
-        // hashed field and is folded whether or not the AI source is registered. See the AI-OFF pin above
-        // for the measured cause, the "not comparable across this boundary" statement, and the ordered
-        // operator action for the ignored strategy identity records.
+        // → SPEC 196 (radar-scoring-fp-5ef6508adc5d → radar-scoring-fp-420b31ba0753): the attention
+        // publisher TIER MAP — the inverted unknown default (0.25 → 0.1) plus the four-tier policy and its
+        // audited membership. It re-stamped BOTH the AI-OFF and the AI-ON default automatically, because
+        // attnDesc is its own hashed field and is folded whether or not the AI source is registered. See
+        // the AI-OFF pin above for the measured cause and the "not comparable across this boundary"
+        // statement.
+        // → SPEC 197 (radar-scoring-fp-420b31ba0753 → the value below): the news-read identity moves for
+        // TWO reasons at once, both arriving through the ALREADY-HASHED spec-194 §2 `news=` segment, folded
+        // into ONE recomputation (which is why §1 and §2 were deliberately specified together rather than
+        // shipped as two slices with two operator resets):
+        //   (a) §1.3 — news-judgment-signal-v1 → news-judgment-signal-v2. The observation→evidence join
+        //       replaced its title-only key with a fail-closed ladder (exact URL + normalized headline +
+        //       publication instant, then exact URL + headline, then the pre-197 unique headline; ambiguity
+        //       STOPS and never falls through to a weaker key). That changes WHICH judgments can produce a
+        //       scoring input at all — measured on the live store, the 2026-08-27 baseline's 9 eligible
+        //       directional judgments went from 2 materializable to 9 — so it is not a silent fix under the
+        //       v1 token. Accrued v1 signals stay valid, immutable and recognized by the ONE shared
+        //       classifier; an existing valid v1 id is prior-version occupancy and mints no v2 duplicate.
+        //   (b) §2.2 — news-judgment-prompt-v2/schema-v2 → v3. The accepted FactId GRAMMAR is part of the
+        //       result schema (a unique 8–31-character hex prefix of exactly one SUPPLIED representative
+        //       fact now expands deterministically; everything else fails by named reason), and both
+        //       versions enter the resolved PRESENTATION COHORT KEY that this segment carries.
+        // Consequence stated where the pin is: forking the stage-2 cohort key means every candidate company
+        // is RE-JUDGED ONCE on the first post-197 run (≈19 hosted judge calls at the current candidate
+        // count) and the five accrued ValidationFailed attempts are not reused — the intended effect, and
+        // no budget or retry-count change was requested. No _formula.Version bump, no RuleSetVersion bump
+        // (still radar-keyword-rules-v8), no media-collapse bump (still media-collapse-v2), no supersede or
+        // neutralization rule bump, no attention tier edit, no weight edit; §3's warning aggregation is
+        // transient and would move nothing on its own. THE THREE AI-OFF PINS ARE PROVEN UNCHANGED — see the
+        // AI-OFF pin above for why, and why a move there would be scope leakage.
+        //
+        // OPERATOR ACTION AFTER SPEC 197 — the third close identity boundary in a row (194, 196, 197), and
+        // the ORDER is load-bearing: (1) do not touch the ignored identity records while a pre-197 baseline
+        // is running; (2) after merge and BEFORE the first post-197 baseline, consciously delete or
+        // re-record every configured data/scoring-configs/strategies/{name}.json; (3) verify the first run
+        // reports radar-scoring-fp-81a397434756 (the shipped profile is AI-ON at 60 days) before treating
+        // later snapshots as the corrected series. That path is git-ignored, so those records cannot ride
+        // in a PR and MUST NEVER be fabricated. If step 2 is missed, StrategyIdentityGuard halts the run
+        // before collection — that halt is CORRECT and must not be bypassed.
+        //
+        // ⚠ THE DISCONTINUITY, stated precisely: post-194/v1 scores fail closed CORRECTLY but materially
+        // UNDER-ADMIT grounded judgments, because the title-only join rejected stronger exact identity (2 of
+        // 9 eligible directional judgments admitted on the measured baseline); post-197/v2 scores admit only
+        // citations resolved by the stronger deterministic ladder. History is preserved and never
+        // regenerated, rewritten or backfilled (AD-8/AD-1) — and the pre-197 sparse-join segment must NOT be
+        // presented as equivalent judgment coverage when interpreting news-direction efficacy.
         Assert.Equal(
-            "radar-scoring-fp-420b31ba0753",
+            "radar-scoring-fp-e7317fd038ac",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -468,19 +531,34 @@ public sealed class ScoringConfigFingerprintTests
         // → radar-scoring-fp-7a4cd9d409ed; 120d → radar-scoring-fp-759835b624ca. Spec 194 §1.5: 60d
         // → radar-scoring-fp-162df0f4c62b; 120d → radar-scoring-fp-b8ce14dea17a.
         // Spec 194 §2: 60d → radar-scoring-fp-b9543f441717;
-        // 120d → radar-scoring-fp-901129153cd1. SPEC 196 moves them to the values below, for the attention
-        // publisher tier map (attnDesc) — the inverted 0.1 unknown default plus the four-tier audited
-        // membership. The AI-OFF live values moved at every one of those steps too (60d
-        // radar-scoring-fp-4eb2fe5d3cdf → 58c289cd0113 → 06e4781f86bb → 61891b37e429 → 2cbbd056ffe5 →
-        // radar-scoring-fp-8daa662a57a6; 120d radar-scoring-fp-0a7058d94582 → 5d89d6ce1668 → 5cb9dc71f309 →
-        // f160ee8faaa6 → f68e6481b136 → radar-scoring-fp-f610244e23c6) — a rules=, media-collapse, news= or
-        // attnDesc change folds in with or without the AI descriptor.
-        // These are the FINAL post-196 values; everything named above them is history.
+        // 120d → radar-scoring-fp-901129153cd1. SPEC 196 moved them for the attention publisher tier map
+        // (attnDesc) — the inverted 0.1 unknown default plus the four-tier audited membership: 60d
+        // → radar-scoring-fp-65eb592d0354; 120d → radar-scoring-fp-a89b6d9ad0a5. The AI-OFF live values
+        // moved at every one of those steps too (60d radar-scoring-fp-4eb2fe5d3cdf → 58c289cd0113 →
+        // 06e4781f86bb → 61891b37e429 → 2cbbd056ffe5 → radar-scoring-fp-8daa662a57a6; 120d
+        // radar-scoring-fp-0a7058d94582 → 5d89d6ce1668 → 5cb9dc71f309 → f160ee8faaa6 → f68e6481b136 →
+        // radar-scoring-fp-f610244e23c6) — a rules=, media-collapse, news= or attnDesc change folds in with
+        // or without the AI descriptor.
+        //
+        // SPEC 197 MOVES THEM TO THE VALUES BELOW — and, unlike every step named above, it moves the AI-ON
+        // side ONLY: 60d radar-scoring-fp-65eb592d0354 → radar-scoring-fp-81a397434756; 120d
+        // radar-scoring-fp-a89b6d9ad0a5 → radar-scoring-fp-e9d9819a2b41, while the AI-OFF live values
+        // radar-scoring-fp-8daa662a57a6 / radar-scoring-fp-f610244e23c6 are UNCHANGED and asserted so by
+        // Compute_LiveWindowAiOffStamps_ArePinned below. The move has two causes folded into one
+        // recomputation — news-judgment-signal-v2 (§1.3) and news-judgment-prompt-v3/news-judgment-schema-v3
+        // (§2.2) — both reaching the hash through the `news=` segment, which on the AI-OFF side renders its
+        // DISABLED form carrying neither the presentation cohort nor the materializer version. See
+        // Compute_AiOnDefault_MatchesPinnedFingerprint for the full lineage, the one-time re-judge and the
+        // ordered operator action; radar-scoring-fp-81a397434756 is the value the first post-197 baseline
+        // must report.
+        // These are the FINAL post-197 values; everything named above them is history. The three window
+        // pairs are three CORRECT answers at three windows — do NOT reconcile them onto one value; match an
+        // accrued stamp against the pair for the window that run actually used.
         Assert.Equal(
-            "radar-scoring-fp-65eb592d0354",
+            "radar-scoring-fp-81a397434756",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-a89b6d9ad0a5",
+            "radar-scoring-fp-e9d9819a2b41",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -492,6 +570,14 @@ public sealed class ScoringConfigFingerprintTests
         // so nothing asserted them and a transcription error could survive indefinitely. They are what a run
         // with Radar:Ai unconfigured stamps at the two windows real runs use; pinning them makes all six
         // recorded values change-detected instead of four of them.
+        //
+        // ⚠ SPEC 197 LEFT BOTH OF THESE EXACTLY AS SPEC 196 SET THEM, AND THAT IS AN ASSERTED DELIVERABLE.
+        // §4 predicted the split in advance: the three AI-ON pins move because their `news=enabled:…`
+        // segment carries the presentation cohort (news-judgment-prompt-v3/news-judgment-schema-v3, §2.2)
+        // and the materializer identity (news-judgment-signal-v2, §1.3); the disabled segment
+        // `news=disabled:legacy-news-inheritance-v1:news-judgment-supersede-v1;` carries neither, so it
+        // cannot see either move. If either value below ever changes in a slice that touches only the
+        // judgment read, the finding is SCOPE LEAKAGE, not a deliverable.
         Assert.Equal("radar-scoring-fp-8daa662a57a6", DefaultFingerprint(window: TimeSpan.FromDays(60)));
         Assert.Equal("radar-scoring-fp-f610244e23c6", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }

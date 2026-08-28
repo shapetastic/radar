@@ -30,7 +30,15 @@ public sealed record NewsRiskLiveDocument(
     // record of a measurement the run performed and then discarded: a reader has to be able to tell a v3
     // document (measurement NOT RECORDED, hydrating null) from a v4 document that measured an honest zero.
     // Nothing is removed or re-meant, so a by-name v3 consumer is unaffected.
-    public const string CurrentSchemaVersion = "news-risk-live-v4";
+    //
+    // v5 (spec 197 §1.2): the run-level observation-to-evidence JOIN measurement nested inside
+    // SignalMaterialization, plus the prior-version-occupancy count. The tag moves for the same reason v4's
+    // did: the buckets are the artifact's only record of a measurement the run performed, so a reader must
+    // be able to tell a v4 document (join measurement NOT RECORDED, hydrating null) from a v5 document that
+    // measured an honest zero. Nothing is removed or re-meant; a by-name v4 consumer is unaffected. The
+    // measurement is current-run diagnostic provenance only — it enters no bundle hash, cache key, cohort
+    // key, judgment, signal or score.
+    public const string CurrentSchemaVersion = "news-risk-live-v5";
 
     /// <summary>The §1 live caveat, verbatim — carried by every live artifact.</summary>
     public const string LiveCaveat =
@@ -111,7 +119,13 @@ public sealed record NewsRiskLiveJudgment(
     IReadOnlyList<NewsJudgmentFamilyRef> Families,
     // Spec 187 §1: the supplied FactIds the judge said ESTABLISH the trajectory. NULL means "not recorded
     // under news-judgment-v1" — never an empty v2 evidence set and never proof of invalidity.
-    IReadOnlyList<Guid>? TrajectoryFactIds = null);
+    IReadOnlyList<Guid>? TrajectoryFactIds = null,
+    // Spec 197 §2.2: how many raw FactId citations this judgment's response had shortened and the shared
+    // resolver deterministically expanded. TRAILING and NULLABLE, mirroring the record's own three states:
+    // null = no validated response was examined under this contract (or a pre-197 record), 0 = a response
+    // was examined and every accepted citation was already complete, positive = that many expansions. The
+    // renderer states all three DISTINCTLY — a defaulted zero must never read as a measured one.
+    int? FactIdPrefixExpansionCount = null);
 
 /// <summary>One supplied article's display row: headline, publisher, URL and which text fields were supplied.</summary>
 public sealed record NewsRiskLiveArticle(

@@ -50,6 +50,14 @@ public sealed class ScoringPass : IScoringPass
         // ScoringPassResult for why this axis is not primary-only).
         var snapshotsNotPersisted = 0;
 
+        // Spec 197 §3: ScoringEngine is ONE STRATEGY, so its former per-company Warnings for unresolved
+        // evidence (spec 145) and neutralized accrued news directions (spec 194 §1.4) were really per
+        // strategy × company — 460 lines on the live baseline, burying the exceptional failures. The engine
+        // now RETURNS those counts and this pass, which can see the whole strategy × company grid, emits at
+        // most ONE Warning per category for the entire pass, labelling the population honestly. A pass with
+        // nothing to report logs nothing at all.
+        var assemblyDiagnostics = new ScoreAssemblyDiagnosticsAggregator("Scoring pass");
+
         // Stage 6: score every company at asOfUtc, once PER CONFIGURED STRATEGY (spec 137) — strategies ×
         // companies. EVERYTHING ABOVE THIS POINT RUNS EXACTLY ONCE: collection, the AI directional read,
         // extraction, resolution, review and signal persistence are shared, strategy-independent work, and
@@ -95,6 +103,8 @@ public sealed class ScoringPass : IScoringPass
 
                 var result = await strategy.Engine
                     .ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
+                assemblyDiagnostics.Record(
+                    strategy.Definition.Name, company.Id, asOfUtc, result.Diagnostics);
                 var durable = await scoreFileStore
                     .WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
                 if (durable.Outcome == DurableWriteOutcome.Failed)
@@ -108,6 +118,11 @@ public sealed class ScoringPass : IScoringPass
                 }
             }
         }
+
+        // Spec 197 §3: at most one Warning per diagnostic category for the WHOLE pass. Emitted before the
+        // spec-193 store Warning below purely to keep the two blocks' order stable; they are independent
+        // facts (what could not be assembled vs what could not be written) and are never pooled.
+        assemblyDiagnostics.LogAggregates(_logger);
 
         // Spec 193 §1: ONE aggregated Warning for the score-snapshot store per run (the spec-145 aggregation
         // precedent), never one line per failure.
