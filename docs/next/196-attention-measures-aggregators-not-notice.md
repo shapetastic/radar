@@ -7,29 +7,47 @@ is marked down. The intent is right: Radar exists to surface companies **before*
 measurement is not. Attention is built from third-party publisher breadth, and the publisher tier map that
 decides what counts as "genuine market notice" classifies almost none of the actual traffic.
 
-**Measured over the 3,194 news observations of the last 60 days (368 distinct publishers):**
+**Measurement basis, stated because the first draft got it wrong.** Population = news observations whose
+**`publishedAtUtc`** falls in the trailing 60 days **and** whose company is in the **current 74-company
+universe** (not file mtime, not every historical score directory). Tier resolution uses the **production
+`ConfiguredAttentionSourceWeights.Normalize`** — lowercase, strip one trailing TLD from a closed set, remove
+non-alphanumerics — not whole-string comparison.
 
 | tier | weight | observations | share |
 | --- | ---: | ---: | ---: |
-| `Mill` | 0.1 | 1,403 | 43.9 % |
 | `Genuine` | 1.0 | **15** | **0.5 %** |
-| **unclassified → `UnknownWeight`** | **0.25** | **1,776** | **55.6 %** |
+| `Mill` | 0.1 | 1,414 | 49.5 % |
+| **unclassified → `UnknownWeight`** | **0.25** | **1,429** | **50.0 %** |
 
-The unknown default is carrying the majority of the signal, across **353 unclassified publishers**. The
-consequence is visible in the output: attention has a mean of **73.4** across 75 companies with **53 of 75
-between 70 and 89**, so it is close to a uniform tax rather than a discriminator, while `OpportunityScore`
-is compressed to a mean of **19.2** with a maximum of **38** — no company in the universe can reach even
-40 % of the nominal range.
+2,858 observations in window; **303 distinct unclassified publishers**. Independently reproduced by an
+external reviewer at 15 / 1,415 / 1,435.
 
-**The worked example that prompted this.** DGII (Digi International) scores attention **75**. Its 45
-observations are 38 from algorithmic aggregators; there is no editorial coverage at all. Its single largest
-source is **Yahoo Finance (10)**, which is unclassified and therefore weighted **0.25 — two and a half times
-a Mill publisher** — despite being an automated republisher of press releases for every listed ticker. The
-maintainer, an engaged investor, had never heard of the company. Radar believed it was 75 % noticed.
+⚠ **A first draft of this spec published 43.9 / 0.5 / 55.6 % over 3,194 observations across 353 publishers.
+Those figures were wrong**: they used file mtime rather than `publishedAtUtc` (admitting 329 observations
+published outside the window, some back to 2010), counted a stale 75th score directory, and simulated the
+matcher with whole-string comparison instead of calling it. The corrected numbers are above. The diagnosis
+is unchanged — half the volume is unclassified and genuine notice is 0.5 % — but the error is recorded
+because it is exactly the failure the new "no measure ships without its live distribution" rule exists to
+prevent, committed in the same change as this spec.
+
+**Consequence in the output** (75 score directories scanned; the live universe is 74): attention has a mean
+of **73.4** with **53 of 75 between 70 and 89**, so it is close to a uniform tax rather than a
+discriminator, while `OpportunityScore` is compressed to a mean of **19.2** and a maximum of **38**. §7
+re-measures both properly.
+
+**The worked example that prompted this.** DGII (Digi International) scores attention **75**. Of its 45
+in-window observations, 38 are from algorithmic aggregators, and its single largest source is **Yahoo
+Finance (10)** — unclassified, therefore weighted **0.25, two and a half times a Mill publisher**. The
+maintainer, an engaged investor, had never heard of the company.
+
+⚠ A first draft claimed DGII had "no editorial coverage at all". That overstates: the set includes Seeking
+Alpha and at least one analytical piece, and Yahoo Finance carries a mixture of press releases, syndicated
+analysis and original material. The defensible claim is narrower and sufficient: **the dominant sources are
+platforms that publish on every listed ticker regardless of newsworthiness, so breadth across them is not
+evidence of selection.**
 
 **The distinction that matters:** Radar is trying to get ahead of *investors*, but the proxy measures
-*database coverage*. For a small-cap universe those come apart completely — a company can appear in every
-aggregator on earth and remain genuinely unknown.
+*database coverage*. For a small-cap universe those come apart completely.
 
 ## Assignment
 
@@ -59,43 +77,78 @@ This changes Attention output, and `IAttentionSourceWeights.CanonicalDescriptor(
 `ScoringConfigVersion` (AD-10), so **the fingerprints move**. That is correct and intended — two runs with
 different tier maps must not be judged comparable. See §4.
 
-## 2. Classify the measured volume, not a guess
+## 2. Define the tier policy BEFORE assigning publishers
 
-Extend the shipped table using the **measured** distribution above, not intuition. At minimum, from the top
-of the live traffic:
+The first draft assigned Seeking Alpha 0.1 and The Motley Fool 1.0 — a tenfold difference between broadly
+comparable investor-content platforms — with no stated principle. That is the same unprincipled curation
+this spec exists to fix. Define the tiers first, then classify against them.
 
-- **To `Mill` (0.1):** Yahoo Finance (596 — the single largest source in the corpus), Seeking Alpha (77),
-  Quiver Quantitative (60), Kalkine Media (27), TradingKey (17), Revelio Labs (18), Sahm (31), vinanet.vn
-  (31), Pluang (19).
-- **A new `Wire` tier (weight 0.05, below Mill):** PR Newswire (61), Business Wire (49), GlobeNewswire (42).
-  A press wire is **the company's own announcement redistributed** — it is not third-party notice at all,
-  and it is currently weighted 0.25 as though it were. Wire traffic is already captured as
-  first-party evidence by the RSS press-release collector; counting it again as market attention is
-  double-counting the company talking about itself.
-- **To `Genuine` (1.0):** The Globe and Mail (19), The Motley Fool (21) — plus a review of the remaining
-  tail for real outlets. Keep this list short and defensible; when in doubt leave it unclassified, which
-  now means 0.1 rather than 0.25.
+**Tier definitions (the policy, which is what gets reviewed):**
 
-**Fix the matching, which is silently leaking.** Entries are compared as whole strings, so
-`marketscreener.com` (47 observations) does **not** match the listed `MarketScreener`, and
-`Investing.com Nigeria` (13) does not match `Investing.com`. Both currently fall to the unknown default
-despite their family being classified. Add normalization — trim, casefold, strip a leading `www.` and a
-trailing TLD — or an explicit alias list. Whichever is chosen, add a test that pins the specific
-`marketscreener.com` and `Investing.com Nigeria` cases, because they are the measured instances.
+- **`Wire` (0.05)** — paid or company-originated distribution. Confers visibility, **not independent
+  notice**, because the company controls whether the item exists at all. That is the whole rationale; do
+  **not** justify it by assuming the item was also captured via RSS, which is not always true.
+- **`Mill` (0.1)** — automated, templated or republished material with no demonstrated independent
+  selection. The test is *selection*: does this outlet decide which companies to cover, or does it publish
+  on every ticker by construction?
+- **`Platform` (new, weight to be declared in the range 0.25–0.4)** — investor-content platforms carrying a
+  mixture of contributor analysis and syndication, where a human chose to write about *this* company but
+  the outlet exercises little editorial gatekeeping. **Seeking Alpha and The Motley Fool both belong
+  here**, which is precisely why the first draft's tenfold split was wrong. Declare the weight explicitly
+  and say why.
+- **`Genuine` (1.0)** — independent reporting or editorial selection.
 
-## 3. Make the unclassified tail visible so it can be curated from evidence
+**Classify by sampled audit, not by reputation.** Before hard-coding any high-volume publisher, sample a
+small number of its actual in-corpus items and record what they were. Cover at minimum: Yahoo Finance
+(478 — 16.7 % of the corpus on its own), Seeking Alpha (64), Quiver Quantitative (51), Sahm (31),
+vinanet.vn (31), Kalkine Media (27), The Globe and Mail (19), Revelio Labs (17), TradingKey (17), plus
+**MarketWatch, Morningstar and the Business Journals**, which the reviewer correctly identified as
+meaningful unknown-tail sources. Record the sample and the resulting tier in the PR body so the assignment
+is auditable rather than asserted.
 
-The reason this drifted is that nothing reported it. Add a per-run aggregated diagnostic (the spec-145
-one-line-per-cohort precedent, not one line per publisher):
+Wires to classify from the measured tail: **PR Newswire (41), GlobeNewswire (31), Business Wire (29)**.
 
-- the observation counts and share falling to each tier, including unknown; and
-- the top N unclassified publishers by volume for that run.
+**Matching: one real fix, one retraction.**
 
-Emit it in the run log and record it on the news-observation batch or the attention artifact — wherever it
-sits beside existing coverage provenance. This makes the next miscalibration a number a maintainer sees
-rather than something discovered by asking why a familiar-looking company scored 75.
+- ⚠ **RETRACTED:** the first draft claimed `marketscreener.com` does not match the listed `MarketScreener`.
+  **It does.** `Normalize` already strips the trailing TLD, and
+  `ConfiguredAttentionSourceWeightsTests` already pins this case. No change is needed and none should be
+  made.
+- **REAL:** `Investing.com Nigeria` normalizes to `investingcomnigeria`, which does not match
+  `investingcom`. Add an explicit alias (or a documented prefix rule) and pin it by test. Prefer an alias
+  list over broadening `Normalize`, so a change here cannot silently collapse unrelated outlets.
 
-Do not auto-classify from it. The tier map stays curated policy (AD-5); this only makes the gap legible.
+## 3. A typed resolver — the diagnostic is otherwise unimplementable
+
+**This is a structural consequence of §1 that the first draft missed.** Once `UnknownWeight` becomes 0.1,
+an explicitly-classified `Mill` publisher and an unclassified one **return the same number**.
+`IAttentionSourceWeights.WeightFor` returns only a `double`, so the §3 diagnostic literally cannot tell them
+apart — and an implementer would either duplicate the matching rules (they will drift) or silently report
+every Mill publisher as unclassified (the diagnostic then lies about the very thing it exists to expose).
+
+Add **one authoritative resolver** on `IAttentionSourceWeights`, returning a typed result carrying at least:
+
+- `TierName` — the matched tier, or the unclassified sentinel;
+- `Weight`;
+- `IsExplicitlyMapped` — the bit that survives two tiers sharing a weight; and
+- `NormalizedPublisher` — the key actually matched on, so a curator can see why something missed.
+
+`WeightFor` becomes a thin projection of that resolver, and the diagnostic consumes the same call. **One
+matching implementation, two consumers** — the CLAUDE.md reuse rule, and here it is load-bearing rather
+than tidy: a second copy would make the diagnostic disagree with the score it is describing.
+
+**Persistence seam, chosen rather than left open.** The first draft said "the news-observation batch or the
+attention artifact", which is not a decision. Record the per-run tier summary on the **news-observation
+batch record** — it is already the per-run home of collection-coverage provenance, it is written once per
+run, and it is where a reader chasing publisher coverage would look. Bump that record's schema version;
+new fields are **trailing and nullable**, and a pre-196 batch hydrates them as **null = not recorded, never
+zero** (the standing rule). Emit the same summary as one aggregated log line per run — the spec-145
+precedent, never one line per publisher.
+
+Report: observations and share per tier including unclassified, and the top N unclassified publishers by
+volume. **Do not auto-classify from it** — the tier map stays curated policy (AD-5); this only makes the
+gap legible so the next drift is a number someone sees rather than something discovered by asking why a
+familiar company scored 75.
 
 ## 4. Fingerprints, lineage and the operator step
 
@@ -140,39 +193,60 @@ Recorded so the next reader does not assume more was decided than was:
 - A regression using the measured DGII publisher set: with the shipped table its attention falls materially
   versus the pre-196 value. Assert the **direction and the mechanism**, not a magic number.
 
-## 7. Report the live distribution — this spec must prove its own fix
+## 7. Prove the fix with a PAIRED COUNTERFACTUAL, not consecutive runs
 
-Per CLAUDE.md's **"no measure ships without its live distribution"** rule (added with this spec), the
-implementation is not done until it reports what the corrected measure actually produces across the live
-universe. This is the check that would have caught the defect years earlier, so it is a deliverable, not a
-courtesy.
+Per CLAUDE.md's **"no measure ships without its live distribution"** rule, this spec must report what the
+corrected measure actually produces. But comparing two nightly runs is **confounded**: the tier policy and
+the underlying evidence both change, so the delta shows their sum, not the policy's effect.
 
-Record in the PR body, measured against the live store — not a fixture:
+Require instead a **read-only paired counterfactual**:
 
-- **tier coverage before and after**: observations and share resolving to `Genuine` / `Mill` / `Wire` /
-  unclassified. The pre-196 baseline is 43.9 % Mill, 0.5 % Genuine, **55.6 % unclassified across 353
-  publishers** over 3,194 observations. State the post-196 figures beside it.
-- **the `AttentionScore` distribution across all 75 companies**, before and after — minimum, maximum, mean
-  and a decade histogram. The pre-196 baseline is min 0, max 95, **mean 73.4, with 53 of 75 between 70 and
-  89**.
-- **the `OpportunityScore` distribution**, before and after, same statistics. Pre-196: min 3, max 38,
-  **mean 19.2**.
-- the top unclassified publishers that remain, by volume.
+- ONE fixed as-of instant;
+- the SAME evidence and signal inputs on both sides;
+- the current **74-company** universe (not 75, not every historical score directory);
+- the **primary `default`** strategy only;
+- **only the publisher-tier policy differs** between the two arms; and
+- **nothing is persisted** — no snapshot, no run record, no identity record. This mirrors the spec-139
+  replay discipline and the spec-183 affine-invariance proof; it is not a new mechanism.
 
-**The success criterion is discrimination, not direction.** Attention should stop being a near-uniform tax:
-the spread must widen and the mass must stop clustering in one decade. If after this change attention is
-*still* near-constant, say so plainly in the PR — that is a real result and it becomes the evidence for
-re-tuning the discount weights in a follow-up, which §5 deliberately keeps out of scope. Do not tune weights
-to manufacture a better-looking spread.
+Report, old policy versus new, from that single paired run:
+
+- tier coverage — observations and share per tier, and the count of unclassified publishers remaining;
+- the `AttentionScore` distribution across the 74 companies: min, max, mean, and a decade histogram; and
+- the `OpportunityScore` distribution, same statistics.
+
+The **first real post-merge baseline** is reported **separately**, and is not the evidence for the policy.
+
+**The success criterion is discrimination, not direction.** Attention must stop being a near-uniform tax:
+the spread widens and the mass stops clustering in one decade. Pre-196 reference from the score store
+(75 directories, mean 73.4, 53 of 75 in 70–89; Opportunity mean 19.2, max 38) is indicative only — the
+counterfactual's own old-policy arm is the controlled baseline. **If attention is still near-constant
+afterwards, say so plainly**: that is a real result and becomes the evidence for re-tuning the discount
+weights in a follow-up, which §5 deliberately keeps out of scope. Do not tune weights to manufacture a
+better-looking spread.
 
 ## Acceptance criteria
 
 - [ ] An unclassified publisher is treated as low-signal (0.1 default), non-zero, and configurable; explicit
       classification is required to count as genuine notice.
-- [ ] Yahoo Finance and the other measured aggregators are classified; press wires sit in their own tier
-      below Mill; publisher-name variants no longer leak to the default.
-- [ ] Every run reports its tier shares and top unclassified publishers, aggregated, so the gap stays
-      visible.
+- [ ] The four tiers are DEFINED by principle (`Wire` company-originated / `Mill` no independent selection /
+      `Platform` contributor analysis with weak gatekeeping / `Genuine` editorial selection) before any
+      publisher is assigned, and Seeking Alpha and The Motley Fool land in the SAME tier.
+- [ ] Every high-volume publisher hard-coded in this slice is backed by a recorded sampled audit in the PR
+      body, including Yahoo Finance, MarketWatch, Morningstar and the Business Journals.
+- [ ] `marketscreener.com` is NOT "fixed" — it already resolves. `Investing.com Nigeria` gains an explicit
+      alias, pinned by test, without broadening `Normalize`.
+- [ ] One typed resolver carries `TierName`, `Weight`, `IsExplicitlyMapped` and `NormalizedPublisher`;
+      `WeightFor` and the diagnostic both consume it, so an explicit `Mill` is distinguishable from an
+      unclassified publisher despite sharing a weight.
+- [ ] The per-run tier summary is recorded on the news-observation batch record with a bumped schema
+      version, trailing nullable fields, null = not recorded on pre-196 batches, plus one aggregated log
+      line per run.
+- [ ] The fix is proven by a read-only PAIRED COUNTERFACTUAL at one as-of instant over the 74-company
+      universe and the `default` strategy, varying ONLY the tier policy and persisting nothing; the first
+      post-merge baseline is reported separately.
+- [ ] Attention's spread widens and stops clustering in one decade — or the PR states plainly that it did
+      not, as evidence for a separate weight-tuning slice. Weights are NOT tuned here.
 - [ ] All six pins are recomputed and updated, the lineage note names this as the third identity move, and
       the operator step for the gitignored identity records is stated.
 - [ ] Discount weights, `FollowingTier`, collection and history are untouched; no strategy, formula, signal
