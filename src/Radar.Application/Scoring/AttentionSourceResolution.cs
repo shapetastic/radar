@@ -11,8 +11,10 @@ namespace Radar.Application.Scoring;
 /// <para>
 /// <b>The invariant is structural, not conventional:</b> <see cref="IsExplicitlyMapped"/> is true iff
 /// <see cref="TierName"/> is a real tier name, enforced by the private constructor plus the two factories.
-/// An unclassified resolution always carries <see cref="UnclassifiedTierName"/>, which is deliberately not
-/// a legal configured tier name shape, so a curated tier can never impersonate the sentinel.
+/// An unclassified resolution always carries <see cref="UnclassifiedTierName"/>, which is a RESERVED tier
+/// name: the configured tier map rejects it at construction, so a curated tier can never impersonate the
+/// sentinel. The reservation is enforced, not merely conventional — a promise nothing checks is not an
+/// invariant.
 /// </para>
 /// <para>
 /// <see cref="NormalizedPublisher"/> is the key the lookup actually matched on (or would have matched on),
@@ -24,7 +26,8 @@ public sealed record AttentionSourceResolution
 {
     /// <summary>
     /// The <see cref="TierName"/> carried by a publisher that is in no configured tier. Parenthesised so it
-    /// cannot be confused with a curated tier name in a rendered diagnostic.
+    /// cannot be confused with a curated tier name in a rendered diagnostic, and RESERVED: a tier map that
+    /// configures this name (in any casing) fails fast at construction.
     /// </summary>
     public const string UnclassifiedTierName = "(unclassified)";
 

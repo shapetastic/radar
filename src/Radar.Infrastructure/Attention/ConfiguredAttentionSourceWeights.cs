@@ -56,6 +56,22 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
         var tiers = options.SourceTiers ?? new Dictionary<string, AttentionSourceTierOptions.SourceTier>();
         foreach (var tierName in tiers.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
+            // The unclassified sentinel is RESERVED, and it is enforced rather than merely documented:
+            // AttentionSourceResolution promises that an unclassified resolution's TierName can never be
+            // impersonated by a curated tier, and a promise nothing checks is not an invariant. Tier names
+            // are hashed into nothing (CanonicalDescriptor omits them), so this rejects a misconfiguration
+            // without touching any fingerprint.
+            if (string.Equals(
+                    tierName, AttentionSourceResolution.UnclassifiedTierName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Radar:Attention tier name '{tierName}' is reserved: it is the sentinel "
+                        + $"AttentionSourceResolution carries for a publisher in NO tier "
+                        + $"('{AttentionSourceResolution.UnclassifiedTierName}'). A curated tier using it "
+                        + "would make an explicitly-classified publisher indistinguishable from an "
+                        + "unclassified one in every rendered coverage diagnostic. Rename the tier.");
+            }
+
             var tier = tiers[tierName];
             if (tier is null)
             {

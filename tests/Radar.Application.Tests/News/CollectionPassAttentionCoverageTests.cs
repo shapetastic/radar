@@ -248,6 +248,36 @@ public sealed class CollectionPassAttentionCoverageTests
         Assert.Equal(coverage.ObservationsAttempted, coverage.Tiers.Sum(t => t.Observations));
     }
 
+    [Theory]
+    [InlineData("ZED Outlet", "Zed Outlet")]
+    [InlineData("Zed Outlet", "ZED Outlet")]
+    public async Task Coverage_UnclassifiedCasingVariants_AreOneRow_WithAnEncounterOrderIndependentName(
+        string first, string second)
+    {
+        // One outlet whose feed capitalised its own name differently must be ONE curation worklist row, and
+        // the rendered spelling must not depend on which variant the collector happened to yield first
+        // (AD-3): the ordinally-smallest spelling wins in either order.
+        var candidates = new List<NewsObservationCandidate>
+        {
+            Candidate(first, "https://news.google.com/rss/articles/A"),
+            Candidate(second, "https://news.google.com/rss/articles/B"),
+            Candidate(second, "https://news.google.com/rss/articles/C"),
+        };
+
+        var (pass, archive) = CreatePass(candidates);
+
+        await pass.RunAsync(CancellationToken.None);
+
+        var coverage = Assert.Single(archive.Batches).AttentionPublisherCoverage!;
+
+        var row = Assert.Single(coverage.TopUnclassifiedPublishers);
+        Assert.Equal("ZED Outlet", row.Publisher);
+        Assert.Equal(3, row.Observations);
+        Assert.Equal(1, coverage.DistinctUnclassifiedPublishers);
+        Assert.Equal(3, TierCount(coverage, AttentionSourceResolution.UnclassifiedTierName));
+        Assert.Equal(coverage.ObservationsAttempted, coverage.Tiers.Sum(t => t.Observations));
+    }
+
     [Fact]
     public async Task Coverage_TopUnclassifiedList_IsCapped_ButTheDistinctCountIsNot()
     {

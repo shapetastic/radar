@@ -467,7 +467,14 @@ public sealed class CollectionPass : ICollectionPass
         // never disagree with the map it is describing; and it uses Resolve rather than WeightFor because
         // since the spec-196 inversion an explicit Mill and an unclassified publisher share one weight.
         var observationsByTier = new Dictionary<string, int>(StringComparer.Ordinal);
-        var unclassifiedByPublisher = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        // Case-insensitive GROUPING (one outlet, however its feed capitalised it that day) but a
+        // deterministic DISPLAY spelling (AD-3): the raw spellings are folded onto the ordinally-smallest
+        // one seen, never onto whichever arrived first. Keying on the raw string alone would make the
+        // rendered name — and therefore the ordering tie-break and the log line — depend on collector
+        // iteration order.
+        var unclassifiedByPublisher =
+            new Dictionary<string, (string Display, int Count)>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (_, result) in captures)
         {
@@ -485,7 +492,10 @@ public sealed class CollectionPass : ICollectionPass
                         ? UnclassifiedPublisherCoverage.Unattributed
                         : candidate.Publisher.Trim();
                     unclassifiedByPublisher[publisher] =
-                        unclassifiedByPublisher.GetValueOrDefault(publisher) + 1;
+                        unclassifiedByPublisher.TryGetValue(publisher, out var seen)
+                            ? (string.CompareOrdinal(publisher, seen.Display) < 0 ? publisher : seen.Display,
+                                seen.Count + 1)
+                            : (publisher, 1);
                 }
 
                 var outcome = await _newsObservationArchive!
@@ -580,7 +590,7 @@ public sealed class CollectionPass : ICollectionPass
     private static AttentionPublisherCoverageSummary BuildAttentionPublisherCoverage(
         int attempted,
         IReadOnlyDictionary<string, int> observationsByTier,
-        IReadOnlyDictionary<string, int> unclassifiedByPublisher) =>
+        IReadOnlyDictionary<string, (string Display, int Count)> unclassifiedByPublisher) =>
         new(
             Version: AttentionPublisherCoverageSummary.CurrentVersion,
             ObservationsAttempted: attempted,
@@ -594,11 +604,11 @@ public sealed class CollectionPass : ICollectionPass
             DistinctUnclassifiedPublishers: unclassifiedByPublisher.Count,
             TopUnclassifiedPublishers:
             [
-                .. unclassifiedByPublisher
-                    .OrderByDescending(e => e.Value)
-                    .ThenBy(e => e.Key, StringComparer.Ordinal)
+                .. unclassifiedByPublisher.Values
+                    .OrderByDescending(e => e.Count)
+                    .ThenBy(e => e.Display, StringComparer.Ordinal)
                     .Take(AttentionPublisherCoverageSummary.TopUnclassifiedPublisherLimit)
-                    .Select(e => new UnclassifiedPublisherCoverage(e.Key, e.Value)),
+                    .Select(e => new UnclassifiedPublisherCoverage(e.Display, e.Count)),
             ]);
 
     /// <summary>
