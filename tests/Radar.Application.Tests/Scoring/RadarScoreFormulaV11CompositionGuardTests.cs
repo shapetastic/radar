@@ -245,8 +245,19 @@ public sealed class RadarScoreFormulaV11CompositionGuardTests
     /// <c>ScoringConfigFingerprintTests</c> pins and left this one exactly where §1.5 put it. The isolation
     /// is the feature; do not "fix" it by pointing the stub at the real descriptor.
     /// </para>
+    /// <para>
+    /// SPEC 196 MOVES IT AGAIN, for a hashed field outside this file once more — the attention publisher
+    /// TIER MAP (<c>attnDesc</c>). The unknown default was inverted 0.25 → 0.1 and the map gained the
+    /// four-tier Wire/Mill/Platform/Genuine policy with its audited membership
+    /// (<c>docs/cohorts/attention-publisher-audit-v1.md</c>). These guard fixtures DO consume the real
+    /// <c>AttentionSourceTierOptions.Default</c>, so every strategy re-stamps at once. Verified to be the
+    /// SOLE cause: substituting a reconstructed pre-196 tier map into this fixture reproduces the previous
+    /// pin exactly, with the frozen <c>StubSourceDescriptor</c> and every other input untouched. The
+    /// composition, the weights, the budget, the revision and the pinned COMPONENT values below are all
+    /// unmoved — only the stamp is.
+    /// </para>
     /// </summary>
-    private const string PinnedScoringConfigVersion = "radar-scoring-fp-173e8e705e77";
+    private const string PinnedScoringConfigVersion = "radar-scoring-fp-32a50355b568";
 
     private static (Guid SignalId, Guid EvidenceId, string Reason, int Weight)[] PinnedLinks =>
     [

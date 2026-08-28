@@ -6,19 +6,36 @@ namespace Radar.Infrastructure.Attention;
 
 /// <summary>
 /// Config-driven <see cref="IAttentionSourceWeights"/> over <see cref="AttentionSourceTierOptions"/>: builds
-/// an immutable, normalised publisher → tier-weight lookup once at construction so the scoring formula stays a
-/// pure, deterministic function (AD-3). Publisher names are normalised to a domain-form-tolerant key (lowercase,
-/// a single trailing common-TLD token stripped, then all non-alphanumerics removed) so observed variants of the
-/// same outlet such as <c>"marketscreener.com"</c> and <c>"MarketScreener"</c> resolve to the same curated entry. The same
-/// normalization is applied to the configured keys at load and to the incoming <c>SourceName</c> at lookup. A
-/// publisher not in any tier resolves to <see cref="AttentionSourceTierOptions.UnknownWeight"/>; a blank/null
-/// name likewise returns the unknown default. Fails fast (throws in the constructor) on a configured weight
-/// outside [0,1] so a misconfiguration cannot silently distort scoring.
+/// an immutable, normalised publisher → (tier name, tier weight) lookup once at construction so the scoring
+/// formula stays a pure, deterministic function (AD-3). Publisher names are normalised to a
+/// domain-form-tolerant key (lowercase, a single trailing common-TLD token stripped, then all
+/// non-alphanumerics removed) so observed variants of the same outlet such as <c>"marketscreener.com"</c> and
+/// <c>"MarketScreener"</c> resolve to the same curated entry. The same normalization is applied to the
+/// configured keys at load and to the incoming <c>SourceName</c> at lookup. A publisher not in any tier
+/// resolves to <see cref="AttentionSourceTierOptions.UnknownWeight"/>; a blank/null name likewise returns the
+/// unknown default. Fails fast (throws in the constructor) on a configured weight outside [0,1] so a
+/// misconfiguration cannot silently distort scoring.
+/// <para>
+/// <b>Spec 196 §3: <see cref="Resolve"/> is the ONE matching implementation and <see cref="WeightFor"/> is a
+/// thin projection of it.</b> The stored value is the (tier name, weight) PAIR rather than a bare weight,
+/// because the inverted unknown default (0.1 — the <c>Mill</c> weight) makes an explicitly-classified mill
+/// and an unclassified publisher numerically identical. The capture-flow coverage diagnostic needs that
+/// distinction, and a second copy of the matching rules would drift from the one the score uses.
+/// </para>
+/// <para>
+/// <b>An ambiguous publisher FAILS FAST.</b> A normalized key claimed by two different tiers used to resolve
+/// by ordinal last-wins, which made both the score and the diagnostic depend on tier-NAME ordering — an
+/// invisible dependency a rename could flip. A publisher belongs to exactly one tier; "cannot tell" must
+/// never resolve to "whichever sorted last".
+/// </para>
 /// </summary>
 public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
 {
+    /// <summary>One curated map entry: the tier that claims the key, its weight, and the listed name.</summary>
+    private readonly record struct TierEntry(string TierName, double Weight, string ListedPublisher);
+
     private readonly double _unknownWeight;
-    private readonly IReadOnlyDictionary<string, double> _weightByPublisher;
+    private readonly IReadOnlyDictionary<string, TierEntry> _entryByPublisher;
 
     public ConfiguredAttentionSourceWeights(AttentionSourceTierOptions options)
     {
@@ -33,12 +50,28 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
 
         _unknownWeight = options.UnknownWeight;
 
-        // Iterate tiers in a stable (ordinal by tier name) order so a publisher listed in two tiers resolves
-        // deterministically (last-wins). All weights are validated into [0,1] before they can reach scoring.
-        var map = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        // Iterate tiers in a stable (ordinal by tier name) order so the pair named in an ambiguity failure
+        // is deterministic (AD-3). All weights are validated into [0,1] before they can reach scoring.
+        var map = new Dictionary<string, TierEntry>(StringComparer.OrdinalIgnoreCase);
         var tiers = options.SourceTiers ?? new Dictionary<string, AttentionSourceTierOptions.SourceTier>();
         foreach (var tierName in tiers.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
+            // The unclassified sentinel is RESERVED, and it is enforced rather than merely documented:
+            // AttentionSourceResolution promises that an unclassified resolution's TierName can never be
+            // impersonated by a curated tier, and a promise nothing checks is not an invariant. Tier names
+            // are hashed into nothing (CanonicalDescriptor omits them), so this rejects a misconfiguration
+            // without touching any fingerprint.
+            if (string.Equals(
+                    tierName, AttentionSourceResolution.UnclassifiedTierName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Radar:Attention tier name '{tierName}' is reserved: it is the sentinel "
+                        + $"AttentionSourceResolution carries for a publisher in NO tier "
+                        + $"('{AttentionSourceResolution.UnclassifiedTierName}'). A curated tier using it "
+                        + "would make an explicitly-classified publisher indistinguishable from an "
+                        + "unclassified one in every rendered coverage diagnostic. Rename the tier.");
+            }
+
             var tier = tiers[tierName];
             if (tier is null)
             {
@@ -60,25 +93,48 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
                     continue;
                 }
 
-                map[key] = tier.Weight;
+                if (map.TryGetValue(key, out var existing))
+                {
+                    // Same tier twice (a duplicate entry, or two spellings that normalize alike) is
+                    // idempotent — it names one tier, so nothing is ambiguous.
+                    if (string.Equals(existing.TierName, tierName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    throw new InvalidOperationException(
+                        $"Radar:Attention publisher '{publisher}' (normalized key '{key}', also listed as "
+                            + $"'{existing.ListedPublisher}') is claimed by two tiers: '{existing.TierName}' "
+                            + $"and '{tierName}'. A publisher belongs to exactly one tier — resolving by "
+                            + "ordinal last-wins would make both the attention score and the publisher "
+                            + "coverage diagnostic depend on tier-NAME ordering, which a rename could flip.");
+                }
+
+                map[key] = new TierEntry(tierName, tier.Weight, publisher);
             }
         }
 
-        _weightByPublisher = map;
+        _entryByPublisher = map;
     }
 
     /// <inheritdoc />
-    public double WeightFor(string? sourceName)
+    public AttentionSourceResolution Resolve(string? sourceName)
     {
-        if (string.IsNullOrWhiteSpace(sourceName))
-        {
-            return _unknownWeight;
-        }
+        var key = Normalize(sourceName);
 
-        return _weightByPublisher.TryGetValue(Normalize(sourceName), out var weight)
-            ? weight
-            : _unknownWeight;
+        return _entryByPublisher.TryGetValue(key, out var entry)
+            ? AttentionSourceResolution.Mapped(entry.TierName, entry.Weight, key)
+            : AttentionSourceResolution.Unclassified(_unknownWeight, key);
     }
+
+    /// <summary>
+    /// <inheritdoc cref="IAttentionSourceWeights.WeightFor" path="/summary/node()"/>
+    /// </summary>
+    /// <remarks>
+    /// Declared on the class as well as defaulted on the interface so concretely-typed callers keep
+    /// compiling; it is the same one-line projection either way.
+    /// </remarks>
+    public double WeightFor(string? sourceName) => Resolve(sourceName).Weight;
 
     /// <inheritdoc />
     public string CanonicalDescriptor()
@@ -89,16 +145,21 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
         // escaped so the reserved delimiters (=, ;, and the % escape char itself) cannot appear literally —
         // otherwise a name containing one could collide with a different tier map and yield the same
         // descriptor (a non-injective fingerprint input). Normal names (spaces etc.) are left unchanged.
+        //
+        // TIER NAMES ARE DELIBERATELY ABSENT (spec 196). The descriptor's SHAPE is unchanged by the spec-196
+        // resolver: two tier maps with the same membership and the same weights score identically, so a tier
+        // RENAME must not re-stamp a series. The pins move because the MAP moved — that must be the only
+        // reason they moved.
         var builder = new StringBuilder();
         builder.Append("unknown=")
             .Append(_unknownWeight.ToString("R", CultureInfo.InvariantCulture))
             .Append(';');
 
-        foreach (var key in _weightByPublisher.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        foreach (var key in _entryByPublisher.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
             builder.Append(DescriptorEscaping.Escape(key))
                 .Append('=')
-                .Append(_weightByPublisher[key].ToString("R", CultureInfo.InvariantCulture))
+                .Append(_entryByPublisher[key].Weight.ToString("R", CultureInfo.InvariantCulture))
                 .Append(';');
         }
 
@@ -122,6 +183,10 @@ public sealed class ConfiguredAttentionSourceWeights : IAttentionSourceWeights
     // "marketscreener", "simplywall.st" → "simplywall". Conservative by design (no fuzzy/vowel stripping); it
     // still removes punctuation/spacing, so distinct names differing only by those characters can collapse onto
     // one key — it minimises, not eliminates, cross-outlet collisions. Pure static (AD-3).
+    //
+    // SPEC 196 DELIBERATELY DID NOT BROADEN THIS. The regional-edition variants it needed
+    // ("Investing.com Nigeria" → investingcomnigeria) are handled by explicit alias entries in the tier
+    // lists, because a prefix rule here could silently collapse genuinely unrelated outlets.
     private static string Normalize(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))

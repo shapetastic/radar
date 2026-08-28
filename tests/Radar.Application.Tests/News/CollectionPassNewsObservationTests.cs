@@ -11,6 +11,7 @@ using Radar.Application.Signals;
 using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
+using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.Persistence.InMemory;
 
 namespace Radar.Application.Tests.News;
@@ -144,6 +145,7 @@ public sealed class CollectionPassNewsObservationTests
             healthValidator ?? new CleanHealthValidator(),
             new FixedTime(FixedNow),
             NullLogger<CollectionPass>.Instance,
+            new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default),
             directionalFilingSignals: null,
             newsObservationArchive: observationArchive,
             newsObservationCaptureOptions: captureOptions);
@@ -309,7 +311,8 @@ public sealed class CollectionPassNewsObservationTests
             companies,
             new CleanHealthValidator(),
             new FixedTime(FixedNow),
-            NullLogger<CollectionPass>.Instance);
+            NullLogger<CollectionPass>.Instance,
+            new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default));
 
         var result = await pass.RunAsync(CancellationToken.None);
 

@@ -41,7 +41,8 @@ namespace Radar.Application.Scoring;
 /// <para><b>A BREADTH CHANNEL IS REJECTED AT CONSTRUCTION — decided, not overlooked.</b> The shared pass can
 /// compute one (it is the tier-weighted distinct-publisher <see cref="ScoreSignalMath.AttentionReach"/>), and
 /// admitting it would have been the smaller diff. It is refused because reach is <b>tier-weighted</b>: outlets
-/// count as their source-quality tier (mills ≈0.1, unknown 0.5, genuine 1.0) rather than as 1. That is a
+/// count as their source-quality tier (wire 0.05, mill 0.1, platform 0.3, genuine 1.0; an unrecognised
+/// publisher falls to the spec-196 inverted default of 0.1) rather than as 1. That is a
 /// quality weighting, and a control whose headline claim is "no quality weighting" must not quietly contain
 /// one. A baseline that measures something other than what it says it measures is worse than no baseline,
 /// because it looks like a control while testing something else (spec 154 §1). A strategy that wants to test

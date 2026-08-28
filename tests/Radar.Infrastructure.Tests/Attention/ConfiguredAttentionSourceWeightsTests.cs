@@ -1,3 +1,4 @@
+using Radar.Application.Scoring;
 using Radar.Infrastructure.Attention;
 
 namespace Radar.Infrastructure.Tests.Attention;
@@ -72,8 +73,9 @@ public sealed class ConfiguredAttentionSourceWeightsTests
         // Newly-listed long-tail aggregators tier as mill (spec 90 denylist-expand).
         Assert.Equal(0.1, weights.WeightFor("Finviz"));
         Assert.Equal(0.1, weights.WeightFor("Investing.com"));
-        // A truly-unlisted publisher falls to the recalibrated 0.25 unknown default (was 0.5).
-        Assert.Equal(0.25, weights.WeightFor("Definitely Not Listed"));
+        // A truly-unlisted publisher falls to the INVERTED 0.1 unknown default (spec 196 §1; was 0.25,
+        // and 0.5 before that).
+        Assert.Equal(0.1, weights.WeightFor("Definitely Not Listed"));
     }
 
     [Fact]
@@ -104,7 +106,7 @@ public sealed class ConfiguredAttentionSourceWeightsTests
         var fake = weights.WeightFor("Reuters Breakingviews Fake");
 
         Assert.Equal(1.0, reuters);
-        Assert.Equal(0.25, fake);
+        Assert.Equal(0.1, fake);
         Assert.NotEqual(reuters, fake);
     }
 
@@ -200,5 +202,45 @@ public sealed class ConfiguredAttentionSourceWeightsTests
         var pairDescriptor = new ConfiguredAttentionSourceWeights(pair).CanonicalDescriptor();
 
         Assert.NotEqual(pairDescriptor, singleDescriptor);
+    }
+
+    [Theory]
+    [InlineData("(unclassified)")]
+    [InlineData("(UNCLASSIFIED)")]
+    public void Constructor_TierNamedWithTheReservedUnclassifiedSentinel_FailsFast(string reservedName)
+    {
+        // AttentionSourceResolution documents that a curated tier can never impersonate the unclassified
+        // sentinel. That is enforced here (in any casing, matching the tier map's own comparer), so the
+        // documented invariant is a checked one rather than a convention.
+        var options = new AttentionSourceTierOptions
+        {
+            UnknownWeight = 0.1,
+            SourceTiers = new Dictionary<string, AttentionSourceTierOptions.SourceTier>(StringComparer.OrdinalIgnoreCase)
+            {
+                [reservedName] = new AttentionSourceTierOptions.SourceTier
+                {
+                    Weight = 1.0,
+                    Publishers = new[] { "Reuters" },
+                },
+            },
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ConfiguredAttentionSourceWeights(options));
+        Assert.Contains("reserved", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(AttentionSourceResolution.UnclassifiedTierName, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolve_MappedPublisher_NeverCarriesTheUnclassifiedSentinelTierName()
+    {
+        // The positive half of the reservation: every real tier name is distinguishable from the sentinel,
+        // so IsExplicitlyMapped and TierName can never disagree in a rendered diagnostic.
+        var weights = new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default);
+
+        var mapped = weights.Resolve("Reuters");
+
+        Assert.True(mapped.IsExplicitlyMapped);
+        Assert.NotEqual(AttentionSourceResolution.UnclassifiedTierName, mapped.TierName);
     }
 }

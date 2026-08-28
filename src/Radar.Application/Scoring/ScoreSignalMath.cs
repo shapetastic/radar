@@ -397,7 +397,8 @@ public static class ScoreSignalMath
 
     /// <summary>
     /// The tier-weighted sum over a distinct-publisher set: each publisher counts as its source-quality tier
-    /// weight (mills ≈0.1, unknown 0.5, genuine 1.0) rather than as 1, so breadth reflects genuine notice and
+    /// weight (wire 0.05, mill 0.1, platform 0.3, genuine 1.0; an unrecognised publisher falls to the
+    /// spec-196 inverted default of 0.1) rather than as 1, so breadth reflects genuine notice and
     /// not mill volume. Enumeration order is the caller's, and addition over a set of non-negative weights is
     /// what it is — the caller hands the same collection v8 handed it.
     /// </summary>

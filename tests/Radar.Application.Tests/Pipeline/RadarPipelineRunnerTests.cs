@@ -35,7 +35,8 @@ public sealed class RadarPipelineRunnerTests
     // outlet). The pipeline tests exercise end-to-end orchestration, not the attention tiering math.
     private sealed class AllGenuineWeights : IAttentionSourceWeights
     {
-        public double WeightFor(string? sourceName) => 1.0;
+        public AttentionSourceResolution Resolve(string? sourceName) =>
+            AttentionSourceResolution.Unclassified(1.0, sourceName ?? string.Empty);
         public string CanonicalDescriptor() => "test-all-genuine";
     }
 
@@ -560,6 +561,7 @@ public sealed class RadarPipelineRunnerTests
                 healthValidator ?? new StubCollectionHealthValidator(),
                 time,
                 CollectionPassLog,
+                new AllGenuineWeights(),
                 directionalFilingSignals);
 
             ScoringPass = new ScoringPass(

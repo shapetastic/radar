@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Abstractions.Persistence;
@@ -6,6 +8,7 @@ using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
 using Radar.Application.News;
+using Radar.Application.Scoring;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
@@ -45,6 +48,13 @@ public sealed class CollectionPass : ICollectionPass
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<CollectionPass> _logger;
 
+    // The curated attention publisher tier map (spec 196 §3). REQUIRED, never optional-nullable: a silently
+    // null optional dependency means a production wiring mistake renders no coverage diagnostic while every
+    // test stays green (spec 150's precedent). It is registered unconditionally by
+    // AddRadarApplicationServices, so every composition that can build a CollectionPass can supply it.
+    // Read-only and observational here — the pass never scores anything.
+    private readonly IAttentionSourceWeights _attentionSourceWeights;
+
     // OPT-IN directional filing enrichment (AI only). Null when AI is disabled (the shipped default), in
     // which case the enrichment step is skipped entirely and the default pipeline is byte-for-byte
     // unchanged. .NET DI supplies the null default when the service is not registered.
@@ -72,6 +82,7 @@ public sealed class CollectionPass : ICollectionPass
         ICollectionHealthValidator healthValidator,
         TimeProvider timeProvider,
         ILogger<CollectionPass> logger,
+        IAttentionSourceWeights attentionSourceWeights,
         IDirectionalFilingSignalSource? directionalFilingSignals = null,
         INewsObservationArchive? newsObservationArchive = null,
         NewsObservationCaptureOptions? newsObservationCaptureOptions = null)
@@ -90,6 +101,7 @@ public sealed class CollectionPass : ICollectionPass
         ArgumentNullException.ThrowIfNull(healthValidator);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(attentionSourceWeights);
 
         // Materialize once in a stable CollectorName-ordinal order so the merge order — and therefore
         // which collector "wins" a ContentHash tie in AddIfNewAsync — is deterministic across runs and
@@ -122,6 +134,7 @@ public sealed class CollectionPass : ICollectionPass
         _healthValidator = healthValidator;
         _timeProvider = timeProvider;
         _logger = logger;
+        _attentionSourceWeights = attentionSourceWeights;
         _directionalFilingSignals = directionalFilingSignals;
         _newsObservationArchive = newsObservationArchive;
         _newsObservationCaptureOptions = newsObservationCaptureOptions ?? new NewsObservationCaptureOptions();
@@ -448,12 +461,42 @@ public sealed class CollectionPass : ICollectionPass
         var deduped = 0;
         var failed = 0;
 
+        // Spec 196 §3, the CAPTURE-FLOW diagnostic. Every candidate ATTEMPTED is tallied — written,
+        // cross-run deduped and failed alike — so the tier counts partition ObservationsAttempted exactly.
+        // Resolution goes through the SAME IAttentionSourceWeights the score consumes, so the diagnostic can
+        // never disagree with the map it is describing; and it uses Resolve rather than WeightFor because
+        // since the spec-196 inversion an explicit Mill and an unclassified publisher share one weight.
+        var observationsByTier = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        // Case-insensitive GROUPING (one outlet, however its feed capitalised it that day) but a
+        // deterministic DISPLAY spelling (AD-3): the raw spellings are folded onto the ordinally-smallest
+        // one seen, never onto whichever arrived first. Keying on the raw string alone would make the
+        // rendered name — and therefore the ordering tie-break and the log line — depend on collector
+        // iteration order.
+        var unclassifiedByPublisher =
+            new Dictionary<string, (string Display, int Count)>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var (_, result) in captures)
         {
             foreach (var candidate in result.Observations!)
             {
                 ct.ThrowIfCancellationRequested();
                 attempted++;
+
+                var resolution = _attentionSourceWeights.Resolve(candidate.Publisher);
+                observationsByTier[resolution.TierName] =
+                    observationsByTier.GetValueOrDefault(resolution.TierName) + 1;
+                if (!resolution.IsExplicitlyMapped)
+                {
+                    var publisher = string.IsNullOrWhiteSpace(candidate.Publisher)
+                        ? UnclassifiedPublisherCoverage.Unattributed
+                        : candidate.Publisher.Trim();
+                    unclassifiedByPublisher[publisher] =
+                        unclassifiedByPublisher.TryGetValue(publisher, out var seen)
+                            ? (string.CompareOrdinal(publisher, seen.Display) < 0 ? publisher : seen.Display,
+                                seen.Count + 1)
+                            : (publisher, 1);
+                }
 
                 var outcome = await _newsObservationArchive!
                     .WriteAsync(NewsObservationRecord.Prospective(candidate), ct)
@@ -472,6 +515,9 @@ public sealed class CollectionPass : ICollectionPass
                 }
             }
         }
+
+        var attentionCoverage = BuildAttentionPublisherCoverage(
+            attempted, observationsByTier, unclassifiedByPublisher);
 
         var batch = new NewsObservationBatch(
             BatchId: Guid.NewGuid(),
@@ -498,7 +544,8 @@ public sealed class CollectionPass : ICollectionPass
                         c.Result.CompanyCoverage?.Any(cov => cov.HitEffectiveResultLimit),
                     AnyFeedConfirmedLocalTruncation:
                         AnyConfirmedLocalTruncation(c.Result.CompanyCoverage))),
-            ]);
+            ],
+            AttentionPublisherCoverage: attentionCoverage);
 
         if (failed > 0)
         {
@@ -529,7 +576,76 @@ public sealed class CollectionPass : ICollectionPass
             deduped,
             failed);
 
+        LogAttentionPublisherCoverage(batch.BatchId, attentionCoverage);
+
         return batch.BatchId;
+    }
+
+    /// <summary>
+    /// Projects the per-tier / per-unclassified-publisher tallies into the spec-196 capture-flow summary.
+    /// Ordering is deterministic (AD-3): descending count, then name (ordinal) — so a re-run over the same
+    /// candidates renders the same document. The unclassified sentinel is a tier ROW, which is what makes
+    /// "the tier counts sum to ObservationsAttempted" exactly true rather than true-after-adding-a-remainder.
+    /// </summary>
+    private static AttentionPublisherCoverageSummary BuildAttentionPublisherCoverage(
+        int attempted,
+        IReadOnlyDictionary<string, int> observationsByTier,
+        IReadOnlyDictionary<string, (string Display, int Count)> unclassifiedByPublisher) =>
+        new(
+            Version: AttentionPublisherCoverageSummary.CurrentVersion,
+            ObservationsAttempted: attempted,
+            Tiers:
+            [
+                .. observationsByTier
+                    .OrderByDescending(e => e.Value)
+                    .ThenBy(e => e.Key, StringComparer.Ordinal)
+                    .Select(e => new AttentionPublisherTierCoverage(e.Key, e.Value)),
+            ],
+            DistinctUnclassifiedPublishers: unclassifiedByPublisher.Count,
+            TopUnclassifiedPublishers:
+            [
+                .. unclassifiedByPublisher.Values
+                    .OrderByDescending(e => e.Count)
+                    .ThenBy(e => e.Display, StringComparer.Ordinal)
+                    .Take(AttentionPublisherCoverageSummary.TopUnclassifiedPublisherLimit)
+                    .Select(e => new UnclassifiedPublisherCoverage(e.Display, e.Count)),
+            ]);
+
+    /// <summary>
+    /// ONE aggregated Information line per run for the whole publisher-coverage summary (the spec-145
+    /// aggregation precedent) — never one line per publisher. It names the tier shares INCLUDING
+    /// unclassified and the largest unclassified publishers, so the curation gap is a number someone sees
+    /// rather than something discovered by asking why a familiar company scored 75. It states what it is:
+    /// a capture-flow diagnostic, not the attention input.
+    /// </summary>
+    private void LogAttentionPublisherCoverage(Guid batchId, AttentionPublisherCoverageSummary coverage)
+    {
+        var tiers = coverage.ObservationsAttempted == 0
+            ? "(no candidates attempted)"
+            : string.Join(
+                ", ",
+                coverage.Tiers.Select(t => string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{t.TierName} {t.Observations} ({(double)t.Observations / coverage.ObservationsAttempted:P1})")));
+
+        var unclassified = coverage.TopUnclassifiedPublishers.Count == 0
+            ? "(none)"
+            : string.Join(
+                ", ",
+                coverage.TopUnclassifiedPublishers.Select(p => $"{p.Publisher} {p.Observations}"));
+
+        _logger.LogInformation(
+            "Attention publisher coverage for batch {BatchId} ({Version}): {Attempted} attempted candidate(s) "
+                + "by tier — {Tiers}. {DistinctUnclassified} distinct unclassified publisher(s); top by volume: "
+                + "{TopUnclassified}. CAPTURE-FLOW DIAGNOSTIC ONLY — scoring consumes tier-weighted DISTINCT "
+                + "publishers per company over the scoring window, not this candidate volume, and nothing is "
+                + "auto-classified from it.",
+            batchId,
+            coverage.Version,
+            coverage.ObservationsAttempted,
+            tiers,
+            coverage.DistinctUnclassifiedPublishers,
+            unclassified);
     }
 
     /// <summary>

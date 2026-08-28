@@ -25,7 +25,8 @@ public sealed class RadarBaselineActivityFormulaV1Tests
 
     private sealed class FuncWeights(Func<string?, double> fn) : IAttentionSourceWeights
     {
-        public double WeightFor(string? sourceName) => fn(sourceName);
+        public AttentionSourceResolution Resolve(string? sourceName) =>
+            AttentionSourceResolution.Unclassified(fn(sourceName), sourceName ?? string.Empty);
         public string CanonicalDescriptor() => "test-func-weights";
     }
 
