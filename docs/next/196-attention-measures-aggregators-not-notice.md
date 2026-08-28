@@ -8,19 +8,22 @@ measurement is not. Attention is built from third-party publisher breadth, and t
 decides what counts as "genuine market notice" classifies almost none of the actual traffic.
 
 **Measurement basis, stated because the first draft got it wrong.** Population = news observations whose
-**`publishedAtUtc`** falls in the trailing 60 days **and** whose company is in the **current 74-company
-universe** (not file mtime, not every historical score directory). Tier resolution uses the **production
+**`publishedAtUtc`** falls in the 60 days preceding the PINNED as-of instant
+**`2026-08-27T21:42:45.4943606Z`** (the last completed baseline's `windowEndUtc`) **and** whose company is
+in the **current 74-company universe** (not file mtime, not "now", not every historical score directory).
+The instant is pinned because the boundary moves: re-measuring later aged seven 2026-06-29 observations out
+and produced 2,858, which is the same corpus read at a different moment, not a different result. Tier resolution uses the **production
 `ConfiguredAttentionSourceWeights.Normalize`** — lowercase, strip one trailing TLD from a closed set, remove
 non-alphanumerics — not whole-string comparison.
 
 | tier | weight | observations | share |
 | --- | ---: | ---: | ---: |
 | `Genuine` | 1.0 | **15** | **0.5 %** |
-| `Mill` | 0.1 | 1,414 | 49.5 % |
-| **unclassified → `UnknownWeight`** | **0.25** | **1,429** | **50.0 %** |
+| `Mill` | 0.1 | 1,415 | 49.4 % |
+| **unclassified → `UnknownWeight`** | **0.25** | **1,435** | **50.1 %** |
 
-2,858 observations in window; **303 distinct unclassified publishers**. Independently reproduced by an
-external reviewer at 15 / 1,415 / 1,435.
+**2,865** observations in window at the pinned instant; ~300 distinct unclassified publishers.
+Independently reproduced by an external reviewer.
 
 ⚠ **A first draft of this spec published 43.9 / 0.5 / 55.6 % over 3,194 observations across 353 publishers.
 Those figures were wrong**: they used file mtime rather than `publishedAtUtc` (admitting 329 observations
@@ -91,15 +94,20 @@ this spec exists to fix. Define the tiers first, then classify against them.
 - **`Mill` (0.1)** — automated, templated or republished material with no demonstrated independent
   selection. The test is *selection*: does this outlet decide which companies to cover, or does it publish
   on every ticker by construction?
-- **`Platform` (new, weight to be declared in the range 0.25–0.4)** — investor-content platforms carrying a
-  mixture of contributor analysis and syndication, where a human chose to write about *this* company but
-  the outlet exercises little editorial gatekeeping. **Seeking Alpha and The Motley Fool both belong
-  here**, which is precisely why the first draft's tenfold split was wrong. Declare the weight explicitly
-  and say why.
+- **`Platform` (0.3)** — investor-content platforms carrying a mixture of contributor analysis and
+  syndication, where a human chose to write about *this* company but the outlet exercises little editorial
+  gatekeeping. **Seeking Alpha and The Motley Fool both belong here**, which is precisely why the first
+  draft's tenfold split was wrong. **The weight is 0.3 and is decided HERE, not by the implementer**: it
+  moves scores and all six fingerprints, so it is a spec decision. Three times `Mill`, because a human
+  chose this company; materially below a professionally gated newsroom, because almost nothing was
+  gatekept. **The audit determines publisher MEMBERSHIP, never the tier's weight.**
 - **`Genuine` (1.0)** — independent reporting or editorial selection.
 
-**Classify by sampled audit, not by reputation.** Before hard-coding any high-volume publisher, sample a
-small number of its actual in-corpus items and record what they were. Cover at minimum: Yahoo Finance
+**Classify by sampled audit, not by reputation — and make the audit reproducible.** For each high-volume
+publisher, sample **up to the ten most-recent in-corpus items, across distinct companies**, and record what
+each actually was. State the rule so a later reader can re-run it and get the same sample.
+**Commit the resulting audit table to the repository** (beside the tier options, or under `docs/cohorts/`)
+— a PR body is not a durable record, and this table is the justification for a hashed scoring input. Cover at minimum: Yahoo Finance
 (478 — 16.7 % of the corpus on its own), Seeking Alpha (64), Quiver Quantitative (51), Sahm (31),
 vinanet.vn (31), Kalkine Media (27), The Globe and Mail (19), Revelio Labs (17), TradingKey (17), plus
 **MarketWatch, Morningstar and the Business Journals**, which the reviewer correctly identified as
@@ -133,20 +141,42 @@ Add **one authoritative resolver** on `IAttentionSourceWeights`, returning a typ
 - `IsExplicitlyMapped` — the bit that survives two tiers sharing a weight; and
 - `NormalizedPublisher` — the key actually matched on, so a curator can see why something missed.
 
+**Fail fast on an ambiguous publisher.** The current resolver silently takes ordinal last-wins when one
+normalized publisher appears in two tiers, so both the score and the diagnostic would depend on tier-NAME
+ordering — an invisible dependency that a rename could flip. With named tiers this must **throw at
+construction**, naming the publisher and both tiers. A publisher belongs to exactly one tier; "cannot tell"
+must never resolve to "whichever sorted last".
+
 `WeightFor` becomes a thin projection of that resolver, and the diagnostic consumes the same call. **One
 matching implementation, two consumers** — the CLAUDE.md reuse rule, and here it is load-bearing rather
 than tidy: a second copy would make the diagnostic disagree with the score it is describing.
 
-**Persistence seam, chosen rather than left open.** The first draft said "the news-observation batch or the
-attention artifact", which is not a decision. Record the per-run tier summary on the **news-observation
-batch record** — it is already the per-run home of collection-coverage provenance, it is written once per
-run, and it is where a reader chasing publisher coverage would look. Bump that record's schema version;
-new fields are **trailing and nullable**, and a pre-196 batch hydrates them as **null = not recorded, never
-zero** (the standing rule). Emit the same summary as one aggregated log line per run — the spec-145
-precedent, never one line per publisher.
+**Persistence seam, chosen — and it must NOT bump the batch schema version.** Record the per-run tier
+summary on the **news-observation batch record**: it is already the per-run home of collection-coverage
+provenance and is written once per run.
 
-Report: observations and share per tier including unclassified, and the top N unclassified publishers by
-volume. **Do not auto-classify from it** — the tier map stays curated policy (AD-5); this only makes the
+⚠ **A draft of this spec said "bump that record's schema version". That is wrong and would break a shared
+field.** `NewsObservationBatch.SchemaVersion` is stamped with `NewsObservationRecord.CurrentSchemaVersion`
+(`CollectionPass` line ~479) — the SAME const every individual observation carries. Bumping it would either
+churn every new observation record to v2 for no reason, or give one field two meanings. The contract is:
+
+- add **one trailing nullable `AttentionPublisherCoverageSummary`** to the batch record;
+- give that **nested** summary **its own** version token, `attention-publisher-coverage-v1`;
+- leave `NewsObservationBatch.SchemaVersion` **unchanged**; and
+- a pre-196 batch hydrates the summary as **null = not recorded, never zero** (the standing rule).
+
+**Population, defined explicitly because the field sits on a collection batch:** every observation candidate
+**attempted** by that batch — written, cross-run deduped and failed alike — so the tier counts **sum to
+`ObservationsAttempted`**. Assert that sum in test.
+
+⚠ **Label it a CAPTURE-FLOW diagnostic, not the input to `AttentionScore`.** The two populations genuinely
+differ: this counts attempted candidates in one collection pass, whereas scoring consumes tier-weighted
+**distinct publishers per company** over the scoring window. The summary is for curating the publisher map;
+it must not be read, or described, as the attention input. §7 measures the scoring unit separately.
+
+Emit the same summary as one aggregated log line per run — the spec-145 precedent, never one line per
+publisher. Report: observations and share per tier including unclassified, and the top N unclassified
+publishers by volume. **Do not auto-classify from it** — the tier map stays curated policy (AD-5); this only makes the
 gap legible so the next drift is a number someone sees rather than something discovered by asking why a
 familiar company scored 75.
 
@@ -209,11 +239,21 @@ Require instead a **read-only paired counterfactual**:
 - **nothing is persisted** — no snapshot, no run record, no identity record. This mirrors the spec-139
   replay discipline and the spec-183 affine-invariance proof; it is not a new mechanism.
 
-Report, old policy versus new, from that single paired run:
+Report, old policy versus new, from that single paired run. **Two populations, because raw article volume
+is NOT the scoring unit** — `AttentionReach` weights **distinct third-party publishers per company**, so a
+publisher appearing forty times counts once, and observation-level coverage answers a curation question
+rather than a scoring one:
 
-- tier coverage — observations and share per tier, and the count of unclassified publishers remaining;
-- the `AttentionScore` distribution across the 74 companies: min, max, mean, and a decade histogram; and
-- the `OpportunityScore` distribution, same statistics.
+1. **Raw observation coverage** — observations and share per tier, plus unclassified publishers remaining.
+   This is for publisher-map maintenance.
+2. **Distinct publisher/company breadth actually consumed by `AttentionReach`** — the tier-weighted
+   contributions per company, counting **both surviving and collapsed-only publishers** (a publisher
+   appearing only inside media-collapsed items still contributes breadth, and omitting it would understate
+   the change). **This is the population the score actually sees.**
+3. The `AttentionScore` distribution across the 74 companies: min, max, mean, decade histogram.
+4. The `OpportunityScore` distribution, same statistics.
+
+(1) explains what to curate next; (2) explains why the scores moved; (3) and (4) show the effect.
 
 The **first real post-merge baseline** is reported **separately**, and is not the evidence for the policy.
 
@@ -239,9 +279,18 @@ better-looking spread.
 - [ ] One typed resolver carries `TierName`, `Weight`, `IsExplicitlyMapped` and `NormalizedPublisher`;
       `WeightFor` and the diagnostic both consume it, so an explicit `Mill` is distinguishable from an
       unclassified publisher despite sharing a weight.
-- [ ] The per-run tier summary is recorded on the news-observation batch record with a bumped schema
-      version, trailing nullable fields, null = not recorded on pre-196 batches, plus one aggregated log
-      line per run.
+- [ ] The per-run tier summary is a trailing nullable `AttentionPublisherCoverageSummary` on the batch
+      record carrying its OWN `attention-publisher-coverage-v1` token; `NewsObservationBatch.SchemaVersion`
+      is UNCHANGED (it is shared with every observation record); its tier counts sum to
+      `ObservationsAttempted`, asserted; null = not recorded on pre-196 batches; and it is labelled a
+      capture-flow diagnostic, never the `AttentionScore` input.
+- [ ] `Platform = 0.3` ships as declared here, with Seeking Alpha and The Motley Fool in it; the sampled
+      audit (≤10 most-recent items across distinct companies per publisher) is COMMITTED to the repo and
+      determines membership only, never a tier weight.
+- [ ] An ambiguous publisher — one normalized key in two tiers — throws at construction naming both tiers,
+      rather than resolving by ordinal last-wins.
+- [ ] The counterfactual reports BOTH raw observation coverage AND the distinct publisher/company breadth
+      `AttentionReach` actually consumes, including collapsed-only publishers.
 - [ ] The fix is proven by a read-only PAIRED COUNTERFACTUAL at one as-of instant over the 74-company
       universe and the `default` strategy, varying ONLY the tier policy and persisting nothing; the first
       post-merge baseline is reported separately.
