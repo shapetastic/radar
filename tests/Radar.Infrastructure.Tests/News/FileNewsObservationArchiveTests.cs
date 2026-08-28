@@ -208,6 +208,69 @@ public sealed class FileNewsObservationArchiveTests : IDisposable
     }
 
     [Fact]
+    public async Task Batch_AttentionPublisherCoverage_RoundTripsThroughDisk()
+    {
+        // Spec 196 §3: the capture-flow summary is persisted on the batch manifest and hydrates back with
+        // its OWN token, while NewsObservationBatch.SchemaVersion — which is shared with every individual
+        // observation record — is untouched.
+        var archive = CreateArchive();
+        var coverage = new AttentionPublisherCoverageSummary(
+            Version: AttentionPublisherCoverageSummary.CurrentVersion,
+            ObservationsAttempted: 3,
+            Tiers:
+            [
+                new AttentionPublisherTierCoverage("Mill", 2),
+                new AttentionPublisherTierCoverage("(unclassified)", 1),
+            ],
+            DistinctUnclassifiedPublishers: 1,
+            TopUnclassifiedPublishers: [new UnclassifiedPublisherCoverage("Some Outlet", 1)]);
+        var batch = Batch() with { AttentionPublisherCoverage = coverage };
+
+        Assert.True(await archive.WriteBatchAsync(batch, CancellationToken.None));
+
+        var hydrated = await CreateArchive().GetBatchAsync(batch.BatchId, CancellationToken.None);
+
+        Assert.NotNull(hydrated);
+        Assert.Equal(NewsObservationRecord.CurrentSchemaVersion, hydrated!.SchemaVersion);
+        Assert.Equal("attention-publisher-coverage-v1", hydrated.AttentionPublisherCoverage!.Version);
+        Assert.Equal(3, hydrated.AttentionPublisherCoverage.ObservationsAttempted);
+        Assert.Equal(
+            3, hydrated.AttentionPublisherCoverage.Tiers.Sum(t => t.Observations));
+        Assert.Equal(
+            "Some Outlet",
+            Assert.Single(hydrated.AttentionPublisherCoverage.TopUnclassifiedPublishers).Publisher);
+    }
+
+    [Fact]
+    public async Task Batch_WrittenBeforeSpec196_HydratesCoverageAsNull_MeaningNotRecorded()
+    {
+        // A batch manifest written before spec 196 carries no coverage property at all. It must hydrate as
+        // null — NOT RECORDED — never as an all-zero summary, which would read as "this run captured
+        // nothing from any tier" (the standing rule: null means not recorded, never 0 or false).
+        var archive = CreateArchive();
+        var batch = Batch();
+        Assert.True(await archive.WriteBatchAsync(batch, CancellationToken.None));
+
+        // Turn the manifest into a genuine PRE-196 file by removing the property entirely — an absent
+        // property, not an explicit null, is what a manifest written before this slice actually looks like.
+        var manifest = Directory.EnumerateFiles(
+            Path.Combine(_tempDir, "batches"), "*.json", SearchOption.AllDirectories).Single();
+        var document = System.Text.Json.Nodes.JsonNode
+            .Parse(await File.ReadAllTextAsync(manifest, CancellationToken.None))!.AsObject();
+        Assert.True(document.Remove("attentionPublisherCoverage"));
+        await File.WriteAllTextAsync(manifest, document.ToJsonString(), CancellationToken.None);
+        Assert.DoesNotContain(
+            "attentionPublisherCoverage",
+            await File.ReadAllTextAsync(manifest, CancellationToken.None),
+            StringComparison.OrdinalIgnoreCase);
+
+        var hydrated = await CreateArchive().GetBatchAsync(batch.BatchId, CancellationToken.None);
+
+        Assert.NotNull(hydrated);
+        Assert.Null(hydrated!.AttentionPublisherCoverage);
+    }
+
+    [Fact]
     public async Task WriteBatchAsync_WritesAsOfNamedManifest()
     {
         var archive = CreateArchive();

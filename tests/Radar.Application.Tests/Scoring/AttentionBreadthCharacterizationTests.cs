@@ -29,8 +29,9 @@ namespace Radar.Application.Tests.Scoring;
 /// <para>
 /// The same 15 distinct third-party publishers (7 outlets in the curated
 /// <see cref="AttentionSourceTierOptions.Default"/> "Genuine" tier at weight 1.0, and 8 realistic outlets
-/// absent from the tier map that therefore resolve to <c>UnknownWeight</c> 0.25) are run four ways so the
-/// collapse effect and the tiering effect stay separately visible:
+/// absent from the tier map that therefore resolve to <c>UnknownWeight</c> — <b>0.1 since spec 196
+/// inverted it from 0.25</b>) are run four ways so the collapse effect and the tiering effect stay
+/// separately visible:
 /// </para>
 /// <list type="number">
 /// <item><b>Single-event burst</b> — all 15 observed inside one <c>MediaCollapseOptions.EventWindow</c>,
@@ -72,11 +73,13 @@ public sealed class AttentionBreadthCharacterizationTests
     /// burst scenario and is therefore the surviving collapse representative — realistically an outlet that
     /// is not on the curated genuine list, so it resolves to <c>UnknownWeight</c>. Seven entries are on
     /// <see cref="AttentionSourceTierOptions.Default"/>'s "Genuine" tier (weight 1.0); the remaining eight are
-    /// absent from every tier (weight 0.25). None are on the "Mill" denylist.
+    /// absent from every tier (weight 0.1 since spec 196 — they are realistic-but-unlisted names, and the
+    /// point of the inversion is that an unlisted outlet is treated as low-signal coverage). None are on the
+    /// "Mill", "Wire" or "Platform" lists.
     /// </summary>
     private static readonly string[] Publishers =
     {
-        "Regional Business Journal",   // unknown → 0.25 (earliest ⇒ the collapse representative)
+        "Regional Business Journal",   // unknown → 0.1 (earliest ⇒ the collapse representative)
         "Reuters",                     // genuine → 1.0
         "Bloomberg",                   // genuine → 1.0
         "The Wall Street Journal",     // genuine → 1.0
@@ -84,39 +87,48 @@ public sealed class AttentionBreadthCharacterizationTests
         "Associated Press",            // genuine → 1.0
         "Financial Times",             // genuine → 1.0
         "SpaceNews",                   // genuine → 1.0
-        "Industry Wire Daily",         // unknown → 0.25
-        "Semiconductor Report",        // unknown → 0.25
-        "The Morning Ledger",          // unknown → 0.25
-        "Capital Markets Today",       // unknown → 0.25
-        "TechSector Weekly",           // unknown → 0.25
-        "The Evening Dispatch",        // unknown → 0.25
-        "Global Trade Review",         // unknown → 0.25
+        "Industry Wire Daily",         // unknown → 0.1
+        "Semiconductor Report",        // unknown → 0.1
+        "The Morning Ledger",          // unknown → 0.1
+        "Capital Markets Today",       // unknown → 0.1
+        "TechSector Weekly",           // unknown → 0.1
+        "The Evening Dispatch",        // unknown → 0.1
+        "Global Trade Review",         // unknown → 0.1
     };
 
     // ---- The pinned numbers (spec 124 diagnosis → spec 122 fix) ----
 
     /// <summary>
     /// 15 publishers, ONE event, at the DEFAULT <c>CollapsedBreadthCredit</c> 1.0 (spec 122): the collapse
-    /// still keeps one representative (an unknown-tier outlet, 0.25) and <c>mediaSignalCount</c> stays 1, but
+    /// still keeps one representative (an unknown-tier outlet, 0.1) and <c>mediaSignalCount</c> stays 1, but
     /// the 14 collapsed-away publishers now contribute their tier weights to breadth
-    /// (7·1.0 + 7·0.25 = 8.75), so reach = 0.25 + 1.0·8.75 + 0.10·1 = 9.10 and
-    /// Attention = 100·9.10/(9.10+3.0) = 75.2 → <b>75</b>.
+    /// (7·1.0 + 7·0.1 = 7.70), so reach = 0.1 + 1.0·7.70 + 0.10·1 = 7.90 and
+    /// Attention = 100·7.90/(7.90+3.0) = 72.5 → <b>72</b>.
+    /// <para>
+    /// <b>Spec 196 moved this from 75 to 72</b> — and every number in this file — because
+    /// <c>UnknownWeight</c> was inverted 0.25 → 0.1. Nothing about the COLLAPSE changed; the eight unlisted
+    /// outlets simply stopped counting as quarter-strength genuine notice. The spec-122 claim these pins
+    /// exist to protect is unaffected: the burst still expresses the breadth of ~15 publishers rather than
+    /// of one, which is what the comparison against the zero-credit anchor below asserts.
+    /// </para>
     /// </summary>
-    private const int SingleEventBurstAttention = 75;
+    private const int SingleEventBurstAttention = 72;
 
     /// <summary>
     /// The spec-124 regression anchor: the SAME burst at <c>CollapsedBreadthCredit = 0</c>, where v8 is
-    /// radar-formula-v7 exactly — reach = 0.25 + 0.10·1 = 0.35 and
-    /// Attention = 100·0.35/(0.35+3.0) = 10.4 → <b>10</b>.
+    /// radar-formula-v7 exactly — reach = 0.1 + 0.10·1 = 0.20 and
+    /// Attention = 100·0.20/(0.20+3.0) = 6.3 → <b>6</b> (was 10 before spec 196 inverted
+    /// <c>UnknownWeight</c>).
     /// </summary>
-    private const int SingleEventBurstAttentionAtZeroCredit = 10;
+    private const int SingleEventBurstAttentionAtZeroCredit = 6;
 
     /// <summary>
     /// The SAME 15 publishers across 15 separate events: nothing collapses, so
-    /// reach = (7·1.0 + 8·0.25) + 0.10·15 = 10.5 and Attention = 100·10.5/(10.5+3.0) = 77.8 → <b>78</b>.
-    /// Unmoved by spec 122 — there is nothing collapsed away to credit.
+    /// reach = (7·1.0 + 8·0.1) + 0.10·15 = 9.30 and Attention = 100·9.30/(9.30+3.0) = 75.6 → <b>76</b>.
+    /// Unmoved by spec 122 — there is nothing collapsed away to credit — and moved by spec 196 only through
+    /// the inverted <c>UnknownWeight</c> (was 78).
     /// </summary>
-    private const int SpreadCoverageAttention = 78;
+    private const int SpreadCoverageAttention = 76;
 
     private static IReadOnlyList<DateTimeOffset> BurstObservations() =>
         Enumerable.Range(0, Publishers.Length)
@@ -170,7 +182,9 @@ public sealed class AttentionBreadthCharacterizationTests
         // number exactly — the diagnosis that attributed the whole original 10 → 78 gap to the collapse rather
         // than to the tier map, which only sets the ceiling (78 rather than the 85 that 15 fully-genuine
         // outlets would reach). Spec 122's fix moves the COLLAPSED burst up toward this value; this
-        // no-collapse baseline itself is unmoved.
+        // no-collapse baseline itself is unmoved by spec 122. Spec 196's inverted UnknownWeight lowers
+        // BOTH sides equally (the ceiling is now 76 rather than 78 against the 85 that 15 fully-genuine
+        // outlets would reach), so the equality this test asserts is untouched.
         var sourceWeights = new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default);
         var formula = new RadarScoreFormulaV8(new ScoringWeights(), sourceWeights);
 

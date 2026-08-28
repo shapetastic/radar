@@ -25,7 +25,8 @@ public sealed class RadarScoreFormulaV8Tests
     {
         private readonly Func<string?, double> _fn;
         public FuncWeights(Func<string?, double> fn) => _fn = fn;
-        public double WeightFor(string? sourceName) => _fn(sourceName);
+        public AttentionSourceResolution Resolve(string? sourceName) =>
+            AttentionSourceResolution.Unclassified(_fn(sourceName), sourceName ?? string.Empty);
         public string CanonicalDescriptor() => "test-func-weights";
     }
 

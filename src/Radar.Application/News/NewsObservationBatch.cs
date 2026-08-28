@@ -29,6 +29,16 @@ namespace Radar.Application.News;
 /// <param name="ObservationsFailed">Candidates the archive could not durably persist (disk failure or id/hash conflict).</param>
 /// <param name="CaptureProven">True iff every attempted observation is durably accounted for (<see cref="ObservationsFailed"/> == 0).</param>
 /// <param name="Collectors">Per-collector capture provenance: the spec-169 coverage rows plus provider outcomes.</param>
+/// <param name="AttentionPublisherCoverage">
+/// Spec 196 §3: how this pass's ATTEMPTED observation candidates distribute across the curated attention
+/// publisher tier map, plus the largest unclassified publishers. A <b>CAPTURE-FLOW DIAGNOSTIC</b> for
+/// curating that map — explicitly NOT the <c>AttentionScore</c> input, which consumes tier-weighted DISTINCT
+/// publishers per company over the scoring window. Its tier counts sum to
+/// <see cref="ObservationsAttempted"/>. Trailing and nullable: <c>null</c> on a pre-196 batch means NOT
+/// RECORDED, never a measured zero. It carries its OWN
+/// <see cref="AttentionPublisherCoverageSummary.CurrentVersion"/> token, so
+/// <see cref="SchemaVersion"/> — which is shared with every individual observation record — is UNCHANGED.
+/// </param>
 public sealed record NewsObservationBatch(
     Guid BatchId,
     DateTimeOffset RunAsOfUtc,
@@ -39,7 +49,8 @@ public sealed record NewsObservationBatch(
     int ObservationsCrossRunDeduped,
     int ObservationsFailed,
     bool CaptureProven,
-    IReadOnlyList<NewsObservationCollectorCapture> Collectors);
+    IReadOnlyList<NewsObservationCollectorCapture> Collectors,
+    AttentionPublisherCoverageSummary? AttentionPublisherCoverage = null);
 
 /// <summary>
 /// One observation-emitting collector's capture provenance inside a batch: its spec-169 per-company/query

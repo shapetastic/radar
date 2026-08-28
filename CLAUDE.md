@@ -2106,6 +2106,157 @@ Do not hand back broken code.
     news-trajectory strength constants configurable (§2 hashes them by value; a test perturbs a CONSTRUCTED
     identity fixture instead); folding call budgets or retry caps into the identity; and retiring
     v8/v9/v10/v11 or changing which arm is Lead.
+- **Attention measured aggregator COVERAGE, not notice — the default is inverted and the volume is
+  classified (spec 196).** `OpportunityScore` applies attention as an inverse discount, so a company Radar
+  believes is already noticed is marked down; the intent is right, the measurement was not. Measured over the
+  live corpus at the pinned instant `2026-08-27T21:42:45.4943606Z` (news observations whose `publishedAtUtc`
+  falls in the preceding 60 days, company in the 74-company universe, resolved through the production
+  `Normalize`): **2,865 observations, of which 50.1 % were UNCLASSIFIED and therefore weighted `0.25` — two
+  and a half times a `Mill` publisher — while `Genuine` notice was 15 observations, 0.5 %.** Output
+  consequence: attention mean **73.4** with **53 of 75** score directories between 70 and 89, i.e. a
+  near-uniform tax rather than a discriminator, and `OpportunityScore` compressed to mean 19.2 / max 38. The
+  worked example: **DGII scored attention 75** with 38 of its 45 in-window observations from algorithmic
+  aggregators and Yahoo Finance (10) as its single largest source, unclassified. Rules:
+  - **The default is INVERTED: `UnknownWeight` 0.25 → 0.1, the `Mill` weight.** An explicit entry is now
+    required to count as **notice**, not to be **discounted** — genuine outlets are a short enumerable list
+    while mills and syndication are an unbounded long tail (~300 unclassified publishers and counting), so
+    enumerating the tail is unwinnable. It stays deliberately **non-zero** (real coverage is never silently
+    zeroed; a zero would make an unclassified genuine outlet invisible rather than merely quiet) and stays
+    **configurable**, so the inversion is a declared default rather than a hard-coded belief.
+  - **The POLICY was defined before any publisher was assigned, and it lives in code**: `Wire` **0.05** (paid
+    or company-originated distribution — visibility the company controls the existence of, not independent
+    notice), `Mill` **0.1** (automated/templated/republished with no demonstrated independent *selection* —
+    does the outlet decide which companies to cover, or publish on every ticker by construction?), `Platform`
+    **0.3** (contributor investor content: a human chose *this* company, the outlet gatekeeps little) and
+    `Genuine` **1.0** (independent reporting or editorial selection). **Seeking Alpha and The Motley Fool are
+    both `Platform`** — a tenfold split between two comparable investor-content platforms was exactly the
+    unprincipled curation this slice removes.
+  - **MEMBERSHIP is the committed audit's; the WEIGHTS are the spec's.** `docs/cohorts/attention-publisher-audit-v1.md`
+    records each classified publisher's in-corpus volume, company spread, verdict and the sampled items it
+    rests on (sampling: the most-recent in-corpus item per company by `PublishedAtUtc` then `ObservationId`,
+    up to ten companies). **Audit overrode reputation** where they disagreed: MarketWatch is `Mill` because
+    all ten of its in-corpus items were the automated market-wrap template, and The Globe and Mail is `Mill`
+    because its in-corpus feed was entirely syndicated. Two findings the audit recorded and deliberately did
+    NOT fix in the tier map: `Valley News Live`/`Perham Focus`/`The Mighty 790 KFGO` are real Otter Tail
+    County newsrooms matched to OTTR **by company-name collision** (a resolution defect, not a publisher one),
+    and issuer names appear as publishers (`Aehr Test Systems`, `Chevron`) — both fall to the inverted default,
+    which is the right practical outcome, and both are separate specs. Post-audit the live corpus is Wire 4.4 %
+    / Mill 78.1 % / Platform 3.7 % / Genuine 1.0 % / unclassified **12.8 %** (367 observations over 256
+    publishers, 194 of them singletons).
+  - **Matching: one real fix, one retraction.** `marketscreener.com` was **never** broken — `Normalize`
+    already strips the trailing TLD — and a test now GUARDS that rather than "fixing" it. The real gap was
+    `Investing.com Nigeria` (`investingcomnigeria`), which shares no key with the listed `Investing.com`
+    (`investing`); it and the other regional Investing.com/Yahoo Finance editions are plain **alias entries**
+    in the tier lists. `Normalize` is deliberately **not broadened** — a prefix rule could silently collapse
+    unrelated outlets.
+  - **`IAttentionSourceWeights.Resolve` is the ONE matching implementation; `WeightFor` is a projection of it
+    (a default interface member).** This is a structural consequence of the inversion, not tidiness: once
+    unknown == `Mill` == 0.1, a `double` cannot distinguish an audited mill from an unclassified publisher, so
+    a diagnostic built on `WeightFor` would either duplicate the matching rules (they drift) or report every
+    mill as unclassified — lying about the very gap it exists to expose. `AttentionSourceResolution` carries
+    `TierName` / `Weight` / `IsExplicitlyMapped` / `NormalizedPublisher`, with the invariant "`IsExplicitlyMapped`
+    ⟺ a real tier" enforced by a private ctor plus two factories. **An ambiguous publisher — one normalized key
+    in two tiers — now THROWS at construction naming the publisher, the key and BOTH tiers**, instead of
+    resolving by ordinal last-wins, which made both the score and the diagnostic depend on tier-NAME ordering.
+    A duplicate within one tier is idempotent.
+  - **The per-run CAPTURE-FLOW diagnostic, which is NOT the `AttentionScore` input.** `AttentionPublisherCoverageSummary`
+    (primitive-only, so `Radar.Application.News` still takes no dependency on `Radar.Application.Scoring`) rides
+    `NewsObservationBatch` as **one trailing nullable member** carrying its OWN token
+    `attention-publisher-coverage-v1`; **`NewsObservationBatch.SchemaVersion` is UNCHANGED** because it is
+    stamped with `NewsObservationRecord.CurrentSchemaVersion`, the same const every observation record carries,
+    and bumping it would churn every record for an unrelated reason. `null` on a pre-196 batch = NOT RECORDED,
+    never zero. It counts **every candidate ATTEMPTED** — written, cross-run deduped and failed alike — so its
+    tier counts **sum to `ObservationsAttempted`** (asserted), and it is emitted as ONE aggregated Information
+    line per run (the spec-145 precedent) with the tier shares and the top-10 unclassified publishers by
+    descending volume. The two populations genuinely differ: this is candidate volume in one collection pass,
+    whereas scoring consumes tier-weighted **distinct publishers per company** over the scoring window. Nothing
+    is auto-classified from it — the tier map stays curated policy (AD-5). `CollectionPass` takes
+    `IAttentionSourceWeights` as a **required** ctor dependency (spec 150's precedent — a silently-null optional
+    dependency means a wiring mistake renders no diagnostic while every test stays green).
+  - ⚠ **ALL SIX PINS MOVED — THE THIRD SCORING-IDENTITY MOVE IN AS MANY WEEKS**, because the tier map is the
+    `attnDesc` hashed field (AD-10). **CURRENT values: 30d code-default** AI-OFF **`radar-scoring-fp-54e845330f96`**
+    / AI-ON **`radar-scoring-fp-420b31ba0753`**; **60d LIVE baseline** AI-OFF **`radar-scoring-fp-8daa662a57a6`**
+    / AI-ON **`radar-scoring-fp-65eb592d0354`**; **120d `-Profile long-window`** AI-OFF
+    **`radar-scoring-fp-f610244e23c6`** / AI-ON **`radar-scoring-fp-a89b6d9ad0a5`**. The three pairs are three
+    correct answers at three windows — **do not reconcile them onto one value**; match an accrued stamp against
+    the pair for the window that run actually used. The spec-194 values (`5036d7f73af3`/`5ef6508adc5d`,
+    `2cbbd056ffe5`/`b9543f441717`, `f68e6481b136`/`901129153cd1`) are now history. **Verified twice, and the
+    second check is the useful one:** each value was re-derived outside .NET by rebuilding the canonical string
+    and hashing it with a different SHA-256 implementation (the spec-194 precedent), AND substituting a
+    reconstructed pre-196 tier map into the same code reproduces every pre-196 pin exactly — so the tier map is
+    provably the SOLE cause of the move. The three **composition-guard** pins moved with them and only with
+    them (`RadarScoreFormulaV10` `412ba7a0b6f5 → 70e32b77f1c4`, `V11` `173e8e705e77 → 32a50355b568`,
+    `RadarBaselineActivityFormulaV1` `a8bda5680a46 → 7af921a7ae84`): those files substitute a frozen
+    `StubSourceDescriptor` but DO consume the real `AttentionSourceTierOptions.Default`, and the same
+    substitution control reproduces their previous values. No `_formula.Version` bump, no `RuleSetVersion` bump
+    (still `radar-keyword-rules-v8`), no `MediaAttentionCollapse.Version` bump (still `media-collapse-v2`), no
+    weight edit. **`CanonicalDescriptor()`'s SHAPE is unchanged and tier NAMES are deliberately NOT hashed** —
+    a rename with identical weights and membership scores identically and must not re-stamp.
+  - ⚠ **THE ATTENTION REGIME BEFORE THIS BOUNDARY IS NOT COMPARABLE WITH THE ONE AFTER IT.** Accrued snapshots
+    keep their old attention values (history is deliberately NOT regenerated, rewritten or backfilled —
+    AD-8/AD-1, the spec-148 precedent); they were computed against a map under which half the observed volume
+    outranked a content mill.
+  - ⚠ **OPERATOR ACTION — REQUIRED BEFORE THE FIRST POST-196 BASELINE, AND THE ORDER IS LOAD-BEARING.**
+    `data/scoring-configs/` is git-ignored, so the identity records cannot ride in a PR and **must never be
+    fabricated**: **(1)** do not touch them while a pre-196 baseline is running; **(2)** after merge and before
+    the first post-196 baseline, consciously **delete or re-record every configured
+    `data/scoring-configs/strategies/{name}.json`**; **(3)** verify the first run reports
+    `radar-scoring-fp-65eb592d0354` (the shipped profile is AI-ON at 60 days) before treating later snapshots
+    as the corrected series. If step 2 is missed, `StrategyIdentityGuard` halts the run before collection —
+    **that halt is CORRECT and must not be bypassed.**
+  - **The fix is proven by a READ-ONLY PAIRED COUNTERFACTUAL, not by consecutive runs** (§7), because two
+    nightly runs change the policy AND the evidence and would show their sum. `AttentionPolicyCounterfactualTests`
+    (env-gated on `RADAR_ATTENTION_COUNTERFACTUAL_DATA_ROOT`, skipped with a NAMED reason otherwise) hydrates
+    the durable signal + raw-evidence stores read-only (spec 142), scores the 74-company universe for the
+    primary `default` strategy at ONE fixed as-of instant through the REAL `ScoringEngine`, and varies ONLY the
+    `IAttentionSourceWeights` instance. **Nothing is persisted** — no snapshot, no run record, no identity
+    record; the composition registers no score file store, no run store, no scoring-config store and no
+    collector. It reports BOTH populations: raw observation coverage per tier (map maintenance) AND the
+    tier-weighted **distinct publisher/company breadth `AttentionReach` actually consumes**, counting survivors
+    and collapsed-only publishers alike, plus the `AttentionScore` and `OpportunityScore` distributions.
+  - ✅ **THE MEASURED COUNTERFACTUAL RESULT — recorded HERE because a PR body is not a durable record**
+    (CLAUDE.md's "no measure ships without its live distribution" rule cuts both ways: the harness is not the
+    measurement). Old policy → new policy, ONE paired read-only run at the pinned as-of
+    `2026-08-27T21:42:45.4943606Z`, 60-day window, `default` strategy, 74 companies, nothing persisted.
+    **(1) Raw observation coverage** over the 2,865 in-window observations: unclassified 1,435 (50.1 %) →
+    **367 (12.8 %)**; `Mill` 1,415 (49.4 %) → 2,238 (78.1 %); `Platform` 0 → 105 (3.7 %); `Wire` 0 → 127
+    (4.4 %); `Genuine` 15 (0.5 %) → 28 (1.0 %); unclassified publishers 302 → 256, **194 of them singletons**.
+    Largest remaining: `Valley News Live` 8, `Aehr Test Systems` 7, `Perham Focus` 7, `The Mighty 790 KFGO` 6
+    — exactly the company-name-collision and issuer-as-publisher cases the audit recorded and deliberately did
+    NOT tier. **The old-policy arm reproduces the spec's own corpus measurement exactly (2,865 / 1,435 / 1,415
+    / 15), which is what validates the harness** rather than merely running it.
+    **(2) Breadth actually consumed by `AttentionReach`** — the *scoring* unit, 3,107 company-publisher pairs
+    over 833 distinct publishers, survivors AND collapsed-only: per company min 2.350 → 1.500, mean
+    **9.165 → 4.949**, max 58.900 → 25.700. Distinct publishers by tier: unclassified **808 → 756**, `Mill`
+    19 → 55, `Platform` 0 → 6, `Wire` 0 → 7, `Genuine` 6 → 9. **The point this makes, and it is the
+    load-bearing one: the audit classified the VOLUME, not the breadth TAIL** — 756 of 833 distinct publishers
+    remain unclassified even though only 12.8 % of *observations* are, because the tail is singletons —
+    **which is precisely why the inverted default, and not further enumeration, was the right lever.**
+    **(3) `AttentionScore`** (n = 74): min 52 → 44, mean **74.4 → 64.7**, max 95 → 90, spread 43 → **46**,
+    populated decades 5 → 6. Decades old → new: 40–49 `0→2`, 50–59 `2→17`, 60–69 `16→40`, 70–79 `43→11`,
+    80–89 `10→3`, 90–99 `3→1`. (The old arm's 74.4 and the 73.4 quoted at the top of this bullet are the
+    SAME regime read two ways — 73.4 is the accrued snapshots across 75 score directories, 74.4 is the
+    74-company universe re-scored at the pinned instant. Neither is a correction of the other.)
+    **(4) `OpportunityScore`** (n = 74): min 3 → 3, mean 19.0 → **20.2**, max 38 → **41**, spread 35 → **38**,
+    populated decades 4 → 5. Decades old → new: 0–9 `6→6`, 10–19 `35→33`, 20–29 `28→25`, 30–39 `5→8`,
+    40–49 `0→2`.
+  - ⚠ **THE VERDICT IS PARTIAL AND MUST NOT BE READ AS A CLEAN WIN.** The criterion — attention DISCRIMINATES
+    rather than taxes — is only **PARTIALLY** met. What improved is real: the mass moved out of the 70s
+    (43 → 11) into the 60s, a sixth decade opened, and the spread widened 43 → **46**. What did not: **40 of
+    74 companies (54 %) still sit in ONE decade (60–69)**, so attention remains substantially a broad discount
+    rather than a strong discriminator, and the corrected measure did not by itself make it one. Per §5/§7
+    that is not a failure of this slice but its **recorded evidence for a separate discount-weight-tuning
+    slice** (`OpportunityAttentionDivisor` / `OpportunityAttentionDiscountWeight` /
+    `FollowingTierDiscountWeight`) with its own measurement — **no weight was tuned here to manufacture a
+    better-looking spread**, and none was touched.
+  - **§5 — what this deliberately does NOT do, recorded so the next reader does not assume more was decided
+    than was.** It does **not re-tune the discount weights**: `OpportunityAttentionDivisor`,
+    `OpportunityAttentionDiscountWeight` and `FollowingTierDiscountWeight` are untouched, because the hypothesis
+    is that attention measured the *wrong thing*, not that the discount was too strong — **if attention still
+    looks like a near-uniform tax after this, THAT is the evidence for re-tuning, in a separate spec with its
+    own measurement.** It does not touch the curated per-company `FollowingTier`. It does not change collection
+    (no feed, cap, collector or admission rule; no evidence or observation added, removed or re-mapped). It does
+    not rewrite history. No new strategy, arm, formula class, signal type, label or Lead change.
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

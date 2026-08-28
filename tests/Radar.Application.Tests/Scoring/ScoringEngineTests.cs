@@ -43,7 +43,8 @@ public sealed class ScoringEngineTests
 
     private sealed class AllGenuineWeights : IAttentionSourceWeights
     {
-        public double WeightFor(string? sourceName) => 1.0;
+        public AttentionSourceResolution Resolve(string? sourceName) =>
+            AttentionSourceResolution.Unclassified(1.0, sourceName ?? string.Empty);
         public string CanonicalDescriptor() => "test-all-genuine";
     }
 

@@ -11,8 +11,11 @@ namespace Radar.Application.Tests.Scoring;
 
 public sealed class ScoringConfigFingerprintTests
 {
-    // The canonical descriptor of the default attention tier map (spec 88 seed lists). Application.Tests
-    // already references Infrastructure (AD-4), so the real ConfiguredAttentionSourceWeights can produce it.
+    // The canonical descriptor of the default attention tier map (spec 88 seed lists, re-based by spec 196
+    // onto the four-tier Wire/Mill/Platform/Genuine policy with the inverted 0.1 unknown default).
+    // Application.Tests already references Infrastructure (AD-4), so the real
+    // ConfiguredAttentionSourceWeights can produce it — which is why a tier-map edit re-stamps all six pins
+    // below automatically rather than needing anything here to be updated by hand.
     private static string DefaultTierDescriptor() =>
         new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default).CanonicalDescriptor();
 
@@ -231,14 +234,38 @@ public sealed class ScoringConfigFingerprintTests
         // (AD-8/AD-1). No _formula.Version bump, no RuleSetVersion bump (it stays radar-keyword-rules-v8),
         // no weight edit.
         //
+        // SPEC 196 MOVES IT AGAIN — THE THIRD SCORING-IDENTITY MOVE IN AS MANY WEEKS:
+        // radar-scoring-fp-5036d7f73af3 → radar-scoring-fp-54e845330f96, for the attention publisher TIER
+        // MAP, which is the `attnDesc` hashed field. Two changes, both in that one field: the unknown
+        // default was INVERTED from 0.25 to 0.1 (the Mill weight — an explicit entry is now required to
+        // count as NOTICE rather than to be DISCOUNTED), and the map gained the four-tier policy
+        // (Wire 0.05 / Mill 0.1 / Platform 0.3 / Genuine 1.0) with ~50 publishers classified by the sampled
+        // audit committed at docs/cohorts/attention-publisher-audit-v1.md. Measured cause: over the live
+        // 60-day corpus at the pinned instant 2026-08-27T21:42:45.4943606Z, 50.1 % of 2,865 observations
+        // were unclassified and therefore weighted 0.25 — two and a half times a Mill publisher — while
+        // GENUINE notice was 0.5 %, so Attention was measuring aggregator database coverage rather than
+        // market notice (mean 73.4 with 53 of 75 companies between 70 and 89: a near-uniform tax, not a
+        // discriminator). No _formula.Version bump, no RuleSetVersion bump (still radar-keyword-rules-v8),
+        // no MediaAttentionCollapse.Version bump (still media-collapse-v2), no weight edit, and the
+        // DESCRIPTOR'S SHAPE is unchanged — tier NAMES are deliberately not hashed, so a rename with
+        // identical weights and membership re-stamps nothing. The map moved; that is the only reason
+        // these six values moved.
+        //
+        // ⚠ THE ATTENTION REGIME BEFORE THIS PIN IS NOT COMPARABLE WITH THE ONE AFTER IT. Accrued snapshots
+        // keep their old attention values (history is not regenerated — AD-8/AD-1, the spec-148 precedent);
+        // they were computed against a map under which half the observed volume outranked a content mill.
+        // The live 60-day AI-OFF/AI-ON values are now radar-scoring-fp-8daa662a57a6 /
+        // radar-scoring-fp-65eb592d0354, and the 120-day -Profile long-window values
+        // radar-scoring-fp-f610244e23c6 / radar-scoring-fp-a89b6d9ad0a5.
+        //
         // OPERATOR ACTION, and the ORDER is load-bearing: (1) do not touch the ignored identity records
-        // while a pre-194 baseline is running; (2) after merge and BEFORE the first post-194 baseline,
+        // while a pre-196 baseline is running; (2) after merge and BEFORE the first post-196 baseline,
         // consciously delete or re-record every configured data/scoring-configs/strategies/{name}.json;
         // (3) verify the first run reports the expected new fingerprint before treating subsequent snapshots
         // as the corrected series. That path is git-ignored, so those records cannot be committed from a
         // worktree and must not be fabricated. If step 2 is missed, StrategyIdentityGuard halts the run
         // before collection — that halt is CORRECT and must not be bypassed.
-        Assert.Equal("radar-scoring-fp-5036d7f73af3", DefaultFingerprint());
+        Assert.Equal("radar-scoring-fp-54e845330f96", DefaultFingerprint());
     }
 
     [Fact]
@@ -349,7 +376,7 @@ public sealed class ScoringConfigFingerprintTests
         //
         // ⚠ NOT the live stamp any more — see the AI-OFF pin above. Since spec 148 the window is hashed, and
         // the live baseline runs at Radar:ScoringWindowDays = 60, where the AI-ON value is
-        // radar-scoring-fp-b9543f441717 since spec 194 §2 (recorded in default.json's comment and asserted by
+        // radar-scoring-fp-65eb592d0354 since spec 196 (recorded in default.json's comment and asserted by
         // Compute_LiveWindowAiOnStamps_ArePinned below). This pin is the unit-level change-detector at the
         // code default; that one is the operator-facing live record.
         //
@@ -396,15 +423,19 @@ public sealed class ScoringConfigFingerprintTests
         // media-collapse-v1 → media-collapse-v2 bump. It re-stamps BOTH the AI-OFF and the AI-ON default
         // automatically, because mediaCollapseDescriptor is its own hashed field and is folded whether or
         // not the AI source is registered.
-        // → SPEC 194 §2 (radar-scoring-fp-fce77b299c76 → the value below): the news-read scoring identity.
-        // On THIS side the segment carries the ENABLED form — the live baseline designates the DeepInfra
-        // DeepSeek reader as both presentation judge and presentation stage-1 extractor — so a judge-model
-        // or presentation-cohort change now moves this pin, exactly as the earnings-read model has moved it
-        // since spec 119. See the AI-OFF pin above for what the segment contains, why it is unconditional,
-        // the two-moves-in-one-week / three-regime discontinuity statement, and the ordered operator action
-        // for the ignored strategy identity records.
+        // → SPEC 194 §2 (radar-scoring-fp-fce77b299c76 → radar-scoring-fp-5ef6508adc5d): the news-read
+        // scoring identity. On THIS side the segment carries the ENABLED form — the live baseline designates
+        // the DeepInfra DeepSeek reader as both presentation judge and presentation stage-1 extractor — so a
+        // judge-model or presentation-cohort change now moves this pin, exactly as the earnings-read model
+        // has moved it since spec 119.
+        // → SPEC 196 (radar-scoring-fp-5ef6508adc5d → the value below): the attention publisher TIER MAP —
+        // the inverted unknown default (0.25 → 0.1) plus the four-tier policy and its audited membership.
+        // It re-stamps BOTH the AI-OFF and the AI-ON default automatically, because attnDesc is its own
+        // hashed field and is folded whether or not the AI source is registered. See the AI-OFF pin above
+        // for the measured cause, the "not comparable across this boundary" statement, and the ordered
+        // operator action for the ignored strategy identity records.
         Assert.Equal(
-            "radar-scoring-fp-5ef6508adc5d",
+            "radar-scoring-fp-420b31ba0753",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -435,18 +466,21 @@ public sealed class ScoringConfigFingerprintTests
         // Spec 191 lineage: 60d radar-scoring-fp-5ffa8c9e25f0 → radar-scoring-fp-3670cdb74652;
         // 120d radar-scoring-fp-19fecdb64e3a → radar-scoring-fp-c9fe86a19073. Spec 194 §1.1: 60d
         // → radar-scoring-fp-7a4cd9d409ed; 120d → radar-scoring-fp-759835b624ca. Spec 194 §1.5: 60d
-        // → radar-scoring-fp-162df0f4c62b; 120d → radar-scoring-fp-b8ce14dea17a. Spec 194 §2 moves them to
-        // the values below. The AI-OFF live values moved at every one of those steps too (60d
-        // radar-scoring-fp-4eb2fe5d3cdf → 58c289cd0113 → 06e4781f86bb → 61891b37e429 →
-        // radar-scoring-fp-2cbbd056ffe5; 120d radar-scoring-fp-0a7058d94582 → 5d89d6ce1668 → 5cb9dc71f309 →
-        // f160ee8faaa6 → radar-scoring-fp-f68e6481b136) — a rules=, media-collapse or news= change folds in
-        // with or without the AI descriptor.
-        // These are the FINAL post-194 values; everything named above them is history.
+        // → radar-scoring-fp-162df0f4c62b; 120d → radar-scoring-fp-b8ce14dea17a.
+        // Spec 194 §2: 60d → radar-scoring-fp-b9543f441717;
+        // 120d → radar-scoring-fp-901129153cd1. SPEC 196 moves them to the values below, for the attention
+        // publisher tier map (attnDesc) — the inverted 0.1 unknown default plus the four-tier audited
+        // membership. The AI-OFF live values moved at every one of those steps too (60d
+        // radar-scoring-fp-4eb2fe5d3cdf → 58c289cd0113 → 06e4781f86bb → 61891b37e429 → 2cbbd056ffe5 →
+        // radar-scoring-fp-8daa662a57a6; 120d radar-scoring-fp-0a7058d94582 → 5d89d6ce1668 → 5cb9dc71f309 →
+        // f160ee8faaa6 → f68e6481b136 → radar-scoring-fp-f610244e23c6) — a rules=, media-collapse, news= or
+        // attnDesc change folds in with or without the AI descriptor.
+        // These are the FINAL post-196 values; everything named above them is history.
         Assert.Equal(
-            "radar-scoring-fp-b9543f441717",
+            "radar-scoring-fp-65eb592d0354",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-901129153cd1",
+            "radar-scoring-fp-a89b6d9ad0a5",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -458,8 +492,8 @@ public sealed class ScoringConfigFingerprintTests
         // so nothing asserted them and a transcription error could survive indefinitely. They are what a run
         // with Radar:Ai unconfigured stamps at the two windows real runs use; pinning them makes all six
         // recorded values change-detected instead of four of them.
-        Assert.Equal("radar-scoring-fp-2cbbd056ffe5", DefaultFingerprint(window: TimeSpan.FromDays(60)));
-        Assert.Equal("radar-scoring-fp-f68e6481b136", DefaultFingerprint(window: TimeSpan.FromDays(120)));
+        Assert.Equal("radar-scoring-fp-8daa662a57a6", DefaultFingerprint(window: TimeSpan.FromDays(60)));
+        Assert.Equal("radar-scoring-fp-f610244e23c6", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }
 
     [Fact]

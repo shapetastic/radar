@@ -72,8 +72,9 @@ public sealed class ConfiguredAttentionSourceWeightsTests
         // Newly-listed long-tail aggregators tier as mill (spec 90 denylist-expand).
         Assert.Equal(0.1, weights.WeightFor("Finviz"));
         Assert.Equal(0.1, weights.WeightFor("Investing.com"));
-        // A truly-unlisted publisher falls to the recalibrated 0.25 unknown default (was 0.5).
-        Assert.Equal(0.25, weights.WeightFor("Definitely Not Listed"));
+        // A truly-unlisted publisher falls to the INVERTED 0.1 unknown default (spec 196 §1; was 0.25,
+        // and 0.5 before that).
+        Assert.Equal(0.1, weights.WeightFor("Definitely Not Listed"));
     }
 
     [Fact]
@@ -104,7 +105,7 @@ public sealed class ConfiguredAttentionSourceWeightsTests
         var fake = weights.WeightFor("Reuters Breakingviews Fake");
 
         Assert.Equal(1.0, reuters);
-        Assert.Equal(0.25, fake);
+        Assert.Equal(0.1, fake);
         Assert.NotEqual(reuters, fake);
     }
 

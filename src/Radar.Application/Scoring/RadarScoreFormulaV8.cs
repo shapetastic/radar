@@ -145,7 +145,8 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         // ---- 2. AttentionScore (saturating on breadth) ----
         // v2: only third-party (market attention) evidence source names count toward reach; a company's
         // own disclosures (press releases, filings, ...) are not market attention. v4 weights each distinct
-        // third-party publisher by its source-quality tier (mills ≈0.1, unknown 0.5, genuine 1.0) instead of
+        // third-party publisher by its source-quality tier (wire 0.05, mill 0.1, platform 0.3, genuine 1.0;
+        // an unrecognised publisher falls to the spec-196 inverted default of 0.1) instead of
         // counting every distinct publisher as 1, so breadth reflects genuine notice, not mill volume; the
         // half-saturation constant was re-tuned (12→3) for the resulting smaller reach — see field comments.
         //

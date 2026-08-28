@@ -370,7 +370,10 @@ public sealed class ScoreSignalMathTests
 
     private sealed class TieredWeights : IAttentionSourceWeights
     {
-        public double WeightFor(string? sourceName) => sourceName switch
+        public AttentionSourceResolution Resolve(string? sourceName) =>
+            AttentionSourceResolution.Unclassified(Weight(sourceName), sourceName ?? string.Empty);
+
+        private static double Weight(string? sourceName) => sourceName switch
         {
             null => 0.5,
             var n when n.StartsWith("mill", StringComparison.OrdinalIgnoreCase) => 0.1,
