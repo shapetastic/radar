@@ -1,5 +1,6 @@
 using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
+using Radar.Application.Scoring;
 
 namespace Radar.Worker;
 
@@ -448,6 +449,23 @@ public sealed class NewsWorkerOptions
 
     /// <summary>Pause between successive per-company requests, in seconds. Defaults to 1 (Google News RSS is not per-IP throttled).</summary>
     public int InterRequestDelaySeconds { get; init; } = 1;
+
+    /// <summary>
+    /// The news-feed recency window in days, appended to the search phrase as a <c>when:{n}d</c> term
+    /// (spec 198 §1). Defaults to <see cref="NewsQueryScoringIdentity.DefaultRecencyWindowDays"/> — THE one
+    /// definition, shared with <c>NewsCollectorOptions</c> and with the hashed identity — and <c>0</c>
+    /// disables the filter, reproducing the pre-198 unfiltered query byte-for-byte. A negative value fails
+    /// startup naming <c>Radar:News:RecencyWindowDays</c>.
+    /// <para>
+    /// ⚠ <b>It is a hashed <c>ScoringConfigVersion</c> input</b> via
+    /// <see cref="NewsQueryScoringIdentity"/>: the query decides which <c>NewsArticle</c> evidence exists at
+    /// all, so changing it changes <c>AttentionReach</c>, <c>OpportunityScore</c> and every rank. Changing it
+    /// re-stamps every strategy and therefore trips <c>StrategyIdentityGuard</c> until the recorded identity
+    /// files are deleted or re-recorded. A company's FIRST collection stays unfiltered regardless (spec 198
+    /// §2) so seeding still acquires back history.
+    /// </para>
+    /// </summary>
+    public int RecencyWindowDays { get; init; } = NewsQueryScoringIdentity.DefaultRecencyWindowDays;
 }
 
 /// <summary>

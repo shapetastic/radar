@@ -78,6 +78,67 @@ public sealed class FileNewsObservationArchiveTests : IDisposable
             CaptureProven: failed == 0,
             Collectors: []);
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 198 §2: the first-collection read seam, over the SAME hydrated index — no second store, no side
+    // index, no second deserializer.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetCompaniesWithObservations_EmptyArchive_IsEmpty_SoEveryCompanyIsAFirstCollection()
+    {
+        Assert.Empty(await CreateArchive().GetCompaniesWithObservationsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetCompaniesWithObservations_ReadsTheHydratedIndex_AcrossProcessBoundaries()
+    {
+        var rocketLab = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var mercury = Guid.Parse("11111111-1111-1111-1111-111111111111");
+
+        var archive = CreateArchive();
+        await archive.WriteAsync(
+            NewsObservationRecord.Prospective(Candidate()), CancellationToken.None);
+        await archive.WriteAsync(
+            NewsObservationRecord.Prospective(Candidate(url: "https://news.google.com/rss/articles/BBB"))
+                with { CompanyId = mercury },
+            CancellationToken.None);
+
+        // Visible to the instance that wrote them…
+        var immediate = await archive.GetCompaniesWithObservationsAsync(CancellationToken.None);
+        Assert.Equal([mercury, rocketLab], immediate.Order());
+
+        // …and to a FRESH instance, which is the case that matters: the next nightly run is a new process,
+        // and this is the PERSISTED-STATE answer the collector's first-collection rule depends on.
+        var hydrated = await CreateArchive().GetCompaniesWithObservationsAsync(CancellationToken.None);
+        Assert.Equal([mercury, rocketLab], hydrated.Order());
+    }
+
+    [Fact]
+    public async Task GetCompaniesWithObservations_IgnoresRecordsCarryingNoCompany()
+    {
+        // An unattributed observation is not evidence that Radar has observed any particular company, so it
+        // must not make some other company look already-collected.
+        var archive = CreateArchive();
+        await archive.WriteAsync(
+            NewsObservationRecord.Prospective(Candidate()) with { CompanyId = null },
+            CancellationToken.None);
+
+        Assert.Empty(await archive.GetCompaniesWithObservationsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetCompaniesWithObservations_IsDeterministicAcrossRepeatedReads()
+    {
+        var archive = CreateArchive();
+        await archive.WriteAsync(
+            NewsObservationRecord.Prospective(Candidate()), CancellationToken.None);
+
+        var first = await archive.GetCompaniesWithObservationsAsync(CancellationToken.None);
+        var second = await archive.GetCompaniesWithObservationsAsync(CancellationToken.None);
+
+        Assert.Equal(first.Order(), second.Order());
+    }
+
     [Fact]
     public async Task WriteAsync_NewObservation_WritesPartitionedFileAndRoundTrips()
     {

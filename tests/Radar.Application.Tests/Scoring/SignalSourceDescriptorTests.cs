@@ -65,6 +65,14 @@ public sealed class SignalSourceDescriptorTests
     /// </summary>
     private static readonly string NewsDisabled = NewsJudgmentScoringIdentity.Disabled.Segment;
 
+    /// <summary>
+    /// The spec-198 news-QUERY segment every identity descriptor now ends with when the recency window is
+    /// left at its shipped default. Taken from the real type for the same reason <see cref="NewsDisabled"/>
+    /// is. It follows the news-read segment, so the two constants are concatenated in that order wherever a
+    /// whole descriptor is pinned.
+    /// </summary>
+    private static readonly string NewsQueryDefault = NewsQueryScoringIdentity.Default.Segment;
+
     [Fact]
     public void CollectorToggle_LeavesIdentityUnchanged_MovesOnlyCollectionProvenance()
     {
@@ -92,7 +100,7 @@ public sealed class SignalSourceDescriptorTests
         // future edit can reintroduce it by accident.
         var identity = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled, identity);
+        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled + NewsQueryDefault, identity);
         Assert.DoesNotContain("collectors=", identity, StringComparison.Ordinal);
         Assert.DoesNotContain("usaspending", identity, StringComparison.Ordinal);
     }
@@ -327,7 +335,7 @@ public sealed class SignalSourceDescriptorTests
         // segment.
         var descriptor = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled, descriptor);
+        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled + NewsQueryDefault, descriptor);
         Assert.DoesNotContain("ai=", descriptor, StringComparison.Ordinal);
     }
 
@@ -341,7 +349,8 @@ public sealed class SignalSourceDescriptorTests
         // DIRECTION — that is scoring identity, not a collector set.
         Assert.Equal(
             "rules=radar-keyword-rules-v8;ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;"
-                + NewsDisabled,
+                + NewsDisabled
+                + NewsQueryDefault,
             DescriptorWithAi("directional-filing:str=6;nov=6;minconf=0.6", "rss", "sec", "usaspending"));
     }
 
@@ -363,7 +372,9 @@ public sealed class SignalSourceDescriptorTests
         // cannot collide with a different descriptor (injectivity, AD-3).
         var descriptor = DescriptorWithAi("a=b;c,d%e", "rss");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;ai=a%3Db%3Bc%2Cd%25e;" + NewsDisabled, descriptor);
+        Assert.Equal(
+            "rules=radar-keyword-rules-v8;ai=a%3Db%3Bc%2Cd%25e;" + NewsDisabled + NewsQueryDefault,
+            descriptor);
     }
 
     [Fact]
@@ -397,6 +408,87 @@ public sealed class SignalSourceDescriptorTests
         Assert.Equal(omitted, explicitlyDisabled);
         Assert.Contains("news=disabled:", omitted, StringComparison.Ordinal);
         Assert.EndsWith(";", omitted, StringComparison.Ordinal);
+    }
+
+    // ---- spec 198 §3: the news feed QUERY is in the identity, and it is appended LAST -----------------
+
+    private static SignalSourceDescriptor BuildWithNewsQuery(
+        NewsQueryScoringIdentity newsQuery, params string[] names) =>
+        new(Vocabulary(names), null, null, null, null, newsQuery);
+
+    [Fact]
+    public void NewsQuerySegment_OmittedIdentity_FallsBackToTheShippedDefault_NotToNone()
+    {
+        // THE spec-198 asymmetry with the judgment read, asserted rather than left to the comment. The
+        // recency window is a SHIPPED CODE DEFAULT that applies whenever the newssearch collector runs, so a
+        // composition that never registered the identity collects the FILTERED feed; falling back to "no
+        // filter" would stamp a claim the run cannot support. (The judgment step is opt-in, which is why its
+        // fallback is Disabled.)
+        var omitted = DescriptorFor("rss");
+        var explicitDefault = BuildWithNewsQuery(NewsQueryScoringIdentity.Default, "rss")
+            .CanonicalDescriptor();
+
+        Assert.Equal(omitted, explicitDefault);
+        Assert.EndsWith("newsquery=7d;", omitted, StringComparison.Ordinal);
+        Assert.NotEqual(
+            omitted, BuildWithNewsQuery(NewsQueryScoringIdentity.None, "rss").CanonicalDescriptor());
+    }
+
+    [Fact]
+    public void NewsQueryWindowDisabled_RendersNothing_ReproducingThePre198Descriptor()
+    {
+        // The additivity proof at the descriptor: a window of 0 renders the EMPTY segment, so the composed
+        // identity is byte-identical to the pre-198 one. That is what lets
+        // ScoringConfigFingerprintTests.Compute_NewsQueryWindowDisabled_ReproducesPost197Pins reproduce all
+        // six post-197 values exactly.
+        var disabled = BuildWithNewsQuery(NewsQueryScoringIdentity.None, "rss").CanonicalDescriptor();
+
+        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled, disabled);
+        Assert.DoesNotContain("newsquery=", disabled, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NewsQuerySegment_IsAppendedAfterRulesAiAndNews_SoThePrefixStaysByteStable()
+    {
+        // Segment ORDER, again load-bearing: rules= then ai= then news= then newsquery=. Appending LAST
+        // keeps the whole post-197 prefix byte-stable, so the spec-198 pin move is attributable to this one
+        // input.
+        var descriptor = new SignalSourceDescriptor(
+            Vocabulary("rss"),
+            new FakeAiFilingSource("directional-filing:str=6"),
+            null,
+            null,
+            NewsJudgmentScoringIdentity.Disabled,
+            NewsQueryScoringIdentity.Default).CanonicalDescriptor();
+
+        var rules = descriptor.IndexOf("rules=", StringComparison.Ordinal);
+        var ai = descriptor.IndexOf("ai=", StringComparison.Ordinal);
+        var news = descriptor.IndexOf("news=", StringComparison.Ordinal);
+        var newsQuery = descriptor.IndexOf("newsquery=", StringComparison.Ordinal);
+
+        Assert.Equal(0, rules);
+        Assert.True(rules < ai && ai < news && news < newsQuery, descriptor);
+        Assert.EndsWith("newsquery=7d;", descriptor, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChangedNewsQueryWindow_ChangesIdentity_ButNotCollectionProvenance()
+    {
+        // Changing the window changes WHICH evidence exists, so it must move the identity - while leaving
+        // the collector provenance, which records what was configured to collect rather than what was asked
+        // for, untouched.
+        var seven = BuildWithNewsQuery(NewsQueryScoringIdentity.Default, "rss");
+        var fourteen = BuildWithNewsQuery(NewsQueryScoringIdentity.ForWindowDays(14), "rss");
+        var off = BuildWithNewsQuery(NewsQueryScoringIdentity.None, "rss");
+
+        Assert.NotEqual(seven.CanonicalDescriptor(), fourteen.CanonicalDescriptor());
+        Assert.NotEqual(seven.CanonicalDescriptor(), off.CanonicalDescriptor());
+        Assert.NotEqual(fourteen.CanonicalDescriptor(), off.CanonicalDescriptor());
+
+        Assert.Equal(seven.CollectionProvenance(), fourteen.CollectionProvenance());
+        Assert.Equal(seven.CollectionProvenance(), off.CollectionProvenance());
+        Assert.DoesNotContain(
+            "newsquery=", seven.CollectionProvenance(), StringComparison.Ordinal);
     }
 
     [Fact]

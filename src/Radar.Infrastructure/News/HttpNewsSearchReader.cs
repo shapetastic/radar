@@ -50,6 +50,16 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
     // asks for English-only coverage (see BuildRequestUri) — do NOT bake them into the base template.
     private const string SearchEndpointTemplate = "https://news.google.com/rss/search?q={0}";
     private const string EnglishUsLocaleParams = "&hl=en-US&gl=US&ceid=US:en";
+
+    /// <summary>
+    /// THE one definition of the spec-198 recency term appended to the search PHRASE (never a separate query
+    /// parameter — Google News RSS has no such parameter; the operator is part of the search expression).
+    /// Formatted invariant-culture and escaped WITH the phrase, so <c>Caterpillar Inc</c> + a 7-day window
+    /// encodes as <c>q=Caterpillar%20Inc%20when%3A7d</c> — exactly the form verified against the live
+    /// endpoint on 2026-08-29 (100 items unfiltered, oldest 24 Jun 2026; 66 items windowed, oldest 23 Aug
+    /// 2026).
+    /// </summary>
+    private const string RecencyTermFormat = " when:{0}d";
     // The ONE Google News publisher-suffix separator definition (spec 179 extracted it; this reader keeps
     // its own genuinely different behaviour — extracting the suffix as a source-name FALLBACK — but shares
     // the token so the two rules cannot drift).
@@ -152,10 +162,25 @@ internal sealed class HttpNewsSearchReader : INewsSearchReader
     /// locale params are appended to pin English/US coverage (mirroring how the GDELT reader honors its own
     /// <c>EnglishOnly</c> flag). When it is clear the params are omitted, so Google News applies its default
     /// locale rather than the flag silently doing nothing.
+    /// <para>
+    /// <b>Spec 198 §1:</b> a POSITIVE <see cref="NewsSearchQuery.RecencyWindowDays"/> appends the
+    /// <c>when:{n}d</c> term to the TRIMMED phrase BEFORE <see cref="Uri.EscapeDataString"/>, so the whole
+    /// search expression is escaped once and the term encodes as <c>%20when%3A7d</c>. A non-positive window
+    /// appends nothing, and the resulting URL is BYTE-IDENTICAL to the pre-198 one — that equality is the
+    /// compatibility proof, pinned by test. Nothing else about the request changes: same endpoint, same
+    /// single GET, no pagination, no extra parameter.
+    /// </para>
     /// </summary>
     private static Uri BuildRequestUri(NewsSearchQuery query)
     {
-        var phrase = Uri.EscapeDataString(query.QueryPhrase.Trim());
+        var expression = query.QueryPhrase.Trim();
+        if (query.RecencyWindowDays > 0)
+        {
+            expression += string.Format(
+                CultureInfo.InvariantCulture, RecencyTermFormat, query.RecencyWindowDays);
+        }
+
+        var phrase = Uri.EscapeDataString(expression);
         var url = string.Format(CultureInfo.InvariantCulture, SearchEndpointTemplate, phrase);
         if (query.EnglishOnly)
         {

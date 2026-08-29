@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 
@@ -268,6 +269,123 @@ public sealed class HttpNewsSearchReaderTests
         Assert.NotNull(handler.LastRequestUri);
         Assert.Contains("q=Rocket%20Lab", handler.LastRequestUri!.Query, StringComparison.Ordinal);
         Assert.DoesNotContain("hl=en-US", handler.LastRequestUri.Query, StringComparison.Ordinal);
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Spec 198 §1: the recency window on the query. A window of 0 (the record default, and what every
+    // pre-198 construction expresses) must reproduce the pre-198 URL BYTE-FOR-BYTE; a positive window
+    // appends exactly `when:{n}d` to the search phrase, escaped with it.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ReadAsync_NoRecencyWindow_ProducesThePre198UrlByteForByte()
+    {
+        // THE compatibility proof, pinned against the LITERAL pre-198 URL rather than against a recomputed
+        // expectation - a recomputed one would follow the code wherever it went.
+        var handler = new CapturingHandler(HttpStatusCode.OK, ValidFeed);
+        var reader = CreateReader(handler);
+
+        await reader.ReadAsync(Query with { RecencyWindowDays = 0 }, CancellationToken.None);
+        Assert.Equal(
+            "https://news.google.com/rss/search?q=Rocket%20Lab&hl=en-US&gl=US&ceid=US:en",
+            handler.LastRequestUri!.OriginalString);
+
+        // The record default is 0, so a query constructed without naming the component is identical.
+        await reader.ReadAsync(
+            new NewsSearchQuery(QueryPhrase: "Rocket Lab", MaxRecords: 25, EnglishOnly: true),
+            CancellationToken.None);
+        Assert.Equal(
+            "https://news.google.com/rss/search?q=Rocket%20Lab&hl=en-US&gl=US&ceid=US:en",
+            handler.LastRequestUri!.OriginalString);
+
+        // Locale off: still byte-identical to the pre-198 form.
+        await reader.ReadAsync(
+            Query with { RecencyWindowDays = 0, EnglishOnly = false }, CancellationToken.None);
+        Assert.Equal(
+            "https://news.google.com/rss/search?q=Rocket%20Lab",
+            handler.LastRequestUri!.OriginalString);
+
+        // A NEGATIVE window is nonsense the registration guard rejects; if one ever reached the reader it
+        // must degrade to unfiltered rather than emit `when:-3d`.
+        await reader.ReadAsync(Query with { RecencyWindowDays = -3 }, CancellationToken.None);
+        Assert.Equal(
+            "https://news.google.com/rss/search?q=Rocket%20Lab&hl=en-US&gl=US&ceid=US:en",
+            handler.LastRequestUri!.OriginalString);
+    }
+
+    [Fact]
+    public async Task ReadAsync_RecencyWindow_AppendsTheWhenTermToThePhrase_LeavingItOtherwiseUnchanged()
+    {
+        // The exact encoding verified against the live endpoint on 2026-08-29: the term joins the search
+        // PHRASE (Google News RSS has no recency parameter), so the separating space and the colon are
+        // escaped with it as %20 and %3A.
+        var handler = new CapturingHandler(HttpStatusCode.OK, ValidFeed);
+        var reader = CreateReader(handler);
+
+        await reader.ReadAsync(Query with { RecencyWindowDays = 7 }, CancellationToken.None);
+        Assert.Equal(
+            "https://news.google.com/rss/search?q=Rocket%20Lab%20when%3A7d&hl=en-US&gl=US&ceid=US:en",
+            handler.LastRequestUri!.OriginalString);
+
+        // EnglishOnly is orthogonal: the locale params are still honoured either way.
+        await reader.ReadAsync(
+            Query with { RecencyWindowDays = 7, EnglishOnly = false }, CancellationToken.None);
+        Assert.Equal(
+            "https://news.google.com/rss/search?q=Rocket%20Lab%20when%3A7d",
+            handler.LastRequestUri!.OriginalString);
+
+        // A different window renders a different term, invariant-formatted.
+        await reader.ReadAsync(Query with { RecencyWindowDays = 14 }, CancellationToken.None);
+        Assert.Equal(
+            "https://news.google.com/rss/search?q=Rocket%20Lab%20when%3A14d&hl=en-US&gl=US&ceid=US:en",
+            handler.LastRequestUri!.OriginalString);
+    }
+
+    [Fact]
+    public async Task ReadAsync_RecencyWindow_IsCultureInvariant()
+    {
+        // A comma-decimal locale must not reach the rendered term (AD-3): the window is an int, but the
+        // formatting is pinned explicitly so a future edit cannot introduce a locale-sensitive rendering.
+        var handler = new CapturingHandler(HttpStatusCode.OK, ValidFeed);
+        var reader = CreateReader(handler);
+
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            await reader.ReadAsync(Query with { RecencyWindowDays = 1234 }, CancellationToken.None);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
+
+        Assert.Equal(
+            "https://news.google.com/rss/search?q=Rocket%20Lab%20when%3A1234d&hl=en-US&gl=US&ceid=US:en",
+            handler.LastRequestUri!.OriginalString);
+    }
+
+    [Fact]
+    public async Task ReadAsync_ProviderIgnoresTheRecencyFilter_BehavesExactlyAsAnUnfilteredResponseWould()
+    {
+        // The spec-198 §1 failure posture: "no improvement", never "no results". If the operator is ever
+        // withdrawn, the response simply carries more/older items and every downstream mechanic - the
+        // retained prefix, the observed-count, the diagnostic tail - is byte-identical to the same response
+        // read WITHOUT the window. Asserted by feeding the identical body to both arms.
+        var windowed = CreateReader(new StubHandler(HttpStatusCode.OK, ValidFeed));
+        var unfiltered = CreateReader(new StubHandler(HttpStatusCode.OK, ValidFeed));
+
+        var withWindow = await windowed.ReadAsync(
+            Query with { RecencyWindowDays = 7 }, CancellationToken.None);
+        var without = await unfiltered.ReadAsync(
+            Query with { RecencyWindowDays = 0 }, CancellationToken.None);
+
+        Assert.Equal(without.Outcome, withWindow.Outcome);
+        Assert.Equal(without.ValidItemsObserved, withWindow.ValidItemsObserved);
+        Assert.Equal(without.DiagnosticTail.Count, withWindow.DiagnosticTail.Count);
+        Assert.Equal(
+            without.Items.Select(i => (i.Url, i.Title, i.SourceName, i.PublishedAt)),
+            withWindow.Items.Select(i => (i.Url, i.Title, i.SourceName, i.PublishedAt)));
     }
 
     // -------------------------------------------------------------------------------------------------

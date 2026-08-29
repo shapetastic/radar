@@ -9,11 +9,13 @@ namespace Radar.Application.Scoring;
 /// composed signal-source set.
 /// <list type="bullet">
 /// <item><description>
-/// <b>Identity</b> (<see cref="CanonicalDescriptor"/>) — <c>rules=&lt;RuleSetVersion&gt;;[ai=…;]news=…;</c>:
-/// the deterministic extractor's rule-set identity (<see cref="KeywordSignalExtractor.RuleSetVersion"/>);
-/// then, when the opt-in AI directional-filing path is registered, that source's per-signal magnitudes (its
+/// <b>Identity</b> (<see cref="CanonicalDescriptor"/>) —
+/// <c>rules=&lt;RuleSetVersion&gt;;[ai=…;]news=…;[newsquery=…;]</c>: the deterministic extractor's rule-set
+/// identity (<see cref="KeywordSignalExtractor.RuleSetVersion"/>); then, when the opt-in AI
+/// directional-filing path is registered, that source's per-signal magnitudes (its
 /// <see cref="IDirectionalFilingSignalSource.ScoringDescriptor"/>, escaped); then, ALWAYS, the spec-194 §2
-/// news-read identity (<see cref="NewsJudgmentScoringIdentity"/>). This is what the
+/// news-read identity (<see cref="NewsJudgmentScoringIdentity"/>); then, when the spec-198 news-feed recency
+/// window is enabled, that window (<see cref="NewsQueryScoringIdentity"/>). This is what the
 /// <c>ScoringConfigVersion</c> fingerprint hashes.
 /// </description></item>
 /// <item><description>
@@ -61,7 +63,8 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         IDirectionalFilingSignalSource? aiFilingSource = null,
         CollectionPassOptions? collectionPass = null,
         CollectorAttributionOptions? attribution = null,
-        NewsJudgmentScoringIdentity? newsJudgment = null)
+        NewsJudgmentScoringIdentity? newsJudgment = null,
+        NewsQueryScoringIdentity? newsQuery = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
 
@@ -139,6 +142,26 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // deliberately NOT in it: API keys, call budgets and retry caps, which change only how much Radar
         // spends looking.
         descriptor += (newsJudgment ?? NewsJudgmentScoringIdentity.Disabled).Segment;
+
+        // SPEC 198 §3: the NEWS FEED QUERY's recency window, appended LAST — after the spec-194 news=
+        // segment — for exactly the reason that segment is appended after ai=: the whole post-197 prefix
+        // stays byte-stable, so a pin move is unambiguously attributable to this one input.
+        //
+        // Why the news query belongs on the IDENTITY side: the query decides WHICH evidence exists at all.
+        // A `when:{n}d` term bounds the Google News RSS response to the last n days, so it changes the
+        // NewsArticle evidence Radar admits and therefore AttentionReach, OpportunityScore and every rank —
+        // the same argument that put the AI reading model in ai= (spec 119) and the judge cohort in news=
+        // (spec 194 §2). What is deliberately NOT in it: the retention limit, the parse ceiling, the pacing
+        // delay and the locale flag — operational posture, not identity (spec 141).
+        //
+        // The NULL FALLBACK IS THE DEFAULT, NOT `None`, and the asymmetry with newsJudgment above is
+        // deliberate. The stage-2 judgment is an opt-in step a composition must switch on, so an unaware
+        // composition genuinely scores as Disabled. The recency window is a SHIPPED CODE DEFAULT that
+        // applies whenever the newssearch collector runs, so an unaware composition collects the filtered
+        // feed; falling back to None would stamp "no filter" over a run that filtered. A composition that
+        // genuinely wants no filter configures the window to 0, which renders an EMPTY segment and
+        // reproduces the pre-198 descriptor byte-for-byte.
+        descriptor += (newsQuery ?? NewsQueryScoringIdentity.Default).Segment;
 
         _identityDescriptor = descriptor;
     }
