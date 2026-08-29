@@ -242,6 +242,41 @@ Do not hand back broken code.
   so news reached scoring as pure volume (spec 191/194); `AttentionScore` classified 25 of 368 live
   publishers and came out 73.4 ± a few for every company, discounting every score by an unvalidated
   constant (spec 196). Both shipped green and were only found by looking at live data.
+- **A REVERSAL must be recorded where the original claim lives.** Adding a note is not enough; the failure
+  mode is not a missing statement, it is a surviving one. When a slice **withdraws, supersedes, replaces or
+  changes direction on** earlier work — including a strategy, a default, a constraint or a decision that
+  merely *stopped being true* — amend the ORIGINAL bullet **in place** with the supersession, rather than
+  appending a second bullet beside it. Two bullets that disagree are worse than one that is stale, because
+  a reader acts on whichever they find first. Concretely, all of these were live in this file and each was
+  written correctly at the time:
+  - a bullet describing types that a later spec **DELETED** (spec 191's read seam, after 194 removed it);
+  - "a genuinely NEW structure still earns `radar-formula-v11`" — after v11 was **taken** and persisted, so
+    following the instruction would have re-meant an existing strategy's stamps;
+  - three "**CURRENT values**" pin tables and a live "verify the first run reports `…`" imperative, five
+    moves stale — an agent greps that phrasing and acts on it;
+  - "NO NEW STRATEGIES", which was a **scope fence inside one spec** (166: "this batch adds observations for
+    the EXISTING ten arms") and hardened into a standing prohibition that blocked real work. See
+    [[radar-constraints-arent-rules]] — before citing any constraint, find its origin.
+
+  Three mechanical rules, because judgement alone has already failed here:
+  1. **Never duplicate a value that code defines.** Fingerprint pins, version tokens, counts, defaults and
+     limits must CITE where they live (`ScoringConfigFingerprintTests`, `ScoreFormulaVersions.cs`,
+     `default.json`) rather than being copied. A copied value is a fact with no owner and it goes stale
+     silently. Quoting one as *history* is fine — quoting one as *current* is not.
+  2. **Scope a per-slice claim to its slice.** "The pins do not move" and "no fingerprint input changed" are
+     true OF THAT SLICE and read as standing guarantees. Write "spec N moved nothing" — never a bare
+     present-tense guarantee.
+  3. **A false doc claim is a BLOCKING review defect, not a nit.** `radar-code-reviewer` must verify the
+     claims a slice touches against the code, and has already blocked three merges this week on exactly
+     that (a doc asserting an unachievable prompt property; `default.json` claiming news contributed no
+     direction while 24 signals said otherwise; a lineage block pointing the operator at the wrong pin
+     pair). This is the enforcement — the rest is guidance.
+
+  The same applies to the reference specs (`docs/radar-full-pipeline-spec.md`, `docs/radar-schema-spec.md`,
+  `.claude/agents/radar-philosophy.md`): CLAUDE.md tells planners to **plan from them**, so a stale
+  structural claim there misdirects work at design time, which is worse than at implementation time. Both
+  were found (2026-08-29) to describe a single-pass single-strategy pipeline with no news reading and no
+  `RunMode`, and to recommend implementing **two interfaces that never existed**.
 - **Layering:** `Radar.Domain` references nothing; `Radar.Application` references Domain;
   `Radar.Infrastructure` references Application + Domain; `Radar.Worker` references
   Application + Infrastructure. Nothing references Worker.
