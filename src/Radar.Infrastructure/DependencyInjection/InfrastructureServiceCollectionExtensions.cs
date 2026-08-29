@@ -3193,8 +3193,7 @@ public static class InfrastructureServiceCollectionExtensions
             sb.Append(char.IsLetterOrDigit(ch) || ch is '.' or '-' or '_' ? ch : '-');
         }
 
-        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
-        var suffix = Convert.ToHexStringLower(hash)[..16];
+        var suffix = Radar.Application.Identity.CanonicalHash.Sha256Hex(raw)[..16];
         return sb.ToString() + "-" + suffix;
     }
 

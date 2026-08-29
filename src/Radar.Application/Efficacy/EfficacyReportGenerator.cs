@@ -44,6 +44,9 @@ public sealed class EfficacyReportGenerator : IEfficacyReportGenerator
         var rendered = 0;
         var skipped = 0;
 
+        // Spec 201 §1: artifact FILES (svg/csv, counted individually) whose write degraded gracefully.
+        var filesNotPersisted = 0;
+
         foreach (var company in series)
         {
             ct.ThrowIfCancellationRequested();
@@ -66,8 +69,22 @@ public sealed class EfficacyReportGenerator : IEfficacyReportGenerator
 
             var svg = _svgRenderer.Render(company);
             var csv = _csvRenderer.Render(company);
-            await _artifactStore.WriteAsync(company.Ticker, svg, csv, ct).ConfigureAwait(false);
+            var written = await _artifactStore
+                .WriteAsync(company.Ticker, svg, csv, ct)
+                .ConfigureAwait(false);
+            filesNotPersisted += written.NotPersistedCount;
             rendered++;
+        }
+
+        // Spec 201 §1: ONE aggregated Warning for the artifact store per generation, never one per file.
+        if (filesNotPersisted > 0)
+        {
+            _logger.LogWarning(
+                "Efficacy: {FilesNotPersisted} artifact file(s) across {Rendered} rendered company/companies "
+                    + "could NOT be durably persisted: the writes degraded gracefully and those files are "
+                    + "missing or stale on disk.",
+                filesNotPersisted,
+                rendered);
         }
 
         _logger.LogInformation(

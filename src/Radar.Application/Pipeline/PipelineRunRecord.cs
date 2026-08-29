@@ -72,4 +72,13 @@ public sealed record PipelineRunRecord(
     // and RecentRunSummary does not read it. It is not backfilled onto existing records (heal forward,
     // AD-8).
     int? SignalsNotPersisted = null,
-    int? ScoreSnapshotsNotPersisted = null);
+    int? ScoreSnapshotsNotPersisted = null,
+    // Spec 201 §1: the two remaining durable writes a pipeline run performs whose outcome had been discarded
+    // — the weekly report markdown and the per-strategy effective scoring-config file (content-addressed,
+    // insert-if-new). Same contract as the two counters above: trailing + NULLABLE, null means NOT RECORDED
+    // ("this pass did not do that kind of work" — a `collect` pass writes neither, a run with GenerateReport
+    // off writes no report), never a fabricated 0. ReportId stays populated on a failed report write: the
+    // report WAS generated (its in-memory model may still be re-rendered to the same path by the judgment
+    // re-renderer), so the id identifies what exists and this counter says the FILE did not land.
+    int? ReportsNotPersisted = null,
+    int? ScoringConfigsNotPersisted = null);

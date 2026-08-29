@@ -55,13 +55,28 @@ public static class NewsRiskClaimValidator
         if (!TryParseToken<NewsRiskAssessmentKind>(response.Assessment, out var kind))
         {
             return Failed(
-                response,
                 rationale,
                 dropReasons,
-                $"assessment-token-invalid: '{response.Assessment}' is not a defined assessment");
+                $"assessment-token-invalid: '{response.Assessment}' is not a defined assessment",
+                // Spec 201 §4: an absent claims array is not "zero claims" — total is what was supplied.
+                total: response.Claims?.Count ?? 0);
         }
 
-        var rawClaims = response.Claims ?? [];
+        // Spec 201 §4: a MISSING claims array is a malformed response and fails with a named reason. It is
+        // not "zero claims" — the schema requires the array, and reading its absence as an empty list would
+        // let a response that omitted its evidence validate as "no claims made" (a ThesisChallenged with a
+        // missing array would fail closed anyway; a NoRiskFoundInSuppliedText would NOT, and would render as
+        // a clean read on a response that never stated its claims).
+        if (response.Claims is null)
+        {
+            return Failed(
+                rationale,
+                dropReasons,
+                "claims-array-missing: the response carried no claims array (a missing array is not zero claims)",
+                total: 0);
+        }
+
+        var rawClaims = response.Claims;
         var accepted = new List<NewsRiskValidatedClaim>();
         for (var i = 0; i < rawClaims.Count; i++)
         {
@@ -172,7 +187,6 @@ public static class NewsRiskClaimValidator
                 if (response.RiskScore is not { } score || score is < 0 or > 100)
                 {
                     return Failed(
-                        response,
                         rationale,
                         dropReasons,
                         $"risk-score-out-of-range: '{response.RiskScore}'",
@@ -236,16 +250,19 @@ public static class NewsRiskClaimValidator
         || (article.BodyText is not null
             && article.BodyText.Contains(excerpt, StringComparison.Ordinal));
 
+    /// <summary>
+    /// Spec 201 §4: the claim total is a REQUIRED, caller-measured argument — the pre-201 shape defaulted it
+    /// from <c>Claims?.Count ?? 0</c>, which read a missing array as a measured zero.
+    /// </summary>
     private static NewsRiskValidationResult Failed(
-        NewsRiskModelResponse response,
         string? rationale,
         List<string> dropReasons,
         string reason,
-        int? total = null,
+        int total,
         int accepted = 0)
     {
         dropReasons.Add(reason);
-        var claimTotal = total ?? response.Claims?.Count ?? 0;
+        var claimTotal = total;
         return new NewsRiskValidationResult(
             NewsRiskAssessmentStatus.ValidationFailed,
             RiskScore: null,

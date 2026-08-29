@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Pipeline;
+using Radar.Application.Storage;
 
 namespace Radar.Infrastructure.FileSystem;
 
@@ -14,7 +15,8 @@ namespace Radar.Infrastructure.FileSystem;
 /// <see cref="PipelineRunRecord.Id"/>, so files never collide and prior runs are never overwritten — this
 /// is an append-only log, not an upsert-by-id mirror. All file I/O and JSON stay confined to
 /// Infrastructure (AD-5); the Application sees only <see cref="IPipelineRunStore"/>. Disk failures degrade
-/// gracefully (warn + return the attempted path on write; warn + skip on read) and never crash the run.
+/// gracefully (warn + report a <see cref="DurableWriteOutcome.Failed"/> outcome on write; warn + skip on read)
+/// and never crash the run — spec 201 §1: the attempted path is still returned, but never as proof of storage.
 /// </summary>
 public sealed class FilePipelineRunStore : IPipelineRunStore
 {
@@ -31,7 +33,7 @@ public sealed class FilePipelineRunStore : IPipelineRunStore
         _logger = logger;
     }
 
-    public async Task<string> WriteAsync(PipelineRunRecord record, CancellationToken ct)
+    public async Task<DurableWriteResult> WriteAsync(PipelineRunRecord record, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(record);
 
@@ -46,12 +48,13 @@ public sealed class FilePipelineRunStore : IPipelineRunStore
 
         var json = JsonSerializer.Serialize(record, RadarFileStoreJson.Options);
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
+        var written = await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false);
+        if (written)
         {
             _logger.LogInformation("Wrote pipeline run record {RunId} to {Path}.", record.Id, path);
         }
 
-        return path;
+        return DurableWriteResult.From(path, written);
     }
 
     public async Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct)

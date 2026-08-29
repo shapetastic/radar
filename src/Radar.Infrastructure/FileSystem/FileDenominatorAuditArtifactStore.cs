@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Efficacy.DenominatorAudit;
+using Radar.Application.Storage;
 
 namespace Radar.Infrastructure.FileSystem;
 
@@ -42,17 +43,23 @@ public sealed class FileDenominatorAuditArtifactStore : IDenominatorAuditArtifac
         var csvPath = Path.Combine(_options.RootDirectory, FileStem + ".csv");
         var markdownPath = Path.Combine(_options.RootDirectory, FileStem + ".md");
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
+        var csvWritten = await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false);
+        if (csvWritten)
         {
             _logger.LogInformation("Wrote score-move denominator audit CSV to {Path}.", csvPath);
         }
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
-            .ConfigureAwait(false))
+        var markdownWritten = await GracefulFileWriter
+            .TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
+            .ConfigureAwait(false);
+        if (markdownWritten)
         {
             _logger.LogInformation("Wrote score-move denominator audit markdown to {Path}.", markdownPath);
         }
 
-        return new DenominatorAuditPaths(csvPath, markdownPath);
+        // Spec 201 §1: each file's outcome rides beside its attempted path — never a path as proof.
+        return new DenominatorAuditPaths(
+            DurableWriteResult.From(csvPath, csvWritten),
+            DurableWriteResult.From(markdownPath, markdownWritten));
     }
 }

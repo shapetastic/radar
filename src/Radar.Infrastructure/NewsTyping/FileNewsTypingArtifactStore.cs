@@ -45,17 +45,30 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
 
         var basePath = Path.Combine(
             _options.RootDirectory, "live", $"attention-decomposition-{asOfDateToken}");
-        await GracefulFileWriter
+        var markdownWritten = await GracefulFileWriter
             .TryWriteAllTextAsync(basePath + ".md", markdown, _logger, ct)
             .ConfigureAwait(false);
-        await GracefulFileWriter
+        var jsonWritten = await GracefulFileWriter
             .TryWriteAllTextAsync(
                 basePath + ".json",
                 JsonSerializer.Serialize(document, RadarFileStoreJson.Options),
                 _logger,
                 ct)
             .ConfigureAwait(false);
-        _logger.LogInformation("Attention-decomposition artifact written: {Path}.md/.json", basePath);
+        // Spec 201 §1: the "written" line is gated on BOTH writes; a failure names the path that did not land.
+        if (markdownWritten && jsonWritten)
+        {
+            _logger.LogInformation("Attention-decomposition artifact written: {Path}.md/.json", basePath);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Attention-decomposition artifact NOT (fully) written: markdown {MarkdownWritten}, json "
+                    + "{JsonWritten} at {Path}.md/.json — the write(s) degraded gracefully.",
+                markdownWritten,
+                jsonWritten,
+                basePath);
+        }
     }
 
     public async Task WriteFailedAsync(string asOfDateToken, string reason, CancellationToken ct)
@@ -69,7 +82,17 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
                 + "The typing step failed and typed nothing. The Radar run itself is unaffected — no score, "
                 + "label, rank or report was rolled back or relabelled.\n\n"
                 + $"Reason: {reason}\n";
-        await GracefulFileWriter.TryWriteAllTextAsync(path, content, _logger, ct).ConfigureAwait(false);
-        _logger.LogWarning("News-typing FAILED artifact written: {Path} ({Reason})", path, reason);
+        var written = await GracefulFileWriter.TryWriteAllTextAsync(path, content, _logger, ct).ConfigureAwait(false);
+        if (written)
+        {
+            _logger.LogWarning("News-typing FAILED artifact written: {Path} ({Reason})", path, reason);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "News-typing FAILED artifact could NOT be written to {Path} ({Reason}): the write degraded gracefully.",
+                path,
+                reason);
+        }
     }
 }

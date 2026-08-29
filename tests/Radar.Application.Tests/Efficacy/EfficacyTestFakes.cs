@@ -89,7 +89,7 @@ internal sealed class FakePriceHistoryStore : IPriceHistoryStore
     public Task<PriceHistory?> ReadAsync(string ticker, CancellationToken ct) =>
         Task.FromResult(_byTicker.TryGetValue(ticker, out var h) ? h : null);
 
-    public Task<string> WriteAsync(PriceHistory history, CancellationToken ct)
+    public Task<DurableWriteResult> WriteAsync(PriceHistory history, CancellationToken ct)
     {
         WriteCount++;
         throw new NotSupportedException("The efficacy layer must be read-only over price.");
@@ -109,7 +109,8 @@ internal sealed class RecordingEfficacyArtifactStore : IEfficacyArtifactStore
         string ticker, string svg, string csv, CancellationToken ct)
     {
         Written.Add((ticker, svg, csv));
-        return Task.FromResult(new EfficacyArtifactPaths($"{ticker}.svg", $"{ticker}.csv"));
+        return Task.FromResult(new EfficacyArtifactPaths(
+            DurableWriteResult.Succeeded($"{ticker}.svg"), DurableWriteResult.Succeeded($"{ticker}.csv")));
     }
 
     public Task<StrategyLeaderboardPaths> WriteLeaderboardAsync(
@@ -117,7 +118,8 @@ internal sealed class RecordingEfficacyArtifactStore : IEfficacyArtifactStore
     {
         Leaderboards.Add((csv, markdown));
         return Task.FromResult(new StrategyLeaderboardPaths(
-            "strategy-leaderboard.csv", "strategy-leaderboard.md"));
+            DurableWriteResult.Succeeded("strategy-leaderboard.csv"),
+            DurableWriteResult.Succeeded("strategy-leaderboard.md")));
     }
 
     public Task<PairedComparisonPaths> WritePairedComparisonAsync(
@@ -125,9 +127,9 @@ internal sealed class RecordingEfficacyArtifactStore : IEfficacyArtifactStore
     {
         PairedComparisons.Add((csv, markdown, blocksCsv));
         return Task.FromResult(new PairedComparisonPaths(
-            "strategy-paired-comparison.csv",
-            "strategy-paired-comparison.md",
-            "strategy-paired-comparison-blocks.csv"));
+            DurableWriteResult.Succeeded("strategy-paired-comparison.csv"),
+            DurableWriteResult.Succeeded("strategy-paired-comparison.md"),
+            DurableWriteResult.Succeeded("strategy-paired-comparison-blocks.csv")));
     }
 }
 

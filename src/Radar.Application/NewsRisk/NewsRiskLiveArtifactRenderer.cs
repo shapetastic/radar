@@ -157,11 +157,15 @@ public static class NewsRiskLiveArtifactRenderer
             return;
         }
 
-        var publishers = company.SyndicatedDistinctPublisherCount ?? 0;
+        // Spec 201 §4: a null publisher count is NOT RECORDED, never a measured zero — rendering "across 0
+        // distinct publisher(s)" would state a measurement that was not taken.
+        var publishers = company.SyndicatedDistinctPublisherCount is { } recorded
+            ? string.Create(CultureInfo.InvariantCulture, $"{recorded} distinct publisher(s)")
+            : "a not-recorded number of distinct publishers";
         sb.AppendLine(string.Create(
             CultureInfo.InvariantCulture,
             $"Syndication before collapse: {duplicates} duplicate cop(y/ies) removed by the "
-                + $"duplicate-headline collapse, across {publishers} distinct publisher(s) carrying the "
+                + $"duplicate-headline collapse, across {publishers} carrying the "
                 + $"collapsed stories. Current-run enumeration provenance; not a scoring, cohort, cache or "
                 + $"model input."));
     }

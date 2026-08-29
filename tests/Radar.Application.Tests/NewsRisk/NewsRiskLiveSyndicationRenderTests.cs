@@ -88,6 +88,22 @@ public sealed class NewsRiskLiveSyndicationRenderTests
     }
 
     /// <summary>
+    /// Spec 201 §4: a recorded duplicate count beside a NULL publisher count renders "not recorded" for the
+    /// publishers — never "across 0 distinct publisher(s)", which would print a measurement that was not
+    /// taken. Benign today (both construction sites set the pair together); pinned so it stays honest if
+    /// they ever diverge.
+    /// </summary>
+    [Fact]
+    public void CompanyWithDuplicatesButNoPublisherCount_RendersNotRecorded_NeverZero()
+    {
+        var markdown = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(Company("Test Co", 3, null)));
+
+        Assert.Contains("Syndication before collapse: 3 duplicate cop", markdown, StringComparison.Ordinal);
+        Assert.Contains("a not-recorded number of distinct publishers", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("across 0 distinct publisher", markdown, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A MEASURED ZERO stays a zero in the document (that is where the honest zero lives) but does not
     /// print a per-company line — repeating "0 duplicate copies" under every company would bury the
     /// companies that actually syndicated.

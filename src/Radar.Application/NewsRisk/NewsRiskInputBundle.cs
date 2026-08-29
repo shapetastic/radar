@@ -1,6 +1,6 @@
-using System.Security.Cryptography;
 using System.Text;
 
+using Radar.Application.Identity;
 using Radar.Application.News;
 
 namespace Radar.Application.NewsRisk;
@@ -280,6 +280,6 @@ public static class NewsRiskInputBundleBuilder
                 .Append(';');
         }
 
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+        return CanonicalHash.Sha256Hex(canonical);
     }
 }

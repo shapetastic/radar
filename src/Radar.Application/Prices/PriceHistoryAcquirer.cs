@@ -59,6 +59,9 @@ public sealed class PriceHistoryAcquirer : IPriceHistoryAcquirer
         var sourcesUnreadable = 0;
         var barsStored = 0;
 
+        // Spec 201 §1: histories fetched but NOT durably persisted (the store's write degraded gracefully).
+        var historiesNotPersisted = 0;
+
         // Strictly sequential (never fanned out) + paced: a small polite pace between reads AFTER the first.
         var isFirstRequest = true;
 
@@ -100,9 +103,29 @@ public sealed class PriceHistoryAcquirer : IPriceHistoryAcquirer
                 RetrievedAtUtc: _timeProvider.GetUtcNow(),
                 Bars: result.Bars);
 
-            await _store.WriteAsync(history, ct).ConfigureAwait(false);
+            var write = await _store.WriteAsync(history, ct).ConfigureAwait(false);
             tickersFetched++;
-            barsStored += result.Bars.Count;
+            if (write.Written)
+            {
+                barsStored += result.Bars.Count;
+            }
+            else
+            {
+                historiesNotPersisted++;
+            }
+        }
+
+        // Spec 201 §1: ONE aggregated Warning for the price store per acquisition (the spec-145
+        // precedent), never one per ticker. "Bars stored" above counts only bars that reached disk.
+        if (historiesNotPersisted > 0)
+        {
+            _logger.LogWarning(
+                "{HistoriesNotPersisted} of {TickersFetched} fetched price histor(y/ies) could NOT be "
+                    + "durably persisted to the price store: the writes degraded gracefully and those "
+                    + "tickers' bars are NOT in the accrued price files, so the efficacy reads will not "
+                    + "see them.",
+                historiesNotPersisted,
+                tickersFetched);
         }
 
         _logger.LogInformation(

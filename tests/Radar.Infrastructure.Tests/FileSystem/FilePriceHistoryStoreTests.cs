@@ -51,7 +51,7 @@ public sealed class FilePriceHistoryStoreTests : IDisposable
         var history = HistoryWith("MRCY", Bar(d0, 100.25m), Bar(d1, 101.50m));
 
         var store = CreateStore();
-        var path = await store.WriteAsync(history, CancellationToken.None);
+        var path = (await store.WriteAsync(history, CancellationToken.None)).Path;
 
         Assert.Equal(Path.Combine(_tempDir, "mrcy.json"), path);
         Assert.True(File.Exists(path), $"Expected file at {path}.");
@@ -129,8 +129,8 @@ public sealed class FilePriceHistoryStoreTests : IDisposable
 
         var store = CreateStore(rootAsFile);
 
-        var path = await store.WriteAsync(
-            HistoryWith("MRCY", Bar(new DateOnly(2026, 6, 8), 100m)), CancellationToken.None);
+        var path = (await store.WriteAsync(
+            HistoryWith("MRCY", Bar(new DateOnly(2026, 6, 8), 100m)), CancellationToken.None)).Path;
 
         Assert.Equal(Path.Combine(rootAsFile, "mrcy.json"), path);
     }
@@ -140,8 +140,8 @@ public sealed class FilePriceHistoryStoreTests : IDisposable
     {
         var store = CreateStore();
 
-        var path = await store.WriteAsync(
-            HistoryWith("   ", Bar(new DateOnly(2026, 6, 8), 100m)), CancellationToken.None);
+        var path = (await store.WriteAsync(
+            HistoryWith("   ", Bar(new DateOnly(2026, 6, 8), 100m)), CancellationToken.None)).Path;
 
         // No real file was written; the returned path stays under the root (never outside it).
         Assert.StartsWith(_tempDir, path, StringComparison.Ordinal);

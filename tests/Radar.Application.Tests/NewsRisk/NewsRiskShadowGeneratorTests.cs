@@ -6,6 +6,7 @@ using Radar.Application.NewsRisk;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 
 namespace Radar.Application.Tests.NewsRisk;
 
@@ -32,8 +33,8 @@ public sealed class NewsRiskShadowGeneratorTests
     {
         public List<PipelineRunRecord> Records { get; } = [];
 
-        public Task<string> WriteAsync(PipelineRunRecord record, CancellationToken ct) =>
-            Task.FromResult("(unused)");
+        public Task<DurableWriteResult> WriteAsync(PipelineRunRecord record, CancellationToken ct) =>
+            Task.FromResult(DurableWriteResult.Succeeded("(unused)"));
 
         public Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<PipelineRunRecord>>(Records.Take(count).ToList());

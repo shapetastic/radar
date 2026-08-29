@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
@@ -48,18 +49,27 @@ public sealed class StrategyIdentityGuardTests
 
         public int RecordCallCount { get; private set; }
 
-        public Task<string> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct) =>
-            Task.FromResult($"written/{config.Fingerprint}.json");
+        /// <summary>Spec 201 §1: when set, the record write reports <see cref="DurableWriteOutcome.Failed"/>.</summary>
+        public bool FailRecordWrites { get; set; }
+
+        public Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct) =>
+            Task.FromResult(DurableWriteResult.Succeeded($"written/{config.Fingerprint}.json"));
 
         public Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct) =>
             Task.FromResult(Recorded.GetValueOrDefault(strategyName));
 
-        public Task<string> RecordStrategyFingerprintAsync(
+        public Task<DurableWriteResult> RecordStrategyFingerprintAsync(
             string strategyName, string fingerprint, CancellationToken ct)
         {
             RecordCallCount++;
+            if (FailRecordWrites)
+            {
+                return Task.FromResult(
+                    DurableWriteResult.NotPersisted($"written/strategies/{strategyName}.json"));
+            }
+
             Recorded[strategyName] = fingerprint;
-            return Task.FromResult($"written/strategies/{strategyName}.json");
+            return Task.FromResult(DurableWriteResult.Succeeded($"written/strategies/{strategyName}.json"));
         }
     }
 
@@ -106,6 +116,48 @@ public sealed class StrategyIdentityGuardTests
 
         Assert.Equal(1, store.RecordCallCount);
         Assert.Equal(runtime.Engine.EffectiveConfig.Fingerprint, store.Recorded["momentum"]);
+    }
+
+    /// <summary>
+    /// Spec 201 §1: a first-sighting record whose write degraded must NOT be reported as recorded. The run
+    /// still continues (best-effort, AD-8), but the log says the tripwire is unarmed — no Information
+    /// "Recorded first identity" line, one Warning naming the strategy and the attempted path.
+    /// </summary>
+    [Fact]
+    public async Task FirstRun_FailedRecordWrite_WarnsInsteadOfClaimingRecorded_AndContinues()
+    {
+        var store = new FakeScoringConfigStore { FailRecordWrites = true };
+        var runtime = Runtime("momentum", new ScoringWeights(), "rss", "sec-edgar");
+        var logger = new CapturingLogger();
+
+        await StrategyIdentityGuard.VerifyAsync([runtime], store, logger, CancellationToken.None);
+
+        Assert.Equal(1, store.RecordCallCount);
+        Assert.DoesNotContain("momentum", store.Recorded.Keys);
+        Assert.DoesNotContain(
+            logger.Entries,
+            e => e.Level == LogLevel.Information && e.Message.Contains("Recorded first identity", StringComparison.Ordinal));
+        var warning = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("momentum", warning.Message);
+        Assert.Contains("written/strategies/momentum.json", warning.Message);
+        Assert.Contains("not armed", warning.Message);
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     [Fact]
@@ -227,17 +279,17 @@ public sealed class StrategyIdentityGuardTests
     {
         public int RecordCallCount { get; private set; }
 
-        public Task<string> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct) =>
-            Task.FromResult("written.json");
+        public Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct) =>
+            Task.FromResult(DurableWriteResult.Succeeded("written.json"));
 
         public Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct) =>
             Task.FromResult<string?>(null);
 
-        public Task<string> RecordStrategyFingerprintAsync(
+        public Task<DurableWriteResult> RecordStrategyFingerprintAsync(
             string strategyName, string fingerprint, CancellationToken ct)
         {
             RecordCallCount++;
-            return Task.FromResult("written.json");
+            return Task.FromResult(DurableWriteResult.Succeeded("written.json"));
         }
     }
 

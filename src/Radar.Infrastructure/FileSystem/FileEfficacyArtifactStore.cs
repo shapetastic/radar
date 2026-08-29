@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Efficacy;
+using Radar.Application.Storage;
 
 namespace Radar.Infrastructure.FileSystem;
 
@@ -11,9 +12,10 @@ namespace Radar.Infrastructure.FileSystem;
 /// is sanitized through the shared <see cref="FileTickerKey"/> — the SAME key the price file uses — so the
 /// efficacy artifact and the price file line up on disk. All file I/O stays in Infrastructure (AD-5).
 /// <para>
-/// Best-effort (AD-8): a disk failure logs a warning and the attempted path(s) are still returned — the write
-/// never throws. A blank/invalid ticker has no safe filename, so a path-shaped placeholder under the root is
-/// returned (never a write outside the root).
+/// Best-effort (AD-8): a disk failure logs a warning and the write never throws — and since spec 201 §1 each
+/// file's outcome is REPORTED on the returned record beside its attempted path, so a caller cannot read the
+/// path as proof of storage. A blank/invalid ticker has no safe filename, so a path-shaped placeholder under
+/// the root is returned with a Failed outcome (never a write outside the root).
 /// </para>
 /// </summary>
 public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
@@ -44,24 +46,28 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
                 "Efficacy ticker '{Ticker}' is blank or contains invalid filename characters; skipping write.",
                 ticker);
             return new EfficacyArtifactPaths(
-                Path.Combine(_options.RootDirectory, "(invalid-ticker).svg"),
-                Path.Combine(_options.RootDirectory, "(invalid-ticker).csv"));
+                DurableWriteResult.NotPersisted(Path.Combine(_options.RootDirectory, "(invalid-ticker).svg")),
+                DurableWriteResult.NotPersisted(Path.Combine(_options.RootDirectory, "(invalid-ticker).csv")));
         }
 
         var svgPath = Path.Combine(_options.RootDirectory, sanitized + ".svg");
         var csvPath = Path.Combine(_options.RootDirectory, sanitized + ".csv");
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(svgPath, svg, _logger, ct).ConfigureAwait(false))
+        var svgWritten = await GracefulFileWriter.TryWriteAllTextAsync(svgPath, svg, _logger, ct).ConfigureAwait(false);
+        if (svgWritten)
         {
             _logger.LogInformation("Wrote efficacy SVG for '{Ticker}' to {Path}.", ticker, svgPath);
         }
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
+        var csvWritten = await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false);
+        if (csvWritten)
         {
             _logger.LogInformation("Wrote efficacy CSV for '{Ticker}' to {Path}.", ticker, csvPath);
         }
 
-        return new EfficacyArtifactPaths(svgPath, csvPath);
+        return new EfficacyArtifactPaths(
+            DurableWriteResult.From(svgPath, svgWritten),
+            DurableWriteResult.From(csvPath, csvWritten));
     }
 
     /// <summary>
@@ -103,18 +109,23 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
                 ct)
             .ConfigureAwait(false);
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
+        var csvWritten = await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false);
+        if (csvWritten)
         {
             _logger.LogInformation("Wrote strategy-comparison leaderboard CSV to {Path}.", csvPath);
         }
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
-            .ConfigureAwait(false))
+        var markdownWritten = await GracefulFileWriter
+            .TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
+            .ConfigureAwait(false);
+        if (markdownWritten)
         {
             _logger.LogInformation("Wrote strategy-comparison leaderboard markdown to {Path}.", markdownPath);
         }
 
-        return new StrategyLeaderboardPaths(csvPath, markdownPath);
+        return new StrategyLeaderboardPaths(
+            DurableWriteResult.From(csvPath, csvWritten),
+            DurableWriteResult.From(markdownPath, markdownWritten));
     }
 
     /// <summary>
@@ -136,24 +147,32 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
         var markdownPath = Path.Combine(_options.RootDirectory, PairedComparisonFileStem + ".md");
         var blocksCsvPath = Path.Combine(_options.RootDirectory, PairedComparisonBlocksFileStem + ".csv");
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
+        var csvWritten = await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false);
+        if (csvWritten)
         {
             _logger.LogInformation("Wrote paired strategy-comparison CSV to {Path}.", csvPath);
         }
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
-            .ConfigureAwait(false))
+        var markdownWritten = await GracefulFileWriter
+            .TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
+            .ConfigureAwait(false);
+        if (markdownWritten)
         {
             _logger.LogInformation("Wrote paired strategy-comparison markdown to {Path}.", markdownPath);
         }
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(blocksCsvPath, blocksCsv, _logger, ct)
-            .ConfigureAwait(false))
+        var blocksWritten = await GracefulFileWriter
+            .TryWriteAllTextAsync(blocksCsvPath, blocksCsv, _logger, ct)
+            .ConfigureAwait(false);
+        if (blocksWritten)
         {
             _logger.LogInformation("Wrote paired strategy-comparison blocks CSV to {Path}.", blocksCsvPath);
         }
 
-        return new PairedComparisonPaths(csvPath, markdownPath, blocksCsvPath);
+        return new PairedComparisonPaths(
+            DurableWriteResult.From(csvPath, csvWritten),
+            DurableWriteResult.From(markdownPath, markdownWritten),
+            DurableWriteResult.From(blocksCsvPath, blocksWritten));
     }
 
     /// <summary>

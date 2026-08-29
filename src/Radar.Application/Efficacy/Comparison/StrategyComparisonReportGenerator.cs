@@ -112,7 +112,20 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
 
         var csv = _renderer.RenderCsv(leaderboard);
         var markdown = _renderer.RenderMarkdown(leaderboard);
-        await _artifactStore.WriteLeaderboardAsync(csv, markdown, ct).ConfigureAwait(false);
+        var leaderboardWrite = await _artifactStore
+            .WriteLeaderboardAsync(csv, markdown, ct)
+            .ConfigureAwait(false);
+        if (leaderboardWrite.NotPersistedCount > 0)
+        {
+            // Spec 201 §1: the outcome is no longer discarded — a leaderboard that never landed must not
+            // read as ranked. One line for the pair.
+            _logger.LogWarning(
+                "Strategy leaderboard: {FilesNotPersisted} of 2 artifact file(s) could NOT be durably "
+                    + "persisted ({CsvPath}, {MarkdownPath}); the on-disk leaderboard is missing or STALE.",
+                leaderboardWrite.NotPersistedCount,
+                leaderboardWrite.CsvPath,
+                leaderboardWrite.MarkdownPath);
+        }
 
         _logger.LogInformation(
             "Strategy comparison over {Series}: {Compared} of {Considered} strateg(ies) ranked, "
@@ -195,9 +208,22 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         var pairedCsv = _pairedRenderer.RenderCsv(paired, verdict);
         var pairedMarkdown = _pairedRenderer.RenderMarkdown(paired, verdict);
         var pairedBlocksCsv = _pairedRenderer.RenderBlocksCsv(paired);
-        await _artifactStore
+        var pairedWrite = await _artifactStore
             .WritePairedComparisonAsync(pairedCsv, pairedMarkdown, pairedBlocksCsv, ct)
             .ConfigureAwait(false);
+        if (pairedWrite.NotPersistedCount > 0)
+        {
+            // Spec 201 §1: this is the claim-bearing artifact (AD-15) — a stale copy on disk is worse than
+            // none, so the failure is stated loudly, once for the triple.
+            _logger.LogWarning(
+                "Paired strategy comparison: {FilesNotPersisted} of 3 artifact file(s) could NOT be durably "
+                    + "persisted ({CsvPath}, {MarkdownPath}, {BlocksCsvPath}); the on-disk paired comparison "
+                    + "— the AD-15 claim-bearing artifact — is missing or STALE.",
+                pairedWrite.NotPersistedCount,
+                pairedWrite.CsvPath,
+                pairedWrite.MarkdownPath,
+                pairedWrite.BlocksCsvPath);
+        }
 
         _logger.LogInformation(
             "Paired strategy comparison over {Series}: primary '{Primary}' (predeclared: {Predeclared}) vs "

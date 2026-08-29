@@ -1,6 +1,7 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
+
+using Radar.Application.Identity;
 
 namespace Radar.Application.Scoring;
 
@@ -15,7 +16,7 @@ namespace Radar.Application.Scoring;
 /// snapshot's <c>ScoringConfigVersion</c> uniquely identifies the STRATEGY that produced it (AD-10 as
 /// amended). The canonical string uses a FIXED, explicit field ordering (never reflection order, which is
 /// unstable across runtimes) and culture-invariant round-trip number formatting (AD-3), then hashes with the
-/// shared EvidenceNormalizer idiom (<c>Convert.ToHexStringLower(SHA256.HashData(...))</c>). Any
+/// shared <c>CanonicalHash.Sha256Hex</c> step (UTF-8 → SHA-256 → lower hex, spec 201 §2). Any
 /// output-affecting change (formula shape <b>as expressed by the formula's version token</b>, any weight, the
 /// tier map, the window length) changes the fingerprint automatically. Pure and deterministic — no clock, IO,
 /// or randomness.
@@ -132,7 +133,8 @@ public static class ScoringConfigFingerprint
         Append(builder, "window", window.Ticks);
 
         var canonical = builder.ToString();
-        var hex = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+        // Spec 201 §2: the hash step is the shared CanonicalHash (byte-identical: UTF-8 → SHA-256 → lower hex).
+        var hex = CanonicalHash.Sha256Hex(canonical);
         return $"radar-scoring-fp-{hex[..12]}";
     }
 

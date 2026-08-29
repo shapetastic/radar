@@ -4,6 +4,7 @@ using Radar.Application.News;
 using Radar.Application.NewsRisk;
 using Radar.Application.NewsRisk.Evaluation;
 using Radar.Application.Prices;
+using Radar.Application.Storage;
 
 namespace Radar.Application.Tests.NewsRisk;
 
@@ -49,8 +50,8 @@ public sealed class NewsRiskEvaluationGeneratorTests
 
     private sealed class FakePriceStore(Dictionary<string, PriceHistory> histories) : IPriceHistoryStore
     {
-        public Task<string> WriteAsync(PriceHistory history, CancellationToken ct) =>
-            Task.FromResult("(unused)");
+        public Task<DurableWriteResult> WriteAsync(PriceHistory history, CancellationToken ct) =>
+            Task.FromResult(DurableWriteResult.Succeeded("(unused)"));
 
         public Task<PriceHistory?> ReadAsync(string ticker, CancellationToken ct) =>
             Task.FromResult(histories.GetValueOrDefault(ticker));

@@ -183,9 +183,23 @@ public sealed class ReplayRunner : IReplayRunner
             // pipeline already wrote it, and it is the difference between a replayed snapshot's stamp
             // dereferencing to the weights that produced it and dereferencing to nothing. Best-effort like
             // every other file store: it never aborts the replay or changes a count.
-            await _scoringConfigStore
+            var configWrite = await _scoringConfigStore
                 .WriteIfNewAsync(strategy.Engine.EffectiveConfig, ct)
                 .ConfigureAwait(false);
+            if (!configWrite.Written)
+            {
+                // Spec 201 §1: the outcome is no longer discarded. ONE Warning per strategy (the config is
+                // written once per strategy, so this IS the aggregate) — every replayed snapshot of this
+                // strategy carries a stamp that dereferences to nothing on disk.
+                _logger.LogWarning(
+                    "Replay '{Label}': strategy {StrategyName}'s effective scoring config could NOT be "
+                        + "durably persisted to {Path}. Its replayed snapshots still carry the "
+                        + "ScoringConfigVersion stamp, but the stamp dereferences to nothing on disk until "
+                        + "a later run writes the same content-addressed file.",
+                    _plan.Label,
+                    strategy.Definition.Name,
+                    configWrite.Path);
+            }
 
             var scoreFileStore = _scoreFileStores.ForStrategy(_plan.Label, strategy.Definition);
 

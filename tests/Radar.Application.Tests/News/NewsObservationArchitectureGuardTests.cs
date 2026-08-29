@@ -1,8 +1,10 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 
 using Radar.Application.News;
 using Radar.Application.Pipeline;
 using Radar.Application.Scoring;
+using Radar.Application.SignalExtraction;
 
 namespace Radar.Application.Tests.News;
 
@@ -71,6 +73,125 @@ public sealed class NewsObservationArchitectureGuardTests
             offenders.Count == 0,
             "Scoring/evidence-pipeline types must not reference the news-observation subsystem "
                 + "(spec 177 acquisition-only boundary):\n" + string.Join('\n', offenders.Distinct()));
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // SPEC 201 §3: the ban is TOTAL, not type-graph-only. The reflection walk above cannot see a `const`
+    // read or a method-body reference (a const is inlined at compile time), and exactly one was live:
+    // LegacyNewsInheritanceNeutralization read NewsTrajectorySignalRules.BaseStrength from
+    // Radar.Application.News. The constants moved to Radar.Application.SignalExtraction and this SOURCE
+    // scan makes the boundary hold at the text level as well. Mutation-proven: re-add
+    // `using Radar.Application.News;` to any file under src/Radar.Application/Scoring and this goes red
+    // naming file and line.
+    // -------------------------------------------------------------------------------------------------
+
+    private static readonly Regex ForbiddenSourceReference = new(
+        @"^\s*using\s+(static\s+)?Radar\.Application\.News(Risk)?\s*(\.[\w.]+)?\s*;"
+            + @"|Radar\.Application\.News(Risk)?\.",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    [Fact]
+    public void NoScoringSourceFile_ReferencesNewsOrNewsRisk_AtSourceLevel()
+    {
+        var scoringRoot = Path.Combine(FindRepositoryRoot(), "src", "Radar.Application", "Scoring");
+        Assert.True(Directory.Exists(scoringRoot), $"Expected the Scoring source folder at {scoringRoot}.");
+
+        var offenders = new List<string>();
+        var filesScanned = 0;
+        foreach (var file in Directory.EnumerateFiles(scoringRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            filesScanned++;
+            var lines = File.ReadAllLines(file);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                // Comments may legitimately NAME the banned namespaces (the boundary is documented in
+                // place); only code lines are scanned.
+                var trimmed = line.TrimStart();
+                if (trimmed.StartsWith("//", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (ForbiddenSourceReference.IsMatch(line))
+                {
+                    offenders.Add($"{Path.GetRelativePath(scoringRoot, file)}:{i + 1}: {trimmed}");
+                }
+            }
+        }
+
+        // Positive control on the scan itself: it must have looked at real files.
+        Assert.True(filesScanned > 10, $"Expected to scan the Scoring sources, scanned {filesScanned}.");
+        Assert.True(
+            offenders.Count == 0,
+            "src/Radar.Application/Scoring must carry NO reference of any kind — using directive or "
+                + "fully-qualified — to Radar.Application.News or Radar.Application.NewsRisk (spec 201 §3):\n"
+                + string.Join('\n', offenders));
+    }
+
+    [Fact]
+    public void SourceScan_PositiveControl_TheRegexCatchesEveryBannedShape()
+    {
+        // The scan cannot pass because the pattern went blind: every shape the ban covers is matched.
+        Assert.Matches(ForbiddenSourceReference, "using Radar.Application.News;");
+        Assert.Matches(ForbiddenSourceReference, "using Radar.Application.NewsRisk;");
+        Assert.Matches(ForbiddenSourceReference, "using Radar.Application.NewsRisk.Judgment;");
+        Assert.Matches(ForbiddenSourceReference, "using static Radar.Application.News.NewsTrajectorySignalRules;");
+        Assert.Matches(ForbiddenSourceReference, "        Strength = Radar.Application.News.NewsTrajectorySignalRules.BaseStrength,");
+        Assert.Matches(ForbiddenSourceReference, "var x = global::Radar.Application.NewsRisk.Judgment.NewsJudgmentTrajectory.Unknown;");
+
+        // ...and the namespaces Scoring DOES legitimately reference are not caught.
+        Assert.DoesNotMatch(ForbiddenSourceReference, "using Radar.Application.SignalExtraction;");
+        Assert.DoesNotMatch(ForbiddenSourceReference, "using Radar.Application.Storage;");
+    }
+
+    /// <summary>
+    /// Spec 201 §3: relocating the magnitudes out of <c>Radar.Application.News</c> moved NO value — the
+    /// mapping's aliases read the SignalExtraction constants — and therefore no fingerprint: the
+    /// <c>news=…;</c> identity segment encodes them BY VALUE, so a composition built from the relocated
+    /// constants is byte-identical to one built from the spec-194 literals.
+    /// </summary>
+    [Fact]
+    public void RelocatedTrajectoryConstants_KeepTheirValues_AndTheNewsIdentitySegmentIsUnchanged()
+    {
+        Assert.Equal(4, NewsTrajectorySignalConstants.BaseStrength);
+        Assert.Equal(3, NewsTrajectorySignalConstants.MaxFindingContribution);
+        Assert.Equal(1, NewsTrajectorySignalConstants.CompleteTypingBonus);
+        Assert.Equal(4, NewsTrajectorySignalConstants.Novelty);
+        Assert.Equal(0.5m, NewsTrajectorySignalConstants.Confidence);
+
+        Assert.Equal(NewsTrajectorySignalConstants.BaseStrength, NewsTrajectorySignalRules.BaseStrength);
+        Assert.Equal(NewsTrajectorySignalConstants.MaxFindingContribution, NewsTrajectorySignalRules.MaxFindingContribution);
+        Assert.Equal(NewsTrajectorySignalConstants.CompleteTypingBonus, NewsTrajectorySignalRules.CompleteTypingBonus);
+        Assert.Equal(NewsTrajectorySignalConstants.Novelty, NewsTrajectorySignalRules.Novelty);
+        Assert.Equal(NewsTrajectorySignalConstants.Confidence, NewsTrajectorySignalRules.Confidence);
+
+        const string cohort = "deepinfra:deepseek|news-judgment-prompt-v3|news-judgment-schema-v3|stage1=x|families=y";
+        var viaFactory = NewsJudgmentScoringIdentityFactory.ForPresentationCohort(cohort).Segment;
+        var viaSpec194Literals = NewsJudgmentScoringIdentity.ForPresentationCohort(
+            cohort,
+            NewsDirectionalSignalMetadata.JudgmentSignalVersionValue,
+            NewsJudgmentScoringIdentityFactory.DirectionMappingTokens,
+            4, 3, 1, 4, 0.5m).Segment;
+
+        Assert.Equal(viaSpec194Literals, viaFactory);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Radar.sln")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException(
+            $"Could not locate Radar.sln walking up from {AppContext.BaseDirectory}.");
     }
 
     [Fact]

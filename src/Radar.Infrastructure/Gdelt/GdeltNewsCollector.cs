@@ -198,41 +198,14 @@ internal sealed class GdeltNewsCollector : IEvidenceCollector
     };
 
     /// <summary>
-    /// True when the whitespace-normalised, case-insensitive article title contains the company query phrase
-    /// or the (optional) ticker token. GDELT spaces out punctuation in titles, so both sides are
+    /// The shared <see cref="FeedTargetRelevance.IsRelevant"/> rule (spec 201 §2 — one predicate for both
+    /// query-driven news collectors). GDELT spaces out punctuation in titles, so both sides are
     /// whitespace-normalised first — that is what lets a spaced <c>"( MRCY )"</c> still match a <c>MRCY</c>
-    /// ticker and <c>"Mercury Systems , Inc ."</c> still match the <c>Mercury Systems</c> phrase.
+    /// ticker and <c>"Mercury Systems , Inc ."</c> still match the <c>Mercury Systems</c> phrase. No
+    /// pre-normalize hook: GDELT titles carry no publisher suffix.
     /// </summary>
-    private static bool IsRelevant(string? title, QueryFeedTarget target)
-    {
-        var normalizedTitle = NormalizeWhitespace(title);
-        if (normalizedTitle.Length == 0)
-        {
-            return false;
-        }
-
-        var phrase = NormalizeWhitespace(target.QueryPhrase);
-        if (phrase.Length > 0
-            && normalizedTitle.Contains(phrase, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var ticker = NormalizeWhitespace(target.Ticker);
-        return ticker.Length > 0
-            && normalizedTitle.Contains(ticker, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>Collapses every run of whitespace to a single space and trims; null/blank becomes empty.</summary>
-    private static string NormalizeWhitespace(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        return string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-    }
+    private static bool IsRelevant(string? title, QueryFeedTarget target) =>
+        FeedTargetRelevance.IsRelevant(title, target);
 
     private CollectedEvidence MapToEvidence(
         CompanySourceFeed feed, GdeltArticleItem article, IReadOnlyList<string> hints)

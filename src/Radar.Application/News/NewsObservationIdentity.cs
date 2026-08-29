@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 
 using Radar.Application.Identity;
@@ -69,8 +68,7 @@ public static class NewsObservationIdentity
         AppendLengthPrefixed(canonical, descriptionRaw);
         AppendLengthPrefixed(canonical, fetchedContentHash);
 
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
-        return Convert.ToHexStringLower(bytes);
+        return CanonicalHash.Sha256Hex(canonical);
     }
 
     /// <summary>

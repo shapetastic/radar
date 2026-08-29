@@ -1,3 +1,5 @@
+using Radar.Application.Storage;
+
 namespace Radar.Application.Pipeline;
 
 /// <summary>
@@ -9,11 +11,12 @@ namespace Radar.Application.Pipeline;
 public interface IPipelineRunStore
 {
     /// <summary>
-    /// Persists <paramref name="record"/> to the run log and returns the written path. Best-effort:
-    /// disk failures degrade gracefully (the record is not lost from the returned in-memory result) and
-    /// never abort the run.
+    /// Persists <paramref name="record"/> to the run log. Best-effort: disk failures degrade gracefully (the
+    /// record is not lost from the returned in-memory result) and never abort the run — but the outcome is
+    /// REPORTED (spec 201 §1): the returned <see cref="DurableWriteResult"/> carries the attempted path plus
+    /// whether the record actually reached it, and the caller must not read the path as proof of storage.
     /// </summary>
-    Task<string> WriteAsync(PipelineRunRecord record, CancellationToken ct);
+    Task<DurableWriteResult> WriteAsync(PipelineRunRecord record, CancellationToken ct);
 
     /// <summary>
     /// Returns up to <paramref name="count"/> most-recent run records, newest-first, ordered by

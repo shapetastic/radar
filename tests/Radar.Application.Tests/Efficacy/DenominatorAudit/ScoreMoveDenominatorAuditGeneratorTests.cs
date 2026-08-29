@@ -52,8 +52,9 @@ public sealed class ScoreMoveDenominatorAuditGeneratorTests
         public Task<DenominatorAuditPaths> WriteAsync(string csv, string markdown, CancellationToken ct)
         {
             Written.Add((csv, markdown));
-            return Task.FromResult(
-                new DenominatorAuditPaths("score-move-denominator.csv", "score-move-denominator.md"));
+            return Task.FromResult(new DenominatorAuditPaths(
+                DurableWriteResult.Succeeded("score-move-denominator.csv"),
+                DurableWriteResult.Succeeded("score-move-denominator.md")));
         }
     }
 

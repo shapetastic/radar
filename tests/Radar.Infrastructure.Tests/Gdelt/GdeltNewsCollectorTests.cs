@@ -331,6 +331,86 @@ public sealed class GdeltNewsCollectorTests
         Assert.Contains("Agilysys", warning.Message);
     }
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 201 §2: the SAME six spec-200 adversarial headline pins the newssearch collector carries, through
+    // THIS collector's public surface — both collectors now route through the shared FeedTargetRelevance,
+    // and this is the proof that the GDELT copy no longer drifts. GDELT titles carry no publisher suffix, so
+    // the raw headline is used as-is.
+    // -------------------------------------------------------------------------------------------------
+
+    private static readonly Guid UtmdId = Guid.Parse("28243c9e-eb18-4a85-acec-8f93aeb8cdef");
+    private static readonly Guid IticId = Guid.Parse("2ae6e6da-b714-416f-9d90-b6432f6eac2b");
+    private static readonly Guid EsqId = Guid.Parse("971ea074-e524-4d6d-baf2-ead26449a0dc");
+
+    public static TheoryData<string, string> Spec200RejectedHeadlines => new()
+    {
+        { "UTMD", "University of Utah Medical School opens a new centre" },
+        { "ITIC", "Investors title technology as their top theme" },
+        { "ESQ", "Esquire names its people of the year" },
+    };
+
+    public static TheoryData<string, string> Spec200AcceptedHeadlines => new()
+    {
+        { "UTMD", "Utah Medical Products reports quarterly results" },
+        { "ITIC", "Investors Title Company declares a dividend" },
+        { "ESQ", "Esquire Financial expands litigation banking" },
+    };
+
+    [Theory]
+    [MemberData(nameof(Spec200RejectedHeadlines))]
+    public async Task CollectAsync_Spec200RepairedFeed_RejectsTheAdversarialHeadline(string ticker, string headline)
+    {
+        var (company, feed, phrase) = Spec200Fixture(ticker);
+        var reader = new FakeGdeltNewsReader
+        {
+            [phrase] = [Article("https://reject.example/" + ticker, headline)],
+        };
+
+        var result = await CreateCollector(reader)
+            .CollectAsync(new CollectionContext([company], [feed]), CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);
+        Assert.Empty(result.Evidence);
+    }
+
+    [Theory]
+    [MemberData(nameof(Spec200AcceptedHeadlines))]
+    public async Task CollectAsync_Spec200RepairedFeed_AcceptsTheIssuerHeadline_ForTheIntendedCompany(
+        string ticker, string headline)
+    {
+        var (company, feed, phrase) = Spec200Fixture(ticker);
+        var reader = new FakeGdeltNewsReader
+        {
+            [phrase] = [Article("https://accept.example/" + ticker, headline)],
+        };
+
+        var result = await CreateCollector(reader)
+            .CollectAsync(new CollectionContext([company], [feed]), CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);
+        var item = Assert.Single(result.Evidence);
+        Assert.Equal("https://accept.example/" + ticker, item.SourceUrl);
+        Assert.Equal([ticker], item.CompanyHints);
+    }
+
+    private static (Company Company, CompanySourceFeed Feed, string Phrase) Spec200Fixture(string ticker) =>
+        ticker switch
+        {
+            "UTMD" => (
+                Company(UtmdId, "Utah Medical Products", "UTMD"),
+                Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000001"), UtmdId, "Utah Medical Products — News", "query=Utah Medical Products&ticker=UTMD"),
+                "Utah Medical Products"),
+            "ITIC" => (
+                Company(IticId, "Investors Title Company", "ITIC"),
+                Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000002"), IticId, "Investors Title Company — News", "query=Investors Title Company"),
+                "Investors Title Company"),
+            "ESQ" => (
+                Company(EsqId, "Esquire Financial Holdings", "ESQ"),
+                Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000003"), EsqId, "Esquire Financial Holdings — News", "query=Esquire Financial"),
+                "Esquire Financial"),
+            _ => throw new ArgumentOutOfRangeException(nameof(ticker), ticker, "Not a spec-200 fixture ticker."),
+        };
+
     private sealed class FakeGdeltNewsReader : IGdeltNewsReader
     {
         private readonly Dictionary<string, GdeltReadResult> _byPhrase = new(StringComparer.Ordinal);

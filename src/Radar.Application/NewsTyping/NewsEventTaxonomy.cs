@@ -1,5 +1,4 @@
-using System.Security.Cryptography;
-using System.Text;
+using Radar.Application.Identity;
 
 namespace Radar.Application.NewsTyping;
 
@@ -51,8 +50,7 @@ public static class NewsEventTaxonomy
         "radar:" + TaxonomyVersion + ":" + string.Join("|", Members.Select(m => m.ToString()));
 
     /// <summary>Lowercase-hex SHA-256 of <see cref="CanonicalString"/> — pinned by test as a change-detector.</summary>
-    public static readonly string TaxonomyHash =
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(CanonicalString)));
+    public static readonly string TaxonomyHash = CanonicalHash.Sha256Hex(CanonicalString);
 
     /// <summary>
     /// Exact enum-name token parse (case-insensitive, never numeric — "3" must not become an event type),

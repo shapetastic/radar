@@ -87,7 +87,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         var config = ConfigFor(new ScoringWeights());
         var store = CreateStore();
 
-        var path = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var path = (await store.WriteIfNewAsync(config, CancellationToken.None)).Path;
 
         Assert.Equal(Path.Combine(_tempDir, config.Fingerprint + ".json"), path);
         Assert.True(File.Exists(path), $"Expected file at {path}.");
@@ -137,14 +137,14 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         var config = ConfigFor(new ScoringWeights());
         var store = CreateStore();
 
-        var path = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var path = (await store.WriteIfNewAsync(config, CancellationToken.None)).Path;
 
         // Tamper with the file on disk. Insert-if-new must NOT rewrite it — the tampered bytes survive,
         // proving the second call truly skipped (mirrors AD-1 evidence immutability).
         const string tampered = "TAMPERED-NOT-JSON";
         await File.WriteAllTextAsync(path, tampered);
 
-        var secondPath = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var secondPath = (await store.WriteIfNewAsync(config, CancellationToken.None)).Path;
 
         Assert.Equal(path, secondPath);
         Assert.Equal(tampered, await File.ReadAllTextAsync(path));
@@ -160,7 +160,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         var config = ConfigFor(new ScoringWeights());
         var store = CreateStore();
 
-        var path = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var path = (await store.WriteIfNewAsync(config, CancellationToken.None)).Path;
 
         var stored = ReadStored(path);
 
@@ -205,7 +205,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
             Window: Window);
 
         var store = CreateStore();
-        var path = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var path = (await store.WriteIfNewAsync(config, CancellationToken.None)).Path;
         var stored = ReadStored(path);
 
         Assert.Equal(composed, stored.FormulaVersion);
@@ -239,8 +239,8 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         // Distinct content -> distinct fingerprint -> distinct filename (content-addressed).
         Assert.NotEqual(defaultConfig.Fingerprint, customConfig.Fingerprint);
 
-        var defaultPath = await store.WriteIfNewAsync(defaultConfig, CancellationToken.None);
-        var customPath = await store.WriteIfNewAsync(customConfig, CancellationToken.None);
+        var defaultPath = (await store.WriteIfNewAsync(defaultConfig, CancellationToken.None)).Path;
+        var customPath = (await store.WriteIfNewAsync(customConfig, CancellationToken.None)).Path;
 
         Assert.NotEqual(defaultPath, customPath);
         Assert.True(File.Exists(defaultPath));
@@ -267,7 +267,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         var config = ConfigFor(new ScoringWeights());
         var store = CreateStore(rootAsFile);
 
-        var path = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var path = (await store.WriteIfNewAsync(config, CancellationToken.None)).Path;
 
         Assert.Equal(Path.Combine(rootAsFile, config.Fingerprint + ".json"), path);
     }
@@ -282,7 +282,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         var config = ConfigFor(new ScoringWeights { AttentionHalfSaturation = double.NaN });
         var store = CreateStore();
 
-        var path = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var path = (await store.WriteIfNewAsync(config, CancellationToken.None)).Path;
 
         Assert.Equal(Path.Combine(_tempDir, config.Fingerprint + ".json"), path);
         Assert.False(File.Exists(path), "Serialization failure must not leave a file on disk.");
@@ -303,8 +303,8 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     {
         var store = CreateStore();
 
-        var path = await store.RecordStrategyFingerprintAsync(
-            "momentum", "radar-scoring-fp-aaaa1111", CancellationToken.None);
+        var path = (await store.RecordStrategyFingerprintAsync(
+            "momentum", "radar-scoring-fp-aaaa1111", CancellationToken.None)).Path;
 
         // A subdirectory, so the root's content-addressed {fingerprint}.json listing is untouched.
         Assert.Equal(Path.Combine(_tempDir, "strategies", "momentum.json"), path);
@@ -361,8 +361,8 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         // Graceful degrade (AD-8): "cannot read" must read as "unrecorded", never as "changed" — otherwise a
         // corrupted byte would fail every run through the startup tripwire.
         var store = CreateStore();
-        var path = await store.RecordStrategyFingerprintAsync(
-            "momentum", "radar-scoring-fp-aaaa", CancellationToken.None);
+        var path = (await store.RecordStrategyFingerprintAsync(
+            "momentum", "radar-scoring-fp-aaaa", CancellationToken.None)).Path;
         await File.WriteAllTextAsync(path, "{ not json");
 
         Assert.Null(await store.ReadStrategyFingerprintAsync("momentum", CancellationToken.None));
@@ -379,8 +379,8 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         await File.WriteAllTextAsync(rootAsFile, "x");
         var store = CreateStore(rootAsFile);
 
-        var path = await store.RecordStrategyFingerprintAsync(
-            "momentum", "radar-scoring-fp-aaaa", CancellationToken.None);
+        var path = (await store.RecordStrategyFingerprintAsync(
+            "momentum", "radar-scoring-fp-aaaa", CancellationToken.None)).Path;
 
         Assert.Equal(Path.Combine(rootAsFile, "strategies", "momentum.json"), path);
     }
