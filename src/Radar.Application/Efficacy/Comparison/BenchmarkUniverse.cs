@@ -20,7 +20,7 @@ public sealed record BenchmarkUniverseMember(
 /// A FROZEN, VERSIONED benchmark universe (spec 183 §1) — the committed
 /// <c>data/efficacy/benchmark-universe-v1.json</c> artifact, parsed. One fixed pond, applied uniformly to
 /// every as-of date, so excess returns are byte-stable regardless of later seed edits. The watch universe has
-/// changed repeatedly (8 → 19 → 29 → 43 → 66 → 74); benchmarking historical dates against the CURRENT seed
+/// changed repeatedly (8 → 19 → 29 → 43 → 66 → 74 → 94); benchmarking historical dates against the CURRENT seed
 /// would retroactively insert later-selected companies — mutable-universe leakage. A future expansion is a
 /// NEW <c>benchmark-universe-v2</c> declared prospectively; it never restates v1-era results.
 /// </summary>

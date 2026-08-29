@@ -2,6 +2,7 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.EntityResolution;
+using Radar.Domain.Companies;
 using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Tests.Sources;
@@ -9,18 +10,20 @@ namespace Radar.Infrastructure.Tests.Sources;
 /// <summary>
 /// Guardrails over the SHIPPED watch universe (<c>data/companies.json</c>) — the curated, diversified efficacy
 /// sample. These assertions pin two things a well-meaning later edit could silently undo: the universe size
-/// (spec 125 expanded it 29 -> 43; spec 159 expanded it 43 -> 66; spec 166 expanded it 66 -> 74) and the
-/// ticker-collision rule for the tickers that are substrings of common headline words. The universe is NOT a
-/// scoring input, so nothing here touches the fingerprint.
+/// (spec 125 expanded it 29 -> 43; spec 159 expanded it 43 -> 66; spec 166 expanded it 66 -> 74; spec 199
+/// expanded it 74 -> 94) and the ticker-collision rule for the tickers that are substrings of common headline
+/// words. The universe is NOT a scoring input, so nothing here touches the fingerprint.
 /// </summary>
 public sealed class ProductionCompanySeedTests
 {
     /// <summary>
-    /// Universe size after the spec-166 batch-4 expansion (66 existing + 8 added: PSTL, FR, CCOI, ATNI, CARS,
-    /// MHO, THRM, BKE — the event-enriched exploratory cohort recorded in
-    /// <c>docs/cohorts/event-enriched-2026-07.json</c>). Spec 159 had taken it 43 -> 66.
+    /// Universe size after the spec-199 under-covered expansion (74 existing + the 20 additions listed in
+    /// <see cref="Spec199Ciks"/>). Spec 166 had taken it 66 -> 74 (batch 4: PSTL, FR, CCOI, ATNI, CARS, MHO,
+    /// THRM, BKE — the event-enriched exploratory cohort recorded in
+    /// <c>docs/cohorts/event-enriched-2026-07.json</c>), and spec 159 had taken it 43 -> 66. Spec 199 is
+    /// additions only: no existing company was modified, removed or re-tiered.
     /// </summary>
-    private const int ExpectedCompanyCount = 74;
+    private const int ExpectedCompanyCount = 94;
 
     /// <summary>
     /// The AD-16 §7 exclusion-cohort file (under <c>docs/cohorts/</c>) naming the spec-166 batch-4 companies.
@@ -42,9 +45,51 @@ public sealed class ProductionCompanySeedTests
     /// "<b>Fr</b>iday", "<b>Fr</b>ance") and <c>CARS</c> is a common plural noun ("used <b>cars</b>",
     /// "<b>cars</b> recalled").
     /// </para>
+    /// <para>
+    /// Spec 199 added four: <c>ITIC</c> ("cr<b>itic</b>", "pol<b>itic</b>al"), <c>GEOS</c>
+    /// ("<b>geos</b>patial", "<b>geos</b>cience"), <c>CTO</c> ("dire<b>cto</b>r", "se<b>cto</b>r",
+    /// "fa<b>cto</b>r", "do<b>cto</b>r") and <c>UTL</c> ("o<b>utl</b>ook", "o<b>utl</b>et",
+    /// "o<b>utl</b>ine").
+    /// </para>
     /// </summary>
     private static readonly string[] TickersWithoutTickerToken =
-        ["DEA", "SHOO", "ATEX", "SHEN", "KGS", "PUMP", "CASS", "ANIP", "PLUS", "CALM", "IDT", "FR", "CARS"];
+    [
+        "DEA", "SHOO", "ATEX", "SHEN", "KGS", "PUMP", "CASS", "ANIP", "PLUS", "CALM", "IDT", "FR", "CARS",
+        "ITIC", "GEOS", "CTO", "UTL",
+    ];
+
+    /// <summary>
+    /// The spec-199 batch, pinned ticker -> 10-digit EDGAR CIK. Every CIK was live-verified against
+    /// <c>https://data.sec.gov/submissions/CIK{cik}.json</c> on 2026-08-29 (HTTP 200; entity name, ticker and
+    /// exchange matched; filings within the last month; Form 4 and SC 13 present). The pin exists because a
+    /// CIK is the load-bearing identity of a registrant and a mistyped digit silently points a company's
+    /// filings feed at a DIFFERENT company — evidence that would then be scored under the wrong name, and
+    /// which is never backfilled once collected.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> Spec199Ciks =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["GHM"] = "0000716314",
+            ["CLMB"] = "0000945983",
+            ["UTMD"] = "0000706698",
+            ["MLAB"] = "0000724004",
+            ["JOUT"] = "0000788329",
+            ["FLXS"] = "0000037472",
+            ["ITIC"] = "0000720858",
+            ["ESQ"] = "0001531031",
+            ["SGA"] = "0000886136",
+            ["OOMA"] = "0001327688",
+            ["JBSS"] = "0000880117",
+            ["SENEA"] = "0000088948",
+            ["NWPX"] = "0001001385",
+            ["KOP"] = "0001315257",
+            ["GEOS"] = "0001001115",
+            ["EPM"] = "0001006655",
+            ["CTO"] = "0000023795",
+            ["OLP"] = "0000712770",
+            ["UTL"] = "0000755001",
+            ["RGCO"] = "0001069533",
+        };
 
     [Fact]
     public async Task ProductionSeed_ContainsTheExpectedUniverseSize()
@@ -74,6 +119,10 @@ public sealed class ProductionCompanySeedTests
     [InlineData("IDT")]
     [InlineData("FR")] // spec-166: "from", "free", "Friday", "France" — a near-universal bigram.
     [InlineData("CARS")] // spec-166: "cars", "used cars", "cars recalled".
+    [InlineData("ITIC")] // spec-199: "critic", "critical", "political".
+    [InlineData("GEOS")] // spec-199: "geospatial", "geoscience", "geosciences".
+    [InlineData("CTO")] // spec-199: "director", "sector", "factor", "doctor".
+    [InlineData("UTL")] // spec-199: "outlook", "outlet", "outline".
     public async Task ProductionSeed_CollidingTickers_HaveNoTickerTokenInNewsSearchFeed(string ticker)
     {
         var urls = await GetNewsSearchUrlsAsync(ticker);
@@ -89,6 +138,7 @@ public sealed class ProductionCompanySeedTests
     [InlineData("HWKN")]
     [InlineData("DGII")] // spec-159 newcomer: distinctive tickers from the batch keep the token too.
     [InlineData("CCOI")] // spec-166 newcomer: same honesty control for batch 4.
+    [InlineData("CLMB")] // spec-199 newcomer: same honesty control for the under-covered batch.
     public async Task ProductionSeed_DistinctiveTicker_KeepsTheTickerToken(string ticker)
     {
         // Honesty control for the theory above: a distinctive ticker still carries the token.
@@ -145,6 +195,127 @@ public sealed class ProductionCompanySeedTests
         Assert.Equal(
             ["query=Cars Commerce", "query=Cars.com"],
             urls.OrderBy(u => u, StringComparer.Ordinal).ToList());
+    }
+
+    /// <summary>
+    /// Spec 199: the 20 additions, pinned ticker -> CIK, with all THREE EDGAR feeds (<c>sec</c>,
+    /// <c>secform4</c>, <c>sec13dg</c>) resolving to the same submissions document for that registrant. This
+    /// is the guard that a later edit cannot silently re-point one of the three at the wrong registrant: the
+    /// three feed kinds are driven by ONE submissions url, so a divergence between them is always a defect,
+    /// and a divergence from <see cref="Spec199Ciks"/> means the company's filings evidence would be
+    /// collected under another company's identity.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_Spec199Additions_CarryTheirLiveVerifiedCikOnAllThreeEdgarFeeds()
+    {
+        var seed = await LoadProductionSeedAsync();
+
+        foreach (var (ticker, cik) in Spec199Ciks)
+        {
+            var company = Assert.Single(
+                seed.Companies,
+                c => string.Equals(c.Ticker, ticker, StringComparison.OrdinalIgnoreCase));
+
+            var expectedUrl = $"https://data.sec.gov/submissions/CIK{cik}.json";
+
+            foreach (var feedType in new[] { "sec", "secform4", "sec13dg" })
+            {
+                var feed = Assert.Single(
+                    seed.SourceFeeds,
+                    f => f.CompanyId == company.Id
+                        && string.Equals(f.FeedType, feedType, StringComparison.OrdinalIgnoreCase));
+
+                Assert.Equal(expectedUrl, feed.Url);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Spec 199 §6: every addition is a US-listed <c>followingTier: small</c> name with a working SEC
+    /// submissions feed and at least one <c>newssearch</c> feed. The tier matters because the batch's stated
+    /// purpose is to shift the universe toward the UNDER-COVERED end (35/74 small before, 55/94 after) — a
+    /// later re-tier of one of these to <c>mid</c> would quietly undo that without changing any count this
+    /// file pins. The SEC feed is the load-bearing one: spec 199 §1 refuses to add a company without one,
+    /// because filings are the highest-quality evidence source and the arms under test are disclosure-led.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_Spec199Additions_AreSmallTierUsCompaniesWithSecAndNewsFeeds()
+    {
+        var seed = await LoadProductionSeedAsync();
+
+        foreach (var ticker in Spec199Ciks.Keys)
+        {
+            var company = Assert.Single(
+                seed.Companies,
+                c => string.Equals(c.Ticker, ticker, StringComparison.OrdinalIgnoreCase));
+
+            Assert.Equal(FollowingTier.Small, company.FollowingTier);
+            Assert.Equal("US", company.CountryCode);
+
+            var feeds = seed.SourceFeeds.Where(f => f.CompanyId == company.Id).ToList();
+
+            var secFeed = Assert.Single(
+                feeds,
+                f => string.Equals(f.FeedType, "sec", StringComparison.OrdinalIgnoreCase));
+            Assert.False(string.IsNullOrWhiteSpace(secFeed.Url));
+
+            Assert.Contains(
+                feeds,
+                f => string.Equals(f.FeedType, "newssearch", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    /// <summary>
+    /// JBSS is the spec-199 repeat of the spec-159 <c>&amp;</c> trap. <c>TwoKeyFeedToken.TrySplit</c> splits
+    /// the feed url on the FIRST <c>&amp;</c> after the value start, so the registrant name
+    /// "John B. Sanfilippo &amp; Son" written verbatim as <c>query=John B. Sanfilippo &amp; Son&amp;ticker=JBSS</c>
+    /// would parse the phrase as "John B. Sanfilippo " plus a junk second key — losing the ticker token
+    /// entirely. The url must therefore stay EXACTLY the ampersand-free phrase below. Do NOT "restore" the
+    /// ampersand for consistency with <c>legalName</c>/<c>name</c>: that is the single most likely
+    /// well-meaning edit to break it, and the resulting evidence gap is unhealable because evidence is never
+    /// backfilled.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_Jbss_NewsSearchUrlCarriesNoAmpersandInThePhrase()
+    {
+        var url = Assert.Single(await GetNewsSearchUrlsAsync("JBSS"));
+
+        Assert.Equal("query=John B. Sanfilippo&ticker=JBSS", url);
+    }
+
+    /// <summary>
+    /// NWPX carries TWO newssearch feeds, for the same reason CARS does (spec 166's post-review fix).
+    /// <c>NewsAttentionCollector.IsRelevant</c> consults only the feed's OWN query phrase (plus the optional
+    /// ticker token) — never the seed aliases — and the company renamed from "Northwest Pipe Company" to
+    /// "NWPX Infrastructure", so a single-phrase feed would silently drop every legacy-brand headline and
+    /// undercount Attention. Both phrases keep the distinctive <c>NWPX</c> ticker token.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_Nwpx_CarriesBothCurrentAndLegacyBrandNewsSearchFeeds()
+    {
+        var urls = await GetNewsSearchUrlsAsync("NWPX");
+
+        Assert.Equal(
+            ["query=NWPX Infrastructure&ticker=NWPX", "query=Northwest Pipe&ticker=NWPX"],
+            urls.OrderBy(u => u, StringComparer.Ordinal).ToList());
+    }
+
+    /// <summary>
+    /// The spec-97 feed-identity collision guard, applied seed-wide. <c>LocalFileCompanySeedSource</c> derives
+    /// each feed's id deterministically from <c>(companyId, "feed", "{feedType}|{url}")</c> so re-seeding
+    /// upserts the same rows — which also means two feeds on one company sharing a type AND a url would
+    /// collapse onto ONE id and the second would silently vanish at seed time, uncounted. The three EDGAR
+    /// feeds are safe because their TYPES differ; a duplicated newssearch phrase would not be. This asserts
+    /// the whole 94-company seed, not just the spec-199 batch.
+    /// </summary>
+    [Fact]
+    public async Task ProductionSeed_EverySourceFeedIdIsDistinct()
+    {
+        var seed = await LoadProductionSeedAsync();
+
+        Assert.Equal(
+            seed.SourceFeeds.Count,
+            seed.SourceFeeds.Select(f => f.Id).Distinct().Count());
     }
 
     /// <summary>

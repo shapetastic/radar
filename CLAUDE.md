@@ -1094,7 +1094,9 @@ Do not hand back broken code.
   not (spec 183).** AD-16's "must be benchmark-adjusted" is now implemented: excess = raw forward return −
   the equal-weight mean forward return of the OTHER resolved members of **`benchmark-universe-v1`**
   (`data/efficacy/benchmark-universe-v1.json` — committed, self-contained, 74 members frozen 2026-08-23,
-  content hash `97e31fde67655453e4bdee8f69eef07785db6f2c80124220176a5637829561fc`), self-excluded, members
+  content hash `97e31fde67655453e4bdee8f69eef07785db6f2c80124220176a5637829561fc`; ⚠ spec 199 later took the
+  SEED to 94 while this artifact stays frozen at 74, so the 20 post-199 additions correctly report
+  `NotInBenchmarkUniverse` until a prospective `benchmark-universe-v2` is declared), self-excluded, members
   resolving through the SAME spec-152 `ForwardReturn` rules. Rules: the artifact is the ONLY membership /
   price-series-key input (never `companies.json` — a seed edit moves nothing; expansion = a prospective
   `benchmark-universe-v2`, never an edit — the reader refuses a content-hash mismatch); the computation is
@@ -2666,6 +2668,113 @@ Do not hand back broken code.
     weight re-tuning (spec 196 left that open on its own evidence); no backfill and no re-collection; no new
     collector, feed, provider or query beyond the appended term; `Radar:Gdelt:*` untouched (a DIFFERENT
     collector's similarly named knob).
+- **The universe is 94, the selection variable was COVERAGE not market cap, and nothing in the scoring
+  identity moved (spec 199).** `data/companies.json` goes **74 → 94**,
+  **additions only**: every existing company entry is byte-identical (asserted — the diff is a pure
+  insertion, 710 added lines, 0 deleted), no company was removed, renamed or re-tiered, and no evidence,
+  observation, signal, snapshot or efficacy artifact is rewritten. The universe had sat at 74 since spec 166
+  while the Lead arm's evidence status read "no evidence of discrimination yet" and a media-count baseline
+  out-performed every research arm out of sample — **a universe too small or too tame to contain a genuine
+  early-stage improver cannot demonstrate the method works, however carefully it is measured**, so waiting
+  for validation before expanding was circular. Rules:
+  - **Selection was on being UNDER-COVERED; small cap is the PRIOR, not the test.** `followingTier` is
+    curated from following/coverage evidence and is never derived from price or market cap (AD-14), and the
+    live tier↔attention overlap is why cap would have optimised the wrong variable: `small` n=35 mean
+    **62.0** (46–79), `mid` n=32 mean **66.0** (56–90), `large` n=2 mean 74.5 (67–82), `mega` n=5 mean
+    **71.6** (58–90) — **four points of mean separation and near-total overlap**, a `small` reaching 79
+    while a `mega` sits at 58. The spec permitted up to a quarter of the batch as `mid` with an argued
+    obscurity case; **none was needed — all 20 are `followingTier: small`**, taking the universe from 35/74
+    small to **55/94**, so the majority of it is finally the under-covered thing Radar exists to look at.
+  - **Sector spread was a hard constraint, because a sector-correlated batch would confound the efficacy
+    read with a sector bet.** Two additions each across nine sectors, plus one Industrials and one
+    Technology — all eleven sectors gained at least one. Final:
+    Industrials 11, Technology 10, Healthcare 10, Consumer Cyclical 10, Financial Services 9, Communication
+    Services 9, Consumer Defensive 8, Basic Materials 7, Energy 7, Real Estate 7, Utilities 6 = 94. Themes
+    are spread rather than drawn from one story.
+  - **Every CIK was live-verified 2026-08-29** against `https://data.sec.gov/submissions/CIK{cik}.json`
+    (HTTP 200; entity name, ticker and exchange matched; filings within the last month; Form 4 and SC 13
+    present), and is **pinned by test** with all three EDGAR feeds (`sec`/`secform4`/`sec13dg`) asserted to
+    resolve to that one submissions document — the guard that a later edit cannot silently re-point a
+    company's filings at a different registrant, whose evidence would then be scored under the wrong name
+    and is never backfilled. **Exactly ONE addition carries an `rss` press-release feed** (GHM,
+    `ir.grahamcorp.com/…/rss`, verified 200 + valid RSS 2.0, 10 items); every other IR feed candidate failed
+    verification and was **omitted rather than guessed** — spec 199 §2's rule that a broken feed is worse
+    than an absent one, the PSTL/BKE precedent.
+  - **Four tickers carry NO `ticker=` token, and one phrase deliberately contradicts its own legal name.**
+    `NewsAttentionCollector.IsRelevant` is an unanchored case-insensitive `Contains` over `phrase OR
+    ticker`, so `ITIC` ("cr**itic**", "pol**itic**al"), `GEOS` ("**geos**patial", "**geos**cience"), `CTO`
+    ("dire**cto**r", "se**cto**r", "fa**cto**r", "do**cto**r") and `UTL` ("o**utl**ook", "o**utl**et",
+    "o**utl**ine") are phrase-only (the V/FR/CARS treatment). **JBSS is the spec-159 `&` trap again**:
+    `TwoKeyFeedToken.TrySplit` splits on the FIRST `&`, so the url is exactly
+    `query=John B. Sanfilippo&ticker=JBSS` — **do not "restore" the ampersand for consistency with
+    `John B. Sanfilippo & Son`**, which would eat the ticker token. **NWPX carries TWO newssearch phrases**
+    (`NWPX Infrastructure` + the legacy `Northwest Pipe`), the CARS precedent: `IsRelevant` consults only
+    the feed's own phrase and never the aliases, so a renamed company with one phrase silently drops every
+    legacy-brand headline. All four rules are pinned by test.
+  - **`benchmark-universe-v1` is UNTOUCHED and no v2 was created.** Spec 183's rule is explicit — expansion
+    is a **prospective** `benchmark-universe-v2`, never an edit — so the artifact keeps its 74 frozen
+    members and content hash, and the 20 additions correctly report **`NotInBenchmarkUniverse`** on the
+    pooled path rather than being silently admitted (which would retroactively insert later-selected members
+    into every historical excess number). Asserted both ways: none of the 20 ids or tickers is a v1 member,
+    and no `benchmark-universe-v2.json` exists.
+  - ✅ **NO SCORING CHANGE, NO FINGERPRINT INPUT, ALL SIX PINS UNCHANGED, AND NO OPERATOR
+    IDENTITY-RECORD CLEAR IS REQUIRED FOR THIS SLICE.** The watch universe is not a hashed input:
+    no formula, weight, tier map, rule set, strategy, channel budget or config default changed, and
+    `ScoringConfigFingerprintTests` is **untouched** (verified by `git diff`). The current values stand
+    exactly as spec 198 set them — 30d `radar-scoring-fp-56c8e882beed`/`radar-scoring-fp-7d2b0cf537c4`, **60d
+    live** `radar-scoring-fp-0ff442a14c1b`/**`radar-scoring-fp-11240da5aeb0`**, 120d
+    `radar-scoring-fp-adf455313d35`/`radar-scoring-fp-7eece22968a4`. **199 adds no operator step of its
+    own**, and the spec-198 one is UNCHANGED and STILL OWED: before the first post-198 baseline,
+    delete or re-record every configured `data/scoring-configs/strategies/{name}.json` (git-ignored, so
+    it can never ride in a PR and must never be fabricated) and verify the first run reports
+    **`radar-scoring-fp-11240da5aeb0`**.
+  - ⚠ **THE SELECTION IS A HYPOTHESIS AND IS RECORDED AS ONE.** Coverage cannot be measured for a company
+    that is not yet in the universe — it has no observations — so seed-time selection is a **prediction**.
+    The predicted attention bands (low < 55 / mid 55–70 / high > 70), committed here so they can be judged:
+    **low (9)** UTMD, FLXS, ITIC, SGA, SENEA, GEOS, OLP, UTL, RGCO; **mid (11)** GHM, CLMB, MLAB, JOUT, ESQ,
+    OOMA, JBSS, NWPX, KOP, EPM, CTO; **high (0)**. The DURABLE record — one row per company carrying its
+    CIK, sector, predicted band and the one-line obscurity REASON it was selected on — is
+    `docs/cohorts/under-covered-2026-08.md` (the spec-166 `event-enriched-2026-07.json` precedent;
+    human-read at the retrospective, deliberately wired into NO code path). This bullet must not be the
+    only copy, and the two must not disagree. After **three** post-199 runs, compare predicted against
+    measured `AttentionScore` and report the hit rate. **If the additions cluster ABOVE 70 the under-covered
+    heuristic FAILED and that must be reported as a failed heuristic, not quietly absorbed** — it would mean
+    seed-time judgement cannot identify under-covered names, which is worth knowing before any further
+    expansion.
+  - **The capacity premise, MEASURED — and the spec's own projection was wrong in BOTH directions.**
+    ⚠ **No post-198 baseline exists yet** (the latest run is `fa50b516`, 2026-08-28T21:40Z, which is
+    PRE-198), so §5's "measure against the first post-198 run" is measured here from the last three PRE-198
+    runs plus spec 198's own live measurement, and **the post-198 check is still OWED on the first post-198
+    baseline**. Measured typing drain, `untypedRemaining` per run: 2026-08-26 **2,028** → 08-27 **1,927** →
+    08-28 **1,821**, i.e. **101 and 106 per run** — so the spec's premise of "~58/run today" **understated**
+    current capacity. Per run: 350 provider calls attempted, ~337–342 completed outcomes persisted, 0
+    provider/parse failures, 10 validation failures (08-28). Observations captured: 08-26 **255**, 08-27
+    **236**, 08-28 **234 new / 1,370 cross-run deduped**. Of the 234 captured on 08-28, **194 were ≤7 days
+    old** (08-27: 199 of 236; 08-26: 195 of 255), so under spec 198's 7-day window those ~195 still arrive,
+    and with 198's measured **+15.5 %** recent-coverage gain (683 → 789 admitted) post-198 inflow projects
+    to **~225/run** — close to today's 234 rather than the spec's assumed drop to 210. Projected post-198
+    drain at 74 companies is therefore **≈115/run** (not the spec's 140), and at 94 companies inflow is
+    **≈286/run worst case** (pro-rata; under-covered additions should produce LESS than the average, so it
+    is an **upper bound**) giving a projected drain of **≈54/run**. **Still clearly draining, so the spec's
+    ship condition is met and the FULL 20 ships**; the 1,821 backlog clears in ~34 runs at that rate. No
+    typing or judgment budget was changed — §5 measures the effect; a budget change is a separate decision.
+  - **Expected operational consequences, recorded NOT discovered, so the first post-199 run is read
+    correctly and nothing reads as a regression**: per-run scorings rise **740 → ≈940** (94 companies × 10
+    strategies); **82 additional feeds**, taking the seed from 359 to **441** (4 per company = 80, plus
+    GHM's rss and NWPX's second newssearch), so
+    collection wall-clock rises above the 2026-08-28 **1h49m** baseline and must be confirmed to stay inside
+    the scheduled window; **price history backfills one year per new ticker on the first run**, a one-off
+    cost outside the pipeline (AD-14 — price is validation only, never a scoring input); and the new
+    companies have **NO accrued evidence**, so their first scores are thin and their attention is low.
+    ⚠ **They will therefore look artificially attractive under the inverse-attention discount before their
+    evidence accrues — an early high rank for a new company MUST NOT be read as a finding**, and the report
+    period's interpretation should say so. They enter the efficacy series with zero history, contribute no
+    in-sample observations for **~21+ days**, and will initially show as spec-152 `PartialWindow`
+    observations.
+  - **Out of scope, recorded not built**: creating `benchmark-universe-v2`; changing any existing company's
+    tier, feeds or identity; any new collector, feed kind or provider; any typing/judgment budget change;
+    and backfilling evidence, prices or scores for the additions (they accrue forward, like every other
+    company did).
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

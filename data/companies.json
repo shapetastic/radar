@@ -2904,6 +2904,716 @@
           "url": "query=The Buckle&ticker=BKE"
         }
       ]
+    },
+    {
+      "id": "03d83435-a25a-46d9-8c0b-ccd6ae2f6370",
+      "name": "Graham Corporation",
+      "legalName": "GRAHAM CORP",
+      "ticker": "GHM",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Specialty Industrial Machinery",
+      "followingTier": "small",
+      "aliases": ["Graham Corporation", "Graham Manufacturing"],
+      "themes": ["vacuum and heat transfer", "naval propulsion", "defense industrial base"],
+      "sourceFeeds": [
+        {
+          "type": "rss",
+          "name": "Graham Corporation — News Releases (IR)",
+          "url": "https://ir.grahamcorp.com/news-events/press-releases/rss"
+        },
+        {
+          "type": "sec",
+          "name": "Graham Corporation — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000716314.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Graham Corporation — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000716314.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Graham Corporation — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000716314.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Graham Corporation — News attention (Google News)",
+          "url": "query=Graham Corporation&ticker=GHM"
+        }
+      ]
+    },
+    {
+      "id": "3ec8fa0f-0be7-425b-9d18-d3f2cf9c7cce",
+      "name": "Climb Global Solutions",
+      "legalName": "Climb Global Solutions, Inc.",
+      "ticker": "CLMB",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Information Technology Services",
+      "followingTier": "small",
+      "aliases": ["Climb Global Solutions", "Climb Channel Solutions"],
+      "themes": ["IT distribution", "channel software", "emerging technology distribution"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Climb Global Solutions — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000945983.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Climb Global Solutions — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000945983.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Climb Global Solutions — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000945983.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Climb Global Solutions — News attention (Google News)",
+          "url": "query=Climb Global Solutions&ticker=CLMB"
+        }
+      ]
+    },
+    {
+      "id": "28243c9e-eb18-4a85-acec-8f93aeb8cdef",
+      "name": "Utah Medical Products",
+      "legalName": "UTAH MEDICAL PRODUCTS INC",
+      "ticker": "UTMD",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Instruments & Supplies",
+      "followingTier": "small",
+      "aliases": ["Utah Medical", "Utah Medical Products"],
+      "themes": ["neonatal devices", "obstetrics devices", "medical instruments"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Utah Medical Products — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000706698.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Utah Medical Products — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000706698.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Utah Medical Products — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000706698.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Utah Medical Products — News attention (Google News)",
+          "url": "query=Utah Medical&ticker=UTMD"
+        }
+      ]
+    },
+    {
+      "id": "6546421b-76ce-40cf-ad5a-67850e8a6a14",
+      "name": "Mesa Laboratories",
+      "legalName": "MESA LABORATORIES INC",
+      "ticker": "MLAB",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Diagnostics & Research",
+      "followingTier": "small",
+      "aliases": ["Mesa Labs", "Mesa Laboratories"],
+      "themes": ["sterilization monitoring", "calibration instruments", "biopharma quality control"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Mesa Laboratories — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000724004.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Mesa Laboratories — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000724004.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Mesa Laboratories — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000724004.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Mesa Laboratories — News attention (Google News)",
+          "url": "query=Mesa Laboratories&ticker=MLAB"
+        }
+      ]
+    },
+    {
+      "id": "345739cf-7b3b-4a5e-9282-9a08d00dbf95",
+      "name": "Johnson Outdoors",
+      "legalName": "JOHNSON OUTDOORS INC",
+      "ticker": "JOUT",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Leisure",
+      "followingTier": "small",
+      "aliases": ["Johnson Outdoors", "Minn Kota"],
+      "themes": ["outdoor recreation", "fishing electronics", "watercraft"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Johnson Outdoors — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000788329.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Johnson Outdoors — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000788329.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Johnson Outdoors — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000788329.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Johnson Outdoors — News attention (Google News)",
+          "url": "query=Johnson Outdoors&ticker=JOUT"
+        }
+      ]
+    },
+    {
+      "id": "977ab7ef-84c4-4415-914e-225445f5bf77",
+      "name": "Flexsteel Industries",
+      "legalName": "FLEXSTEEL INDUSTRIES INC",
+      "ticker": "FLXS",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Cyclical",
+      "industry": "Furnishings, Fixtures & Appliances",
+      "followingTier": "small",
+      "aliases": ["Flexsteel", "Flexsteel Industries"],
+      "themes": ["residential furniture", "furniture manufacturing", "home furnishings"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Flexsteel Industries — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000037472.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Flexsteel Industries — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000037472.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Flexsteel Industries — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000037472.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Flexsteel Industries — News attention (Google News)",
+          "url": "query=Flexsteel&ticker=FLXS"
+        }
+      ]
+    },
+    {
+      "id": "2ae6e6da-b714-416f-9d90-b6432f6eac2b",
+      "name": "Investors Title Company",
+      "legalName": "INVESTORS TITLE CO",
+      "ticker": "ITIC",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Insurance—Specialty",
+      "followingTier": "small",
+      "aliases": ["Investors Title", "Investors Title Company"],
+      "themes": ["title insurance", "real estate closing services", "specialty insurance"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Investors Title Company — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000720858.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Investors Title Company — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000720858.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Investors Title Company — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000720858.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Investors Title Company — News attention (Google News)",
+          "url": "query=Investors Title"
+        }
+      ]
+    },
+    {
+      "id": "971ea074-e524-4d6d-baf2-ead26449a0dc",
+      "name": "Esquire Financial Holdings",
+      "legalName": "Esquire Financial Holdings, Inc.",
+      "ticker": "ESQ",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Financial Services",
+      "industry": "Banks—Regional",
+      "followingTier": "small",
+      "aliases": ["Esquire Financial", "Esquire Bank"],
+      "themes": ["litigation banking", "merchant payments", "niche commercial banking"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Esquire Financial Holdings — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001531031.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Esquire Financial Holdings — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001531031.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Esquire Financial Holdings — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001531031.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Esquire Financial Holdings — News attention (Google News)",
+          "url": "query=Esquire Financial&ticker=ESQ"
+        }
+      ]
+    },
+    {
+      "id": "b9114ba4-4a9e-444a-b295-e5ee4d6e75c3",
+      "name": "Saga Communications",
+      "legalName": "SAGA COMMUNICATIONS INC",
+      "ticker": "SGA",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Broadcasting",
+      "followingTier": "small",
+      "aliases": ["Saga Communications", "Saga Comm"],
+      "themes": ["local radio", "broadcast advertising", "local media"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Saga Communications — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000886136.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Saga Communications — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000886136.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Saga Communications — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000886136.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Saga Communications — News attention (Google News)",
+          "url": "query=Saga Communications&ticker=SGA"
+        }
+      ]
+    },
+    {
+      "id": "6abb319e-7404-4771-a7e4-1392afcdd106",
+      "name": "Ooma",
+      "legalName": "OOMA INC",
+      "ticker": "OOMA",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Communication Services",
+      "industry": "Telecom Services",
+      "followingTier": "small",
+      "aliases": ["Ooma"],
+      "themes": ["cloud telephony", "small business communications", "residential VoIP"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Ooma — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001327688.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Ooma — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001327688.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Ooma — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001327688.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Ooma — News attention (Google News)",
+          "url": "query=Ooma&ticker=OOMA"
+        }
+      ]
+    },
+    {
+      "id": "9033c658-5451-4eb6-a75d-6ee934e0d0ae",
+      "name": "John B. Sanfilippo & Son",
+      "legalName": "JOHN B SANFILIPPO & SON INC",
+      "ticker": "JBSS",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Defensive",
+      "industry": "Packaged Foods",
+      "followingTier": "small",
+      "aliases": ["John B. Sanfilippo", "Fisher Nuts"],
+      "themes": ["nut processing", "private label snacks", "packaged foods"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "John B. Sanfilippo & Son — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000880117.json"
+        },
+        {
+          "type": "secform4",
+          "name": "John B. Sanfilippo & Son — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000880117.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "John B. Sanfilippo & Son — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000880117.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "John B. Sanfilippo & Son — News attention (Google News)",
+          "url": "query=John B. Sanfilippo&ticker=JBSS"
+        }
+      ]
+    },
+    {
+      "id": "28a12288-2bef-4e98-9c20-2243eb8c7a3a",
+      "name": "Seneca Foods",
+      "legalName": "Seneca Foods Corp",
+      "ticker": "SENEA",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Consumer Defensive",
+      "industry": "Packaged Foods",
+      "followingTier": "small",
+      "aliases": ["Seneca Foods"],
+      "themes": ["canned vegetables", "food processing", "private label groceries"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Seneca Foods — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000088948.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Seneca Foods — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000088948.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Seneca Foods — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000088948.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Seneca Foods — News attention (Google News)",
+          "url": "query=Seneca Foods&ticker=SENEA"
+        }
+      ]
+    },
+    {
+      "id": "5a2b18f8-a612-4d50-9987-4aa182205a5f",
+      "name": "NWPX Infrastructure",
+      "legalName": "NWPX Infrastructure, Inc.",
+      "ticker": "NWPX",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Basic Materials",
+      "industry": "Steel",
+      "followingTier": "small",
+      "aliases": ["NWPX Infrastructure", "Northwest Pipe"],
+      "themes": ["water infrastructure", "steel pipe", "engineered water systems"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "NWPX Infrastructure — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001001385.json"
+        },
+        {
+          "type": "secform4",
+          "name": "NWPX Infrastructure — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001001385.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "NWPX Infrastructure — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001001385.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "NWPX Infrastructure — News attention (Google News)",
+          "url": "query=NWPX Infrastructure&ticker=NWPX"
+        },
+        {
+          "type": "newssearch",
+          "name": "NWPX Infrastructure — News attention, legacy brand (Google News)",
+          "url": "query=Northwest Pipe&ticker=NWPX"
+        }
+      ]
+    },
+    {
+      "id": "0ca2bef7-aebf-4e2b-acdc-d5383c5e9acf",
+      "name": "Koppers Holdings",
+      "legalName": "Koppers Holdings Inc.",
+      "ticker": "KOP",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Basic Materials",
+      "industry": "Specialty Chemicals",
+      "followingTier": "small",
+      "aliases": ["Koppers", "Koppers Holdings"],
+      "themes": ["treated wood products", "carbon materials", "railroad crossties"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Koppers Holdings — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001315257.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Koppers Holdings — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001315257.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Koppers Holdings — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001315257.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Koppers Holdings — News attention (Google News)",
+          "url": "query=Koppers&ticker=KOP"
+        }
+      ]
+    },
+    {
+      "id": "77b0bd01-7b66-4b56-b192-954476183ec6",
+      "name": "Geospace Technologies",
+      "legalName": "GEOSPACE TECHNOLOGIES CORP",
+      "ticker": "GEOS",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Energy",
+      "industry": "Oil & Gas Equipment & Services",
+      "followingTier": "small",
+      "aliases": ["Geospace Technologies", "Geospace"],
+      "themes": ["seismic instrumentation", "borehole monitoring", "industrial sensing"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Geospace Technologies — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001001115.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Geospace Technologies — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001001115.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Geospace Technologies — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001001115.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Geospace Technologies — News attention (Google News)",
+          "url": "query=Geospace Technologies"
+        }
+      ]
+    },
+    {
+      "id": "a86391fc-476a-41ef-8fae-b259b052eec9",
+      "name": "Evolution Petroleum",
+      "legalName": "EVOLUTION PETROLEUM CORP",
+      "ticker": "EPM",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Energy",
+      "industry": "Oil & Gas E&P",
+      "followingTier": "small",
+      "aliases": ["Evolution Petroleum"],
+      "themes": ["non-operated working interests", "mature field production", "dividend energy"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Evolution Petroleum — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001006655.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Evolution Petroleum — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001006655.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Evolution Petroleum — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001006655.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Evolution Petroleum — News attention (Google News)",
+          "url": "query=Evolution Petroleum&ticker=EPM"
+        }
+      ]
+    },
+    {
+      "id": "2f6db469-4729-4c7b-af2c-89ec30b7285b",
+      "name": "CTO Realty Growth",
+      "legalName": "CTO Realty Growth, Inc.",
+      "ticker": "CTO",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Real Estate",
+      "industry": "REIT—Retail",
+      "followingTier": "small",
+      "aliases": ["CTO Realty Growth", "CTO Realty"],
+      "themes": ["retail REIT", "sunbelt real estate", "mixed-use property"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "CTO Realty Growth — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000023795.json"
+        },
+        {
+          "type": "secform4",
+          "name": "CTO Realty Growth — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000023795.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "CTO Realty Growth — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000023795.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "CTO Realty Growth — News attention (Google News)",
+          "url": "query=CTO Realty Growth"
+        }
+      ]
+    },
+    {
+      "id": "de02b7db-8c25-4252-96a1-64093e3a5e3a",
+      "name": "One Liberty Properties",
+      "legalName": "ONE LIBERTY PROPERTIES INC",
+      "ticker": "OLP",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Real Estate",
+      "industry": "REIT—Diversified",
+      "followingTier": "small",
+      "aliases": ["One Liberty Properties", "One Liberty"],
+      "themes": ["net lease REIT", "industrial net lease", "diversified property"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "One Liberty Properties — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000712770.json"
+        },
+        {
+          "type": "secform4",
+          "name": "One Liberty Properties — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000712770.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "One Liberty Properties — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000712770.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "One Liberty Properties — News attention (Google News)",
+          "url": "query=One Liberty Properties&ticker=OLP"
+        }
+      ]
+    },
+    {
+      "id": "db2f28fc-75f0-42c7-9480-04dd4b5e4326",
+      "name": "Unitil",
+      "legalName": "UNITIL CORP",
+      "ticker": "UTL",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Utilities",
+      "industry": "Utilities—Diversified",
+      "followingTier": "small",
+      "aliases": ["Unitil", "Unitil Corporation"],
+      "themes": ["regulated electric and gas", "New England utility", "distribution utility"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Unitil — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000755001.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Unitil — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000755001.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Unitil — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000755001.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Unitil — News attention (Google News)",
+          "url": "query=Unitil"
+        }
+      ]
+    },
+    {
+      "id": "1f2c8b48-1daa-41fb-bd08-1cbdc30dcb3b",
+      "name": "RGC Resources",
+      "legalName": "RGC RESOURCES INC",
+      "ticker": "RGCO",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Utilities",
+      "industry": "Utilities—Regulated Gas",
+      "followingTier": "small",
+      "aliases": ["RGC Resources", "Roanoke Gas"],
+      "themes": ["regulated natural gas", "local distribution company", "pipeline investment"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "RGC Resources — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001069533.json"
+        },
+        {
+          "type": "secform4",
+          "name": "RGC Resources — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001069533.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "RGC Resources — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001069533.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "RGC Resources — News attention (Google News)",
+          "url": "query=RGC Resources&ticker=RGCO"
+        }
+      ]
     }
   ]
 }
