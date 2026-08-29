@@ -202,7 +202,7 @@ powershell -File scripts/run-radar.ps1 -Profile low-media -WhatIf   # print the 
 ### Tech stack
 
 - Target framework `.NET 10` / `net10.0`, C# 14.
-- ASP.NET Core / Worker Service, PostgreSQL, Dapper.
+- ASP.NET Core / Worker Service. Persistence is the insert-only FILE store (AD-8, `docs/radar-schema-spec.md`); PostgreSQL/Dapper are NOT wired and no such package exists (stale line corrected 2026-08-29 by the spec-201 audit).
 - AI behind `Microsoft.Extensions.AI` via application interfaces.
 
 ### Build & test gate
