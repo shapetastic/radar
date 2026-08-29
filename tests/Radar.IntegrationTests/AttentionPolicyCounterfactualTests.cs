@@ -157,6 +157,9 @@ public sealed class AttentionPolicyCounterfactualTests(ITestOutputHelper output)
             // Both arms ask the previous-window store the IDENTICAL question, so the read is memoized
             // once rather than rescanned per arm. Read-through and answer-preserving; it changes no result,
             // only how many times the same files are opened.
+            // ONE memoized read of the per-call disk-scanning window store, shared by both arms (see
+            // MemoizingSignalWindowReads for why that scan is expensive and why memoizing it is
+            // answer-preserving). Extracted to its own file by spec 198, which needed the same primitive.
             var windowReads = new MemoizingSignalWindowReads(
                 provider.GetRequiredService<ISignalFileStore>());
             var oldScores = await ScoreAllAsync(provider, ordered, oldWeights, windowReads, ct);
@@ -184,8 +187,14 @@ public sealed class AttentionPolicyCounterfactualTests(ITestOutputHelper output)
     /// <summary>
     /// A read-only composition over the live data root: durable signal history + raw evidence hydrated from
     /// disk (spec 142), the company seed, the news-observation archive, and an IN-MEMORY score repository.
+    /// <para>
+    /// <c>internal</c> since spec 198 so its second read-only harness composes the SAME graph instead of a
+    /// copy that could quietly diverge (CLAUDE.md reuse-over-copy). It registers no score file store, no run
+    /// store, no scoring-config store, no report writer and no collector, so there is nothing either harness
+    /// could write even by accident.
+    /// </para>
     /// </summary>
-    private static ServiceProvider BuildReadOnlyProvider(string root)
+    internal static ServiceProvider BuildReadOnlyProvider(string root)
     {
         var services = new ServiceCollection();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Error));
@@ -219,7 +228,7 @@ public sealed class AttentionPolicyCounterfactualTests(ITestOutputHelper output)
             // The signal-source descriptor is recorded provenance, never a scoring input; both arms get the
             // same frozen stub, so the one thing it could affect (the stamp) is identical on both sides and
             // a read-only harness never has to register a collector or an AI seam it must not use.
-            CounterfactualSourceDescriptor.Instance,
+            ReadOnlyHarnessSourceDescriptor.Instance,
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
             new ScoringOptions { Window = ScoringWindow },
@@ -506,59 +515,6 @@ public sealed class AttentionPolicyCounterfactualTests(ITestOutputHelper output)
         }
     }
 
-    /// <summary>
-    /// A read-through memoization of <see cref="ISignalFileStore.ReadApprovedInWindowAsync"/> keyed by its
-    /// EXACT arguments. The two arms differ only in the attention tier map, so they ask this store the
-    /// identical question for every company; memoizing it removes one full rescan of the signal store per
-    /// company without changing a single answer. <see cref="WriteAsync"/> throws — this harness is
-    /// read-only and must fail loudly if that ever stops being true.
-    /// </summary>
-    private sealed class MemoizingSignalWindowReads(ISignalFileStore inner) : ISignalFileStore
-    {
-        private readonly Dictionary<(Guid, DateTimeOffset, DateTimeOffset, DateTimeOffset),
-            IReadOnlyList<Radar.Domain.Signals.Signal>> _cache = [];
-
-        public Task<DurableWriteResult> WriteAsync(
-            Radar.Domain.Signals.Signal signal,
-            Radar.Domain.Signals.SignalReview review,
-            CancellationToken ct) =>
-            throw new InvalidOperationException(
-                "The spec-196 §7 counterfactual is read-only and must never write a signal.");
-
-        public async Task<IReadOnlyList<Radar.Domain.Signals.Signal>> ReadApprovedInWindowAsync(
-            Guid companyId,
-            DateTimeOffset startExclusiveUtc,
-            DateTimeOffset endInclusiveUtc,
-            DateTimeOffset knownAsOfUtc,
-            CancellationToken ct)
-        {
-            var key = (companyId, startExclusiveUtc, endInclusiveUtc, knownAsOfUtc);
-            if (_cache.TryGetValue(key, out var cached))
-            {
-                return cached;
-            }
-
-            var read = await inner.ReadApprovedInWindowAsync(
-                companyId, startExclusiveUtc, endInclusiveUtc, knownAsOfUtc, ct);
-            _cache[key] = read;
-            return read;
-        }
-    }
-
-    /// <summary>
-    /// A frozen signal-source descriptor. This harness compares SCORES between two attention policies; the
-    /// descriptor contributes only to the recorded stamp, which is identical on both arms.
-    /// </summary>
-    private sealed class CounterfactualSourceDescriptor : ISignalSourceDescriptor
-    {
-        public static readonly CounterfactualSourceDescriptor Instance = new();
-
-        public string CanonicalDescriptor() => "counterfactual-src-desc";
-
-        public string CollectionProvenance() => "collectors=;collection=none-this-pass;";
-
-        public IReadOnlyList<string> EnabledCollectors() => [];
-    }
 }
 
 /// <summary>

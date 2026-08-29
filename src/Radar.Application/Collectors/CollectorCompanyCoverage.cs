@@ -84,6 +84,18 @@ public static class CollectionCoverageIssues
 /// coverage never silently upgrade. Every diagnostic field is <c>null</c> on a row written before spec 190
 /// (or by a collector that records none) — <b><c>null</c> means NOT RECORDED, never <c>false</c></b>.
 /// </para>
+/// <para>
+/// <b>Spec 198 — which query shape the row's feeds actually issued.</b>
+/// <see cref="RecencyWindowDays"/> records the CONFIGURED news-feed recency window and
+/// <see cref="UnfilteredFirstCollectionFeedCount"/> how many of the company's feeds skipped it because the
+/// archive held no prior observation for the company (the §2 first-collection exemption, decided from
+/// PERSISTED STATE and never from a clock). Both follow the spec-190 convention verbatim: <b><c>null</c>
+/// means NOT RECORDED, never <c>0</c></b>, and the news collector records them on EVERY row it writes —
+/// including a MissingFeed or failed row, where the count is honestly zero — so <c>null</c> stays reserved
+/// for rows written by a collector that records none. Purely observational: the configured window is the
+/// hashed scoring input (<c>NewsQueryScoringIdentity</c>), while these two fields are per-run provenance and
+/// feed no evidence, signal, score or fingerprint.
+/// </para>
 /// </summary>
 /// <param name="CompanyId">The company this row describes. One row per company in the collection context.</param>
 /// <param name="ExpectedFeedCount">How many of this collector's feeds are configured for the company. Zero is a legitimate, recorded state (<see cref="CollectionCoverageIssues.MissingFeed"/>), not an omission.</param>
@@ -94,6 +106,8 @@ public static class CollectionCoverageIssues
 /// <param name="MaxValidItemsObserved">The MAXIMUM number of structurally valid response items observed across the company's successful feeds (bounded by the reader's absolute parse ceiling); <c>null</c> = not recorded.</param>
 /// <param name="ConfirmedLocalTruncation">True when at least one successful feed's response held a valid item BEYOND <paramref name="EffectiveResultLimit"/>, so the discard is confirmed rather than suspected; <c>false</c> means no such item was observed (NOT that the provider had none); <c>null</c> = not recorded.</param>
 /// <param name="UnadmittedRelevantTailItemCount">How many additional UNIQUE company-relevant items were observed in the diagnostic tail and deliberately NOT admitted by the current collection contract; <c>null</c> = not recorded. Purely observational — no such item became evidence, an observation candidate or a scoring input.</param>
+/// <param name="RecencyWindowDays">The CONFIGURED news-feed recency window in days this collector applied on this run (spec 198 §1); <c>0</c> means the filter is disabled and every query was unfiltered; <c>null</c> = not recorded. It is the configured value, not a per-feed outcome — see <paramref name="UnfilteredFirstCollectionFeedCount"/> for how many feeds actually skipped it.</param>
+/// <param name="UnfilteredFirstCollectionFeedCount">How many of this company's feeds issued the UNFILTERED first-collection query (spec 198 §2 — the archive held no prior observation for the company, so the window was not applied); <c>null</c> = not recorded. A recorded <c>0</c> on a MissingFeed or fully failed row is honest: no feed issued that query.</param>
 public sealed record CollectorCompanyCoverage(
     Guid CompanyId,
     int ExpectedFeedCount,
@@ -103,4 +117,6 @@ public sealed record CollectorCompanyCoverage(
     int? EffectiveResultLimit = null,
     int? MaxValidItemsObserved = null,
     bool? ConfirmedLocalTruncation = null,
-    int? UnadmittedRelevantTailItemCount = null);
+    int? UnadmittedRelevantTailItemCount = null,
+    int? RecencyWindowDays = null,
+    int? UnfilteredFirstCollectionFeedCount = null);

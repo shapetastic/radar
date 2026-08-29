@@ -450,7 +450,9 @@ public sealed class CollectionPassNewsObservationTests
             EffectiveResultLimit: 25,
             MaxValidItemsObserved: 31,
             ConfirmedLocalTruncation: true,
-            UnadmittedRelevantTailItemCount: 4);
+            UnadmittedRelevantTailItemCount: 4,
+            RecencyWindowDays: 7,
+            UnfilteredFirstCollectionFeedCount: 1);
 
         var collector = new FakeCollector(
             "newssearch",
@@ -466,6 +468,9 @@ public sealed class CollectionPassNewsObservationTests
         Assert.Equal(31, row.MaxValidItemsObserved);
         Assert.True(row.ConfirmedLocalTruncation);
         Assert.Equal(4, row.UnadmittedRelevantTailItemCount);
+        // Spec 198's two trailing members ride the same `with` and must survive it for the same reason.
+        Assert.Equal(7, row.RecencyWindowDays);
+        Assert.Equal(1, row.UnfilteredFirstCollectionFeedCount);
     }
 
 }

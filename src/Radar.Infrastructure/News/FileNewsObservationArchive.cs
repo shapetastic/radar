@@ -43,7 +43,10 @@ namespace Radar.Infrastructure.News;
 /// </para>
 /// </remarks>
 public sealed class FileNewsObservationArchive
-    : INewsObservationArchive, INewsObservationBatchReader, INewsProspectiveBoundaryReader
+    : INewsObservationArchive,
+        INewsObservationBatchReader,
+        INewsProspectiveBoundaryReader,
+        INewsObservationCompanyHistory
 {
     private const string ObservationsFolder = "observations";
     private const string BatchesFolder = "batches";
@@ -175,6 +178,33 @@ public sealed class FileNewsObservationArchive
 
         // Deterministic order (AD-3).
         return [.. _byId.Values.OrderBy(o => o.FirstObservedAtUtc).ThenBy(o => o.ObservationId)];
+    }
+
+    /// <summary>
+    /// SPEC 198 §2 — the company ids that already hold at least one archived observation, read off the SAME
+    /// lazily-hydrated <c>_byId</c> index every other read uses. No second store, no side index and no
+    /// second deserializer (spec 142's "the repository IS the file store" precedent, and spec 151's recorded
+    /// rejection of a materialized side index that can drift from the store it summarises).
+    /// <para>
+    /// Records carrying no company contribute nothing: an unattributed observation is not evidence that
+    /// Radar has ever observed any particular company. The result is a plain set, deterministic by
+    /// construction (membership, not order), and the caller treats it as read-only.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlySet<Guid>> GetCompaniesWithObservationsAsync(CancellationToken ct)
+    {
+        await EnsureHydratedAsync(ct).ConfigureAwait(false);
+
+        var companies = new HashSet<Guid>();
+        foreach (var record in _byId.Values)
+        {
+            if (record.CompanyId is { } companyId)
+            {
+                companies.Add(companyId);
+            }
+        }
+
+        return companies;
     }
 
     /// <summary>

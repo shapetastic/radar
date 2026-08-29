@@ -210,6 +210,28 @@ internal static class RadarWorkerServices
             }
         }
 
+        // SPEC 198 §3 — the news-feed QUERY identity (the recency window), registered in EVERY run mode for
+        // the same reason spec 194 §2's news-read identity is: it holds an int, so a standalone `score` pass
+        // and a spec-139 replay compose the SAME ScoringConfigVersion a `full` run composes from the same
+        // configuration WITHOUT registering the newssearch collector (which score mode deliberately never
+        // does). Registered here rather than inside AddNewsAttentionCollector precisely so it is present
+        // even when no collector is — a collector-gated identity would silently stamp the shipped default
+        // over a score pass whose configuration says otherwise.
+        //
+        // Validated here too, with the same message the collector registration uses, because that
+        // registration does not run in score mode and a negative window must fail identically wherever it is
+        // detected (the spec-194 §2 precedent for the presentation cohort).
+        if (options.News.RecencyWindowDays < 0)
+        {
+            throw new InvalidOperationException(
+                "News search RecencyWindowDays must not be negative; configure Radar:News:RecencyWindowDays "
+                    + $"to a non-negative window in days (default {NewsQueryScoringIdentity.DefaultRecencyWindowDays}) "
+                    + "— zero legitimately DISABLES the when:{n}d filter and reproduces the unfiltered query, "
+                    + "but a negative value is configuration nonsense that would silently read as disabled.");
+        }
+
+        services.AddSingleton(NewsQueryScoringIdentity.ForWindowDays(options.News.RecencyWindowDays));
+
         // Spec 177: the point-in-time news observation archive, the safe article-fetch seam, and the
         // explicit one-shot migration. Spec 179 adds the in-process news-risk shadow read behind the same
         // fail-closed block (registered only for an unfiltered full-mode run with a resolvable reader).
@@ -519,6 +541,7 @@ internal static class RadarWorkerServices
                 MaxRecordsPerCompany = options.News.MaxRecordsPerCompany,
                 EnglishOnly = options.News.EnglishOnly,
                 InterRequestDelay = TimeSpan.FromSeconds(options.News.InterRequestDelaySeconds),
+                RecencyWindowDays = options.News.RecencyWindowDays,
             })),
         new("hiringats", RadarCollectorNames.HiringAts,
             static (services, options) => services.AddHiringBoardCollector(new HiringCollectorOptions

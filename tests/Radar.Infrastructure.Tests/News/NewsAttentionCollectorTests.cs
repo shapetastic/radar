@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
+using Radar.Application.News;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Infrastructure.News;
@@ -53,12 +54,309 @@ public sealed class NewsAttentionCollectorTests
             PublishedAt: publishedAt ?? new DateTimeOffset(2026, 6, 27, 12, 30, 0, TimeSpan.Zero));
 
     private static NewsAttentionCollector CreateCollector(
-        FakeNewsSearchReader reader, NewsCollectorOptions? options = null) =>
+        FakeNewsSearchReader reader,
+        NewsCollectorOptions? options = null,
+        INewsObservationCompanyHistory? history = null,
+        DateTimeOffset? now = null) =>
         new(
             reader,
             NullLogger<NewsAttentionCollector>.Instance,
-            new FixedTimeProvider(FixedNow),
-            options ?? new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero });
+            new FixedTimeProvider(now ?? FixedNow),
+            // Every pre-198 test constructs the options without naming RecencyWindowDays, which would pick
+            // up the shipped default of 7 and change what those tests exercise. The DEFAULT for this helper
+            // is therefore the disabled window, so the spec-198 tests below are the only ones that opt in —
+            // exactly mirroring "a window of 0 reproduces pre-198 behaviour".
+            options ?? new NewsCollectorOptions
+            {
+                InterRequestDelay = TimeSpan.Zero,
+                RecencyWindowDays = 0,
+            },
+            history);
+
+    /// <summary>
+    /// A spec-198 §2 history seam over a fixed set of company ids, counting how many times it is asked. The
+    /// collector must resolve it ONCE per collection pass, not once per feed.
+    /// </summary>
+    private sealed class FakeObservationHistory(params Guid[] companies) : INewsObservationCompanyHistory
+    {
+        public int CallCount { get; private set; }
+
+        public Task<IReadOnlySet<Guid>> GetCompaniesWithObservationsAsync(CancellationToken ct)
+        {
+            CallCount++;
+            return Task.FromResult<IReadOnlySet<Guid>>(companies.ToHashSet());
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Spec 198 §2: the recency window per feed, and the first-collection exemption.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task CollectAsync_CompanyWithPriorObservations_IssuesTheWindowedQuery()
+    {
+        var feed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-000000000001"), MrcyId, "Mercury — News", MrcyToken);
+        var reader = new FakeNewsSearchReader();
+        var history = new FakeObservationHistory(MrcyId);
+
+        var collector = CreateCollector(
+            reader,
+            new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 7 },
+            history);
+
+        var result = await collector.CollectAsync(
+            new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]),
+            CancellationToken.None);
+
+        Assert.Equal(7, Assert.Single(reader.QueriesInOrder).RecencyWindowDays);
+
+        var coverage = Assert.Single(result.CompanyCoverage!);
+        Assert.Equal(7, coverage.RecencyWindowDays);
+        Assert.Equal(0, coverage.UnfilteredFirstCollectionFeedCount);
+    }
+
+    [Fact]
+    public async Task CollectAsync_CompanyWithNoPriorObservation_IssuesTheUnfilteredFirstCollectionQuery()
+    {
+        // THE seeding guarantee: the unfiltered query is the only way a newly seeded company acquires back
+        // history, so a company the archive has never seen must still get it.
+        var feed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-000000000002"), RklbId, "Rocket Lab — News", RklbToken);
+        var reader = new FakeNewsSearchReader();
+
+        // The archive holds observations for a DIFFERENT company only.
+        var collector = CreateCollector(
+            reader,
+            new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 7 },
+            new FakeObservationHistory(MrcyId));
+
+        var result = await collector.CollectAsync(
+            new CollectionContext([Company(RklbId, "Rocket Lab", "RKLB")], [feed]),
+            CancellationToken.None);
+
+        Assert.Equal(0, Assert.Single(reader.QueriesInOrder).RecencyWindowDays);
+
+        var coverage = Assert.Single(result.CompanyCoverage!);
+        // The CONFIGURED window is recorded even though this feed did not apply it — the two facts are
+        // different, and the second is what the count reports.
+        Assert.Equal(7, coverage.RecencyWindowDays);
+        Assert.Equal(1, coverage.UnfilteredFirstCollectionFeedCount);
+    }
+
+    [Fact]
+    public async Task CollectAsync_FirstCollectionDecision_ComesFromPersistedState_NotFromAClock()
+    {
+        // AD-3: the rule is "does the archive already hold an observation for this company", never "was the
+        // last run recent enough". Proven by advancing the collector's TimeProvider by a year and asserting
+        // the issued queries are IDENTICAL — a clock-derived rule would have re-widened the query.
+        var mrcyFeed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-000000000003"), MrcyId, "Mercury — News", MrcyToken);
+        var rklbFeed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-000000000004"), RklbId, "Rocket Lab — News", RklbToken);
+        var context = new CollectionContext(
+            [Company(MrcyId, "Mercury Systems", "MRCY"), Company(RklbId, "Rocket Lab", "RKLB")],
+            [mrcyFeed, rklbFeed]);
+        var options = new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 7 };
+
+        var now = new FakeNewsSearchReader();
+        await CreateCollector(now, options, new FakeObservationHistory(MrcyId)).CollectAsync(
+            context, CancellationToken.None);
+
+        var muchLater = new FakeNewsSearchReader();
+        await CreateCollector(
+                muchLater,
+                options,
+                new FakeObservationHistory(MrcyId),
+                now: FixedNow.AddYears(1))
+            .CollectAsync(context, CancellationToken.None);
+
+        Assert.Equal(
+            now.QueriesInOrder.Select(q => (q.QueryPhrase, q.RecencyWindowDays)),
+            muchLater.QueriesInOrder.Select(q => (q.QueryPhrase, q.RecencyWindowDays)));
+
+        // …and the split really is per company: Mercury windowed, Rocket Lab (no history) unfiltered.
+        Assert.Equal(
+            [(MrcyPhrase, 7), (RklbPhrase, 0)],
+            now.QueriesInOrder.Select(q => (q.QueryPhrase, q.RecencyWindowDays)));
+    }
+
+    [Fact]
+    public async Task CollectAsync_NoHistorySeamRegistered_IssuesEveryQueryUnfiltered()
+    {
+        // FAIL CLOSED TO "NO IMPROVEMENT": a composition that registers no history seam cannot establish
+        // which companies are new, so it narrows nothing and behaves exactly as pre-198.
+        var feed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-000000000005"), MrcyId, "Mercury — News", MrcyToken);
+        var reader = new FakeNewsSearchReader();
+
+        var collector = CreateCollector(
+            reader,
+            new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 7 },
+            history: null);
+
+        var result = await collector.CollectAsync(
+            new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]),
+            CancellationToken.None);
+
+        Assert.Equal(0, Assert.Single(reader.QueriesInOrder).RecencyWindowDays);
+        Assert.Equal(1, Assert.Single(result.CompanyCoverage!).UnfilteredFirstCollectionFeedCount);
+    }
+
+    [Fact]
+    public async Task CollectAsync_WindowDisabled_IssuesUnfilteredQueries_AndCountsNoFirstCollection()
+    {
+        // With the filter configured OFF every query is unfiltered for an unrelated reason, so the recorded
+        // window of 0 says it and the first-collection count stays honestly zero — counting these as first
+        // collections would report an exemption that never applied.
+        var feed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-000000000006"), MrcyId, "Mercury — News", MrcyToken);
+        var reader = new FakeNewsSearchReader();
+
+        var collector = CreateCollector(
+            reader,
+            new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 0 },
+            new FakeObservationHistory(MrcyId));
+
+        var result = await collector.CollectAsync(
+            new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]),
+            CancellationToken.None);
+
+        Assert.Equal(0, Assert.Single(reader.QueriesInOrder).RecencyWindowDays);
+
+        var coverage = Assert.Single(result.CompanyCoverage!);
+        Assert.Equal(0, coverage.RecencyWindowDays);
+        Assert.Equal(0, coverage.UnfilteredFirstCollectionFeedCount);
+    }
+
+    [Fact]
+    public async Task CollectAsync_ResolvesTheHistorySeamOncePerPass_NotOncePerFeed()
+    {
+        // The seam hydrates a whole archive index; asking it per feed would re-answer an identical question
+        // dozens of times per run.
+        var reader = new FakeNewsSearchReader();
+        var history = new FakeObservationHistory(MrcyId);
+
+        await CreateCollector(
+                reader,
+                new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 7 },
+                history)
+            .CollectAsync(
+                new CollectionContext(
+                    [Company(MrcyId, "Mercury Systems", "MRCY"), Company(RklbId, "Rocket Lab", "RKLB")],
+                    [
+                        Feed(Guid.Parse("cccccccc-0000-0000-0000-000000000007"), MrcyId, "M1", MrcyToken),
+                        Feed(Guid.Parse("cccccccc-0000-0000-0000-000000000008"), MrcyId, "M2", MrcyToken),
+                        Feed(Guid.Parse("cccccccc-0000-0000-0000-000000000009"), RklbId, "R1", RklbToken),
+                    ]),
+                CancellationToken.None);
+
+        Assert.Equal(1, history.CallCount);
+        Assert.Equal(3, reader.QueriesInOrder.Count);
+    }
+
+    [Fact]
+    public async Task CollectAsync_RecordsTheSpec198Diagnostics_OnEveryRow_IncludingMissingFeedAndFailedRows()
+    {
+        // The spec-190 convention verbatim: `null` stays reserved for a collector that records none, so a
+        // MissingFeed row and a failed-read row both carry the CONFIGURED window and an honest count.
+        var rklbFeed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-00000000000a"), RklbId, "Rocket Lab — News", RklbToken);
+        var reader = new FakeNewsSearchReader();
+        reader.SetFailure(RklbPhrase, NewsSearchReadOutcome.HttpError, "HTTP 500");
+
+        // Mercury holds observations but has NO feed (MissingFeed); Rocket Lab has a feed that fails.
+        var collector = CreateCollector(
+            reader,
+            new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 7 },
+            new FakeObservationHistory(MrcyId, RklbId));
+
+        var result = await collector.CollectAsync(
+            new CollectionContext(
+                [Company(MrcyId, "Mercury Systems", "MRCY"), Company(RklbId, "Rocket Lab", "RKLB")],
+                [rklbFeed]),
+            CancellationToken.None);
+
+        var rows = result.CompanyCoverage!;
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, r => Assert.Equal(7, r.RecencyWindowDays));
+
+        var missingFeed = rows.Single(r => r.CompanyId == MrcyId);
+        Assert.Contains(CollectionCoverageIssues.MissingFeed, missingFeed.Issues);
+        Assert.Equal(0, missingFeed.UnfilteredFirstCollectionFeedCount);
+
+        // Rocket Lab HAS history, so its (failed) feed still issued the WINDOWED query — the count reports
+        // the query shape Radar sent, not the read's outcome.
+        var failed = rows.Single(r => r.CompanyId == RklbId);
+        Assert.Contains(CollectionCoverageIssues.SourceFailure, failed.Issues);
+        Assert.Equal(0, failed.UnfilteredFirstCollectionFeedCount);
+    }
+
+    [Fact]
+    public async Task CollectAsync_MalformedFeedToken_IssuesNoQuery_AndCountsNoFirstCollection()
+    {
+        // A malformed token never reaches the reader, so it is neither windowed nor an unfiltered first
+        // collection: nothing was asked.
+        var feed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-00000000000b"), RklbId, "Rocket Lab — News", "garbage");
+        var reader = new FakeNewsSearchReader();
+
+        var result = await CreateCollector(
+                reader,
+                new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 7 },
+                new FakeObservationHistory())
+            .CollectAsync(
+                new CollectionContext([Company(RklbId, "Rocket Lab", "RKLB")], [feed]),
+                CancellationToken.None);
+
+        Assert.Empty(reader.QueriesInOrder);
+        var coverage = Assert.Single(result.CompanyCoverage!);
+        Assert.Equal(7, coverage.RecencyWindowDays);
+        Assert.Equal(0, coverage.UnfilteredFirstCollectionFeedCount);
+    }
+
+    [Fact]
+    public async Task CollectAsync_WindowedQuery_LeavesEveryDownstreamMechanicUnchanged()
+    {
+        // Spec 198 §5/§6: the window changes only WHAT THE PROVIDER IS ASKED FOR. Given an identical
+        // response, the relevance filter, the URL dedupe, the per-feed cap, the evidence mapping and the
+        // observation capture are byte-identical to the unfiltered arm.
+        var feed = Feed(
+            Guid.Parse("cccccccc-0000-0000-0000-00000000000c"), MrcyId, "Mercury — News", MrcyToken);
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        static FakeNewsSearchReader Reader() => new()
+        {
+            [MrcyPhrase] =
+            [
+                Article("https://ok.example/1", "Mercury Systems wins radar deal - Reuters"),
+                Article("https://ok.example/1", "Mercury Systems wins radar deal - Reuters"), // dupe url
+                Article("https://ok.example/2", "Unrelated company story - Reuters"),          // off-topic
+                Article("https://ok.example/3", "Mercury Systems beats estimates - Yahoo Finance",
+                    sourceName: "Yahoo Finance"),
+            ],
+        };
+
+        var windowed = await CreateCollector(
+                Reader(),
+                new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 7 },
+                new FakeObservationHistory(MrcyId))
+            .CollectAsync(context, CancellationToken.None);
+
+        var unfiltered = await CreateCollector(
+                Reader(),
+                new NewsCollectorOptions { InterRequestDelay = TimeSpan.Zero, RecencyWindowDays = 0 })
+            .CollectAsync(context, CancellationToken.None);
+
+        Assert.Equal(
+            unfiltered.Evidence.Select(e => (e.SourceUrl, e.Title, e.SourceName, e.PublishedAt)),
+            windowed.Evidence.Select(e => (e.SourceUrl, e.Title, e.SourceName, e.PublishedAt)));
+        Assert.Equal(
+            unfiltered.Observations!.Select(o => (o.GoogleLandingUrl, o.Headline, o.Publisher)),
+            windowed.Observations!.Select(o => (o.GoogleLandingUrl, o.Headline, o.Publisher)));
+        Assert.Equal(unfiltered.Summary.ItemsCollected, windowed.Summary.ItemsCollected);
+    }
+
 
     [Fact]
     public async Task CollectAsync_MapsArticlesToNewsEvidenceWithProvenanceAndHints()
@@ -806,6 +1104,9 @@ public sealed class NewsAttentionCollectorTests
 
         public List<string> QueryPhrasesInOrder { get; } = [];
 
+        /// <summary>Every query issued, in order — spec 198 needs the per-feed recency window, not just the phrase.</summary>
+        public List<NewsSearchQuery> QueriesInOrder { get; } = [];
+
         public IReadOnlyList<NewsArticleItem> this[string phrase]
         {
             set => _byPhrase[phrase] = NewsSearchReadResult.Success(value);
@@ -820,6 +1121,7 @@ public sealed class NewsAttentionCollectorTests
             ReadCount++;
             LastQuery = query;
             QueryPhrasesInOrder.Add(query.QueryPhrase);
+            QueriesInOrder.Add(query);
             return Task.FromResult(
                 _byPhrase.TryGetValue(query.QueryPhrase, out var result)
                     ? result

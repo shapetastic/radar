@@ -468,7 +468,10 @@ public sealed class FilePipelineRunStoreTests : IDisposable
                             EffectiveResultLimit: 25,
                             MaxValidItemsObserved: 31,
                             ConfirmedLocalTruncation: true,
-                            UnadmittedRelevantTailItemCount: 4),
+                            UnadmittedRelevantTailItemCount: 4,
+                            // Spec 198: the recency-window diagnostics ride the same durable round-trip.
+                            RecencyWindowDays: 7,
+                            UnfilteredFirstCollectionFeedCount: 1),
                     ]),
             ],
         };
@@ -482,6 +485,8 @@ public sealed class FilePipelineRunStoreTests : IDisposable
         Assert.Equal(31, coverage.MaxValidItemsObserved);
         Assert.True(coverage.ConfirmedLocalTruncation);
         Assert.Equal(4, coverage.UnadmittedRelevantTailItemCount);
+        Assert.Equal(7, coverage.RecencyWindowDays);
+        Assert.Equal(1, coverage.UnfilteredFirstCollectionFeedCount);
         // The fail-closed possible-truncation facts are untouched by the new diagnostics.
         Assert.True(coverage.HitEffectiveResultLimit);
         Assert.Equal([CollectionCoverageIssues.ResultLimitReached], coverage.Issues);
@@ -543,6 +548,11 @@ public sealed class FilePipelineRunStoreTests : IDisposable
         Assert.Null(coverage.MaxValidItemsObserved);
         Assert.Null(coverage.ConfirmedLocalTruncation);
         Assert.Null(coverage.UnadmittedRelevantTailItemCount);
+        // Spec 198, same rule: an accrued row records neither recency-window diagnostic, so both hydrate as
+        // "not recorded". A 0 would be a fabricated claim that the filter was configured off and that no
+        // feed took the first-collection exemption.
+        Assert.Null(coverage.RecencyWindowDays);
+        Assert.Null(coverage.UnfilteredFirstCollectionFeedCount);
         // Everything the legacy row DID record still reads exactly as it did.
         Assert.True(coverage.HitEffectiveResultLimit);
         Assert.Equal([CollectionCoverageIssues.ResultLimitReached], coverage.Issues);

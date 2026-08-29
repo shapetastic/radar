@@ -2433,6 +2433,151 @@ Do not hand back broken code.
     a later run); deleting or rewriting v1 signals, v2 judgments or pre-197 snapshots; and any formula,
     weight, attention-tier, strategy-arm, Lead, marker-vocabulary or collection change — spec 195's
     file-write diagnostics and spec 196's attention calibration are untouched.
+- **The news feed is filtered by RECENCY, and the query is finally a hashed input (spec 198).** Radar queried
+  Google News per company with **no time filter**, retained the first 25 items in document order and only
+  *then* deduped. Measured against the live endpoint on 2026-08-28 for one company phrase: the unfiltered
+  response held **100 items, median age 71 days**, 63 of them over a month old and only 3 within a day; the
+  2026-08-28 baseline retained 1,604 items → **234 new, 1,370 cross-run deduped**, i.e. ~85 % of the
+  collection budget spent re-reading known articles, leaving ~3–4 slots per company per night for anything
+  new. It is a **capacity** defect, not a "scoring on stale news" one — what Radar captured *was* fresh (159
+  of the 234 were ≤1 day old). **This also retires spec 190's open question**: the "4,312 additional unique
+  company-relevant tail items observed but not admitted" reads like missed coverage but is overwhelmingly
+  OLD, so selectively admitting it by publisher tier — an earlier draft's plan — was abandoned as carefully
+  importing more stale articles while leaving the waste untouched. Rules:
+  - **§1 — `Radar:News:RecencyWindowDays` (default 7), applied as a `when:{n}d` term on the search PHRASE.**
+    Google News RSS has no recency PARAMETER; the operator is part of the search expression, so it is
+    appended to the trimmed phrase **before** `Uri.EscapeDataString` and encodes as `%20when%3A7d`.
+    **Verified against the live endpoint on 2026-08-29** for `Caterpillar Inc` (the spec asked for this
+    because the operator is undocumented): unfiltered → **100 items, oldest 24 Jun 2026**; `when:7d` → **66
+    items, oldest 23 Aug 2026**. So it demonstrably BOUNDS the response and does not silently degrade to
+    unfiltered. **`0` reproduces the pre-198 URL BYTE-FOR-BYTE** — pinned against the literal, and that
+    equality is the compatibility proof — while a negative value fails startup naming the key (zero is a
+    legitimate *disabled*; negative is nonsense that would read as disabled). **Failure posture is "no
+    improvement", never "no results"**: a provider that ignored the term returns more/older items and the
+    retained prefix, relevance filter, URL dedupe, per-feed cap, diagnostic tail, evidence mapping and
+    observation capture all behave exactly as today (asserted by feeding an identical body to both arms).
+    **Seven, not one or two**: the baseline runs daily, so a 1–2 day window has no margin — the 2026-08-26
+    run fired 23 minutes late and a missed night would open a *permanent* gap, because a skipped article
+    never reappears in a narrower window. The window is **fixed and declared**, never adaptive, never derived
+    from the last successful run and never per company (AD-3).
+  - **§2 — a company's FIRST collection stays UNFILTERED, decided from PERSISTED STATE and never from a
+    clock.** The unfiltered query is the only way a newly seeded company acquires back history, so
+    `INewsObservationCompanyHistory` (new, in `Radar.Application.News`) answers "which companies already hold
+    at least one archived observation?" and `FileNewsObservationArchive` **additionally implements it off the
+    SAME lazily-hydrated `_byId` index** — spec 142's "the repository IS the file store" precedent, and spec
+    151's recorded rejection of a materialized side index that can drift. Resolved **ONCE per collection
+    pass**, not per feed. Records carrying no company contribute nothing. The seam is an **optional** ctor
+    dependency of `NewsAttentionCollector`, so a composition that never registers it narrows nothing and is
+    byte-identical to pre-198 — **fail closed to "no improvement"**. Proven the way the spec demanded:
+    advancing the collector's `TimeProvider` by a year leaves the issued queries identical.
+  - **The mode used is RECORDED, never inferred.** `CollectorCompanyCoverage` gains two **trailing nullable**
+    fields — `RecencyWindowDays` (the CONFIGURED window) and `UnfilteredFirstCollectionFeedCount` (how many of
+    that company's feeds took the §2 exemption) — following the spec-190 convention verbatim: **`null` means
+    NOT RECORDED, never `0`/`false`**, and the news collector records them on EVERY row it writes, including
+    MissingFeed and failed rows where the count is honestly zero. The count is deliberately **0 when the
+    window is disabled** (every query was unfiltered for an unrelated reason, and the recorded `0` window
+    already says so) — counting those would report an exemption that never applied. Both survive the run
+    record's `c with { Issues = … }` health amend and the durable round-trip (asserted, not assumed), and a
+    legacy row hydrates both as `null`. One **aggregated Information line per RUN** (never per company or
+    feed) reports the configured window, the windowed/unfiltered feed split and how many companies were on
+    their first collection.
+  - **§3 — `NewsQueryScoringIdentity` (`Radar.Application.Scoring`) makes the query a hashed
+    `ScoringConfigVersion` input.** The feed query decides WHICH evidence exists, so it changes
+    `AttentionReach`, `OpportunityScore` and every rank — and it was hashed into NOTHING, the same
+    comparability hole spec 194 §2 closed for the judgment read. It **holds an int** (the spec-147
+    `EnabledCollectorVocabulary` / spec-194 `NewsJudgmentScoringIdentity` posture, asserted on the TYPE
+    GRAPH): it references no News/NewsRisk/Infrastructure type, cannot issue a request, and therefore a
+    spec-144 `score` pass and a spec-139 replay compose the SAME identity a `full` run composes **without
+    registering the newssearch collector** (asserted through the real composed Worker graphs).
+    `DefaultRecencyWindowDays = 7` is **THE one definition** — `NewsCollectorOptions.RecencyWindowDays` and
+    `NewsWorkerOptions.RecencyWindowDays` both default off it, so the value a run SENDS and the value the
+    fingerprint HASHES cannot drift (pinned by test). The `newsquery={n}d;` segment is appended **LAST**, after
+    the spec-194 `news=` segment, so the whole post-197 prefix stays byte-stable.
+  - ⚠ **THE SEGMENT IS CONDITIONAL, UNLIKE SPEC 194's — and that is the additivity proof.** A window of `0`
+    renders the **EMPTY** string, so a disabled configuration reproduces the post-197 descriptor byte-for-byte;
+    `Compute_NewsQueryWindowDisabled_ReproducesPost197Pins` asserts all six post-197 values are then reproduced
+    EXACTLY, for BOTH AI-off and AI-on at all three windows. Spec 194 chose the opposite because "judgment off"
+    and "a Radar that predates the judgment read" are different facts; here the input is a plain magnitude with
+    a code default, and rendering `newsquery=0d;` would have re-stamped every composition for a filter that does
+    nothing. The **null fallback in `SignalSourceDescriptor` is the DEFAULT, not `None`** — unlike the opt-in
+    judgment step the window applies whenever the newssearch collector runs, so falling back to "no filter"
+    would stamp a claim the run cannot support; a composition that genuinely wants none configures `0`.
+    Cost/posture knobs are deliberately NOT folded in: the retention limit, the 100-item parse ceiling, the
+    pacing delay and the locale flag (spec 141 — a fingerprint records identity, not throttle).
+  - ⚠ **ALL SIX PINS MOVED — THE SIXTH SCORING-IDENTITY BOUNDARY IN THREE WEEKS** (191, 194 §1.5, 194 §2, 196,
+    197, 198). **CURRENT values: 30d code-default (the unit pins)** AI-OFF **`radar-scoring-fp-56c8e882beed`** /
+    AI-ON **`radar-scoring-fp-7d2b0cf537c4`**; **60d LIVE baseline** AI-OFF **`radar-scoring-fp-0ff442a14c1b`** /
+    AI-ON **`radar-scoring-fp-11240da5aeb0`**; **120d `-Profile long-window`** AI-OFF
+    **`radar-scoring-fp-adf455313d35`** / AI-ON **`radar-scoring-fp-7eece22968a4`**. **Unlike spec 197 this
+    moves BOTH sides, and that is the deliverable**: the segment is not judgment-gated, so an unchanged AI-OFF
+    pin would mean the window is not actually hashed. Verified TWICE — through
+    `ScoringConfigFingerprint.Compute` over the real descriptors AND re-derived outside .NET by rebuilding the
+    canonical string, writing it with no trailing newline and hashing with `sha256sum` (the spec-194/196/197
+    practice). The standing rule holds: **the three window pairs are three correct answers at three windows — do
+    NOT reconcile them onto one value.** The spec-197 values (`54e845330f96`/`e7317fd038ac`,
+    `8daa662a57a6`/`81a397434756`, `f610244e23c6`/`e9d9819a2b41`) are now history. No `_formula.Version` bump,
+    no `RuleSetVersion` bump (still `radar-keyword-rules-v8`), no `MediaAttentionCollapse.Version` bump (still
+    `media-collapse-v2`), no supersede/neutralization rule bump, no attention-tier edit, no weight edit. The
+    three **composition-guard** pins did NOT move (`RadarScoreFormulaV10` `70e32b77f1c4`, `V11` `32a50355b568`,
+    `RadarBaselineActivityFormulaV1` `7af921a7ae84`): those files substitute a frozen `StubSourceDescriptor`,
+    which is exactly why an identity move cannot disturb a formula-COMPOSITION pin.
+  - ⚠ **OPERATOR ACTION — REQUIRED BEFORE THE FIRST POST-198 BASELINE, AND THE ORDER IS LOAD-BEARING.**
+    `data/scoring-configs/` is git-ignored, so the identity records cannot ride in a PR and **must NEVER be
+    fabricated**: **(1)** do not touch them while a pre-198 baseline is running; **(2)** after merge and before
+    the first post-198 baseline, consciously **delete or re-record every configured
+    `data/scoring-configs/strategies/{name}.json`**; **(3)** verify the first run reports
+    **`radar-scoring-fp-11240da5aeb0`** (the shipped profile is AI-ON at 60 days) before treating later
+    snapshots as the corrected series. If step 2 is missed, `StrategyIdentityGuard` halts before collection —
+    **that halt is CORRECT and must not be bypassed.**
+  - ⚠ **THE COLLECTION REGIME BEFORE THIS BOUNDARY IS NOT COMPARABLE WITH THE ONE AFTER IT.** Pre-198 runs read
+    an unfiltered feed whose median item was ten weeks old; post-198 runs read a 7-day window. History is
+    deliberately **NOT** regenerated, rewritten or backfilled (AD-8/AD-1, the spec-148 precedent), and nothing
+    is re-collected — the change is forward-only.
+  - **§4 — the live distribution, measured by two read-only env-gated harnesses (CLAUDE.md's "no measure ships
+    without its live distribution").** `NewsRecencyWindowLiveMeasurementTests`
+    (`RADAR_NEWS_RECENCY_LIVE_DATA_ROOT`) issues BOTH arms for every configured `newssearch` feed through the
+    PRODUCTION `HttpNewsSearchReader` (hence the attribute-only `InternalsVisibleTo` addition — measuring a
+    reimplementation would measure the wrong thing), paced by the collector's own `InterRequestDelay`, and
+    reports item counts, **age distributions**, projected retained-slot usage and the projected
+    new-vs-deduped split against the 234 / 1,370 baseline, plus the companies the windowed arm returns ZERO
+    items for (**expected, not a fault** — nothing was published about them this week).
+    `NewsRecencyWindowCounterfactualTests` (`RADAR_NEWS_RECENCY_COUNTERFACTUAL_DATA_ROOT`) is the paired
+    read-only projection at ONE pinned as-of instant over the 74-company universe and the primary `default`
+    strategy at the 60-day scoring window, through the REAL `ScoringEngine`, with the arms differing ONLY in an
+    evidence-ADMISSION decorator over `ISignalRepository`/`ISignalFileStore` (no scoring arithmetic
+    duplicated). Neither admits, maps or persists anything; both skip with a NAMED reason when unset; the
+    shared `BuildReadOnlyProvider` and the frozen `ReadOnlyHarnessSourceDescriptor` are REUSED from the spec-196
+    §7 harness rather than copied. ⚠ **The counterfactual is a PROJECTION over accrued evidence, not a replay
+    of a different collection history**: cross-run dedupe means most excluded items contributed no new evidence
+    on the night they were re-read (so the loss is OVERSTATED) and the freed budget is not modelled (so the gain
+    is UNDERSTATED) — a bound on the downside, not a forecast. Both artifacts render those caveats.
+  - **MEASURED, 2026-08-29, live endpoint over the full 74-company feed set. THE COVERAGE CRITERION IS MET.**
+    Full response, unfiltered → windowed: median items **100 → 19**; median age **32.2 d → 2.9 d**; items over
+    30 days old **3,855 → 0**; oldest item **7,465 days → 7.0 days**. Projected over the retained 25 slots:
+    recent (≤7 d) relevant items admitted **683 → 789**, i.e. coverage **RISES ~15.5 %** and does not fall —
+    which is the ship/no-ship criterion; projected NEW **152 → 210**; projected cross-run DEDUPED
+    **1,453 → 579**. So the change admits ~38 % more new material while cutting redundant re-reads ~60 %.
+  - ⚠ **Read the two "new" numbers carefully — they are calibrated differently and do NOT disagree.** The
+    unfiltered projected-new of **152** sits below the 2026-08-28 baseline's ACTUAL **234** because the
+    observation archive has since accrued another night of URLs, so a re-projection over today's archive
+    dedupes more than that night did. The projection is therefore calibrated on the DEDUPE side and
+    **conservative on the new side**; treat 789/210 as a lower bound on the gain, not a forecast.
+  - ⚠ **THE PAIRED COUNTERFACTUAL DID NOT COMPLETE.** The §4 live measurement above ran and passes its
+    criterion, but the implementing session was cut off before the counterfactual finished, so the following
+    acceptance items are **UNEVIDENCED on the record**: distinct-publisher breadth actually consumed by
+    `AttentionReach` before/after, and the `AttentionScore`/`OpportunityScore` distributions before/after.
+    The harness is built, read-only and env-gated (`NewsRecencyWindowCounterfactualTests`) — run it and record
+    the numbers here rather than assuming the direction. **Expected direction, stated so it can be falsified:**
+    fewer stale duplicates should mean less redundant `MediaAttention`, so attention may FALL and opportunity
+    may RISE. Nothing in this slice depends on that being true; the coverage criterion above is what licensed
+    the ship.
+  - **§5 — explicit non-goals, enforced**: no change to `Radar:News:MaxRecordsPerCompany` (stays 25), the
+    absolute 100-item parse ceiling, the request count, the pacing or the number of requests per company; no
+    selective tail admission by publisher tier and no tail item admitted at all; no change to the relevance
+    rule, URL dedupe, evidence identity (spec 145) or the spec-197 join; no typing-budget change; no attention
+    weight re-tuning (spec 196 left that open on its own evidence); no backfill and no re-collection; no new
+    collector, feed, provider or query beyond the appended term; `Radar:Gdelt:*` untouched (a DIFFERENT
+    collector's similarly named knob).
 - Prefer deterministic code before AI. Use typed records and validated structured outputs.
 - Store all timestamps in UTC. IDs are `Guid` unless there is a strong reason otherwise.
 - AI outputs must be typed and validated before persistence. If AI confidence is low,

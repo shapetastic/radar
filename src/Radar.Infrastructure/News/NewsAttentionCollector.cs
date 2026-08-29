@@ -31,6 +31,20 @@ namespace Radar.Infrastructure.News;
 /// news SEARCH returns headlines only). All HTTP/XML/source specifics stay behind the injected
 /// <see cref="INewsSearchReader"/> (AD-5) — this collector contains no <c>HttpClient</c> and no XML parsing.
 /// </para>
+/// <para>
+/// <b>Spec 198 — the recency window, and the first-collection exemption.</b> Each feed's query carries the
+/// configured <see cref="NewsCollectorOptions.RecencyWindowDays"/> as a <c>when:{n}d</c> term UNLESS this is
+/// the company's FIRST collection, which stays unfiltered exactly as every pre-198 collection was, so
+/// seeding still acquires back history. That decision is read from PERSISTED STATE — the optional
+/// <see cref="INewsObservationCompanyHistory"/> seam, resolved ONCE per collection rather than per feed —
+/// and never from a clock (AD-3). The whole feature FAILS CLOSED TO "NO IMPROVEMENT": no history seam
+/// registered, or a window of <c>0</c>, means every query is unfiltered and byte-identical to pre-198; a
+/// provider that ignored the term simply returns more, older items, which the retained-prefix/relevance/
+/// dedupe path handles exactly as it always has. Nothing here can drop a result. The window used is recorded
+/// on every coverage row (<see cref="CollectorCompanyCoverage.RecencyWindowDays"/> plus
+/// <see cref="CollectorCompanyCoverage.UnfilteredFirstCollectionFeedCount"/>) so the split is visible rather
+/// than inferred.
+/// </para>
 /// </summary>
 internal sealed class NewsAttentionCollector : IEvidenceCollector
 {
@@ -41,12 +55,20 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
     private readonly ILogger<NewsAttentionCollector> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly NewsCollectorOptions _options;
+    private readonly INewsObservationCompanyHistory? _observationHistory;
 
+    /// <param name="observationHistory">
+    /// OPTIONAL (spec 198 §2): the persisted-state seam that answers which companies already hold an
+    /// archived observation. Optional on purpose — a composition that does not register it never narrows a
+    /// query, which is byte-identical to pre-198 behaviour, so the failure posture is "no improvement",
+    /// never "no results".
+    /// </param>
     public NewsAttentionCollector(
         INewsSearchReader reader,
         ILogger<NewsAttentionCollector> logger,
         TimeProvider timeProvider,
-        NewsCollectorOptions options)
+        NewsCollectorOptions options,
+        INewsObservationCompanyHistory? observationHistory = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(logger);
@@ -57,6 +79,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         _logger = logger;
         _timeProvider = timeProvider;
         _options = options;
+        _observationHistory = observationHistory;
     }
 
     /// <summary>
@@ -110,7 +133,7 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         // configured newssearch feed is recorded as MissingFeed rather than silently absent — an absent row
         // and a clean row must never be the same thing.
         var coverage = context.Companies.ToDictionary(
-            c => c.Id, c => new CompanyCoverageAccumulator(EffectiveMaxRecords));
+            c => c.Id, c => new CompanyCoverageAccumulator(EffectiveMaxRecords, _options.RecencyWindowDays));
 
         // The EFFECTIVE clamped LOCAL retention limit — the same value BuildQuery sends, not the unclamped
         // config value. A raw result count that REACHES it means Radar stopped retaining there, so more may
@@ -121,6 +144,21 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         // that feed's response held (bounded by the reader's absolute parse ceiling). Feed order is
         // deterministic, and the summary below only takes a max/median, so the audit line is run-stable (AD-3).
         var successfulFeedObservedSizes = new List<int>();
+
+        // SPEC 198 §2 — the first-collection exemption, resolved ONCE per collection pass rather than per
+        // feed: the seam hydrates a whole archive index, so asking it per feed would re-answer an identical
+        // question dozens of times. It is a PERSISTED-STATE question ("does the archive already hold an
+        // observation for this company?"), never a clock comparison (AD-3) — a clock-derived answer would
+        // make two runs over identical data disagree and would silently re-widen the query after any gap.
+        // An absent seam yields an EMPTY set, so every feed is treated as a first collection and every query
+        // is unfiltered: byte-identical to pre-198, the "no improvement" failure posture.
+        var companiesWithHistory = _observationHistory is null
+            ? (IReadOnlySet<Guid>)new HashSet<Guid>()
+            : await _observationHistory.GetCompaniesWithObservationsAsync(ct).ConfigureAwait(false);
+
+        var configuredRecencyWindowDays = _options.RecencyWindowDays;
+        var windowedFeeds = 0;
+        var unfilteredFirstCollectionFeeds = 0;
 
         // Strictly sequential (never Task.WhenAll) + paced: a small polite pace between reads.
         var isFirstRequest = true;
@@ -159,7 +197,31 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
 
             isFirstRequest = false;
 
-            var query = BuildQuery(target);
+            // The per-feed query shape. A positive configured window applies to every company Radar has
+            // ALREADY archived an observation for; a company on its first collection gets the unfiltered
+            // query exactly as pre-198, which is what makes seeding still acquire back history. Recorded on
+            // the company's coverage row either way, so the split is visible rather than inferred.
+            var useRecencyWindow = configuredRecencyWindowDays > 0
+                && _observationHistory is not null
+                && companiesWithHistory.Contains(feed.CompanyId);
+
+            if (useRecencyWindow)
+            {
+                windowedFeeds++;
+            }
+            else if (configuredRecencyWindowDays > 0)
+            {
+                // Counted ONLY when a positive window was configured and this feed nevertheless went out
+                // unfiltered — i.e. the §2 exemption genuinely applied. With the window disabled every feed
+                // is unfiltered for an unrelated reason, and the recorded RecencyWindowDays of 0 already
+                // says so; counting those here would report a first collection that never happened. A
+                // composition with no history seam registered cannot establish history at all, so it treats
+                // every feed as a first collection and is counted here — which is exactly what it did.
+                unfilteredFirstCollectionFeeds++;
+                companyCoverage?.RecordUnfilteredFirstCollectionFeed();
+            }
+
+            var query = BuildQuery(target, useRecencyWindow ? configuredRecencyWindowDays : 0);
 
             var result = await _reader.ReadAsync(query, ct).ConfigureAwait(false);
 
@@ -294,6 +356,27 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
             results.Count,
             observations.Count);
 
+        // SPEC 198 §2 — ONE aggregated, deterministic, advice-free line per RUN (never one per company or
+        // per feed), reporting the query shape this pass actually issued: the configured window, the
+        // windowed/unfiltered feed split, and how many companies were on their first collection. It reads
+        // off the same per-feed decisions the coverage rows record, so the line and the rows cannot
+        // disagree. A window of 0 renders "disabled", which is a different fact from a window that applied
+        // to nothing.
+        _logger.LogInformation(
+            "News search recency-window audit: configured window {RecencyWindow}; {WindowedFeeds} feed(s) "
+                + "issued the windowed query, {UnfilteredFeeds} issued the unfiltered first-collection "
+                + "query; {FirstCollectionCompanies} company/companies were on their first collection "
+                + "(no prior archived observation); {CompaniesWithHistory} of {UniverseCompanies} company/"
+                + "companies in this universe already held observations.",
+            configuredRecencyWindowDays > 0
+                ? string.Create(CultureInfo.InvariantCulture, $"when:{configuredRecencyWindowDays}d")
+                : "disabled",
+            windowedFeeds,
+            unfilteredFirstCollectionFeeds,
+            coverage.Count(kvp => kvp.Value.UnfilteredFirstCollectionFeedCount > 0),
+            context.Companies.Count(c => companiesWithHistory.Contains(c.Id)),
+            context.Companies.Count);
+
         var summary = new CollectionSummary(
             feedsChecked, feedsChecked - feedsFailed, feedsFailed, results.Count, failures.ToArray());
 
@@ -354,17 +437,24 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
     private int EffectiveMaxRecords =>
         Math.Clamp(_options.MaxRecordsPerCompany, ApiMinRecords, ApiMaxRecords);
 
-    private NewsSearchQuery BuildQuery(QueryFeedTarget target) => new(
+    /// <summary>
+    /// Builds one feed's request. <paramref name="recencyWindowDays"/> is the PER-FEED window (spec 198 §2:
+    /// <c>0</c> for a company's first collection, or when the filter is configured off), deliberately taken
+    /// as a parameter rather than read from the options here — the exemption is a per-company decision the
+    /// caller has already made, and reading the option in both places is how the two would drift.
+    /// </summary>
+    private NewsSearchQuery BuildQuery(QueryFeedTarget target, int recencyWindowDays) => new(
         QueryPhrase: target.QueryPhrase,
         MaxRecords: EffectiveMaxRecords,
-        EnglishOnly: _options.EnglishOnly);
+        EnglishOnly: _options.EnglishOnly,
+        RecencyWindowDays: recencyWindowDays);
 
     /// <summary>
     /// Accumulates one company's per-feed coverage facts across the feed loop and projects them into the
     /// durable <see cref="CollectorCompanyCoverage"/> row. Kept as a tiny mutable accumulator (rather than
     /// rebuilding an immutable record per feed) so the loop reads as what it is: three counters plus a flag.
     /// </summary>
-    private sealed class CompanyCoverageAccumulator(int effectiveResultLimit)
+    private sealed class CompanyCoverageAccumulator(int effectiveResultLimit, int recencyWindowDays)
     {
         private int _expected;
         private int _succeeded;
@@ -372,6 +462,10 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         private bool _hitLimit;
         private int _maxValidItemsObserved;
         private bool _confirmedLocalTruncation;
+
+        // Spec 198 §2: how many of this company's feeds issued the UNFILTERED first-collection query. Zero
+        // on a MissingFeed or malformed-token row is honest — no feed issued that query.
+        private int _unfilteredFirstCollectionFeeds;
 
         // Spec 195 §3: company-scoped, NOT per-feed. `_observedPrefixUrls` is the union of every successful
         // feed's retained reader prefix; `_relevantTailUrls` is the union of every company-relevant URL seen
@@ -385,6 +479,14 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         public void RecordExpectedFeed() => _expected++;
 
         public void RecordFeedFailure() => _failed = true;
+
+        /// <summary>
+        /// Records that one of this company's feeds issued the UNFILTERED first-collection query while a
+        /// positive recency window was configured (spec 198 §2). Recorded for the ATTEMPT, before the read's
+        /// outcome is known, because it describes the query Radar SENT — a feed that then failed still sent
+        /// the unfiltered query.
+        /// </summary>
+        public void RecordUnfilteredFirstCollectionFeed() => _unfilteredFirstCollectionFeeds++;
 
         /// <summary>
         /// Records one SUCCESSFUL feed. <paramref name="hitEffectiveResultLimit"/> keeps its exact pre-190
@@ -418,6 +520,9 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
 
         /// <summary>True when at least one of this company's feeds reached the effective LOCAL retention limit.</summary>
         public bool HitEffectiveResultLimit => _hitLimit;
+
+        /// <summary>How many of this company's feeds issued the UNFILTERED first-collection query (spec 198 §2).</summary>
+        public int UnfilteredFirstCollectionFeedCount => _unfilteredFirstCollectionFeeds;
 
         /// <summary>True when at least one feed's response held a valid item BEYOND that local limit.</summary>
         public bool ConfirmedLocalTruncation => _confirmedLocalTruncation;
@@ -466,7 +571,13 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
                 EffectiveResultLimit: effectiveResultLimit,
                 MaxValidItemsObserved: _maxValidItemsObserved,
                 ConfirmedLocalTruncation: _confirmedLocalTruncation,
-                UnadmittedRelevantTailItemCount: UnadmittedRelevantTailItemCount);
+                UnadmittedRelevantTailItemCount: UnadmittedRelevantTailItemCount,
+                // Spec 198 diagnostics, recorded on EVERY row this collector writes for the same reason the
+                // spec-190 ones are: `null` must stay reserved for a collector that records none, so a
+                // MissingFeed/failed row carries the CONFIGURED window and an honest zero rather than a
+                // silence that reads like "not recorded".
+                RecencyWindowDays: recencyWindowDays,
+                UnfilteredFirstCollectionFeedCount: _unfilteredFirstCollectionFeeds);
         }
     }
 

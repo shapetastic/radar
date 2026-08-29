@@ -32,6 +32,13 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>Radar.CalibrationAudit</_Parameter1>
     </AssemblyAttribute>
+    <!-- Spec 198 §4: the read-only LIVE news-recency measurement harness issues both arms through the
+         production HttpNewsSearchReader (internal, like every reader) rather than a copy of its request
+         building and RSS parsing - measuring a reimplementation would measure the wrong thing. Same
+         non-behavioural shape as the CalibrationAudit entry above: an attribute addition only. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Radar.IntegrationTests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

@@ -154,12 +154,20 @@ public static class InfrastructureServiceCollectionExtensions
         // NewsJudgmentScoringIdentity.Disabled, which is exactly what it scores as. The Worker registers the
         // config-derived instance in EVERY scoring-capable mode (full/score/replay) — it holds strings, so a
         // score pass composes the same identity a full pass does WITHOUT registering the judgment step.
+        // Spec 198 §3 adds the news-feed QUERY identity (the recency window) as a fifth folded input, on the
+        // same optional-resolution shape and for the same score-pass reason — it holds an int, so no
+        // collector need be registered to know it. Its null fallback is the shipped DEFAULT rather than
+        // "none", because unlike the opt-in judgment step the window applies whenever the newssearch
+        // collector runs; see SignalSourceDescriptor for the full reasoning. AddNewsAttentionCollector
+        // deliberately does NOT register it: the identity must be composable without a collector (spec
+        // 144/147), so the Worker registers it in every run mode instead.
         services.TryAddSingleton<ISignalSourceDescriptor>(sp => new SignalSourceDescriptor(
             sp.GetRequiredService<EnabledCollectorVocabulary>(),
             sp.GetService<IDirectionalFilingSignalSource>(),
             sp.GetRequiredService<CollectionPassOptions>(),
             sp.GetRequiredService<CollectorAttributionOptions>(),
-            sp.GetService<NewsJudgmentScoringIdentity>()));
+            sp.GetService<NewsJudgmentScoringIdentity>(),
+            sp.GetService<NewsQueryScoringIdentity>()));
         // Multi-strategy scoring (spec 137). One ScoringEngine instance IS one strategy (it resolves its whole
         // effective config + fingerprint once in its constructor), so plural strategies are purely a
         // COMPOSITION concern: the factory builds one engine per strategy over the SAME shared collection
@@ -2249,9 +2257,14 @@ public static class InfrastructureServiceCollectionExtensions
     /// All HTTP/XML/source specifics stay in Infrastructure behind the reader (AD-5). This is a DISTINCT kind
     /// from the GDELT <c>news</c> collector, so both can be enabled independently.
     /// <para>
-    /// Fails fast when <see cref="NewsCollectorOptions.MaxRecordsPerCompany"/> is zero/negative or when
-    /// <see cref="NewsCollectorOptions.InterRequestDelay"/> is negative: each would let the collector run yet
-    /// either collect nothing or carry nonsensical config, so they are treated as configuration errors. The
+    /// Fails fast when <see cref="NewsCollectorOptions.MaxRecordsPerCompany"/> is zero/negative, when
+    /// <see cref="NewsCollectorOptions.InterRequestDelay"/> is negative, or when
+    /// <see cref="NewsCollectorOptions.RecencyWindowDays"/> is negative: each would let the collector run yet
+    /// either collect nothing or carry nonsensical config, so they are treated as configuration errors. A
+    /// recency window of ZERO is legal and means the spec-198 filter is disabled. This method deliberately
+    /// does NOT register <see cref="NewsQueryScoringIdentity"/> — the hashed identity must be composable by a
+    /// pass that registers no collector at all (spec 144/147), so the Worker registers it in every run mode.
+    /// The
     /// endpoint needs no User-Agent or key (Google News RSS is keyless); the named client only enables
     /// automatic gzip/deflate decompression (polite).
     /// </para>
@@ -2274,6 +2287,15 @@ public static class InfrastructureServiceCollectionExtensions
             throw new InvalidOperationException(
                 "News search InterRequestDelay must not be negative; configure Radar:News:InterRequestDelaySeconds "
                     + "to a non-negative pacing delay (default 1s) — Google News RSS is not per-IP throttled, so a small polite pace suffices.");
+        }
+
+        if (options.RecencyWindowDays < 0)
+        {
+            throw new InvalidOperationException(
+                "News search RecencyWindowDays must not be negative; configure Radar:News:RecencyWindowDays "
+                    + $"to a non-negative window in days (default {NewsQueryScoringIdentity.DefaultRecencyWindowDays}) "
+                    + "— zero legitimately DISABLES the when:{n}d filter and reproduces the unfiltered query, "
+                    + "but a negative value is configuration nonsense that would silently read as disabled.");
         }
 
         services.AddSingleton(options);
@@ -2314,6 +2336,12 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<Radar.Application.News.INewsObservationBatchReader>(
             sp => sp.GetRequiredService<FileNewsObservationArchive>());
         services.AddSingleton<Radar.Application.News.INewsProspectiveBoundaryReader>(
+            sp => sp.GetRequiredService<FileNewsObservationArchive>());
+        // Spec 198 §2: the first-collection read seam, over the SAME hydrated instance — the news collector
+        // asks it once per pass which companies already hold an observation, so a company Radar has never
+        // seen still gets the unfiltered query that acquires its back history. Read-only; the archive stays
+        // insert-only.
+        services.AddSingleton<Radar.Application.News.INewsObservationCompanyHistory>(
             sp => sp.GetRequiredService<FileNewsObservationArchive>());
         return services;
     }
