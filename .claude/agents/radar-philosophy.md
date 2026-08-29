@@ -32,7 +32,15 @@ Never lose the link between raw evidence, extracted signal, score, and report.
 
 ### AI assists; humans decide
 
-AI can collect, extract, summarize, challenge, and score. Humans decide what deserves capital.
+AI can collect, extract, summarize and challenge. **AI does NOT score** — the scoring formula is
+deterministic code by design (AD-6), and `ScoringEngine` has no AI dependency on its path. Humans decide what
+deserves capital.
+
+**AD-14 — price is validation data, never an input.** Price, market cap and volume must never enter the
+evidence → signal → score path. They exist only to test, after the fact, whether a score preceded a move.
+This is enforced structurally, not by convention: a type-graph guard fails the build if anything reachable
+from the scoring closure can reach a price type. `FollowingTier` is curated from coverage evidence for the
+same reason — it would otherwise be a back door for market cap.
 
 ### Avoid hype loops
 

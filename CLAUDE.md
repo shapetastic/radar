@@ -188,7 +188,7 @@ powershell -File scripts/run-radar.ps1 -Profile low-media  # an experiment: over
 powershell -File scripts/run-radar.ps1 -Profile low-media -WhatIf   # print the resolved --Radar args, don't run
 ```
 
-- **`default.json` captures how we run** (the 6 collectors — rss/sec/usaspending/newssearch/secform4/sec13dg — + DeepInfra DeepSeek-V4-Flash for the AI earnings-read, spec 119; `-Profile` can route back to local Ollama. The baseline therefore requires `DEEPINFRA_API_KEY` in the environment — see the key-handling note under "Running the app live"). Every other profile is loaded
+- **`default.json` captures how we run** (the **7** collectors — rss/sec/usaspending/newssearch/secform4/sec13dg/**fda** — + DeepInfra DeepSeek-V4-Flash for the AI earnings-read, spec 119; `-Profile` can route back to local Ollama. The baseline therefore requires `DEEPINFRA_API_KEY` in the environment — see the key-handling note under "Running the app live"). Every other profile is loaded
   **on top of** it and carries only its delta (e.g. `low-media.json` overrides `MediaReachWeight`) — so the
   baseline is never lost and experiments are minimal diffs. This pairs with the config-driven `ScoringWeights`
   (a profile can set `Radar:Scoring:Profiles:{name}:*`), which the snapshot fingerprint (AD-10) then stamps.
@@ -301,7 +301,7 @@ Do not hand back broken code.
     the immutable content-addressed `{fingerprint}.json` files, never inside them. No record ⇒ record and
     continue; equal ⇒ continue; different ⇒ throw naming the strategy, both fingerprints and the remedy. A
     read failure degrades to "unrecorded" and never trips (AD-8) — "cannot tell" must not read as "changed".
-  - **`ISignalSourceDescriptor` has two members**: `CanonicalDescriptor()` = strategy identity
+  - **`ISignalSourceDescriptor` has THREE members** (⚠ this bullet originally said two; `EnabledCollectors()` was added by spec 146, and the identity string is now `rules=…;[ai=…;]news=…;[newsquery=…;]` — the `news=`/`newsquery=` segments moved the pins in specs 197 and 198): `CanonicalDescriptor()` = strategy identity
     (`rules=…;[ai=…;]`, the fingerprint input) and `CollectionProvenance()` = `collectors=<csv>;`, stamped
     verbatim on `CompanyScoreSnapshot.CollectionProvenance` (trailing + nullable) and **hashed into nothing**.
     It is deliberately NOT added to `EffectiveScoringConfig`: that store is content-addressed and
@@ -714,8 +714,10 @@ Do not hand back broken code.
   move" above was true of its own slice and stays true of it; this slice moved them, deliberately, once.
   ⚠ **Both have since moved again — the AI-ON side by spec 160 (`… → radar-scoring-fp-ebd7d11a58d0`) and
   then BOTH by spec 191 (the `radar-keyword-rules-v6 → v7` bump). For the CURRENT values at all three
-  windows, read the spec-191 bullet at the end of this list; every value quoted in THIS bullet is historical
-  lineage, not today's stamp.** Rules:
+  windows, read the spec-198 bullet (the LAST pin-moving bullet) or — authoritatively —
+  `ScoringConfigFingerprintTests`; every value quoted in THIS bullet is historical lineage, not today's
+  stamp. ⚠ The pins have moved SIX times (191, 194, 196, 197, 198); do not trust a pin quoted in any bullet
+  older than the last one.** Rules:
   - ⚠ **THE PIN IS NO LONGER THE LIVE STAMP, and that equivalence break is this slice's doing.** Every pin
     quoted anywhere above doubled as the value a live baseline run writes, because every hashed input was a
     code default. The window is not: the pins are computed at the `ScoringOptions` **code default of 30 days**,
@@ -1026,7 +1028,7 @@ Do not hand back broken code.
     strategy's stamp) **together in one file**: change v10's composition and it fails, and the
     only green fixes are revert, or bump the revision and update all three pins — which re-stamps and
     therefore trips `StrategyIdentityGuard` on the next run. **Relationship to AD-6:** a genuinely NEW
-    structure still earns `radar-formula-v11`; the revision only makes a spec-149-style in-place adjustment
+    structure still earns a NEW `radar-formula-vN`; the revision only makes a spec-149-style in-place adjustment
     impossible to make invisibly.
   - **Reuse over copy, and it was the bulk of the slice.** v9 held VERBATIM copies of v8's Trajectory /
     Attention / EvidenceConfidence / SignalVelocity blocks (the architecture audit's **M3**, deferred by spec
@@ -1175,7 +1177,7 @@ Do not hand back broken code.
   artifact — `news-risk-live-v3`, cohorts never pool, no merged verdict). The leaders marker: EVERY
   live-leaders row (research/stopped/comparator alike) carries a MANDATORY `semantic read` column — `⚠
   challenged (top-finding)` / `· no challenge found in supplied facts` (+` (typing incomplete)` when typing
-  ≠ Complete; never worded clean) / `? unassessed (reason)` from a closed 8-token vocabulary — derived ONLY
+  ≠ Complete; never worded clean) / `? unassessed (reason)` from a closed vocabulary (8 at spec 185; **11 today** — `invalid-record` added by 186, `retries-exhausted` by 187, plus `not-persisted`) — derived ONLY
   by `NewsJudgmentMarkerPolicy` from the PROSPECTIVELY designated presentation cohort
   (`Radar:NewsResearch:Judgment:PresentationCohort {Judge,Extractor}`, referentially validated at startup);
   the model never chooses presentation, an absent marker is unrepresentable
@@ -1893,7 +1895,7 @@ Do not hand back broken code.
     branch**: once for `MediaAttentionCollapse.Version` **`media-collapse-v1` → `media-collapse-v2`** (§1.5,
     a hashed field in its own right — `mediaCollapseDescriptor`) and once for the **news-judgment identity
     segment** (§2). Neither needed a `RuleSetVersion` or `_formula.Version` change.
-    **CURRENT, FINAL post-194 values (`radar-keyword-rules-v8` + `media-collapse-v2` + `news=…;`),
+    **post-194 values ⚠ SUPERSEDED (moved again by specs 196, 197 and 198 — see the spec-198 bullet or `ScoringConfigFingerprintTests` for today's) — (`radar-keyword-rules-v8` + `media-collapse-v2` + `news=…;`),
     independently recomputed and confirmed twice — once through `ScoringConfigFingerprint.Compute` over a
     REAL `SignalSourceDescriptor`, and once by re-deriving the canonical string and its SHA-256 outside
     .NET:**
@@ -2415,7 +2417,7 @@ Do not hand back broken code.
     so the identity records cannot ride in a PR and **must NEVER be fabricated**: **(1)** do not touch them
     while a pre-197 baseline is running; **(2)** after merge and before the first post-197 baseline,
     consciously **delete or re-record every configured `data/scoring-configs/strategies/{name}.json`**;
-    **(3)** verify the first run reports **`radar-scoring-fp-81a397434756`** (the shipped profile is AI-ON
+    **(3)** verify the first run reports **`radar-scoring-fp-81a397434756`** ⚠ **SUPERSEDED BY SPEC 198 — the only correct verify-target today is `radar-scoring-fp-11240da5aeb0` (60d AI-ON); AI-OFF is `radar-scoring-fp-0ff442a14c1b`.** (the shipped profile is AI-ON
     at 60 days) before treating later snapshots as the corrected series. If step 2 is missed,
     `StrategyIdentityGuard` runs as the FIRST statement of the run and halts before collection — **that halt
     is CORRECT and must not be bypassed.**
@@ -2621,10 +2623,13 @@ When implementing a spec that replaces existing functionality:
    `RadarScoreFormulaFactory` — that list is the closed set of shippable formulas, so config can only pick
    between structures the maintainer wrote, never define one. **Which** formula a strategy runs is now a
    per-strategy config choice (`Radar:Strategies[i].Formula`, default `radar-formula-v8`); *writing* one is
-   still code. **Spec 153 added `radar-formula-v10` to `ScoreFormulaVersions.All`** (now
-   `{ v8, v9, v10 }`, in version order) and to `RadarScoreFormulaFactory`'s dispatch; whether a formula takes
-   a `Channels` budget is answered by the single predicate `ScoreFormulaVersions.ConsumesChannels`
-   (`v9`, `v10`), which both `ScoringStrategySet`'s rules and the factory read. **And an in-place change to
+   still code. ⚠ **CURRENT SHIPPED SET (verify against `ScoreFormulaVersions.cs`, not this line):
+   `All = { radar-formula-v8, v9, v10, v11, radar-baseline-activity-v1 }`. `v11` and the
+   `radar-baseline-activity-v1` CONTROL are both TAKEN — a new structure earns **v12**, not v11.** Two
+   predicates, not one, and both are read by `ScoringStrategySet` AND the factory so they cannot drift:
+   `ConsumesChannels` is true for **v9, v10, v11 and `radar-baseline-activity-v1`**; and
+   `RejectsBreadthChannels` is true for **v11** — a v11 strategy declaring a breadth channel FAILS AT
+   STARTUP. The baseline control is deliberately NOT numbered in the `vN` lineage. **And an in-place change to
    an EXISTING formula's composition now has a mechanism**: `IScoreFormula.CompositionRevision` (default
    empty ⇒ nothing changes for v8/v9), composed by `FormulaIdentity.Of` into the hashed + persisted +
    stamped identity. Bump it in the same change that alters a composition — it re-stamps and trips
