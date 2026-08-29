@@ -285,3 +285,35 @@ Phase B:
       cold-start, and names the first fully accrued 60-day descriptive read date.
 - [ ] No history is rewritten, no scoring identity moves, benchmark-v1 is byte-identical, and the full suite
       and dry-run verification pass.
+
+## §2 record (Phase A, 2026-08-29)
+
+Inspected the durable stores read-only (per-company directories under `data/scores`, `data/signals`,
+`data/prices`, `data/news-typing`; `companyId` search in `data/news-observations`; the run records under
+`data/runs`; no recursive flat grep) BEFORE editing the three queries.
+
+- **Latest durable run:** `run-20260828T214044920Z-fa50b516-19a6-4129-ab02-151c1260e290.json` — run
+  `fa50b516-19a6-4129-ab02-151c1260e290`, created **2026-08-28T21:40:44Z**, `companiesScored: 74`, primary
+  `default`, 10 strategies. A **PRE-199** run (spec 199 merged after it).
+- **Per-company counts, all three ids:**
+
+  | ticker | company id | score dirs | signal dirs | news-typing dirs | news-observation files | run-record mentions | evidence mentions | price files |
+  | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | UTMD | `28243c9e-eb18-4a85-acec-8f93aeb8cdef` | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+  | ITIC | `2ae6e6da-b714-416f-9d90-b6432f6eac2b` | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+  | ESQ | `971ea074-e524-4d6d-baf2-ead26449a0dc` | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+- **Outcome: no post-199 history exists — the correction landed before first collection. No migration or
+  cleanup is required.** Nothing was deleted, rewritten, re-hashed, reassigned or backfilled. No row of
+  `docs/cohorts/under-covered-2026-08.md` is contaminated, and no three-run attention read needs a
+  contamination label.
+
+## Phase A status (2026-08-29)
+
+Phase A (§1–§4) is implemented: the three seed urls are corrected, `ESQ` is on the colliding-ticker
+allowlist, the exact urls and six adversarial accept/reject headlines are pinned, and the spec-199 doc /
+CLAUDE.md bullet / cohort file are amended in place. **§5 (three-run capacity measurement) and §6 (the
+20-row attention retrospective) are STILL OWED** and land in the Phase B follow-up after three successful
+post-199 full runs — which is why this spec stays in `docs/next/` and was NOT promoted. The spec-198
+operator precondition (clear/re-record `data/scoring-configs/strategies/{name}.json`, verify
+`radar-scoring-fp-11240da5aeb0`) is unchanged and still owed before run 1.

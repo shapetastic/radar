@@ -51,12 +51,35 @@ public sealed class ProductionCompanySeedTests
     /// "fa<b>cto</b>r", "do<b>cto</b>r") and <c>UTL</c> ("o<b>utl</b>ook", "o<b>utl</b>et",
     /// "o<b>utl</b>ine").
     /// </para>
+    /// <para>
+    /// Spec 200 added <c>ESQ</c>: "Esquire" is an ordinary word AND a publisher name (a headline ending
+    /// " - Esquire" belongs to whichever company the article is about, not to Esquire Financial), and because
+    /// <c>IsRelevant</c> is an unanchored substring <c>Contains</c> over phrase OR ticker, the ticker token
+    /// <c>ESQ</c> would have admitted every such headline — the spec-199 ITIC/GEOS/CTO/UTL precedent. The
+    /// issuer phrase alone is sufficiently specific, so the feed is exactly <c>query=Esquire Financial</c>.
+    /// </para>
     /// </summary>
     private static readonly string[] TickersWithoutTickerToken =
     [
         "DEA", "SHOO", "ATEX", "SHEN", "KGS", "PUMP", "CASS", "ANIP", "PLUS", "CALM", "IDT", "FR", "CARS",
         "ITIC", "GEOS", "CTO", "UTL",
+        "ESQ", // spec 200
     ];
+
+    /// <summary>
+    /// The three spec-200 feed-identity repairs, pinned as EXACT url strings (not merely ticker presence or
+    /// absence). Each was corrected at the seed BEFORE its first collection (spec 200 §2 found zero history
+    /// for all three ids), so a later "tidy-up" that widened any of them would silently re-open the very
+    /// false-positive channel this pin closes: "University of Utah Medical …", "investors title …" as a
+    /// theme, and "Esquire" as a word/publisher.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> Spec200ExactNewsSearchUrls =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["UTMD"] = "query=Utah Medical Products&ticker=UTMD",
+            ["ITIC"] = "query=Investors Title Company",
+            ["ESQ"] = "query=Esquire Financial",
+        };
 
     /// <summary>
     /// The spec-199 batch, pinned ticker -> 10-digit EDGAR CIK. Every CIK was live-verified against
@@ -123,6 +146,7 @@ public sealed class ProductionCompanySeedTests
     [InlineData("GEOS")] // spec-199: "geospatial", "geoscience", "geosciences".
     [InlineData("CTO")] // spec-199: "director", "sector", "factor", "doctor".
     [InlineData("UTL")] // spec-199: "outlook", "outlet", "outline".
+    [InlineData("ESQ")] // spec-200: "Esquire" — an ordinary word and a publisher name.
     public async Task ProductionSeed_CollidingTickers_HaveNoTickerTokenInNewsSearchFeed(string ticker)
     {
         var urls = await GetNewsSearchUrlsAsync(ticker);
@@ -360,6 +384,24 @@ public sealed class ProductionCompanySeedTests
 
             Assert.Equal($"https://data.sec.gov/submissions/CIK{cik}.json", secFeed.Url);
         }
+    }
+
+    /// <summary>
+    /// Spec 200 §1/§3: the three repaired feed identities are pinned as EXACT strings. UTMD keeps its
+    /// non-colliding ticker but the phrase must name the ISSUER, not a university plus the word "medical";
+    /// ITIC (already phrase-only under spec 199) uses the issuer's full public name; ESQ drops its colliding
+    /// ticker and relies on the issuer phrase alone. Each company has exactly ONE newssearch feed.
+    /// </summary>
+    [Theory]
+    [InlineData("UTMD")]
+    [InlineData("ITIC")]
+    [InlineData("ESQ")]
+    public async Task ProductionSeed_Spec200RepairedFeeds_NewsSearchUrlIsExactly(string ticker)
+    {
+        var urls = await GetNewsSearchUrlsAsync(ticker);
+
+        var url = Assert.Single(urls);
+        Assert.Equal(Spec200ExactNewsSearchUrls[ticker], url);
     }
 
     [Fact]

@@ -128,8 +128,16 @@ State these in the PR so the first post-199 run is read correctly and nothing re
 - **New companies have NO accrued evidence**, so their first scores are thin and their attention is low. They
   will look artificially attractive on an inverse-attention discount before their evidence accrues. **Do not
   read an early high rank for a new company as a finding**; note it in the report period's interpretation.
-- **They enter the efficacy series with zero history**, so they contribute no in-sample observations for ~21+
-  days and will initially show as partial forward windows.
+- ⚠ **AMENDED BY SPEC 200 §4 — "they enter the efficacy series" conflated three different products.** The
+  explicit three-way boundary: **(1) live strategy/report scoring** — all 94 companies score and rank on every
+  ordinary run as soon as evidence is available; no price horizon gates it, and it is the surface used to
+  inspect an EOSE-like bad leader now. **(2) Raw forward-return diagnostics** — a new company can acquire a
+  complete price observation only after its forward horizon resolves (~21+ days, initially spec-152
+  `PartialWindow`); this remains diagnostic and grants NO benchmark membership. **(3) The official
+  benchmark-adjusted leaderboard and the paired AD-15 claim** — the 20 additions remain
+  `NotInBenchmarkUniverse` under frozen `benchmark-universe-v1` and are excluded until a prospective
+  `benchmark-universe-v2` is declared; spec 200 creates no v2 and does not move the 2026-09-29 AD-15
+  first-eligible boundary.
 
 ## 5. Measure the capacity claim against reality
 
@@ -148,7 +156,18 @@ predicted against measured `AttentionScore` and report the hit rate. If the addi
 under-covered heuristic did not work and that is a reportable finding — it would mean seed-time judgement cannot
 identify under-covered names, which is worth knowing before any further expansion.
 
-**The ship condition is that the typing backlog is still draining after expansion.** If the measured post-198
+> **Cold-start caveat (spec 200 §4).** The stored `AttentionScore` uses a **60-day** window; after three daily
+> runs the additions have only a few days of locally captured history. The three-run read therefore tests
+> **query relevance, capture shape and early calibration** — it is **NOT proof** that a company is durably
+> under-covered, and **no company may be removed, re-tiered or have its feed tuned** because of it. The mature
+> descriptive read is the first successful run whose 60-day attention window starts no earlier than the first
+> post-199 collection instant; that date is to be recorded (spec 200 Phase B) once the first run exists.
+
+**The ship condition is that the typing backlog is still draining after expansion.** ⚠ **SUPERSEDED BY SPEC
+200:** this condition was a LIVE-measurement condition and was never measured on the code that shipped — the
+batch shipped on a projection while the required post-198 measurement was still owed (see the Recorded section
+below). The measurement is now spec 200 §5, over the first three successful post-199 full runs. The original
+wording, kept for the record: if the measured post-198
 drain is materially below the projected ~140/run, say so and reduce the batch size rather than shipping the
 full ~20 — the point is to expand as far as capacity genuinely allows, not to a round number.
 
@@ -194,9 +213,13 @@ records cannot disagree. The three-run retrospective is recorded there as **OWED
 clustering above 70 is to be reported as a FAILED heuristic rather than absorbed. EPM is pre-registered as the
 most likely miss.
 
-**§5 measured, and the gap stated plainly: NO post-198 baseline run existed at implementation time.** The
+**§5 — PROJECTED, NOT MEASURED — and the gap stated plainly: NO post-198 baseline run existed at
+implementation time.** The
 latest run was `fa50b516`, 2026-08-28T21:40Z, which is pre-198, so the capacity premise was checked against the
-last three PRE-198 runs plus spec 198's own live measurement. The post-198 check is still owed.
+last three PRE-198 runs plus spec 198's own live measurement. The post-198 check is still owed. ⚠ **Spec 200
+amendment:** every post-198 / post-199 number below (~225, ~115, ~286, ~54 per run, ~34 runs) is a PROJECTION
+from pre-198 runs, not a measurement; the pre-expansion post-198 baseline no longer exists and **must not be
+manufactured** after the fact. The live measurement is spec 200 §5.
 
 | measure | 2026-08-26 | 2026-08-27 | 2026-08-28 |
 | --- | ---: | ---: | ---: |
@@ -215,7 +238,20 @@ recent-coverage gain, projecting post-198 inflow at **~225/run** (not the 210 as
 under-covered additions should generate less news than the average — giving a projected drain of **~54/run**
 and clearing the 1,821 backlog in ~34 runs.
 
-**The backlog still drains, so the ship condition is met and the FULL 20 shipped** rather than a reduced batch.
+~~**The backlog still drains, so the ship condition is met and the FULL 20 shipped** rather than a reduced
+batch.~~ ⚠ **SUPERSEDED BY SPEC 200:** the ship condition was NOT met — it was a live-measurement condition and
+the batch shipped on a projection while the required post-198 measurement was still owed. A projection may
+justify taking a reversible operational risk; it cannot satisfy a live-measurement condition after the fact.
+The FULL 20 did ship; whether the backlog drains under the 94-company seed is measured by spec 200 §5 over the
+first three successful post-199 full runs, with the first run reported separately as a one-time seed burst.
+
+**Spec 200 §1 feed-identity repairs, applied BEFORE first collection (spec 200 §2 found zero history for all
+three ids against the latest durable run `fa50b516`, 2026-08-28T21:40Z, 74 companies):** `UTMD`
+`query=Utah Medical&ticker=UTMD` → `query=Utah Medical Products&ticker=UTMD` (the old phrase admitted
+"University of Utah Medical …"); `ITIC` `query=Investors Title` → `query=Investors Title Company` (the
+issuer's full name; still phrase-only); `ESQ` `query=Esquire Financial&ticker=ESQ` → `query=Esquire Financial`
+("Esquire" is an ordinary word and a publisher name, so `ESQ` joins the colliding-ticker allowlist — now FIVE
+phrase-only additions, not four). Seed-only edits; no scoring identity moved.
 
 **Nothing in the scoring identity moved**: `benchmark-universe-v1.json` is byte-unchanged with no v2 created,
 `ScoringConfigFingerprintTests` is untouched, all six pins are unchanged, and **no operator identity-record

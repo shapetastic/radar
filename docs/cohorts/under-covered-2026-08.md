@@ -74,6 +74,22 @@ Every CIK above was live-verified against `https://data.sec.gov/submissions/CIK{
 (HTTP 200; entity name, ticker and exchange matched; filings within the last month; Form 4 and SC 13
 present) and is pinned by `ProductionCompanySeedTests`.
 
+**Spec 200 §1 (2026-08-29): three news-feed phrases were corrected BEFORE first collection.** UTMD
+`query=Utah Medical&ticker=UTMD` → `query=Utah Medical Products&ticker=UTMD`; ITIC `query=Investors Title`
+→ `query=Investors Title Company`; ESQ `query=Esquire Financial&ticker=ESQ` → `query=Esquire Financial`
+(ESQ joins the colliding-ticker allowlist — "Esquire" is an ordinary word and a publisher name). Spec 200 §2
+inspected the durable stores and found ZERO history for all three company ids (latest durable run
+`fa50b516`, 2026-08-28T21:40Z, pre-199), so **no row above is contaminated** by the pre-correction queries.
+No predicted band changed.
+
+**Efficacy boundary for these 20 (spec 200 §4), three-way and explicit:** (1) **live strategy/report
+scoring** is immediate for all 94 companies as soon as evidence exists — no price horizon gates it; (2)
+**raw forward-return diagnostics** appear only after a company's forward horizon resolves and are
+diagnostic only, granting NO benchmark membership; (3) the **official benchmark-adjusted leaderboard and
+the paired AD-15 claim** exclude all 20 as `NotInBenchmarkUniverse` under frozen `benchmark-universe-v1`
+until a prospective `benchmark-universe-v2` is declared — no v2 exists and the 2026-09-29 AD-15 boundary
+is unmoved.
+
 ## Retrospective — OWED, NOT YET DONE
 
 After **three** successful post-199 baseline runs, report:
@@ -89,3 +105,13 @@ After **three** successful post-199 baseline runs, report:
 
 Name the reason for any material miss rather than revising the hypothesis to fit the measurement. This
 retrospective **has not been performed** — no post-199 run exists at the time of writing.
+
+**What the three-run read CAN and CANNOT mean (spec 200 §4 cold-start caveat).** The stored
+`AttentionScore` uses a **60-day** window; after three daily runs these companies have only a few days of
+locally captured history. The read therefore tests **query relevance, capture shape and early
+calibration**. It is **NOT proof** that any company is durably under-covered, and **no company may be
+removed, re-tiered or have its feed tuned** on the strength of it. The mature descriptive read is the first
+successful run whose 60-day attention window starts no earlier than the first post-199 collection instant;
+that date is to be recorded here (spec 200 Phase B) once the first run exists. The run-3 snapshot is fixed
+in advance: the `default` primary-strategy snapshot of the third successful run and its exact
+`WindowEndUtc` (spec 200 §6).
