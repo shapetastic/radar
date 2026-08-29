@@ -2564,14 +2564,21 @@ Do not hand back broken code.
     observation archive has since accrued another night of URLs, so a re-projection over today's archive
     dedupes more than that night did. The projection is therefore calibrated on the DEDUPE side and
     **conservative on the new side**; treat 789/210 as a lower bound on the gain, not a forecast.
-  - ⚠ **THE PAIRED COUNTERFACTUAL DID NOT COMPLETE.** The §4 live measurement above ran and passes its
-    criterion, but the implementing session was cut off before the counterfactual finished, so the following
-    acceptance items are **UNEVIDENCED on the record**: distinct-publisher breadth actually consumed by
-    `AttentionReach` before/after, and the `AttentionScore`/`OpportunityScore` distributions before/after.
-    The harness is built, read-only and env-gated (`NewsRecencyWindowCounterfactualTests`) — run it and record
-    the numbers here rather than assuming the direction. **Expected direction, stated so it can be falsified:**
-    fewer stale duplicates should mean less redundant `MediaAttention`, so attention may FALL and opportunity
-    may RISE. Nothing in this slice depends on that being true; the coverage criterion above is what licensed
+  - **PAIRED COUNTERFACTUAL — RAN 2026-08-29 over the live store (23.6 min, read-only, nothing
+    persisted). The predicted direction HELD.** Unfiltered → windowed, 74 companies, `default` strategy,
+    one as-of instant, only the recency window varying: tier-weighted publisher **breadth mean 4.949 →
+    4.649**; **`AttentionScore` mean 64.662 → 63.284** (min 44 → 42, max 90 both); **`OpportunityScore`
+    mean 20.23 → 20.50** (min 3, max 41 both). Attention falls and opportunity rises, exactly as
+    predicted — the claim was falsifiable and was not quietly reinterpreted.
+  - **The effect is SMALL and that is the informative part: ~1.4 points of attention.** All news evidence
+    12,180 vs 14,824 — the window removes **2,644** items — while **genuinely recent evidence is
+    IDENTICAL at 11,383 in both arms**. So the removed material was overwhelmingly stale duplicates from
+    publishers ALREADY counted, and since breadth counts DISTINCT PUBLISHERS rather than articles,
+    removing them barely moves the number.
+  - ⚠ **This run CANNOT validate the coverage criterion, and the harness says so itself.** Coverage being
+    equal here is true BY CONSTRUCTION: the exclusion predicate only ever removes items older than the
+    window, so the windowed arm can never admit fewer recent items. The meaningful coverage check is the
+    §4 LIVE measurement, where the two arms query the provider independently and coverage ROSE 683 → 789.
     the ship.
   - **§5 — explicit non-goals, enforced**: no change to `Radar:News:MaxRecordsPerCompany` (stays 25), the
     absolute 100-item parse ceiling, the request count, the pacing or the number of requests per company; no
