@@ -86,7 +86,7 @@ public sealed class NewsObservationArchitectureGuardTests
     // -------------------------------------------------------------------------------------------------
 
     private static readonly Regex ForbiddenSourceReference = new(
-        @"^\s*using\s+(static\s+)?Radar\.Application\.News(Risk)?\s*(\.[\w.]+)?\s*;"
+        @"^\s*(global\s+)?using\s+(static\s+)?(\w+\s*=\s*)?Radar\.Application\.News(Risk)?\s*(\.[\w.]+)?\s*;"
             + @"|Radar\.Application\.News(Risk)?\.",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 

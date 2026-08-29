@@ -176,10 +176,11 @@ default-profile run, not `-WhatIf`, a targeted replay or an interrupted process.
 provenance and scoring output. Record failures and partial runs for operations, but do not count them toward
 the three.
 
-**Precondition, owed since spec 198 and still not done:** before run 1, consciously delete or re-record every
-configured `data/scoring-configs/strategies/{name}.json` (git-ignored — never fabricate them), otherwise
-`StrategyIdentityGuard` halts run 1 before collection. That halt is CORRECT and must not be bypassed; a halted
-run does not count toward the three.
+**Precondition, owed since spec 198 — VERIFIED 2026-08-29 20:25Z: `data/scoring-configs/strategies/` is
+EMPTY (cleared 12:35 local), so no deletion is required.** Only the first-run fingerprint verification remains
+owed. (Had records been present: delete or re-record them — git-ignored, never fabricate — or
+`StrategyIdentityGuard` halts run 1 before collection; that halt is CORRECT, and a halted run does not count
+toward the three.)
 
 The first run is a deliberate one-time seed burst: the 20 additions (21 new newssearch feeds because NWPX has
 two, plus GHM's `rss` feed) have no cross-run history, and price history backfills one year per new ticker on
@@ -226,8 +227,10 @@ After the third successful run, use the `default` primary-strategy snapshot prod
 - a short mechanical explanation for a material miss, without revising the prediction.
 
 Report low-band hit rate, mid-band hit rate, overall hit rate, the exact count above 70 and EPM separately
-(EPM is the one addition whose obscurity case in `docs/cohorts/under-covered-2026-08.md` rests on a
-commodity-price-sensitive business, so its attention may move with the sector rather than with coverage). A
+(EPM is the cohort's declared RISK CASE — `docs/cohorts/under-covered-2026-08.md` line 60: a non-operated,
+dividend-paying E&P whose yield attracts investor-platform write-ups, so it may measure as covered for reasons
+that have nothing to do with under-coverage; the precommitted reason is investor-platform/dividend coverage,
+not commodity sensitivity). A
 missing company/snapshot is **unresolved**, remains in the denominator and is not silently dropped. If §2 found
 pre-correction history, label the affected row potentially contaminated and report it both in the full table
 and in a sensitivity total excluding contaminated rows; never erase it from the primary total.
