@@ -121,9 +121,10 @@ public sealed class PriceHistoryAcquirer : IPriceHistoryAcquirer
         {
             _logger.LogWarning(
                 "{HistoriesNotPersisted} of {TickersFetched} fetched price histor(y/ies) could NOT be "
-                    + "durably persisted to the price store: the writes degraded gracefully and those "
-                    + "tickers' bars are NOT in the accrued price files, so the efficacy reads will not "
-                    + "see them.",
+                    + "durably persisted to the price store: the writes degraded gracefully, so the bars "
+                    + "fetched this run for those tickers may be missing from the accrued price files and "
+                    + "any existing file there may be stale (the store merges by path). The efficacy reads "
+                    + "will not see this run's bars for them.",
                 historiesNotPersisted,
                 tickersFetched);
         }

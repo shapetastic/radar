@@ -228,7 +228,9 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     /// <summary>
     /// Spec 201 §1: a failed weekly-report write is stated once, at the runner that attempted it. The report
     /// id stays on the result and the run record — the report was generated and its in-memory model may
-    /// still be re-rendered to the same path — but the FILE did not land, and that is what this line says.
+    /// still be re-rendered to the same path — but THIS run's file did not land, and that is what this line
+    /// says. Weekly reports overwrite by path, so a prior run's report may still sit there: the line claims
+    /// only that the file at that path is not this run's, never that no file exists.
     /// </summary>
     internal static void LogReportNotPersisted(ILogger logger, DurableWriteResult write)
     {
@@ -239,7 +241,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
 
         logger.LogWarning(
             "The weekly report could NOT be durably persisted to {Path}: the write degraded gracefully. "
-                + "The report was generated and its id is recorded, but no file exists at that path.",
+                + "The report was generated and its id is recorded, but this run's file did not land: any "
+                + "file at that path is a prior run's report and is stale.",
             write.Path);
     }
 
