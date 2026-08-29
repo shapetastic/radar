@@ -194,7 +194,8 @@ public sealed class FileOperatingCallSourceTests : IDisposable
     // ---------------------------------------------------------------------------------------------------
     // The COMMITTED file: the shipped initial calls (spec 184 §2) must parse, validate against the live
     // baseline strategy set (the scripts/run-profiles/default.json arms) and reduce to exactly one Lead —
-    // disclosure-led-v11 — with default DoNotLead and the remaining research arms Trial.
+    // disclosure-led-v11 — with default DoNotLead, the three filings-led arms Stop (2026-08-29 data call) and
+    // narrative-led-v2 Trial.
     // ---------------------------------------------------------------------------------------------------
 
     private static readonly IReadOnlyList<ScoringStrategyDefinition> LiveBaselineStrategies =
@@ -230,7 +231,9 @@ public sealed class FileOperatingCallSourceTests : IDisposable
         Assert.False(resolved.StopAll);
         Assert.Equal("disclosure-led-v11", resolved.LeadStrategyName);
         Assert.Equal(OperatingCall.DoNotLead, resolved.For("default")!.Call);
-        Assert.Equal(OperatingCall.Trial, resolved.For("filings-led-v2")!.Call);
+        Assert.Equal(OperatingCall.Stop, resolved.For("filings-led-v2")!.Call);
+        Assert.Equal(OperatingCall.Stop, resolved.For("filings-led-halfnoted")!.Call);
+        Assert.Equal(OperatingCall.Stop, resolved.For("filings-led-nonoted")!.Call);
         Assert.Equal(OperatingCall.Trial, resolved.For("narrative-led-v2")!.Call);
 
         // Every shipped call carries the falsifiability contract: an immutable rule, the exact UTC review
@@ -238,8 +241,10 @@ public sealed class FileOperatingCallSourceTests : IDisposable
         Assert.All(file.Calls, call =>
         {
             Assert.False(string.IsNullOrWhiteSpace(call.ResolutionRule));
-            Assert.Equal(new DateTimeOffset(2026, 8, 23, 0, 0, 0, TimeSpan.Zero), call.AsOfUtc);
-            Assert.Equal(new DateTimeOffset(2026, 9, 5, 0, 0, 0, TimeSpan.Zero), call.ReviewByUtc);
+            // Calls are made at different instants as evidence accrues (2026-08-23 initial set; 2026-08-29
+            // filings-led Stops) — pin the CONTRACT, not one instant: a review checkpoint after the call.
+            Assert.True(call.AsOfUtc >= new DateTimeOffset(2026, 8, 23, 0, 0, 0, TimeSpan.Zero));
+            Assert.True(call.ReviewByUtc > call.AsOfUtc);
             Assert.Equal(OperatingCallActor.Human, call.Actor);
         });
 

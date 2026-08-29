@@ -61,3 +61,27 @@ after 2026-08-23 is appended as it happens.
   filesystem mtime — which the daily efficacy re-write advanced, so a valid override silently expired after
   one run. No call in the committed file carries an override, so no call's meaning changed; v1 stays
   readable (it simply cannot express an override) · actor: maintainer.
+- 2026-08-29 · call-made · `filings-led-v2`, `filings-led-halfnoted`, `filings-led-nonoted` · **Stop**
+  (supersedes the 2026-08-23 Trial calls, outcome Unresolved) · basis: on the 2026-08-29
+  excess-vs-universe-v1 leaderboard (872 obs, 74 companies, 12 oos dates 2026-07-30..08-10) all three oos
+  ρ are NEGATIVE with the 95 % interval excluding zero (−0.159 [−0.223, −0.093] / −0.149 [−0.214, −0.084] /
+  −0.139 [−0.204, −0.074]); the halfnoted/nonoted ablations move nothing, so the notedness discount is not
+  the cause — the sec-form4 + sec-13dg channel hypothesis is what fails. Descriptive, pooled, retrospective
+  to the freeze; still the strongest negative result Radar holds, and declining to act on it would be data
+  fence-sitting. Scoring continues (a Stop is prominence only; the arms render in the diagnostic appendix)
+  · actor: human (maintainer-directed: "make a call on the data we have") · review by 2026-10-30 ·
+  resolution rule: Wrong (re-call Trial) if a later leaderboard with ≥ 24 oos dates shows the interval upper
+  bound above zero; Right otherwise.
+- 2026-08-29 · declared · `default-noattn` (research, implicit Trial) · `default` profile with
+  `OpportunityAttentionDiscountWeight` = `FollowingTierDiscountWeight` = 0, declared inline (spec 149) under
+  a NEW name (spec 141) · basis: `baseline-media-only` — a pure media-count comparator — is the ONLY arm whose
+  oos interval clearly excludes zero positively (+0.137 [0.071, 0.202]) while `default` sits at −0.026 and
+  inverts attention; hypothesis: the inverse-attention discount subtracts the component that predicts.
+  Alternative explanation, recorded so it is not forgotten: a size/regime effect over 12 dates that the
+  universe-mean excess does not remove. Falsified if `default-noattn` oos ρ ≤ `default` oos ρ at review ·
+  actor: human (maintainer-directed) · review by 2026-09-05 with the other calls.
+- 2026-08-29 · finding · `disclosure-led-v11` vs `disclosure-led-v10-control` · the Lead and its formula
+  control are INDISTINGUISHABLE — in-sample 0.1693 vs 0.1694, oos 0.0652 vs 0.0687 — so the v11
+  breadth-rejection changed nothing measurable. Lead stays (precommitted; the gate, not this note, resolves
+  it). Entry condition for a call: if the two remain within 0.01 at the 2026-09-05 review, journal v11's
+  structural change as null and consider retiring the control · actor: human (maintainer-directed).

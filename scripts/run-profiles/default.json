@@ -11,6 +11,11 @@
     "Strategies": [
       { "Name": "default", "ScoringProfile": "default" },
       {
+        "Name": "default-noattn",
+        "ScoringProfile": "default",
+        "Weights": { "OpportunityAttentionDiscountWeight": 0.0, "FollowingTierDiscountWeight": 0.0 }
+      },
+      {
         "Name": "filings-led-v2", "Formula": "radar-formula-v9",
         "Channels": [
           { "Name": "insider", "Collectors": [ "sec-form4" ], "Weight": 0.50, "Saturation": 2 },
