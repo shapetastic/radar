@@ -1,4 +1,5 @@
 using Radar.Application.NewsRisk.Judgment;
+using Radar.Application.SignalExtraction;
 using Radar.Domain.Signals;
 
 namespace Radar.Application.News;
@@ -18,40 +19,33 @@ namespace Radar.Application.News;
 /// carries them.
 /// </para>
 /// <para>
-/// The magnitudes below are the news analogue of the AI filing read's <c>str</c>/<c>nov</c>/<c>minconf</c>.
-/// Unlike those they are currently hashed into NO fingerprint — spec 194 §2 folds them into the scoring
-/// identity, so that a judge-model, presentation-cohort or strength-constant change can no longer hide
-/// inside an unchanged <c>ScoringConfigVersion</c>.
+/// The magnitudes are the news analogue of the AI filing read's <c>str</c>/<c>nov</c>/<c>minconf</c>; spec
+/// 194 §2 folds them into the scoring identity BY VALUE, so a judge-model, presentation-cohort or
+/// strength-constant change can no longer hide inside an unchanged <c>ScoringConfigVersion</c>.
+/// <b>Spec 201 §3: the magnitudes themselves now live in
+/// <see cref="NewsTrajectorySignalConstants"/> (<c>Radar.Application.SignalExtraction</c>)</b>, because
+/// <c>Radar.Application.Scoring</c> — which is banned at source level from referencing this namespace —
+/// legitimately needs the base strength. The members below are read-through aliases so every existing
+/// caller keeps one name for one value; this class remains the MAPPING (it needs the NewsRisk trajectory
+/// enum, which is why the mapping could not move with the constants).
 /// </para>
 /// </summary>
 internal static class NewsTrajectorySignalRules
 {
-    /// <summary>The Neutral <c>MediaAttention</c> strength the extractor has always emitted — the floor a directional read builds on.</summary>
-    internal const int BaseStrength = 4;
+    /// <inheritdoc cref="NewsTrajectorySignalConstants.BaseStrength"/>
+    internal const int BaseStrength = NewsTrajectorySignalConstants.BaseStrength;
 
-    /// <summary>The maximum number of judge findings that contribute to strength.</summary>
-    internal const int MaxFindingContribution = 3;
+    /// <inheritdoc cref="NewsTrajectorySignalConstants.MaxFindingContribution"/>
+    internal const int MaxFindingContribution = NewsTrajectorySignalConstants.MaxFindingContribution;
 
-    /// <summary>The bonus for a judgment whose stage-1 typing was COMPLETE (nothing deferred, nothing failed).</summary>
-    internal const int CompleteTypingBonus = 1;
+    /// <inheritdoc cref="NewsTrajectorySignalConstants.CompleteTypingBonus"/>
+    internal const int CompleteTypingBonus = NewsTrajectorySignalConstants.CompleteTypingBonus;
 
-    /// <summary>
-    /// The Novelty a news attention signal carries. Spec 194 §1.2 requires the judgment-derived signal to
-    /// retain spec 191's declared values, and 191 declared them by inheriting the ordinary news branch's:
-    /// verified against <c>KeywordSignalExtractor</c>'s spec-191 news branch, which set
-    /// <c>Novelty: 4, Confidence: 0.5m</c> on BOTH its Neutral and its directional signal.
-    /// <para>
-    /// Declared here, beside the direction/strength rules, so every magnitude a judgment-derived news
-    /// signal carries is readable in one place — and so spec 194 §2 can fold the whole set into the scoring
-    /// identity. It deliberately does NOT edit the extractor to read this const: §1.1 restored that branch
-    /// to a byte-identical pre-191 form and proving it stays that way is worth more than sharing a literal.
-    /// If the ordinary news branch's magnitudes ever move, move these with them.
-    /// </para>
-    /// </summary>
-    internal const int Novelty = 4;
+    /// <inheritdoc cref="NewsTrajectorySignalConstants.Novelty"/>
+    internal const int Novelty = NewsTrajectorySignalConstants.Novelty;
 
-    /// <summary>The Confidence a news attention signal carries — see <see cref="Novelty"/> for provenance.</summary>
-    internal const decimal Confidence = 0.5m;
+    /// <inheritdoc cref="NewsTrajectorySignalConstants.Confidence"/>
+    internal const decimal Confidence = NewsTrajectorySignalConstants.Confidence;
 
     /// <summary>The direction, or <c>null</c> when the trajectory carries none.</summary>
     internal static SignalDirection? DirectionFor(NewsJudgmentTrajectory trajectory) => trajectory switch

@@ -1,5 +1,6 @@
-using System.Security.Cryptography;
 using System.Text;
+
+using Radar.Application.Identity;
 
 namespace Radar.Application.Efficacy.Comparison;
 
@@ -71,6 +72,6 @@ public static class BenchmarkUniverseContentHash
                 .Append('\n');
         }
 
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+        return CanonicalHash.Sha256Hex(canonical);
     }
 }

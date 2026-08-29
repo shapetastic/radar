@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Efficacy.Attention;
+using Radar.Application.Storage;
 
 namespace Radar.Infrastructure.FileSystem;
 
@@ -51,22 +52,30 @@ public sealed class FileAttentionArrivalArtifactStore : IAttentionArrivalArtifac
         var csvPath = Path.Combine(_options.RootDirectory, FileStem + ".csv");
         var markdownPath = Path.Combine(_options.RootDirectory, FileStem + ".md");
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(jsonPath, json, _logger, ct).ConfigureAwait(false))
+        var jsonWritten = await GracefulFileWriter.TryWriteAllTextAsync(jsonPath, json, _logger, ct).ConfigureAwait(false);
+        if (jsonWritten)
         {
             _logger.LogInformation("Wrote attention-arrival screen JSON to {Path}.", jsonPath);
         }
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false))
+        var csvWritten = await GracefulFileWriter.TryWriteAllTextAsync(csvPath, csv, _logger, ct).ConfigureAwait(false);
+        if (csvWritten)
         {
             _logger.LogInformation("Wrote attention-arrival screen CSV to {Path}.", csvPath);
         }
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
-            .ConfigureAwait(false))
+        var markdownWritten = await GracefulFileWriter
+            .TryWriteAllTextAsync(markdownPath, markdown, _logger, ct)
+            .ConfigureAwait(false);
+        if (markdownWritten)
         {
             _logger.LogInformation("Wrote attention-arrival screen markdown to {Path}.", markdownPath);
         }
 
-        return new AttentionArrivalArtifactPaths(jsonPath, csvPath, markdownPath);
+        // Spec 201 §1: each file's outcome rides beside its attempted path — never a path as proof.
+        return new AttentionArrivalArtifactPaths(
+            DurableWriteResult.From(jsonPath, jsonWritten),
+            DurableWriteResult.From(csvPath, csvWritten),
+            DurableWriteResult.From(markdownPath, markdownWritten));
     }
 }

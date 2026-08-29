@@ -44,13 +44,25 @@ public sealed class AttentionArrivalScreenGenerator : IAttentionArrivalScreenGen
 
         // An early run still writes a useful artifact — Pending, with its exclusion counts — so the coverage
         // instrumentation is exercised and readable long before the first outcome matures.
-        await _artifacts
+        var artifactWrite = await _artifacts
             .WriteAsync(
                 _renderer.RenderJson(result),
                 _renderer.RenderCsv(result),
                 _renderer.RenderMarkdown(result),
                 ct)
             .ConfigureAwait(false);
+        if (artifactWrite.NotPersistedCount > 0)
+        {
+            // Spec 201 §1: an AD-16 screen artifact that never landed must not read as evaluated on disk.
+            _logger.LogWarning(
+                "Attention-arrival screen: {FilesNotPersisted} of 3 artifact file(s) could NOT be durably "
+                    + "persisted ({JsonPath}, {CsvPath}, {MarkdownPath}); the on-disk screen is missing or "
+                    + "STALE.",
+                artifactWrite.NotPersistedCount,
+                artifactWrite.JsonPath,
+                artifactWrite.CsvPath,
+                artifactWrite.MarkdownPath);
+        }
 
         if (result.Availability == AttentionEvaluationAvailability.Unavailable)
         {

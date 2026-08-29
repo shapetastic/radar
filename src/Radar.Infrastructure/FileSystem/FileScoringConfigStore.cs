@@ -14,8 +14,9 @@ namespace Radar.Infrastructure.FileSystem;
 /// <see cref="GracefulFileWriter"/>. This completes the spec-89 provenance chain: a snapshot's
 /// <c>ScoringConfigVersion</c> stamp dereferences back to the exact weights that produced it. All file I/O
 /// and JSON stay confined to Infrastructure (AD-5); the Application sees only <see cref="IScoringConfigStore"/>.
-/// Disk failures degrade gracefully (warn + return the attempted path) and never crash the run — the
-/// snapshot still carries its fingerprint.
+/// Disk failures degrade gracefully (warn + report a <see cref="DurableWriteOutcome.Failed"/> outcome) and never
+/// crash the run — the snapshot still carries its fingerprint, and since spec 201 §1 the caller COUNTS the
+/// stamps whose file never landed instead of reading the returned path as proof.
 /// <para>
 /// Alongside the content-addressed files it keeps a per-STRATEGY-NAME record at
 /// <c>{RootDirectory}/strategies/{name}.json</c> holding <c>{ strategyName, fingerprint }</c> (spec 141).
@@ -57,7 +58,7 @@ public sealed class FileScoringConfigStore : IScoringConfigStore
         _logger = logger;
     }
 
-    public async Task<string> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct)
+    public async Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -72,7 +73,9 @@ public sealed class FileScoringConfigStore : IScoringConfigStore
                 "Effective scoring config {Fingerprint} already exists at {Path}; skipping (immutable).",
                 config.Fingerprint,
                 path);
-            return path;
+            // The content IS durably on disk (that is what the existence check established), so this is a
+            // Written outcome — "skipped because already stored" is not a failure to store.
+            return DurableWriteResult.Succeeded(path);
         }
 
         string json;
@@ -89,16 +92,17 @@ public sealed class FileScoringConfigStore : IScoringConfigStore
                 "Failed to serialize effective scoring config {Fingerprint}; skipping write to {Path}.",
                 config.Fingerprint,
                 path);
-            return path;
+            return DurableWriteResult.NotPersisted(path);
         }
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
+        var written = await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false);
+        if (written)
         {
             _logger.LogInformation(
                 "Wrote effective scoring config {Fingerprint} to {Path}.", config.Fingerprint, path);
         }
 
-        return path;
+        return DurableWriteResult.From(path, written);
     }
 
     public async Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct)
@@ -135,7 +139,7 @@ public sealed class FileScoringConfigStore : IScoringConfigStore
         }
     }
 
-    public async Task<string> RecordStrategyFingerprintAsync(
+    public async Task<DurableWriteResult> RecordStrategyFingerprintAsync(
         string strategyName, string fingerprint, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(strategyName);
@@ -154,19 +158,20 @@ public sealed class FileScoringConfigStore : IScoringConfigStore
             _logger.LogWarning(
                 ex, "Failed to serialize strategy fingerprint record for {StrategyName}; skipping write to {Path}.",
                 strategyName, path);
-            return path;
+            return DurableWriteResult.NotPersisted(path);
         }
 
         // Upsert (last-write-wins), the deliberate opposite of the insert-if-new config files above: this
         // record tracks what a NAME resolves to NOW, so a legitimate re-record must overwrite.
-        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
+        var written = await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false);
+        if (written)
         {
             _logger.LogInformation(
                 "Recorded strategy {StrategyName} fingerprint {Fingerprint} at {Path}.",
                 strategyName, fingerprint, path);
         }
 
-        return path;
+        return DurableWriteResult.From(path, written);
     }
 
     /// <summary>

@@ -1901,10 +1901,14 @@ Do not hand back broken code.
       composed Worker graphs, in the style of spec 147's full-vs-score fingerprint test). This deliberately
       does NOT repeat spec 144's shape, where the whole AI seam had to be registered in score mode because
       `ScoringDescriptor()` could only be obtained from the live source. It is also what keeps the
-      spec-177/179 architecture guards intact: `Radar.Application.Scoring` may reach neither
-      `Radar.Application.News` nor `Radar.Application.NewsRisk`, so the mapping and the constants are
-      composed on the far side by `NewsJudgmentScoringIdentityFactory` (`Radar.Application.News`) and arrive
-      here already rendered. **Do not invert that by taking the trajectory enum or the rules type as a
+      spec-177/179 architecture guards intact: `Radar.Application.Scoring` carries **no reference of any
+      kind** to `Radar.Application.News` or `Radar.Application.NewsRisk` — **source or type-graph, asserted
+      both ways** (`NewsObservationArchitectureGuardTests`: the reflection walk over every Scoring type's
+      shape PLUS, since spec 201 §3, a source scan of `src/Radar.Application/Scoring/**` for any `using` or
+      fully-qualified reference; the one `const` read that had hidden from the type-graph walk now lives in
+      `Radar.Application.SignalExtraction.NewsTrajectorySignalConstants`) — so the mapping and the constants
+      are composed on the far side by `NewsJudgmentScoringIdentityFactory` (`Radar.Application.News`) and
+      arrive here already rendered. **Do not invert that by taking the trajectory enum or the rules type as a
       parameter.**
     - **The segment is UNCONDITIONAL; disabled renders `news=disabled:…;`.** Rendering nothing when disabled
       would be byte-identical to a pre-194 composition, so "judgment off" and "a Radar that predates the
@@ -2251,7 +2255,12 @@ Do not hand back broken code.
     resolving by ordinal last-wins, which made both the score and the diagnostic depend on tier-NAME ordering.
     A duplicate within one tier is idempotent.
   - **The per-run CAPTURE-FLOW diagnostic, which is NOT the `AttentionScore` input.** `AttentionPublisherCoverageSummary`
-    (primitive-only, so `Radar.Application.News` still takes no dependency on `Radar.Application.Scoring`) rides
+    (primitive-only — it carries no `Radar.Application.Scoring` type; ⚠ **the broader claim this bullet
+    originally made, "`Radar.Application.News` still takes no dependency on `Radar.Application.Scoring`",
+    was FALSE when written and is withdrawn (spec 201 §3):** `NewsJudgmentScoringIdentityFactory`
+    (`Radar.Application.News`) and `NewsRiskCandidateSelector` (`Radar.Application.NewsRisk`) DO reference
+    Scoring types, deliberately — the
+    ban runs the OTHER way, Scoring → News/NewsRisk, and that is the one the guards enforce) rides
     `NewsObservationBatch` as **one trailing nullable member** carrying its OWN token
     `attention-publisher-coverage-v1`; **`NewsObservationBatch.SchemaVersion` is UNCHANGED** because it is
     stamped with `NewsObservationRecord.CurrentSchemaVersion`, the same const every observation record carries,

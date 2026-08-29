@@ -142,12 +142,16 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
         // so the transparency footer gets an EMPTY collection summary and no collection-health report — both
         // already supported by IWeeklyReportBuilder — rather than a fabricated or a stale one.
         Guid? reportId = null;
+        // Spec 201 §1: null = no report write was attempted this pass; 0/1 = a measured outcome.
+        int? reportsNotPersisted = null;
         if (_options.GenerateReport)
         {
             var report = await _reportBuilder
                 .GenerateAsync(asOfUtc, CollectionSummary.Empty, health: null, ct)
                 .ConfigureAwait(false);
-            await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
+            var reportWrite = await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
+            reportsNotPersisted = reportWrite.Written ? 0 : 1;
+            RadarPipelineRunner.LogReportNotPersisted(_logger, reportWrite);
             reportId = report.Report.Id;
         }
 
@@ -212,8 +216,13 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
             // ("this pass did not do that work") rather than a 0 that would claim a clean signal write.
             // The snapshot count IS observed here and is recorded even when it is zero.
             SignalsNotPersisted: null,
-            ScoreSnapshotsNotPersisted: scoring.ScoreSnapshotsNotPersisted);
-        await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
+            ScoreSnapshotsNotPersisted: scoring.ScoreSnapshotsNotPersisted,
+            // Spec 201 §1: a score pass writes the report (when enabled) and the per-strategy configs, so
+            // both are measured facts here.
+            ReportsNotPersisted: reportsNotPersisted,
+            ScoringConfigsNotPersisted: scoring.ScoringConfigsNotPersisted);
+        var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
+        RadarPipelineRunner.LogRunRecordNotPersisted(_logger, runRecordWrite);
 
         return pipelineResult;
     }

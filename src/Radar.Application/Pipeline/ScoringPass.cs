@@ -50,6 +50,10 @@ public sealed class ScoringPass : IScoringPass
         // ScoringPassResult for why this axis is not primary-only).
         var snapshotsNotPersisted = 0;
 
+        // Spec 201 §1: per-strategy effective-config files that did NOT land. A snapshot still carries its
+        // fingerprint stamp; this counts the stamps whose dereference target is missing from disk.
+        var scoringConfigsNotPersisted = 0;
+
         // Spec 197 §3: ScoringEngine is ONE STRATEGY, so its former per-company Warnings for unresolved
         // evidence (spec 145) and neutralized accrued news directions (spec 194 §1.4) were really per
         // strategy × company — 460 lines on the live baseline, burying the exceptional failures. The engine
@@ -91,9 +95,13 @@ public sealed class ScoringPass : IScoringPass
         {
             ct.ThrowIfCancellationRequested();
 
-            await _scoringConfigStore
+            var configWrite = await _scoringConfigStore
                 .WriteIfNewAsync(strategy.Engine.EffectiveConfig, ct)
                 .ConfigureAwait(false);
+            if (!configWrite.Written)
+            {
+                scoringConfigsNotPersisted++;
+            }
 
             var scoreFileStore = _scoreFileStores.ForStrategy(strategy.Definition);
 
@@ -141,10 +149,24 @@ public sealed class ScoringPass : IScoringPass
                 strategies.Count);
         }
 
+        // Spec 201 §1: ONE aggregated Warning for the scoring-config store per pass, never one per strategy.
+        if (scoringConfigsNotPersisted > 0)
+        {
+            _logger.LogWarning(
+                "{ScoringConfigsNotPersisted} effective scoring config file(s) this run could NOT be durably "
+                    + "persisted to the scoring-config store (of {StrategyCount} strategies). Every snapshot "
+                    + "still carries its ScoringConfigVersion stamp, but for those strategies the stamp "
+                    + "dereferences to NOTHING on disk until a later run writes the same content-addressed "
+                    + "file. The run was not aborted.",
+                scoringConfigsNotPersisted,
+                strategies.Count);
+        }
+
         return new ScoringPassResult(
             CompaniesScored: companiesScored,
             Strategies: [.. strategies.Select(s => s.Definition.Name)],
             PrimaryStrategy: _scoringStrategies.Primary.Definition.Name,
-            ScoreSnapshotsNotPersisted: snapshotsNotPersisted);
+            ScoreSnapshotsNotPersisted: snapshotsNotPersisted,
+            ScoringConfigsNotPersisted: scoringConfigsNotPersisted);
     }
 }

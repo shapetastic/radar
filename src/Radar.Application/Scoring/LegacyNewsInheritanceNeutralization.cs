@@ -1,6 +1,5 @@
 using System.Collections.Frozen;
 
-using Radar.Application.News;
 using Radar.Application.SignalExtraction;
 using Radar.Domain.Signals;
 
@@ -158,17 +157,18 @@ public static class LegacyNewsInheritanceNeutralization
     {
         Direction = SignalDirection.Neutral,
 
-        // NewsTrajectorySignalRules.BaseStrength IS the Neutral MediaAttention strength the extractor has
+        // NewsTrajectorySignalConstants.BaseStrength IS the Neutral MediaAttention strength the extractor has
         // always emitted (it is the floor spec 191's directional read built on, and the value §1.1 restored
         // the news branch to). Sourced from there rather than re-typed as a literal 4 so the two cannot
         // drift: if the ordinary news strength ever moves, the value this transform substitutes moves with
-        // it. That class is internal to Radar.Application, which is this assembly.
+        // it.
         //
-        // This const read does NOT violate the spec-177/179 Scoring→News guards: they are TYPE-GRAPH guards
-        // (base types, interfaces, fields, signatures, generic arguments) and are structurally blind to a
-        // const or method-body reference. See NewsJudgmentScoringIdentity's remarks, which state the same
-        // boundary from the other side.
-        Strength = NewsTrajectorySignalRules.BaseStrength,
+        // Spec 201 §3: the constant lives in Radar.Application.SignalExtraction — a namespace Scoring
+        // references legitimately — precisely so that this file carries NO reference to
+        // Radar.Application.News. The pre-201 read of NewsTrajectorySignalRules.BaseStrength was a const
+        // reference the spec-177/179 TYPE-GRAPH guard could not see; the guard is now source-level as well
+        // (NewsObservationArchitectureGuardTests), so the ban is total rather than type-graph-only.
+        Strength = NewsTrajectorySignalConstants.BaseStrength,
     };
 
     /// <summary>

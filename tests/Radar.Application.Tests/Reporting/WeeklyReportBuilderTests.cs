@@ -37,8 +37,8 @@ public sealed partial class WeeklyReportBuilderTests
     // requested count via Take (mirroring the real store's cap and AD-3 ordering).
     private sealed class FakeRunStore(IReadOnlyList<PipelineRunRecord> records) : IPipelineRunStore
     {
-        public Task<string> WriteAsync(PipelineRunRecord record, CancellationToken ct) =>
-            Task.FromResult("unused");
+        public Task<DurableWriteResult> WriteAsync(PipelineRunRecord record, CancellationToken ct) =>
+            Task.FromResult(DurableWriteResult.Succeeded("unused"));
 
         public Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<PipelineRunRecord>>(records.Take(Math.Max(0, count)).ToList());

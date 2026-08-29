@@ -1,3 +1,5 @@
+using Radar.Application.Storage;
+
 namespace Radar.Application.Scoring;
 
 /// <summary>
@@ -19,10 +21,13 @@ public interface IScoringConfigStore
     /// Insert-if-new (AD-1-style immutable): writes the effective config to
     /// <c>{RootDirectory}/{config.Fingerprint}.json</c> ONLY if no file for that fingerprint exists yet — a
     /// given fingerprint's config is by definition fixed, so the same config always yields the same
-    /// content. Best-effort (AD-8): a disk failure logs + returns the attempted path, never aborts the
-    /// run (the snapshot still carries the fingerprint). Returns the (existing or written) path.
+    /// content. Best-effort (AD-8): a disk failure logs and never aborts the run (the snapshot still
+    /// carries the fingerprint) — and the outcome is REPORTED (spec 201 §1): an already-existing file is
+    /// <see cref="DurableWriteOutcome.Written"/> (the content IS on disk), a write or serialization failure is
+    /// <see cref="DurableWriteOutcome.Failed"/>, so a stamp whose content-addressed file never landed is
+    /// counted by the caller rather than silently dereferencing to nothing.
     /// </summary>
-    Task<string> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct);
+    Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct);
 
     /// <summary>
     /// The fingerprint last recorded for this strategy NAME, or <c>null</c> when it has never been recorded
@@ -35,7 +40,9 @@ public interface IScoringConfigStore
 
     /// <summary>
     /// Records (upsert) the fingerprint this strategy NAME currently resolves to. Best-effort like every
-    /// other file store: a disk failure logs and continues. Returns the (attempted) path.
+    /// other file store: a disk failure logs and continues — and reports the outcome (spec 201 §1), because a
+    /// record that never landed means the tripwire has nothing to compare against next run.
     /// </summary>
-    Task<string> RecordStrategyFingerprintAsync(string strategyName, string fingerprint, CancellationToken ct);
+    Task<DurableWriteResult> RecordStrategyFingerprintAsync(
+        string strategyName, string fingerprint, CancellationToken ct);
 }

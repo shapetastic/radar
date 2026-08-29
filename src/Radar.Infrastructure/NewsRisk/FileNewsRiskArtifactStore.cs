@@ -42,17 +42,30 @@ public sealed class FileNewsRiskArtifactStore : INewsRiskArtifactStore
         ArgumentNullException.ThrowIfNull(document);
 
         var basePath = Path.Combine(_options.RootDirectory, "live", $"news-risk-{asOfDateToken}");
-        await GracefulFileWriter
+        var markdownWritten = await GracefulFileWriter
             .TryWriteAllTextAsync(basePath + ".md", markdown, _logger, ct)
             .ConfigureAwait(false);
-        await GracefulFileWriter
+        var jsonWritten = await GracefulFileWriter
             .TryWriteAllTextAsync(
                 basePath + ".json",
                 JsonSerializer.Serialize(document, RadarFileStoreJson.Options),
                 _logger,
                 ct)
             .ConfigureAwait(false);
-        _logger.LogInformation("News-risk live artifact written: {Path}.md/.json", basePath);
+        // Spec 201 §1: the "written" line is gated on BOTH writes; a failure names the path that did not land.
+        if (markdownWritten && jsonWritten)
+        {
+            _logger.LogInformation("News-risk live artifact written: {Path}.md/.json", basePath);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "News-risk live artifact NOT (fully) written: markdown {MarkdownWritten}, json {JsonWritten} "
+                    + "at {Path}.md/.json — the write(s) degraded gracefully.",
+                markdownWritten,
+                jsonWritten,
+                basePath);
+        }
     }
 
     public async Task WriteFailedAsync(string asOfDateToken, string reason, CancellationToken ct)
@@ -66,8 +79,18 @@ public sealed class FileNewsRiskArtifactStore : INewsRiskArtifactStore
                 + "The shadow step failed and assessed nothing. The Radar run itself is unaffected — "
                 + "no score, label, rank or report was rolled back or relabelled.\n\n"
                 + $"Reason: {reason}\n";
-        await GracefulFileWriter.TryWriteAllTextAsync(path, content, _logger, ct).ConfigureAwait(false);
-        _logger.LogWarning("News-risk FAILED artifact written: {Path} ({Reason})", path, reason);
+        var written = await GracefulFileWriter.TryWriteAllTextAsync(path, content, _logger, ct).ConfigureAwait(false);
+        if (written)
+        {
+            _logger.LogWarning("News-risk FAILED artifact written: {Path} ({Reason})", path, reason);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "News-risk FAILED artifact could NOT be written to {Path} ({Reason}): the write degraded gracefully.",
+                path,
+                reason);
+        }
     }
 
     public async Task WriteEvaluationAsync(string markdown, string csv, CancellationToken ct)
@@ -76,12 +99,24 @@ public sealed class FileNewsRiskArtifactStore : INewsRiskArtifactStore
         ArgumentNullException.ThrowIfNull(csv);
 
         var basePath = Path.Combine(_options.RootDirectory, "evaluation", "news-risk-evaluation");
-        await GracefulFileWriter
+        var markdownWritten = await GracefulFileWriter
             .TryWriteAllTextAsync(basePath + ".md", markdown, _logger, ct)
             .ConfigureAwait(false);
-        await GracefulFileWriter
+        var csvWritten = await GracefulFileWriter
             .TryWriteAllTextAsync(basePath + ".csv", csv, _logger, ct)
             .ConfigureAwait(false);
-        _logger.LogInformation("News-risk evaluation artifact written: {Path}.md/.csv", basePath);
+        if (markdownWritten && csvWritten)
+        {
+            _logger.LogInformation("News-risk evaluation artifact written: {Path}.md/.csv", basePath);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "News-risk evaluation artifact NOT (fully) written: markdown {MarkdownWritten}, csv "
+                    + "{CsvWritten} at {Path}.md/.csv — the write(s) degraded gracefully.",
+                markdownWritten,
+                csvWritten,
+                basePath);
+        }
     }
 }

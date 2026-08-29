@@ -1,9 +1,11 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Prices;
 using Radar.Domain.Companies;
 using Radar.TestSupport;
+using Radar.Application.Storage;
 
 namespace Radar.Application.Tests.Prices;
 
@@ -50,6 +52,54 @@ public sealed class PriceHistoryAcquirerTests
         Assert.Equal(["MRCY", "AEHR"], store.Written.Select(h => h.Ticker).ToArray());
         Assert.All(store.Written, h => Assert.Equal("yahoo-chart-v8", h.Source));
         Assert.All(store.Written, h => Assert.Equal(FixedNow, h.RetrievedAtUtc));
+    }
+
+    /// <summary>
+    /// Spec 201 §1: a fetched history whose store write degraded is COUNTED — one aggregated Warning for the
+    /// price store, and "bars stored" in the summary counts only bars that reached disk. Mutation: revert
+    /// the acquirer to discard the outcome and the Warning disappears while the summary claims 10 bars.
+    /// </summary>
+    [Fact]
+    public async Task AcquireAsync_FailedStoreWrite_IsCountedOnce_AndNotReportedAsStored()
+    {
+        var repo = new FakeCompanyRepository(
+            new CompanyBuilder().WithTicker("MRCY").Build(),
+            new CompanyBuilder().WithTicker("AEHR").Build());
+        var reader = new RecordingReader(PriceHistoryReadResult.Success(
+            [new PriceBar(new DateOnly(2026, 6, 9), 1m, 1m, 1m, 1m, 1m, 10)]));
+        var store = new RecordingStore { FailWrites = true };
+        var logger = new CapturingLogger<PriceHistoryAcquirer>();
+
+        var acquirer = new PriceHistoryAcquirer(
+            repo, reader, store, new FixedTimeProvider(FixedNow),
+            new PriceAcquisitionOptions { InterRequestDelay = TimeSpan.Zero }, logger);
+        await acquirer.AcquireAsync(CancellationToken.None);
+
+        // Both were fetched and both writes were attempted; neither landed.
+        Assert.Equal(2, store.Written.Count);
+        var warning = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("2 of 2 fetched price histor", warning.Message);
+
+        var summary = Assert.Single(logger.Entries, e => e.Level == LogLevel.Information);
+        Assert.Contains("2/2 ticker(s) fetched", summary.Message);
+        Assert.Contains("0 bar(s) stored", summary.Message);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     [Fact]
@@ -114,10 +164,13 @@ public sealed class PriceHistoryAcquirerTests
     {
         public List<PriceHistory> Written { get; } = [];
 
-        public Task<string> WriteAsync(PriceHistory history, CancellationToken ct)
+        /// <summary>Spec 201 §1: when set, every write reports <see cref="DurableWriteOutcome.Failed"/>.</summary>
+        public bool FailWrites { get; set; }
+
+        public Task<DurableWriteResult> WriteAsync(PriceHistory history, CancellationToken ct)
         {
             Written.Add(history);
-            return Task.FromResult($"data/prices/{history.Ticker}.json");
+            return Task.FromResult(DurableWriteResult.From($"data/prices/{history.Ticker}.json", !FailWrites));
         }
 
         public Task<PriceHistory?> ReadAsync(string ticker, CancellationToken ct) =>

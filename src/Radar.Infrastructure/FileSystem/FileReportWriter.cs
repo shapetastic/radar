@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Reporting;
+using Radar.Application.Storage;
 using Radar.Domain.Reports;
 
 namespace Radar.Infrastructure.FileSystem;
@@ -13,8 +14,9 @@ namespace Radar.Infrastructure.FileSystem;
 /// <c>{RootDirectory}/weekly/radar-weekly-{yyyy-MM-dd}.md</c>. Overwriting an existing report file
 /// is allowed: a report is a derived view, not immutable evidence (AD-1 governs evidence only). All
 /// file I/O is confined to Infrastructure; the Application sees only
-/// <see cref="IReportFileWriter"/>. Disk failures degrade gracefully (warn + return the attempted
-/// path) and never crash the run; the in-memory report still exists.
+/// <see cref="IReportFileWriter"/>. Disk failures degrade gracefully (warn + report a
+/// <see cref="DurableWriteOutcome.Failed"/> outcome carrying the attempted path) and never crash the run; the
+/// in-memory report still exists, but since spec 201 §1 the caller can no longer read the path as stored.
 /// </summary>
 public sealed class FileReportWriter : IReportFileWriter
 {
@@ -33,7 +35,7 @@ public sealed class FileReportWriter : IReportFileWriter
         _logger = logger;
     }
 
-    public async Task<string> WriteAsync(RadarReport report, CancellationToken ct)
+    public async Task<DurableWriteResult> WriteAsync(RadarReport report, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(report);
 
@@ -42,12 +44,14 @@ public sealed class FileReportWriter : IReportFileWriter
             "weekly",
             $"radar-weekly-{report.PeriodEndUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.md");
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(path, report.MarkdownContent, _logger, ct, Utf8NoBom)
-                .ConfigureAwait(false))
+        var written = await GracefulFileWriter
+            .TryWriteAllTextAsync(path, report.MarkdownContent, _logger, ct, Utf8NoBom)
+            .ConfigureAwait(false);
+        if (written)
         {
             _logger.LogInformation("Wrote weekly report {ReportId} to {Path}.", report.Id, path);
         }
 
-        return path;
+        return DurableWriteResult.From(path, written);
     }
 }

@@ -1,11 +1,11 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
-using System.Security.Cryptography;
 using System.Text;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Identity;
 using Radar.Application.News;
 
 namespace Radar.Infrastructure.News;
@@ -103,12 +103,11 @@ internal sealed class HttpNewsArticleContentReader : INewsArticleContentReader
         _resolveHostAddresses = resolveHostAddresses
             ?? (static (host, ct) => Dns.GetHostAddressesAsync(host, ct));
 
-        var domainDigest = Convert.ToHexStringLower(
-            SHA256.HashData(Encoding.UTF8.GetBytes(string.Join(
-                ",",
-                options.AllowedDomains
-                    .Select(d => d.Trim().ToLowerInvariant())
-                    .Order(StringComparer.Ordinal)))))[..12];
+        var domainDigest = CanonicalHash.Sha256Hex(string.Join(
+            ",",
+            options.AllowedDomains
+                .Select(d => d.Trim().ToLowerInvariant())
+                .Order(StringComparer.Ordinal)))[..12];
         _retrievalPolicy = string.Create(
             CultureInfo.InvariantCulture,
             $"news-fetch-v1;extractor={HtmlVisibleText.Version};domains=sha256:{domainDigest}");
@@ -284,7 +283,7 @@ internal sealed class HttpNewsArticleContentReader : INewsArticleContentReader
                 extractorVersion: HtmlVisibleText.Version);
         }
 
-        var contentHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+        var contentHash = CanonicalHash.Sha256Hex(text);
 
         // Fetched ⇒ allowlisted by construction (nothing else is ever requested), so retaining the body is
         // covered by the operator's explicit allowlist permission.

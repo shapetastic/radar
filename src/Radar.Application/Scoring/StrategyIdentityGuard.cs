@@ -70,10 +70,29 @@ public static class StrategyIdentityGuard
 
             if (recorded is null)
             {
-                await store.RecordStrategyFingerprintAsync(name, computed, ct).ConfigureAwait(false);
-                logger.LogInformation(
-                    "Recorded first identity for scoring strategy {StrategyName}: {Fingerprint}.",
-                    name, computed);
+                var recordWrite = await store
+                    .RecordStrategyFingerprintAsync(name, computed, ct)
+                    .ConfigureAwait(false);
+                if (recordWrite.Written)
+                {
+                    logger.LogInformation(
+                        "Recorded first identity for scoring strategy {StrategyName}: {Fingerprint}.",
+                        name, computed);
+                }
+                else
+                {
+                    // Spec 201 §1: a record that never landed must not be reported as recorded. The run
+                    // continues (the guard is read-mostly and best-effort, AD-8), but the operator is told
+                    // that the tripwire is UNARMED for this name: the next run will find no record and
+                    // silently record whatever it computes then.
+                    logger.LogWarning(
+                        "Could NOT record the first identity for scoring strategy {StrategyName} "
+                            + "({Fingerprint}) at {Path}: the write degraded gracefully. The strategy "
+                            + "identity tripwire is not armed for this name until a run succeeds in "
+                            + "recording it.",
+                        name, computed, recordWrite.Path);
+                }
+
                 continue;
             }
 

@@ -614,31 +614,13 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
         value is { } v ? v.ToString("0.##", CultureInfo.InvariantCulture) : "n/a";
 
     /// <summary>
-    /// True when the whitespace-normalised, case-insensitive article title contains the company query phrase
-    /// or the (optional) ticker token. The Google News <c>" - Publisher"</c> title suffix is stripped BEFORE
-    /// the check so a publisher name that happens to contain the ticker/phrase cannot produce a false match;
-    /// both sides are whitespace-normalised first, so a spaced <c>"( RKLB )"</c> still matches an
-    /// <c>RKLB</c> ticker and <c>"Rocket Lab USA , Inc ."</c> still matches the <c>Rocket Lab</c> phrase.
+    /// The shared <see cref="FeedTargetRelevance.IsRelevant"/> rule (spec 201 §2 — one predicate for both
+    /// query-driven news collectors), with THIS collector's one divergent edge passed in as the pre-normalize
+    /// hook: the Google News <c>" - Publisher"</c> title suffix is stripped BEFORE the check so a publisher
+    /// name that happens to contain the ticker/phrase cannot produce a false match.
     /// </summary>
-    private static bool IsRelevant(string? title, QueryFeedTarget target)
-    {
-        var normalizedTitle = NormalizeWhitespace(StripPublisherSuffix(title));
-        if (normalizedTitle.Length == 0)
-        {
-            return false;
-        }
-
-        var phrase = NormalizeWhitespace(target.QueryPhrase);
-        if (phrase.Length > 0
-            && normalizedTitle.Contains(phrase, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var ticker = NormalizeWhitespace(target.Ticker);
-        return ticker.Length > 0
-            && normalizedTitle.Contains(ticker, StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsRelevant(string? title, QueryFeedTarget target) =>
+        FeedTargetRelevance.IsRelevant(title, target, StripPublisherSuffix);
 
     /// <summary>
     /// Removes a trailing <c>" - Publisher"</c> suffix Google News appends to the headline (the outlet name),
@@ -648,17 +630,6 @@ internal sealed class NewsAttentionCollector : IEvidenceCollector
     /// </summary>
     private static string? StripPublisherSuffix(string? title) =>
         GoogleNewsHeadline.StripPublisherSuffix(title);
-
-    /// <summary>Collapses every run of whitespace to a single space and trims; null/blank becomes empty.</summary>
-    private static string NormalizeWhitespace(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        return string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-    }
 
     private CollectedEvidence MapToEvidence(
         CompanySourceFeed feed, NewsArticleItem article, IReadOnlyList<string> hints)

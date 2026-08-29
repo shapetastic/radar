@@ -37,8 +37,15 @@ public interface IScoringPass
 /// this run fail to write" is a statement about the DISK, and a non-primary strategy's lost snapshot is just
 /// as lost. Trailing + defaulted to 0, the truthful value for a pass that persisted everything.
 /// </param>
+/// <param name="ScoringConfigsNotPersisted">
+/// Spec 201 §1: how many per-strategy effective scoring-config files (content-addressed, insert-if-new)
+/// this pass could NOT durably persist. A snapshot still carries its fingerprint stamp either way; this
+/// counts the stamps whose dereference target never landed. Trailing + defaulted to 0, the truthful value
+/// for a pass that persisted every config it attempted.
+/// </param>
 public sealed record ScoringPassResult(
     int CompaniesScored,
     IReadOnlyList<string> Strategies,
     string PrimaryStrategy,
-    int ScoreSnapshotsNotPersisted = 0);
+    int ScoreSnapshotsNotPersisted = 0,
+    int ScoringConfigsNotPersisted = 0);

@@ -106,6 +106,14 @@ public sealed class ScoreMoveDenominatorAuditGenerator : IScoreMoveDenominatorAu
         var csv = _renderer.RenderCsv(report);
         var markdown = _renderer.RenderMarkdown(report);
         var paths = await _artifactStore.WriteAsync(csv, markdown, ct).ConfigureAwait(false);
+        if (paths.NotPersistedCount > 0)
+        {
+            // Spec 201 §1: the summary line below names the paths; this says which of them is not there.
+            _logger.LogWarning(
+                "Score-move denominator audit: {FilesNotPersisted} of 2 artifact file(s) could NOT be "
+                    + "durably persisted; the on-disk audit is missing or STALE.",
+                paths.NotPersistedCount);
+        }
 
         _logger.LogInformation(
             "Score-move denominator audit over {Series}: {Strategies} strateg(ies), "

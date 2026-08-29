@@ -6,6 +6,7 @@ using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 using Radar.TestSupport;
+using Radar.Application.Storage;
 
 namespace Radar.Application.Tests.Efficacy.Attention;
 
@@ -192,7 +193,7 @@ internal sealed class FakeEvidenceRepository : IEvidenceRepository
 /// <summary>A run store serving a fixed history; writes throw.</summary>
 internal sealed class FakePipelineRunStore(params PipelineRunRecord[] records) : IPipelineRunStore
 {
-    public Task<string> WriteAsync(PipelineRunRecord record, CancellationToken ct) =>
+    public Task<DurableWriteResult> WriteAsync(PipelineRunRecord record, CancellationToken ct) =>
         throw new NotSupportedException("The attention screen must be read-only over the run log.");
 
     public Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct) =>
@@ -227,8 +228,8 @@ internal sealed class RecordingAttentionArrivalArtifactStore : IAttentionArrival
     {
         Written.Add((json, csv, markdown));
         return Task.FromResult(new AttentionArrivalArtifactPaths(
-            "attention-arrival-screen.json",
-            "attention-arrival-screen.csv",
-            "attention-arrival-screen.md"));
+            DurableWriteResult.Succeeded("attention-arrival-screen.json"),
+            DurableWriteResult.Succeeded("attention-arrival-screen.csv"),
+            DurableWriteResult.Succeeded("attention-arrival-screen.md")));
     }
 }

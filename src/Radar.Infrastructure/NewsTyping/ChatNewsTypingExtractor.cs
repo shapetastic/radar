@@ -1,9 +1,9 @@
-using System.Security.Cryptography;
 using System.Text;
 
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Identity;
 using Radar.Application.NewsTyping;
 
 namespace Radar.Infrastructure.NewsTyping;
@@ -155,6 +155,5 @@ internal sealed class ChatNewsTypingExtractor : INewsTypingExtractor
         return sb.ToString();
     }
 
-    private static string HashText(string text) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    private static string HashText(string text) => CanonicalHash.Sha256Hex(text);
 }

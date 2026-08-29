@@ -162,6 +162,45 @@ public sealed class NewsRiskClaimValidatorTests
         Assert.Null(result.RiskScore);
     }
 
+    /// <summary>
+    /// Spec 201 §4: a MISSING claims array is a malformed response, not "zero claims". Pre-201 the validator
+    /// read <c>Claims?.Count ?? 0</c>, so a NoRiskFoundInSuppliedText response that omitted its claims array
+    /// validated as a clean read; now it fails with a named reason and the total is the honest 0.
+    /// </summary>
+    [Theory]
+    [InlineData("NoRiskFoundInSuppliedText")]
+    [InlineData("ThesisChallenged")]
+    public void MissingClaimsArray_FailsValidation_WithANamedReason(string assessment)
+    {
+        var response = new NewsRiskModelResponse(
+            Assessment: assessment,
+            RiskScore: 70,
+            Categories: ["LiquidityOrGoingConcern"],
+            Claims: null,
+            Rationale: "Coverage describes a going-concern statement.");
+
+        var result = NewsRiskClaimValidator.Validate(response, Supplied);
+
+        Assert.Equal(NewsRiskAssessmentStatus.ValidationFailed, result.Status);
+        Assert.NotEqual(NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText, result.Status);
+        Assert.Contains(result.ClaimDropReasons, r => r.StartsWith("claims-array-missing", StringComparison.Ordinal));
+        Assert.Equal(0, result.ClaimsTotal);
+        Assert.Equal(0, result.ClaimsAccepted);
+        Assert.Null(result.RiskScore);
+    }
+
+    [Fact]
+    public void EmptyClaimsArray_IsStillZeroClaims_NotAMissingArray()
+    {
+        // The contrast that makes the test above meaningful: an EMPTY array is a real statement of zero
+        // claims and takes the ordinary path (NoRiskFound stays NoRiskFound).
+        var result = NewsRiskClaimValidator.Validate(
+            Response(assessment: "NoRiskFoundInSuppliedText", score: null), Supplied);
+
+        Assert.Equal(NewsRiskAssessmentStatus.NoRiskFoundInSuppliedText, result.Status);
+        Assert.DoesNotContain(result.ClaimDropReasons, r => r.StartsWith("claims-array-missing", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void NoRiskFound_CoercesScoreAndClaimsAway()
     {

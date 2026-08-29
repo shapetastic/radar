@@ -64,7 +64,7 @@ public sealed class FilePipelineRunStoreTests : IDisposable
         var record = RecordAt(BaseInstant, id);
 
         var store = CreateStore();
-        var path = await store.WriteAsync(record, CancellationToken.None);
+        var path = (await store.WriteAsync(record, CancellationToken.None)).Path;
 
         // The file is written under {root}/{yyyy}/{MM}/run-...json.
         var expectedDir = Path.Combine(_tempDir, "2026", "02");
@@ -185,7 +185,7 @@ public sealed class FilePipelineRunStoreTests : IDisposable
         var store = CreateStore();
         await store.WriteAsync(oldest, CancellationToken.None);
         await store.WriteAsync(middle, CancellationToken.None);
-        var newestPath = await store.WriteAsync(newest, CancellationToken.None);
+        var newestPath = (await store.WriteAsync(newest, CancellationToken.None)).Path;
 
         // Corrupt the newest run file in place; it must be skipped, and the read must fall through to the
         // next-newest valid records rather than returning fewer than `count`.
@@ -266,7 +266,7 @@ public sealed class FilePipelineRunStoreTests : IDisposable
 
         var store = CreateStore(rootAsFile);
 
-        var path = await store.WriteAsync(record, CancellationToken.None);
+        var path = (await store.WriteAsync(record, CancellationToken.None)).Path;
 
         // The attempted path is returned (no throw); the in-memory result still carries the counts.
         var expectedPath = Path.Combine(

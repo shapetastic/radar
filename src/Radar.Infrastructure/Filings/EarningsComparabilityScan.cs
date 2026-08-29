@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Text;
 
 using Radar.Application.Filings;
+using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Filings;
 
@@ -81,7 +81,9 @@ public static class EarningsComparabilityScan
             return new ComparabilityMarkers([], []);
         }
 
-        var normalized = NormalizeWhitespace(body);
+        // Spec 201 §2: the shared collapser (one definition, three callers), byte-equivalent to the private
+        // one it replaces — every whitespace run to one space, trimmed.
+        var normalized = FeedTargetRelevance.NormalizeWhitespace(body);
         return new ComparabilityMarkers(
             Match(normalized, CapTriggeringPhrases),
             Match(normalized, DiagnosticOnlyPhrases));
@@ -108,33 +110,5 @@ public static class EarningsComparabilityScan
         }
 
         return matched ?? (IReadOnlyList<string>)[];
-    }
-
-    /// <summary>
-    /// Collapses every run of whitespace (spaces, newlines, tabs — whatever the HTML strip left) to a single
-    /// space so a phrase like "one time" or "litigation settlement" matches across a line break.
-    /// </summary>
-    private static string NormalizeWhitespace(string body)
-    {
-        var sb = new StringBuilder(body.Length);
-        var pendingSpace = false;
-        foreach (var ch in body)
-        {
-            if (char.IsWhiteSpace(ch))
-            {
-                pendingSpace = sb.Length > 0;
-                continue;
-            }
-
-            if (pendingSpace)
-            {
-                sb.Append(' ');
-                pendingSpace = false;
-            }
-
-            sb.Append(ch);
-        }
-
-        return sb.ToString();
     }
 }

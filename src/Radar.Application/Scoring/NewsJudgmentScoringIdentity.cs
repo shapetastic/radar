@@ -22,19 +22,18 @@ namespace Radar.Application.Scoring;
 /// and references nothing that can — which is what lets a spec-144 <c>score</c> pass, and a spec-139 replay,
 /// compose the SAME identity a <c>full</c> run composes from the same configuration, without registering the
 /// judgment step at all. It is also what keeps the spec-177/179 architecture guards intact — and those
-/// guards enforce a TYPE-GRAPH constraint, which is narrower than "Scoring never mentions News": they walk
-/// each <c>Radar.Application.Scoring</c> type's base type, interfaces, ALL fields (private and static
-/// included), property/method/constructor signatures and every generic argument, and fail if any of them
-/// lands in <c>Radar.Application.News</c> or <c>Radar.Application.NewsRisk</c>. They are structurally blind
-/// to a <c>const</c> or method-body reference, and <see cref="LegacyNewsInheritanceNeutralization"/> relies
-/// on exactly that: it reads the <c>const</c> <c>NewsTrajectorySignalRules.BaseStrength</c> inside a method
-/// body so the neutral strength it substitutes cannot drift from the one the extractor emits. That is
-/// deliberate and does not violate the guard, because no field, signature or generic argument carries the
-/// type. What this type must never do is the thing the guard DOES see — carry a News/NewsRisk type in its
-/// shape — so the trajectory→direction mapping and the strength constants arrive here already rendered,
-/// composed by <c>NewsJudgmentScoringIdentityFactory</c> on the far side of that boundary. Do not "simplify"
-/// this by taking the trajectory enum or the rules type as a parameter — that inverts the dependency those
-/// guards exist to enforce.
+/// guards enforce the constraint on the TYPE GRAPH (each <c>Radar.Application.Scoring</c> type's base type,
+/// interfaces, ALL fields, property/method/constructor signatures and every generic argument) AND — since
+/// spec 201 §3 — at SOURCE level: no file under <c>Radar.Application/Scoring</c> may carry a
+/// <c>using</c> of, or a fully-qualified reference to, <c>Radar.Application.News</c> or
+/// <c>Radar.Application.NewsRisk</c>. The ban is total, not type-graph-only: the one <c>const</c> read that
+/// used to hide from the type-graph walk (<see cref="LegacyNewsInheritanceNeutralization"/> reading the
+/// neutral base strength) now reads <c>NewsTrajectorySignalConstants</c> in
+/// <c>Radar.Application.SignalExtraction</c>, a namespace Scoring references legitimately. What this type
+/// must never do is carry a News/NewsRisk type in its shape — so the trajectory→direction mapping and the
+/// strength constants arrive here already rendered, composed by <c>NewsJudgmentScoringIdentityFactory</c> on
+/// the far side of that boundary. Do not "simplify" this by taking the trajectory enum or the rules type as a
+/// parameter — that inverts the dependency those guards exist to enforce.
 /// </para>
 /// <para>
 /// <b>The two rule versions are recorded even when judgment is DISABLED, and that is deliberate.</b>

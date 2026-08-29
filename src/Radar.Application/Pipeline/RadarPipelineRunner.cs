@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 
 namespace Radar.Application.Pipeline;
 
@@ -103,12 +104,16 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // structured row source; never re-read, never re-ranked.
         Guid? reportId = null;
         IReadOnlyList<StrategyReportSection>? strategySections = null;
+        // Spec 201 §1: null = no report write was attempted this run; 0/1 = a measured outcome.
+        int? reportsNotPersisted = null;
         if (_options.GenerateReport)
         {
             var report = await _reportBuilder
                 .GenerateAsync(collection.AsOfUtc, collection.Collection, collection.Health, ct)
                 .ConfigureAwait(false);
-            await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
+            var reportWrite = await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
+            reportsNotPersisted = reportWrite.Written ? 0 : 1;
+            LogReportNotPersisted(_logger, reportWrite);
             reportId = report.Report.Id;
             strategySections = report.StrategySections;
         }
@@ -190,10 +195,55 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             // Spec 193 §1: the combined run did BOTH kinds of work, so it genuinely observed both counts —
             // 0 here is a measured zero, not a fabricated one.
             SignalsNotPersisted: collection.SignalsNotPersisted,
-            ScoreSnapshotsNotPersisted: scoring.ScoreSnapshotsNotPersisted);
-        await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
+            ScoreSnapshotsNotPersisted: scoring.ScoreSnapshotsNotPersisted,
+            // Spec 201 §1: both observed by the combined run (null only when no report was generated).
+            ReportsNotPersisted: reportsNotPersisted,
+            ScoringConfigsNotPersisted: scoring.ScoringConfigsNotPersisted);
+        var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
+        LogRunRecordNotPersisted(_logger, runRecordWrite);
 
         return pipelineResult;
+    }
+
+    /// <summary>
+    /// Spec 201 §1: the run record is the one durable write that cannot count its own failure on itself, so
+    /// the ONE report of it is this Warning, shared by every runner. Silent on success (a healthy run's log
+    /// is byte-identical to before).
+    /// </summary>
+    internal static void LogRunRecordNotPersisted(ILogger logger, DurableWriteResult write)
+    {
+        if (write.Written)
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "The pipeline run record could NOT be durably persisted to {Path}: the write degraded "
+                + "gracefully. The run completed and its counts were reported, but the run log does NOT "
+                + "contain this run, so the weekly report's run-history comparison and every reader of the "
+                + "run log (coverage checkpoints, the news-observation batch association) will not see it.",
+            write.Path);
+    }
+
+    /// <summary>
+    /// Spec 201 §1: a failed weekly-report write is stated once, at the runner that attempted it. The report
+    /// id stays on the result and the run record — the report was generated and its in-memory model may
+    /// still be re-rendered to the same path — but THIS run's file did not land, and that is what this line
+    /// says. Weekly reports overwrite by path, so a prior run's report may still sit there: the line claims
+    /// only that the file at that path is not this run's, never that no file exists.
+    /// </summary>
+    internal static void LogReportNotPersisted(ILogger logger, DurableWriteResult write)
+    {
+        if (write.Written)
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "The weekly report could NOT be durably persisted to {Path}: the write degraded gracefully. "
+                + "The report was generated and its id is recorded, but this run's file did not land: any "
+                + "file at that path is a prior run's report and is stale.",
+            write.Path);
     }
 
     /// <summary>

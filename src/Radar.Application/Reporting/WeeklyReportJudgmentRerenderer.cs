@@ -84,9 +84,22 @@ public sealed class WeeklyReportJudgmentRerenderer : IWeeklyReportJudgmentRerend
         }
 
         var markdown = _renderer.Render(captured.Model with { NewsJudgment = markers });
-        await _fileWriter
+        var write = await _fileWriter
             .WriteAsync(captured.Report with { MarkdownContent = markdown }, ct)
             .ConfigureAwait(false);
+        if (!write.Written)
+        {
+            // Spec 201 §1: a re-render whose file never landed is not a re-render. The pending markers in
+            // whatever file exists at that path (if any) stand, and the caller's bool says so.
+            _logger.LogWarning(
+                "Re-rendered weekly report {ReportId} with the news-judgment markers, but the write to "
+                    + "{Path} degraded gracefully: the file on disk (if any) still carries the pending "
+                    + "markers.",
+                captured.Report.Id,
+                write.Path);
+            return false;
+        }
+
         _logger.LogInformation(
             "Re-rendered weekly report {ReportId} with the news-judgment semantic-read markers.",
             captured.Report.Id);

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Prices;
+using Radar.Application.Storage;
 
 namespace Radar.Infrastructure.FileSystem;
 
@@ -25,7 +26,8 @@ namespace Radar.Infrastructure.FileSystem;
 /// partial last-day bars — rejected.
 /// </para>
 /// <para>
-/// Best-effort (AD-8): a disk failure on write logs a warning and returns the attempted path (never throws); a
+/// Best-effort (AD-8): a disk failure on write logs a warning and reports a <see cref="DurableWriteOutcome.Failed"/>
+/// outcome carrying the attempted path (never throws — spec 201 §1: the path is no longer proof of storage); a
 /// missing file on read returns <c>null</c>, and an unreadable/malformed file logs a warning and returns
 /// <c>null</c> — a bad price file never crashes a run.
 /// </para>
@@ -45,7 +47,7 @@ public sealed class FilePriceHistoryStore : IPriceHistoryStore
         _logger = logger;
     }
 
-    public async Task<string> WriteAsync(PriceHistory history, CancellationToken ct)
+    public async Task<DurableWriteResult> WriteAsync(PriceHistory history, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(history);
 
@@ -57,7 +59,9 @@ public sealed class FilePriceHistoryStore : IPriceHistoryStore
             _logger.LogWarning(
                 "Price history ticker '{Ticker}' is blank or contains invalid filename characters; skipping write.",
                 history.Ticker);
-            return Path.Combine(_options.RootDirectory, "(invalid-ticker).json");
+            // Nothing was written, and the outcome says so (spec 201 §1).
+            return DurableWriteResult.NotPersisted(
+                Path.Combine(_options.RootDirectory, "(invalid-ticker).json"));
         }
 
         var path = Path.Combine(_options.RootDirectory, sanitized + ".json");
@@ -69,7 +73,8 @@ public sealed class FilePriceHistoryStore : IPriceHistoryStore
 
         var json = JsonSerializer.Serialize(toWrite, RadarFileStoreJson.Options);
 
-        if (await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false))
+        var written = await GracefulFileWriter.TryWriteAllTextAsync(path, json, _logger, ct).ConfigureAwait(false);
+        if (written)
         {
             _logger.LogInformation(
                 "Wrote {BarCount} price bar(s) for '{Ticker}' to {Path}.",
@@ -78,7 +83,7 @@ public sealed class FilePriceHistoryStore : IPriceHistoryStore
                 path);
         }
 
-        return path;
+        return DurableWriteResult.From(path, written);
     }
 
     public async Task<PriceHistory?> ReadAsync(string ticker, CancellationToken ct)

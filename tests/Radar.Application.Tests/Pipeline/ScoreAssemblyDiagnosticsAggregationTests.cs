@@ -510,15 +510,15 @@ public sealed class ScoreAssemblyDiagnosticsAggregationTests
 
     private sealed class StubScoringConfigStore : IScoringConfigStore
     {
-        public Task<string> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct) =>
-            Task.FromResult("written/config.json");
+        public Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct) =>
+            Task.FromResult(DurableWriteResult.Succeeded("written/config.json"));
 
         public Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct) =>
             Task.FromResult<string?>(null);
 
-        public Task<string> RecordStrategyFingerprintAsync(
+        public Task<DurableWriteResult> RecordStrategyFingerprintAsync(
             string strategyName, string fingerprint, CancellationToken ct) =>
-            Task.FromResult("written/strategies.json");
+            Task.FromResult(DurableWriteResult.Succeeded("written/strategies.json"));
     }
 
     /// <summary>Records what the pass wrote, in order, so score neutrality is checked on real output.</summary>

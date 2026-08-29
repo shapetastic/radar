@@ -54,7 +54,7 @@ public sealed class FileReportWriterTests : IDisposable
         var report = BuildReport(periodEnd, markdown);
 
         var writer = CreateWriter();
-        var path = await writer.WriteAsync(report, CancellationToken.None);
+        var path = (await writer.WriteAsync(report, CancellationToken.None)).Path;
 
         var expectedPath = Path.Combine(_tempDir, "weekly", "radar-weekly-2026-02-08.md");
         Assert.Equal(expectedPath, path);
@@ -92,7 +92,7 @@ public sealed class FileReportWriterTests : IDisposable
 
         var writer = CreateWriter(rootAsFile);
 
-        var path = await writer.WriteAsync(report, CancellationToken.None);
+        var path = (await writer.WriteAsync(report, CancellationToken.None)).Path;
 
         // Contract: on failure the writer returns the path it *attempted* to write.
         var expectedPath = Path.Combine(rootAsFile, "weekly", "radar-weekly-2026-02-08.md");

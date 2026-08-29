@@ -1,18 +1,53 @@
+using Radar.Application.Storage;
+
 namespace Radar.Application.Efficacy;
 
-/// <summary>The written efficacy-artifact paths (best-effort; returned even when a write degraded).</summary>
-public sealed record EfficacyArtifactPaths(string SvgPath, string CsvPath);
+/// <summary>
+/// The per-file outcomes of one efficacy-artifact write (spec 201 §1). Each member is the shared
+/// <see cref="DurableWriteResult"/>: the ATTEMPTED path plus whether the content actually reached it. The
+/// <c>*Path</c> projections keep the pre-201 shape for readers that only need the target path — a path is
+/// never evidence that the file exists; the outcome is.
+/// </summary>
+public sealed record EfficacyArtifactPaths(DurableWriteResult Svg, DurableWriteResult Csv)
+{
+    public string SvgPath => Svg.Path;
 
-/// <summary>The written strategy-leaderboard paths (best-effort; returned even when a write degraded).</summary>
-public sealed record StrategyLeaderboardPaths(string CsvPath, string MarkdownPath);
+    public string CsvPath => Csv.Path;
 
-/// <summary>The written paired-comparison paths (best-effort; returned even when a write degraded).</summary>
-public sealed record PairedComparisonPaths(string CsvPath, string MarkdownPath, string BlocksCsvPath);
+    /// <summary>How many of the two files did NOT land — a measured count, never inferred from the paths.</summary>
+    public int NotPersistedCount => (Svg.Written ? 0 : 1) + (Csv.Written ? 0 : 1);
+}
+
+/// <summary>The per-file outcomes of the strategy-leaderboard pair (spec 201 §1; see <see cref="EfficacyArtifactPaths"/>).</summary>
+public sealed record StrategyLeaderboardPaths(DurableWriteResult Csv, DurableWriteResult Markdown)
+{
+    public string CsvPath => Csv.Path;
+
+    public string MarkdownPath => Markdown.Path;
+
+    public int NotPersistedCount => (Csv.Written ? 0 : 1) + (Markdown.Written ? 0 : 1);
+}
+
+/// <summary>The per-file outcomes of the paired-comparison triple (spec 201 §1; see <see cref="EfficacyArtifactPaths"/>).</summary>
+public sealed record PairedComparisonPaths(
+    DurableWriteResult Csv, DurableWriteResult Markdown, DurableWriteResult BlocksCsv)
+{
+    public string CsvPath => Csv.Path;
+
+    public string MarkdownPath => Markdown.Path;
+
+    public string BlocksCsvPath => BlocksCsv.Path;
+
+    public int NotPersistedCount =>
+        (Csv.Written ? 0 : 1) + (Markdown.Written ? 0 : 1) + (BlocksCsv.Written ? 0 : 1);
+}
 
 /// <summary>
 /// The persistence seam for the per-company efficacy artifacts (AD-14 read side): writes the SVG + CSV under
-/// <c>data/efficacy/{ticker}.{svg,csv}</c>. Best-effort (AD-8): a disk failure logs and returns the attempted
-/// path(s) rather than throwing. It writes ONLY efficacy artifacts — never evidence/signal/score.
+/// <c>data/efficacy/{ticker}.{svg,csv}</c>. Best-effort (AD-8): a disk failure logs and never throws — but
+/// since spec 201 §1 the outcome is REPORTED per file rather than implied by a returned path, so a caller
+/// can no longer read the return value as proof of storage. It writes ONLY efficacy artifacts — never
+/// evidence/signal/score.
 /// </summary>
 public interface IEfficacyArtifactStore
 {
@@ -22,7 +57,7 @@ public interface IEfficacyArtifactStore
     /// Writes the spec-140 strategy-vs-price leaderboard to <c>data/efficacy/strategy-leaderboard.{csv,md}</c>
     /// — ONE artifact per run (it compares strategies, not companies), alongside the per-company files rather
     /// than replacing any of them. Same best-effort posture as <see cref="WriteAsync"/> (AD-8): a disk failure
-    /// logs and returns the attempted paths rather than throwing.
+    /// logs, never throws, and is reported on the returned outcomes.
     /// </summary>
     Task<StrategyLeaderboardPaths> WriteLeaderboardAsync(string csv, string markdown, CancellationToken ct);
 
@@ -34,7 +69,7 @@ public interface IEfficacyArtifactStore
     /// claim; sharing a file would let one overwrite the other's meaning. The blocks file is its own CSV
     /// (never a <c>recordType</c> discriminator in the summary CSV) so the summary keeps one homogeneous row
     /// per baseline for its existing readers. Same best-effort posture as <see cref="WriteAsync"/> (AD-8): a
-    /// disk failure logs and returns the attempted paths rather than throwing.
+    /// disk failure logs, never throws, and is reported on the returned outcomes.
     /// </summary>
     Task<PairedComparisonPaths> WritePairedComparisonAsync(
         string csv, string markdown, string blocksCsv, CancellationToken ct);

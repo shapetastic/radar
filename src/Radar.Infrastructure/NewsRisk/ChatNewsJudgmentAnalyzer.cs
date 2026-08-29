@@ -1,10 +1,10 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Identity;
 using Radar.Application.NewsRisk;
 using Radar.Application.NewsRisk.Judgment;
 
@@ -227,6 +227,5 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
         return sb.ToString();
     }
 
-    private static string HashText(string text) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    private static string HashText(string text) => CanonicalHash.Sha256Hex(text);
 }

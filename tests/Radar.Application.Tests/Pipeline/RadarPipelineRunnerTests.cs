@@ -282,10 +282,13 @@ public sealed class RadarPipelineRunnerTests
     {
         public List<RadarReport> Written { get; } = new();
 
-        public Task<string> WriteAsync(RadarReport report, CancellationToken ct)
+        /// <summary>Spec 201 §1: when set, every write reports <see cref="DurableWriteOutcome.Failed"/>.</summary>
+        public bool FailWrites { get; set; }
+
+        public Task<DurableWriteResult> WriteAsync(RadarReport report, CancellationToken ct)
         {
             Written.Add(report);
-            return Task.FromResult("written/path.md");
+            return Task.FromResult(DurableWriteResult.From("written/path.md", !FailWrites));
         }
     }
 
@@ -298,10 +301,13 @@ public sealed class RadarPipelineRunnerTests
     {
         public List<PipelineRunRecord> Written { get; } = new();
 
-        public Task<string> WriteAsync(PipelineRunRecord record, CancellationToken ct)
+        /// <summary>Spec 201 §1: when set, every write reports <see cref="DurableWriteOutcome.Failed"/>.</summary>
+        public bool FailWrites { get; set; }
+
+        public Task<DurableWriteResult> WriteAsync(PipelineRunRecord record, CancellationToken ct)
         {
             Written.Add(record);
-            return Task.FromResult("written/run.json");
+            return Task.FromResult(DurableWriteResult.From("written/run.json", !FailWrites));
         }
 
         public Task<IReadOnlyList<PipelineRunRecord>> ReadRecentAsync(int count, CancellationToken ct)
@@ -345,21 +351,26 @@ public sealed class RadarPipelineRunnerTests
         /// </summary>
         public Dictionary<string, string> StrategyFingerprints { get; } = new(StringComparer.Ordinal);
 
-        public Task<string> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct)
+        /// <summary>Spec 201 §1: when set, every config write reports <see cref="DurableWriteOutcome.Failed"/>.</summary>
+        public bool FailWrites { get; set; }
+
+        public Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct)
         {
             WriteCallCount++;
             Written.Add(config);
-            return Task.FromResult($"written/scoring-configs/{config.Fingerprint}.json");
+            return Task.FromResult(
+                DurableWriteResult.From($"written/scoring-configs/{config.Fingerprint}.json", !FailWrites));
         }
 
         public Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct) =>
             Task.FromResult(StrategyFingerprints.GetValueOrDefault(strategyName));
 
-        public Task<string> RecordStrategyFingerprintAsync(
+        public Task<DurableWriteResult> RecordStrategyFingerprintAsync(
             string strategyName, string fingerprint, CancellationToken ct)
         {
             StrategyFingerprints[strategyName] = fingerprint;
-            return Task.FromResult($"written/scoring-configs/strategies/{strategyName}.json");
+            return Task.FromResult(
+                DurableWriteResult.Succeeded($"written/scoring-configs/strategies/{strategyName}.json"));
         }
     }
 
@@ -726,6 +737,129 @@ public sealed class RadarPipelineRunnerTests
                 + "absent from the accrued stores, so the next run's history read and the efficacy/replay "
                 + "reads will not see them.",
             summaryShortfall.Message);
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Spec 201 §1: the remaining durable writes a run performs — the weekly report, the per-strategy effective
+    // scoring config and the run record itself — now report their outcome, and the runner CHECKS it.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FailedReportWrite_IsCountedOnTheRunRecord_KeepsTheReportId_AndWarnsOnce()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, companyId);
+        h.ReportWriter.FailWrites = true;
+
+        var result = await h.Runner.RunAsync(default);
+
+        // The report WAS generated: its id stays on the result and the record (the in-memory model may still
+        // be re-rendered to the same path). What the record must NOT do is imply the file exists.
+        Assert.NotNull(result.ReportId);
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(result.ReportId, record.ReportId);
+        Assert.Equal(1, record.ReportsNotPersisted);
+        Assert.Equal(0, record.ScoringConfigsNotPersisted);
+
+        var warning = Assert.Single(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("weekly report could NOT be durably persisted", warning.Message);
+        Assert.Contains("written/path.md", warning.Message);
+    }
+
+    [Fact]
+    public async Task SuccessfulReportWrite_RecordsAMeasuredZero_NotNull()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = true });
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(0, record.ReportsNotPersisted);
+        Assert.DoesNotContain(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
+    }
+
+    [Fact]
+    public async Task NoReportGenerated_LeavesTheReportCountNull_NeverAFabricatedZero()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        await h.Runner.RunAsync(default);
+
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Null(record.ReportsNotPersisted);
+        // The config write DID happen (one per strategy), so that axis is a measured zero.
+        Assert.Equal(0, record.ScoringConfigsNotPersisted);
+    }
+
+    [Fact]
+    public async Task FailedScoringConfigWrite_IsCountedPerStrategy_InOneAggregatedWarning()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var configStore = new RecordingScoringConfigStore { FailWrites = true };
+        var h = new Harness(collector, extractor, new PipelineOptions(), scoringConfigStore: configStore);
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        await h.Runner.RunAsync(default);
+
+        // One strategy ⇒ one config write attempted ⇒ one not persisted. The snapshot side is untouched.
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(1, record.ScoringConfigsNotPersisted);
+        Assert.Equal(0, record.ScoreSnapshotsNotPersisted);
+
+        var warning = Assert.Single(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("1 effective scoring config file(s)", warning.Message);
+        Assert.Contains("dereferences to NOTHING on disk", warning.Message);
+    }
+
+    [Fact]
+    public async Task CollectPass_LeavesReportAndScoringConfigCountsNull()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        await h.CollectOnlyRunner.RunAsync(default);
+
+        // A collect pass writes neither a report nor a scoring config: null, never a 0 claiming clean writes.
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Null(record.ReportsNotPersisted);
+        Assert.Null(record.ScoringConfigsNotPersisted);
+    }
+
+    [Fact]
+    public async Task FailedRunRecordWrite_IsWarnedOnce_AndTheRunStillCompletes()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions());
+        await SeedCompanyAsync(h, Guid.NewGuid());
+        h.RunStore.FailWrites = true;
+
+        var result = await h.Runner.RunAsync(default);
+
+        // The run completes on what it has; the ONE report of the lost run record is the runner's Warning
+        // (the record cannot count its own failure on itself).
+        Assert.Equal(1, result.CompaniesScored);
+        var warning = Assert.Single(h.RunnerLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("pipeline run record could NOT be durably persisted", warning.Message);
+        Assert.Contains("written/run.json", warning.Message);
     }
 
     [Fact]
