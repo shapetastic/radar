@@ -101,7 +101,7 @@ public sealed class ScoringPass : IScoringPass
             ct.ThrowIfCancellationRequested();
 
             // Spec 202 §1 — DURABILITY PRECONDITION. A snapshot's ScoringConfigVersion must dereference to a
-            // record on disk (the spec-91 provenance chain; spec 148 Part B closed this for replay). Until 202
+            // record on disk (the spec-91 provenance chain; spec 148 Part B closed this for replay). Until spec 202
             // the forward path merely COUNTED a failed config write and scored anyway, so snapshots could
             // carry a stamp that dereferenced to nothing. Now a strategy whose record did not land this pass
             // writes NO snapshot: it is counted, named, and simply retried by the next run — the store is
