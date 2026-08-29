@@ -14,37 +14,37 @@
       "strategy": "default",
       "call": "DoNotLead",
       "asOfUtc": "2026-08-23T00:00:00Z",
-      "basis": "oos ρ −0.05, CI spans zero at call time (remains the storage primary / legacy reference series)",
+      "basis": "oos \u03c1 \u22120.05, CI spans zero at call time (remains the storage primary / legacy reference series)",
       "actor": "human",
       "reviewByUtc": "2026-09-05T00:00:00Z",
-      "resolutionRule": "Wrong if, at the gate-resolution instant, default's out-of-sample ρ interval excludes zero POSITIVELY on the then-current leaderboard; Right otherwise."
+      "resolutionRule": "Wrong if, at the gate-resolution instant, default's out-of-sample \u03c1 interval excludes zero POSITIVELY on the then-current leaderboard; Right otherwise."
     },
     {
       "strategy": "filings-led-v2",
-      "call": "Trial",
-      "asOfUtc": "2026-08-23T00:00:00Z",
-      "basis": "research arm still accruing outcome evidence; no descriptive result distinguishes it yet",
+      "call": "Stop",
+      "asOfUtc": "2026-08-29T21:00:00Z",
+      "basis": "oos rho negative with the 95% interval excluding zero on the 2026-08-29 excess-vs-universe-v1 leaderboard (filings-led-v2 -0.159 [-0.223,-0.093]; halfnoted -0.149 [-0.214,-0.084]; nonoted -0.139 [-0.204,-0.074]; 872 obs, 74 companies, 12 dates); the notedness ablation pair moves nothing, so the filings-channel hypothesis, not the discount, is what fails. Descriptive, pooled, pre-freeze retrospective.",
       "actor": "human",
-      "reviewByUtc": "2026-09-05T00:00:00Z",
-      "resolutionRule": "resolved by supersession — promoted or stopped by a later journaled call."
+      "reviewByUtc": "2026-10-30T00:00:00Z",
+      "resolutionRule": "Wrong (re-call Trial) if a later leaderboard with at least 24 out-of-sample dates shows this arm's oos rho interval upper bound above zero; Right if it stays at or below zero at that point. Scoring continues; only prominence stops."
     },
     {
       "strategy": "filings-led-halfnoted",
-      "call": "Trial",
-      "asOfUtc": "2026-08-23T00:00:00Z",
-      "basis": "research arm still accruing outcome evidence; no descriptive result distinguishes it yet",
+      "call": "Stop",
+      "asOfUtc": "2026-08-29T21:00:00Z",
+      "basis": "oos rho negative with the 95% interval excluding zero on the 2026-08-29 excess-vs-universe-v1 leaderboard (filings-led-v2 -0.159 [-0.223,-0.093]; halfnoted -0.149 [-0.214,-0.084]; nonoted -0.139 [-0.204,-0.074]; 872 obs, 74 companies, 12 dates); the notedness ablation pair moves nothing, so the filings-channel hypothesis, not the discount, is what fails. Descriptive, pooled, pre-freeze retrospective.",
       "actor": "human",
-      "reviewByUtc": "2026-09-05T00:00:00Z",
-      "resolutionRule": "resolved by supersession — promoted or stopped by a later journaled call."
+      "reviewByUtc": "2026-10-30T00:00:00Z",
+      "resolutionRule": "Wrong (re-call Trial) if a later leaderboard with at least 24 out-of-sample dates shows this arm's oos rho interval upper bound above zero; Right if it stays at or below zero at that point. Scoring continues; only prominence stops."
     },
     {
       "strategy": "filings-led-nonoted",
-      "call": "Trial",
-      "asOfUtc": "2026-08-23T00:00:00Z",
-      "basis": "research arm still accruing outcome evidence; no descriptive result distinguishes it yet",
+      "call": "Stop",
+      "asOfUtc": "2026-08-29T21:00:00Z",
+      "basis": "oos rho negative with the 95% interval excluding zero on the 2026-08-29 excess-vs-universe-v1 leaderboard (filings-led-v2 -0.159 [-0.223,-0.093]; halfnoted -0.149 [-0.214,-0.084]; nonoted -0.139 [-0.204,-0.074]; 872 obs, 74 companies, 12 dates); the notedness ablation pair moves nothing, so the filings-channel hypothesis, not the discount, is what fails. Descriptive, pooled, pre-freeze retrospective.",
       "actor": "human",
-      "reviewByUtc": "2026-09-05T00:00:00Z",
-      "resolutionRule": "resolved by supersession — promoted or stopped by a later journaled call."
+      "reviewByUtc": "2026-10-30T00:00:00Z",
+      "resolutionRule": "Wrong (re-call Trial) if a later leaderboard with at least 24 out-of-sample dates shows this arm's oos rho interval upper bound above zero; Right if it stays at or below zero at that point. Scoring continues; only prominence stops."
     },
     {
       "strategy": "narrative-led-v2",
@@ -53,7 +53,7 @@
       "basis": "research arm still accruing outcome evidence; no descriptive result distinguishes it yet",
       "actor": "human",
       "reviewByUtc": "2026-09-05T00:00:00Z",
-      "resolutionRule": "resolved by supersession — promoted or stopped by a later journaled call."
+      "resolutionRule": "resolved by supersession \u2014 promoted or stopped by a later journaled call."
     }
   ]
 }
