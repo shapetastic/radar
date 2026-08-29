@@ -1161,6 +1161,14 @@ Do not hand back broken code.
     Lead (resolved by the AD-15 composite gate EVENT, not a calendar date), `default` DoNotLead (oos ρ −0.05,
     CI spans zero at call time), the four other research arms Trial (resolved by supersession); comparators
     carry no call, ever. Radar records wrong calls rather than avoiding falsifiable decisions.
+    ⚠ **SUPERSEDED IN PART 2026-08-29 (PR #206, `d6244ac`):** the three `filings-led-*` arms are now **Stop**
+    (oos ρ −0.159/−0.149/−0.139, every 95 % CI excluding zero; the notedness ablation pair inert — the
+    filings-channel hypothesis fails, not the discount; scoring continues, prominence stops; re-called Trial
+    if ≥ 24 oos dates show the CI upper bound > 0), `narrative-led-v2` stays Trial, and a new research arm
+    **`default-noattn`** (`default` with both notedness discounts at 0, implicit Trial) tests whether the
+    inverse-attention discount subtracts the component `baseline-media-only` (+0.137, the only clearly
+    positive oos arm) predicts on. `disclosure-led-v11` ≈ its v10 control (Δρ 0.0035) — Lead unchanged,
+    precommitted. The live strategy count is **11**. Journal: `docs/strategy-lifecycle.md`.
 - **News event typing — stage 1 of the two-stage read: facts and event types, NO directional question (spec
   181).** A new `NewsTyping` slice (Application + Infrastructure) types spec-177 archived observations
   against the closed **`news-event-taxonomy-v1`** (14 members incl. `MarketReaction`; hash
