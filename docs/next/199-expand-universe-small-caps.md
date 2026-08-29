@@ -30,17 +30,47 @@ efficacy artifact remains immutable; **no existing company is removed, renamed o
 
 Estimated time: ~1–1.5 days, dominated by seed research and feed verification, not code.
 
-## 1. What to add: ~20 genuinely small caps
+## 1. What to add: ~20 genuinely UNDER-COVERED companies
 
-Target **~94 companies total**, all additions `followingTier: small`. This deliberately shifts the balance:
-35/74 small today → ~55/94, so the majority of the universe becomes the under-covered names Radar is for.
+Target **~94 companies total**. At least three quarters `followingTier: small`, the remainder `mid` only where
+genuine obscurity is argued (see below). This shifts the balance from 35/74 small today to roughly 50–55/94, so
+the majority of the universe becomes the under-covered names Radar exists for.
+
+### The selection variable is COVERAGE, not market cap — decided, with the evidence
+
+`followingTier` is curated from **following/coverage evidence only** and is never derived from price, market
+cap or volume (AD-14). So "small cap" and `followingTier: small` are different things, and the live data shows
+the curated tier is only a weak proxy for what Radar actually scores:
+
+| tier | n | attention min | mean | max |
+| --- | ---: | ---: | ---: | ---: |
+| small | 35 | 46 | **62.0** | 79 |
+| mid | 32 | 56 | **66.0** | 90 |
+| large | 2 | 67 | 74.5 | 82 |
+| mega | 5 | 58 | 71.6 | 90 |
+
+**Four points of mean separation and near-total overlap** — a `small` company reaches 79 while a `mega` sits at
+58. Selecting purely on market cap would therefore optimise the wrong variable.
+
+**The rule: select on being UNDER-COVERED. Small cap is the prior, not the test.** In practice most additions
+will be small caps because they dominate the under-covered end, but an unloved mid-cap industrial nobody
+writes about is a better Radar target than a small cap with a retail following. **Up to a quarter of the batch
+may be `followingTier: mid`** where the case for genuine obscurity is explicit; the rest are `small`.
+
+⚠ **This is a HYPOTHESIS, and it must be recorded as one.** Coverage cannot be measured for a company that is
+not yet in the universe — it has no observations. So seed-time selection is a prediction, and §5 makes it
+falsifiable: record a **predicted attention band** (low < 55 / mid 55–70 / high > 70) per addition, and check
+it retrospectively. If the additions cluster at the high-attention end, **the selection heuristic was wrong
+and that is a finding to report**, not something to quietly absorb.
 
 Selection rules, applied in order:
 
 - **US-listed operating companies** (NASDAQ/NYSE), consistent with the existing seed.
-- **Genuinely under-covered.** The practical test is Radar's own: a company whose news volume is dominated by
-  aggregators rather than editorial outlets. Do NOT add a name because it is interesting — add it because it is
-  plausibly under-noticed. Record the reason per company.
+- **Genuinely under-covered — the primary criterion.** The practical test is Radar's own: would this company's
+  news volume be dominated by aggregators rather than editorial outlets? Do NOT add a name because it is
+  interesting — add it because it is plausibly un-noticed. **Record the reason AND the predicted attention band
+  per company.** A useful sanity check: would an engaged private investor plausibly have heard of it? If yes,
+  it is probably already noticed.
 - **Not already represented.** No duplicate ticker, CIK or company identity.
 - **Must have a working SEC submissions feed** (`data.sec.gov/submissions/CIK…json`) — this is the load-bearing
   one. Filings are the highest-quality evidence source and the arms under test are disclosure/filings-led.
@@ -52,8 +82,8 @@ Selection rules, applied in order:
   adding twenty names from one story.
 
 Each addition needs the full seed shape already used: `id` (a fresh `Guid`), `name`, `legalName`, `ticker`,
-`exchange`, `countryCode`, `sector`, `industry`, `followingTier: "small"`, `aliases`, `themes`, and
-`sourceFeeds`.
+`exchange`, `countryCode`, `sector`, `industry`, `followingTier` (`"small"`, or `"mid"` for the minority with
+an argued case), `aliases`, `themes`, and `sourceFeeds`.
 
 ## 2. Feeds must be VERIFIED, not assumed
 
@@ -112,6 +142,12 @@ after. Report in the PR:
 - typing: in-window observations, typed, untyped remaining, and the resulting drain per run; and
 - the projected post-199 drain at ~94 companies.
 
+**Record the selection hypothesis so it can be judged later.** Commit the per-company predicted attention band
+alongside the seed (a short table in the PR and in the spec's own record). After **three** post-199 runs, compare
+predicted against measured `AttentionScore` and report the hit rate. If the additions cluster ABOVE 70, the
+under-covered heuristic did not work and that is a reportable finding — it would mean seed-time judgement cannot
+identify under-covered names, which is worth knowing before any further expansion.
+
 **The ship condition is that the typing backlog is still draining after expansion.** If the measured post-198
 drain is materially below the projected ~140/run, say so and reduce the batch size rather than shipping the
 full ~20 — the point is to expand as far as capacity genuinely allows, not to a round number.
@@ -128,8 +164,11 @@ full ~20 — the point is to expand as far as capacity genuinely allows, not to 
 
 ## Acceptance criteria
 
-- [ ] ~20 US-listed `followingTier: small` companies added, spread across sectors and themes, each with a
-      recorded reason for inclusion and a verified SEC submissions feed.
+- [ ] ~20 US-listed companies added, selected on being UNDER-COVERED rather than on market cap, at least three
+      quarters `followingTier: small` and any `mid` carrying an explicit obscurity case; spread across sectors
+      and themes; each with a recorded reason, a **predicted attention band**, and a verified SEC feed.
+- [ ] The selection hypothesis is committed and scheduled for a three-run retrospective against measured
+      attention, with a clustering-above-70 result reported as a failed heuristic rather than absorbed.
 - [ ] No existing company is modified, removed or re-tiered; no duplicate identity.
 - [ ] `benchmark-universe-v1` is untouched and new companies report `NotInBenchmarkUniverse`; no v2 is created.
 - [ ] No scoring, formula, weight, tier-map, strategy or config change; **all six pins unchanged** and no
