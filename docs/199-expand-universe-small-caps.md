@@ -179,3 +179,44 @@ full ~20 — the point is to expand as far as capacity genuinely allows, not to 
       stated in the PR and the lineage.
 - [ ] `dotnet build Radar.sln -c Release` and the full suite pass; `git diff --check` clean; on Windows
       `run-radar.ps1 -Profile default -WhatIf` still resolves.
+
+---
+
+## Recorded — what shipped (2026-08-29)
+
+Implemented on `feature/expand-universe-small-caps`, PR #204. Universe **74 → 94**, additions only; the
+`data/companies.json` diff is a pure 710-line insertion with zero deletions.
+
+**The selection hypothesis is committed as a prediction** in `docs/cohorts/under-covered-2026-08.md` — one row
+per addition with ticker, CIK, sector, a one-line obscurity reason and a predicted attention band (**9 low /
+11 mid / 0 high**). The band sets there are byte-equal to the ones in the CLAUDE.md spec-199 bullet, so the two
+records cannot disagree. The three-run retrospective is recorded there as **OWED, NOT YET DONE**, and a result
+clustering above 70 is to be reported as a FAILED heuristic rather than absorbed. EPM is pre-registered as the
+most likely miss.
+
+**§5 measured, and the gap stated plainly: NO post-198 baseline run existed at implementation time.** The
+latest run was `fa50b516`, 2026-08-28T21:40Z, which is pre-198, so the capacity premise was checked against the
+last three PRE-198 runs plus spec 198's own live measurement. The post-198 check is still owed.
+
+| measure | 2026-08-26 | 2026-08-27 | 2026-08-28 |
+| --- | ---: | ---: | ---: |
+| observations captured (new) | 255 | 236 | 234 |
+| cross-run deduped | — | 1,357 | 1,370 |
+| of the captured, 7 days old or newer | 195 | 199 | 194 |
+| typing calls attempted | 350 | 350 | 350 |
+| completed outcomes persisted | 342 | 337 | 340 |
+| `untypedRemaining` | 2,028 | 1,927 | 1,821 |
+
+So the **measured** pre-198 drain is **101 and 106 per run** — this spec's premise of "~58/run today"
+UNDERSTATED current capacity. Because ~195 of each run's ~234 new observations are already within 7 days,
+spec 198's window does not much reduce inflow; it removes wasted re-reads and adds a measured +15.5 %
+recent-coverage gain, projecting post-198 inflow at **~225/run** (not the 210 assumed above) and a drain of
+**~115/run** (not ~140). At 94 companies, pro-rata inflow is **~286/run** worst case — an upper bound, since
+under-covered additions should generate less news than the average — giving a projected drain of **~54/run**
+and clearing the 1,821 backlog in ~34 runs.
+
+**The backlog still drains, so the ship condition is met and the FULL 20 shipped** rather than a reduced batch.
+
+**Nothing in the scoring identity moved**: `benchmark-universe-v1.json` is byte-unchanged with no v2 created,
+`ScoringConfigFingerprintTests` is untouched, all six pins are unchanged, and **no operator identity-record
+clear is required for this slice** — the outstanding spec-198 step is unchanged and still owed.
