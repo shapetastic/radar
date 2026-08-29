@@ -23,9 +23,10 @@ public interface IScoringConfigStore
     /// given fingerprint's config is by definition fixed, so the same config always yields the same
     /// content. Best-effort (AD-8): a disk failure logs and never aborts the run (the snapshot still
     /// carries the fingerprint) — and the outcome is REPORTED (spec 201 §1): an already-existing file is
-    /// <see cref="DurableWriteOutcome.Written"/> (the content IS on disk), a write or serialization failure is
-    /// <see cref="DurableWriteOutcome.Failed"/>, so a stamp whose content-addressed file never landed is
-    /// counted by the caller rather than silently dereferencing to nothing.
+    /// <see cref="DurableWriteOutcome.AlreadyAvailable"/> (the content IS on disk, nothing was written this
+    /// call — spec 202 §1; <see cref="DurableWriteResult.Written"/> is still true), a write or serialization
+    /// failure is <see cref="DurableWriteOutcome.Failed"/>. Since spec 202 §1 the caller treats a durable
+    /// record as a PRECONDITION: a strategy whose record did not land writes no snapshot this pass.
     /// </summary>
     Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct);
 

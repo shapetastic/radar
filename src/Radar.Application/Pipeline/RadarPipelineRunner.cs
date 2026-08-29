@@ -198,7 +198,9 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             ScoreSnapshotsNotPersisted: scoring.ScoreSnapshotsNotPersisted,
             // Spec 201 §1: both observed by the combined run (null only when no report was generated).
             ReportsNotPersisted: reportsNotPersisted,
-            ScoringConfigsNotPersisted: scoring.ScoringConfigsNotPersisted);
+            ScoringConfigsNotPersisted: scoring.ScoringConfigsNotPersisted,
+            // Spec 202 §1: the strategies the scoring pass skipped (null = none) — measured by this run.
+            StrategiesSkippedForUnpersistedConfig: scoring.StrategiesSkippedForUnpersistedConfig);
         var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
         LogRunRecordNotPersisted(_logger, runRecordWrite);
 

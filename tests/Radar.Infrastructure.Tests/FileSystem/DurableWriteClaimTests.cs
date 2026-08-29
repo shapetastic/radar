@@ -145,10 +145,11 @@ public sealed class DurableWriteClaimTests : IDisposable
     }
 
     [Fact]
-    public async Task ScoringConfigStore_ExistingConfig_ReportsWritten_BecauseTheContentIsOnDisk()
+    public async Task ScoringConfigStore_ExistingConfig_ReportsAlreadyAvailable_AndWrittenIsTrue()
     {
-        // Insert-if-new: the SECOND call skips the write, and that skip is a Written outcome — the
-        // content-addressed file demonstrably exists, which is the only thing the caller is asking.
+        // Insert-if-new: the SECOND call skips the write. Since spec 202 §1 that skip is the distinct
+        // AlreadyAvailable outcome ("found it there", not "wrote it now") — but Written stays true, because
+        // the content-addressed file demonstrably exists, which is the only thing the caller is asking.
         var logger = new CapturingLogger<FileScoringConfigStore>();
         var store = new FileScoringConfigStore(
             new FileScoringConfigStoreOptions { RootDirectory = Path.Combine(_tempDir, "configs") }, logger);
@@ -158,7 +159,8 @@ public sealed class DurableWriteClaimTests : IDisposable
         var second = await store.WriteIfNewAsync(config, CancellationToken.None);
 
         Assert.Equal(DurableWriteOutcome.Written, first.Outcome);
-        Assert.Equal(DurableWriteOutcome.Written, second.Outcome);
+        Assert.Equal(DurableWriteOutcome.AlreadyAvailable, second.Outcome);
+        Assert.True(second.Written);
         Assert.Equal(first.Path, second.Path);
         Assert.True(File.Exists(second.Path));
     }

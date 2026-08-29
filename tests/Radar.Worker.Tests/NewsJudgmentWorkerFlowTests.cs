@@ -76,7 +76,7 @@ public sealed class NewsJudgmentWorkerFlowTests
     {
         public NewsJudgmentRunResult? ReceivedJudgment { get; private set; }
 
-        public Task GenerateAsync(
+        public Task<NewsRiskShadowRunResult> GenerateAsync(
             Guid? runId,
             IReadOnlyList<StrategyReportSection>? strategySections,
             CancellationToken ct,
@@ -84,7 +84,7 @@ public sealed class NewsJudgmentWorkerFlowTests
         {
             log.Add("shadow");
             ReceivedJudgment = judgment;
-            return Task.CompletedTask;
+            return Task.FromResult(NewsRiskShadowRunResult.NoWriteAttempted);
         }
     }
 

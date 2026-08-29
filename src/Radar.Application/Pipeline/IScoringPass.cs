@@ -41,11 +41,22 @@ public interface IScoringPass
 /// Spec 201 §1: how many per-strategy effective scoring-config files (content-addressed, insert-if-new)
 /// this pass could NOT durably persist. A snapshot still carries its fingerprint stamp either way; this
 /// counts the stamps whose dereference target never landed. Trailing + defaulted to 0, the truthful value
-/// for a pass that persisted every config it attempted.
+/// for a pass that persisted every config it attempted. Since spec 202 §1 every strategy counted here was
+/// SKIPPED for the pass (durability precondition) and is named in
+/// <paramref name="StrategiesSkippedForUnpersistedConfig"/>.
+/// </param>
+/// <param name="StrategiesSkippedForUnpersistedConfig">
+/// Spec 202 §1: the strategies (run order) that wrote NO snapshot this pass because their effective
+/// scoring-config record could not be made durable — a snapshot must never carry a
+/// <c>ScoringConfigVersion</c> that dereferences to nothing. <c>null</c> means none was skipped; it is never
+/// an empty list, so "nothing skipped" and "not recorded" cannot be confused on the run record. The next run
+/// retries naturally (content-addressed, insert-if-new store). Note <paramref name="CompaniesScored"/> is
+/// honestly 0 when the PRIMARY strategy was skipped.
 /// </param>
 public sealed record ScoringPassResult(
     int CompaniesScored,
     IReadOnlyList<string> Strategies,
     string PrimaryStrategy,
     int ScoreSnapshotsNotPersisted = 0,
-    int ScoringConfigsNotPersisted = 0);
+    int ScoringConfigsNotPersisted = 0,
+    IReadOnlyList<string>? StrategiesSkippedForUnpersistedConfig = null);

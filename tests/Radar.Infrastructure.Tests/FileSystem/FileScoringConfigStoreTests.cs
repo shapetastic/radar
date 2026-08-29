@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 using Radar.Infrastructure.FileSystem;
 
 namespace Radar.Infrastructure.Tests.FileSystem;
@@ -152,6 +153,28 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         // Exactly one file exists for that fingerprint.
         var files = Directory.GetFiles(_tempDir, config.Fingerprint + ".json");
         Assert.Single(files);
+    }
+
+    /// <summary>
+    /// Spec 202 §1: the existence-check path reports <see cref="DurableWriteOutcome.AlreadyAvailable"/> —
+    /// "found it there", distinct from "wrote it now" — while <see cref="DurableWriteResult.Written"/> stays
+    /// true for both, because the durability precondition asks only whether the record is on disk.
+    /// </summary>
+    [Fact]
+    public async Task WriteIfNewAsync_SecondWriteOfTheSameFingerprint_ReportsAlreadyAvailable_AndWrittenIsTrue()
+    {
+        var config = ConfigFor(new ScoringWeights());
+        var store = CreateStore();
+
+        var first = await store.WriteIfNewAsync(config, CancellationToken.None);
+        var second = await store.WriteIfNewAsync(config, CancellationToken.None);
+
+        Assert.Equal(DurableWriteOutcome.Written, first.Outcome);
+        Assert.True(first.Written);
+
+        Assert.Equal(DurableWriteOutcome.AlreadyAvailable, second.Outcome);
+        Assert.True(second.Written);
+        Assert.Equal(first.Path, second.Path);
     }
 
     [Fact]

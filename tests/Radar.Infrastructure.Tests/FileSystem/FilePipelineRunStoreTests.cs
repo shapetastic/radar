@@ -592,6 +592,8 @@ public sealed class FilePipelineRunStoreTests : IDisposable
 
         Assert.Null(read.SignalsNotPersisted);
         Assert.Null(read.ScoreSnapshotsNotPersisted);
+        // Spec 202 §1: a pre-202 record hydrates as "not recorded", never as an empty list.
+        Assert.Null(read.StrategiesSkippedForUnpersistedConfig);
         // Everything the legacy record DID carry still reads exactly as it did.
         Assert.Equal(Guid.Parse("88888888-8888-8888-8888-888888888888"), read.Id);
         Assert.Equal(2, read.SignalsApproved);
@@ -621,12 +623,15 @@ public sealed class FilePipelineRunStoreTests : IDisposable
             SourcesFailed: 0,
             ReportId: null,
             SignalsNotPersisted: 3,
-            ScoreSnapshotsNotPersisted: 0);
+            ScoreSnapshotsNotPersisted: 0,
+            StrategiesSkippedForUnpersistedConfig: ["b"]);
 
         await store.WriteAsync(record, CancellationToken.None);
 
         var read = Assert.Single(await CreateStore().ReadRecentAsync(10, CancellationToken.None));
         Assert.Equal(3, read.SignalsNotPersisted);
         Assert.Equal(0, read.ScoreSnapshotsNotPersisted);
+        // Spec 202 §1: the skipped-strategy names round-trip.
+        Assert.Equal(["b"], read.StrategiesSkippedForUnpersistedConfig!.ToArray());
     }
 }

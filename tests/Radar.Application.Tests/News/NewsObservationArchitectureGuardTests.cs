@@ -177,7 +177,11 @@ public sealed class NewsObservationArchitectureGuardTests
         Assert.Equal(viaSpec194Literals, viaFactory);
     }
 
-    private static string FindRepositoryRoot()
+    /// <summary>
+    /// The ONE repository-root locator for the source-scanning guards in this assembly (spec 202's
+    /// <c>DurableWriteSourceGuardTests</c> reuses it rather than copying it).
+    /// </summary>
+    internal static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
