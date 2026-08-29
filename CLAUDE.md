@@ -2108,6 +2108,50 @@ Do not hand back broken code.
     news-trajectory strength constants configurable (§2 hashes them by value; a test perturbs a CONSTRUCTED
     identity fixture instead); folding call budgets or retry caps into the identity; and retiring
     v8/v9/v10/v11 or changing which arm is Lead.
+- **Nothing may be discarded without being counted — three sites closed (spec 193).** Accounting only: no
+  scoring behaviour, formula, rule set, cohort key or cache key changed and **no pin moved**. Three findings
+  from a silent-discard sweep, all of the same family the architecture rule above now forbids:
+  - **A failed durable write read as SUCCESS — the only one that could lose real data.**
+    `GracefulFileWriter.TryWriteAllTextAsync` caught IO/permission errors, logged one Warning and returned
+    `false`, and **every caller used that return only to gate a success log**. `FileSignalStore.WriteAsync`
+    then unconditionally ran `_byId[signal.Id] = signal;` and returned the path, so a signal that never
+    reached disk sat in the in-process index, reported a path, and was counted as stored —
+    `CollectionPass` even carried a comment sanctioning it. The next run's `ReadApprovedInWindowAsync` simply
+    would not see it and **nothing recorded that it should have**. Reachable on Windows via an antivirus file
+    lock. Now: a typed `DurableWriteResult` shaped on the existing `NewsObservationWriteOutcome` (not a second
+    invention), trailing-nullable `SignalsNotPersisted`/`ScoreSnapshotsNotPersisted` on the run record, and
+    ONE aggregated Warning per store per run. **The graceful degradation, the in-memory copy and the catch
+    set are untouched — only the CLAIM changed.**
+  - **`GuidanceChangeSupersede` removed signals from BOTH scoring windows with no count, log or contribution
+    reason** — the only signal-removal step in `ScoringEngine` with no trace, sitting between two that
+    account (the dropped-evidence aggregate above it, `MediaAttentionCollapse` below it). It matters because
+    spec 173 measured **4 of the top 10 companies by Opportunity resting on a results-only
+    `GuidanceChange`**. Now returns counts in the `MediaCollapseResult` shape, each charged to the survivor of
+    its own `EvidenceId`; **which signals are removed is pinned byte-identical.**
+  - **Duplicate-headline collapse discarded syndication volume**, so one story carried by 40 outlets was
+    indistinguishable from one carried by 1 — and the code comment claiming publisher diversity survived was
+    false. Now counted; neither count is a `BundleHash` input, so the assessment cache key does not move.
+  - ⚠ **The fix reproduced the defect once, in its own warning line**: `signalsNotPersisted ?? 0` rendered a
+    null ("this pass did no signal writes") as a measured `0`. Caught by Copilot, not by the reviewer. The
+    line now renders only the axes a pass actually observed, while a *measured* zero beside a non-zero
+    sibling still renders. **The rule applies to log lines and rendered text, not only to persisted records.**
+- **The discard accounting made real, and one near-miss worth remembering (spec 195).** The three
+  operational findings split out of spec 194 so the correctness fix would not wait on them. No pin moved.
+  - **Spec 193's aggregation did not actually exist in the composed system**: `GracefulFileWriter` still
+    logged a Warning per failed file *in addition to* the new pass-level aggregate. Fixed with a typed
+    **per-instance** failure-log mode — `Immediate` (default, every existing caller unchanged) vs
+    `CallerAggregates` (the two pipeline batch paths only).
+  - ⚠ **The reviewer caught that a CLASS-WIDE flip would have silently muted spec-139 REPLAY write
+    failures.** `ReplayRunner` discards its `DurableWriteResult`, so an unwritable replay directory would
+    have looked like a successful run. This is why the mode is per-instance rather than global — a fix for a
+    silent-discard defect nearly introduced a worse one.
+  - **Spec 193's syndication counts were captured but rendered nowhere.** Now carried as trailing-nullable
+    fields on `news-risk-live-v4`, taken from the FRESH bundle rather than a cached assessment (the surviving
+    articles and therefore `BundleHash` can be unchanged while breadth changes, so cache reuse would display
+    a previous run's breadth as current). The artifact total is labelled a company-publisher **incidence
+    sum**, never "globally distinct".
+  - **Spec 190's diagnostic tail is deduped company-wide** instead of per-feed-then-summed, so the same tail
+    URL in two feeds counts once and feed iteration order cannot change the answer.
 - **Attention measured aggregator COVERAGE, not notice — the default is inverted and the volume is
   classified (spec 196).** `OpportunityScore` applies attention as an inverse discount, so a company Radar
   believes is already noticed is marked down; the intent is right, the measurement was not. Measured over the
