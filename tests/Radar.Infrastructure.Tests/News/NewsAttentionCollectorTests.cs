@@ -1084,6 +1084,119 @@ public sealed class NewsAttentionCollectorTests
         Assert.Equal(FixedNow, Assert.Single(result.Observations!).RetrievedAtUtc);
     }
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 200 §3: the three repaired production feed identities (UTMD / ITIC / ESQ), exercised through the
+    // PUBLIC collection surface with the production company ids, tickers and phrases. `IsRelevant` stays
+    // private and unchanged — these pin what the exact seed phrases make it decide.
+    // -------------------------------------------------------------------------------------------------
+
+    private static readonly Guid UtmdId = Guid.Parse("28243c9e-eb18-4a85-acec-8f93aeb8cdef");
+    private static readonly Guid IticId = Guid.Parse("2ae6e6da-b714-416f-9d90-b6432f6eac2b");
+    private static readonly Guid EsqId = Guid.Parse("971ea074-e524-4d6d-baf2-ead26449a0dc");
+
+    private const string UtmdPhrase = "Utah Medical Products";
+    private const string UtmdToken = "query=Utah Medical Products&ticker=UTMD";
+
+    private const string IticPhrase = "Investors Title Company";
+    private const string IticToken = "query=Investors Title Company";
+
+    private const string EsqPhrase = "Esquire Financial";
+    private const string EsqToken = "query=Esquire Financial";
+
+    public static TheoryData<string, string> Spec200RejectedHeadlines => new()
+    {
+        // UTMD: the old phrase "Utah Medical" admitted a university plus the word "medical".
+        { "UTMD", "University of Utah Medical School opens a new centre" },
+        // ITIC: the old phrase "Investors Title" admitted "investors title <something>" as a theme.
+        { "ITIC", "Investors title technology as their top theme" },
+        // ESQ: the old ticker token "ESQ" admitted every headline containing the word "Esquire".
+        { "ESQ", "Esquire names its people of the year" },
+    };
+
+    public static TheoryData<string, string> Spec200AcceptedHeadlines => new()
+    {
+        { "UTMD", "Utah Medical Products reports quarterly results" },
+        { "ITIC", "Investors Title Company declares a dividend" },
+        { "ESQ", "Esquire Financial expands litigation banking" },
+    };
+
+    [Theory]
+    [MemberData(nameof(Spec200RejectedHeadlines))]
+    public async Task CollectAsync_Spec200RepairedFeed_RejectsTheAdversarialHeadline(string ticker, string headline)
+    {
+        var (company, feed, phrase) = Spec200Fixture(ticker);
+        var reader = new FakeNewsSearchReader
+        {
+            [phrase] = [Article("https://reject.example/" + ticker, headline + " - Reuters")],
+        };
+
+        var result = await CreateCollector(reader)
+            .CollectAsync(new CollectionContext([company], [feed]), CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);
+        Assert.Empty(result.Evidence);
+    }
+
+    [Theory]
+    [MemberData(nameof(Spec200AcceptedHeadlines))]
+    public async Task CollectAsync_Spec200RepairedFeed_AcceptsTheIssuerHeadline_ForTheIntendedCompany(
+        string ticker, string headline)
+    {
+        var (company, feed, phrase) = Spec200Fixture(ticker);
+        var reader = new FakeNewsSearchReader
+        {
+            [phrase] = [Article("https://accept.example/" + ticker, headline + " - Reuters")],
+        };
+
+        var result = await CreateCollector(reader)
+            .CollectAsync(new CollectionContext([company], [feed]), CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);
+        var item = Assert.Single(result.Evidence);
+        Assert.Equal("https://accept.example/" + ticker, item.SourceUrl);
+        // The evidence is bound to the INTENDED company: the hint comes from the feed binding (ticker) and
+        // the observation sidecar carries the company id itself.
+        Assert.Equal([ticker], item.CompanyHints);
+        var observation = Assert.Single(result.Observations!);
+        Assert.Equal(company.Id, observation.CompanyId);
+        Assert.Equal(ticker, observation.Ticker);
+    }
+
+    [Theory]
+    [MemberData(nameof(Spec200RejectedHeadlines))]
+    public async Task CollectAsync_Spec200RepairedFeed_RejectedHeadline_ProducesNoObservationEither(
+        string ticker, string headline)
+    {
+        var (company, feed, phrase) = Spec200Fixture(ticker);
+        var reader = new FakeNewsSearchReader
+        {
+            [phrase] = [Article("https://reject.example/" + ticker, headline + " - Reuters")],
+        };
+
+        var result = await CreateCollector(reader)
+            .CollectAsync(new CollectionContext([company], [feed]), CancellationToken.None);
+
+        Assert.Empty(result.Observations ?? []);
+    }
+
+    private static (Company Company, CompanySourceFeed Feed, string Phrase) Spec200Fixture(string ticker) =>
+        ticker switch
+        {
+            "UTMD" => (
+                Company(UtmdId, "Utah Medical Products", "UTMD"),
+                Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000001"), UtmdId, "Utah Medical Products — News", UtmdToken),
+                UtmdPhrase),
+            "ITIC" => (
+                Company(IticId, "Investors Title Company", "ITIC"),
+                Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000002"), IticId, "Investors Title Company — News", IticToken),
+                IticPhrase),
+            "ESQ" => (
+                Company(EsqId, "Esquire Financial Holdings", "ESQ"),
+                Feed(Guid.Parse("dddddddd-0000-0000-0000-000000000003"), EsqId, "Esquire Financial Holdings — News", EsqToken),
+                EsqPhrase),
+            _ => throw new ArgumentOutOfRangeException(nameof(ticker), ticker, "Not a spec-200 fixture ticker."),
+        };
+
     private static void AssertNoAdviceLanguage(CollectedEvidence item)
     {
         string[] banned = ["buy", "sell", "guaranteed upside", "safe bet"];

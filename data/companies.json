@@ -3011,7 +3011,7 @@
         {
           "type": "newssearch",
           "name": "Utah Medical Products — News attention (Google News)",
-          "url": "query=Utah Medical&ticker=UTMD"
+          "url": "query=Utah Medical Products&ticker=UTMD"
         }
       ]
     },
@@ -3151,7 +3151,7 @@
         {
           "type": "newssearch",
           "name": "Investors Title Company — News attention (Google News)",
-          "url": "query=Investors Title"
+          "url": "query=Investors Title Company"
         }
       ]
     },
@@ -3186,7 +3186,7 @@
         {
           "type": "newssearch",
           "name": "Esquire Financial Holdings — News attention (Google News)",
-          "url": "query=Esquire Financial&ticker=ESQ"
+          "url": "query=Esquire Financial"
         }
       ]
     },

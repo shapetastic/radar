@@ -2700,11 +2700,19 @@ Do not hand back broken code.
     `ir.grahamcorp.com/…/rss`, verified 200 + valid RSS 2.0, 10 items); every other IR feed candidate failed
     verification and was **omitted rather than guessed** — spec 199 §2's rule that a broken feed is worse
     than an absent one, the PSTL/BKE precedent.
-  - **Four tickers carry NO `ticker=` token, and one phrase deliberately contradicts its own legal name.**
+  - **FIVE tickers carry NO `ticker=` token (four at spec 199, ESQ added by spec 200), and one phrase
+    deliberately contradicts its own legal name.**
     `NewsAttentionCollector.IsRelevant` is an unanchored case-insensitive `Contains` over `phrase OR
     ticker`, so `ITIC` ("cr**itic**", "pol**itic**al"), `GEOS` ("**geos**patial", "**geos**cience"), `CTO`
-    ("dire**cto**r", "se**cto**r", "fa**cto**r", "do**cto**r") and `UTL` ("o**utl**ook", "o**utl**et",
-    "o**utl**ine") are phrase-only (the V/FR/CARS treatment). **JBSS is the spec-159 `&` trap again**:
+    ("dire**cto**r", "se**cto**r", "fa**cto**r", "do**cto**r"), `UTL` ("o**utl**ook", "o**utl**et",
+    "o**utl**ine") and — **spec 200** — `ESQ` ("**Esq**uire", an ordinary word AND a publisher name) are
+    phrase-only (the V/FR/CARS treatment). ⚠ **Spec 200 §1 corrected three phrases at the seed BEFORE their
+    first collection** (§2 found zero history for all three ids): UTMD `query=Utah Medical Products&ticker=UTMD`
+    (was `Utah Medical`, which admitted "University of Utah Medical …"), ITIC `query=Investors Title Company`
+    (was `Investors Title`), ESQ `query=Esquire Financial` (was `…&ticker=ESQ`). Exact urls pinned by
+    `ProductionCompanySeedTests`; six adversarial accept/reject headlines pinned through the collector's public
+    surface in `NewsAttentionCollectorTests`. `IsRelevant` itself is UNCHANGED (a global predicate change needs
+    its own corpus-wide audit). **JBSS is the spec-159 `&` trap again**:
     `TwoKeyFeedToken.TrySplit` splits on the FIRST `&`, so the url is exactly
     `query=John B. Sanfilippo&ticker=JBSS` — **do not "restore" the ampersand for consistency with
     `John B. Sanfilippo & Son`**, which would eat the ticker token. **NWPX carries TWO newssearch phrases**
@@ -2740,7 +2748,11 @@ Do not hand back broken code.
     measured `AttentionScore` and report the hit rate. **If the additions cluster ABOVE 70 the under-covered
     heuristic FAILED and that must be reported as a failed heuristic, not quietly absorbed** — it would mean
     seed-time judgement cannot identify under-covered names, which is worth knowing before any further
-    expansion.
+    expansion. ⚠ **Cold-start caveat (spec 200 §4):** `AttentionScore` is a 60-day window and three daily runs
+    hold only a few days of capture, so the three-run read tests query relevance, capture shape and early
+    calibration — it is NOT proof of durable under-coverage, and no company may be removed, re-tiered or
+    feed-tuned from it; the mature read is the first successful run whose 60-day window starts no earlier
+    than the first post-199 collection instant (date recorded under spec 200 Phase B once it exists).
   - **The capacity premise, MEASURED — and the spec's own projection was wrong in BOTH directions.**
     ⚠ **No post-198 baseline exists yet** (the latest run is `fa50b516`, 2026-08-28T21:40Z, which is
     PRE-198), so §5's "measure against the first post-198 run" is measured here from the last three PRE-198
@@ -2755,9 +2767,15 @@ Do not hand back broken code.
     to **~225/run** — close to today's 234 rather than the spec's assumed drop to 210. Projected post-198
     drain at 74 companies is therefore **≈115/run** (not the spec's 140), and at 94 companies inflow is
     **≈286/run worst case** (pro-rata; under-covered additions should produce LESS than the average, so it
-    is an **upper bound**) giving a projected drain of **≈54/run**. **Still clearly draining, so the spec's
-    ship condition is met and the FULL 20 ships**; the 1,821 backlog clears in ~34 runs at that rate. No
-    typing or judgment budget was changed — §5 measures the effect; a budget change is a separate decision.
+    is an **upper bound**) giving a projected drain of **≈54/run**. ~~**Still clearly draining, so the spec's
+    ship condition is met and the FULL 20 ships**; the 1,821 backlog clears in ~34 runs at that rate.~~
+    ⚠ **SUPERSEDED BY SPEC 200: every post-198/post-199 figure in this bullet is PROJECTED, NOT MEASURED.**
+    The ship condition was a live-measurement condition and was never measured on the code that shipped — the
+    batch shipped on a projection while the post-198 measurement was still owed; the pre-expansion post-198
+    baseline no longer exists and must not be manufactured. The live measurement is **spec 200 §5** (first
+    three successful post-199 full runs, run 1 reported separately as the one-time seed burst; verdict
+    DRAINING / NOT DRAINING / UNRESOLVED, missing data never read as zero). No
+    typing or judgment budget was changed — a budget change is a separate decision.
   - **Expected operational consequences, recorded NOT discovered, so the first post-199 run is read
     correctly and nothing reads as a regression**: per-run scorings rise **740 → ≈940** (94 companies × 10
     strategies); **82 additional feeds**, taking the seed from 359 to **441** (4 per company = 80, plus
@@ -2768,9 +2786,12 @@ Do not hand back broken code.
     companies have **NO accrued evidence**, so their first scores are thin and their attention is low.
     ⚠ **They will therefore look artificially attractive under the inverse-attention discount before their
     evidence accrues — an early high rank for a new company MUST NOT be read as a finding**, and the report
-    period's interpretation should say so. They enter the efficacy series with zero history, contribute no
-    in-sample observations for **~21+ days**, and will initially show as spec-152 `PartialWindow`
-    observations.
+    period's interpretation should say so. **Efficacy is a THREE-WAY boundary (spec 200 §4), not "they
+    enter the efficacy series"**: (1) live strategy/report scoring is immediate for all 94 as soon as
+    evidence exists; (2) raw forward-return diagnostics appear only after a company's horizon resolves (~21+
+    days, initially spec-152 `PartialWindow`) and grant NO benchmark membership; (3) the official
+    benchmark-v1 leaderboard and the paired AD-15 claim exclude all 20 as `NotInBenchmarkUniverse` until a
+    prospective `benchmark-universe-v2` — none created, the 2026-09-29 AD-15 boundary unmoved.
   - **Out of scope, recorded not built**: creating `benchmark-universe-v2`; changing any existing company's
     tier, feeds or identity; any new collector, feed kind or provider; any typing/judgment budget change;
     and backfilling evidence, prices or scores for the additions (they accrue forward, like every other
