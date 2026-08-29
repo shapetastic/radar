@@ -117,18 +117,56 @@ All projects should target `net10.0`.
 
 ### High-Level Flow
 
+⚠ **This document was written for the single-pass MVP. The sections below marked
+"AS BUILT" describe what actually ships; the rest is original intent and may be stale.
+Verify against code before planning from any structural claim here.**
+
+**AS BUILT.** `Radar:RunMode` selects one of four shapes — `full` (default), `collect`,
+`score`, `replay` — so "collect then score in one run" is true of only one of them:
+
 ```text
-Watch Universe
-  -> Collectors
-  -> Raw Evidence Files
-  -> Evidence Normalizer
-  -> Company Resolver
-  -> Signal Extractor
-  -> Signal Reviewer
-  -> Scoring Engine
-  -> Weekly Report
-  -> Human Review
+Stage 0   StrategyIdentityGuard        (before anything is collected)
+  |
+CollectionPass  (stages 1-5)           [full, collect]
+  Watch Universe -> Collectors -> Raw Evidence (insert-only, content-addressed)
+    -> Signal Extraction -> Company Resolution -> Deterministic Review
+  |
+ScoringPass     (stage 6)              [full, score, replay]
+  N STRATEGIES over the ONE collection pass; each writes its own snapshot series
+  |
+Stage 7  Weekly Report                 [full, score]
+  |
+Human Review
 ```
+
+Note the order inside collection: extraction happens **before** resolution and review.
+Normalization is not a stage — it is inside `CollectedEvidenceMapper`.
+
+**Six further steps run in the Worker, OUTSIDE `IRadarPipeline`**, after the pipeline
+returns: price acquisition, stage-1 news typing, the stage-2 news judge,
+judgment-derived signal materialization, the news-risk shadow read, and
+efficacy/leaderboard generation. Price is deliberately outside the pipeline because it must
+never reach scoring (AD-14).
+
+### News reading is TWO-STAGE, and it is not in the flow above
+
+**AS BUILT.** News is read on a separate path from evidence, and only rejoins scoring at the
+end:
+
+```text
+News search -> Observation archive (sidecar to evidence; its own store)
+  -> Stage 1: TYPING    facts + event types, NO direction  (news-event-taxonomy-vN)
+  -> Fact families      deterministic checkpoint, no model call
+  -> Stage 2: JUDGE     BusinessTrajectory + challenge-only findings, from families ONLY
+  -> Materializer       ONE deterministic signal per eligible judgment, anchored to the
+                        evidence that judgment actually CITED
+  -> ScoringPass        as an ordinary directional MediaAttention signal
+```
+
+Two rules that are easy to get wrong: the judge sees **only** canonical fact families —
+never raw prose, scores, ranks or price — and an article is joined to its evidence by an
+ordered match ladder (exact URL+title+instant, then URL+title, then unique title), which
+**fails closed on ambiguity** rather than guessing.
 
 ### Important Separation
 
@@ -180,23 +218,30 @@ tests/
   Radar.Infrastructure.Tests/
   Radar.Worker.Tests/
 
-data/
-  watch-universe/
-    companies.json
-
+data/                                   # AS BUILT
+  companies.json                        # NOT data/watch-universe/companies.json
+                                        # shape: { "companies": [ { id, legalName, sector,
+                                        #   industry, followingTier, feeds[] } ] }
   evidence/
-    raw/
-      press-releases/
-      news/
-      test/
-    normalized/
-
-  signals/
-
-  scores/
-
-  reports/
-    weekly/
+    raw/{sourceTypeFolder}/{yyyy}/{MM}/{contentHash}.json
+                                        # insert-only, content-addressed.
+                                        # There is NO normalized/ directory - normalization
+                                        # happens in CollectedEvidenceMapper, not on disk.
+  signals/{yyyy}/{MM}/
+  scores/{companyId}/                   # primary series
+  scores/strategies/{name}/{companyId}/ # one series PER STRATEGY
+  scoring-configs/                      # content-addressed effective config +
+                                        # strategies/{name}.json identity records
+                                        # (GITIGNORED - cannot ride in a PR)
+  runs/{yyyy}/{MM}/                     # pipeline run records
+  news-observations/                    # sidecar archive (batches/ + observations/)
+  news-typing/                          # stage-1 typing records + decomposition artifacts
+  news-risk/                            # judgments/ + shadow assessments + live artifacts
+  prices/                               # validation only - NEVER a scoring input (AD-14)
+  efficacy/                             # score-vs-price series, leaderboards
+  replays/                              # spec-139 read-only replay output
+  experiments/{profile}/                # a named run profile writes here, not to data/
+  reports/weekly/
 ```
 
 API/UI projects can wait.
@@ -271,12 +316,13 @@ They simply answer:
 Recommended application interface:
 
 ```csharp
+// AS BUILT - SourceType is strongly typed and the return carries a summary, not a bare list.
 public interface IEvidenceCollector
 {
     string CollectorName { get; }
-    string SourceType { get; }
+    EvidenceSourceType SourceType { get; }
 
-    Task<IReadOnlyCollection<CollectedEvidence>> CollectAsync(
+    Task<CollectionResult> CollectAsync(
         CollectionContext context,
         CancellationToken cancellationToken);
 }
@@ -471,25 +517,28 @@ Examples:
 
 The deterministic extractor should produce low/medium confidence signals and supporting excerpts.
 
-### Future AI Extractor
+### AI extraction — AS BUILT
 
-When introduced, AI extraction must sit behind an application abstraction and use typed outputs.
+⚠ **`IAiStructuredOutputService` NEVER EXISTED.** Earlier revisions of this document
+proposed it as a single generic seam; nothing was ever built against it. Do not implement
+it.
 
-No provider SDK should leak into application code.
+The principle held — no provider SDK leaks outside `Radar.Infrastructure`, and every model
+output is typed and validated before persistence — but it was realised as **several
+purpose-built seams**, each with its own contract, cohort key and failure vocabulary:
 
-Recommended interface:
+- `IChatClientFactory` — the one provider-facing seam (`Microsoft.Extensions.AI`).
+- `ISignalExtractor` — signal extraction from evidence.
+- `IDirectionalFilingSignalSource` — the AI earnings/filing directional read.
+- the stage-1 typing reader and the stage-2 judge — see the two-stage news read above.
+- `INewsRiskAnalyzer` — the news-risk shadow read.
 
-```csharp
-public interface IAiStructuredOutputService
-{
-    Task<TOutput> GenerateAsync<TOutput>(
-        string systemPrompt,
-        object input,
-        CancellationToken cancellationToken);
-}
-```
+**Review is NOT one of them.** `DeterministicSignalReviewer` is deterministic code; there
+is no AI review path and no AI review schema.
 
-Implementation can use `Microsoft.Extensions.AI`.
+Each seam versions its own prompt and result schema and folds them into a cohort key, so
+two contracts never pool results. Adding a new AI capability means a new purpose-built
+interface, not a generic one.
 
 ---
 
@@ -568,20 +617,32 @@ Initial scores:
 - `AttentionScore`: simple count of evidence items for now.
 - `OpportunityScore`: trajectory adjusted by attention and confidence.
 
-### MVP Formula Guidance
+### Formula guidance — AS BUILT
 
-Keep formula visible and versioned.
+The MVP text above is the original single-formula intent. What ships is **plural**, and the
+differences matter when planning:
 
-Example:
+- **N strategies over ONE collection pass.** A strategy is a named `{ ScoringProfile,
+  Formula, Channels?, SignalTypes? }`. Collection, the AI read, extraction, resolution and
+  review run **exactly once**; only stage 6 runs per strategy. The primary writes the series
+  the weekly report renders; the rest write to `strategies/{name}/`.
+- **Five shipped formulas**, selected per strategy:
+  `{ radar-formula-v8, v9, v10, v11, radar-baseline-activity-v1 }`. A new *structure* earns
+  the next free `vN` (**v12** — v11 is taken); an in-place composition change bumps
+  `IScoreFormula.CompositionRevision` instead. The baseline control is deliberately outside
+  the `vN` lineage.
+- **`AttentionScore` is NOT a count of evidence items.** It is tier-weighted **distinct
+  publisher** reach, saturated — so forty articles from one outlet count once, and a curated
+  publisher tier map decides what counts as genuine notice. It enters `OpportunityScore` as
+  an INVERSE discount: a company Radar believes is already noticed is marked down.
+- **The window is config** (`Radar:ScoringWindowDays`; the live baseline runs 60 days, not
+  30) and is a hashed fingerprint input.
+- **Magnitudes are config, structure is code.** Changing a weight is a config edit that
+  re-stamps `ScoringConfigVersion` automatically; changing the shape of a component needs a
+  new formula class.
 
-```text
-TrajectoryScore = weighted average of accepted signal strength
-SignalVelocity = current 30-day signal score - previous 30-day signal score
-EvidenceConfidence = average confidence adjusted by source count
-OpportunityScore = TrajectoryScore + EvidenceConfidence + SignalVelocity - AttentionPenalty
-```
-
-The exact formula can evolve, but every score must explain which signals contributed.
+Every score must still explain which signals contributed, and a score without evidence is
+invalid.
 
 ---
 
@@ -787,7 +848,12 @@ evidence): short interest, options flow, social/Reddit sentiment, price/volume m
 bill-of-lading demand data is conceptually strong but effectively paywalled (Panjiva/ImportGenius),
 so feasibility rules it out.
 
-Suggested expansion arc: **Patent (spec 127, queued) → FCC Equipment Authorization → FDA → USPTO
+⚠ **AS BUILT — this arc is DONE and its FCC step was dropped.** Twelve collectors are
+registered (`RadarCollectorNames`: rss, local-file, sec-edgar, sec-form4, sec-13dg,
+usaspending, gdelt-news, newssearch, hiring-ats, patents, fda, trademarks); the baseline
+runs **seven**. Patents, FDA and trademarks all shipped. **No FCC collector exists and none
+is planned** — it was assessed as unfounded and recommended for drop. Historical arc:
+**Patent (spec 127, queued) → FCC Equipment Authorization → FDA → USPTO
 Trademark**, sequenced (not parallelized) because each bumps `RuleSetVersion` and re-pins the same
 fingerprint.
 

@@ -34,7 +34,14 @@ public sealed record Company(
     string? Industry,
     CompanyStatus Status,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    IReadOnlyList<string> Themes,
+    FollowingTier FollowingTier = FollowingTier.Small);
+
+// FollowingTier is a SCORING INPUT (the notedness discount). It is curated from
+// following/coverage evidence ONLY and is NEVER derived from price, market cap or
+// volume - see AD-14.
+public enum FollowingTier { Small = 0, Mid, Large, Mega }
 ```
 
 ```csharp
@@ -96,7 +103,12 @@ public enum EvidenceSourceType
     GovernmentContract,
     JobPosting,
     Patent,
-    SocialMedia
+    SocialMedia,
+    RegulatoryAnnouncement,
+    InsiderTransaction,
+    ConferenceMention,
+    RegulatoryApproval,
+    Trademark
 }
 ```
 
@@ -145,7 +157,12 @@ public sealed record Signal(
     string Reason,
     SignalReviewStatus ReviewStatus,
     DateTimeOffset ObservedAtUtc,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    string? MetadataJson = null);
+
+// MetadataJson carries the provenance envelope for a judgment-derived news signal
+// (newsJudgmentSignalVersion / newsJudgmentId / newsJudgmentCohortKey / observation
+// and evidence ids). Trailing + nullable: a legacy signal hydrates it as null.
 ```
 
 ```csharp
@@ -163,6 +180,10 @@ public enum SignalType
     PatentActivity,
     DeveloperAdoption,
     MediaAttention,
+    HiringActivity,
+    InstitutionalOwnership,
+    RegulatoryApproval,
+    TrademarkActivity,
     Other
 }
 ```
@@ -243,10 +264,24 @@ public sealed record CompanyScoreSnapshot(
     string ComponentJson,
     DateTimeOffset WindowStartUtc,
     DateTimeOffset WindowEndUtc,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    string? ScoringConfigVersion = null,
+    string? StrategyName = null,
+    string? CollectionProvenance = null);
 ```
 
 Scores are 0-100.
+
+**The three trailing fields are load-bearing and all are nullable for legacy records.**
+
+- `ScoringConfigVersion` — the content fingerprint of everything that could change the
+  number (`radar-scoring-fp-…`). Two snapshots with different stamps are NOT comparable.
+- `StrategyName` — **the series key.** Radar scores N strategies over ONE collection pass,
+  so a company has one snapshot *per strategy per run*. `null`/blank means the primary
+  series; `ScoreSeriesKey` is the single definition and compares case-insensitively.
+  Without this field the schema cannot represent what Radar actually does.
+- `CollectionProvenance` — which collectors ran (`collectors=…;`), recorded verbatim and
+  **hashed into nothing**, so enabling a collector re-stamps no strategy.
 
 ### ScoreEvidenceLink
 
@@ -331,27 +366,42 @@ Rules:
 - Do not infer ticker unless explicit in evidence.
 - Use direct evidence excerpts.
 
-### ReviewSignalsOutput
+### Signal review is DETERMINISTIC — there is no AI review schema
 
-```csharp
-public sealed record ReviewSignalsOutput(
-    string Status,
-    IReadOnlyList<ReviewedSignal> ReviewedSignals,
-    string Summary);
+⚠ Earlier revisions of this document specified `ReviewSignalsOutput` / `ReviewedSignal`.
+**Neither has ever existed.** Review is performed by `DeterministicSignalReviewer`
+(`ISignalReviewer`), which returns a `SignalReviewOutcome`; no model is called on the
+review path. Do not design against an AI review schema.
 
-public sealed record ReviewedSignal(
-    Guid? SignalId,
-    string Decision,
-    decimal AdjustedConfidence,
-    string Reason,
-    IReadOnlyList<string> Issues);
-```
+The one shipped AI structured output on the extraction path is `ExtractSignalsOutput`
+above. The other model-facing contracts live in their own subsystems and are versioned
+independently: the directional filing read, stage-1 news typing
+(`news-typing-prompt-*` / `news-typing-schema-*`), and the stage-2 news judge
+(`news-judgment-prompt-*` / `news-judgment-schema-*`).
 
 ---
 
-## PostgreSQL Tables
+## Persistence
 
-Initial table list:
+⚠ **Radar is FILE-BASED today. PostgreSQL is not wired** — there is no Dapper or Npgsql
+dependency in `src/`. The table list below is the original conceptual model, retained as
+intent, not as a description of storage.
+
+It is also no longer the whole model. The durable stores that actually exist include
+scoring configs, pipeline run records, price bars, efficacy/leaderboard artifacts, news
+observations, typing records, fact-family snapshots, judgments, news-risk assessments and
+operating calls — none of which appear below.
+
+Two rules matter more than the table shapes:
+
+- **The repository IS the file store** (spec 142): `FileSignalStore` and
+  `FileRawEvidenceStore` implement both the file-store and repository interfaces, so
+  scoring reads accrued history rather than an empty in-memory singleton.
+- **Evidence identity is content-derived** (spec 145): the id comes from the normalized
+  title+body hash ALONE. Source URL, collector, timestamps and metadata are excluded, so
+  the same content from two collectors is ONE evidence record.
+
+Original conceptual table list:
 
 ```text
 companies
@@ -392,11 +442,26 @@ Do not rely on live ticker resolution in the first implementation.
 
 ## Versioning
 
-Scoring formulas must have explicit versions, e.g. `mvp-v1`.
+Scoring identity is a **composite**, not one version string. Four independent things move:
 
-AI prompts should also be versioned in code or database metadata.
+- **The formula** — a `radar-formula-vN` class. Shipped set:
+  `{ v8, v9, v10, v11, radar-baseline-activity-v1 }`. A new *structure* earns the next free
+  `vN` (**v12**); an in-place change to an existing formula's composition instead bumps
+  `IScoreFormula.CompositionRevision`.
+- **The extractor rule set** — `KeywordSignalExtractor.RuleSetVersion` (a rule-STRUCTURE
+  change; magnitudes are config).
+- **`ScoringConfigVersion`** — the content fingerprint over everything that can change a
+  number: weights, scoring window, formula identity, channel budget, signal-type filter,
+  attention tier map, the news-judgment identity and the news query window. Tunable
+  magnitudes live in config and re-stamp automatically.
+- **Model contracts** — prompt and result schema versions, versioned separately per
+  subsystem, and folded into their cohort keys so two contracts never pool.
 
-If a prompt changes significantly, future outputs should record the new prompt version.
+**A strategy is IMMUTABLE BY CONVENTION.** To change one, add a new name
+(`momentum` → `momentum-v2`); `StrategyIdentityGuard` fails the run before collection if a
+named strategy's fingerprint moves. Pins are also **window-dependent** — the unit-test pin
+is computed at a 30-day window the Worker never uses, so reconcile a real run against the
+pair for the window it actually ran.
 
 ---
 
