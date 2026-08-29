@@ -50,8 +50,8 @@ public sealed class ScoringPass : IScoringPass
         // ScoringPassResult for why this axis is not primary-only).
         var snapshotsNotPersisted = 0;
 
-        // Spec 201 §1: per-strategy effective-config files that did NOT land. A snapshot still carries its
-        // fingerprint stamp; this counts the stamps whose dereference target is missing from disk.
+        // Spec 201 §1: per-strategy effective-config files that did NOT land. Since spec 202 §1 such a
+        // strategy is skipped for the pass (below), so this counts strategies that scored NOTHING this pass.
         var scoringConfigsNotPersisted = 0;
 
         // Spec 197 §3: ScoringEngine is ONE STRATEGY, so its former per-company Warnings for unresolved
@@ -87,20 +87,34 @@ public sealed class ScoringPass : IScoringPass
         // formula, weights, tier map), so persist it ONCE PER STRATEGY — not per company — content-addressed
         // by its fingerprint (insert-if-new), so a historical snapshot's ScoringConfigVersion stamp
         // dereferences back to the exact weights (provenance completion, AD-10-as-amended, spec 91). Two
-        // strategies resolving to the same config dedupe naturally. Best-effort like the other file stores:
-        // the store swallows disk errors, so a failure logs + continues and the snapshots still carry the
-        // stamp — it never aborts the run or changes any counter.
+        // strategies resolving to the same config dedupe naturally. The store swallows disk errors and a
+        // failure never aborts the run — but since spec 202 §1 it DOES change what is written: see the
+        // durability precondition inside the loop.
         var strategies = _scoringStrategies.Runtimes;
+
+        // Spec 202 §1: the strategies this pass SKIPPED because their config record is not durable, in run
+        // order. Null on the result when none was skipped — never an empty list standing in for "none".
+        List<string>? strategiesSkipped = null;
+
         foreach (var strategy in strategies)
         {
             ct.ThrowIfCancellationRequested();
 
+            // Spec 202 §1 — DURABILITY PRECONDITION. A snapshot's ScoringConfigVersion must dereference to a
+            // record on disk (the spec-91 provenance chain; spec 148 Part B closed this for replay). Until spec 202
+            // the forward path merely COUNTED a failed config write and scored anyway, so snapshots could
+            // carry a stamp that dereferenced to nothing. Now a strategy whose record did not land this pass
+            // writes NO snapshot: it is counted, named, and simply retried by the next run — the store is
+            // content-addressed and insert-if-new, so nothing has to be repaired. Every OTHER strategy still
+            // scores; a strategy whose record was already on disk (AlreadyAvailable) is durable and proceeds.
             var configWrite = await _scoringConfigStore
                 .WriteIfNewAsync(strategy.Engine.EffectiveConfig, ct)
                 .ConfigureAwait(false);
             if (!configWrite.Written)
             {
                 scoringConfigsNotPersisted++;
+                (strategiesSkipped ??= []).Add(strategy.Definition.Name);
+                continue;
             }
 
             var scoreFileStore = _scoreFileStores.ForStrategy(strategy.Definition);
@@ -149,17 +163,23 @@ public sealed class ScoringPass : IScoringPass
                 strategies.Count);
         }
 
-        // Spec 201 §1: ONE aggregated Warning for the scoring-config store per pass, never one per strategy.
-        if (scoringConfigsNotPersisted > 0)
+        // Spec 201 §1 / 202 §1: ONE aggregated Warning for the scoring-config store per pass, never one per
+        // strategy, naming the strategies the precondition skipped. The count and the name list are the same
+        // fact (a not-persisted config IS a skipped strategy), so one line carries both rather than two lines
+        // the reader would have to reconcile.
+        if (strategiesSkipped is not null)
         {
             _logger.LogWarning(
                 "{ScoringConfigsNotPersisted} effective scoring config file(s) this run could NOT be durably "
-                    + "persisted to the scoring-config store (of {StrategyCount} strategies). Every snapshot "
-                    + "still carries its ScoringConfigVersion stamp, but for those strategies the stamp "
-                    + "dereferences to NOTHING on disk until a later run writes the same content-addressed "
-                    + "file. The run was not aborted.",
+                    + "persisted to the scoring-config store (of {StrategyCount} strategies). The affected "
+                    + "strategies were SKIPPED for this pass and NO snapshot was written under them: "
+                    + "{StrategiesSkipped}. A snapshot whose ScoringConfigVersion dereferences to nothing on "
+                    + "disk is not written (durability precondition, spec 202 §1). The next run retries "
+                    + "naturally — the store is content-addressed and insert-if-new — and the run was not "
+                    + "aborted; every other strategy scored.",
                 scoringConfigsNotPersisted,
-                strategies.Count);
+                strategies.Count,
+                string.Join(", ", strategiesSkipped));
         }
 
         return new ScoringPassResult(
@@ -167,6 +187,7 @@ public sealed class ScoringPass : IScoringPass
             Strategies: [.. strategies.Select(s => s.Definition.Name)],
             PrimaryStrategy: _scoringStrategies.Primary.Definition.Name,
             ScoreSnapshotsNotPersisted: snapshotsNotPersisted,
-            ScoringConfigsNotPersisted: scoringConfigsNotPersisted);
+            ScoringConfigsNotPersisted: scoringConfigsNotPersisted,
+            StrategiesSkippedForUnpersistedConfig: strategiesSkipped);
     }
 }

@@ -220,7 +220,9 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
             // Spec 201 §1: a score pass writes the report (when enabled) and the per-strategy configs, so
             // both are measured facts here.
             ReportsNotPersisted: reportsNotPersisted,
-            ScoringConfigsNotPersisted: scoring.ScoringConfigsNotPersisted);
+            ScoringConfigsNotPersisted: scoring.ScoringConfigsNotPersisted,
+            // Spec 202 §1: the strategies the scoring pass skipped (null = none) — measured by this pass.
+            StrategiesSkippedForUnpersistedConfig: scoring.StrategiesSkippedForUnpersistedConfig);
         var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
         RadarPipelineRunner.LogRunRecordNotPersisted(_logger, runRecordWrite);
 

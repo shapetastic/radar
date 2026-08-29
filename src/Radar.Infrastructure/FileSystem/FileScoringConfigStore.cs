@@ -73,9 +73,11 @@ public sealed class FileScoringConfigStore : IScoringConfigStore
                 "Effective scoring config {Fingerprint} already exists at {Path}; skipping (immutable).",
                 config.Fingerprint,
                 path);
-            // The content IS durably on disk (that is what the existence check established), so this is a
-            // Written outcome — "skipped because already stored" is not a failure to store.
-            return DurableWriteResult.Succeeded(path);
+            // The content IS durably on disk (that is what the existence check established), so
+            // Written reports true — "skipped because already stored" is not a failure to store — but the
+            // outcome is AlreadyAvailable, not Written (spec 202 §1): this call produced nothing, and a
+            // run log must not claim a write that never happened.
+            return DurableWriteResult.AlreadyOnDisk(path);
         }
 
         string json;

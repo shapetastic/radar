@@ -255,10 +255,35 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         // from COMPLETED typings — never only this run's new facts (which would miss duplicates typed by
         // earlier runs), and never only the window (which would churn the durable family id) — then the
         // window projection that the snapshot, the decomposition and the stage-2 judge consume.
+        // Spec 202 §2: the family store's bool is CHECKED (spec 187 §3's rule for the typing store). A
+        // snapshot that did not persist is STILL this pass's in-memory input to the judge — spec 185 consumes
+        // the run result, never disk — so what the judge sees this run is deliberately unchanged; the loss is
+        // counted, named on the run result and warned ONCE per pass (the spec-145 precedent).
+        var familySnapshotsAttempted = 0;
+        List<string>? familySnapshotsNotPersisted = null;
         foreach (var pass in perReader)
         {
             ct.ThrowIfCancellationRequested();
-            await WriteFamilyCheckpointAsync(pass, now, windowStartUtc, asOfUtc, ct).ConfigureAwait(false);
+            familySnapshotsAttempted++;
+            var persisted = await WriteFamilyCheckpointAsync(pass, now, windowStartUtc, asOfUtc, ct)
+                .ConfigureAwait(false);
+            if (!persisted)
+            {
+                (familySnapshotsNotPersisted ??= []).Add(pass.Identity.CohortKey);
+            }
+        }
+
+        if (familySnapshotsNotPersisted is not null)
+        {
+            _logger.LogWarning(
+                "{FamilySnapshotsNotPersisted} of {FamilySnapshotsAttempted} fact-family checkpoint "
+                    + "snapshot(s) this pass could NOT be durably persisted to the family snapshot store "
+                    + "(cohort(s): {Cohorts}). The in-memory families still feed this run's stage-2 judge and "
+                    + "decomposition artifact unchanged, but the checkpoint is absent from the accrued store. "
+                    + "The run was not aborted; the next pass rebuilds and re-checkpoints the families.",
+                familySnapshotsNotPersisted.Count,
+                familySnapshotsAttempted,
+                string.Join(", ", familySnapshotsNotPersisted));
         }
 
         var document = BuildDecomposition(
@@ -293,7 +318,11 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             NewsObservationBatchId: runRecord?.NewsObservationBatchId,
             Cohorts: perReader
                 .Select(p => BuildCohortRunResult(p, windowStartUtc, asOfUtc))
-                .ToList());
+                .ToList(),
+            // Spec 202 §2: null when no checkpoint write was attempted (no reader) — never a fabricated 0.
+            FamilySnapshotsNotPersisted: familySnapshotsAttempted == 0
+                ? null
+                : familySnapshotsNotPersisted?.Count ?? 0);
     }
 
     /// <summary>
@@ -1128,7 +1157,11 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         AttemptReservationId: reservation.ReservationId,
         AttemptOrdinal: reservation.AttemptOrdinal);
 
-    private async Task WriteFamilyCheckpointAsync(
+    /// <summary>
+    /// Builds and checkpoints one cohort's fact families. Returns whether the snapshot was DURABLY written
+    /// (spec 202 §2); the in-memory families are set on <paramref name="pass"/> either way.
+    /// </summary>
+    private async Task<bool> WriteFamilyCheckpointAsync(
         ReaderPass pass,
         DateTimeOffset checkpointUtc,
         DateTimeOffset windowStartUtc,
@@ -1197,7 +1230,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             Families: families,
             FactsConsidered: considered,
             FactsWithoutCompany: withoutCompany);
-        await _familyStore
+        return await _familyStore
             .WriteAsync(
                 NewsTypingCohortPath.PolicySegment(pass.Identity.Provider, pass.Identity.ModelId),
                 snapshot,

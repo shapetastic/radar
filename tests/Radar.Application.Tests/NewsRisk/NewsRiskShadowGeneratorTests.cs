@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
@@ -7,6 +8,7 @@ using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.Storage;
+using Radar.Application.Tests.Ai;
 
 namespace Radar.Application.Tests.NewsRisk;
 
@@ -67,8 +69,16 @@ public sealed class NewsRiskShadowGeneratorTests
     {
         public List<NewsRiskAssessmentRecord> Records { get; } = [];
 
+        /// <summary>Spec 202 §2: when set, every write degrades (returns false, persists nothing).</summary>
+        public bool FailWrites { get; set; }
+
         public Task<bool> WriteAsync(NewsRiskAssessmentRecord record, CancellationToken ct)
         {
+            if (FailWrites)
+            {
+                return Task.FromResult(false);
+            }
+
             if (Records.All(r => r.AssessmentId != record.AssessmentId))
             {
                 Records.Add(record);
@@ -279,6 +289,77 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Equal(NewsRiskAssessmentBundle.Complete, record.AssessmentBundle);
         Assert.NotNull(artifacts.LiveDocument);
         Assert.Null(artifacts.LiveDocument!.Diagnostic);
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Spec 202 §2: the assessment store's bool is CHECKED. A record that did not persist is counted on the
+    // run result, excluded from the persisted total, and warned ONCE — while what the pass renders in-process
+    // is unchanged.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FailedAssessmentWrite_IsCountedOnTheRunResult_NotInThePersistedTotal_AndWarnsOnce()
+    {
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Test Co flags doubt", AsOf.AddDays(-1)));
+        var assessments = new InMemoryAssessmentStore { FailWrites = true };
+        var artifacts = new FakeArtifactStore();
+        var log = new CapturingLogger<NewsRiskShadowGenerator>();
+        var generator = new NewsRiskShadowGenerator(
+            runStore,
+            archive,
+            archive,
+            new NewsRiskReaderSet([Reader("a", "model-a", new ScriptedAnalyzer(ThesisChallengedOutcome))]),
+            assessments,
+            artifacts,
+            Options(),
+            new FixedTimeProvider(AsOf.AddMinutes(10)),
+            log);
+
+        var result = await generator.GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        // Counted, and NOT in the persisted total.
+        Assert.Equal(1, result.AssessmentsAttempted);
+        Assert.Equal(0, result.AssessmentsPersisted);
+        Assert.Equal(1, result.AssessmentsNotPersisted);
+        Assert.Empty(assessments.Records);
+
+        // What the shadow returns/renders in-process is unchanged: the reader result still reached the
+        // live artifact from memory.
+        var company = Assert.Single(artifacts.LiveDocument!.Companies);
+        var reader = Assert.Single(company.ReaderResults);
+        Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, reader.Status);
+
+        // ONE aggregated Warning per pass.
+        var warning = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("1 of 1 news-risk assessment record(s)", warning.Message);
+        Assert.Contains("could NOT be durably persisted", warning.Message);
+    }
+
+    [Fact]
+    public async Task SuccessfulAssessmentWrite_ReportsAMeasuredZero_AndNoWriteAttemptedReportsNull()
+    {
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Test Co flags doubt", AsOf.AddDays(-1)));
+        var assessments = new InMemoryAssessmentStore();
+        var artifacts = new FakeArtifactStore();
+        var analyzer = new ScriptedAnalyzer(ThesisChallengedOutcome);
+
+        var healthy = await Build(runStore, archive, assessments, artifacts, Reader("a", "model-a", analyzer))
+            .GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+        Assert.Equal(1, healthy.AssessmentsAttempted);
+        Assert.Equal(1, healthy.AssessmentsPersisted);
+        Assert.Equal(0, healthy.AssessmentsNotPersisted);
+
+        // No candidate ⇒ no write attempted ⇒ null, never a fabricated 0.
+        var none = await Build(runStore, archive, assessments, artifacts, Reader("a", "model-a", analyzer))
+            .GenerateAsync(RunId, null, CancellationToken.None);
+        Assert.Equal(0, none.AssessmentsAttempted);
+        Assert.Null(none.AssessmentsNotPersisted);
     }
 
     [Fact]

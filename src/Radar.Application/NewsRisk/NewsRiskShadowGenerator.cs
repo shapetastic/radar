@@ -25,11 +25,40 @@ public interface INewsRiskShadowGenerator
     /// persisted, so the live artifact embeds the per-company judgment sections and marker states beside
     /// the single-call read — side by side, cohorts never pooled, no merged verdict.
     /// </summary>
-    Task GenerateAsync(
+    /// Returns the pass's durable-write accounting (spec 202 §2) — never <c>null</c>; a pass that attempted
+    /// no assessment write reports <see cref="NewsRiskShadowRunResult.AssessmentsNotPersisted"/> as
+    /// <c>null</c>, never a fabricated 0.
+    Task<NewsRiskShadowRunResult> GenerateAsync(
         Guid? runId,
         IReadOnlyList<StrategyReportSection>? strategySections,
         CancellationToken ct,
         NewsJudgmentRunResult? judgment = null);
+}
+
+/// <summary>
+/// What one shadow pass durably did (spec 202 §2). The assessment store's <c>WriteAsync</c> returns a
+/// <c>bool</c> that the generator had discarded, so a record that never reached disk was returned — and
+/// rendered in the live artifact — as if it had. The in-process record still flows (the artifact is built from
+/// the pass's own instances, not from a disk re-read; that is unchanged), but the COUNT of records that are
+/// not in the accrued store is now a fact on the result rather than a silent gap.
+/// </summary>
+/// <param name="AssessmentsAttempted">How many assessment-record writes this pass attempted.</param>
+/// <param name="AssessmentsPersisted">
+/// How many of those the store confirmed durable. This is the ONLY "persisted" total; a failed write is
+/// never counted here.
+/// </param>
+/// <param name="AssessmentsNotPersisted">
+/// How many attempted writes the store reported NOT durable. Trailing + NULLABLE: <c>null</c> means no
+/// write was attempted this pass (no run id, no run record, no candidate, or the pass failed before its
+/// first write) — never a fabricated 0, which would claim a clean write that never happened.
+/// </param>
+public sealed record NewsRiskShadowRunResult(
+    int AssessmentsAttempted,
+    int AssessmentsPersisted,
+    int? AssessmentsNotPersisted = null)
+{
+    /// <summary>A pass that attempted no assessment write at all.</summary>
+    public static NewsRiskShadowRunResult NoWriteAttempted { get; } = new(0, 0, null);
 }
 
 /// <summary>
@@ -100,7 +129,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         _logger = logger;
     }
 
-    public async Task GenerateAsync(
+    public async Task<NewsRiskShadowRunResult> GenerateAsync(
         Guid? runId,
         IReadOnlyList<StrategyReportSection>? strategySections,
         CancellationToken ct,
@@ -108,9 +137,12 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
     {
         var fallbackDateToken = _timeProvider.GetUtcNow().UtcDateTime
             .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        // Spec 202 §2: pass-local durable-write accounting, held OUTSIDE the try so a pass that fails after
+        // its first write still reports what it wrote and what it lost, rather than reporting nothing.
+        var writes = new AssessmentWriteAccounting();
         try
         {
-            await GenerateCoreAsync(runId, strategySections, judgment, fallbackDateToken, ct)
+            await GenerateCoreAsync(runId, strategySections, judgment, fallbackDateToken, writes, ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -126,6 +158,51 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
                 .WriteFailedAsync(fallbackDateToken, $"{ex.GetType().Name}: {ex.Message}", ct)
                 .ConfigureAwait(false);
         }
+
+        // Spec 202 §2: ONE aggregated Warning per pass (the spec-145 precedent), never one per record. The
+        // in-process record still reached the live artifact — that is unchanged and deliberate — but the
+        // accrued store does not hold it, so the §6 cache and every later reader will not see it.
+        if (writes.NotPersisted > 0)
+        {
+            _logger.LogWarning(
+                "{AssessmentsNotPersisted} of {AssessmentsAttempted} news-risk assessment record(s) this pass "
+                    + "could NOT be durably persisted to the assessment store (the write degraded gracefully). "
+                    + "They were still rendered into this pass's live artifact from memory, but they are "
+                    + "absent from the accrued store: the assessment cache will not reuse them and the "
+                    + "evaluation read will not see them. The run was not aborted.",
+                writes.NotPersisted,
+                writes.Attempted);
+        }
+
+        return writes.ToResult();
+    }
+
+    /// <summary>
+    /// Spec 202 §2: the pass's assessment-write tally, kept as one mutable object threaded through the
+    /// candidate loop so the count is taken at the ONE site that calls the store.
+    /// </summary>
+    private sealed class AssessmentWriteAccounting
+    {
+        public int Attempted { get; private set; }
+
+        public int NotPersisted { get; private set; }
+
+        public void Record(bool persisted)
+        {
+            Attempted++;
+            if (!persisted)
+            {
+                NotPersisted++;
+            }
+        }
+
+        public NewsRiskShadowRunResult ToResult() =>
+            Attempted == 0
+                ? NewsRiskShadowRunResult.NoWriteAttempted
+                : new NewsRiskShadowRunResult(
+                    AssessmentsAttempted: Attempted,
+                    AssessmentsPersisted: Attempted - NotPersisted,
+                    AssessmentsNotPersisted: NotPersisted);
     }
 
     private async Task GenerateCoreAsync(
@@ -133,6 +210,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         IReadOnlyList<StrategyReportSection>? strategySections,
         NewsJudgmentRunResult? judgment,
         string fallbackDateToken,
+        AssessmentWriteAccounting writes,
         CancellationToken ct)
     {
         var readerLabels = _readers.Readers
@@ -209,7 +287,8 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         {
             ct.ThrowIfCancellationRequested();
             companies.Add(await AssessCandidateAsync(
-                candidate, id, selectionAsOfUtc, observations, batch, judgment, ct).ConfigureAwait(false));
+                candidate, id, selectionAsOfUtc, observations, batch, judgment, writes, ct)
+                .ConfigureAwait(false));
         }
 
         var document = new NewsRiskLiveDocument(
@@ -231,10 +310,13 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             .ConfigureAwait(false);
 
         _logger.LogInformation(
-            "News-risk shadow read complete for run {RunId}: {Companies} candidate(s) × {Readers} reader(s).",
+            "News-risk shadow read complete for run {RunId}: {Companies} candidate(s) × {Readers} reader(s); "
+                + "{AssessmentsPersisted} of {AssessmentsAttempted} assessment record(s) durably persisted.",
             id,
             companies.Count,
-            _readers.Readers.Count);
+            _readers.Readers.Count,
+            writes.Attempted - writes.NotPersisted,
+            writes.Attempted);
     }
 
     private async Task<NewsRiskLiveCompany> AssessCandidateAsync(
@@ -244,6 +326,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         IReadOnlyList<NewsObservationRecord> observations,
         NewsObservationBatch? batch,
         NewsJudgmentRunResult? judgment,
+        AssessmentWriteAccounting writes,
         CancellationToken ct)
     {
         var coverage = NewsRiskCoverageEvaluator.Evaluate(
@@ -273,7 +356,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             // One reader's runtime failure never blocks another (spec 179 §5): each pass is independently
             // recorded, and the analyzer contract already types provider failures rather than throwing.
             var record = await AssessWithReaderAsync(
-                reader, candidate, runId, selectionAsOfUtc, bundle, coverage, ct)
+                reader, candidate, runId, selectionAsOfUtc, bundle, coverage, writes, ct)
                 .ConfigureAwait(false);
 
             var warnings = new List<string>(fetchWarnings);
@@ -413,6 +496,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         DateTimeOffset selectionAsOfUtc,
         NewsRiskInputBundle bundle,
         NewsRiskCoverageEvaluation coverage,
+        AssessmentWriteAccounting writes,
         CancellationToken ct)
     {
         var identity = reader.Identity;
@@ -462,7 +546,12 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             }
         }
 
-        await _assessmentStore.WriteAsync(record, ct).ConfigureAwait(false);
+        // Spec 202 §2: the store's bool is CHECKED (spec 187 §3's rule for the typing store, applied here).
+        // The record is still returned — the live artifact is built from this pass's instances, and a
+        // rendered-but-unpersisted assessment is more honest than a hidden one — but a failed write is
+        // counted on the run result and never enters the "persisted" total.
+        var persisted = await _assessmentStore.WriteAsync(record, ct).ConfigureAwait(false);
+        writes.Record(persisted);
         return record;
     }
 

@@ -157,7 +157,9 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
             // Spec 201 §1: a collect pass writes no report and no scoring config, so both stay null ("this
             // pass did not do that work") rather than a 0 that would claim clean writes that never happened.
             ReportsNotPersisted: null,
-            ScoringConfigsNotPersisted: null);
+            ScoringConfigsNotPersisted: null,
+            // Spec 202 §1: a collect pass scores nothing, so no strategy could be skipped — null, not [].
+            StrategiesSkippedForUnpersistedConfig: null);
         var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
         RadarPipelineRunner.LogRunRecordNotPersisted(_logger, runRecordWrite);
 

@@ -138,9 +138,17 @@ public sealed record NewsTypingCohortRunResult(
 /// Carries the run's archive-capture provenance (fail-closed: <c>null</c> = unproven) so downstream
 /// completeness dimensions come from the same evaluation this pass recorded.
 /// </summary>
+/// <param name="FamilySnapshotsNotPersisted">
+/// Spec 202 §2: how many per-cohort fact-family checkpoint snapshots this pass could NOT durably persist
+/// (the store's <c>WriteAsync</c> returned <c>false</c>). The in-memory families on each cohort are the
+/// judge's input regardless — this counts what is missing from the ACCRUED store, not from this run.
+/// Trailing + NULLABLE: <c>null</c> means no checkpoint write was attempted (no reader ran), never a
+/// fabricated 0.
+/// </param>
 public sealed record NewsTypingRunResult(
     Guid? RunId,
     DateTimeOffset WindowStartUtc,
     DateTimeOffset WindowEndUtc,
     Guid? NewsObservationBatchId,
-    IReadOnlyList<NewsTypingCohortRunResult> Cohorts);
+    IReadOnlyList<NewsTypingCohortRunResult> Cohorts,
+    int? FamilySnapshotsNotPersisted = null);

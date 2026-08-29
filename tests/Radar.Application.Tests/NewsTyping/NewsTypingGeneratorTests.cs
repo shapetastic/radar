@@ -168,8 +168,16 @@ public sealed class NewsTypingGeneratorTests
     {
         public List<(string PolicySegment, FactFamilySnapshot Snapshot)> Snapshots { get; } = [];
 
+        /// <summary>Spec 202 §2: when set, every checkpoint write degrades (returns false, keeps nothing).</summary>
+        public bool FailWrites { get; set; }
+
         public Task<bool> WriteAsync(string policySegment, FactFamilySnapshot snapshot, CancellationToken ct)
         {
+            if (FailWrites)
+            {
+                return Task.FromResult(false);
+            }
+
             Snapshots.Add((policySegment, snapshot));
             return Task.FromResult(true);
         }
@@ -457,6 +465,48 @@ public sealed class NewsTypingGeneratorTests
         Assert.Equal(2, harness.FamilyStore.Snapshots.Count);
         Assert.Equal(
             2, harness.FamilyStore.Snapshots.Select(s => s.Snapshot.CohortKey).Distinct().Count());
+    }
+
+    /// <summary>
+    /// Spec 202 §2: the family store's bool is CHECKED. A checkpoint that did not persist is counted on the
+    /// run result and warned once — and the judge's in-memory input (the cohort's families) is unchanged.
+    /// </summary>
+    [Fact]
+    public async Task FailedFamilyCheckpointWrite_IsCountedAndWarnedOnce_WhileTheJudgeStillSeesTheFamilies()
+    {
+        var harness = new Harness { Logger = new CapturingLogger<NewsTypingGenerator>() };
+        harness.RunStore.Records.Add(RunRecord());
+        harness.Archive.Observations.Add(
+            Observation("Company faces legal scrutiny after complaint filed", AsOf.AddDays(-3)));
+        harness.FamilyStore.FailWrites = true;
+
+        var result = await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(1, result!.FamilySnapshotsNotPersisted);
+        Assert.Empty(harness.FamilyStore.Snapshots);
+
+        // What the judge sees this run is deliberately unchanged: the in-memory families still flow.
+        var cohort = Assert.Single(result.Cohorts);
+        Assert.Single(cohort.Families);
+
+        var warning = Assert.Single(harness.Logger!.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("1 of 1 fact-family checkpoint snapshot(s)", warning.Message);
+        Assert.Contains("could NOT be durably persisted", warning.Message);
+    }
+
+    [Fact]
+    public async Task SuccessfulFamilyCheckpointWrite_ReportsAMeasuredZero()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+        harness.Archive.Observations.Add(
+            Observation("Company faces legal scrutiny after complaint filed", AsOf.AddDays(-3)));
+
+        var result = await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        Assert.Equal(0, result!.FamilySnapshotsNotPersisted);
+        Assert.Single(harness.FamilyStore.Snapshots);
     }
 
     [Fact]

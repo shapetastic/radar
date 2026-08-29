@@ -1,7 +1,8 @@
 using System.Net;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+
+using Radar.Application.Identity;
 
 namespace Radar.Application.Evidence;
 
@@ -148,12 +149,11 @@ public sealed partial class EvidenceNormalizer : IEvidenceNormalizer
         return builder.ToString();
     }
 
-    private static string ComputeHash(string canonical)
-    {
-        var bytes = Encoding.UTF8.GetBytes(canonical);
-        var hash = SHA256.HashData(bytes);
-        return Convert.ToHexStringLower(hash);
-    }
+    // Spec 202 §3: the evidence contentHash (spec 145's identity input) routes through the ONE shared
+    // hashing step. Same algorithm — UTF-8 bytes, SHA-256, lower-case hex — so every pinned contentHash and
+    // every content-derived evidence id is byte-identical; the pins in EvidenceNormalizerTests and the
+    // EvidenceIdentity tests are the proof.
+    private static string ComputeHash(string canonical) => CanonicalHash.Sha256Hex(canonical);
 
     [GeneratedRegex(@"<(script|style)\b[^>]*>.*?</\1\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex ScriptStyleBlockRegex();

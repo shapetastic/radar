@@ -354,12 +354,30 @@ public sealed class RadarPipelineRunnerTests
         /// <summary>Spec 201 §1: when set, every config write reports <see cref="DurableWriteOutcome.Failed"/>.</summary>
         public bool FailWrites { get; set; }
 
+        /// <summary>
+        /// Spec 202 §1: fail ONLY the config writes this predicate selects (by fingerprint), so a test can
+        /// break one strategy's record while its siblings land.
+        /// </summary>
+        public Func<EffectiveScoringConfig, bool>? FailWhen { get; set; }
+
+        /// <summary>
+        /// Spec 202 §1: when set, every config write reports <see cref="DurableWriteOutcome.AlreadyAvailable"/>
+        /// — the content-addressed file was already on disk, so nothing was written but the record is durable.
+        /// </summary>
+        public bool ReportAlreadyAvailable { get; set; }
+
         public Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct)
         {
             WriteCallCount++;
             Written.Add(config);
+            var path = $"written/scoring-configs/{config.Fingerprint}.json";
+            var fail = FailWrites || (FailWhen?.Invoke(config) ?? false);
             return Task.FromResult(
-                DurableWriteResult.From($"written/scoring-configs/{config.Fingerprint}.json", !FailWrites));
+                fail
+                    ? DurableWriteResult.NotPersisted(path)
+                    : ReportAlreadyAvailable
+                        ? DurableWriteResult.AlreadyOnDisk(path)
+                        : DurableWriteResult.Succeeded(path));
         }
 
         public Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct) =>
@@ -389,6 +407,12 @@ public sealed class RadarPipelineRunnerTests
         public RecordingScoreSnapshotFileStore Primary { get; } = primary;
 
         public RecordingScoreSnapshotFileStore For(string strategyName) => _byStrategy[strategyName];
+
+        /// <summary>
+        /// Spec 202 §1: whether the pass ever ASKED for this non-primary strategy's store. A skipped
+        /// strategy never reaches <see cref="ForStrategy"/>, so no store exists for it at all.
+        /// </summary>
+        public bool HasStoreFor(string strategyName) => _byStrategy.ContainsKey(strategyName);
 
         public IScoreSnapshotFileStore ForStrategy(ScoringStrategyDefinition strategy)
         {
@@ -801,10 +825,12 @@ public sealed class RadarPipelineRunnerTests
         Assert.Null(record.ReportsNotPersisted);
         // The config write DID happen (one per strategy), so that axis is a measured zero.
         Assert.Equal(0, record.ScoringConfigsNotPersisted);
+        // Spec 202 §1: nothing skipped ⇒ null, never an empty list.
+        Assert.Null(record.StrategiesSkippedForUnpersistedConfig);
     }
 
     [Fact]
-    public async Task FailedScoringConfigWrite_IsCountedPerStrategy_InOneAggregatedWarning()
+    public async Task FailedScoringConfigWrite_SkipsTheStrategy_WritesNoSnapshot_AndWarnsOnce()
     {
         var collector = new FakeEvidenceCollector([BuildCollected()]);
         var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
@@ -813,17 +839,123 @@ public sealed class RadarPipelineRunnerTests
         var h = new Harness(collector, extractor, new PipelineOptions(), scoringConfigStore: configStore);
         await SeedCompanyAsync(h, Guid.NewGuid());
 
-        await h.Runner.RunAsync(default);
+        var result = await h.Runner.RunAsync(default);
 
-        // One strategy ⇒ one config write attempted ⇒ one not persisted. The snapshot side is untouched.
+        // Spec 202 §1 (amending spec 201 §1): one strategy ⇒ one config write attempted ⇒ one not persisted
+        // ⇒ the strategy is SKIPPED. No snapshot is written under a stamp that dereferences to nothing, so
+        // the snapshot store saw nothing, the snapshot-failure axis is a measured zero (no write was
+        // attempted, none failed), and the primary's company count is honestly zero.
         var record = Assert.Single(h.RunStore.Written);
         Assert.Equal(1, record.ScoringConfigsNotPersisted);
         Assert.Equal(0, record.ScoreSnapshotsNotPersisted);
+        Assert.Empty(h.ScoreStore.Written);
+        Assert.Equal(0, result.CompaniesScored);
+        Assert.Equal(0, record.CompaniesScored);
+        Assert.Equal(
+            [ScoringStrategySet.DefaultStrategyName],
+            record.StrategiesSkippedForUnpersistedConfig!.ToArray());
 
         var warning = Assert.Single(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("1 effective scoring config file(s)", warning.Message);
-        Assert.Contains("dereferences to NOTHING on disk", warning.Message);
+        Assert.Contains("SKIPPED", warning.Message);
+        Assert.Contains("NO snapshot was written", warning.Message);
+        Assert.Contains(ScoringStrategySet.DefaultStrategyName, warning.Message);
+        Assert.Contains("next run retries naturally", warning.Message);
     }
+
+    /// <summary>
+    /// Three strategies: "a" (primary) and "b"/"c" (non-primary, each with a different MediaReachWeight so
+    /// all three fingerprints genuinely differ and a per-fingerprint failure can single out "b").
+    /// </summary>
+    private static ScoringStrategySet ThreeStrategies() =>
+        new(
+        [
+            new ScoringStrategyDefinition("a", "default", new ScoringWeights(), IsPrimary: true),
+            new ScoringStrategyDefinition(
+                "b", "b", new ScoringWeights { MediaReachWeight = 0.02 }, IsPrimary: false),
+            new ScoringStrategyDefinition(
+                "c", "c", new ScoringWeights { MediaReachWeight = 0.03 }, IsPrimary: false),
+        ]);
+
+    /// <summary>
+    /// Spec 202 §1's named acceptance test: the config store fails for strategy B ONLY ⇒ A's and C's
+    /// snapshots are written, B's are not, the run record names B, and exactly one Warning is emitted.
+    /// Mutation: revert the <c>continue</c> in <c>ScoringPass</c> and the "no store for b" assertion goes
+    /// red (the pass would ask for B's store and write a snapshot under an undereferenceable stamp).
+    /// </summary>
+    [Fact]
+    public async Task ConfigWriteFailsForOneStrategy_OnlyThatStrategyIsSkipped_AndTheRunRecordNamesIt()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var configStore = new RecordingScoringConfigStore();
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            strategies: ThreeStrategies(), scoringConfigStore: configStore);
+        await SeedCompanyAsync(h, companyId);
+
+        var bFingerprint = h.StrategyFactory.Runtimes
+            .Single(r => r.Definition.Name == "b").Engine.EffectiveConfig.Fingerprint;
+        configStore.FailWhen = config => config.Fingerprint == bFingerprint;
+
+        var result = await h.Runner.RunAsync(default);
+
+        // All three config writes were ATTEMPTED (the precondition is evaluated per strategy)...
+        Assert.Equal(3, configStore.WriteCallCount);
+
+        // ...A (primary) and C scored and persisted their snapshots...
+        var aWritten = Assert.Single(h.ScoreStores.Primary.Written);
+        Assert.Equal("a", aWritten.Snapshot.StrategyName);
+        var cWritten = Assert.Single(h.ScoreStores.For("c").Written);
+        Assert.Equal("c", cWritten.Snapshot.StrategyName);
+        Assert.Equal(1, result.CompaniesScored);
+
+        // ...and B wrote NOTHING: no file-store was even requested for it, and its isolated repository
+        // holds no snapshot for the company.
+        Assert.False(h.ScoreStores.HasStoreFor("b"));
+        var bRepository = h.ScoreRepositories.ForStrategy(h.StrategySet.Strategies[1]);
+        Assert.Empty(await bRepository.GetSnapshotsForCompanyAsync(companyId, default));
+
+        // The run record names exactly B, counts exactly one config not persisted, and reports zero
+        // snapshot-write failures (none was attempted for B, and A's and C's landed).
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(["b"], record.StrategiesSkippedForUnpersistedConfig!.ToArray());
+        Assert.Equal(1, record.ScoringConfigsNotPersisted);
+        Assert.Equal(0, record.ScoreSnapshotsNotPersisted);
+        Assert.Equal(["a", "b", "c"], record.Strategies!.ToArray());
+
+        // Exactly ONE Warning for the whole pass, naming B and only B.
+        var warning = Assert.Single(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("1 effective scoring config file(s)", warning.Message);
+        Assert.Contains("of 3 strategies", warning.Message);
+        Assert.Contains("under them: b.", warning.Message);
+    }
+
+    [Fact]
+    public async Task AlreadyAvailableConfigRecord_SatisfiesTheDurabilityPrecondition()
+    {
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        // Spec 202 §1: the content-addressed file already on disk is a DURABLE record — the precondition asks
+        // "is it durable?", not "was it written just now" — so the strategy scores normally.
+        var configStore = new RecordingScoringConfigStore { ReportAlreadyAvailable = true };
+        var h = new Harness(collector, extractor, new PipelineOptions(), scoringConfigStore: configStore);
+        await SeedCompanyAsync(h, Guid.NewGuid());
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Single(h.ScoreStore.Written);
+        Assert.Equal(1, result.CompaniesScored);
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(0, record.ScoringConfigsNotPersisted);
+        Assert.Null(record.StrategiesSkippedForUnpersistedConfig);
+        Assert.DoesNotContain(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
+    }
+
+
 
     [Fact]
     public async Task CollectPass_LeavesReportAndScoringConfigCountsNull()
@@ -840,6 +972,8 @@ public sealed class RadarPipelineRunnerTests
         var record = Assert.Single(h.RunStore.Written);
         Assert.Null(record.ReportsNotPersisted);
         Assert.Null(record.ScoringConfigsNotPersisted);
+        // Spec 202 §1: it scored nothing, so nothing could be skipped — null, not an empty list.
+        Assert.Null(record.StrategiesSkippedForUnpersistedConfig);
     }
 
     [Fact]

@@ -6,9 +6,17 @@ namespace Radar.Application.Storage;
 /// outcome: <see cref="Written"/> is 0, so the SUCCESS case is the enum's default value exactly as it is
 /// there, and a failure is a NAMED outcome rather than a discarded <c>bool</c>.
 /// <para>
-/// This carries only the two outcomes the mirror stores can produce. The archive's extra members
+/// The mirror stores produce only <see cref="Written"/> and <see cref="Failed"/>. The archive's extra members
 /// (<c>CrossRunDeduped</c>, <c>Conflict</c>) are insert-only semantics that do not exist here: the signal and
 /// score-snapshot stores are upsert-by-Id (last-write-wins), so a write either lands or it does not.
+/// </para>
+/// <para>
+/// <see cref="AlreadyAvailable"/> (spec 202 §1) is the ONE content-addressed, insert-if-new case: the
+/// scoring-config store's <c>{fingerprint}.json</c> already existed, so nothing was written this call but the
+/// record IS durably on disk. Only <c>FileScoringConfigStore</c> returns it; no other store may. It is
+/// distinguished from <see cref="Written"/> so a run log can tell "wrote it now" from "found it there"
+/// without changing the answer to the caller's actual question — <see cref="DurableWriteResult.Written"/>
+/// is <c>true</c> for both.
 /// </para>
 /// </summary>
 public enum DurableWriteOutcome
@@ -23,6 +31,13 @@ public enum DurableWriteOutcome
     /// next run's history read will not see it. It must never be reported as stored.
     /// </summary>
     Failed,
+
+    /// <summary>
+    /// Nothing was written THIS call because the content-addressed file already existed: the record is
+    /// durable (<see cref="DurableWriteResult.Written"/> reports <c>true</c>), it just was not produced by
+    /// this write. Returned only by the insert-if-new scoring-config store (spec 202 §1).
+    /// </summary>
+    AlreadyAvailable,
 }
 
 /// <summary>
@@ -36,14 +51,27 @@ public enum DurableWriteOutcome
 /// <param name="Outcome">Whether the content was durably persisted.</param>
 public sealed record DurableWriteResult(string Path, DurableWriteOutcome Outcome)
 {
-    /// <summary>True iff the content was durably persisted.</summary>
-    public bool Written => Outcome == DurableWriteOutcome.Written;
+    /// <summary>
+    /// True iff the content is durably on disk at <see cref="Path"/> — written by this call
+    /// (<see cref="DurableWriteOutcome.Written"/>) or already there before it
+    /// (<see cref="DurableWriteOutcome.AlreadyAvailable"/>). The durability precondition asks exactly this
+    /// question, and both answer yes.
+    /// </summary>
+    public bool Written =>
+        Outcome is DurableWriteOutcome.Written or DurableWriteOutcome.AlreadyAvailable;
 
     /// <summary>A successful write to <paramref name="path"/>.</summary>
     public static DurableWriteResult Succeeded(string path) => new(path, DurableWriteOutcome.Written);
 
     /// <summary>A gracefully-degraded write that never reached <paramref name="path"/>.</summary>
     public static DurableWriteResult NotPersisted(string path) => new(path, DurableWriteOutcome.Failed);
+
+    /// <summary>
+    /// A content-addressed record that already existed at <paramref name="path"/>: durable, not written by
+    /// this call (spec 202 §1). Scoring-config store only.
+    /// </summary>
+    public static DurableWriteResult AlreadyOnDisk(string path) =>
+        new(path, DurableWriteOutcome.AlreadyAvailable);
 
     /// <summary>
     /// Maps the shared writer's <c>bool</c> onto the typed outcome at the ONE place Infrastructure converts

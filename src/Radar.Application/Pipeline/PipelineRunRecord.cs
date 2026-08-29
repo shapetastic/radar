@@ -81,4 +81,12 @@ public sealed record PipelineRunRecord(
     // report WAS generated (its in-memory model may still be re-rendered to the same path by the judgment
     // re-renderer), so the id identifies what exists and this counter says the FILE did not land.
     int? ReportsNotPersisted = null,
-    int? ScoringConfigsNotPersisted = null);
+    int? ScoringConfigsNotPersisted = null,
+    // Spec 202 §1: the strategies this run SKIPPED at the scoring stage because their effective
+    // scoring-config record could not be made durable — no snapshot was written under them (a stamp that
+    // dereferences to nothing on disk is not written), and the next run retries them naturally (the store is
+    // content-addressed, insert-if-new). Trailing + NULLABLE: null means NONE SKIPPED or NOT RECORDED (a
+    // pre-202 record, or a `collect` pass that scored nothing) — never an empty list, so the two readings
+    // can never be told apart by a fabricated value. Observational only; never a scoring or fingerprint
+    // input, never backfilled (AD-8).
+    IReadOnlyList<string>? StrategiesSkippedForUnpersistedConfig = null);
