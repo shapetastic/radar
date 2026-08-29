@@ -13,8 +13,9 @@ namespace Radar.IntegrationTests;
 /// question (the activity-only previous window, AD-6) under semantics pinned by its own tests. That is
 /// correct for the pipeline, which asks once per company per run, and ruinous for a PAIRED harness, which
 /// asks the identical question once per company per ARM: <c>ScoreCompanyAsync</c> calls it for the current
-/// AND the previous/velocity window, so two arms over a 74-company universe issue ~148 scans over signal
-/// partitions holding tens of thousands of JSON files each. Measured on the live store (2026-08-29): the
+/// AND the previous/velocity window, so two arms over the 94-company universe (spec 199 took it 74 -> 94)
+/// issue ~188 scans over signal partitions holding tens of thousands of JSON files each. The spec-198
+/// measurement below was taken at 74 companies (~148 scans). Measured on the live store (2026-08-29): the
 /// spec-198 counterfactual ran 14 minutes on ~2 seconds of CPU — pure disk thrash — before this was shared.
 /// </para>
 /// <para>

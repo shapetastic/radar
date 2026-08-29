@@ -1816,7 +1816,10 @@ requirement is satisfied, per consumer:
   VERSIONED universe, self-excluded** — `benchmark-universe-v1`, the committed self-contained artifact
   `data/efficacy/benchmark-universe-v1.json`: 74 members frozen 2026-08-23 from `companies.json` at seed
   hash `530ac6b8265851aeb49ce007958724d23ec6893aab4399f4591c708aa8426404`, content hash
-  **`97e31fde67655453e4bdee8f69eef07785db6f2c80124220176a5637829561fc`**. Members resolve to price series
+  **`97e31fde67655453e4bdee8f69eef07785db6f2c80124220176a5637829561fc`**. ⚠ Spec 199 subsequently expanded
+  the SEED to 94 companies; this artifact is deliberately unchanged at its 74 frozen members, so the 20
+  post-199 additions report `NotInBenchmarkUniverse` on the pooled path until a prospective
+  `benchmark-universe-v2` is declared. Members resolve to price series
   through the artifact's own `priceSeriesKey` — the mutable seed list is never consulted, so a seed edit
   moves no historical benchmark value. Future expansions are a prospective `benchmark-universe-v2` cohort
   dimension; v1-era results are never restated. Member windows resolve through the SAME spec-152
