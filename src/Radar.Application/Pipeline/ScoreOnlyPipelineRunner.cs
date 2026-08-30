@@ -4,6 +4,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 
 namespace Radar.Application.Pipeline;
 
@@ -59,6 +60,7 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
     private readonly IPipelineRunStore _runStore;
     private readonly PipelineOptions _options;
     private readonly ScoringPassOptions _scoringPassOptions;
+    private readonly IEnumerable<IHydrationTelemetry> _hydrationTelemetry;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ScoreOnlyPipelineRunner> _logger;
 
@@ -72,6 +74,7 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
         IPipelineRunStore runStore,
         PipelineOptions options,
         ScoringPassOptions scoringPassOptions,
+        IEnumerable<IHydrationTelemetry> hydrationTelemetry,
         TimeProvider timeProvider,
         ILogger<ScoreOnlyPipelineRunner> logger)
     {
@@ -84,6 +87,7 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(runStore);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(scoringPassOptions);
+        ArgumentNullException.ThrowIfNull(hydrationTelemetry);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -96,6 +100,7 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
         _runStore = runStore;
         _options = options;
         _scoringPassOptions = scoringPassOptions;
+        _hydrationTelemetry = hydrationTelemetry;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -144,12 +149,16 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
         Guid? reportId = null;
         // Spec 201 §1: null = no report write was attempted this pass; 0/1 = a measured outcome.
         int? reportsNotPersisted = null;
+        // Spec 203 §1: null = no report was generated this pass, never a fabricated zero duration.
+        TimeSpan? reportElapsed = null;
         if (_options.GenerateReport)
         {
+            var reportStarted = _timeProvider.GetTimestamp();
             var report = await _reportBuilder
                 .GenerateAsync(asOfUtc, CollectionSummary.Empty, health: null, ct)
                 .ConfigureAwait(false);
             var reportWrite = await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
+            reportElapsed = _timeProvider.GetElapsedTime(reportStarted);
             reportsNotPersisted = reportWrite.Written ? 0 : 1;
             RadarPipelineRunner.LogReportNotPersisted(_logger, reportWrite);
             reportId = report.Report.Id;
@@ -184,6 +193,9 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
             SourcesChecked: 0,
             SourcesFailed: 0,
             Collection: CollectionSummary.Empty);
+
+        // Spec 203 §1: read AFTER scoring, so the sum covers every hydration this pass triggered.
+        var hydrationElapsed = RadarPipelineRunner.SumHydrationElapsed(_hydrationTelemetry);
 
         var runRecord = new PipelineRunRecord(
             Id: Guid.NewGuid(),
@@ -222,9 +234,18 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
             ReportsNotPersisted: reportsNotPersisted,
             ScoringConfigsNotPersisted: scoring.ScoringConfigsNotPersisted,
             // Spec 202 §1: the strategies the scoring pass skipped (null = none) — measured by this pass.
-            StrategiesSkippedForUnpersistedConfig: scoring.StrategiesSkippedForUnpersistedConfig);
+            StrategiesSkippedForUnpersistedConfig: scoring.StrategiesSkippedForUnpersistedConfig,
+            // Spec 203 §1: measured by this pass (hydration summed across the stores that reported one).
+            ScoringElapsed: scoring.ScoringElapsed,
+            HydrationElapsed: hydrationElapsed);
+        var runRecordStarted = _timeProvider.GetTimestamp();
         var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
+        var runRecordElapsed = _timeProvider.GetElapsedTime(runRecordStarted);
         RadarPipelineRunner.LogRunRecordNotPersisted(_logger, runRecordWrite);
+
+        // Spec 203 §1: separate line so the "Score-only run complete" summary above stays byte-identical.
+        RadarPipelineRunner.LogStageTimings(
+            _logger, hydrationElapsed, scoring.ScoringElapsed, reportElapsed, runRecordElapsed);
 
         return pipelineResult;
     }

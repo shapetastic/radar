@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Evidence;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.FileSystem;
 using Radar.Infrastructure.Persistence.InMemory;
@@ -98,5 +99,24 @@ public sealed class DurableRadarSignalHistoryRegistrationTests : IDisposable
         Assert.IsType<InMemoryEvidenceRepository>(sp.GetRequiredService<IEvidenceRepository>());
         Assert.IsType<FileSignalStore>(sp.GetRequiredService<ISignalFileStore>());
         Assert.IsType<FileRawEvidenceStore>(sp.GetRequiredService<IRawEvidenceStore>());
+    }
+
+    /// <summary>
+    /// Spec 203 §1: both durable stores expose their hydration elapsed through the Application-layer
+    /// <see cref="IHydrationTelemetry"/> seam — as the SAME instances the store interfaces resolve to, so
+    /// the runners' summed HydrationElapsed reads the stores that actually hydrated.
+    /// </summary>
+    [Fact]
+    public void HydrationTelemetry_ResolvesToBothFileStoreInstances()
+    {
+        using var sp = BuildDurableProvider();
+
+        var telemetry = sp.GetServices<IHydrationTelemetry>().ToList();
+
+        Assert.Equal(2, telemetry.Count);
+        Assert.Contains(telemetry, t => ReferenceEquals(t, sp.GetRequiredService<FileSignalStore>()));
+        Assert.Contains(telemetry, t => ReferenceEquals(t, sp.GetRequiredService<FileRawEvidenceStore>()));
+        // Nothing has hydrated in this process: NOT RECORDED, never zero.
+        Assert.All(telemetry, t => Assert.Null(t.HydrationElapsed));
     }
 }

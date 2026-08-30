@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.Evidence;
+using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 
 namespace Radar.Infrastructure.FileSystem;
@@ -59,7 +60,7 @@ namespace Radar.Infrastructure.FileSystem;
 /// logged at Warning — as data loss.
 /// </para>
 /// </remarks>
-public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepository
+public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepository, IHydrationTelemetry
 {
     // Every EvidenceSourceType member, keyed by the snake_case token the file's `sourceType` carries.
     // Built FROM the enum via the same ToSnakeCase used on write, so write and read-back cannot drift and
@@ -70,6 +71,10 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
 
     private readonly FileRawEvidenceStoreOptions _options;
     private readonly ILogger<FileRawEvidenceStore> _logger;
+    private readonly TimeProvider _timeProvider;
+
+    // Spec 203 §1: the measured hydration walk (monotonic). Null until this instance hydrates.
+    private TimeSpan? _hydrationElapsed;
 
     private readonly ConcurrentDictionary<Guid, EvidenceItem> _byId = new();
     private readonly ConcurrentDictionary<string, Guid> _byContentHash = new(StringComparer.Ordinal);
@@ -80,15 +85,24 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
     private readonly SemaphoreSlim _hydrationGate = new(1, 1);
     private volatile bool _hydrated;
 
+    /// <param name="timeProvider">
+    /// Spec 203 §1: the clock whose MONOTONIC timestamp pair measures the hydration walk. Optional and
+    /// trailing so every existing construction site is untouched; <c>null</c> ⇒ <see cref="TimeProvider.System"/>.
+    /// </param>
     public FileRawEvidenceStore(
         FileRawEvidenceStoreOptions options,
-        ILogger<FileRawEvidenceStore> logger)
+        ILogger<FileRawEvidenceStore> logger,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
+
+    /// <inheritdoc />
+    public TimeSpan? HydrationElapsed => _hydrationElapsed;
 
     public async Task<bool> WriteIfNewAsync(EvidenceItem evidence, CancellationToken ct)
     {
@@ -288,6 +302,9 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
             var duplicatesCollapsed = 0;
             var unreadable = 0;
 
+            // Spec 203 §1: monotonic, never wall-clock subtraction (spec 187 §7's rule).
+            var started = _timeProvider.GetTimestamp();
+
             if (Directory.Exists(_options.RootDirectory))
             {
                 // Ordinal-sorted, NOT raw enumeration order: hydration de-dupes by ContentHash and
@@ -375,14 +392,18 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
                 }
             }
 
+            var elapsed = _timeProvider.GetElapsedTime(started);
+            _hydrationElapsed = elapsed;
+
             _logger.LogInformation(
                 "Hydrated {Loaded} raw evidence item(s) from '{Root}' "
                     + "({DuplicateFiles} duplicate-content file(s) collapsed, "
-                    + "{UnreadableFiles} unreadable/conflicting file(s) skipped).",
+                    + "{UnreadableFiles} unreadable/conflicting file(s) skipped) in {HydrationElapsed}.",
                 loaded,
                 _options.RootDirectory,
                 duplicatesCollapsed,
-                unreadable);
+                unreadable,
+                elapsed);
 
             _hydrated = true;
         }

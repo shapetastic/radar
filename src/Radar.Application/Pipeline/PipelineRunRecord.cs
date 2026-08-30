@@ -89,4 +89,16 @@ public sealed record PipelineRunRecord(
     // pre-202 record, or a `collect` pass that scored nothing) — never an empty list, so the two readings
     // can never be told apart by a fabricated value. Observational only; never a scoring or fingerprint
     // input, never backfilled (AD-8).
-    IReadOnlyList<string>? StrategiesSkippedForUnpersistedConfig = null);
+    IReadOnlyList<string>? StrategiesSkippedForUnpersistedConfig = null,
+    // Spec 203 §1: two MEASURED stage durations, both from the monotonic TimeProvider timestamp pair (never
+    // wall-clock subtraction). ScoringElapsed is the whole stage-6 pass (every strategy × every company,
+    // snapshot writes included). HydrationElapsed is the hydrations this process performed before the record
+    // was written, summed across the signal and raw-evidence stores — null when neither store reported one
+    // (a composition without the durable stores, or a pass that never touched them). Trailing + NULLABLE:
+    // null means NOT RECORDED — a pre-203 record, or a record written by the collect-only runner, which
+    // reports neither (a `collect` pass scores nothing, and although it DOES hydrate the raw-evidence store
+    // it does not carry that measurement) — and is never a fabricated TimeSpan.Zero — "took no measurable time" and "nobody measured" are different facts.
+    // Observational only: never an evidence, signal, score, fingerprint or strategy-comparability input,
+    // never backfilled (AD-8), and RecentRunSummary does not read them.
+    TimeSpan? ScoringElapsed = null,
+    TimeSpan? HydrationElapsed = null);

@@ -634,4 +634,73 @@ public sealed class FilePipelineRunStoreTests : IDisposable
         // Spec 202 §1: the skipped-strategy names round-trip.
         Assert.Equal(["b"], read.StrategiesSkippedForUnpersistedConfig!.ToArray());
     }
+
+    /// <summary>
+    /// Spec 203 §1: the two stage durations round-trip through the durable record, and a pre-203 record
+    /// hydrates them as NOT RECORDED (null) — never a fabricated TimeSpan.Zero.
+    /// </summary>
+    [Fact]
+    public async Task Spec203StageTimings_RoundTripThroughTheDurableRecord()
+    {
+        var store = CreateStore();
+        var record = new PipelineRunRecord(
+            Id: Guid.NewGuid(),
+            CreatedAtUtc: new DateTimeOffset(2026, 2, 8, 12, 0, 0, TimeSpan.Zero),
+            Collectors: ["newssearch"],
+            EvidenceCollected: 1,
+            EvidenceNew: 1,
+            SignalsExtracted: 1,
+            SignalsValid: 1,
+            SignalsApproved: 1,
+            SignalsNeedingReview: 0,
+            CompaniesScored: 1,
+            SourcesChecked: 1,
+            SourcesFailed: 0,
+            ReportId: null,
+            ScoringElapsed: TimeSpan.FromSeconds(12.5),
+            HydrationElapsed: TimeSpan.FromMilliseconds(875));
+
+        await store.WriteAsync(record, CancellationToken.None);
+
+        var read = Assert.Single(await CreateStore().ReadRecentAsync(10, CancellationToken.None));
+        Assert.Equal(TimeSpan.FromSeconds(12.5), read.ScoringElapsed);
+        Assert.Equal(TimeSpan.FromMilliseconds(875), read.HydrationElapsed);
+    }
+
+    [Fact]
+    public async Task LegacyRunJsonWithoutSpec203Timings_HydratesAsNotRecorded_NeverZero()
+    {
+        var directory = Path.Combine(_tempDir, "2026", "02");
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "run-legacy-stage-timings.json"),
+            """
+            {
+              "id": "99999999-9999-9999-9999-999999999999",
+              "createdAtUtc": "2026-02-08T12:00:00+00:00",
+              "collectors": [ "newssearch" ],
+              "evidenceCollected": 3,
+              "evidenceNew": 2,
+              "signalsExtracted": 2,
+              "signalsValid": 2,
+              "signalsApproved": 2,
+              "signalsNeedingReview": 0,
+              "companiesScored": 1,
+              "sourcesChecked": 1,
+              "sourcesFailed": 0,
+              "reportId": null,
+              "signalsNotPersisted": 0,
+              "scoreSnapshotsNotPersisted": 0
+            }
+            """);
+
+        var read = Assert.Single(await CreateStore().ReadRecentAsync(10, CancellationToken.None));
+
+        // Spec 203 §1: a pre-203 record carries no timings; null, never TimeSpan.Zero.
+        Assert.Null(read.ScoringElapsed);
+        Assert.Null(read.HydrationElapsed);
+        // The measured spec-193 zeros it DID carry still read as zeros.
+        Assert.Equal(0, read.SignalsNotPersisted);
+        Assert.Equal(Guid.Parse("99999999-9999-9999-9999-999999999999"), read.Id);
+    }
 }

@@ -196,7 +196,8 @@ public sealed class ScoreAssemblyDiagnosticsAggregationTests
         }
     }
 
-    private static void AssertScoringEquivalent(
+    /// <summary>Shared with <see cref="ScoringPassLoopOrderTests"/> (spec 203 §4) — one definition of "same score".</summary>
+    internal static void AssertScoringEquivalent(
         (CompanyScoreSnapshot Snapshot, IReadOnlyList<ScoreEvidenceLink> Links) expected,
         (CompanyScoreSnapshot Snapshot, IReadOnlyList<ScoreEvidenceLink> Links) actual)
     {
@@ -348,7 +349,11 @@ public sealed class ScoreAssemblyDiagnosticsAggregationTests
                     strategyName: name))).ToList();
 
             var pass = new ScoringPass(
-                new StubStrategyFactory(runtimes), scoreStores, new StubScoringConfigStore(), passLog);
+                new StubStrategyFactory(runtimes),
+                scoreStores,
+                new StubScoringConfigStore(),
+                TimeProvider.System,
+                passLog);
 
             return new DiagnosticsFixture(pass, companies, engineLog, passLog, scoreStores);
         }

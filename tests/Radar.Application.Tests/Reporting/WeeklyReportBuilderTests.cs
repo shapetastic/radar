@@ -178,6 +178,15 @@ public sealed partial class WeeklyReportBuilderTests
             Guid companyId, DateTimeOffset windowEndUtc, CancellationToken ct) =>
             throw new NotSupportedException(
                 "The weekly report must never score; it reads persisted snapshots only.");
+
+        public Task<CompanyScoringReads> ReadCompanyAsync(
+            Guid companyId, DateTimeOffset windowEndUtc, CancellationToken ct) =>
+            throw new NotSupportedException(
+                "The weekly report must never read scoring inputs; it reads persisted snapshots only.");
+
+        public Task<CompanyScoreResult> ScoreCompanyAsync(CompanyScoringReads reads, CancellationToken ct) =>
+            throw new NotSupportedException(
+                "The weekly report must never score; it reads persisted snapshots only.");
     }
 
     private sealed class FakeScoringStrategyFactory : IScoringStrategyFactory

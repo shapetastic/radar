@@ -62,14 +62,28 @@ namespace Radar.Infrastructure.FileSystem;
 /// skipped. This is intentional — do not re-flag it as an AD-1 violation.
 /// </para>
 /// </remarks>
-public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
+public sealed class FileSignalStore : ISignalFileStore, ISignalRepository, IHydrationTelemetry
 {
     private readonly FileSignalStoreOptions _options;
     private readonly ILogger<FileSignalStore> _logger;
+    private readonly TimeProvider _timeProvider;
 
     // The hydration cache: every persisted signal, keyed by id. Also carries signals added in THIS process
     // (AddAsync / WriteAsync), so a write is visible to a subsequent read without touching the disk.
     private readonly ConcurrentDictionary<Guid, Signal> _byId = new();
+
+    // Spec 203 §3: the SAME signals, bucketed by company id, so a per-company read filters the company's own
+    // signals instead of scanning the whole 64k index. Maintained at EVERY _byId mutation site (hydration
+    // TryAdd, AddAsync, WriteAsync) through IndexByCompany, never anywhere else, so the two views cannot
+    // drift. A signal whose CompanyId is null is held in _byId only: no company read could ever have matched
+    // it (the previous `s.CompanyId == companyId` compared a Guid? against a Guid), so it has no bucket.
+    // Guarded by _byCompanyGate: writes are rare and reads copy the bucket under the lock, which keeps the
+    // per-company view deterministic without a second concurrent structure.
+    private readonly Dictionary<Guid, Dictionary<Guid, Signal>> _byCompany = [];
+    private readonly object _byCompanyGate = new();
+
+    // Spec 203 §1: the measured hydration walk (monotonic). Null until this instance hydrates.
+    private TimeSpan? _hydrationElapsed;
 
     // Guards the once-per-instance hydration. Deliberately not disposed (the store is not IDisposable):
     // SemaphoreSlim only allocates a disposable WaitHandle if AvailableWaitHandle is read, and it never is
@@ -77,15 +91,24 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
     private readonly SemaphoreSlim _hydrationGate = new(1, 1);
     private volatile bool _hydrated;
 
+    /// <param name="timeProvider">
+    /// Spec 203 §1: the clock whose MONOTONIC timestamp pair measures the hydration walk. Optional and
+    /// trailing so every existing construction site is untouched; <c>null</c> ⇒ <see cref="TimeProvider.System"/>.
+    /// </param>
     public FileSignalStore(
         FileSignalStoreOptions options,
-        ILogger<FileSignalStore> logger)
+        ILogger<FileSignalStore> logger,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
+
+    /// <inheritdoc />
+    public TimeSpan? HydrationElapsed => _hydrationElapsed;
 
     public async Task<DurableWriteResult> WriteAsync(Signal signal, SignalReview review, CancellationToken ct)
     {
@@ -135,106 +158,52 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
         // what it has. What changes is the CLAIM: a failed write returns Failed, so the pipeline counts the
         // signal as not-persisted instead of silently reporting a path that holds nothing. The next run's
         // accrued-history read will not see it, and that fact is now recorded rather than discarded.
-        _byId[signal.Id] = signal;
+        IndexUpsert(signal);
 
         return DurableWriteResult.From(path, written);
     }
 
+    /// <summary>
+    /// The activity-only previous/velocity window read (AD-6), served from the hydration index since spec 203
+    /// §2. The predicate and its order are EXACTLY the pre-203 disk scan's: Approved only, then
+    /// <c>ObservedAtUtc</c> in <c>(startExclusive, endInclusive]</c>, then the spec-136 known-at rule
+    /// <c>CreatedAtUtc &lt;= knownAsOfUtc</c>, then the spec-85 cross-run collapse (lowest id) and the
+    /// deterministic <c>ObservedAtUtc</c>/<c>Id</c> ordering. The existing tests pin those semantics unmodified.
+    /// <para>
+    /// <b>The ONE semantic edge, stated honestly.</b> The disk scan read a legacy file with no <c>createdAt</c>
+    /// as "knowledge date unknown ⇒ INCLUDED unconditionally". The index holds that file through the same
+    /// <see cref="ToSignal"/> mapping hydration always used, which sets <c>CreatedAtUtc = ObservedAt</c>, so
+    /// here the predicate on such a file is <c>ObservedAt &lt;= knownAsOfUtc</c>. The two readings differ only
+    /// when <c>knownAsOfUtc &lt; endInclusiveUtc</c> — a known-at instant EARLIER than the window it asks about
+    /// — which no production caller does: <c>ScoringEngine</c> passes <c>knownAsOf = windowEndUtc</c>, which is
+    /// ≥ <c>endInclusive = windowStartUtc</c>. Under that contract (asserted by the spec-203 equivalence test)
+    /// the two implementations are element-for-element identical.
+    /// </para>
+    /// </summary>
     public async Task<IReadOnlyList<Signal>> ReadApprovedInWindowAsync(
         Guid companyId, DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc,
         DateTimeOffset knownAsOfUtc, CancellationToken ct)
     {
-        // WriteAsync stores each signal date-partitioned at {RootDirectory}/{yyyy}/{MM}/{signalId}.json
-        // (by ObservedAtUtc), NOT grouped by company. Rather than scan the whole tree on every
-        // per-company read (scoring calls this once per company, so a full-tree scan would be
-        // O(companies × totalSignalFiles) and degrade as the store grows), open only the year/month
-        // directories the requested window can touch and filter those files by the persisted CompanyId.
-        // Files are streamed rather than materialised into a list so cancellation stays responsive.
-        if (!Directory.Exists(_options.RootDirectory))
-        {
-            return Array.Empty<Signal>();
-        }
+        await EnsureHydratedAsync(ct).ConfigureAwait(false);
 
-        var matches = new List<Signal>();
-        foreach (var monthDirectory in EnumerateWindowMonthDirectories(startExclusiveUtc, endInclusiveUtc))
-        {
-            if (!Directory.Exists(monthDirectory))
-            {
-                continue;
-            }
-
-            try
-            {
-                // Files live directly under {yyyy}/{MM}/, so a top-directory enumeration suffices.
-                foreach (var file in Directory.EnumerateFiles(monthDirectory, "*.json", SearchOption.TopDirectoryOnly))
-                {
-                    ct.ThrowIfCancellationRequested();
-
-                    try
-                    {
-                        var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
-                        var parsed = JsonSerializer.Deserialize<SignalFile>(text, RadarFileStoreJson.Options);
-                        if (parsed is null)
-                        {
-                            // A JSON literal `null` deserializes to a null record — treat it as a malformed
-                            // entry so operators can spot corrupted signal files.
-                            _logger.LogWarning("Signal file '{File}' contained a null signal; skipping.", file);
-                            continue;
-                        }
-
-                        // Approved-only + in the (startExclusive, endInclusive] window for this company. The
-                        // shared boundary (AD-6): a signal exactly at endInclusiveUtc (== the current window's
-                        // start) belongs to THIS previous window and is never double-counted against the
-                        // current window.
-                        if (parsed.CompanyId != companyId
-                            || parsed.ReviewStatus != SignalReviewStatus.Approved
-                            || parsed.ObservedAt <= startExclusiveUtc
-                            || parsed.ObservedAt > endInclusiveUtc)
-                        {
-                            continue;
-                        }
-
-                        // Point-in-time honesty (spec 136): only what Radar KNEW by knownAsOfUtc — skip a
-                        // signal created after the threshold (CreatedAt <= knownAsOfUtc must hold, equality
-                        // included so a forward run keeps its own signals). A null CreatedAt (a file written
-                        // before this field's predicate existed) is unknown → INCLUDED, preserving pre-136
-                        // behaviour for that history; such history is NOT replay-honest and cannot be — the
-                        // fact was never recorded.
-                        if (parsed.CreatedAt is not null && parsed.CreatedAt > knownAsOfUtc)
-                        {
-                            continue;
-                        }
-
-                        // Reconstruct the full Signal from the persisted fields. Evidence / ScoreEvidenceLinks
-                        // are intentionally NOT rehydrated: this is the activity-only previous window for
-                        // velocity (Strength magnitude), NOT dropped provenance — AD-6 says it carries none.
-                        matches.Add(ToSignal(parsed));
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-                    {
-                        // One unreadable/malformed signal file must not break the whole read.
-                        _logger.LogWarning(ex, "Failed to read signal file '{File}'; skipping.", file);
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Enumeration of one month directory failed (thrown lazily during iteration); skip that
-                // month rather than abandoning the whole read. OperationCanceledException is not caught
-                // here, so cancellation still propagates.
-                _logger.LogWarning(
-                    ex,
-                    "Failed to enumerate signal files in '{MonthDirectory}'; skipping that month.",
-                    monthDirectory);
-            }
-        }
+        // Approved-only + in the (startExclusive, endInclusive] window for this company. The shared boundary
+        // (AD-6): a signal exactly at endInclusiveUtc (== the current window's start) belongs to THIS previous
+        // window and is never double-counted against the current window.
+        //
+        // Point-in-time honesty (spec 136): only what Radar KNEW by knownAsOfUtc — skip a signal created after
+        // the threshold (CreatedAt <= knownAsOfUtc must hold, equality included so a forward run keeps its own
+        // signals).
+        var matches = CompanySignals(companyId)
+            .Where(s => s.ReviewStatus == SignalReviewStatus.Approved)
+            .Where(s => s.ObservedAtUtc > startExclusiveUtc && s.ObservedAtUtc <= endInclusiveUtc)
+            .Where(s => s.CreatedAtUtc <= knownAsOfUtc);
 
         // Collapse cross-run duplicate signals before ordering (spec 85). The same underlying signal is
         // re-minted with a fresh SignalId (and CreatedAt) on every pipeline run — WriteAsync path-keys on
         // signal.Id, so N runs leave N files for ONE signal — inflating this activity-only previous window
         // and making SignalVelocityScore depend on how many times the pipeline has run (an AD-3 violation).
         // The stable identity and the collapse both live in SignalCrossRunDedupe, shared with the durable
-        // repository read below so the two can never drift (spec 142).
+        // repository reads below so the two can never drift (spec 142).
         //
         // Survivor rule: LOWEST SignalId. Correct HERE — and deliberately different from the repository
         // read's EarliestKnown — because this read has ALREADY applied the known-at predicate above, so
@@ -254,12 +223,16 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
     // ---------------------------------------------------------------------------------------------
     // ISignalRepository — the DURABLE read path (spec 142).
     //
-    // These serve from the hydration index (the whole accrued store, plus anything this process wrote),
-    // NOT from a per-call disk scan. ReadApprovedInWindowAsync above deliberately keeps its own
-    // month-scoped disk read: it answers a different question (the activity-only previous window, AD-6)
-    // under semantics pinned by its own tests, and it must keep working for callers that never touch the
-    // repository surface. The parts that MUST agree — the persisted record shape, the SignalFile→Signal
-    // mapping (ToSignal), and the cross-run identity key — are shared, not copied.
+    // EVERY read — these AND ReadApprovedInWindowAsync above — serves from the hydration index (the whole
+    // accrued store, plus anything this process wrote), never from a per-call disk scan. Until spec 203 the
+    // window read kept its own month-scoped disk scan on the argument that it "answers a different question
+    // under semantics pinned by its own tests" — which was an argument about the FILTER (window, known-at,
+    // Approved, LowestId survivor), not about the SOURCE: the index holds byte-identical records through
+    // the same ToSignal mapping the scan used. Measured on the 2026-08-29 baseline that scan cost ~12k file
+    // reads per call × 1,034 calls. The filter semantics are unchanged and still pinned by the same tests;
+    // the per-file skip-don't-throw rule now lives ONLY in hydration, which always had it. A caller that
+    // never touched the repository surface now pays the one-time hydration on its first call instead of a
+    // scan on every call (every production caller already hydrates via AddDurableRadarSignalHistory).
     // ---------------------------------------------------------------------------------------------
 
     /// <remarks>
@@ -278,7 +251,7 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
         ct.ThrowIfCancellationRequested();
 
         // Upsert by Id (last-write-wins), matching the interface contract and WriteAsync's file semantics.
-        _byId[signal.Id] = signal;
+        IndexUpsert(signal);
         return Task.CompletedTask;
     }
 
@@ -303,8 +276,11 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
         // earliest-known copy is the only choice under which "was this signal known by T?" gets the honest
         // answer. Keeping a later-created copy would silently hide, from a replay at T, a signal Radar
         // demonstrably knew about at T.
+        //
+        // Spec 203 §3: over the company's OWN bucket rather than the whole index — the same set the previous
+        // `_byId.Values.Where(s => s.CompanyId == companyId)` selected, O(company's signals) instead of O(all).
         var collapsed = SignalCrossRunDedupe.Collapse(
-            _byId.Values.Where(s => s.CompanyId == companyId), SignalCopySurvivor.EarliestKnown);
+            CompanySignals(companyId), SignalCopySurvivor.EarliestKnown);
 
         // Deterministic order (AD-3), identical to InMemorySignalRepository's.
         return [.. collapsed.OrderBy(s => s.ObservedAtUtc).ThenBy(s => s.Id)];
@@ -352,6 +328,9 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
             var loaded = 0;
             var skipped = 0;
 
+            // Spec 203 §1: monotonic, never wall-clock subtraction (spec 187 §7's rule).
+            var started = _timeProvider.GetTimestamp();
+
             if (Directory.Exists(_options.RootDirectory))
             {
                 foreach (var file in EnumerateSignalFiles())
@@ -369,7 +348,7 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
                             continue;
                         }
 
-                        if (_byId.TryAdd(parsed.SignalId, ToSignal(parsed)))
+                        if (IndexTryAdd(ToSignal(parsed)))
                         {
                             loaded++;
                         }
@@ -382,11 +361,16 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
                 }
             }
 
+            var elapsed = _timeProvider.GetElapsedTime(started);
+            _hydrationElapsed = elapsed;
+
             _logger.LogInformation(
-                "Hydrated {Loaded} signal(s) from '{Root}' ({Skipped} unreadable file(s) skipped).",
+                "Hydrated {Loaded} signal(s) from '{Root}' ({Skipped} unreadable file(s) skipped) in "
+                    + "{HydrationElapsed}.",
                 loaded,
                 _options.RootDirectory,
-                skipped);
+                skipped,
+                elapsed);
 
             _hydrated = true;
         }
@@ -443,8 +427,9 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
     }
 
     /// <summary>
-    /// The single <see cref="SignalFile"/> → <see cref="Signal"/> mapping, shared by the window read and
-    /// hydration so a field can never be reconstructed two different ways.
+    /// The single <see cref="SignalFile"/> → <see cref="Signal"/> mapping. Since spec 203 §2 hydration is
+    /// the ONLY deserializing read (every query serves from the index it builds), so a field is
+    /// reconstructed exactly one way by construction.
     /// </summary>
     private static Signal ToSignal(SignalFile parsed) => new(
         Id: parsed.SignalId,
@@ -470,33 +455,90 @@ public sealed class FileSignalStore : ISignalFileStore, ISignalRepository
         MetadataJson: parsed.MetadataJson);
 
     /// <summary>
-    /// Yields the <c>{RootDirectory}/{yyyy}/{MM}</c> partition directories that the
-    /// <c>(startExclusiveUtc, endInclusiveUtc]</c> window can contain signals for — every month from the
-    /// start bound's month through the end bound's month, inclusive. The start bound is exclusive, but a
-    /// signal later in that same month is still in-window, so its month is still scanned. Bounding the
-    /// scan to the window (typically one or two months) keeps each per-company read from touching files
-    /// that cannot possibly match.
+    /// Spec 203 §3: the company's signals as a point-in-time COPY of its bucket (taken under the gate, so a
+    /// concurrent same-process write can never invalidate an enumeration in progress). Empty for a company
+    /// with no bucket. Order is irrelevant: every consumer collapses and then sorts deterministically.
     /// </summary>
-    private IEnumerable<string> EnumerateWindowMonthDirectories(
-        DateTimeOffset startExclusiveUtc, DateTimeOffset endInclusiveUtc)
+    private IReadOnlyList<Signal> CompanySignals(Guid companyId)
     {
-        // Partition names come from the persisted ObservedAtUtc, so compare in UTC.
-        var startUtc = startExclusiveUtc.ToUniversalTime();
-        var endUtc = endInclusiveUtc.ToUniversalTime();
-        if (endUtc < startUtc)
+        lock (_byCompanyGate)
         {
-            yield break;
+            return _byCompany.TryGetValue(companyId, out var bucket)
+                ? [.. bucket.Values]
+                : [];
         }
+    }
 
-        var cursor = new DateTime(startUtc.Year, startUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var last = new DateTime(endUtc.Year, endUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        while (cursor <= last)
+    /// <summary>
+    /// The ONE upsert-by-Id path for both same-process writers (<see cref="WriteAsync"/> and
+    /// <see cref="AddAsync"/>): updates <c>_byId</c> AND the company index together, so the two views cannot
+    /// drift. The previous entry under the same id (if any) is looked up FIRST so a re-write under a
+    /// different <c>CompanyId</c> leaves the old company's bucket.
+    /// </summary>
+    private void IndexUpsert(Signal signal)
+    {
+        lock (_byCompanyGate)
         {
-            yield return Path.Combine(
-                _options.RootDirectory,
-                cursor.ToString("yyyy", CultureInfo.InvariantCulture),
-                cursor.ToString("MM", CultureInfo.InvariantCulture));
-            cursor = cursor.AddMonths(1);
+            _byId.TryGetValue(signal.Id, out var previous);
+            _byId[signal.Id] = signal;
+            IndexByCompany(signal, previous);
+        }
+    }
+
+    /// <summary>
+    /// The ONE insert-if-absent path (hydration): <c>_byId.TryAdd</c> AND the company index mutate under
+    /// the SAME gate, so a same-process <see cref="IndexUpsert"/> can never interleave between the two and
+    /// leave <c>_byId</c> holding the written copy while the bucket holds the hydrated one. Only a WINNING
+    /// TryAdd reaches the bucket, so a signal this process wrote keeps both of its entries.
+    /// </summary>
+    private bool IndexTryAdd(Signal signal)
+    {
+        lock (_byCompanyGate)
+        {
+            if (!_byId.TryAdd(signal.Id, signal))
+            {
+                return false;
+            }
+
+            IndexByCompany(signal, previous: null);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Places <paramref name="signal"/> in its company bucket, removing <paramref name="previous"/> (the
+    /// entry this id held before, or null) from ITS bucket when the company changed. A null
+    /// <c>CompanyId</c> is indexed under no company (see the field comment). Takes the gate itself (the lock
+    /// is re-entrant, so <see cref="IndexUpsert"/> may already hold it) so both the hydration path and the
+    /// same-process writers are safe regardless of which one calls.
+    /// </summary>
+    private void IndexByCompany(Signal signal, Signal? previous)
+    {
+        lock (_byCompanyGate)
+        {
+            if (previous?.CompanyId is { } oldCompany
+                && oldCompany != signal.CompanyId
+                && _byCompany.TryGetValue(oldCompany, out var oldBucket))
+            {
+                oldBucket.Remove(signal.Id);
+                if (oldBucket.Count == 0)
+                {
+                    _byCompany.Remove(oldCompany);
+                }
+            }
+
+            if (signal.CompanyId is not { } company)
+            {
+                return;
+            }
+
+            if (!_byCompany.TryGetValue(company, out var bucket))
+            {
+                bucket = [];
+                _byCompany[company] = bucket;
+            }
+
+            bucket[signal.Id] = signal;
         }
     }
 

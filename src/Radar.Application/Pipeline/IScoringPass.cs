@@ -45,6 +45,12 @@ public interface IScoringPass
 /// SKIPPED for the pass (durability precondition) and is named in
 /// <paramref name="StrategiesSkippedForUnpersistedConfig"/>.
 /// </param>
+/// <param name="ScoringElapsed">
+/// Spec 203 §1: how long the WHOLE scoring pass took (every strategy × every company, including snapshot
+/// writes), measured with the monotonic <see cref="TimeProvider.GetTimestamp"/> /
+/// <see cref="TimeProvider.GetElapsedTime(long)"/> pair. Trailing + nullable so every existing construction
+/// site is untouched; the pass itself always measures it, so it is populated whenever the pass ran.
+/// </param>
 /// <param name="StrategiesSkippedForUnpersistedConfig">
 /// Spec 202 §1: the strategies (run order) that wrote NO snapshot this pass because their effective
 /// scoring-config record could not be made durable — a snapshot must never carry a
@@ -59,4 +65,5 @@ public sealed record ScoringPassResult(
     string PrimaryStrategy,
     int ScoreSnapshotsNotPersisted = 0,
     int ScoringConfigsNotPersisted = 0,
-    IReadOnlyList<string>? StrategiesSkippedForUnpersistedConfig = null);
+    IReadOnlyList<string>? StrategiesSkippedForUnpersistedConfig = null,
+    TimeSpan? ScoringElapsed = null);

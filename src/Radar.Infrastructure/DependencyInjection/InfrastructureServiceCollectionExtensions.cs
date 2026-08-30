@@ -24,6 +24,7 @@ using Radar.Application.Prices;
 using Radar.Application.Replay;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
@@ -3331,6 +3332,9 @@ public static class InfrastructureServiceCollectionExtensions
         // every existing caller.
         services.AddSingleton<FileRawEvidenceStore>();
         services.AddSingleton<IRawEvidenceStore>(sp => sp.GetRequiredService<FileRawEvidenceStore>());
+        // Spec 203 §1: the SAME instance also reports its hydration elapsed, so the runners' summed
+        // HydrationElapsed reads the store that actually hydrated — never a second instance.
+        services.AddSingleton<IHydrationTelemetry>(sp => sp.GetRequiredService<FileRawEvidenceStore>());
         return services;
     }
 
@@ -3352,6 +3356,8 @@ public static class InfrastructureServiceCollectionExtensions
         // every existing caller.
         services.AddSingleton<FileSignalStore>();
         services.AddSingleton<ISignalFileStore>(sp => sp.GetRequiredService<FileSignalStore>());
+        // Spec 203 §1: see AddFileRawEvidenceStore — one instance, one hydration, one telemetry source.
+        services.AddSingleton<IHydrationTelemetry>(sp => sp.GetRequiredService<FileSignalStore>());
         return services;
     }
 
