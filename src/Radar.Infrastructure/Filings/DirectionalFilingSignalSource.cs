@@ -14,8 +14,13 @@ using Radar.Infrastructure.Sec;
 namespace Radar.Infrastructure.Filings;
 
 /// <summary>
-/// Opt-in enrichment that turns an earnings-8-K <see cref="EvidenceItem"/> into at most one confidence-gated
-/// directional <c>GuidanceChange</c> <see cref="ExtractedSignal"/>. It composes the merged Infrastructure
+/// Opt-in enrichment that turns an earnings-8-K <see cref="EvidenceItem"/> into at most one
+/// <c>GuidanceChange</c> <see cref="ExtractedSignal"/>: a confidence-gated DIRECTIONAL read
+/// (Improving→Positive / Deteriorating→Negative at the configured Strength/Novelty), or — since spec 204 —
+/// the NON-DIRECTIONAL read persisted as its own signal (a confident Mixed as Direction <c>Mixed</c>;
+/// Unknown or a below-gate read as <c>Neutral</c>; all at the keyword-fallback magnitudes with the model's
+/// direction/confidence/rationale in the <see cref="FilingReadSignalMetadata"/> envelope, so a two-sided
+/// quarter is no longer indistinguishable from a filing Radar never read). It composes the merged Infrastructure
 /// interfaces — <see cref="ISecEarningsReleaseReader"/> (fetch + strip the EX-99.1 body) and
 /// <see cref="IFilingAnalyzer"/> (typed directional read) — behind the Application
 /// <see cref="IDirectionalFilingSignalSource"/> seam. It contains <b>no</b> HTTP and <b>no</b> provider SDK:
@@ -33,7 +38,9 @@ namespace Radar.Infrastructure.Filings;
 /// <item>
 /// <b>Pass 1 — replay (unbounded, SEC-independent, breaker-independent).</b> Every eligible in-window earnings
 /// filing is looked up in the <see cref="IAnalyzedFilingCache"/> by accession. A hit replays a field-identical
-/// <see cref="DirectionalFilingSignal"/> (or emits nothing for a confirmed no-signal) WITHOUT any www.sec.gov
+/// <see cref="DirectionalFilingSignal"/> (or, since spec 204, reconstructs the non-directional READ signal
+/// from a v3 no-signal record's cause fields — a cause-less no-signal record replays nothing, the pre-204
+/// behaviour) WITHOUT any www.sec.gov
 /// fetch or AI call — so a cached directional read keeps contributing for as long as its evidence is in the
 /// scoring window, regardless of how many newer filings exist elsewhere in the universe, and regardless of a
 /// tripped 429 breaker. Cache MISSES are collected newest-first for pass 2. Cache hits never touch the cap and
@@ -214,6 +221,28 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 {
                     produced.Add(new DirectionalFilingSignal(cached.Signal, evidence));
                 }
+                else if (cached.Outcome == AnalyzedFilingOutcome.NoDirectionalSignal
+                    && cached.NoSignalCause is FilingNoSignalCause cause
+                    && cause != FilingNoSignalCause.EmptyBody
+                    && !string.IsNullOrWhiteSpace(cached.ReadDirection)
+                    && cached.ReadConfidence is decimal cachedReadConfidence)
+                {
+                    // Spec 204: a v3 no-signal hit replays the SAME read signal the fresh analysis emitted,
+                    // reconstructed deterministically from the record's cause fields through the ONE builder
+                    // (BuildReadSignal) the fresh path also uses — so the two cannot drift. The ExtractedSignal
+                    // is deliberately NOT stored on the record (IsConsistent keeps requiring
+                    // NoDirectionalSignal ⇒ Signal is null); the record carries the FACTS of the read and the
+                    // signal is a pure function of them plus the evidence. A record with a null cause
+                    // (defensive — a v2 no-signal record is already a version miss at the file-cache layer,
+                    // but an in-memory cache implementation may still hand one back) replays nothing, exactly
+                    // as pre-204; EmptyBody is in the cause vocabulary but is never cached, so a record
+                    // claiming it is untrustworthy and likewise replays nothing.
+                    produced.Add(new DirectionalFilingSignal(
+                        BuildReadSignal(
+                            evidence, cause, cached.ReadDirection, cachedReadConfidence,
+                            cached.Rationale ?? string.Empty),
+                        evidence));
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -263,40 +292,53 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
             try
             {
-                var (outcome, signal, cacheable, markers) = await AnalyzeFilingAsync(evidence, cik, accession, asOfUtc, ct)
+                var analysis = await AnalyzeFilingAsync(evidence, cik, accession, asOfUtc, ct)
                     .ConfigureAwait(false);
+                var outcome = analysis.Outcome;
 
                 if (outcome == SecEarningsReleaseReadOutcome.Success)
                 {
                     // Any structurally successful read is a non-429 outcome: it resets the consecutive-429
                     // counter whether or not it was authoritative enough to cache.
                     consecutiveRateLimited = 0;
-                    if (!cacheable)
+                    if (!analysis.Cacheable)
                     {
                         // Non-authoritative read (empty/implausibly-short body, spec 114): NOT cached — leave the
                         // filing for a later healthy run to re-attempt. Caching it would freeze a degenerate
                         // fetch in as a false no-signal forever (the 2026-07-18 block-era poison).
                     }
-                    else if (signal is not null)
+                    else if (analysis.Signal is not null && analysis.NoSignalCause is null)
                     {
-                        produced.Add(new DirectionalFilingSignal(signal, evidence));
+                        // Directional read (Improving/Deteriorating at-or-above the gate): unchanged pre-204
+                        // path — the whole signal rides the record so a replay is field-identical.
+                        produced.Add(new DirectionalFilingSignal(analysis.Signal, evidence));
                         await _cache.PutAsync(
                             new AnalyzedFilingRecord(
                                 accession,
                                 AnalyzedFilingOutcome.DirectionalSignalProduced,
-                                signal,
+                                analysis.Signal,
                                 evidence.PublishedAtUtc ?? evidence.CollectedAtUtc,
                                 AnalyzedFilingRecord.CurrentCacheVersion,
                                 _comparabilityPolicy,
-                                markers),
+                                analysis.Markers),
                             ct).ConfigureAwait(false);
                     }
                     else
                     {
-                        // Read OK on real content but no directional signal (Mixed/Unknown/below-confidence) —
-                        // cache it so we never re-fetch this filing. The comparability policy + markers are
-                        // recorded on this outcome too (spec 160): a no-signal verdict reached under an old
-                        // policy must become a miss when the policy changes.
+                        // Read OK on real content but no DIRECTIONAL signal (Mixed/Unknown/below-confidence).
+                        // Spec 204: the read is still a READ — it is emitted as its own GuidanceChange signal
+                        // (Mixed or Neutral at the keyword-fallback magnitudes, so the score does not move)
+                        // and the cache record NAMES THE CAUSE (direction/confidence/rationale) so pass 1 can
+                        // replay the same signal deterministically. The record's Outcome stays
+                        // NoDirectionalSignal with a null Signal — the signal is reconstructed on replay,
+                        // never stored — and the comparability policy + markers are recorded exactly as
+                        // before (spec 160): a no-signal verdict reached under an old policy must become a
+                        // miss when the policy changes.
+                        if (analysis.Signal is not null)
+                        {
+                            produced.Add(new DirectionalFilingSignal(analysis.Signal, evidence));
+                        }
+
                         await _cache.PutAsync(
                             new AnalyzedFilingRecord(
                                 accession,
@@ -305,7 +347,11 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                                 null,
                                 AnalyzedFilingRecord.CurrentCacheVersion,
                                 _comparabilityPolicy,
-                                markers),
+                                analysis.Markers,
+                                analysis.NoSignalCause,
+                                analysis.ReadDirection,
+                                analysis.ReadConfidence,
+                                analysis.Rationale),
                             ct).ConfigureAwait(false);
                     }
                 }
@@ -353,19 +399,48 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
     }
 
     /// <summary>
+    /// The result of one analysis attempt. <c>Signal</c> is the emitted <c>GuidanceChange</c> — since spec 204
+    /// EVERY authoritative read emits one: a directional signal (Improving/Deteriorating at-or-above the
+    /// gate, <c>NoSignalCause</c> null), or the spec-204 read signal (Mixed/Unknown/below-gate,
+    /// <c>NoSignalCause</c> + <c>ReadDirection</c>/<c>ReadConfidence</c>/<c>Rationale</c> populated so the
+    /// caller can name the cause on the cache record). <c>Cacheable</c> is false for a fetch failure or an
+    /// empty/implausibly-short body (spec 114), which also emits no signal.
+    /// </summary>
+    private sealed record FilingAnalysis(
+        SecEarningsReleaseReadOutcome Outcome,
+        ExtractedSignal? Signal,
+        bool Cacheable,
+        ComparabilityMarkers? Markers,
+        FilingNoSignalCause? NoSignalCause = null,
+        string? ReadDirection = null,
+        decimal? ReadConfidence = null,
+        string? Rationale = null);
+
+    /// <summary>
     /// Reads the EX-99.1 body, analyzes it, applies the confidence gate + direction mapping, and returns the
-    /// read <see cref="SecEarningsReleaseReadOutcome"/> paired with a single directional <c>GuidanceChange</c>
-    /// <see cref="ExtractedSignal"/> or <c>null</c>, plus a <c>Cacheable</c> flag. The outcome lets the caller
+    /// read <see cref="SecEarningsReleaseReadOutcome"/> paired with a single <c>GuidanceChange</c>
+    /// <see cref="ExtractedSignal"/> (or <c>null</c>), plus a <c>Cacheable</c> flag. The outcome lets the caller
     /// distinguish a fetch FAILURE (non-<see cref="SecEarningsReleaseReadOutcome.Success"/>, never cached) from a
     /// SUCCESS; <c>Cacheable</c> is false for a structurally successful read whose body was empty/implausibly
     /// short (below <see cref="MinPlausibleBodyLength"/>, spec 114) — a non-authoritative read the caller must
-    /// NOT cache (and never sees the analyzer), so a later run re-attempts it. Only a SUCCESS on real content
-    /// with no directional signal (below the gate, Mixed/Unknown) is cached as no-signal. Never calls the
-    /// analyzer on a non-success read. When the spec-115 debug sink is registered, each analysis attempt
-    /// (including the empty-body skip) emits one guarded, best-effort debug record stamped with
-    /// <paramref name="asOfUtc"/>; a fetch failure emits nothing (no analysis happened).
+    /// NOT cache (and never sees the analyzer), so a later run re-attempts it. Never calls the analyzer on a
+    /// non-success read. When the spec-115 debug sink is registered, each analysis attempt (including the
+    /// empty-body skip) emits one guarded, best-effort debug record stamped with <paramref name="asOfUtc"/>;
+    /// a fetch failure emits nothing (no analysis happened).
+    /// <para>
+    /// SPEC 204 — a Mixed read is a READ. A SUCCESS on real content with no directional signal is no longer a
+    /// silent token: it emits the read as its own signal (see <see cref="BuildReadSignal"/>) and reports the
+    /// CAUSE so the caller can persist it. Classification order, deliberate: <b>Unknown first</b> (any
+    /// confidence — "the model could not establish a direction" is a fact about the READ, and letting the
+    /// gate see an Unknown's confidence first would record the gate's verdict on a value that never claimed a
+    /// direction; consequence, recorded: a low-confidence Unknown's DEBUG outcome is now
+    /// <see cref="FilingReadOutcome.NoDirectionalRead"/> rather than BelowConfidence — a diagnostic-only
+    /// reclassification that mirrors the persisted cause), <b>then the gate</b> on the CAPPED confidence
+    /// (unchanged, spec 160 — this is where a below-gate Improving/Deteriorating/Mixed lands), <b>then
+    /// Mixed</b> (at-or-above the gate: the confident two-sided read), then the directional mapping.
+    /// </para>
     /// </summary>
-    private async Task<(SecEarningsReleaseReadOutcome Outcome, ExtractedSignal? Signal, bool Cacheable, ComparabilityMarkers? Markers)> AnalyzeFilingAsync(
+    private async Task<FilingAnalysis> AnalyzeFilingAsync(
         EvidenceItem evidence, string cik, string accession, DateTimeOffset asOfUtc, CancellationToken ct)
     {
         var read = await _reader.ReadAsync(cik, accession, ct).ConfigureAwait(false);
@@ -377,7 +452,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 cik,
                 accession,
                 read.Outcome);
-            return (read.Outcome, null, Cacheable: false, Markers: null);
+            return new FilingAnalysis(read.Outcome, null, Cacheable: false, Markers: null);
         }
 
         // Empty/short-body guard (spec 114): a structurally-successful fetch whose stripped body is implausibly
@@ -398,7 +473,9 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 accession, evidence, read.PlainText, trimmedBodyLength,
                 sentiment: null, FilingReadOutcome.EmptyBodySkipped, asOfUtc,
                 markers: null, cappedConfidence: null, ct).ConfigureAwait(false);
-            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: false, Markers: null);
+            // Spec 204: deliberately NO read signal and NO cause here — no model call happened, so there is
+            // no read to persist. FilingNoSignalCause.EmptyBody exists in the vocabulary but is never cached.
+            return new FilingAnalysis(SecEarningsReleaseReadOutcome.Success, null, Cacheable: false, Markers: null);
         }
 
         // Comparability scan (spec 160): deterministic, on the FULL stripped body — deliberately BEFORE the
@@ -427,13 +504,49 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 string.Join(", ", markers.CapTriggering));
         }
 
-        // Confidence gate (CLAUDE.md): a low-confidence read produces no directional signal — the
-        // deterministic Neutral GuidanceChange (spec 57) stands. Applied to the CAPPED value (spec 160: the
-        // gate comes AFTER the cap, so a cap configured below MinConfidence suppresses capped signals).
+        // Builds the spec-204 non-directional-read result: the read signal (Mixed or Neutral at the keyword
+        // magnitudes) plus the cause fields the caller persists on the no-signal cache record. The read
+        // direction is the model's OWN token and the confidence is the EFFECTIVE (capped) value the gate
+        // saw — one value across the signal's Reason, its metadata envelope and the cache record.
+        FilingAnalysis NonDirectionalRead(FilingNoSignalCause cause)
+        {
+            var readDirection = sentiment.Direction.ToString();
+            return new FilingAnalysis(
+                SecEarningsReleaseReadOutcome.Success,
+                BuildReadSignal(evidence, cause, readDirection, confidence, sentiment.Rationale),
+                Cacheable: true,
+                Markers: markers,
+                NoSignalCause: cause,
+                ReadDirection: readDirection,
+                ReadConfidence: confidence,
+                Rationale: sentiment.Rationale);
+        }
+
+        // Spec 204 classification order — Unknown FIRST, at any confidence: an Unknown verdict never claimed
+        // a direction, so the gate has nothing to gate; recording it as "below-confidence" would name the
+        // wrong cause. (Diagnostic consequence, deliberate: a low-confidence Unknown's debug outcome is now
+        // NoDirectionalRead, where it was BelowConfidence pre-204 — the debug outcome mirrors the cause.)
+        if (sentiment.Direction == FilingDirection.Unknown)
+        {
+            _logger.LogDebug(
+                "Directional read for evidence {EvidenceId} was Unknown; persisting the read as a Neutral signal.",
+                evidence.Id);
+            await TryRecordReadDebugAsync(
+                accession, evidence, read.PlainText, trimmedBodyLength,
+                sentiment, FilingReadOutcome.NoDirectionalRead, asOfUtc,
+                markers, cappedConfidence, ct).ConfigureAwait(false);
+            return NonDirectionalRead(FilingNoSignalCause.Unknown);
+        }
+
+        // Confidence gate (CLAUDE.md): a low-confidence read produces no directional signal. Applied to the
+        // CAPPED value (spec 160: the gate comes AFTER the cap, so a cap configured below MinConfidence
+        // suppresses capped signals). Spec 204: the suppressed read (Improving/Deteriorating/Mixed alike) is
+        // still persisted — as a Neutral read signal naming the below-confidence cause.
         if (confidence < _options.MinConfidence)
         {
             _logger.LogDebug(
-                "Directional read for evidence {EvidenceId} was below MinConfidence ({Confidence} < {Min}); no signal.",
+                "Directional read for evidence {EvidenceId} was below MinConfidence ({Confidence} < {Min}); "
+                    + "persisting the read as a Neutral signal.",
                 evidence.Id,
                 confidence,
                 _options.MinConfidence);
@@ -441,27 +554,33 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 accession, evidence, read.PlainText, trimmedBodyLength,
                 sentiment, FilingReadOutcome.BelowConfidence, asOfUtc,
                 markers, cappedConfidence, ct).ConfigureAwait(false);
-            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true, Markers: markers);
+            return NonDirectionalRead(FilingNoSignalCause.BelowConfidence);
+        }
+
+        // Spec 204: a confident Mixed read is emitted as a Mixed GuidanceChange — SignalDirection.Mixed has
+        // existed since the domain was written and scores 0 exactly like Neutral in every component
+        // (ScoreSignalMath treats the two identically), so this is provenance, never a score move.
+        if (sentiment.Direction == FilingDirection.Mixed)
+        {
+            _logger.LogDebug(
+                "Directional read for evidence {EvidenceId} was Mixed; persisting the read as a Mixed signal.",
+                evidence.Id);
+            await TryRecordReadDebugAsync(
+                accession, evidence, read.PlainText, trimmedBodyLength,
+                sentiment, FilingReadOutcome.NoDirectionalRead, asOfUtc,
+                markers, cappedConfidence, ct).ConfigureAwait(false);
+            return NonDirectionalRead(FilingNoSignalCause.Mixed);
         }
 
         var direction = sentiment.Direction switch
         {
             FilingDirection.Improving => "Positive",
             FilingDirection.Deteriorating => "Negative",
-            _ => null, // Mixed / Unknown -> no directional signal.
+            // Unknown/Mixed were handled above; a future enum member is a contract change that must fail
+            // loudly here rather than be silently mapped onto a direction.
+            _ => throw new InvalidOperationException(
+                $"Unhandled filing direction '{sentiment.Direction}' for evidence {evidence.Id}."),
         };
-        if (direction is null)
-        {
-            _logger.LogDebug(
-                "Directional read for evidence {EvidenceId} was {Direction}; no directional signal.",
-                evidence.Id,
-                sentiment.Direction);
-            await TryRecordReadDebugAsync(
-                accession, evidence, read.PlainText, trimmedBodyLength,
-                sentiment, FilingReadOutcome.NoDirectionalRead, asOfUtc,
-                markers, cappedConfidence, ct).ConfigureAwait(false);
-            return (SecEarningsReleaseReadOutcome.Success, null, Cacheable: true, Markers: markers);
-        }
 
         await TryRecordReadDebugAsync(
             accession, evidence, read.PlainText, trimmedBodyLength,
@@ -482,7 +601,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 + string.Join(", ", markers.CapTriggering.Select(m => "'" + m + "'"))
                 + ")";
 
-        return (
+        return new FilingAnalysis(
             SecEarningsReleaseReadOutcome.Success,
             new ExtractedSignal(
                 CompanyMention: evidence.SourceName,
@@ -495,6 +614,67 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 Reason: reason),
             Cacheable: true,
             Markers: markers);
+    }
+
+    /// <summary>
+    /// SPEC 204 — the ONE builder of the non-directional read signal, used by BOTH the fresh-analysis path
+    /// and the pass-1 cache replay so the two cannot drift: the replayed signal is field-for-field what the
+    /// fresh path emitted, reconstructed from the record's cause fields plus the evidence.
+    /// <para>
+    /// Shape: a <c>GuidanceChange</c> at the KEYWORD FALLBACK's exact magnitudes
+    /// (<see cref="FilingReadSignalMetadata.Strength"/>/<see cref="FilingReadSignalMetadata.Novelty"/>/<see cref="FilingReadSignalMetadata.Confidence"/> —
+    /// pinned equal to the extractor's "results of operations" rule by test), Direction <c>Mixed</c> for a
+    /// confident Mixed read and <c>Neutral</c> otherwise; both score 0 directional mass, so every component
+    /// is byte-identical to the keyword copy it stands in for (the spec-204 engine pin asserts it). The
+    /// SupportingExcerpt is the evidence Title (the same guaranteed-in-evidence excerpt the directional path
+    /// uses — it must pass the mapper's excerpt-in-evidence guard) and CompanyMention is the evidence
+    /// SourceName, so resolution behaves exactly like every other filing signal.
+    /// </para>
+    /// <para>
+    /// The Reason prefix is exactly informative and nothing more — outcome-bearing direction token, the
+    /// EFFECTIVE (capped) confidence the gate saw, the below-gate note on that row only, then the
+    /// advice-scrubbed model rationale: <c>AI earnings read: Mixed 0.85 — …</c> /
+    /// <c>AI earnings read: Unknown 0.3 — …</c> /
+    /// <c>AI earnings read: Improving 0.45 (below MinConfidence 0.6) — …</c>. Confidences render invariant
+    /// <c>G29</c> (the decimal round-trip format the descriptor already uses; deterministic, AD-3). The
+    /// spec-160 cap-marker annotation the DIRECTIONAL path appends is deliberately NOT added here: the
+    /// prefix already carries the capped value the gate compared, and the markers stay on the cache record
+    /// and the debug record — keeping the Reason a pure function of (cause, direction, confidence,
+    /// rationale, MinConfidence) is what makes the cache replay reconstructible at all.
+    /// </para>
+    /// <para>
+    /// Two recorded replay caveats, both the same class as the directional record's whole-signal replay:
+    /// the below-gate note renders the CURRENT <c>MinConfidence</c> (the value is not on the record; a
+    /// retuned gate changes only that display text on replays, exactly as a retuned gate never re-gates a
+    /// replayed directional signal), and the metadata's <c>filingReadModel</c> is the CURRENT
+    /// <see cref="DirectionalFilingSignalOptions.ModelIdentity"/> — safe because the cache is model-SEGMENTED
+    /// (spec 118), so a record can only replay under the model identity that wrote it.
+    /// </para>
+    /// </summary>
+    private ExtractedSignal BuildReadSignal(
+        EvidenceItem evidence,
+        FilingNoSignalCause cause,
+        string readDirection,
+        decimal effectiveConfidence,
+        string rationale)
+    {
+        var direction = cause == FilingNoSignalCause.Mixed ? "Mixed" : "Neutral";
+        var confidenceText = effectiveConfidence.ToString("G29", CultureInfo.InvariantCulture);
+        var belowGateNote = cause == FilingNoSignalCause.BelowConfidence
+            ? " (below MinConfidence " + _options.MinConfidence.ToString("G29", CultureInfo.InvariantCulture) + ")"
+            : string.Empty;
+
+        return new ExtractedSignal(
+            CompanyMention: evidence.SourceName,
+            SignalType: "GuidanceChange",
+            Direction: direction,
+            Strength: FilingReadSignalMetadata.Strength,
+            Novelty: FilingReadSignalMetadata.Novelty,
+            Confidence: FilingReadSignalMetadata.Confidence,
+            SupportingExcerpt: evidence.Title,
+            Reason: $"AI earnings read: {readDirection} {confidenceText}{belowGateNote} — {rationale}",
+            MetadataJson: FilingReadSignalMetadata.Compose(
+                cause, readDirection, effectiveConfidence, _options.ModelIdentity?.Trim() ?? string.Empty));
     }
 
     /// <summary>

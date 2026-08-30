@@ -13,6 +13,39 @@ public enum AnalyzedFilingOutcome
 }
 
 /// <summary>
+/// WHY an analyzed filing produced no DIRECTIONAL signal (spec 204). Before this existed, a confident
+/// "materially two-sided quarter" and "the model could not read it" were indistinguishable on disk — one
+/// cached token with no direction, confidence, rationale or cause, half of every analysed filing discarded
+/// uncounted (224 no-signal vs 222 produced, measured 2026-08-30).
+/// <para>
+/// Persisted TOKEN-BASED only: <c>RadarFileStoreJson</c> serializes enums through
+/// <c>JsonStringEnumConverter(allowIntegerValues: false)</c>, so an integer on disk is REJECTED on read
+/// (the whole record then degrades to a cache miss) and the member ordinals below can never leak into a
+/// file. <see cref="Unknown"/> is deliberately the zero value (the spec-186 house rule: the degraded
+/// default must never be the member that carries the most meaning) — <c>default</c> of this enum replays a
+/// NEUTRAL signal, never a Mixed direction.
+/// </para>
+/// </summary>
+public enum FilingNoSignalCause
+{
+    /// <summary>The model returned <c>Unknown</c> (any confidence): no direction could be established. The safe zero.</summary>
+    Unknown = 0,
+
+    /// <summary>The model returned a confident <c>Mixed</c> read: the quarter is materially two-sided.</summary>
+    Mixed = 1,
+
+    /// <summary>The (comparability-capped, spec 160) confidence fell below <c>MinConfidence</c>.</summary>
+    BelowConfidence = 2,
+
+    /// <summary>
+    /// The fetched EX-99.1 body was empty/implausibly short (spec 114). Part of the cause VOCABULARY for
+    /// completeness, but never actually persisted: an empty-body read is non-authoritative and is never
+    /// cached, so no record on disk may legitimately carry this value.
+    /// </summary>
+    EmptyBody = 3,
+}
+
+/// <summary>
 /// A cached earnings-filing analysis RESULT, keyed by SEC accession (spec 107). It stores the WHOLE
 /// <see cref="ExtractedSignal"/> a successful read produced so a replay is field-identical by construction — the
 /// cache only changes WHETHER a <c>www.sec.gov</c> fetch happens, never the signal that is scored.
@@ -47,6 +80,17 @@ public enum AnalyzedFilingOutcome
 /// <param name="ComparabilityPolicy">The comparability-scan policy string this entry was produced under (spec
 /// 160); null = written pre-160, not scanned.</param>
 /// <param name="ComparabilityMarkers">What the comparability scan matched (both groups); null = not scanned.</param>
+/// <param name="NoSignalCause">SPEC 204 (trailing + nullable): WHY a <see cref="AnalyzedFilingOutcome.NoDirectionalSignal"/>
+/// entry produced no direction. <c>null</c> = NOT RECORDED (a pre-204 record, or a produced-signal record where
+/// the cause is inapplicable) — never a fabricated cause. A non-null cause is what lets pass-1 replay re-emit
+/// the spec-204 read signal deterministically without re-fetching or re-analyzing.</param>
+/// <param name="ReadDirection">SPEC 204 (trailing + nullable): the model's OWN direction token
+/// (<c>Mixed</c>/<c>Unknown</c>/<c>Improving</c>/<c>Deteriorating</c>) for a no-signal read; <c>null</c> = not recorded.</param>
+/// <param name="ReadConfidence">SPEC 204 (trailing + nullable): the EFFECTIVE (comparability-capped, spec 160)
+/// read confidence the gate saw — the same value the read signal's metadata and Reason prefix carry, so the
+/// record and the signal it replays cannot disagree; <c>null</c> = not recorded.</param>
+/// <param name="Rationale">SPEC 204 (trailing + nullable): the model's advice-scrubbed rationale for a
+/// no-signal read (empty for an Unknown read that produced none); <c>null</c> = not recorded.</param>
 public sealed record AnalyzedFilingRecord(
     string Accession,
     AnalyzedFilingOutcome Outcome,
@@ -54,15 +98,24 @@ public sealed record AnalyzedFilingRecord(
     DateTimeOffset? ObservedAtUtc,
     int CacheVersion,
     string? ComparabilityPolicy = null,
-    ComparabilityMarkers? ComparabilityMarkers = null)
+    ComparabilityMarkers? ComparabilityMarkers = null,
+    FilingNoSignalCause? NoSignalCause = null,
+    string? ReadDirection = null,
+    decimal? ReadConfidence = null,
+    string? Rationale = null)
 {
     /// <summary>
     /// The current cache-schema version stamped on every write. Deliberately non-zero so a legacy file with no
     /// <c>cacheVersion</c> property (deserializes to 0) is always a mismatch. See the record docs for when to bump.
     /// Bumped 1 → 2 by spec 116: the analyzer system prompt changed materially (profitability/margin-aware
     /// earnings read), so every read cached under the old prompt must be retired and re-analyzed.
+    /// Bumped 2 → 3 by spec 204: a no-signal record now names its cause (direction/confidence/rationale), and a
+    /// v2 <see cref="AnalyzedFilingOutcome.NoDirectionalSignal"/> record must be re-analyzed so those facts get
+    /// recorded. The invalidation is OUTCOME-SCOPED in <c>FileAnalyzedFilingCache.TryGetAsync</c> — a v2
+    /// <see cref="AnalyzedFilingOutcome.DirectionalSignalProduced"/> record stays a HIT, because its signal is
+    /// intact and re-reading it would spend hosted calls to reproduce a known answer.
     /// </summary>
-    public const int CurrentCacheVersion = 2;
+    public const int CurrentCacheVersion = 3;
 }
 
 /// <summary>

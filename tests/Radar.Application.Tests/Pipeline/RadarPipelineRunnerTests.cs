@@ -2493,6 +2493,62 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(SignalDirection.Positive, write.Signal.Direction);
     }
 
+    /// <summary>The spec-204 non-directional read signal (a confident Mixed) over a filing's evidence —
+    /// keyword-fallback magnitudes, real metadata envelope, exactly what the source now emits.</summary>
+    private static ExtractedSignal MixedReadSignal(EvidenceItem ev) =>
+        new(
+            CompanyMention: CompanyName,
+            SignalType: "GuidanceChange",
+            Direction: "Mixed",
+            Strength: FilingReadSignalMetadata.Strength,
+            Novelty: FilingReadSignalMetadata.Novelty,
+            Confidence: FilingReadSignalMetadata.Confidence,
+            SupportingExcerpt: ev.Title,
+            Reason: "AI earnings read: Mixed 0.85 — Revenue up, margins down.",
+            MetadataJson: FilingReadSignalMetadata.Compose(
+                FilingNoSignalCause.Mixed, "Mixed", 0.85m, "openai:test-model"));
+
+    [Fact]
+    public async Task MixedReadSignal_SupersedesDeterministicNeutral_AndStoresTheMixedRead()
+    {
+        // Spec 204, the CollectionPass consequence stated by the spec: the §1 read signals ride the SAME
+        // directional list, so the same-run deterministic keyword Neutral is suppressed before store and the
+        // Mixed READ is what persists — approved through the same map→resolve→review→store path (3/4/0.4 at
+        // High quality clears every reviewer floor exactly as the keyword copy did), with the counters
+        // counting the filing's GuidanceChange ONCE.
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildFilingCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([NeutralGuidanceChange()], "summary"));
+        var source = new SelectiveDirectionalFilingSignalSource(MixedReadSignal);
+
+        var h = new Harness(
+            collector, extractor, new PipelineOptions { GenerateReport = false },
+            directionalFilingSignals: source);
+        await SeedCompanyAsync(h, companyId);
+
+        var result = await h.Runner.RunAsync(default);
+
+        Assert.Equal(1, result.SignalsExtracted);
+        Assert.Equal(1, result.SignalsValid);
+        Assert.Equal(1, result.SignalsApproved);
+
+        // Exactly one GuidanceChange persisted for the filing: the Mixed read, envelope intact.
+        var signals = await h.Signals.GetByCompanyAsync(companyId, default);
+        var signal = Assert.Single(signals);
+        Assert.Equal(SignalType.GuidanceChange, signal.Type);
+        Assert.Equal(SignalDirection.Mixed, signal.Direction);
+        Assert.Equal(SignalReviewStatus.Approved, signal.ReviewStatus);
+        Assert.Equal(FilingReadSignalMetadata.Confidence, signal.Confidence); // reviewer did not reduce it.
+        Assert.True(FilingReadSignalMetadata.IsFilingReadSignal(signal));
+        Assert.DoesNotContain(
+            signals, s => s.Type == SignalType.GuidanceChange && s.Direction == SignalDirection.Neutral);
+
+        // On-disk twin: the Mixed read is the one durable GuidanceChange; the Neutral has no file.
+        var write = Assert.Single(h.SignalStore.Written);
+        Assert.Equal(signal.Id, write.Signal.Id);
+        Assert.Equal(SignalDirection.Mixed, write.Signal.Direction);
+    }
+
     [Fact]
     public async Task NoDirectionalRead_LeavesDeterministicNeutralGuidanceChangeStanding()
     {
