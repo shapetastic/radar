@@ -600,7 +600,7 @@ public sealed class RadarPipelineRunnerTests
                 directionalFilingSignals);
 
             ScoringPass = new ScoringPass(
-                strategyFactory, ScoreStores, ScoringConfigStore, ScoringPassLog);
+                strategyFactory, ScoreStores, ScoringConfigStore, time, ScoringPassLog);
 
             Runner = new RadarPipelineRunner(
                 CollectionPass,
@@ -611,6 +611,9 @@ public sealed class RadarPipelineRunnerTests
                 ReportWriter,
                 RunStore,
                 options,
+                // Spec 203 §1: this harness composes in-memory stores, so no hydration telemetry exists.
+                [],
+                time,
                 RunnerLog);
 
             CollectOnlyRunner = new CollectOnlyPipelineRunner(
@@ -651,6 +654,7 @@ public sealed class RadarPipelineRunnerTests
                 RunStore,
                 options,
                 new ScoringPassOptions { AsOfUtc = asOfUtc },
+                [],
                 timeProvider ?? Clock,
                 ScoreOnlyLog);
     }

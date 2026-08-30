@@ -41,8 +41,14 @@ public sealed class RadarPipelineRunner : IRadarPipeline
     private readonly IReportFileWriter _reportFileWriter;
     private readonly IPipelineRunStore _runStore;
     private readonly PipelineOptions _options;
+    private readonly IEnumerable<IHydrationTelemetry> _hydrationTelemetry;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<RadarPipelineRunner> _logger;
 
+    /// <param name="hydrationTelemetry">
+    /// Spec 203 §1: every durable store that can report its hydration elapsed (the signal and raw-evidence
+    /// file stores when composed; EMPTY in a composition without them — required, never null).
+    /// </param>
     public RadarPipelineRunner(
         ICollectionPass collectionPass,
         IScoringPass scoringPass,
@@ -52,6 +58,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         IReportFileWriter reportFileWriter,
         IPipelineRunStore runStore,
         PipelineOptions options,
+        IEnumerable<IHydrationTelemetry> hydrationTelemetry,
+        TimeProvider timeProvider,
         ILogger<RadarPipelineRunner> logger)
     {
         ArgumentNullException.ThrowIfNull(collectionPass);
@@ -62,6 +70,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(reportFileWriter);
         ArgumentNullException.ThrowIfNull(runStore);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(hydrationTelemetry);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _collectionPass = collectionPass;
@@ -72,6 +82,8 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         _reportFileWriter = reportFileWriter;
         _runStore = runStore;
         _options = options;
+        _hydrationTelemetry = hydrationTelemetry;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -106,12 +118,16 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         IReadOnlyList<StrategyReportSection>? strategySections = null;
         // Spec 201 §1: null = no report write was attempted this run; 0/1 = a measured outcome.
         int? reportsNotPersisted = null;
+        // Spec 203 §1: null = no report was generated this run, never a fabricated zero duration.
+        TimeSpan? reportElapsed = null;
         if (_options.GenerateReport)
         {
+            var reportStarted = _timeProvider.GetTimestamp();
             var report = await _reportBuilder
                 .GenerateAsync(collection.AsOfUtc, collection.Collection, collection.Health, ct)
                 .ConfigureAwait(false);
             var reportWrite = await _reportFileWriter.WriteAsync(report.Report, ct).ConfigureAwait(false);
+            reportElapsed = _timeProvider.GetElapsedTime(reportStarted);
             reportsNotPersisted = reportWrite.Written ? 0 : 1;
             LogReportNotPersisted(_logger, reportWrite);
             reportId = report.Report.Id;
@@ -143,6 +159,9 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // below and returned on the pipeline result, so the shadow step's persisted assessments reference
         // exactly the run record that exists on disk — never a second id for the same run.
         var runId = Guid.NewGuid();
+
+        // Spec 203 §1: read AFTER scoring, so the sum covers every hydration this run's stages triggered.
+        var hydrationElapsed = SumHydrationElapsed(_hydrationTelemetry);
 
         var pipelineResult = new RadarPipelineResult(
             EvidenceCollected: collection.EvidenceCollected,
@@ -200,11 +219,60 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             ReportsNotPersisted: reportsNotPersisted,
             ScoringConfigsNotPersisted: scoring.ScoringConfigsNotPersisted,
             // Spec 202 §1: the strategies the scoring pass skipped (null = none) — measured by this run.
-            StrategiesSkippedForUnpersistedConfig: scoring.StrategiesSkippedForUnpersistedConfig);
+            StrategiesSkippedForUnpersistedConfig: scoring.StrategiesSkippedForUnpersistedConfig,
+            // Spec 203 §1: measured by this run (hydration summed across the stores that reported one).
+            ScoringElapsed: scoring.ScoringElapsed,
+            HydrationElapsed: hydrationElapsed);
+        var runRecordStarted = _timeProvider.GetTimestamp();
         var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
+        var runRecordElapsed = _timeProvider.GetElapsedTime(runRecordStarted);
         LogRunRecordNotPersisted(_logger, runRecordWrite);
 
+        // Spec 203 §1: the run-record write cannot time itself INTO the record it writes, so its elapsed is
+        // reported here only. A SEPARATE line, so the "Pipeline run complete" summary above stays
+        // byte-identical (a pinned criterion).
+        LogStageTimings(_logger, hydrationElapsed, scoring.ScoringElapsed, reportElapsed, runRecordElapsed);
+
         return pipelineResult;
+    }
+
+    /// <summary>
+    /// Spec 203 §1: the ONE definition of the run record's <c>HydrationElapsed</c> — the hydrations this
+    /// process performed before the record was written, SUMMED across every store that reported one
+    /// (signal + raw evidence). <c>null</c> when no store reported a hydration: a composition without the
+    /// durable stores, or a pass that never touched them — never a fabricated zero.
+    /// </summary>
+    internal static TimeSpan? SumHydrationElapsed(IEnumerable<IHydrationTelemetry> telemetry)
+    {
+        TimeSpan? total = null;
+        foreach (var source in telemetry)
+        {
+            if (source.HydrationElapsed is { } elapsed)
+            {
+                total = (total ?? TimeSpan.Zero) + elapsed;
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Spec 203 §1: the ONE rendering of the stage-timings line, shared by the combined and score-only
+    /// runners. An axis that was not measured renders as "not measured", never as a zero duration — a
+    /// defaulted zero must never read as a measured one.
+    /// </summary>
+    internal static void LogStageTimings(
+        ILogger logger, TimeSpan? hydration, TimeSpan? scoring, TimeSpan? report, TimeSpan? runRecord)
+    {
+        logger.LogInformation(
+            "Stage timings: hydration {HydrationElapsed}, scoring {ScoringElapsed}, report {ReportElapsed}, "
+                + "run record {RunRecordElapsed}.",
+            Render(hydration),
+            Render(scoring),
+            Render(report),
+            Render(runRecord));
+
+        static string Render(TimeSpan? elapsed) => elapsed?.ToString() ?? "not measured";
     }
 
     /// <summary>

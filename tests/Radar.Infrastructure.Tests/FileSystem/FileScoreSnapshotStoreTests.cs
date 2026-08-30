@@ -796,4 +796,39 @@ public sealed class FileScoreSnapshotStoreTests : IDisposable
 
         Assert.Contains("SnapshotFileName", ex.Message);
     }
+
+    /// <summary>
+    /// Spec 203 §4: the scoring pass now writes company-major instead of strategy-major, so NOTHING may read
+    /// order from the file system. Files are written in an order that is the REVERSE of their content order
+    /// (and named so that ordinal/creation order disagrees with CreatedAtUtc), and every read still returns
+    /// the content order — ascending CreatedAtUtc then Id.
+    /// </summary>
+    [Fact]
+    public async Task Reads_SortByContent_NeverByFileSystemOrder()
+    {
+        var companyId = Guid.NewGuid();
+        var store = CreateStore();
+
+        // Ids chosen so that ordinal file-name order (0001 < 0002 < 0003) is the OPPOSITE of CreatedAtUtc
+        // order, and written newest-first so creation order disagrees too.
+        var newest = new ScoreSnapshotBuilder().WithId(Guid.Parse("00000001-0000-0000-0000-000000000000"))
+            .WithCompanyId(companyId).WithCreatedAtUtc(WindowEnd.AddDays(2)).Build();
+        var middle = new ScoreSnapshotBuilder().WithId(Guid.Parse("00000002-0000-0000-0000-000000000000"))
+            .WithCompanyId(companyId).WithCreatedAtUtc(WindowEnd.AddDays(1)).Build();
+        var oldest = new ScoreSnapshotBuilder().WithId(Guid.Parse("00000003-0000-0000-0000-000000000000"))
+            .WithCompanyId(companyId).WithCreatedAtUtc(WindowEnd).Build();
+
+        await store.WriteAsync(newest, [], CancellationToken.None);
+        await store.WriteAsync(middle, [], CancellationToken.None);
+        await store.WriteAsync(oldest, [], CancellationToken.None);
+
+        var all = await store.ReadAllForCompanyAsync(companyId, CancellationToken.None);
+        Assert.Equal([oldest.Id, middle.Id, newest.Id], all.Select(s => s.Id).ToArray());
+
+        var withLinks = await store.ReadAllWithLinksForCompanyAsync(companyId, CancellationToken.None);
+        Assert.Equal([oldest.Id, middle.Id, newest.Id], withLinks.Select(s => s.Snapshot.Id).ToArray());
+
+        var latest = await store.ReadLatestBeforeAsync(companyId, WindowEnd.AddDays(10), CancellationToken.None);
+        Assert.Equal(newest.Id, latest!.Id);
+    }
 }

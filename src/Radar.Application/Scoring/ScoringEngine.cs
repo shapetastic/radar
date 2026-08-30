@@ -3,6 +3,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
 using Radar.Domain.Companies;
+using Radar.Domain.Evidence;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
 
@@ -265,12 +266,86 @@ public sealed class ScoringEngine : IScoringEngine
     public async Task<CompanyScoreResult> ScoreCompanyAsync(
         Guid companyId, DateTimeOffset windowEndUtc, CancellationToken ct)
     {
+        // Spec 203 §4: the two-argument form IS "read, then score" — one path, so the shared-reads overload
+        // ScoringPass uses cannot drift from the per-call one replay and the tests use.
+        var reads = await ReadCompanyAsync(companyId, windowEndUtc, ct).ConfigureAwait(false);
+        return await ScoreCompanyAsync(reads, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<CompanyScoringReads> ReadCompanyAsync(
+        Guid companyId, DateTimeOffset windowEndUtc, CancellationToken ct)
+    {
         ct.ThrowIfCancellationRequested();
 
         // Operational scaffolding (tunable, NOT a formula weight): a fixed-length recent-signal window.
         var windowStartUtc = windowEndUtc - _options.Window;
 
         var allSignals = await _signalRepository.GetByCompanyAsync(companyId, ct).ConfigureAwait(false);
+
+        // Prefetch the evidence behind every signal that passes the STRATEGY-INDEPENDENT predicates (window,
+        // known-at, Approved — the same three ScoreCompanyAsync applies, in the same order) but NOT the
+        // per-strategy SignalTypes gate: the result is a superset every strategy's filter selects from. An
+        // unresolvable evidence id is left ABSENT so the scoring path's dropped-signal accounting is
+        // unchanged. Iterated in allSignals' deterministic order; the dictionary itself is keyed, so the
+        // order of prefetch cannot affect any output.
+        var evidenceById = new Dictionary<Guid, EvidenceItem>();
+        foreach (var signal in allSignals
+            .Where(s => s.ObservedAtUtc > windowStartUtc && s.ObservedAtUtc <= windowEndUtc)
+            .Where(s => s.CreatedAtUtc <= windowEndUtc)
+            .Where(s => s.ReviewStatus == SignalReviewStatus.Approved))
+        {
+            if (evidenceById.ContainsKey(signal.EvidenceId))
+            {
+                continue;
+            }
+
+            var evidence = await _evidenceRepository.GetByIdAsync(signal.EvidenceId, ct).ConfigureAwait(false);
+            if (evidence is not null)
+            {
+                evidenceById[signal.EvidenceId] = evidence;
+            }
+        }
+
+        // The immediately-preceding window of the same length — see the ScoreCompanyAsync(reads) comment for
+        // why it is read from the durable signal store and why the known-at bound is windowEndUtc.
+        var previousWindowStartUtc = windowStartUtc - _options.Window;
+        var previousSignals = await _signalFileStore
+            .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, windowEndUtc, ct)
+            .ConfigureAwait(false);
+
+        return new CompanyScoringReads(
+            CompanyId: companyId,
+            WindowEndUtc: windowEndUtc,
+            Window: _options.Window,
+            AllSignals: allSignals,
+            PreviousWindowSignals: previousSignals,
+            EvidenceById: evidenceById);
+    }
+
+    /// <inheritdoc />
+    public async Task<CompanyScoreResult> ScoreCompanyAsync(CompanyScoringReads reads, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(reads);
+        ct.ThrowIfCancellationRequested();
+
+        if (reads.Window != _options.Window)
+        {
+            throw new ArgumentException(
+                $"The supplied reads were taken for a {reads.Window} window, but this engine (strategy "
+                    + $"'{_strategyName ?? "(none)"}') scores a {_options.Window} window; the previous/velocity "
+                    + "window they carry would be the wrong one. Read the company through this engine's own "
+                    + "ReadCompanyAsync.",
+                nameof(reads));
+        }
+
+        var companyId = reads.CompanyId;
+        var windowEndUtc = reads.WindowEndUtc;
+
+        // Operational scaffolding (tunable, NOT a formula weight): a fixed-length recent-signal window.
+        var windowStartUtc = windowEndUtc - _options.Window;
+
+        var allSignals = reads.AllSignals;
 
         // Window + known-at + review filter — all three are tunable pipeline scaffolding, NOT formula:
         //   * window rule: ObservedAtUtc in (windowStartUtc, windowEndUtc] — exclusive start, inclusive end;
@@ -307,9 +382,9 @@ public sealed class ScoringEngine : IScoringEngine
 
         foreach (var signal in windowedApproved)
         {
-            // Provenance cannot be established without the source evidence; drop the signal.
-            var evidence = await _evidenceRepository.GetByIdAsync(signal.EvidenceId, ct).ConfigureAwait(false);
-            if (evidence is null)
+            // Provenance cannot be established without the source evidence; drop the signal. Spec 203 §4:
+            // resolved from the prefetched reads (absent ⇒ unresolvable), never a second store read.
+            if (!reads.EvidenceById.TryGetValue(signal.EvidenceId, out var evidence))
             {
                 droppedSignalCount++;
                 (droppedEvidenceIds ??= []).Add(signal.EvidenceId);
@@ -388,7 +463,7 @@ public sealed class ScoringEngine : IScoringEngine
         var collapse = _mediaCollapse.Collapse(newsSuperseded);
         var scoredSignals = collapse.Signals.ToList();
 
-        // The immediately-preceding window of the same length, now sourced from the ON-DISK signal store
+        // The immediately-preceding window of the same length, sourced from the ON-DISK signal store
         // (cross-run) rather than the in-memory repo — the in-memory repo starts empty every process and
         // holds only THIS run's signals, so slicing the previous window from it left previous-window
         // activity at 0 on every fresh run. Velocity then collapsed to its no-previous behaviour: exactly
@@ -405,12 +480,9 @@ public sealed class ScoringEngine : IScoringEngine
         // evidence is loaded for it and it never builds contributions / ScoreEvidenceLinks — provenance is
         // only the current-window signals (AD-6). A failed/empty read degrades to an empty previous window
         // (the safe no-previous velocity); the store swallows per-file failures, but OperationCanceledException
-        // still propagates (no broad catch here).
-        var previousWindowStartUtc = windowStartUtc - _options.Window;
-
-        var previousSignals = await _signalFileStore
-            .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, windowEndUtc, ct)
-            .ConfigureAwait(false);
+        // still propagates (no broad catch here). Spec 203 §4: the read itself happens in ReadCompanyAsync
+        // (with exactly these bounds); here it is consumed from the materialised reads.
+        var previousSignals = reads.PreviousWindowSignals;
 
         // Spec 194 §1.4, previous window too, and in the SAME relative position (before the supersede): an
         // accrued inherited direction must not be allowed to misdirect the velocity comparison either. The

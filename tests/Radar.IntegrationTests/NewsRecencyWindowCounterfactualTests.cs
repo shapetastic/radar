@@ -104,13 +104,14 @@ public sealed class NewsRecencyWindowCounterfactualTests(ITestOutputHelper outpu
             var signals = provider.GetRequiredService<ISignalRepository>();
             var evidence = provider.GetRequiredService<IEvidenceRepository>();
 
-            // ONE memoized read of the window store, shared by BOTH arms — without it this harness is
-            // effectively unrunnable. FileSignalStore.ReadApprovedInWindowAsync deliberately keeps a
-            // per-call month-scoped DISK SCAN instead of serving from the spec-142 hydration index (it
-            // answers the activity-only previous-window question, AD-6), and ScoreCompanyAsync calls it for
-            // the current AND the previous window, per company, per arm. Measured on the live store
-            // (2026-08-29): unshared, this ran 14 minutes on ~2 seconds of CPU — pure disk thrash — over
-            // signal partitions of 14,115 / 7,905 / 7,140 / 4,611 / 2,747 files.
+            // ONE memoized read of the window store, shared by BOTH arms. HISTORY (dated): before spec 203
+            // §2 FileSignalStore.ReadApprovedInWindowAsync was a per-call month-scoped DISK SCAN, and
+            // ScoreCompanyAsync reads the previous/velocity window through it per company, per arm —
+            // measured on the live store (2026-08-29), unshared, this ran 14 minutes on ~2 seconds of CPU
+            // (pure disk thrash over signal partitions of 14,115 / 7,905 / 7,140 / 4,611 / 2,747 files).
+            // Spec 203 §2 moved that read onto the hydration index (no file is opened after hydration), so
+            // today the memoizer only avoids repeating an in-memory filter + collapse + sort per arm while
+            // GUARANTEEING both arms see the identical list.
             //
             // SHARING THE CACHE IS LEGITIMATE HERE BECAUSE THE WINDOWED ARM'S FILTER IS A PURE POST-READ
             // EXCLUSION BY EVIDENCE ID: it never changes the QUERY, so filtering a memoized result is
@@ -245,8 +246,9 @@ public sealed class NewsRecencyWindowCounterfactualTests(ITestOutputHelper outpu
     /// <b>Called once per arm, and that is cheap — confirmed, not assumed.</b> Both reads it makes are
     /// INDEX-BACKED: <c>FileSignalStore.GetByCompanyAsync</c> and <c>FileRawEvidenceStore.GetByIdAsync</c>
     /// each hydrate once per instance (spec 142) and then serve from a dictionary, so a second walk re-reads
-    /// no file. Only <see cref="ISignalFileStore.ReadApprovedInWindowAsync"/> keeps a per-call disk scan,
-    /// which is why THAT one is memoized and these are not.
+    /// no file. Since spec 203 §2 <see cref="ISignalFileStore.ReadApprovedInWindowAsync"/> is index-backed
+    /// too; it stays memoized (<see cref="MemoizingSignalWindowReads"/>) so the two arms are guaranteed the
+    /// identical previous-window list, not because it still touches the disk.
     /// </para>
     /// </summary>
     private static async Task<IReadOnlyDictionary<Guid, IReadOnlyCollection<string>>>

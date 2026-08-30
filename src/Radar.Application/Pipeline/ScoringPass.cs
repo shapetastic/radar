@@ -19,22 +19,26 @@ public sealed class ScoringPass : IScoringPass
     private readonly IScoringStrategyFactory _scoringStrategies;
     private readonly IScoreSnapshotFileStoreFactory _scoreFileStores;
     private readonly IScoringConfigStore _scoringConfigStore;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<ScoringPass> _logger;
 
     public ScoringPass(
         IScoringStrategyFactory scoringStrategies,
         IScoreSnapshotFileStoreFactory scoreFileStores,
         IScoringConfigStore scoringConfigStore,
+        TimeProvider timeProvider,
         ILogger<ScoringPass> logger)
     {
         ArgumentNullException.ThrowIfNull(scoringStrategies);
         ArgumentNullException.ThrowIfNull(scoreFileStores);
         ArgumentNullException.ThrowIfNull(scoringConfigStore);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _scoringStrategies = scoringStrategies;
         _scoreFileStores = scoreFileStores;
         _scoringConfigStore = scoringConfigStore;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -92,10 +96,22 @@ public sealed class ScoringPass : IScoringPass
         // durability precondition inside the loop.
         var strategies = _scoringStrategies.Runtimes;
 
+        // Spec 203 §1: the whole pass, monotonic (spec 187 §7's rule — never wall-clock subtraction).
+        var passStarted = _timeProvider.GetTimestamp();
+
         // Spec 202 §1: the strategies this pass SKIPPED because their config record is not durable, in run
         // order. Null on the result when none was skipped — never an empty list standing in for "none".
         List<string>? strategiesSkipped = null;
 
+        // Spec 203 §4: the loop is COMPANY-major. Phase 1 runs the per-strategy preamble — the spec-202
+        // durability precondition and the per-strategy score file store — exactly as before and in the same
+        // strategy order, collecting the ACTIVE strategies. Phase 2 then reads each company's stores ONCE
+        // and hands the same materialised inputs to every active strategy's engine. The per-strategy work
+        // (SignalTypes filter, neutralization, supersedes, collapse, formula, snapshot + links + writes) is
+        // untouched inside the engine, so every snapshot is byte-identical to the strategy-major loop's —
+        // only the ORDER of snapshot writes changes (nothing reads order from the file system:
+        // FileScoreSnapshotStore sorts by content, and the diagnostics aggregate is order-independent).
+        var active = new List<(ScoringStrategyRuntime Strategy, IScoreSnapshotFileStore Store)>(strategies.Count);
         foreach (var strategy in strategies)
         {
             ct.ThrowIfCancellationRequested();
@@ -117,29 +133,66 @@ public sealed class ScoringPass : IScoringPass
                 continue;
             }
 
-            var scoreFileStore = _scoreFileStores.ForStrategy(strategy.Definition);
+            active.Add((strategy, _scoreFileStores.ForStrategy(strategy.Definition)));
+        }
+
+        // Spec 203 §1: per-strategy elapsed, accumulated across companies (each strategy's scoring + write
+        // for one company is bracketed monotonically), reported once per strategy after the company loop.
+        var strategyElapsed = new TimeSpan[active.Count];
+
+        // Spec 203 §4: with no active strategy there is nothing to score and no read to make.
+        if (active.Count > 0)
+        {
+            // Every engine shares the same repositories and the same ScoringOptions instance (one factory,
+            // one options object), so the FIRST active strategy's engine produces reads every other engine
+            // accepts — and each engine VERIFIES the window on the reads it is handed rather than trusting it.
+            var reader = active[0].Strategy.Engine;
 
             foreach (var company in companies)
             {
                 ct.ThrowIfCancellationRequested();
 
-                var result = await strategy.Engine
-                    .ScoreCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
-                assemblyDiagnostics.Record(
-                    strategy.Definition.Name, company.Id, asOfUtc, result.Diagnostics);
-                var durable = await scoreFileStore
-                    .WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
-                if (durable.Outcome == DurableWriteOutcome.Failed)
-                {
-                    snapshotsNotPersisted++;
-                }
+                var reads = await reader.ReadCompanyAsync(company.Id, asOfUtc, ct).ConfigureAwait(false);
 
-                if (strategy.Definition.IsPrimary)
+                for (var i = 0; i < active.Count; i++)
                 {
-                    companiesScored++;
+                    ct.ThrowIfCancellationRequested();
+                    var (strategy, scoreFileStore) = active[i];
+
+                    var started = _timeProvider.GetTimestamp();
+
+                    var result = await strategy.Engine.ScoreCompanyAsync(reads, ct).ConfigureAwait(false);
+                    assemblyDiagnostics.Record(
+                        strategy.Definition.Name, company.Id, asOfUtc, result.Diagnostics);
+                    var durable = await scoreFileStore
+                        .WriteAsync(result.Snapshot, result.Links, ct).ConfigureAwait(false);
+                    if (durable.Outcome == DurableWriteOutcome.Failed)
+                    {
+                        snapshotsNotPersisted++;
+                    }
+
+                    if (strategy.Definition.IsPrimary)
+                    {
+                        companiesScored++;
+                    }
+
+                    strategyElapsed[i] += _timeProvider.GetElapsedTime(started);
                 }
             }
         }
+
+        // Spec 203 §1: ONE Information line per strategy (never per company) — name, companies, elapsed.
+        for (var i = 0; i < active.Count; i++)
+        {
+            _logger.LogInformation(
+                "Scoring stage: strategy {StrategyName} scored {CompanyCount} company/companies in "
+                    + "{StrategyElapsed}.",
+                active[i].Strategy.Definition.Name,
+                companies.Count,
+                strategyElapsed[i]);
+        }
+
+        var scoringElapsed = _timeProvider.GetElapsedTime(passStarted);
 
         // Spec 197 §3: at most one Warning per diagnostic category for the WHOLE pass. Emitted before the
         // spec-193 store Warning below purely to keep the two blocks' order stable; they are independent
@@ -188,6 +241,7 @@ public sealed class ScoringPass : IScoringPass
             PrimaryStrategy: _scoringStrategies.Primary.Definition.Name,
             ScoreSnapshotsNotPersisted: snapshotsNotPersisted,
             ScoringConfigsNotPersisted: scoringConfigsNotPersisted,
-            StrategiesSkippedForUnpersistedConfig: strategiesSkipped);
+            StrategiesSkippedForUnpersistedConfig: strategiesSkipped,
+            ScoringElapsed: scoringElapsed);
     }
 }

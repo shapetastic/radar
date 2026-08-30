@@ -8,15 +8,15 @@ namespace Radar.IntegrationTests;
 /// A read-through memoization of <see cref="ISignalFileStore.ReadApprovedInWindowAsync"/>, keyed by its
 /// EXACT arguments, for the read-only paired counterfactual harnesses (spec 196 §7, spec 198 §4).
 /// <para>
-/// <b>Why it exists, quantified.</b> <c>FileSignalStore.ReadApprovedInWindowAsync</c> deliberately keeps its
-/// own month-scoped DISK SCAN rather than serving from the spec-142 hydration index — it answers a different
-/// question (the activity-only previous window, AD-6) under semantics pinned by its own tests. That is
-/// correct for the pipeline, which asks once per company per run, and ruinous for a PAIRED harness, which
-/// asks the identical question once per company per ARM: <c>ScoreCompanyAsync</c> calls it for the current
-/// AND the previous/velocity window, so two arms over the 94-company universe (spec 199 took it 74 -> 94)
-/// issue ~188 scans over signal partitions holding tens of thousands of JSON files each. The spec-198
-/// measurement below was taken at 74 companies (~148 scans). Measured on the live store (2026-08-29): the
-/// spec-198 counterfactual ran 14 minutes on ~2 seconds of CPU — pure disk thrash — before this was shared.
+/// <b>Why it exists.</b> HISTORY (dated): before spec 203 §2, <c>FileSignalStore.ReadApprovedInWindowAsync</c>
+/// was a per-call month-scoped DISK SCAN, and a PAIRED harness asks the identical question once per company
+/// per ARM (<c>ScoreCompanyAsync</c> reads the previous/velocity window through it), so on 2026-08-29 the
+/// spec-198 counterfactual ran 14 minutes on ~2 seconds of CPU — pure disk thrash — until this memoizer was
+/// shared between the arms. Spec 203 §2 then moved that read onto the spec-142 hydration index: it opens NO
+/// file after hydration, so the disk cost is gone for the pipeline and the harnesses alike. What the memoizer
+/// buys TODAY is smaller and still worth having: it avoids repeating the in-memory filter + cross-run
+/// collapse + sort per arm, and — the property the paired design actually rests on — it GUARANTEES both arms
+/// see the identical list for the identical argument tuple.
 /// </para>
 /// <para>
 /// <b>It is answer-preserving.</b> It changes no result, only how many times the same files are opened; the

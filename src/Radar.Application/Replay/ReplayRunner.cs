@@ -103,6 +103,7 @@ public sealed class ReplayRunner : IReplayRunner
     private readonly IReplayScoreSnapshotFileStoreFactory _scoreFileStores;
     private readonly IScoringConfigStore _scoringConfigStore;
     private readonly ReplayPlan _plan;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<ReplayRunner> _logger;
 
     public ReplayRunner(
@@ -111,6 +112,7 @@ public sealed class ReplayRunner : IReplayRunner
         IReplayScoreSnapshotFileStoreFactory scoreFileStores,
         IScoringConfigStore scoringConfigStore,
         ReplayPlan plan,
+        TimeProvider timeProvider,
         ILogger<ReplayRunner> logger)
     {
         ArgumentNullException.ThrowIfNull(companyRepository);
@@ -118,6 +120,7 @@ public sealed class ReplayRunner : IReplayRunner
         ArgumentNullException.ThrowIfNull(scoreFileStores);
         ArgumentNullException.ThrowIfNull(scoringConfigStore);
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _companyRepository = companyRepository;
@@ -125,6 +128,7 @@ public sealed class ReplayRunner : IReplayRunner
         _scoreFileStores = scoreFileStores;
         _scoringConfigStore = scoringConfigStore;
         _plan = plan;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -177,6 +181,9 @@ public sealed class ReplayRunner : IReplayRunner
         foreach (var strategy in strategies)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Spec 203 §1: this strategy's whole loop, monotonic (spec 187 §7's rule).
+            var strategyStarted = _timeProvider.GetTimestamp();
 
             // Spec 148: persist the effective resolved config ONCE PER STRATEGY, exactly as ScoringPass does
             // for a forward run — content-addressed and insert-if-new, so it costs nothing when the forward
@@ -247,10 +254,12 @@ public sealed class ReplayRunner : IReplayRunner
             }
 
             _logger.LogInformation(
-                "Replay '{Label}': strategy {StrategyName} replayed over {AsOfPoints} as-of point(s).",
+                "Replay '{Label}': strategy {StrategyName} replayed over {AsOfPoints} as-of point(s) in "
+                    + "{StrategyElapsed}.",
                 _plan.Label,
                 strategy.Definition.Name,
-                series.Count);
+                series.Count,
+                _timeProvider.GetElapsedTime(strategyStarted));
         }
 
         // Spec 197 §3: at most one Warning per diagnostic category for the COMPLETE replay invocation —
