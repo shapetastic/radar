@@ -30,7 +30,11 @@ namespace Radar.Infrastructure.Filings;
 /// Invalidation (spec 114): every write is stamped with <see cref="AnalyzedFilingRecord.CurrentCacheVersion"/>,
 /// and a read whose stored <see cref="AnalyzedFilingRecord.CacheVersion"/> differs is a MISS (the filing is
 /// re-analyzed). Legacy files with no <c>cacheVersion</c> property deserialize to 0 and so auto-invalidate —
-/// this is how the 2026-07-18 block-era poison self-heals with no manual file deletion.
+/// this is how the 2026-07-18 block-era poison self-heals with no manual file deletion. Since spec 204 the
+/// rule is OUTCOME-SCOPED for the 2 → 3 bump only (see <c>IsAcceptedVersion</c>): a v2 produced-signal record
+/// stays a hit, a v2 no-signal record is a miss. The cache is path-keyed per accession — never per version —
+/// so the re-analysis's v3 write REPLACES the v2 file in place; that is acceptable because a v2 no-signal
+/// record carries nothing a v3 record does not (asserted by the v2→v3 round-trip test).
 /// </para>
 /// </summary>
 public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
@@ -60,12 +64,12 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
         {
             var text = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
             var record = JsonSerializer.Deserialize<AnalyzedFilingRecord>(text, RadarFileStoreJson.Options);
-            if (record is not null && record.CacheVersion != AnalyzedFilingRecord.CurrentCacheVersion)
+            if (record is not null && !IsAcceptedVersion(record))
             {
                 // A stale-version entry is not corrupt — it is the deliberate invalidation path (spec 114): the
                 // entry predates the current cache schema (legacy files with no cacheVersion property deserialize
                 // to 0), so it must be re-analyzed rather than replayed. Debug, not warning: this is expected
-                // self-healing, not a fault.
+                // self-healing, not a fault. The rule is OUTCOME-SCOPED since spec 204 — see IsAcceptedVersion.
                 _logger.LogDebug(
                     "Analyzed-filing cache file '{Path}' has stale CacheVersion {Stale} (current {Current}); treating as a cache miss.",
                     path,
@@ -124,6 +128,28 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
                 path);
         }
     }
+
+    /// <summary>
+    /// The pre-spec-204 cache-schema version, kept only for the outcome-scoped acceptance rule below. A v2
+    /// record differs from a v3 one ONLY by the four spec-204 no-signal cause fields (NoSignalCause /
+    /// ReadDirection / ReadConfidence / Rationale, all trailing + nullable).
+    /// </summary>
+    private const int PreSpec204CacheVersion = 2;
+
+    /// <summary>
+    /// The spec-204 OUTCOME-SCOPED stale-version rule. A record stamped with the current version is always
+    /// accepted. A version-2 record whose Outcome is <see cref="AnalyzedFilingOutcome.DirectionalSignalProduced"/>
+    /// is treated as CURRENT (a HIT — its signal is intact and carried whole on the record; re-reading it
+    /// would spend hosted calls, and a www.sec.gov fetch, purely to reproduce a known answer). A version-2
+    /// <see cref="AnalyzedFilingOutcome.NoDirectionalSignal"/> record is a stale-version MISS: it carries no
+    /// cause/direction/confidence/rationale, so it cannot replay the spec-204 read signal — it is re-analyzed
+    /// like any other miss, bounded by the existing MaxFilingsPerRun cap and the 429 breaker. All other
+    /// mismatched versions (0, 1, future) stay misses for BOTH outcomes, exactly as before.
+    /// </summary>
+    private static bool IsAcceptedVersion(AnalyzedFilingRecord record) =>
+        record.CacheVersion == AnalyzedFilingRecord.CurrentCacheVersion
+        || (record.CacheVersion == PreSpec204CacheVersion
+            && record.Outcome == AnalyzedFilingOutcome.DirectionalSignalProduced);
 
     /// <summary>
     /// Confirms a deserialized record is trustworthy for the accession it was looked up under: the stored

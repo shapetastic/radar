@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 
+using Radar.Application.Filings;
 using Radar.Domain.Signals;
 
 namespace Radar.Application.Scoring;
@@ -16,18 +17,29 @@ namespace Radar.Application.Scoring;
 ///
 /// <para>
 /// Rule: among <see cref="SignalType.GuidanceChange"/> signals sharing one <c>EvidenceId</c>, at most ONE
-/// survives — a directional one (<see cref="Signal.Direction"/> != <see cref="SignalDirection.Neutral"/>;
-/// Mixed counts as directional, matching the spec-78 supersede where ANY directional read replaces the
-/// deterministic Neutral) when present, else the Neutral. If multiple candidates remain on the winning side
-/// (contradictory Positive+Negative, or duplicate copies), the tie-break is the stable signal order:
-/// earliest <c>ObservedAtUtc</c>, then lowest <c>Id</c> — a total order independent of input order, so the
-/// survivor is identical on every assembly (AD-3). Non-GuidanceChange signals pass through untouched,
-/// nothing collapses across different <c>EvidenceId</c>s, and survivors keep the input's relative ordering.
+/// survives, chosen by three ordered steps. FIRST (spec 204): a signal whose metadata carries the
+/// <c>filingReadOutcome</c> key (<see cref="FilingReadSignalMetadata.IsFilingReadSignal"/> — the ONE
+/// definition of that predicate) beats one that does not — the persisted AI READ of the filing replaces the
+/// deterministic keyword copy, so provenance is decided by "the model actually read this", never by GUID
+/// order (before 204 a Neutral read would TIE with the keyword Neutral and fall to the stable-order
+/// tie-break; a Mixed read already won under the directional step, so this step matters exactly for the
+/// Neutral read row). THEN a directional one (<see cref="Signal.Direction"/> !=
+/// <see cref="SignalDirection.Neutral"/>; Mixed counts as directional, matching the spec-78 supersede where
+/// ANY directional read replaces the deterministic Neutral) beats the Neutral. THEN the stable signal
+/// order: earliest <c>ObservedAtUtc</c>, then lowest <c>Id</c> — a total order independent of input order,
+/// so the survivor is identical on every assembly (AD-3; the predicate itself is a pure, deterministic
+/// function of the signal's own persisted metadata — no clock, config, state or IO). Non-GuidanceChange
+/// signals pass through untouched, nothing collapses across different <c>EvidenceId</c>s, and survivors
+/// keep the input's relative ordering. The spec-193 counts and the contribution-reason note are unchanged
+/// in shape: the superseded keyword copy is still counted and still named on the survivor.
 /// </para>
 /// <para>
 /// Deliberately NOT a fingerprint input: this is a pipeline-correctness fix (which already-available signal
 /// is scored), not a scoring-config change — there is no <c>CanonicalDescriptor()</c> and the default
-/// <c>ScoringConfigVersion</c> fingerprint must not move.
+/// <c>ScoringConfigVersion</c> fingerprint must not move. That stays true through spec 204's read-preference
+/// step: the read and the keyword copy carry identical magnitudes and zero directional mass, so which one
+/// survives changes provenance text only, never a score — the spec-204 engine pin asserts the components,
+/// explanation and ComponentJson are byte-identical either way, and the six fingerprint pins stand.
 /// </para>
 /// <para>
 /// SPEC 193 §2: this was the ONLY signal-removal step in <c>ScoringEngine.ScoreCompanyAsync</c> with no
@@ -144,11 +156,26 @@ public static class GuidanceChangeSupersede
 
     /// <summary>
     /// True when <paramref name="candidate"/> supersedes <paramref name="incumbent"/> for the same
-    /// EvidenceId: directional beats Neutral; within the same side the stable order (earliest
-    /// ObservedAtUtc, then lowest Id) wins. Strict — never true for the same signal.
+    /// EvidenceId: a persisted AI read (metadata carrying <c>filingReadOutcome</c>, spec 204) beats a
+    /// signal without one; then directional beats Neutral; within the same side the stable order (earliest
+    /// ObservedAtUtc, then lowest Id) wins. Strict — never true for the same signal. Still deterministic
+    /// and side-effect free (AD-3): the read predicate is a pure function of the candidate's own persisted
+    /// <see cref="Signal.MetadataJson"/>, parsed lazily per comparison through the shared
+    /// <see cref="FilingReadSignalMetadata"/> helper (one definition; correctness over micro-perf — the
+    /// GuidanceChange set per company window is tiny).
     /// </summary>
     private static bool Beats(Signal candidate, Signal incumbent)
     {
+        // Spec 204, ahead of every existing rule: the AI READ of a filing replaces the deterministic keyword
+        // copy over the same evidence. Without this step a NEUTRAL read would tie with the keyword Neutral
+        // and the survivor would be picked by ObservedAtUtc/GUID order — provenance by coin toss.
+        var candidateIsRead = FilingReadSignalMetadata.IsFilingReadSignal(candidate);
+        var incumbentIsRead = FilingReadSignalMetadata.IsFilingReadSignal(incumbent);
+        if (candidateIsRead != incumbentIsRead)
+        {
+            return candidateIsRead;
+        }
+
         var candidateDirectional = candidate.Direction != SignalDirection.Neutral;
         var incumbentDirectional = incumbent.Direction != SignalDirection.Neutral;
         if (candidateDirectional != incumbentDirectional)

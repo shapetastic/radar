@@ -2,6 +2,7 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
+using Radar.Application.Collectors;
 using Radar.Application.Filings;
 using Radar.Application.SignalExtraction;
 using Radar.Domain.Evidence;
@@ -247,8 +248,11 @@ public sealed class DirectionalFilingSignalSourceTests
     }
 
     [Fact]
-    public async Task BelowMinConfidence_ProducesNoSignal()
+    public async Task BelowMinConfidence_PersistsNeutralReadSignal_WithBelowConfidenceProvenance()
     {
+        // Spec 204: a directional read below the gate is still a READ — it is persisted as a Neutral
+        // GuidanceChange at the keyword-fallback magnitudes, with the model's own direction/confidence in
+        // the metadata envelope and a Reason prefix naming the gate that suppressed the direction.
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
             SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
@@ -258,26 +262,103 @@ public sealed class DirectionalFilingSignalSourceTests
 
         var result = await CreateSource(reader, analyzer).ProduceAsync([evidence], AsOf, CancellationToken.None);
 
-        Assert.Empty(result);
-        // The read + analysis both ran; only the signal is withheld.
+        var produced = Assert.Single(result);
         Assert.Equal(1, reader.ReadCount);
         Assert.Equal(1, analyzer.AnalyzeCount);
+
+        Assert.Equal("GuidanceChange", produced.Signal.SignalType);
+        Assert.Equal("Neutral", produced.Signal.Direction);
+        // The keyword fallback's exact magnitudes — NOT the directional read's Strength 8 / Novelty 6.
+        Assert.Equal(FilingReadSignalMetadata.Strength, produced.Signal.Strength);
+        Assert.Equal(FilingReadSignalMetadata.Novelty, produced.Signal.Novelty);
+        Assert.Equal(FilingReadSignalMetadata.Confidence, produced.Signal.Confidence);
+        Assert.Equal(
+            "AI earnings read: Improving 0.5 (below MinConfidence 0.6) — Weakly improving.",
+            produced.Signal.Reason);
+
+        // The provenance envelope carries the model's REAL read; the signal's Confidence stays 0.4.
+        AssertReadMetadata(produced.Signal, "below-confidence", "Improving", "0.5");
+
+        // The signal round-trips valid through the mapper (Neutral parses; the Title excerpt passes the
+        // excerpt-in-evidence guard).
+        var mapping = ExtractedSignalMapper.ToSignal(produced.Signal, evidence, AsOf);
+        Assert.True(mapping.IsValid, string.Join("; ", mapping.Errors));
     }
 
-    [Theory]
-    [InlineData(FilingDirection.Mixed)]
-    [InlineData(FilingDirection.Unknown)]
-    public async Task MixedOrUnknown_ProducesNoSignal_RegardlessOfConfidence(FilingDirection direction)
+    [Fact]
+    public async Task ConfidentMixed_PersistsMixedReadSignal_AtKeywordMagnitudes()
     {
+        // Spec 204, the headline row: a confident Mixed read is emitted as a Mixed GuidanceChange —
+        // SignalDirection.Mixed scores 0 exactly like Neutral, so this is provenance, never a score move.
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
             SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
-        // High confidence, but a non-directional read must never emit a signal.
-        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(direction, 0.95m, "Both up and down."));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Mixed, 0.95m, "Both up and down."));
 
         var result = await CreateSource(reader, analyzer).ProduceAsync([evidence], AsOf, CancellationToken.None);
 
-        Assert.Empty(result);
+        var produced = Assert.Single(result);
+        Assert.Equal("GuidanceChange", produced.Signal.SignalType);
+        Assert.Equal("Mixed", produced.Signal.Direction);
+        Assert.Equal(FilingReadSignalMetadata.Strength, produced.Signal.Strength);
+        Assert.Equal(FilingReadSignalMetadata.Novelty, produced.Signal.Novelty);
+        Assert.Equal(FilingReadSignalMetadata.Confidence, produced.Signal.Confidence);
+        Assert.Equal("AI earnings read: Mixed 0.95 — Both up and down.", produced.Signal.Reason);
+        AssertReadMetadata(produced.Signal, "mixed", "Mixed", "0.95");
+
+        // A Mixed direction parses and maps like any other (the domain member existed; nothing produced it).
+        var mapping = ExtractedSignalMapper.ToSignal(produced.Signal, evidence, AsOf);
+        Assert.True(mapping.IsValid, string.Join("; ", mapping.Errors));
+        Assert.Equal(Radar.Domain.Signals.SignalDirection.Mixed, mapping.Signal!.Direction);
+    }
+
+    [Fact]
+    public async Task ConfidentUnknown_PersistsNeutralReadSignal_WithUnknownProvenance()
+    {
+        // Unknown at ANY confidence is a Neutral read signal whose cause is "unknown" — never
+        // "below-confidence": an Unknown verdict never claimed a direction, so the gate has nothing to gate.
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Unknown, 0.95m, "Both up and down."));
+
+        var result = await CreateSource(reader, analyzer).ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal("Neutral", produced.Signal.Direction);
+        Assert.Equal("AI earnings read: Unknown 0.95 — Both up and down.", produced.Signal.Reason);
+        AssertReadMetadata(produced.Signal, "unknown", "Unknown", "0.95");
+    }
+
+    [Fact]
+    public async Task MixedBelowGate_PersistsNeutralReadSignal_AsBelowConfidence()
+    {
+        // A Mixed read that fails the confidence bar is not persisted as a Mixed DIRECTION: the gate saw it
+        // first, so it lands on the below-confidence row (Neutral) like any other sub-gate read.
+        var evidence = EarningsFiling();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Mixed, 0.45m, "Weakly two-sided."));
+
+        var result = await CreateSource(reader, analyzer).ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal("Neutral", produced.Signal.Direction);
+        Assert.Equal(
+            "AI earnings read: Mixed 0.45 (below MinConfidence 0.6) — Weakly two-sided.",
+            produced.Signal.Reason);
+        AssertReadMetadata(produced.Signal, "below-confidence", "Mixed", "0.45");
+    }
+
+    /// <summary>Asserts the spec-204 provenance envelope through the SHARED reader (one parser, ever).</summary>
+    private static void AssertReadMetadata(
+        ExtractedSignal signal, string outcome, string direction, string confidenceG29, string model = "")
+    {
+        Assert.True(EvidenceMetadata.TryRead(signal.MetadataJson, out var metadata, out _));
+        Assert.Equal(outcome, metadata[FilingReadSignalMetadata.OutcomeKey]);
+        Assert.Equal(direction, metadata[FilingReadSignalMetadata.DirectionKey]);
+        Assert.Equal(confidenceG29, metadata[FilingReadSignalMetadata.ConfidenceKey]);
+        Assert.Equal(model, metadata[FilingReadSignalMetadata.ModelKey]);
     }
 
     [Theory]
@@ -301,17 +382,23 @@ public sealed class DirectionalFilingSignalSourceTests
     }
 
     [Fact]
-    public async Task AnalyzerUnknown_ProducesNoSignal()
+    public async Task AnalyzerUnknown_PersistsNeutralReadSignal()
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
             SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
         // Spec 74 degrades a malformed/failed AI response to FilingSentiment.Unknown (never throws).
+        // Spec 204: even that safe default is a READ verdict — persisted as a Neutral signal with the
+        // "unknown" cause, so "the model could not read this" is distinguishable from "Radar never looked".
         var analyzer = new FakeFilingAnalyzer(FilingSentiment.Unknown);
 
         var result = await CreateSource(reader, analyzer).ProduceAsync([evidence], AsOf, CancellationToken.None);
 
-        Assert.Empty(result);
+        var produced = Assert.Single(result);
+        Assert.Equal("Neutral", produced.Signal.Direction);
+        // FilingSentiment.Unknown carries confidence 0 and an EMPTY rationale — the prefix stands alone.
+        Assert.Equal("AI earnings read: Unknown 0 — ", produced.Signal.Reason);
+        AssertReadMetadata(produced.Signal, "unknown", "Unknown", "0");
     }
 
     [Fact]
@@ -473,28 +560,103 @@ public sealed class DirectionalFilingSignalSourceTests
     }
 
     [Fact]
-    public async Task SuccessfulReadWithNoSignal_IsCachedAsNoSignal_AndNotRefetched()
+    public async Task SuccessfulReadWithNoSignal_IsCachedAsNoSignalNamingTheCause_AndReplayIsFieldIdentical()
     {
         var evidence = EarningsFiling();
         var reader = new FakeSecEarningsReleaseReader(
             SecEarningsReleaseReadResult.Success(PlausibleBody("Some earnings text."), "EX-99.1", "ex991.htm"));
-        // Mixed -> a successful read but no directional signal; must be cached as NoDirectionalSignal.
+        // Mixed -> a successful read with no DIRECTIONAL signal; cached as NoDirectionalSignal naming the
+        // cause (spec 204), while the read itself is emitted as a Mixed signal.
         var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Mixed, 0.95m, "Both up and down."));
         var cache = new FakeAnalyzedFilingCache();
         var source = CreateSource(reader, analyzer, cache: cache);
 
         var first = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
-        Assert.Empty(first);
+        var fresh = Assert.Single(first);
         Assert.Equal(1, reader.ReadCount);
         var entry = Assert.Single(cache.Entries.Values);
         Assert.Equal(AnalyzedFilingOutcome.NoDirectionalSignal, entry.Outcome);
+        // The ExtractedSignal is NOT stored on a no-signal record (IsConsistent keeps requiring
+        // NoDirectionalSignal ⇒ Signal is null); the record carries the FACTS of the read instead.
         Assert.Null(entry.Signal);
         Assert.Equal(AnalyzedFilingRecord.CurrentCacheVersion, entry.CacheVersion);
+        Assert.Equal(FilingNoSignalCause.Mixed, entry.NoSignalCause);
+        Assert.Equal("Mixed", entry.ReadDirection);
+        Assert.Equal(0.95m, entry.ReadConfidence);
+        Assert.Equal("Both up and down.", entry.Rationale);
 
-        // Second run: the no-signal cache hit means the reader is NOT called again and nothing is emitted.
+        // Second run: the no-signal cache hit replays the SAME read signal — field for field — with the
+        // reader and analyzer untouched, reconstructed from the record through the same builder the fresh
+        // path used.
         var second = await source.ProduceAsync([evidence], AsOf, CancellationToken.None);
-        Assert.Empty(second);
+        var replayed = Assert.Single(second);
         Assert.Equal(1, reader.ReadCount);
+        Assert.Equal(1, analyzer.AnalyzeCount);
+        Assert.Equal(fresh.Signal, replayed.Signal); // record equality: every field, MetadataJson included.
+        Assert.Same(evidence, replayed.Evidence);
+    }
+
+    [Fact]
+    public async Task V3NoSignalCacheHit_BelowConfidenceCause_ReplaysTheReconstructedNeutralSignal()
+    {
+        // A PLANTED v3 no-signal record (no fresh pass in this process): the replay reconstructs the exact
+        // §1 signal from the record's cause fields — the same builder the fresh path uses — with no fetch
+        // and no model call.
+        var accession = "0001049521-26-000011";
+        var evidence = EarningsFiling(accession: accession);
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries[accession] = new AnalyzedFilingRecord(
+            accession,
+            AnalyzedFilingOutcome.NoDirectionalSignal,
+            null,
+            null,
+            AnalyzedFilingRecord.CurrentCacheVersion,
+            CurrentDefaultPolicy,
+            new ComparabilityMarkers([], []),
+            FilingNoSignalCause.BelowConfidence,
+            "Improving",
+            0.45m,
+            "Weakly improving.");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("irrelevant"), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "n/a"));
+
+        var result = await CreateSource(reader, analyzer, cache: cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var replayed = Assert.Single(result);
+        Assert.Equal(0, reader.ReadCount);
+        Assert.Equal(0, analyzer.AnalyzeCount);
+        Assert.Equal("GuidanceChange", replayed.Signal.SignalType);
+        Assert.Equal("Neutral", replayed.Signal.Direction);
+        Assert.Equal(FilingReadSignalMetadata.Strength, replayed.Signal.Strength);
+        Assert.Equal(FilingReadSignalMetadata.Novelty, replayed.Signal.Novelty);
+        Assert.Equal(FilingReadSignalMetadata.Confidence, replayed.Signal.Confidence);
+        Assert.Equal(
+            "AI earnings read: Improving 0.45 (below MinConfidence 0.6) — Weakly improving.",
+            replayed.Signal.Reason);
+        AssertReadMetadata(replayed.Signal, "below-confidence", "Improving", "0.45");
+    }
+
+    [Fact]
+    public async Task NoSignalCacheHit_WithNullCause_ReplaysNothing()
+    {
+        // Defensive: a v3-shaped record with NO cause (only reachable through a non-file cache — the file
+        // cache already treats a v2 no-signal record as a version miss) replays nothing, the pre-204
+        // behaviour, rather than fabricating a read that was never recorded.
+        var accession = "0001049521-26-000011";
+        var evidence = EarningsFiling(accession: accession);
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries[accession] = CachedNoSignalRecord(accession, CurrentDefaultPolicy);
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("irrelevant"), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "n/a"));
+
+        var result = await CreateSource(reader, analyzer, cache: cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        Assert.Equal(0, reader.ReadCount); // still a HIT — no re-fetch, just no replayed signal.
     }
 
     [Theory]
@@ -943,7 +1105,9 @@ public sealed class DirectionalFilingSignalSourceTests
         var result = await CreateSource(reader, analyzer, debugSink: sink)
             .ProduceAsync([evidence], AsOf, CancellationToken.None);
 
-        Assert.Empty(result);
+        // Spec 204: the below-gate read now emits a Neutral read signal, but the DEBUG record is unchanged —
+        // it keeps recording the model's raw verdict for the attempt.
+        Assert.Single(result);
         var record = Assert.Single(sink.Records);
         Assert.Equal(FilingReadOutcome.BelowConfidence, record.Outcome);
         Assert.Equal(evidence.Id, record.EvidenceId);
@@ -968,7 +1132,8 @@ public sealed class DirectionalFilingSignalSourceTests
         var result = await CreateSource(reader, analyzer, debugSink: sink)
             .ProduceAsync([evidence], AsOf, CancellationToken.None);
 
-        Assert.Empty(result);
+        // Spec 204: the Mixed/Unknown read now emits its own read signal; the DEBUG record is unchanged.
+        Assert.Single(result);
         var record = Assert.Single(sink.Records);
         Assert.Equal(FilingReadOutcome.NoDirectionalRead, record.Outcome);
         Assert.Equal(direction.ToString(), record.Direction);
@@ -1247,17 +1412,28 @@ public sealed class DirectionalFilingSignalSourceTests
         var result = await CreateSource(reader, analyzer, options, cache, sink)
             .ProduceAsync([evidence], AsOf, CancellationToken.None);
 
-        Assert.Empty(result);
+        // Spec 204: the suppressed DIRECTION is still a read — persisted as a Neutral signal carrying the
+        // CAPPED confidence (the value the gate saw) in its prefix and envelope.
+        var produced = Assert.Single(result);
+        Assert.Equal("Neutral", produced.Signal.Direction);
+        Assert.Equal(
+            "AI earnings read: Improving 0.5 (below MinConfidence 0.6) — Net income rose sharply.",
+            produced.Signal.Reason);
+        AssertReadMetadata(produced.Signal, "below-confidence", "Improving", "0.5");
+
         var entry = Assert.Single(cache.Entries.Values);
         Assert.Equal(AnalyzedFilingOutcome.NoDirectionalSignal, entry.Outcome);
         Assert.Null(entry.Signal);
         Assert.Equal(EarningsComparabilityScan.Policy(0.5m), entry.ComparabilityPolicy);
         Assert.NotNull(entry.ComparabilityMarkers);
         Assert.Equal(new[] { "one-time", "gain on sale" }, entry.ComparabilityMarkers!.CapTriggering);
+        Assert.Equal(FilingNoSignalCause.BelowConfidence, entry.NoSignalCause);
+        Assert.Equal("Improving", entry.ReadDirection);
+        Assert.Equal(0.5m, entry.ReadConfidence); // the CAPPED value the gate compared, not the raw 0.9.
 
         var record = Assert.Single(sink.Records);
         Assert.Equal(FilingReadOutcome.BelowConfidence, record.Outcome);
-        Assert.Equal(0.9m, record.Confidence);       // the model's raw read...
+        Assert.Equal(0.9m, record.Confidence);       // the model's raw read (the debug store keeps the raw)...
         Assert.Equal(0.5m, record.CappedConfidence); // ...capped below the gate.
     }
 
@@ -1336,9 +1512,14 @@ public sealed class DirectionalFilingSignalSourceTests
         var result = await CreateSource(reader, analyzer, options, cache)
             .ProduceAsync([evidence], AsOf, CancellationToken.None);
 
-        Assert.Empty(result);
+        // Spec 204: no DIRECTIONAL signal — the capped 0.65 fails the raised 0.7 gate — but the read itself
+        // persists as a Neutral signal naming the below-confidence cause.
+        var produced = Assert.Single(result);
+        Assert.Equal("Neutral", produced.Signal.Direction);
+        AssertReadMetadata(produced.Signal, "below-confidence", "Improving", "0.65");
         var entry = Assert.Single(cache.Entries.Values);
         Assert.Equal(AnalyzedFilingOutcome.NoDirectionalSignal, entry.Outcome);
+        Assert.Equal(FilingNoSignalCause.BelowConfidence, entry.NoSignalCause);
     }
 
     [Fact]

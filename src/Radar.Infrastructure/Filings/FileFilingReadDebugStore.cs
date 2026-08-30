@@ -23,6 +23,17 @@ namespace Radar.Infrastructure.Filings;
 /// scrubs — a non-validating <c>IFilingAnalyzer</c> implementation must not be able to persist advice language
 /// through this store), and the rationale is re-bounded to the same cap the analyzer enforces.
 /// </para>
+/// <para>
+/// SPEC 204 §5, recorded after investigating the two live <c>Improving ≥ 0.6</c> records whose cache says
+/// no-signal: this store keeps the LAST-WRITTEN attempt per accession (path-keyed overwrite), it is NOT
+/// model-segmented (unlike the spec-118 analysis cache), and a record exists only for runs where the
+/// opt-in sink was registered at all. A debug record can therefore describe a DIFFERENT model's read than
+/// the verdict in the current model-segmented cache — the two live cases are exactly that: a 2026-07-20
+/// pre-segmentation read cached <c>DirectionalSignalProduced</c> at the cache ROOT, then a 2026-07-21
+/// DeepSeek re-read cached <c>NoDirectionalSignal</c> in its own segment with the sink unregistered, so
+/// the debug file still shows the earlier model's Improving 0.9. Semantics deliberately unchanged by spec
+/// 204 — this stays a diagnostic, never a source.
+/// </para>
 /// </summary>
 public sealed class FileFilingReadDebugStore : IFilingReadDebugSink
 {
