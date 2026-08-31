@@ -77,17 +77,19 @@ not a fingerprint input; keep that true and assert the pins.
 ## 3. The cache record names the cause
 
 `AnalyzedFilingRecord` gains trailing nullable `NoSignalCause` (`Mixed` / `Unknown` / `BelowConfidence` /
-`EmptyBody`), `ReadDirection`, `ReadConfidence`, `Rationale`. **`CurrentCacheVersion` 2 → 3, and a v2
-`NoDirectionalSignal` record is a cache MISS** (the existing stale-version path at
-`FileAnalyzedFilingCache.cs:63-70` already does this; a v2 `DirectionalSignalProduced` record is NOT
-invalidated — its signal is intact and re-reading it would spend calls to reproduce a known answer, so
-treat version 2 as current for that outcome only, and say so in the code). Consequence, stated: the 224
-accrued no-signal filings are re-analysed **newest-first under the existing `MaxFilingsPerRun` = 50 cap
-and 429 breaker** — the in-window ones (~36) clear on the first night, the rest over ~4 more, at
-DeepSeek-V4-Flash cost. No cache file is deleted or rewritten; the re-analysis writes a v3 record beside
-the v2 one only if the cache is path-keyed per version — if it is not, the v3 write REPLACES the v2 file and
-that is acceptable because a v2 no-signal record carries nothing a v3 record does not (assert this by test:
-every v2 field round-trips into v3).
+`EmptyBody`), `ReadDirection`, `ReadConfidence`, `Rationale`, and `CurrentCacheVersion` 2 → 3.
+
+**Post-merge correction (spec 205): this section's original accrued-migration claim was false and is
+withdrawn.** `CollectionPass` passes only `newEvidence` to `DirectionalFilingSignalSource`; an already
+durable filing is eliminated by content-derived evidence identity before the cache is consulted. Therefore
+making a v2 `NoDirectionalSignal` record a cache MISS cannot cause the 224 accrued filings measured above
+to be swept or re-read. The MISS remains useful in its only reachable case: the same accession is genuinely
+re-admitted as new evidence (for example because its old raw record never landed, or its content identity
+changed), at which point a fresh read is current point-in-time work, not a backfill. A successful read writes
+v3 through the cache's ordinary per-accession replacement path. A v2 `DirectionalSignalProduced` record
+remains an accepted hit and replays its intact signal. Version 3 otherwise heals forward for genuinely new
+evidence. No historical evidence or signal is rewritten, no cache enumeration/bulk retry is added, and no
+model call is spent merely because an old v2 record exists.
 
 The debug store (`FileFilingReadDebugStore`) is unchanged — it stays a diagnostic, not a source.
 
@@ -117,19 +119,29 @@ finding for the PR body. Do not change the debug store's semantics in this slice
 
 ## 6. Live distribution — the deliverable, not the harness
 
-After the first post-204 baseline, report (read-only, from the cache + signals): the count of v3 records by
-`NoSignalCause`; how many companies now carry a persisted Mixed/Neutral read instead of a keyword-only
+The read-only post-merge audit on **2026-08-31** found **451 version-2 cache records: 225
+`NoDirectionalSignal`, 226 `DirectionalSignalProduced`, and 0 version-3 records**. That is the measurement
+which falsified the migration premise above: the first run did not turn cache misses into a historical
+re-read cohort because those filings never re-entered the candidate list.
+
+After the first post-205 baseline that actually observes at least one genuinely new earnings filing, report
+(read-only, from the cache + signals): the legacy v2 totals separately; the count of new v3 records by
+`NoSignalCause`; how many companies carry a persisted Mixed/Neutral read instead of a keyword-only
 GuidanceChange in the current window; and — the CLAUDE.md rule — the resulting **distribution** of
 `GuidanceChange` directions across the live universe (Positive / Negative / Mixed / Neutral-read /
-Neutral-keyword). If Mixed turns out to be > 50 % of confident reads, that is a fact about the prompt or
-the rubric worth its own spec; record it, do not tune here.
+Neutral-keyword). Reconcile any v2 decrease one-for-one to a genuinely re-admitted accession's v3
+replacement; it is not evidence of an accrued migration. A run with no new filing records **not observed**,
+not a fabricated all-zero distribution. If Mixed turns out to be > 50 % of confident new reads, that is a
+fact about the prompt or the rubric worth its own spec; record it, do not tune here.
 
 ## Non-goals
 
 No change to `MinConfidence`, `Strength`, `MaxFilingsPerRun`, the comparability scan/cap, the analyzer
 prompt, the reading model, or what Mixed/Neutral CONTRIBUTE to any score; no fingerprint move; no rewrite
-or deletion of any signal, evidence or cache file; no re-analysis of `DirectionalSignalProduced` records;
-no change to the news-judgment path; no re-reading of `EmptyBodySkipped` filings.
+or deletion of any signal or evidence file; no enumerated/bulk historical re-analysis of either v2 outcome;
+no cache mutation except the existing per-accession replacement after a genuinely re-admitted no-signal
+record is successfully read; no change to the news-judgment path; no re-reading of accrued
+`EmptyBodySkipped` filings merely because they are accrued.
 
 ## Acceptance criteria
 
@@ -137,7 +149,8 @@ no change to the news-judgment path; no re-reading of `EmptyBodySkipped` filings
       the model's direction/confidence/rationale in metadata; Unknown/below-gate reads persist as Neutral
       with the same envelope; `EmptyBodySkipped` unchanged.
 - [ ] The supersede prefers the read over the keyword copy deterministically; counts and reasons intact.
-- [ ] Cache records name the cause; v2 no-signal records re-analyse under the existing cap; v2 produced
-      records are not re-read.
+- [ ] Cache records name the cause for new v3 reads; v2 produced records remain hits, while a v2 no-signal
+      MISS can run only for genuinely re-admitted evidence and never enumerates the accrued cache (spec 205
+      correction).
 - [ ] Engine pin (a)/(b)/(c) byte-identical, mutation-proven; all pins unchanged; live replay identical.
 - [ ] §5 answered in the PR body; §6 reported after the first live run (or in a follow-up note).

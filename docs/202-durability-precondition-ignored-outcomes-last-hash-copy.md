@@ -37,7 +37,7 @@ pin are untouched — this changes WHEN a snapshot is written, never WHAT.
 Test: a config store double that fails for strategy B only ⇒ A's and C's snapshots are written, B's are not,
 the run record names B, one Warning. Mutation: revert the skip and the B-snapshot assertion goes red.
 
-## 2. Two `Task<bool>` outcomes still ignored
+## 2. Two `Task<bool>` fixes, plus one explicitly recorded exception
 
 - `NewsRiskShadowGenerator.cs:465` — `await _assessmentStore.WriteAsync(record, ct)` discards the bool. A
   record that did not persist must not be returned as if it had: count it on the shadow run result (trailing
@@ -48,9 +48,16 @@ the run record names B, one Warning. Mutation: revert the skip and the B-snapsho
   once, without changing what the judge sees this run.
 
 Both follow spec 187 §3's precedent for the typing store (`WriteAsync`'s boolean is CHECKED). Sweep every
-other `Task<bool>` store call under `src/` and assert in a test that none is discarded (a regex over
-`await _\w+Store\.\w*WriteAsync\(` lines that begin with `await` rather than assigning — the spec-201
-source-guard shape).
+other `Task<bool>` store call under `src/` and guard the result with the spec-201 source-guard shape.
+
+**Post-merge correction (spec 206): the sweep found one further discarded value and the original
+"none" claim is withdrawn.** `CollectionPass` discards `IRawEvidenceStore.WriteIfNewAsync` because that
+legacy boolean conflates a healthy insert-only dedupe with a caught disk failure. Treating every `false` as
+loss would fabricate one failure per duplicate; ignoring it hides a real missing evidence file. The guard
+therefore carries exactly one temporary, named exception for this call site. Spec 206 replaces the boolean
+with a typed `Written` / `AlreadyAvailable` / `Failed` outcome, removes the exception, and makes evidence
+durability a precondition for downstream extraction so no durable signal can point at a raw item that did
+not land.
 
 ## 3. The twelfth SHA-256 copy
 
@@ -70,6 +77,7 @@ pins unchanged; no change to what the judge or the shadow read consumes in-proce
 
 - [ ] A strategy whose config record is not durable writes no snapshot this pass, is named on the run record,
       and every other strategy still scores; `AlreadyAvailable` distinguishes "already on disk" from "written".
-- [ ] No `Task<bool>` store write under `src/` is discarded; the two named sites count and warn.
+- [ ] The two named `Task<bool>` writes count and warn; the source guard contains exactly one documented
+      temporary raw-evidence exception, closed by spec 206.
 - [ ] `CanonicalHash` is the only SHA-256 site; every evidence/contentHash pin unchanged.
 - [ ] Build, full suite, `git diff --check` clean; actual elapsed time in the PR body.
