@@ -9,6 +9,7 @@ using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.Signals;
+using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
@@ -165,8 +166,15 @@ public sealed class DurableSignalHistoryTests
         {
             // Spec 206 §3 ordering: the durable write is the admission decision (and indexes the item on
             // the unified store, so the AddIfNewAsync that follows is a keep-in-step no-op there).
-            Assert.True((await rawStore.WriteIfNewAsync(evidence, default)).Written);
-            await evidenceRepo.AddIfNewAsync(evidence, default);
+            // Outcome must be Written, not merely durable: AlreadyAvailable would mean a same-content file
+            // for a DIFFERENT EvidenceId already exists, and the signal seeded below would reference an
+            // EvidenceId that is not actually on disk.
+            Assert.Equal(DurableWriteOutcome.Written, (await rawStore.WriteIfNewAsync(evidence, default)).Outcome);
+            var indexedAsNew = await evidenceRepo.AddIfNewAsync(evidence, default);
+            if (!ReferenceEquals(evidenceRepo, rawStore))
+            {
+                Assert.True(indexedAsNew);
+            }
             await signalRepo.AddAsync(signal, default);
             await signalStore.WriteAsync(signal, ReviewFor(signal), default);
         }
