@@ -109,11 +109,15 @@ public sealed record AnalyzedFilingRecord(
     /// <c>cacheVersion</c> property (deserializes to 0) is always a mismatch. See the record docs for when to bump.
     /// Bumped 1 → 2 by spec 116: the analyzer system prompt changed materially (profitability/margin-aware
     /// earnings read), so every read cached under the old prompt must be retired and re-analyzed.
-    /// Bumped 2 → 3 by spec 204: a no-signal record now names its cause (direction/confidence/rationale), and a
-    /// v2 <see cref="AnalyzedFilingOutcome.NoDirectionalSignal"/> record must be re-analyzed so those facts get
-    /// recorded. The invalidation is OUTCOME-SCOPED in <c>FileAnalyzedFilingCache.TryGetAsync</c> — a v2
+    /// Bumped 2 → 3 by spec 204: a no-signal record now names its cause (direction/confidence/rationale), so a
+    /// v2 <see cref="AnalyzedFilingOutcome.NoDirectionalSignal"/> record is a MISS (it cannot replay the read
+    /// signal). The invalidation is OUTCOME-SCOPED in <c>FileAnalyzedFilingCache.TryGetAsync</c> — a v2
     /// <see cref="AnalyzedFilingOutcome.DirectionalSignalProduced"/> record stays a HIT, because its signal is
-    /// intact and re-reading it would spend hosted calls to reproduce a known answer.
+    /// intact and re-reading it would spend hosted calls to reproduce a known answer. HEAL-FORWARD only (spec
+    /// 205): the v2 no-signal miss is NOT a migration of the accrued records — an already-durable filing never
+    /// reaches the cache (the collection admission gate hands the filing source only newly-stored evidence),
+    /// so the miss fires, and the v3 replacement is written, only when the same accession is genuinely
+    /// re-admitted as new evidence and read as ordinary current work.
     /// </summary>
     public const int CurrentCacheVersion = 3;
 }

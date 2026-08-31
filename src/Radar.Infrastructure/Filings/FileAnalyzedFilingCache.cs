@@ -32,9 +32,14 @@ namespace Radar.Infrastructure.Filings;
 /// re-analyzed). Legacy files with no <c>cacheVersion</c> property deserialize to 0 and so auto-invalidate —
 /// this is how the 2026-07-18 block-era poison self-heals with no manual file deletion. Since spec 204 the
 /// rule is OUTCOME-SCOPED for the 2 → 3 bump only (see <c>IsAcceptedVersion</c>): a v2 produced-signal record
-/// stays a hit, a v2 no-signal record is a miss. The cache is path-keyed per accession — never per version —
-/// so the re-analysis's v3 write REPLACES the v2 file in place; that is acceptable because a v2 no-signal
-/// record carries nothing a v3 record does not (asserted by the v2→v3 round-trip test).
+/// stays a hit, a v2 no-signal record is a miss. HEAL-FORWARD, not a migration (spec 205): that miss is
+/// reachable only when the same accession is genuinely re-admitted as NEW evidence — <c>CollectionPass</c>
+/// hands the filing source only newly-stored evidence, and content-derived identity (spec 145) removes an
+/// already-durable filing before any cache lookup — so the accrued v2 no-signal records are NOT a retry
+/// queue and cause no calls. The cache is path-keyed per accession — never per version — so on such a
+/// re-admission the ordinary successful analysis's v3 write REPLACES the v2 file in place; that is
+/// acceptable because a v2 no-signal record carries nothing a v3 record does not (asserted by the v2→v3
+/// round-trip test).
 /// </para>
 /// </summary>
 public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
@@ -142,9 +147,12 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
     /// is treated as CURRENT (a HIT — its signal is intact and carried whole on the record; re-reading it
     /// would spend hosted calls, and a www.sec.gov fetch, purely to reproduce a known answer). A version-2
     /// <see cref="AnalyzedFilingOutcome.NoDirectionalSignal"/> record is a stale-version MISS: it carries no
-    /// cause/direction/confidence/rationale, so it cannot replay the spec-204 read signal — it is re-analyzed
-    /// like any other miss, bounded by the existing MaxFilingsPerRun cap and the 429 breaker. All other
-    /// mismatched versions (0, 1, future) stay misses for BOTH outcomes, exactly as before.
+    /// cause/direction/confidence/rationale, so it cannot replay the spec-204 read signal. That miss
+    /// schedules NO re-read on its own (spec 205): the upstream admission gate means an already-durable
+    /// filing never reaches this cache, so it fires only when the same accession is genuinely re-admitted as
+    /// new evidence, where the read is point-in-time honest current work (bounded, like any admitted miss,
+    /// by MaxFilingsPerRun and the 429 breaker). All other mismatched versions (0, 1, future) stay misses
+    /// for BOTH outcomes, exactly as before.
     /// </summary>
     private static bool IsAcceptedVersion(AnalyzedFilingRecord record) =>
         record.CacheVersion == AnalyzedFilingRecord.CurrentCacheVersion

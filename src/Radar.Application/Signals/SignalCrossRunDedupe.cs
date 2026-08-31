@@ -1,3 +1,4 @@
+using Radar.Application.Filings;
 using Radar.Domain.Signals;
 
 namespace Radar.Application.Signals;
@@ -30,7 +31,8 @@ namespace Radar.Application.Signals;
 public static class SignalCrossRunDedupe
 {
     /// <summary>
-    /// The stable identity of a signal across runs: <c>(CompanyId, EvidenceId, Type, Direction)</c>.
+    /// The stable identity of a signal across runs:
+    /// <c>(CompanyId, EvidenceId, Type, Direction, FilingReadOutcomeRecorded)</c>.
     /// <list type="bullet">
     /// <item><see cref="Signal.EvidenceId"/> + <see cref="Signal.Type"/> + <see cref="Signal.Direction"/>
     /// distinguishes the genuinely-DISTINCT signals ONE evidence item can legitimately produce (e.g. a
@@ -38,6 +40,15 @@ public static class SignalCrossRunDedupe
     /// signals into one.</item>
     /// <item><see cref="Signal.CompanyId"/> is usually already fixed by the caller's own filter, but is kept
     /// in the key so it stays self-describing and correct for reads that are not per-company.</item>
+    /// <item><b>FilingReadOutcomeRecorded (spec 205)</b> is the ONE provenance-class discriminator: true
+    /// exactly when the signal is a <see cref="SignalType.GuidanceChange"/> whose metadata carries the
+    /// spec-204 <c>filingReadOutcome</c> envelope (<see cref="FilingReadSignalMetadata.IsFilingReadSignal"/>
+    /// — the one definition of that predicate, never a second parser), and false for every pre-204/non-read
+    /// signal. Without it a keyword Neutral and an AI-read Neutral over the same filing shared one key, so
+    /// this collapse erased the read BEFORE <c>GuidanceChangeSupersede</c> — the rule built to prefer it —
+    /// ever saw it. It is deliberately a BOOLEAN, never the outcome token/confidence/rationale/model:
+    /// repeated persisted copies of the SAME AI read must still collapse, and this is a discriminator
+    /// required by a downstream winner rule, NOT an invitation to hash extractor metadata into identity.</item>
     /// <item><see cref="Signal.ObservedAtUtc"/> is intentionally EXCLUDED: it is derived from the same
     /// evidence and is therefore constant across a signal's cross-run copies, so it adds nothing; including
     /// it would risk NOT collapsing copies if a future change perturbed ObservedAt derivation.
@@ -46,11 +57,18 @@ public static class SignalCrossRunDedupe
     /// evidence/extractor-derived and identical across copies — excluded too.</item>
     /// </list>
     /// </summary>
-    public static (Guid? CompanyId, Guid EvidenceId, SignalType Type, SignalDirection Direction) Key(
-        Signal signal)
+    public static (Guid? CompanyId, Guid EvidenceId, SignalType Type, SignalDirection Direction,
+        bool FilingReadOutcomeRecorded) Key(Signal signal)
     {
         ArgumentNullException.ThrowIfNull(signal);
-        return (signal.CompanyId, signal.EvidenceId, signal.Type, signal.Direction);
+        return (
+            signal.CompanyId,
+            signal.EvidenceId,
+            signal.Type,
+            signal.Direction,
+            // Gated on Type FIRST so a non-GuidanceChange signal keeps its exact spec-142 identity even if
+            // some future producer ever stamped a read envelope onto another signal type.
+            signal.Type == SignalType.GuidanceChange && FilingReadSignalMetadata.IsFilingReadSignal(signal));
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using Radar.Application.Filings;
 using Radar.Application.Signals;
 using Radar.Domain.Signals;
 using Radar.TestSupport;
@@ -5,8 +6,9 @@ using Radar.TestSupport;
 namespace Radar.Application.Tests.Signals;
 
 /// <summary>
-/// The SHARED stable cross-run identity (spec 85's key, extracted in spec 142) used by both the
-/// previous-window disk read and the durable repository read, so the two can never drift apart.
+/// The SHARED stable cross-run identity (spec 85's key, extracted in spec 142; the spec-205 filing-read
+/// provenance bit appended) used by both the previous-window disk read and the durable repository read, so
+/// the two can never drift apart.
 /// </summary>
 public sealed class SignalCrossRunDedupeTests
 {
@@ -24,13 +26,18 @@ public sealed class SignalCrossRunDedupeTests
         .WithCreatedAtUtc(createdAt)
         .Build();
 
+    /// <summary>A real spec-204 read envelope, composed through the ONE producer (never a hand-rolled bag).</summary>
+    private static string ReadEnvelope(decimal confidence = 0.3m) =>
+        FilingReadSignalMetadata.Compose(
+            FilingNoSignalCause.Unknown, "Unknown", confidence, "openai:test-model");
+
     [Fact]
-    public void Key_IsCompanyEvidenceTypeAndDirection()
+    public void Key_IsCompanyEvidenceTypeDirectionAndFilingReadBit()
     {
         var signal = Copy("00000000-0000-0000-0000-000000000001", Observed);
 
         Assert.Equal(
-            (Company, Evidence, SignalType.CustomerWin, SignalDirection.Positive),
+            (Company, Evidence, SignalType.CustomerWin, SignalDirection.Positive, false),
             SignalCrossRunDedupe.Key(signal));
     }
 
@@ -58,6 +65,94 @@ public sealed class SignalCrossRunDedupeTests
 
         Assert.NotEqual(SignalCrossRunDedupe.Key(win), SignalCrossRunDedupe.Key(guidance));
         Assert.NotEqual(SignalCrossRunDedupe.Key(guidance), SignalCrossRunDedupe.Key(neutral));
+    }
+
+    // ---- spec 205: the filing-read provenance bit — one boolean, never the envelope's values -------------
+
+    [Fact]
+    public void Key_KeywordNeutralAndFilingReadNeutral_AreDistinctProvenanceClasses()
+    {
+        // The defect this bit closes: a keyword Neutral and a spec-204 AI-read Neutral over the SAME filing
+        // shared one key, so the durable collapse kept the earliest (the keyword) and discarded the read
+        // before GuidanceChangeSupersede — the rule built to prefer it — could apply its filingReadOutcome
+        // preference.
+        var keyword = Copy("00000000-0000-0000-0000-000000000001", Observed) with
+        {
+            Type = SignalType.GuidanceChange,
+            Direction = SignalDirection.Neutral,
+            MetadataJson = null,
+        };
+        var read = keyword with
+        {
+            Id = Guid.Parse("ffffffff-0000-0000-0000-000000000002"),
+            MetadataJson = ReadEnvelope(),
+        };
+
+        Assert.NotEqual(SignalCrossRunDedupe.Key(keyword), SignalCrossRunDedupe.Key(read));
+        Assert.True(SignalCrossRunDedupe.Key(read).FilingReadOutcomeRecorded);
+        Assert.False(SignalCrossRunDedupe.Key(keyword).FilingReadOutcomeRecorded);
+    }
+
+    [Fact]
+    public void Key_IsABooleanClass_NotTheEnvelopeValues_SoSameReadCopiesShareOneKey()
+    {
+        // Deliberately a provenance-class BIT: two persisted copies of the same AI read key identically even
+        // when the envelope's recorded values differ (here the confidence) — repeated copies of one read must
+        // still collapse across runs, and identity must never grow into hashed extractor metadata.
+        var a = Copy("00000000-0000-0000-0000-000000000001", Observed) with
+        {
+            Type = SignalType.GuidanceChange,
+            Direction = SignalDirection.Neutral,
+            MetadataJson = ReadEnvelope(0.3m),
+        };
+        var b = a with
+        {
+            Id = Guid.Parse("ffffffff-0000-0000-0000-000000000002"),
+            MetadataJson = ReadEnvelope(0.55m),
+        };
+
+        Assert.Equal(SignalCrossRunDedupe.Key(a), SignalCrossRunDedupe.Key(b));
+    }
+
+    [Fact]
+    public void Key_ReadBitIsFalseForNonGuidanceChange_EvenIfAnEnvelopeIsPresent()
+    {
+        // Every non-GuidanceChange signal keeps the exact spec-142 identity it had: the bit is gated on the
+        // signal TYPE first, so a stray envelope on another type cannot split its cross-run copies.
+        var withEnvelope = Copy("00000000-0000-0000-0000-000000000001", Observed) with
+        {
+            MetadataJson = ReadEnvelope(),
+        };
+
+        Assert.False(SignalCrossRunDedupe.Key(withEnvelope).FilingReadOutcomeRecorded);
+        Assert.Equal(
+            SignalCrossRunDedupe.Key(Copy("00000000-0000-0000-0000-000000000001", Observed)),
+            SignalCrossRunDedupe.Key(withEnvelope));
+    }
+
+    [Fact]
+    public void Collapse_KeepsKeywordAndReadNeutralApart_WhileSameReadCopiesStillCollapse()
+    {
+        var keyword = Copy("00000000-0000-0000-0000-000000000001", Observed) with
+        {
+            Type = SignalType.GuidanceChange,
+            Direction = SignalDirection.Neutral,
+            MetadataJson = null,
+        };
+        var readCopy1 = keyword with
+        {
+            Id = Guid.Parse("88888888-0000-0000-0000-000000000002"),
+            MetadataJson = ReadEnvelope(),
+        };
+        var readCopy2 = readCopy1 with { Id = Guid.Parse("ffffffff-0000-0000-0000-000000000003") };
+
+        var collapsed = SignalCrossRunDedupe.Collapse(
+            [keyword, readCopy1, readCopy2], SignalCopySurvivor.EarliestKnown);
+
+        // Two provenance classes survive (keyword + read); the read's cross-run copies collapsed to one.
+        Assert.Equal(2, collapsed.Count);
+        Assert.Contains(collapsed, s => s.Id == keyword.Id);
+        Assert.Contains(collapsed, s => s.Id == readCopy1.Id);
     }
 
     [Fact]
