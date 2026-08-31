@@ -168,18 +168,37 @@ public sealed class RadarPipelineRunnerTests
     }
 
     /// <summary>
-    /// A fake <see cref="IRawEvidenceStore"/> that records every <see cref="EvidenceItem"/> it is asked
-    /// to write and always reports a new write. Lets tests assert exactly which newly-stored evidence
-    /// the runner mirrors to disk.
+    /// A fake <see cref="IRawEvidenceStore"/> mirroring the production contract (spec 206 §3): the first
+    /// write of a content hash is <see cref="DurableWriteOutcome.Written"/> and recorded, a repeat is the
+    /// durable dedupe <see cref="DurableWriteOutcome.AlreadyAvailable"/>, and <see cref="FailWrites"/>
+    /// degrades every write to <see cref="DurableWriteOutcome.Failed"/> WITHOUT recording it (a failed item
+    /// is indexed nowhere, so it stays retryable). <see cref="Written"/> therefore lists exactly the newly
+    /// DURABLE evidence, which is what the mirroring assertions mean.
     /// </summary>
     private sealed class RecordingRawEvidenceStore : IRawEvidenceStore
     {
+        private readonly HashSet<string> _contentHashes = new(StringComparer.Ordinal);
+
         public List<EvidenceItem> Written { get; } = new();
 
-        public Task<bool> WriteIfNewAsync(EvidenceItem evidence, CancellationToken ct)
+        /// <summary>Spec 206 §3: when set, every write degrades to Failed and nothing is recorded.</summary>
+        public bool FailWrites { get; set; }
+
+        public Task<DurableWriteResult> WriteIfNewAsync(EvidenceItem evidence, CancellationToken ct)
         {
+            var path = $"written/evidence/{evidence.ContentHash}.json";
+            if (FailWrites)
+            {
+                return Task.FromResult(DurableWriteResult.NotPersisted(path));
+            }
+
+            if (!_contentHashes.Add(evidence.ContentHash))
+            {
+                return Task.FromResult(DurableWriteResult.AlreadyOnDisk(path));
+            }
+
             Written.Add(evidence);
-            return Task.FromResult(true);
+            return Task.FromResult(DurableWriteResult.Succeeded(path));
         }
     }
 
@@ -859,6 +878,11 @@ public sealed class RadarPipelineRunnerTests
             [ScoringStrategySet.DefaultStrategyName],
             record.StrategiesSkippedForUnpersistedConfig!.ToArray());
 
+        // Spec 206 §2: the record's Strategies list is the ACTIVE complement — with the only strategy
+        // skipped it is recorded-and-empty (nothing scored), never the configured name.
+        Assert.Empty(record.Strategies!);
+        Assert.Equal(ScoringStrategySet.DefaultStrategyName, record.PrimaryStrategy);
+
         var warning = Assert.Single(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("1 effective scoring config file(s)", warning.Message);
         Assert.Contains("SKIPPED", warning.Message);
@@ -928,13 +952,26 @@ public sealed class RadarPipelineRunnerTests
         Assert.Equal(["b"], record.StrategiesSkippedForUnpersistedConfig!.ToArray());
         Assert.Equal(1, record.ScoringConfigsNotPersisted);
         Assert.Equal(0, record.ScoreSnapshotsNotPersisted);
-        Assert.Equal(["a", "b", "c"], record.Strategies!.ToArray());
+
+        // Spec 206 §2: the durable record lists the strategies that ACTUALLY scored — the ordered
+        // complement of the skip list, never the configured set. Pre-206 this claimed ["a","b","c"], i.e.
+        // that B scored when it wrote nothing. The primary stays the CONFIGURED primary; no substitute.
+        Assert.Equal(["a", "c"], record.Strategies!.ToArray());
+        Assert.Equal("a", record.PrimaryStrategy);
 
         // Exactly ONE Warning for the whole pass, naming B and only B.
         var warning = Assert.Single(h.ScoringPassLog.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("1 effective scoring config file(s)", warning.Message);
         Assert.Contains("of 3 strategies", warning.Message);
         Assert.Contains("under them: b.", warning.Message);
+
+        // Spec 206 §2: the SAME pins hold on ScoringPassResult itself — a direct pass invocation under the
+        // same failing store reports the active complement, the skip list, and the configured primary.
+        var passResult = await h.ScoringPass.RunAsync(
+            await h.Companies.GetAllAsync(default), FixedNow, default);
+        Assert.Equal(["a", "c"], passResult.Strategies.ToArray());
+        Assert.Equal(["b"], passResult.StrategiesSkippedForUnpersistedConfig!.ToArray());
+        Assert.Equal("a", passResult.PrimaryStrategy);
     }
 
     [Fact]
@@ -1076,6 +1113,8 @@ public sealed class RadarPipelineRunnerTests
         var record = Assert.Single(h.RunStore.Written);
         Assert.Equal(0, record.SignalsNotPersisted);
         Assert.Equal(0, record.ScoreSnapshotsNotPersisted);
+        // Spec 206 §3: a healthy combined run attempted raw writes and lost none — a MEASURED zero.
+        Assert.Equal(0, record.RawEvidenceNotPersisted);
 
         // No aggregated store Warning, no shortfall statement — and the existing summary line is
         // BYTE-IDENTICAL to the pre-193 text. This is the pinned criterion: the counts are appended as a
@@ -1110,6 +1149,8 @@ public sealed class RadarPipelineRunnerTests
         var record = Assert.Single(h.RunStore.Written);
         Assert.Equal(1, record.SignalsNotPersisted);
         Assert.Null(record.ScoreSnapshotsNotPersisted);
+        // Spec 206 §3: a collect pass attempted raw writes and lost none — a measured 0, not null.
+        Assert.Equal(0, record.RawEvidenceNotPersisted);
 
         var shortfall = Assert.Single(h.CollectOnlyLog.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("did NOT durably persist everything it produced", shortfall.Message);
@@ -1137,6 +1178,9 @@ public sealed class RadarPipelineRunnerTests
         var record = Assert.Single(h.RunStore.Written);
         Assert.Null(record.SignalsNotPersisted);
         Assert.Equal(1, record.ScoreSnapshotsNotPersisted);
+        // Spec 206 §3: a score pass attempts no raw-evidence write, so that axis stays null — never a
+        // fabricated 0 claiming a clean write that never happened.
+        Assert.Null(record.RawEvidenceNotPersisted);
 
         var shortfall = Assert.Single(h.ScoreOnlyLog.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("1 score snapshot(s)", shortfall.Message);
@@ -1144,6 +1188,48 @@ public sealed class RadarPipelineRunnerTests
         // Mirror of the collect-pass assertion: this pass observed no signal write, so the signal axis is
         // omitted rather than reported as a measured "0 signal(s)".
         Assert.DoesNotContain("signal(s)", shortfall.Message);
+    }
+
+    /// <summary>
+    /// Spec 206 §3 — the invariant, not just the count: an item whose raw record did NOT become durable is
+    /// excluded from newEvidence and from every extraction/review/signal step (a signal must never cite
+    /// evidence absent from the accrued store), counted once on the run record, and reported in exactly one
+    /// aggregated pass-level Warning. Mutation: restore the old admit-then-write ordering and the
+    /// zero-signal assertions go red — the item would be extracted and its signal persisted.
+    /// </summary>
+    [Fact]
+    public async Task FailedRawEvidenceWrite_ExcludesTheItemFromAllDownstreamWork_CountsIt_AndWarnsOnce()
+    {
+        var companyId = Guid.NewGuid();
+        var collector = new FakeEvidenceCollector([BuildCollected()]);
+        var extractor = new AnyEvidenceSignalExtractor(new([MaterialSignal()], "summary"));
+
+        var h = new Harness(collector, extractor, new PipelineOptions { GenerateReport = false });
+        await SeedCompanyAsync(h, companyId);
+        h.RawStore.FailWrites = true;
+
+        var result = await h.Runner.RunAsync(default);
+
+        // Collected, but NOT new (EvidenceNew means newly DURABLE) and NOT extracted: no signal, no review,
+        // no repository admission — nothing downstream may reference an evidence record that is not on disk.
+        Assert.Equal(1, result.EvidenceCollected);
+        Assert.Equal(0, result.EvidenceNew);
+        Assert.Equal(0, result.SignalsExtracted);
+        Assert.Empty(await h.Signals.GetByCompanyAsync(companyId, default));
+        Assert.Empty(h.SignalStore.Written);
+        Assert.Empty(h.RawStore.Written);
+
+        // Counted once, on its own run-record axis.
+        var record = Assert.Single(h.RunStore.Written);
+        Assert.Equal(1, record.RawEvidenceNotPersisted);
+        Assert.Equal(0, record.SignalsNotPersisted);
+
+        // Exactly ONE aggregated Warning for the raw-evidence store (the per-file store line is Debug), and
+        // it states the exclusion and the natural retry.
+        var warning = Assert.Single(h.CollectionPassLog.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("1 of 1 collected item(s)", warning.Message);
+        Assert.Contains("EXCLUDED", warning.Message);
+        Assert.Contains("retries them naturally", warning.Message);
     }
 
     [Fact]

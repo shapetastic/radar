@@ -125,8 +125,11 @@ public sealed class EvidenceIdentityCrossRunDedupeTests : IDisposable
 
         var evidence = Mapper().ToEvidenceItem(SourceFact(runInstant));
 
-        await ((IEvidenceRepository)evidenceStore).AddIfNewAsync(evidence, CancellationToken.None);
+        // Spec 206 §3 ordering: the durable write comes FIRST (it is the admission decision and indexes the
+        // item itself); AddIfNewAsync afterwards keeps the fixture shaped like the pass (a no-op on the
+        // unified store).
         await evidenceStore.WriteIfNewAsync(evidence, CancellationToken.None);
+        await ((IEvidenceRepository)evidenceStore).AddIfNewAsync(evidence, CancellationToken.None);
 
         await PersistSignalAsync(signalStore, evidence, companyId, runInstant);
         return evidence;
@@ -322,9 +325,10 @@ public sealed class EvidenceIdentityCrossRunDedupeTests : IDisposable
                 ContentHash = $"{mapped.ContentHash}-run{run}",
             };
 
+            // Write-first (spec 206 §3 ordering) — the per-run hashes are distinct, so every copy lands.
+            await legacyEvidenceStore.WriteIfNewAsync(perRunCopy, CancellationToken.None);
             await ((IEvidenceRepository)legacyEvidenceStore)
                 .AddIfNewAsync(perRunCopy, CancellationToken.None);
-            await legacyEvidenceStore.WriteIfNewAsync(perRunCopy, CancellationToken.None);
             await PersistSignalAsync(legacySignalStore, perRunCopy, companyId, RunInstants[run]);
         }
 
@@ -378,14 +382,17 @@ public sealed class EvidenceIdentityCrossRunDedupeTests : IDisposable
                      (fromFilingFeed, RunInstants[1]),
                  })
         {
-            await ((IEvidenceRepository)evidenceStore).AddIfNewAsync(evidence, CancellationToken.None);
             await evidenceStore.WriteIfNewAsync(evidence, CancellationToken.None);
+            await ((IEvidenceRepository)evidenceStore).AddIfNewAsync(evidence, CancellationToken.None);
             await PersistSignalAsync(signalStore, evidence, companyId, instant);
         }
 
-        // Provenance retention: BOTH collectors' raw files are on disk, under their own source-type
-        // folders. Nothing was deleted; only the identity index collapsed.
-        Assert.Equal(2, EvidenceFileCount(store));
+        // ONE evidence file, deliberately (spec 206 §3 amends the pre-206 expectation of two): the second
+        // retrieval path's write reports AlreadyAvailable against the hydrated content index and writes no
+        // second file — the same fact the pipeline's AddIfNewAsync gate always enforced (the old two-file
+        // shape was only reachable by bypassing that gate). Nothing existing is deleted or overwritten; the
+        // signal files record both retrievals.
+        Assert.Equal(1, EvidenceFileCount(store));
         Assert.Equal(2, SignalFileCount(store));
 
         // Attention breadth/diversity count distinct publishers and source types over the RESOLVED
@@ -451,8 +458,10 @@ public sealed class EvidenceIdentityCrossRunDedupeTests : IDisposable
     }
 
     /// <summary>
-    /// A collection step that HONOURS the <c>AddIfNewAsync</c> gate, exactly as <c>RadarPipelineRunner</c>
-    /// does: already-seen content is not persisted and not re-extracted.
+    /// A collection step that HONOURS the durability-admission gate, exactly as <c>CollectionPass</c> does
+    /// since spec 206 §3 (which superseded the old <c>AddIfNewAsync</c>-first gate this helper used to
+    /// mirror): only a <c>Written</c> outcome — newly durable — is extracted; already-seen content is not
+    /// persisted and not re-extracted.
     /// </summary>
     private static async Task CollectRespectingIdempotencyAsync(
         Store store, Guid companyId, CollectedEvidence collected, DateTimeOffset runInstant)
@@ -462,12 +471,12 @@ public sealed class EvidenceIdentityCrossRunDedupeTests : IDisposable
 
         var evidence = Mapper().ToEvidenceItem(collected);
 
-        if (!await ((IEvidenceRepository)evidenceStore).AddIfNewAsync(evidence, CancellationToken.None))
+        var write = await evidenceStore.WriteIfNewAsync(evidence, CancellationToken.None);
+        if (write.Outcome != Radar.Application.Storage.DurableWriteOutcome.Written)
         {
             return;
         }
 
-        await evidenceStore.WriteIfNewAsync(evidence, CancellationToken.None);
         await PersistSignalAsync(signalStore, evidence, companyId, runInstant);
     }
 }

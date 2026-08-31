@@ -11,12 +11,14 @@ namespace Radar.Application.Storage;
 /// score-snapshot stores are upsert-by-Id (last-write-wins), so a write either lands or it does not.
 /// </para>
 /// <para>
-/// <see cref="AlreadyAvailable"/> (spec 202 §1) is the ONE content-addressed, insert-if-new case: the
-/// scoring-config store's <c>{fingerprint}.json</c> already existed, so nothing was written this call but the
-/// record IS durably on disk. Only <c>FileScoringConfigStore</c> returns it; no other store may. It is
-/// distinguished from <see cref="Written"/> so a run log can tell "wrote it now" from "found it there"
-/// without changing the answer to the caller's actual question — <see cref="DurableWriteResult.Written"/>
-/// is <c>true</c> for both.
+/// <see cref="AlreadyAvailable"/> (spec 202 §1, widened by spec 206 §3) is the content-addressed,
+/// insert-if-new case: the immutable record already existed, so nothing was written this call but the
+/// record IS durably on disk. Exactly TWO stores are insert-if-new and may return it — the scoring-config
+/// store (<c>FileScoringConfigStore</c>, <c>{fingerprint}.json</c>) and the raw-evidence store
+/// (<c>FileRawEvidenceStore</c>, whose hydrated index/content-hash-keyed files make a re-collected item a
+/// durable dedupe); no upsert store may. It is distinguished from <see cref="Written"/> so a run log can
+/// tell "wrote it now" from "found it there" without changing the answer to the caller's actual question —
+/// <see cref="DurableWriteResult.Written"/> is <c>true</c> for both.
 /// </para>
 /// </summary>
 public enum DurableWriteOutcome
@@ -33,9 +35,10 @@ public enum DurableWriteOutcome
     Failed,
 
     /// <summary>
-    /// Nothing was written THIS call because the content-addressed file already existed: the record is
+    /// Nothing was written THIS call because the same immutable record already existed: the record is
     /// durable (<see cref="DurableWriteResult.Written"/> reports <c>true</c>), it just was not produced by
-    /// this write. Returned only by the insert-if-new scoring-config store (spec 202 §1).
+    /// this write. Returned only by the two insert-if-new stores — scoring config (spec 202 §1) and raw
+    /// evidence (spec 206 §3).
     /// </summary>
     AlreadyAvailable,
 }
@@ -68,7 +71,7 @@ public sealed record DurableWriteResult(string Path, DurableWriteOutcome Outcome
 
     /// <summary>
     /// A content-addressed record that already existed at <paramref name="path"/>: durable, not written by
-    /// this call (spec 202 §1). Scoring-config store only.
+    /// this call (spec 202 §1). Insert-if-new stores only (scoring config, raw evidence — spec 206 §3).
     /// </summary>
     public static DurableWriteResult AlreadyOnDisk(string path) =>
         new(path, DurableWriteOutcome.AlreadyAvailable);

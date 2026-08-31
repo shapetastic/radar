@@ -196,6 +196,41 @@ public sealed class NewsRiskLiveArtifactRendererTests
         Assert.Contains("Coverage issues: archive-batch-unavailable", markdown);
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // SPEC 206 §4 — the compact per-row assessment-persistence state.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A recorded marker renders compactly; the failed state is unmistakable and names the id that may not
+    /// dereference; a legacy null (not recorded) renders NOTHING — never "durable", because null must never
+    /// be interpreted as true, and never a fabricated state on an artifact that predates the contract.
+    /// </summary>
+    [Fact]
+    public void AssessmentPersistenceState_RendersTrueAndFalseDistinctly_AndNullNotAtAll()
+    {
+        var company = Company(
+            NewsRiskAssessmentStatus.ThesisChallenged,
+            NewsRiskArchiveCapture.Proven,
+            NewsRiskSearchEnumeration.Complete,
+            NewsRiskAssessmentBundle.Complete);
+        var baseResult = company.ReaderResults[0];
+
+        var durable = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(
+            company with { ReaderResults = [baseResult with { DurablyPersisted = true }] }));
+        Assert.Contains("Assessment persistence: durable", durable);
+        Assert.DoesNotContain("NOT PERSISTED", durable);
+
+        var failed = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(
+            company with { ReaderResults = [baseResult with { DurablyPersisted = false }] }));
+        Assert.Contains("Assessment persistence: **NOT PERSISTED**", failed);
+        Assert.Contains($"`{baseResult.AssessmentId:D}`", failed);
+        Assert.Contains("may not dereference", failed);
+
+        // Legacy artifact: the member hydrates null and the row renders exactly as it did before v6.
+        var legacy = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(company));
+        Assert.DoesNotContain("Assessment persistence", legacy);
+    }
+
     private static void AssertNoAllClear(string markdown)
     {
         // "all clear" in any casing/hyphenation appears NOWHERE (spec 182 §3).

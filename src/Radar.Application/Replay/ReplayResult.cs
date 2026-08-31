@@ -9,8 +9,25 @@ namespace Radar.Application.Replay;
 /// zero-evidence-link snapshot, exactly as forward scoring does), so a series that is discontinuous in the
 /// output means something failed, not that a company had nothing to say.
 /// </para>
+/// <para>
+/// <b><see cref="Strategies"/> counts the strategies that actually EXECUTED (spec 206 §1)</b> — a deliberate
+/// correction of the pre-206 meaning, which counted every configured strategy even when the config-durability
+/// precondition skipped one. A skipped strategy produced no snapshot, so counting it would break the
+/// receipt's own arithmetic. The skipped strategies are named on
+/// <see cref="StrategiesSkippedForUnpersistedConfig"/>; executed + skipped = configured.
+/// </para>
 /// </summary>
 /// <param name="AsOfPoints">How many historical as-of instants were scored at.</param>
-/// <param name="Strategies">How many strategies were replayed over those instants.</param>
+/// <param name="Strategies">How many strategies actually executed (were replayed) over those instants.</param>
 /// <param name="SnapshotsWritten">Total snapshots written to the replay-scoped store.</param>
-public sealed record ReplayResult(int AsOfPoints, int Strategies, int SnapshotsWritten);
+/// <param name="StrategiesSkippedForUnpersistedConfig">
+/// The strategies (run order) that wrote NO replay snapshot because their effective scoring-config record
+/// could not be made durable (spec 206 §1, the spec-202 §1 forward precondition applied to replay).
+/// <c>null</c> means none was skipped — never an empty list pretending to be recorded history. A later
+/// replay retries naturally (the store is content-addressed and insert-if-new).
+/// </param>
+public sealed record ReplayResult(
+    int AsOfPoints,
+    int Strategies,
+    int SnapshotsWritten,
+    IReadOnlyList<string>? StrategiesSkippedForUnpersistedConfig = null);

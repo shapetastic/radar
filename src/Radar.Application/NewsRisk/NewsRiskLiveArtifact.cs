@@ -38,7 +38,15 @@ public sealed record NewsRiskLiveDocument(
     // measured an honest zero. Nothing is removed or re-meant; a by-name v4 consumer is unaffected. The
     // measurement is current-run diagnostic provenance only — it enters no bundle hash, cache key, cohort
     // key, judgment, signal or score.
-    public const string CurrentSchemaVersion = "news-risk-live-v5";
+    //
+    // v6 (spec 206 §4): every reader result carries the per-row assessment-durability marker
+    // (NewsRiskLiveReaderResult.DurablyPersisted). The tag moves because the durable artifact CONTRACT
+    // changed: a v6 row's AssessmentId comes with a true/false statement of whether it dereferences into the
+    // accrued assessment store, while a v1–v5 row (hydrating null) never recorded the fact — and null must
+    // never be interpreted as true. Nothing is removed or re-meant; a by-name v5 consumer is unaffected.
+    // The marker enters NO bundle hash, assessment cache/cohort key, judgment input, scoring descriptor or
+    // efficacy input.
+    public const string CurrentSchemaVersion = "news-risk-live-v6";
 
     /// <summary>The §1 live caveat, verbatim — carried by every live artifact.</summary>
     public const string LiveCaveat =
@@ -148,7 +156,16 @@ public sealed record NewsRiskLiveReaderResult(
     IReadOnlyList<NewsRiskCategory> Categories,
     IReadOnlyList<NewsRiskValidatedClaim> Claims,
     string? Rationale,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    // Spec 206 §4 (v6, additive, TRAILING and NULLABLE): whether THIS pass's assessment-record write for
+    // this row returned durable. `true` = AssessmentId dereferences into the accrued assessment store;
+    // `false` = the row was rendered from memory but the write degraded, so AssessmentId may not
+    // dereference; `null` = a legacy v1–v5 artifact that never recorded the fact — NEVER interpreted as
+    // true. Cache reuse still writes a new run-linked record, so the marker is that CURRENT write's outcome,
+    // not the durability of ReusedFromAssessmentId. The value is threaded from the checked store result at
+    // write time — never re-read or inferred from file existence later — and it enters no bundle hash,
+    // cache/cohort key, judgment input, scoring descriptor or efficacy input.
+    bool? DurablyPersisted = null);
 
 /// <summary>
 /// The artifact write seam (spec 179 §7/§9), implemented in Infrastructure over the shared graceful writer.

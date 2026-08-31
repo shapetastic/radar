@@ -104,20 +104,44 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
     /// <inheritdoc />
     public TimeSpan? HydrationElapsed => _hydrationElapsed;
 
-    public async Task<bool> WriteIfNewAsync(EvidenceItem evidence, CancellationToken ct)
+    /// <remarks>
+    /// Spec 206 §3: the outcome is TYPED and this method is now the collection pass's admission decision, so
+    /// it hydrates first (which <see cref="AddIfNewAsync"/> used to do at the same point of the run) — the
+    /// content-hash index is what makes the dedupe hold across the accrued store AND across two collectors
+    /// finding the same content under different source-type paths in one run. On any failure the item is
+    /// indexed NOWHERE, so a later call in the same process naturally retries. An existing final path that
+    /// cannot be resolved as the SAME VALID evidence is <see cref="DurableWriteOutcome.Failed"/>, never
+    /// <see cref="DurableWriteOutcome.AlreadyAvailable"/> — the durable record there is not trustworthy for
+    /// this evidence, and it is never overwritten (insert-only, AD-1).
+    /// </remarks>
+    public async Task<DurableWriteResult> WriteIfNewAsync(EvidenceItem evidence, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(evidence);
 
+        await EnsureHydratedAsync(ct).ConfigureAwait(false);
+
         var path = PathFor(evidence);
 
-        // Insert-only (AD-1): an existing final path is a dedupe skip, never an overwrite.
+        // The same immutable content is already in the hydrated accrued index — under this path or any
+        // other (two collectors can land the same content under two source-type folders) — AND its file is
+        // verifiably on disk. Both conditions, deliberately: an index entry can also arrive via a bare
+        // AddIfNewAsync (a legacy call order), and AlreadyAvailable is a DURABILITY claim, so reporting it
+        // from the in-memory index alone would be exactly the truth gap this outcome exists to close. An
+        // indexed-but-not-on-disk item falls through to the write below.
+        if (evidence.ContentHash is not null
+            && _byContentHash.TryGetValue(evidence.ContentHash, out var indexedId)
+            && _byId.TryGetValue(indexedId, out var indexed)
+            && File.Exists(PathFor(indexed)))
+        {
+            return DurableWriteResult.AlreadyOnDisk(PathFor(indexed));
+        }
+
+        // Insert-only (AD-1): an existing final path is never overwritten. Not being in the index means
+        // hydration skipped it (unreadable/conflicting) or another process wrote it after this instance
+        // hydrated — resolve which by reading it back.
         if (File.Exists(path))
         {
-            _logger.LogDebug(
-                "Raw evidence file already exists for evidence {EvidenceId} at {Path}; skipping write.",
-                evidence.Id,
-                path);
-            return false;
+            return await ResolveExistingPathAsync(evidence, path, ct).ConfigureAwait(false);
         }
 
         var json = Serialize(evidence);
@@ -144,31 +168,77 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
 
             // Keep the in-process index in step with the disk so a write is immediately visible to a later
             // repository read. Insert-only, mirroring the file semantics; TryAdd means a later hydration
-            // can never clobber it. Deliberately does NOT hydrate — writes stay cheap.
+            // can never clobber it.
             IndexInsertOnly(evidence);
-            return true;
+            return DurableWriteResult.Succeeded(path);
         }
         catch (IOException ex) when (File.Exists(path))
         {
-            // Expected dedupe race: a concurrent writer won the CreateNew and created the immutable
-            // final path first. That is a normal skip, not an I/O failure — log at Debug to avoid
-            // noisy warnings during parallel runs.
+            // Insert race: a concurrent writer won the CreateNew and created the immutable final path
+            // first. Read it back to confirm it really is this evidence before reporting it durable.
             _logger.LogDebug(
                 ex,
-                "Raw evidence file already exists for evidence {EvidenceId} at {Path} (concurrent writer won); skipping write.",
+                "Raw evidence file appeared concurrently for evidence {EvidenceId} at {Path}; resolving the existing file.",
                 evidence.Id,
                 path);
-            return false;
+            return await ResolveExistingPathAsync(evidence, path, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // A genuine disk hiccup (the final path still doesn't exist) must never crash the run.
-            _logger.LogWarning(
+            // A genuine disk hiccup (the final path still doesn't exist) must never crash the run. Logged at
+            // Debug, deliberately (spec 206 §3): CollectionPass — the one production caller — counts every
+            // Failed item and emits ONE aggregated pass-level Warning, so a per-file Warning here would turn
+            // one operator signal into N+1 (the spec-195 §1 precedent).
+            _logger.LogDebug(
                 ex,
-                "Failed to write raw evidence file for evidence {EvidenceId} at {Path}; skipping.",
+                "Failed to write raw evidence file for evidence {EvidenceId} at {Path}; reporting Failed.",
                 evidence.Id,
                 path);
-            return false;
+            return DurableWriteResult.NotPersisted(path);
+        }
+    }
+
+    /// <summary>
+    /// Resolves an existing final path that the hydrated index does not hold (spec 206 §3): read it back and
+    /// require it to be the SAME VALID evidence — deserializable, honestly reconstructible, and carrying this
+    /// evidence's content hash. Then it is <see cref="DurableWriteOutcome.AlreadyAvailable"/> (and is indexed
+    /// so later reads resolve it); anything else is <see cref="DurableWriteOutcome.Failed"/>, because the
+    /// bytes at the path are not a trustworthy durable record OF THIS EVIDENCE and the insert-only rule
+    /// (AD-1) forbids replacing them. Logged at Debug for the same one-operator-signal reason as the write
+    /// failure path; the caller counts the loss.
+    /// </summary>
+    private async Task<DurableWriteResult> ResolveExistingPathAsync(
+        EvidenceItem evidence, string path, CancellationToken ct)
+    {
+        try
+        {
+            var text = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+            var parsed = JsonSerializer.Deserialize<RawEvidenceFile>(text, RadarFileStoreJson.Options);
+            var existing = parsed is null ? null : ToEvidenceItem(parsed, path);
+            if (existing is null || !string.Equals(existing.ContentHash, evidence.ContentHash, StringComparison.Ordinal))
+            {
+                _logger.LogDebug(
+                    "Raw evidence file at {Path} exists but does not resolve as the same valid evidence "
+                        + "(expected content hash '{ContentHash}'); reporting Failed for evidence {EvidenceId}.",
+                    path,
+                    evidence.ContentHash,
+                    evidence.Id);
+                return DurableWriteResult.NotPersisted(path);
+            }
+
+            // Index the ON-DISK record (the durable truth). TryAdd semantics: a concurrent insert of the
+            // same content between the index probe and here simply leaves the earlier entry standing.
+            TryIndexInsert(existing);
+            return DurableWriteResult.AlreadyOnDisk(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _logger.LogDebug(
+                ex,
+                "Failed to read back the existing raw evidence file at {Path}; reporting Failed for evidence {EvidenceId}.",
+                path,
+                evidence.Id);
+            return DurableWriteResult.NotPersisted(path);
         }
     }
 
@@ -177,11 +247,11 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
     // ---------------------------------------------------------------------------------------------
 
     /// <remarks>
-    /// <b>Index-only, by design</b> — the disk write stays with <see cref="WriteIfNewAsync"/>, which
-    /// <c>RadarPipelineRunner</c> already calls immediately after this. Splitting them keeps the
-    /// insert-only file semantics (AD-1) and the append-only run behaviour (AD-8) exactly as they were.
-    /// Hydrates first, so "new" means new to the ACCRUED store, not merely to this process — that is what
-    /// makes re-collection idempotent.
+    /// <b>Index-only, by design</b> — the disk write stays with <see cref="WriteIfNewAsync"/>, which since
+    /// spec 206 §3 the collection pass calls FIRST (durability is the admission decision, and that method
+    /// both writes the file and indexes the item). Splitting them keeps the insert-only file semantics
+    /// (AD-1) and the append-only run behaviour (AD-8) exactly as they were. Hydrates first, so "new" means
+    /// new to the ACCRUED store, not merely to this process — that is what makes re-collection idempotent.
     /// </remarks>
     public async Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct)
     {
@@ -310,8 +380,10 @@ public sealed class FileRawEvidenceStore : IRawEvidenceStore, IEvidenceRepositor
                 // Ordinal-sorted, NOT raw enumeration order: hydration de-dupes by ContentHash and
                 // TryAdds, so when two files carry the same hash the FIRST file read wins. Duplicates
                 // exist and always will: legacy files were written when the mapper minted a fresh evidence
-                // Guid per run (pre-spec-145), and even with content-derived identity the same content can
-                // land under two different source-type folders when two collectors find it.
+                // Guid per run (pre-spec-145), and the same content could land under two different
+                // source-type folders when two collectors found it (since spec 206 §3 the write path
+                // refuses a second file for content the hydrated index already holds, so a NEW same-content
+                // pair can only arise from two processes writing concurrently — the accrued ones remain).
                 // Directory.EnumerateFiles has no defined order, so an unsorted walk would let the winning
                 // item — and therefore the scored evidence set — vary between runs and between OSes.
                 // Sorting makes the survivor a function of the path alone.

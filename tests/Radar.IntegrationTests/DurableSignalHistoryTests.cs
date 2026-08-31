@@ -163,8 +163,10 @@ public sealed class DurableSignalHistoryTests
 
         foreach (var (evidence, signal) in pairs)
         {
-            Assert.True(await evidenceRepo.AddIfNewAsync(evidence, default));
-            await rawStore.WriteIfNewAsync(evidence, default);
+            // Spec 206 §3 ordering: the durable write is the admission decision (and indexes the item on
+            // the unified store, so the AddIfNewAsync that follows is a keep-in-step no-op there).
+            Assert.True((await rawStore.WriteIfNewAsync(evidence, default)).Written);
+            await evidenceRepo.AddIfNewAsync(evidence, default);
             await signalRepo.AddAsync(signal, default);
             await signalStore.WriteAsync(signal, ReviewFor(signal), default);
         }

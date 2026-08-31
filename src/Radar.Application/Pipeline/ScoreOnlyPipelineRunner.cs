@@ -237,7 +237,11 @@ public sealed class ScoreOnlyPipelineRunner : IRadarPipeline
             StrategiesSkippedForUnpersistedConfig: scoring.StrategiesSkippedForUnpersistedConfig,
             // Spec 203 §1: measured by this pass (hydration summed across the stores that reported one).
             ScoringElapsed: scoring.ScoringElapsed,
-            HydrationElapsed: hydrationElapsed);
+            HydrationElapsed: hydrationElapsed,
+            // Spec 206 §3: a score pass collects nothing and attempts no raw-evidence write, so this axis
+            // stays null ("this pass did not do that work") — a 0 would claim a clean write that never
+            // happened.
+            RawEvidenceNotPersisted: null);
         var runRecordStarted = _timeProvider.GetTimestamp();
         var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
         var runRecordElapsed = _timeProvider.GetElapsedTime(runRecordStarted);

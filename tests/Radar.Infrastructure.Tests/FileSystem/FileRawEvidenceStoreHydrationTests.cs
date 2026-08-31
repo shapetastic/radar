@@ -74,7 +74,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
                 new Dictionary<string, string> { ["quality"] = "High", ["form"] = "8-K" }, ["ACME"]))
             .Build();
 
-        Assert.True(await CreateStore().WriteIfNewAsync(original, CancellationToken.None));
+        Assert.True((await CreateStore().WriteIfNewAsync(original, CancellationToken.None)).Written);
 
         // FRESH instance == a fresh process: nothing carries over but the bytes on disk.
         IEvidenceRepository hydrated = CreateStore();
@@ -97,7 +97,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
             .WithPublishedAtUtc(new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero))
             .Build();
 
-        Assert.True(await CreateStore().WriteIfNewAsync(original, CancellationToken.None));
+        Assert.True((await CreateStore().WriteIfNewAsync(original, CancellationToken.None)).Written);
 
         IEvidenceRepository hydrated = CreateStore();
         var read = await hydrated.GetByIdAsync(original.Id, CancellationToken.None);
@@ -116,7 +116,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
             .WithPublishedAtUtc(new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero))
             .Build();
 
-        Assert.True(await CreateStore().WriteIfNewAsync(original, CancellationToken.None));
+        Assert.True((await CreateStore().WriteIfNewAsync(original, CancellationToken.None)).Written);
 
         var path = Path.Combine(_tempDir, "press-releases", "2026", "04", "hash-nosummary.json");
         using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(path));
@@ -146,7 +146,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
             .WithPublishedAtUtc(new DateTimeOffset(2026, 5, 2, 0, 0, 0, TimeSpan.Zero))
             .Build();
 
-        Assert.True(await CreateStore().WriteIfNewAsync(original, CancellationToken.None));
+        Assert.True((await CreateStore().WriteIfNewAsync(original, CancellationToken.None)).Written);
 
         IEvidenceRepository hydrated = CreateStore();
         var read = await hydrated.GetByIdAsync(original.Id, CancellationToken.None);
@@ -259,7 +259,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
                 .WithPublishedAtUtc(new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero))
                 .Build();
 
-            Assert.True(await store.WriteIfNewAsync(item, CancellationToken.None));
+            Assert.True((await store.WriteIfNewAsync(item, CancellationToken.None)).Written);
             written.Add(item);
         }
 
@@ -302,7 +302,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
             .WithContentHash("good")
             .WithPublishedAtUtc(new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero))
             .Build();
-        Assert.True(await CreateStore().WriteIfNewAsync(good, CancellationToken.None));
+        Assert.True((await CreateStore().WriteIfNewAsync(good, CancellationToken.None)).Written);
 
         await WriteLegacyFileAsync("broken", "{ this is not json");
 
@@ -325,7 +325,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
 
         var run1 = CreateStore();
         Assert.True(await ((IEvidenceRepository)run1).AddIfNewAsync(first, CancellationToken.None));
-        Assert.True(await run1.WriteIfNewAsync(first, CancellationToken.None));
+        Assert.True((await run1.WriteIfNewAsync(first, CancellationToken.None)).Written);
 
         // Run 2 re-collects the SAME content but arrives carrying a DIFFERENT evidence id — the shape every
         // legacy file on disk has, from when the mapper minted a fresh Guid per run (pre-spec-145). The
@@ -353,7 +353,7 @@ public sealed class FileRawEvidenceStoreHydrationTests : IDisposable
             .WithPublishedAtUtc(new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero))
             .Build();
 
-        Assert.True(await store.WriteIfNewAsync(item, CancellationToken.None));
+        Assert.True((await store.WriteIfNewAsync(item, CancellationToken.None)).Written);
 
         IEvidenceRepository repo = store;
         Assert.Equal(item, await repo.GetByIdAsync(item.Id, CancellationToken.None));

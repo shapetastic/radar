@@ -67,4 +67,11 @@ public sealed record CollectionPassResult(
     // next run's history read will not see them. Trailing + defaulted to 0, which is the truthful value for
     // a pass that persisted everything; the "not recorded" distinction lives on the durable
     // PipelineRunRecord, not on this in-process result.
-    int SignalsNotPersisted = 0);
+    int SignalsNotPersisted = 0,
+    // Spec 206 §3: how many collected items' raw-evidence records did NOT become durable. Unlike a
+    // not-persisted signal, a Failed raw item was EXCLUDED from the whole run (no extraction, review or
+    // signal — a signal must never cite evidence absent from the accrued store) and left un-admitted so a
+    // later collection retries it. Null means this pass attempted no raw write at all (nothing was
+    // collected); a measured 0 means at least one write was attempted and every item ended Written or
+    // AlreadyAvailable. Since this slice, EvidenceNew means newly DURABLE raw evidence.
+    int? RawEvidenceNotPersisted = null);

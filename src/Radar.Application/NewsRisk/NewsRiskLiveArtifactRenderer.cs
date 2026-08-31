@@ -92,6 +92,22 @@ public static class NewsRiskLiveArtifactRenderer
 
                 sb.AppendLine();
 
+                // Spec 206 §4: the compact per-row assessment-persistence state, rendered ONLY when the row
+                // recorded it (a legacy v1–v5 row hydrates null = not recorded and renders nothing, so an
+                // accrued artifact re-rendered through this renderer is byte-identical to before). A failed
+                // write is unmistakable: the id it names may not dereference in the accrued store.
+                if (result.DurablyPersisted is { } durable)
+                {
+                    // Guid "D" rendering is culture-invariant by construction, so plain concatenation is
+                    // deterministic here.
+                    sb.AppendLine(durable
+                        ? "Assessment persistence: durable"
+                        : "Assessment persistence: **NOT PERSISTED** — assessment `"
+                            + result.AssessmentId.ToString("D")
+                            + "` was rendered from this pass's memory; its id may not dereference in the "
+                            + "accrued assessment store, and the cache and evaluation reads will not see it.");
+                }
+
                 // The permanently-narrow absence wording (spec 182 §3): a pure function of this RUN's
                 // dimensions and counts, so a cached raw verdict replayed under different coverage
                 // circumstances gets THIS run's presentation. Never an all-clear.

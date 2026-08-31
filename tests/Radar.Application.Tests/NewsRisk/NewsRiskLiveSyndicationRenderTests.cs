@@ -64,13 +64,14 @@ public sealed class NewsRiskLiveSyndicationRenderTests
         GeneratedAtUtc: Now);
 
     /// <summary>
-    /// The tag moved BECAUSE the company row gained the measurement (spec 195 §2), and again because the
-    /// materialization block gained the join measurement (spec 197 §1.2).
+    /// The tag moved BECAUSE the company row gained the measurement (spec 195 §2), again because the
+    /// materialization block gained the join measurement (spec 197 §1.2), and again because every reader
+    /// row gained the assessment-durability marker (spec 206 §4).
     /// </summary>
     [Fact]
-    public void SchemaVersion_IsV5()
+    public void SchemaVersion_IsV6()
     {
-        Assert.Equal("news-risk-live-v5", NewsRiskLiveDocument.CurrentSchemaVersion);
+        Assert.Equal("news-risk-live-v6", NewsRiskLiveDocument.CurrentSchemaVersion);
     }
 
     /// <summary>A company that syndicated renders its compact line, naming both measured numbers.</summary>

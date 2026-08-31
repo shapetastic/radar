@@ -93,15 +93,15 @@ public sealed class NewsRiskLiveJudgmentRenderTests
             GeneratedAtUtc: Now));
 
     /// <summary>
-    /// Spec 195 §2 moved the tag on from the v3 this file originally pinned, and spec 197 §1.2 moved it
-    /// again: the materialization block now carries the run's observation-to-evidence join measurement, and
-    /// a reader has to be able to tell a v4 document (NOT RECORDED, hydrating null) from a v5 document that
-    /// measured an honest zero.
+    /// Spec 195 §2 moved the tag on from the v3 this file originally pinned, spec 197 §1.2 moved it again
+    /// (the run's observation-to-evidence join measurement), and spec 206 §4 moved it to v6: every reader
+    /// row now records whether its AssessmentId is durable, and a reader has to be able to tell a v5 row
+    /// (NOT RECORDED, hydrating null — never interpreted as true) from a v6 row that recorded the fact.
     /// </summary>
     [Fact]
-    public void SchemaVersion_IsBumpedToV5()
+    public void SchemaVersion_IsBumpedToV6()
     {
-        Assert.Equal("news-risk-live-v5", NewsRiskLiveDocument.CurrentSchemaVersion);
+        Assert.Equal("news-risk-live-v6", NewsRiskLiveDocument.CurrentSchemaVersion);
     }
 
     [Fact]

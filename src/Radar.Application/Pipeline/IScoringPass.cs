@@ -27,7 +27,12 @@ public interface IScoringPass
 
 /// <summary>
 /// What stage 6 did: how many companies the PRIMARY strategy scored (the run record's established meaning of
-/// "companies scored"), the strategy names in run order, and which of them was primary.
+/// "companies scored"), the strategy names that ACTUALLY scored in run order (spec 206 §2 — a strategy the
+/// spec-202 durability precondition skipped is NOT listed here; it is named in
+/// <see cref="ScoringPassResult.StrategiesSkippedForUnpersistedConfig"/> instead, so the two lists partition
+/// the configured set), and which configured strategy was primary. <see cref="ScoringPassResult.PrimaryStrategy"/>
+/// stays the configured narrative primary even when it was skipped — the skip list makes that explicit, and
+/// no substitute primary is ever nominated.
 /// </summary>
 /// <param name="ScoreSnapshotsNotPersisted">
 /// Spec 193 §1: how many score snapshots this pass computed but could NOT durably persist. Counted across

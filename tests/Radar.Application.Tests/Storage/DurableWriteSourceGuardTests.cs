@@ -42,19 +42,11 @@ public sealed class DurableWriteSourceGuardTests
         @"\bTask(?<generic><[^;{(]+>)?\s+(?<method>\w*Write\w*Async)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    /// <summary>
-    /// The ONE recorded exception, by file and callee. <c>CollectionPass</c> discards
-    /// <c>IRawEvidenceStore.WriteIfNewAsync</c>'s bool because that bool CONFLATES "dedupe skip — the
-    /// insert-only file already exists" with "disk failure" (see <c>FileRawEvidenceStore.WriteIfNewAsync</c>:
-    /// both return <c>false</c>, and the store itself logs the disk failure at Warning). Counting it as
-    /// "not persisted" would fabricate a loss for every legitimate dedupe skip, which is the exact defect the
-    /// nothing-discarded-uncounted rule forbids in the other direction. Splitting the two needs a TYPED
-    /// outcome on that store — its own slice. Recorded as a known gap in spec 202's PR body.
-    /// </summary>
-    private static readonly (string FileSuffix, string Callee)[] RecordedExceptions =
-    [
-        (Path.Combine("Radar.Application", "Pipeline", "CollectionPass.cs"), "_rawEvidenceStore.WriteIfNewAsync("),
-    ];
+    // Spec 206 §3 removed the ONE recorded exception this guard used to carry: CollectionPass discarded
+    // IRawEvidenceStore.WriteIfNewAsync's bool because that bool conflated "dedupe skip" with "disk
+    // failure". The store now returns the typed Written/AlreadyAvailable/Failed outcome and the pass READS
+    // it as its admission decision, so the allowlist is empty by construction — every value-returning store
+    // write under src/ is checked, with zero exceptions.
 
     private static readonly Regex Sha256Site = new(
         @"\bSHA256\b",
@@ -103,14 +95,6 @@ public sealed class DurableWriteSourceGuardTests
                 }
 
                 var statement = Regex.Replace(match.Value.Trim(), @"\s+", " ");
-                if (RecordedExceptions.Any(e =>
-                        relative.EndsWith(e.FileSuffix, StringComparison.Ordinal)
-                        && statement.Replace(" ", string.Empty, StringComparison.Ordinal)
-                            .Contains(e.Callee, StringComparison.Ordinal)))
-                {
-                    continue;
-                }
-
                 var line = text[..match.Index].Count(c => c == '\n') + 1;
                 offenders.Add($"{relative}:{line}: {statement}");
             }
@@ -141,10 +125,14 @@ public sealed class DurableWriteSourceGuardTests
         // A store READ is not a write and must not trip the scan.
         Assert.DoesNotMatch(DiscardedStoreWrite, "        await _store.EnsureHydratedAsync(ct);");
 
-        // The recorded exception really is in the code: the allowlist is not a stale entry.
+        // Spec 206 §3: the raw-evidence write — the shape that was the guard's ONE allowlisted exception
+        // until this slice — is checked in the code (the pass assigns the typed outcome), so the shape the
+        // regex above matches must no longer appear in CollectionPass at all.
         var collectionPass = ProductionSources()
-            .Single(s => s.Relative.EndsWith(RecordedExceptions[0].FileSuffix, StringComparison.Ordinal));
-        Assert.Contains(RecordedExceptions[0].Callee, collectionPass.Text, StringComparison.Ordinal);
+            .Single(s => s.Relative.EndsWith(
+                Path.Combine("Radar.Application", "Pipeline", "CollectionPass.cs"), StringComparison.Ordinal));
+        Assert.Contains("_rawEvidenceStore.WriteIfNewAsync(", collectionPass.Text, StringComparison.Ordinal);
+        Assert.DoesNotMatch(DiscardedStoreWrite, collectionPass.Text);
     }
 
     [Fact]
