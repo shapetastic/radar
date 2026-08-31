@@ -115,7 +115,16 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     pipeline's existing `ISignalFileStore.WriteAsync` call right after it — append-only (AD-8) and the
     provenance guard are both preserved.
   - **Cross-run duplicate collapse on every durable list read.** `SignalCrossRunDedupe` is the ONE
-    definition of the stable identity `(CompanyId, EvidenceId, Type, Direction)` (spec 85's key, extracted),
+    definition of the stable identity — since spec 205 `(CompanyId, EvidenceId, Type, Direction,
+    FilingReadOutcomeRecorded)` (spec 85's key, extracted here, plus one boolean: true exactly for a
+    `GuidanceChange` whose metadata carries the spec-204 `filingReadOutcome` envelope, via the shared
+    `FilingReadSignalMetadata.IsFilingReadSignal`; false for every pre-204/non-read signal, whose identity
+    is therefore unchanged). The fifth field exists because a keyword Neutral and an AI-read Neutral over
+    the same filing otherwise shared one key and this collapse erased the read before
+    `GuidanceChangeSupersede` — the rule built to prefer it — ever saw it; it is a provenance-class
+    discriminator required by that downstream winner rule, **not** an invitation to hash extractor metadata
+    into identity (it is deliberately not the outcome token, confidence, rationale, model or signal id, so
+    repeated copies of the SAME read still collapse). The key is
     shared by `ReadApprovedInWindowAsync` and the repository reads. Survivor rule differs by call site *and
     that difference is load-bearing*: the window read collapses **lowest `SignalId`** because it has already
     applied the known-at predicate, whereas `GetByCompanyAsync`/`GetObservedBetweenAsync` collapse

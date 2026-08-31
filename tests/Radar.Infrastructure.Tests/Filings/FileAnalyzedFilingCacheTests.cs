@@ -363,8 +363,9 @@ public sealed class FileAnalyzedFilingCacheTests
         {
             var cache = CreateCache(dir);
             // A v2 NoDirectionalSignal record carries no cause/direction/confidence/rationale, so it cannot
-            // replay the spec-204 read signal — it must be re-analyzed (a stale-version MISS, bounded like
-            // any miss by the MaxFilingsPerRun cap and the 429 breaker).
+            // replay the spec-204 read signal — a stale-version MISS. Heal-forward, not a migration (spec
+            // 205): the miss is reachable only when the accession is genuinely re-admitted as new evidence
+            // (FilingReadmissionGateTests pins both sides); an accrued v2 record on its own causes no call.
             var v2NoSignal = new AnalyzedFilingRecord(
                 Accession, AnalyzedFilingOutcome.NoDirectionalSignal, null, null, CacheVersion: 2);
             await WriteRecordForAsync(dir, Accession, v2NoSignal);
