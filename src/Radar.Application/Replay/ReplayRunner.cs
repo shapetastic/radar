@@ -39,6 +39,11 @@ namespace Radar.Application.Replay;
 /// <item><description><c>WriteIfNewAsync(strategy.Engine.EffectiveConfig)</c> once per strategy, so every
 /// replayed snapshot's stamp dereferences back to the exact weights. Insert-if-new, so it is free when the
 /// config already exists — which, for a replay of a strategy the forward pipeline also runs, it does.
+/// Since spec 206 §1 this is a DURABILITY PRECONDITION, exactly as in the forward <c>ScoringPass</c>
+/// (spec 202 §1): a strategy whose config record did not land (<c>Failed</c>) is skipped entirely — no
+/// store resolved, no directory created, no snapshot written under an undereferenceable stamp — counted and
+/// named on <see cref="ReplayResult.StrategiesSkippedForUnpersistedConfig"/>, with one aggregated Warning
+/// for the invocation, while every other strategy replays.
 /// </description></item>
 /// </list>
 /// Neither writes a signal, an evidence item, or a byte under the live scores root, and neither changes a
@@ -167,6 +172,13 @@ public sealed class ReplayRunner : IReplayRunner
 
         var snapshotsWritten = 0;
 
+        // Spec 206 §1: the strategies whose config-durability precondition failed, in run order. Their
+        // entire as-of × company loop is skipped (no factory/store resolution, no directory, no snapshot),
+        // exactly as the forward ScoringPass has done since spec 202 §1. Null when none — never an empty
+        // list standing in for "none".
+        List<string>? strategiesSkipped = null;
+        var executedStrategies = 0;
+
         // Spec 197 §3: the engine no longer emits its own per-company Warnings for unresolved evidence
         // (spec 145) or neutralized accrued news directions (spec 194 §1.4) — it returns the counts. Replay
         // is the WORST case for the old shape: strategies × as-of points × companies, so a real series would
@@ -188,26 +200,26 @@ public sealed class ReplayRunner : IReplayRunner
             // Spec 148: persist the effective resolved config ONCE PER STRATEGY, exactly as ScoringPass does
             // for a forward run — content-addressed and insert-if-new, so it costs nothing when the forward
             // pipeline already wrote it, and it is the difference between a replayed snapshot's stamp
-            // dereferencing to the weights that produced it and dereferencing to nothing. Best-effort like
-            // every other file store: it never aborts the replay or changes a count.
+            // dereferencing to the weights that produced it and dereferencing to nothing.
+            //
+            // Spec 206 §1 — THE SAME DURABILITY PRECONDITION AS FORWARD SCORING (spec 202 §1). Written and
+            // AlreadyAvailable mean the effective config is durable and the strategy replays; Failed means
+            // NO replay snapshot may carry its fingerprint — the exact undereferenceable-stamp condition
+            // spec 148 said replay closed — so the whole as-of × company loop is skipped BEFORE the score
+            // file store (and its directory) is even resolved. Every other strategy continues; a later
+            // replay retries naturally (content-addressed, insert-if-new store). It still never aborts the
+            // replay: the skip is counted, named on the result, and reported in ONE aggregated Warning
+            // after the loop.
             var configWrite = await _scoringConfigStore
                 .WriteIfNewAsync(strategy.Engine.EffectiveConfig, ct)
                 .ConfigureAwait(false);
             if (!configWrite.Written)
             {
-                // Spec 201 §1: the outcome is no longer discarded. ONE Warning per strategy (the config is
-                // written once per strategy, so this IS the aggregate) — every replayed snapshot of this
-                // strategy carries a stamp that dereferences to nothing on disk.
-                _logger.LogWarning(
-                    "Replay '{Label}': strategy {StrategyName}'s effective scoring config could NOT be "
-                        + "durably persisted to {Path}. Its replayed snapshots still carry the "
-                        + "ScoringConfigVersion stamp, but the stamp dereferences to nothing on disk until "
-                        + "a later run writes the same content-addressed file.",
-                    _plan.Label,
-                    strategy.Definition.Name,
-                    configWrite.Path);
+                (strategiesSkipped ??= []).Add(strategy.Definition.Name);
+                continue;
             }
 
+            executedStrategies++;
             var scoreFileStore = _scoreFileStores.ForStrategy(_plan.Label, strategy.Definition);
 
             // Monotonic per factory instance (a re-run in the same process keeps counting), so the number
@@ -266,17 +278,36 @@ public sealed class ReplayRunner : IReplayRunner
         // never per strategy, per as-of point or per company.
         assemblyDiagnostics.LogAggregates(_logger);
 
+        // Spec 206 §1: ONE aggregated Warning for the whole invocation naming EVERY skipped strategy —
+        // never one per strategy — mirroring the forward ScoringPass's spec-202 wording. The count and the
+        // name list are the same fact, so one line carries both.
+        if (strategiesSkipped is not null)
+        {
+            _logger.LogWarning(
+                "Replay '{Label}': {SkippedCount} of {StrategyCount} strateg(ies) could NOT have their "
+                    + "effective scoring config durably persisted and were SKIPPED — NO replay snapshot was "
+                    + "written for them: {StrategiesSkipped}. A snapshot whose ScoringConfigVersion "
+                    + "dereferences to nothing on disk is not written (durability precondition, spec 202 §1). "
+                    + "A later replay retries naturally — the store is content-addressed and insert-if-new — "
+                    + "and every other strategy replayed.",
+                _plan.Label,
+                strategiesSkipped.Count,
+                strategies.Count,
+                string.Join(", ", strategiesSkipped));
+        }
+
         _logger.LogInformation(
             "Replay '{Label}' complete: {SnapshotsWritten} snapshot(s) written across {StrategyCount} "
                 + "strateg(ies) and {AsOfPoints} as-of point(s).",
             _plan.Label,
             snapshotsWritten,
-            strategies.Count,
+            executedStrategies,
             series.Count);
 
         return new ReplayResult(
             AsOfPoints: series.Count,
-            Strategies: strategies.Count,
-            SnapshotsWritten: snapshotsWritten);
+            Strategies: executedStrategies,
+            SnapshotsWritten: snapshotsWritten,
+            StrategiesSkippedForUnpersistedConfig: strategiesSkipped);
     }
 }

@@ -327,10 +327,22 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Empty(assessments.Records);
 
         // What the shadow returns/renders in-process is unchanged: the reader result still reached the
-        // live artifact from memory.
+        // live artifact from memory — and (spec 206 §4) its row SAYS the id may not dereference. The
+        // aggregate reconciles with the row-level markers: AssessmentsNotPersisted equals the count of
+        // fresh rows marked false.
         var company = Assert.Single(artifacts.LiveDocument!.Companies);
         var reader = Assert.Single(company.ReaderResults);
         Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, reader.Status);
+        Assert.False(reader.DurablyPersisted);
+        Assert.Equal(
+            result.AssessmentsNotPersisted,
+            artifacts.LiveDocument.Companies
+                .SelectMany(c => c.ReaderResults)
+                .Count(r => r.DurablyPersisted == false));
+
+        // The rendered markdown makes the failed state unmistakable, naming the id that may not resolve.
+        Assert.Contains("Assessment persistence: **NOT PERSISTED**", artifacts.LiveMarkdown!);
+        Assert.Contains($"`{reader.AssessmentId:D}`", artifacts.LiveMarkdown!);
 
         // ONE aggregated Warning per pass.
         var warning = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
@@ -354,6 +366,13 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Equal(1, healthy.AssessmentsAttempted);
         Assert.Equal(1, healthy.AssessmentsPersisted);
         Assert.Equal(0, healthy.AssessmentsNotPersisted);
+
+        // Spec 206 §4: the fresh reader row records TRUE (the checked write outcome), and the rendered
+        // durable state is the compact one — a failed state is never implied.
+        var healthyRow = Assert.Single(Assert.Single(artifacts.LiveDocument!.Companies).ReaderResults);
+        Assert.True(healthyRow.DurablyPersisted);
+        Assert.Contains("Assessment persistence: durable", artifacts.LiveMarkdown!);
+        Assert.DoesNotContain("NOT PERSISTED", artifacts.LiveMarkdown!);
 
         // No candidate ⇒ no write attempted ⇒ null, never a fabricated 0.
         var none = await Build(runStore, archive, assessments, artifacts, Reader("a", "model-a", analyzer))
@@ -706,6 +725,36 @@ public sealed class NewsRiskShadowGeneratorTests
         Assert.Equal(NewsRiskAssessmentStatus.ThesisChallenged, reused.Status);
     }
 
+    /// <summary>
+    /// Spec 206 §4: a cache-reuse row's durability marker is the CURRENT run-linked record write's outcome —
+    /// never the durability of <c>ReusedFromAssessmentId</c>. Run 1 persists the cached record; run 2 hits
+    /// the cache but its OWN write fails, so the row reads false even though the reused record is durable.
+    /// </summary>
+    [Fact]
+    public async Task CacheReuseRow_MarksTheCurrentWritesOutcome_NotTheReusedRecordsDurability()
+    {
+        var runStore = new FakeRunStore();
+        runStore.Records.Add(RunRecord(BatchId));
+        var archive = new FakeArchive { Batch = CompleteBatch(Company) };
+        archive.Observations.Add(NewsRiskTestData.Observation(Company, "Test Co flags doubt", AsOf.AddDays(-1)));
+        var analyzer = new ScriptedAnalyzer(ThesisChallengedOutcome);
+        var assessments = new InMemoryAssessmentStore();
+        var artifacts = new FakeArtifactStore();
+
+        var generator = Build(runStore, archive, assessments, artifacts, Reader("a", "model-a", analyzer));
+        await generator.GenerateAsync(RunId, Sections(Company), CancellationToken.None);
+
+        var secondRunId = Guid.NewGuid();
+        runStore.Records.Insert(0, RunRecord(BatchId) with { Id = secondRunId });
+        assessments.FailWrites = true;
+        var second = await generator.GenerateAsync(secondRunId, Sections(Company), CancellationToken.None);
+
+        Assert.Single(analyzer.Requests); // still a cache hit — no second model call
+        Assert.Equal(1, second.AssessmentsNotPersisted);
+        var row = Assert.Single(Assert.Single(artifacts.LiveDocument!.Companies).ReaderResults);
+        Assert.False(row.DurablyPersisted); // the reused source record IS durable; this run's is not
+    }
+
     [Fact]
     public async Task ADifferentModel_IsADistinctCohortAndCacheEntry()
     {
@@ -942,7 +991,7 @@ public sealed class NewsRiskShadowGeneratorTests
 
         Assert.Equal(3, company.SyndicatedDuplicateCount);
         Assert.Equal(3, company.SyndicatedDistinctPublisherCount);
-        Assert.Equal("news-risk-live-v5", artifacts.LiveDocument.SchemaVersion);
+        Assert.Equal("news-risk-live-v6", artifacts.LiveDocument.SchemaVersion);
 
         Assert.Contains(
             "Syndication before collapse: 3 duplicate cop", artifacts.LiveMarkdown!, StringComparison.Ordinal);

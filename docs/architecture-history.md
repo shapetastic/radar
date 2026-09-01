@@ -525,7 +525,13 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     root emitted snapshots whose stamp dereferenced to nothing. It now runs `StrategyIdentityGuard.VerifyAsync`
     as the FIRST statement of `RunAsync` (mirroring all three forward runners — a misconfiguration costs no
     scoring and no snapshot lands under a name whose meaning changed) and `WriteIfNewAsync` once per strategy
-    in the outer loop. **Writing the scoring-config store is a PROVENANCE RECORD, not a scoring mutation:**
+    in the outer loop. ⚠ Amended by spec 206 §1: until then a FAILED config write still warned and wrote the
+    strategy's snapshots beneath the undereferenceable stamp — the write existed, the precondition did not.
+    Replay now applies the spec-202 §1 durability precondition exactly as the forward `ScoringPass`: a
+    `Failed` strategy's whole as-of × company loop is skipped before its store is resolved, named on
+    `ReplayResult.StrategiesSkippedForUnpersistedConfig` (with `ReplayResult.Strategies` deliberately
+    re-meant to count strategies that EXECUTED), and reported in one aggregated Warning per invocation.
+    **Writing the scoring-config store is a PROVENANCE RECORD, not a scoring mutation:**
     replay still mutates no signal/evidence store, still never writes the live scores directory, and
     `replay ⊆ forward` still holds field for field. Asserted, not assumed — the read-only test now names the
     config store as the ONE sanctioned outside write and pins its exact two files.

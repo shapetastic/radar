@@ -200,8 +200,10 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             SourcesFailed: pipelineResult.SourcesFailed,
             ReportId: pipelineResult.ReportId,
             CollectionWarnings: collection.Health.Warnings,
-            // The scoring strategies that ran, in run order, with the primary marked (spec 137) — the run
-            // log's answer to "which scorings does this collection pass back?". Observational only.
+            // The scoring strategies that ACTUALLY scored, in run order (spec 137, corrected by spec 206 §2:
+            // a strategy the durability precondition skipped is excluded here and named in
+            // StrategiesSkippedForUnpersistedConfig instead) — the run log's answer to "which scorings does
+            // this collection pass back?". Observational only.
             Strategies: scoring.Strategies,
             PrimaryStrategy: scoring.PrimaryStrategy,
             // This run collected the whole watch universe (a filter is collect-only by guard, spec 161).
@@ -222,7 +224,11 @@ public sealed class RadarPipelineRunner : IRadarPipeline
             StrategiesSkippedForUnpersistedConfig: scoring.StrategiesSkippedForUnpersistedConfig,
             // Spec 203 §1: measured by this run (hydration summed across the stores that reported one).
             ScoringElapsed: scoring.ScoringElapsed,
-            HydrationElapsed: hydrationElapsed);
+            HydrationElapsed: hydrationElapsed,
+            // Spec 206 §3: the combined run collects, so this axis is measured (null only when nothing at
+            // all was collected — no raw write was attempted, and 0 would claim a clean write that never
+            // happened).
+            RawEvidenceNotPersisted: collection.RawEvidenceNotPersisted);
         var runRecordStarted = _timeProvider.GetTimestamp();
         var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
         var runRecordElapsed = _timeProvider.GetElapsedTime(runRecordStarted);

@@ -237,7 +237,13 @@ public sealed class ScoringPass : IScoringPass
 
         return new ScoringPassResult(
             CompaniesScored: companiesScored,
-            Strategies: [.. strategies.Select(s => s.Definition.Name)],
+            // Spec 206 §2: the strategies that ACTUALLY entered the company loop, in run order — the
+            // ordered complement of StrategiesSkippedForUnpersistedConfig — not the configured set. A run
+            // record must never claim that a skipped strategy scored. Healthy runs are unchanged (active ==
+            // configured). PrimaryStrategy stays the CONFIGURED narrative primary even when it was skipped:
+            // the skip list states that fact explicitly, and nominating a substitute would silently re-mean
+            // the primary series.
+            Strategies: [.. active.Select(a => a.Strategy.Definition.Name)],
             PrimaryStrategy: _scoringStrategies.Primary.Definition.Name,
             ScoreSnapshotsNotPersisted: snapshotsNotPersisted,
             ScoringConfigsNotPersisted: scoringConfigsNotPersisted,

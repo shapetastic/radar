@@ -293,8 +293,10 @@ public sealed class FilingReadmissionGateTests : IDisposable
 
     private sealed class NullRawStore : IRawEvidenceStore
     {
-        public Task<bool> WriteIfNewAsync(EvidenceItem evidence, CancellationToken ct) =>
-            Task.FromResult(true);
+        // Spec 206 §3: Written — every item is newly durable, so admission flows exactly as before.
+        public Task<Radar.Application.Storage.DurableWriteResult> WriteIfNewAsync(
+            EvidenceItem evidence, CancellationToken ct) =>
+            Task.FromResult(Radar.Application.Storage.DurableWriteResult.Succeeded("(null-raw-store)"));
     }
 
     private sealed class CleanHealthValidator : ICollectionHealthValidator

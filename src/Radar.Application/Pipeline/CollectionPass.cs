@@ -159,6 +159,13 @@ public sealed class CollectionPass : ICollectionPass
         // reviewed and counted as such, because it really was; what it is NOT is in the accrued store.
         var signalsNotPersisted = 0;
 
+        // Spec 206 §3: how many collected items' raw-evidence records did NOT become durable. Null until the
+        // first candidate write is attempted — "nothing was collected" and "everything persisted" are
+        // different facts, and only the second may claim a measured 0. A Failed item is admitted NOWHERE
+        // (not in newEvidence, not extracted, not in the hydrated index), so the next collection in this
+        // process retries it naturally.
+        int? rawEvidenceNotPersisted = null;
+
         // Stage 1 + 2: collect raw evidence over the watch universe, map each result to an immutable
         // domain EvidenceItem (normalization, hashing, quality parsing live in the mapper), then
         // dedupe-store. Only newly-stored evidence is extracted so re-collected duplicates never
@@ -230,16 +237,57 @@ public sealed class CollectionPass : ICollectionPass
 
             evidenceCollected++;
             var evidence = _mapper.ToEvidenceItem(item);
-            if (await _evidenceRepository.AddIfNewAsync(evidence, ct).ConfigureAwait(false))
+
+            // Spec 206 §3 — DURABILITY IS THE ADMISSION DECISION. The insert-only raw store is written
+            // FIRST and its typed outcome decides everything downstream: Written means newly DURABLE raw
+            // evidence (extract it), AlreadyAvailable means a durable dedupe (cross-run or within-run —
+            // skip it, exactly the old AddIfNewAsync dedupe), Failed means the record never became
+            // trustworthy on disk, so the item is counted, admitted NOWHERE, and excluded from newEvidence
+            // and every extraction/review/signal step. Because a Failed item is never indexed, the next
+            // collection IN THIS PROCESS retries it naturally — the pre-206 ordering admitted it to the
+            // in-memory index first, which suppressed every same-process retry while signals could still
+            // cite evidence absent from the accrued store.
+            var rawWrite = await _rawEvidenceStore.WriteIfNewAsync(evidence, ct).ConfigureAwait(false);
+            rawEvidenceNotPersisted ??= 0;
+            if (rawWrite.Outcome == DurableWriteOutcome.Failed)
             {
+                rawEvidenceNotPersisted++;
+                continue;
+            }
+
+            // Keep the in-process repository in step so scoring can resolve the evidence. In production the
+            // repository IS the raw store (spec 142: one FileRawEvidenceStore under both interfaces), so the
+            // durable write above already indexed the item and IS the admission — asking the same index
+            // again would refuse the item as a duplicate of itself. In a composition where they are separate
+            // objects (tests/in-memory), the repository is admitted here and its own insert-only dedupe
+            // still gates newness alongside the store's.
+            var newlyAdmitted = ReferenceEquals(_evidenceRepository, _rawEvidenceStore)
+                ? rawWrite.Outcome == DurableWriteOutcome.Written
+                : await _evidenceRepository.AddIfNewAsync(evidence, ct).ConfigureAwait(false)
+                    && rawWrite.Outcome == DurableWriteOutcome.Written;
+            if (newlyAdmitted)
+            {
+                // EvidenceNew means newly DURABLE raw evidence (spec 206 §3), not merely admitted to memory.
                 evidenceNew++;
                 newEvidence.Add(new CollectedEvidenceEntry(evidence, item.CompanyHints));
-
-                // Mirror each newly-stored item to the insert-only on-disk raw store (AD-8). The file
-                // store is the on-disk twin of the immutable repository; a false return is just a
-                // dedupe/disk skip and must not abort the run or change any counters.
-                await _rawEvidenceStore.WriteIfNewAsync(evidence, ct).ConfigureAwait(false);
             }
+        }
+
+        // Spec 206 §3: ONE aggregated Warning for the raw-evidence store per pass (the spec-145 aggregation
+        // precedent) — the store's own per-file line is demoted to Debug, so this is the one operator signal.
+        if (rawEvidenceNotPersisted is > 0)
+        {
+            _logger.LogWarning(
+                "{RawEvidenceNotPersisted} of {EvidenceCollected} collected item(s) this run could NOT be "
+                    + "durably persisted to the raw evidence store (the write degraded gracefully). They were "
+                    + "EXCLUDED from this run entirely — no extraction, review or signal was produced for "
+                    + "them, because a signal must never cite evidence absent from the accrued store — and "
+                    + "they were not admitted to the in-memory index, so the next collection (this process "
+                    + "included) retries them naturally. The run was not aborted. This Warning is the ONLY "
+                    + "report of these failures; raise the raw-evidence-store log level to Debug to see the "
+                    + "attempted paths.",
+                rawEvidenceNotPersisted,
+                evidenceCollected);
         }
 
         // A single run instant feeds the mapper's createdAtUtc, the scoring windowEndUtc, and the
@@ -436,7 +484,8 @@ public sealed class CollectionPass : ICollectionPass
             Companies: companies,
             CollectorRuns: collectorRuns,
             NewsObservationBatchId: newsObservationBatchId,
-            SignalsNotPersisted: signalsNotPersisted);
+            SignalsNotPersisted: signalsNotPersisted,
+            RawEvidenceNotPersisted: rawEvidenceNotPersisted);
     }
 
     /// <summary>

@@ -91,7 +91,46 @@ public sealed class NewsRiskLiveSyndicationPersistenceTests
 
         Assert.Equal(duplicates, company.SyndicatedDuplicateCount);
         Assert.Equal(publishers, company.SyndicatedDistinctPublisherCount);
-        Assert.Equal("news-risk-live-v5", round.SchemaVersion);
+        Assert.Equal("news-risk-live-v6", round.SchemaVersion);
+    }
+
+    /// <summary>
+    /// Spec 206 §4, persisted side: a legacy reader row with no <c>durablyPersisted</c> member hydrates it
+    /// as <c>null</c> = NOT RECORDED (never true), and a current row round-trips both recorded values
+    /// through the production serializer options.
+    /// </summary>
+    [Fact]
+    public void LegacyReaderRow_HydratesDurablyPersistedAsNull_AndCurrentRowsRoundTrip()
+    {
+        const string LegacyRowJson = """
+        {
+          "readerName": "reader-a",
+          "provider": "test-provider",
+          "modelId": "model-a",
+          "assessmentId": "33333333-3333-3333-3333-333333333333",
+          "status": "ThesisChallenged",
+          "assessmentCutoffUtc": "2026-08-26T12:00:00+00:00",
+          "riskScore": 66,
+          "categories": [],
+          "claims": [],
+          "rationale": null,
+          "warnings": []
+        }
+        """;
+
+        var legacy = JsonSerializer.Deserialize<NewsRiskLiveReaderResult>(
+            LegacyRowJson, RadarFileStoreJson.Options);
+        Assert.NotNull(legacy);
+        Assert.Null(legacy!.DurablyPersisted);
+
+        foreach (var recorded in new[] { true, false })
+        {
+            var row = legacy with { DurablyPersisted = recorded };
+            var json = JsonSerializer.Serialize(row, RadarFileStoreJson.Options);
+            Assert.Contains("\"durablyPersisted\":", json, StringComparison.Ordinal);
+            var round = JsonSerializer.Deserialize<NewsRiskLiveReaderResult>(json, RadarFileStoreJson.Options);
+            Assert.Equal(recorded, round!.DurablyPersisted);
+        }
     }
 
     private static NewsRiskLiveCompany Company(int? duplicates, int? publishers) => new(

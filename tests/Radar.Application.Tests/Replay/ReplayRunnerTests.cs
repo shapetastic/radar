@@ -1,5 +1,9 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+
 using Radar.Application.Replay;
 using Radar.Application.Scoring;
+using Radar.Application.Storage;
 using Radar.Domain.Evidence;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
@@ -469,6 +473,142 @@ public sealed class ReplayRunnerTests
                 ReadReplayedSnapshots(harness, "provenance", runtime.Definition.Name, companyId));
             Assert.Equal(fingerprint, replayed.Snapshot.ScoringConfigVersion);
         }
+    }
+
+    /// <summary>
+    /// SPEC 206 §1 — replay applies the SAME config-durability precondition as forward scoring (spec 202
+    /// §1). Config B's write fails across A/B/C: only A's and C's stores are resolved, only A/C snapshots
+    /// exist (B gets no directory at all, empty or otherwise), the receipt counts/names A and C as executed
+    /// and B as skipped, and exactly ONE aggregated Warning names B. A second run over the now-existing A/C
+    /// config files takes the AlreadyAvailable success path and executes them again. Mutation: restore the
+    /// pre-206 warn-and-continue and B's store is resolved, its directory exists with a snapshot, and the
+    /// executed count reads 3 — every one of those assertions goes red.
+    /// </summary>
+    [Fact]
+    public async Task ConfigWriteFailsForOneStrategy_ReplaySkipsItsEntireLoop_AndTheReceiptNamesIt()
+    {
+        var strategies = new ScoringStrategySet(
+        [
+            new ScoringStrategyDefinition("a", "default", new ScoringWeights(), IsPrimary: true),
+            new ScoringStrategyDefinition(
+                "b", "b", new ScoringWeights { MediaReachWeight = 0.02 }, IsPrimary: false),
+            new ScoringStrategyDefinition(
+                "c", "c", new ScoringWeights { MediaReachWeight = 0.03 }, IsPrimary: false),
+        ]);
+
+        // The root is chosen up front so the overriding doubles can wrap REAL stores over the same paths
+        // the harness registers.
+        var root = Path.Combine(Path.GetTempPath(), $"radar-replay-{Guid.NewGuid():N}");
+        var configStore = new SelectivelyFailingScoringConfigStore(
+            new FileScoringConfigStore(
+                new FileScoringConfigStoreOptions { RootDirectory = Path.Combine(root, "scoring-configs") },
+                NullLogger<FileScoringConfigStore>.Instance));
+        var factory = new RecordingReplayScoreSnapshotFileStoreFactory(
+            new ReplayScopedScoreSnapshotFileStoreFactory(
+                Path.Combine(root, "replays"), NullLogger<FileScoreSnapshotStore>.Instance));
+
+        using var harness = ReplayTestHarness.Create(
+            SinglePointPlan(D, "precondition"),
+            strategies,
+            root: root,
+            overrideServices: services =>
+            {
+                services.AddSingleton<IScoringConfigStore>(configStore);
+                services.AddSingleton<IReplayScoreSnapshotFileStoreFactory>(factory);
+            });
+        var companyId = await harness.SeedCompanyAsync();
+        await harness.SeedSignalAsync(companyId, SignalType.CustomerWin, D.AddDays(-4), D.AddDays(-4));
+
+        var bFingerprint = harness.LiveStrategies.Runtimes
+            .Single(r => r.Definition.Name == "b").Engine.EffectiveConfig.Fingerprint;
+        configStore.FailWhen = config => config.Fingerprint == bFingerprint;
+
+        var result = await harness.ReplayRunner.RunAsync(CancellationToken.None);
+
+        // The receipt: A and C executed, B skipped by name — and the arithmetic still holds over the
+        // EXECUTED count (1 as-of × 2 executed strategies × 1 company).
+        Assert.Equal(1, result.AsOfPoints);
+        Assert.Equal(2, result.Strategies);
+        Assert.Equal(2, result.SnapshotsWritten);
+        Assert.Equal(["b"], result.StrategiesSkippedForUnpersistedConfig!.ToArray());
+
+        // Only A's and C's factories/stores were ever resolved: the skip happens BEFORE ForStrategy.
+        Assert.Equal(["a", "c"], factory.Resolved);
+
+        // Only A/C snapshots exist on disk; B gets NO directory at all — not even an empty one.
+        Assert.Single(ReadReplayedSnapshots(harness, "precondition", "a", companyId));
+        Assert.Single(ReadReplayedSnapshots(harness, "precondition", "c", companyId));
+        Assert.False(
+            Directory.Exists(Path.Combine(
+                harness.ReplaysDirectory,
+                "precondition",
+                StrategyScopedScoreSnapshotFileStoreFactory.StrategiesSegment,
+                "b")),
+            "A skipped strategy must leave no directory behind.");
+
+        // Exactly ONE aggregated Warning for the invocation, naming B (and stating that no snapshot was
+        // written for it) — never one Warning per strategy.
+        var skipWarning = Assert.Single(SkipWarnings(harness));
+        Assert.Contains("precondition", skipWarning, StringComparison.Ordinal);
+        Assert.Contains(": b.", skipWarning, StringComparison.Ordinal);
+        Assert.Contains("NO replay snapshot", skipWarning, StringComparison.Ordinal);
+
+        // AlreadyAvailable takes the SUCCESS path: A's and C's config files now exist, so the second run's
+        // insert-if-new writes report AlreadyAvailable — and both strategies execute again, while B stays
+        // skipped (its write still fails).
+        var second = await harness.ReplayRunner.RunAsync(CancellationToken.None);
+        Assert.Equal(2, second.Strategies);
+        Assert.Equal(2, second.SnapshotsWritten);
+        Assert.Equal(["b"], second.StrategiesSkippedForUnpersistedConfig!.ToArray());
+        Assert.Equal(["a", "c", "a", "c"], factory.Resolved);
+        Assert.Equal(2, SkipWarnings(harness).Count);
+    }
+
+    /// <summary>The spec-206 §1 aggregated skipped-strategy warnings the runner emitted.</summary>
+    private static IReadOnlyList<string> SkipWarnings(ReplayTestHarness harness) =>
+        [.. harness.Logs.Entries
+            .Where(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+                && e.Message.Contains("SKIPPED", StringComparison.Ordinal))
+            .Select(e => e.Message)];
+
+    /// <summary>
+    /// Wraps the REAL content-addressed config store and fails exactly the writes the predicate selects, so
+    /// one strategy's record can be broken while its siblings genuinely land on disk.
+    /// </summary>
+    private sealed class SelectivelyFailingScoringConfigStore(IScoringConfigStore inner) : IScoringConfigStore
+    {
+        public Func<EffectiveScoringConfig, bool>? FailWhen { get; set; }
+
+        public Task<DurableWriteResult> WriteIfNewAsync(EffectiveScoringConfig config, CancellationToken ct) =>
+            FailWhen?.Invoke(config) == true
+                ? Task.FromResult(DurableWriteResult.NotPersisted($"blocked/{config.Fingerprint}.json"))
+                : inner.WriteIfNewAsync(config, ct);
+
+        public Task<string?> ReadStrategyFingerprintAsync(string strategyName, CancellationToken ct) =>
+            inner.ReadStrategyFingerprintAsync(strategyName, ct);
+
+        public Task<DurableWriteResult> RecordStrategyFingerprintAsync(
+            string strategyName, string fingerprint, CancellationToken ct) =>
+            inner.RecordStrategyFingerprintAsync(strategyName, fingerprint, ct);
+    }
+
+    /// <summary>
+    /// Wraps the REAL replay-scoped factory and records every strategy whose store the runner resolves —
+    /// the direct evidence that a skipped strategy never reaches <c>ForStrategy</c>.
+    /// </summary>
+    private sealed class RecordingReplayScoreSnapshotFileStoreFactory(
+        IReplayScoreSnapshotFileStoreFactory inner) : IReplayScoreSnapshotFileStoreFactory
+    {
+        public List<string> Resolved { get; } = [];
+
+        public IScoreSnapshotFileStore ForStrategy(string runLabel, ScoringStrategyDefinition strategy)
+        {
+            Resolved.Add(strategy.Name);
+            return inner.ForStrategy(runLabel, strategy);
+        }
+
+        public int OverwrittenCount(string runLabel, ScoringStrategyDefinition strategy) =>
+            inner.OverwrittenCount(runLabel, strategy);
     }
 
     /// <summary>

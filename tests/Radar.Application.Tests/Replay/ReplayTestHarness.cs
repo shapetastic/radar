@@ -90,7 +90,11 @@ internal sealed class ReplayTestHarness : IDisposable
         IScoreFormulaFactory? formulaFactory = null,
         TimeSpan? scoringWindow = null,
         string? root = null,
-        bool ownsRoot = true)
+        bool ownsRoot = true,
+        // Spec 206 §1: applied LAST, so a test can override a registered seam (last registration wins) —
+        // e.g. wrap the real scoring-config store in a selectively-failing double, or the real replay
+        // snapshot factory in a resolution recorder — while the rest of the graph stays the real one.
+        Action<IServiceCollection>? overrideServices = null)
     {
         root ??= Path.Combine(Path.GetTempPath(), $"radar-replay-{Guid.NewGuid():N}");
 
@@ -126,6 +130,8 @@ internal sealed class ReplayTestHarness : IDisposable
         // The composition root owns the plan (config parsing never reaches Radar.Application).
         services.AddSingleton(plan);
         services.AddRadarReplay(Path.Combine(root, "replays"));
+
+        overrideServices?.Invoke(services);
 
         return new ReplayTestHarness(root, services.BuildServiceProvider(), logs, ownsRoot);
     }

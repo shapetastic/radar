@@ -159,7 +159,13 @@ public sealed class CollectOnlyPipelineRunner : IRadarPipeline
             ReportsNotPersisted: null,
             ScoringConfigsNotPersisted: null,
             // Spec 202 §1: a collect pass scores nothing, so no strategy could be skipped — null, not [].
-            StrategiesSkippedForUnpersistedConfig: null);
+            StrategiesSkippedForUnpersistedConfig: null,
+            // Spec 203 §1: a collect pass reports neither stage timing — see PipelineRunRecord.
+            ScoringElapsed: null,
+            HydrationElapsed: null,
+            // Spec 206 §3: this pass DID collect, so the raw-evidence axis is measured (null only when
+            // nothing was collected and no raw write was attempted).
+            RawEvidenceNotPersisted: collection.RawEvidenceNotPersisted);
         var runRecordWrite = await _runStore.WriteAsync(runRecord, ct).ConfigureAwait(false);
         RadarPipelineRunner.LogRunRecordNotPersisted(_logger, runRecordWrite);
 

@@ -28,10 +28,14 @@ public sealed record PipelineRunRecord(
     // on-disk run JSON (written before this slice) still deserializes (null == no findings recorded);
     // never evidence/signal/scoring input, and RecentRunSummary does not read it.
     IReadOnlyList<CollectionHealthWarning>? CollectionWarnings = null,
-    // The scoring strategies that scored this run's companies, in run order, alongside which of them was
-    // primary (spec 137 — one collection pass, N independently-stamped scorings). Trailing + optional so old
-    // on-disk run JSON (written before this slice) still deserializes (null == single-strategy/unrecorded);
-    // observational only, never evidence/signal/scoring input, and RecentRunSummary does not read it.
+    // The scoring strategies that ACTUALLY scored this run's companies, in run order, alongside which of
+    // them was primary (spec 137 — one collection pass, N independently-stamped scorings). Since spec 206 §2
+    // a strategy the spec-202 durability precondition skipped is NOT listed here — it is named in
+    // StrategiesSkippedForUnpersistedConfig, so the two lists partition the configured set and the record
+    // never claims a scoring that did not happen. PrimaryStrategy stays the CONFIGURED primary even when it
+    // was skipped. Trailing + optional so old on-disk run JSON (written before this slice) still
+    // deserializes (null == single-strategy/unrecorded); observational only, never evidence/signal/scoring
+    // input, and RecentRunSummary does not read it.
     IReadOnlyList<string>? Strategies = null,
     string? PrimaryStrategy = null,
     // The resolved, canonicalised Radar:Companies ticker filter this run collected for (spec 161), or null
@@ -101,4 +105,13 @@ public sealed record PipelineRunRecord(
     // Observational only: never an evidence, signal, score, fingerprint or strategy-comparability input,
     // never backfilled (AD-8), and RecentRunSummary does not read them.
     TimeSpan? ScoringElapsed = null,
-    TimeSpan? HydrationElapsed = null);
+    TimeSpan? HydrationElapsed = null,
+    // Spec 206 §3: how many collected items' raw-evidence records did NOT become durable this run. A Failed
+    // item was EXCLUDED from newEvidence and every downstream extraction/review/signal step (unlike a
+    // not-persisted signal, which was still produced) and left un-admitted so a later collection retries it.
+    // Trailing + NULLABLE: null means this pass attempted no raw write (a `score` pass, or a record written
+    // before this contract existed) — never a fabricated 0; a measured 0 means at least one write was
+    // attempted and everything ended durable (Written or AlreadyAvailable). Combined and `collect` runs
+    // record the measured value. Observational only — never an evidence, signal, score, fingerprint or
+    // strategy-comparability input, never backfilled (AD-8), and RecentRunSummary does not read it.
+    int? RawEvidenceNotPersisted = null);

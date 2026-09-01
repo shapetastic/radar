@@ -50,7 +50,10 @@ public interface INewsRiskShadowGenerator
 /// <param name="AssessmentsNotPersisted">
 /// How many attempted writes the store reported NOT durable. Trailing + NULLABLE: <c>null</c> means no
 /// write was attempted this pass (no run id, no run record, no candidate, or the pass failed before its
-/// first write) — never a fabricated 0, which would claim a clean write that never happened.
+/// first write) — never a fabricated 0, which would claim a clean write that never happened. Since
+/// spec 206 §4 this aggregate equals the count of FRESH live reader rows whose
+/// <see cref="NewsRiskLiveReaderResult.DurablyPersisted"/> is <c>false</c> (every attempted write produces
+/// exactly one row); legacy null rows are never included.
 /// </param>
 public sealed record NewsRiskShadowRunResult(
     int AssessmentsAttempted,
@@ -355,7 +358,9 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
 
             // One reader's runtime failure never blocks another (spec 179 §5): each pass is independently
             // recorded, and the analyzer contract already types provider failures rather than throwing.
-            var record = await AssessWithReaderAsync(
+            // Spec 206 §4: the CHECKED write outcome comes back alongside the record — the row's durability
+            // marker is the write's own result, never a later file-existence probe.
+            var (record, persisted) = await AssessWithReaderAsync(
                 reader, candidate, runId, selectionAsOfUtc, bundle, coverage, writes, ct)
                 .ConfigureAwait(false);
 
@@ -408,7 +413,10 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
                 Categories: record.Categories,
                 Claims: record.Claims,
                 Rationale: record.Rationale,
-                Warnings: warnings));
+                Warnings: warnings,
+                // Spec 206 §4: this pass's OWN write outcome — on a cache-reuse row this is the durability
+                // of the new run-linked record written just now, not of ReusedFromAssessmentId.
+                DurablyPersisted: persisted));
         }
 
         return new NewsRiskLiveCompany(
@@ -489,7 +497,7 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
             .ToList();
     }
 
-    private async Task<NewsRiskAssessmentRecord> AssessWithReaderAsync(
+    private async Task<(NewsRiskAssessmentRecord Record, bool Persisted)> AssessWithReaderAsync(
         NewsRiskReader reader,
         NewsRiskCandidate candidate,
         Guid runId,
@@ -549,10 +557,11 @@ public sealed class NewsRiskShadowGenerator : INewsRiskShadowGenerator
         // Spec 202 §2: the store's bool is CHECKED (spec 187 §3's rule for the typing store, applied here).
         // The record is still returned — the live artifact is built from this pass's instances, and a
         // rendered-but-unpersisted assessment is more honest than a hidden one — but a failed write is
-        // counted on the run result and never enters the "persisted" total.
+        // counted on the run result and never enters the "persisted" total. Spec 206 §4: the outcome is
+        // ALSO returned alongside the record so the live reader row can carry its own durability marker.
         var persisted = await _assessmentStore.WriteAsync(record, ct).ConfigureAwait(false);
         writes.Record(persisted);
-        return record;
+        return (record, persisted);
     }
 
     private async Task<NewsRiskAssessmentRecord> AnalyzeAsync(

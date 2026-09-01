@@ -103,7 +103,7 @@ public sealed class NewsRiskLiveJoinMeasurementPersistenceTests
 
         var round = JsonSerializer.Deserialize<NewsRiskLiveDocument>(json, RadarFileStoreJson.Options);
 
-        Assert.Equal("news-risk-live-v5", round!.SchemaVersion);
+        Assert.Equal("news-risk-live-v6", round!.SchemaVersion);
         Assert.Equal(counts, round.SignalMaterialization!.JoinCounts);
         Assert.Equal(1, round.SignalMaterialization.PriorVersionOccupied);
         Assert.Equal(
