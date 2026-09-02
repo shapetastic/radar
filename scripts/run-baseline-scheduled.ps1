@@ -195,6 +195,47 @@ if ($null -ne $logPath -and $LogRetentionDays -gt 0) {
     }
 }
 
+# --- sync the checkout to origin/main (2026-09-02) ---
+# The 2026-09-01 baseline ran on a STALE checkout: specs 205/206 had merged on GitHub, but nothing here ever
+# pulls, so the run silently used pre-merge code and its run record lacked the new durability receipts. This
+# step fast-forwards main so a merged change cannot miss a night again. Rules, in the spirit of the rest of
+# this file:
+#   - FAIL OPEN: a sync failure (network, diverged history, a dirty tracked file) costs freshness, never the
+#     night's run - warn with the reason, keep going on the code we have. The log records which commit ran.
+#   - --ff-only, and ONLY when the checkout is on 'main': a scheduled task must never create a merge commit,
+#     never move a feature branch, and never resolve divergence - those are a human's decisions.
+#   - git's stderr is NOT redirected (the 5.1 merged-stream trap in the header); --quiet keeps it minimal.
+#   - Skipped under -WhatIf: a smoke test must not mutate the repo.
+if ($WhatIf) {
+    Write-RunLog "Sync   : skipped (-WhatIf; a smoke test must not mutate the repo)."
+}
+else {
+    try {
+        $branch = & git -C $repoRoot rev-parse --abbrev-ref HEAD
+        if ($LASTEXITCODE -ne 0) { throw "git rev-parse --abbrev-ref HEAD exited $LASTEXITCODE" }
+        $before = & git -C $repoRoot rev-parse --short HEAD
+        if ($LASTEXITCODE -ne 0) { throw "git rev-parse --short HEAD exited $LASTEXITCODE" }
+        if ($branch -ne 'main') {
+            Write-RunWarning "Sync: checkout is on '$branch', not 'main' - not pulling. The run uses commit $before as-is."
+        }
+        else {
+            & git -C $repoRoot pull --ff-only --quiet origin main | ForEach-Object { Write-RunLog ([string]$_) }
+            if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only exited $LASTEXITCODE (diverged history or a dirty tracked file needs a human)" }
+            $after = & git -C $repoRoot rev-parse --short HEAD
+            if ($LASTEXITCODE -ne 0) { throw "git rev-parse --short HEAD exited $LASTEXITCODE after the pull" }
+            if ($after -eq $before) {
+                Write-RunLog "Sync   : main already at $before (nothing to pull)."
+            }
+            else {
+                Write-RunLog "Sync   : main fast-forwarded $before -> $after."
+            }
+        }
+    }
+    catch {
+        Write-RunWarning "Sync: could not update the checkout ($($_.Exception.Message)). Continuing on the CURRENT code - this run may be stale; pull manually before the next one."
+    }
+}
+
 # --- hold the host awake for the whole run (spec 171 section 1) ---
 # Fail-open on purpose: a refused power request costs wall clock, never correctness - the reasoning is recorded
 # in full in lib/keep-awake.ps1. Released in the `finally` below.
