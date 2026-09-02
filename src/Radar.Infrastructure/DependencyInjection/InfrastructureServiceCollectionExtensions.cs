@@ -2861,6 +2861,12 @@ public static class InfrastructureServiceCollectionExtensions
         // judgment steps are skipped, and what leaves NewsJudgmentRunResult.SignalMaterialization null
         // ("not attempted") rather than an all-zero summary.
         services.AddSingleton<INewsJudgmentSignalMaterializer, NewsJudgmentSignalMaterializer>();
+
+        // The daily news view (2026-09-02) - registered WITH judgment like the materializer, because it is
+        // a derived read-only report over the judgment signals that step mints: without judgment there is
+        // no day view, and its ABSENCE makes the Worker skip the step entirely.
+        services.AddSingleton<IDailyNewsReportWriter, FileDailyNewsReportWriter>();
+        services.AddSingleton<IDailyNewsReportStep, DailyNewsReportStep>();
         services.TryAddSingleton(TimeProvider.System);
         return services;
     }

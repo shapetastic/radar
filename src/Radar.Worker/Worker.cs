@@ -79,6 +79,7 @@ public sealed class Worker : BackgroundService
     private readonly INewsTypingGenerator? _newsTypingGenerator;
     private readonly INewsJudgmentGenerator? _newsJudgmentGenerator;
     private readonly INewsJudgmentSignalMaterializer? _newsJudgmentSignalMaterializer;
+    private readonly IDailyNewsReportStep? _dailyNewsReportStep;
     private readonly IWeeklyReportJudgmentRerenderer? _judgmentRerenderer;
     private readonly INewsJudgmentCandidatePlanner? _candidatePlanner;
     private readonly IOperatingCallStartupValidator? _operatingCallValidator;
@@ -105,7 +106,8 @@ public sealed class Worker : BackgroundService
         INewsJudgmentGenerator? newsJudgmentGenerator = null,
         IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null,
         INewsJudgmentCandidatePlanner? candidatePlanner = null,
-        INewsJudgmentSignalMaterializer? newsJudgmentSignalMaterializer = null)
+        INewsJudgmentSignalMaterializer? newsJudgmentSignalMaterializer = null,
+        IDailyNewsReportStep? dailyNewsReportStep = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -133,6 +135,7 @@ public sealed class Worker : BackgroundService
         _newsTypingGenerator = newsTypingGenerator;
         _newsJudgmentGenerator = newsJudgmentGenerator;
         _newsJudgmentSignalMaterializer = newsJudgmentSignalMaterializer;
+        _dailyNewsReportStep = dailyNewsReportStep;
         _judgmentRerenderer = judgmentRerenderer;
         _candidatePlanner = candidatePlanner;
         _operatingCallValidator = operatingCallValidator;
@@ -256,6 +259,14 @@ public sealed class Worker : BackgroundService
         // borrowing whatever company verdict happened to predate it.
         judgment = await RunNewsJudgmentSignalMaterializationAsync(judgment, typing, ct)
             .ConfigureAwait(false);
+        // Daily news view (2026-09-02): a derived read-only day report over the judgment signals the
+        // step above just persisted. Skipped when the step is unregistered or materialization was not
+        // attempted; the step owns its own failure handling and never affects the run.
+        if (_dailyNewsReportStep is not null)
+        {
+            await _dailyNewsReportStep.RunAsync(result.RunId, judgment, ct).ConfigureAwait(false);
+        }
+
         await RunNewsRiskShadowAsync(result, judgment, ct).ConfigureAwait(false);
         await RunEfficacyReportAsync(ct).ConfigureAwait(false);
     }
