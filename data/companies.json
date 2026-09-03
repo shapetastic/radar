@@ -3614,6 +3614,286 @@
           "url": "query=RGC Resources&ticker=RGCO"
         }
       ]
+    },
+    {
+      "id": "c84a3f0b-62a2-427f-85d6-8e273d82b4ea",
+      "name": "Palladyne AI",
+      "legalName": "Palladyne AI Corp.",
+      "ticker": "PDYN",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Software—Application",
+      "followingTier": "small",
+      "aliases": ["Palladyne AI", "Palladyne", "Sarcos Technology and Robotics"],
+      "themes": ["AI robotics", "industrial automation", "defense robotics"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Palladyne AI — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001826681.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Palladyne AI — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001826681.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Palladyne AI — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001826681.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Palladyne AI — News attention (Google News)",
+          "url": "query=Palladyne AI&ticker=PDYN"
+        }
+      ]
+    },
+    {
+      "id": "e11cd6a2-a459-4095-8b0f-e70a6c6d4b01",
+      "name": "Stereotaxis",
+      "legalName": "Stereotaxis, Inc.",
+      "ticker": "STXS",
+      "exchange": "NYSE",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Devices",
+      "followingTier": "small",
+      "aliases": ["Stereotaxis", "Genesis RMN"],
+      "themes": ["surgical robotics", "robotic navigation", "electrophysiology"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Stereotaxis — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001289340.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Stereotaxis — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001289340.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Stereotaxis — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001289340.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Stereotaxis — News attention (Google News)",
+          "url": "query=Stereotaxis&ticker=STXS"
+        }
+      ]
+    },
+    {
+      "id": "d903f447-79e6-43be-b3e1-e58b051c9ea1",
+      "name": "Columbus McKinnon",
+      "legalName": "Columbus McKinnon Corporation",
+      "ticker": "CMCO",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Specialty Industrial Machinery",
+      "followingTier": "small",
+      "aliases": ["Columbus McKinnon", "CM Works"],
+      "themes": ["intelligent motion", "industrial automation", "material handling"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Columbus McKinnon — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001005229.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Columbus McKinnon — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001005229.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Columbus McKinnon — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001005229.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Columbus McKinnon — News attention (Google News)",
+          "url": "query=Columbus McKinnon&ticker=CMCO"
+        }
+      ]
+    },
+    {
+      "id": "3e37f145-2f63-4602-94e9-0262734a5e67",
+      "name": "Allient",
+      "legalName": "Allient Inc.",
+      "ticker": "ALNT",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Industrials",
+      "industry": "Electrical Equipment & Parts",
+      "followingTier": "small",
+      "aliases": ["Allient", "Allied Motion Technologies"],
+      "themes": ["precision motion control", "industrial automation", "robotics components"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Allient — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000046129.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Allient — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000046129.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Allient — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0000046129.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Allient — News attention (Google News)",
+          "url": "query=Allient&ticker=ALNT"
+        }
+      ]
+    },
+    {
+      "id": "43ad746d-3a94-46b9-9cf6-d43bbc3cb8c4",
+      "name": "Ouster",
+      "legalName": "Ouster, Inc.",
+      "ticker": "OUST",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Scientific & Technical Instruments",
+      "followingTier": "mid",
+      "aliases": ["Ouster", "Ouster Inc", "Velodyne Lidar"],
+      "themes": ["lidar", "AI perception", "autonomous machines"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Ouster — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001816581.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Ouster — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001816581.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Ouster — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001816581.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Ouster — News attention (Google News)",
+          "url": "query=Ouster Inc"
+        }
+      ]
+    },
+    {
+      "id": "9d9e2e9a-2616-4955-b206-d416348eb533",
+      "name": "PROCEPT BioRobotics",
+      "legalName": "PROCEPT BioRobotics Corporation",
+      "ticker": "PRCT",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Healthcare",
+      "industry": "Medical Devices",
+      "followingTier": "mid",
+      "aliases": ["PROCEPT BioRobotics", "Procept", "Aquablation"],
+      "themes": ["surgical robotics", "urology", "procedure adoption"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "PROCEPT BioRobotics — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001588978.json"
+        },
+        {
+          "type": "secform4",
+          "name": "PROCEPT BioRobotics — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001588978.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "PROCEPT BioRobotics — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001588978.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "PROCEPT BioRobotics — News attention (Google News)",
+          "url": "query=PROCEPT BioRobotics&ticker=PRCT"
+        }
+      ]
+    },
+    {
+      "id": "7876ceca-d703-4b31-96d7-02941ebc2b31",
+      "name": "Novanta",
+      "legalName": "Novanta Inc.",
+      "ticker": "NOVT",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Scientific & Technical Instruments",
+      "followingTier": "mid",
+      "aliases": ["Novanta", "Novanta Inc"],
+      "themes": ["precision motion control", "photonics", "surgical robotics components"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Novanta — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001076930.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Novanta — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001076930.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Novanta — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001076930.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Novanta — News attention (Google News)",
+          "url": "query=Novanta&ticker=NOVT"
+        }
+      ]
+    },
+    {
+      "id": "46a729c6-b438-41c3-a43a-3116bca4917e",
+      "name": "Ambarella",
+      "legalName": "Ambarella, Inc.",
+      "ticker": "AMBA",
+      "exchange": "Nasdaq",
+      "countryCode": "US",
+      "sector": "Technology",
+      "industry": "Semiconductors",
+      "followingTier": "mid",
+      "aliases": ["Ambarella", "Ambarella Inc"],
+      "themes": ["edge AI vision", "computer vision silicon", "autonomous robotics"],
+      "sourceFeeds": [
+        {
+          "type": "sec",
+          "name": "Ambarella — SEC filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001280263.json"
+        },
+        {
+          "type": "secform4",
+          "name": "Ambarella — SEC Form 4 insider filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001280263.json"
+        },
+        {
+          "type": "sec13dg",
+          "name": "Ambarella — SEC 13D/13G ownership filings (EDGAR)",
+          "url": "https://data.sec.gov/submissions/CIK0001280263.json"
+        },
+        {
+          "type": "newssearch",
+          "name": "Ambarella — News attention (Google News)",
+          "url": "query=Ambarella&ticker=AMBA"
+        }
+      ]
     }
   ]
 }

@@ -2456,8 +2456,8 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     `ir.grahamcorp.com/…/rss`, verified 200 + valid RSS 2.0, 10 items); every other IR feed candidate failed
     verification and was **omitted rather than guessed** — spec 199 §2's rule that a broken feed is worse
     than an absent one, the PSTL/BKE precedent.
-  - **FIVE tickers carry NO `ticker=` token (four at spec 199, ESQ added by spec 200), and one phrase
-    deliberately contradicts its own legal name.**
+  - **SIX tickers carry NO `ticker=` token (four at spec 199, ESQ added by spec 200, OUST added by spec 207
+    — see the spec-207 bullet), and one phrase deliberately contradicts its own legal name.**
     `NewsAttentionCollector.IsRelevant` is an unanchored case-insensitive `Contains` over `phrase OR
     ticker`, so `ITIC` ("cr**itic**", "pol**itic**al"), `GEOS` ("**geos**patial", "**geos**cience"), `CTO`
     ("dire**cto**r", "se**cto**r", "fa**cto**r", "do**cto**r"), `UTL` ("o**utl**ook", "o**utl**et",
@@ -2635,3 +2635,54 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     are not a hashed input. **Spec 200 moved nothing**: no formula, weight, strategy, channel, prompt, typing
     budget, recency window or fingerprint pin; `benchmark-universe-v1` byte-identical, no v2; the 2026-09-29
     AD-15 boundary unmoved. The spec was promoted from `docs/next/` to `docs/` by the Phase B PR.
+- **The AI-robotics theme enters the universe — 94 → 102, additions only, gated on spec 200's DRAINING
+  verdict (spec 207, 2026-09-03).** The universe carried no robotics or AI-robotics name (nearest neighbours
+  MRCY, KLIC, DGII, HLIO); the maintainer asked for the theme (2026-09-02). Spec 207's HARD entry condition
+  was spec 200 §5's capacity verdict — NOT DRAINING or UNRESOLVED would have frozen expansion — and the
+  recorded verdict is **DRAINING** (`untypedRemaining` 2,172 → 1,941 → 1,816), so the batch proceeded.
+  - **Eight US-listed names, selected for fit with the under-covered small/mid thesis, not fame.** Small:
+    PDYN (Palladyne AI, CIK 0001826681), STXS (Stereotaxis, 0001289340), CMCO (Columbus McKinnon,
+    0001005229), ALNT (Allient, 0000046129). Mid: OUST (Ouster, 0001816581), PRCT (PROCEPT BioRobotics,
+    0001588978), NOVT (Novanta, 0001076930), AMBA (Ambarella, 0001280263). `small` 55 → 59. Every CIK was
+    resolved from `https://www.sec.gov/files/company_tickers.json` and live-verified against
+    `data.sec.gov/submissions` on 2026-09-03 (HTTP 200, name + ticker matched); none was dropped.
+    `ProductionCompanySeedTests.Spec207Ciks` OWNS those values. The heavily covered theme names (Serve
+    Robotics, Ondas, SoundHound, BigBear.ai, Symbotic) were excluded as covered or too large; Richtech
+    Robotics because its ticker `RR` is unusable as a news token (Rolls-Royce); FARO (acquired) and iRobot
+    (Chapter 11) as not investable. Each row carries exactly the four standard feeds (sec / secform4 /
+    sec13dg / newssearch) — **no rss/IR press feed** for this batch; per-company IR feeds stay a separate,
+    measured decision.
+  - **Exact newssearch identities, chosen against the unanchored substring predicate at the seed — the
+    spec-198/200 lesson applied BEFORE first collection.** `query=Palladyne AI&ticker=PDYN`,
+    `query=Stereotaxis&ticker=STXS`, `query=Columbus McKinnon&ticker=CMCO` (never shorten to the bare
+    "Columbus" — the city), `query=Allient&ticker=ALNT`, `query=Ouster Inc` (**no ticker token**),
+    `query=PROCEPT BioRobotics&ticker=PRCT`, `query=Novanta&ticker=NOVT`, `query=Ambarella&ticker=AMBA`;
+    all eight pinned byte-exact by `ProductionSeed_Spec207Additions_NewsSearchUrlIsExactly`. **OUST is the
+    SIXTH phrase-only ticker** (after ITIC/GEOS/CTO/UTL at spec 199 and ESQ at spec 200): "ouster" is a
+    common English noun ("the CEO's ouster"), colliding as BOTH the ticker and the bare company name, so the
+    phrase carries `Inc` for precision. The adversarial pairs are pinned through the PUBLIC `CollectAsync`
+    surface (`IsRelevant` stays private and unchanged): OUST rejects "Shareholders demand the CEO's ouster
+    after proxy fight" and accepts "Ouster Inc. reports quarterly results"; CMCO rejects "Columbus city
+    council approves transit plan" and accepts "Columbus McKinnon expands automation line".
+  - **OUST is the declared identity RISK CASE, in both directions, recorded before any collection.** The
+    `Ouster Inc` phrase trades recall for precision: a headline that writes only "Ouster (OUST)" is missed
+    (pinned as a known miss by `CollectAsync_Spec207OustFeed_TickerOnlyHeadline_IsMissedByDesign`), so a
+    LOW measured Attention for OUST may be about feed identity, not coverage; loosening the phrase would
+    admit ouster-the-noun headlines and inflate Attention. Neither direction may be "fixed" by tuning inside
+    the spec — a starving feed is a measured follow-up spec against the relevance predicate, never a quiet
+    query edit.
+  - **Predeclared, falsifiable attention predictions: 3 low / 5 mid / 0 high** (bands low <55 / mid 55–70 /
+    high >70 against the stored 60-day `AttentionScore`): PDYN mid, STXS low, CMCO low, ALNT low, OUST mid,
+    PRCT mid, NOVT mid, AMBA mid — committed in `docs/cohorts/ai-robotics-2026-09.md`, a human-read record
+    wired into no code path. **The three-run retrospective is OWED there**, entry condition three successful
+    post-207 full runs, cold-start caveats identical to spec 200 §4 (a few days of capture under a 60-day
+    window tests query relevance and capture shape, not the coverage thesis; no removal, re-tier or feed
+    tuning from the read), together with the per-run `untypedRemaining` deltas — the eight unfiltered first
+    collections are a deliberate seed spike and the post-spike drain check reuses spec 200 §5's arithmetic.
+    Every forward-looking number in the spec is PROJECTED until those runs exist. Spec 207 is single-phase:
+    it promoted to `docs/` on implementation because the owed measurement lives in the cohort doc.
+  - **Spec 207 moved nothing.** No formula, weight, strategy, channel, prompt, typing budget, recency window
+    or fingerprint pin (the seed is not a hashed input; `ScoringConfigFingerprintTests` unchanged);
+    `benchmark-universe-v1` byte-identical, no v2 — the eight report `NotInBenchmarkUniverse`; no AD-15/AD-16
+    boundary movement; no global change to the relevance predicate (OUST's allowlist entry is the whole
+    predicate change).
