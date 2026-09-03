@@ -690,9 +690,11 @@ public sealed class FileNewsTypingArtifactStoreTests : IDisposable
         await Store(logger).WriteFailedAsync(Instant0250Z, runId: null, "boom", CancellationToken.None);
 
         Assert.Equal(new[] { "attention-decomposition-20260901T025000Z-FAILED.md" }, LiveFileNames());
-        Assert.Single(
+        var warning = Assert.Single(
             logger.Entries,
             e => e.Level == LogLevel.Warning && e.Message.Contains("NO run id", StringComparison.Ordinal));
+        // The Warning names the file that was ACTUALLY written (the -FAILED name), not the live sibling.
+        Assert.Contains("attention-decomposition-20260901T025000Z-FAILED", warning.Message, StringComparison.Ordinal);
         Assert.Contains(
             "(run id ABSENT)",
             await File.ReadAllTextAsync(LivePath("attention-decomposition-20260901T025000Z-FAILED.md")),

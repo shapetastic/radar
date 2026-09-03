@@ -765,7 +765,6 @@ public sealed class NewsTypingGeneratorTests
     // Spec 186 §2 — bounded, FIFO-fair typing retries
     // ---------------------------------------------------------------------------------------------------
 
-    /// <summary>Registers and returns a fresh run id, so each simulated pass is a genuinely NEW run.</summary>
     /// <summary>
     /// Spec 208: the decomposition write receives the run's as-of INSTANT (the run record's
     /// <c>CreatedAtUtc</c>, not the clock) and the run id EXPLICITLY — the store names the pair per run
@@ -790,6 +789,7 @@ public sealed class NewsTypingGeneratorTests
         Assert.Empty(harness.ArtifactStore.Failed);
     }
 
+    /// <summary>Registers and returns a fresh run id, so each simulated pass is a genuinely NEW run.</summary>
     private static Guid NextRun(Harness harness)
     {
         var id = Guid.NewGuid();

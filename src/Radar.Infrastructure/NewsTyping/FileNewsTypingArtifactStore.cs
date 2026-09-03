@@ -51,9 +51,9 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
         ArgumentNullException.ThrowIfNull(markdown);
         ArgumentNullException.ThrowIfNull(document);
 
-        WarnIfRunIdAbsent(runId, asOfUtc, "decomposition");
-        var basePath = Path.Combine(
-            _options.RootDirectory, "live", NewsTypingArtifactNames.BaseName(asOfUtc, runId));
+        var baseName = NewsTypingArtifactNames.BaseName(asOfUtc, runId);
+        WarnIfRunIdAbsent(runId, asOfUtc, "decomposition", baseName);
+        var basePath = Path.Combine(_options.RootDirectory, "live", baseName);
         var markdownWritten = await GracefulFileWriter
             .TryWriteAllTextAsync(basePath + ".md", markdown, _logger, ct)
             .ConfigureAwait(false);
@@ -82,9 +82,9 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
 
     public async Task WriteFailedAsync(DateTimeOffset asOfUtc, Guid? runId, string reason, CancellationToken ct)
     {
-        WarnIfRunIdAbsent(runId, asOfUtc, "FAILED");
-        var path = Path.Combine(
-            _options.RootDirectory, "live", NewsTypingArtifactNames.FailedBaseName(asOfUtc, runId) + ".md");
+        var failedBaseName = NewsTypingArtifactNames.FailedBaseName(asOfUtc, runId);
+        WarnIfRunIdAbsent(runId, asOfUtc, "FAILED", failedBaseName);
+        var path = Path.Combine(_options.RootDirectory, "live", failedBaseName + ".md");
         var runLabel = runId is { } id ? $"run {id:D}" : "run id ABSENT";
         var content =
             $"# News-typing pass FAILED — {asOfUtc:o} ({runLabel})\n\n"
@@ -107,9 +107,11 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
 
     /// <summary>
     /// Spec 208: the absent-run-id fallback is COUNTED (one Warning per write) and the write still lands under
-    /// the instant-only name. Never throws, never fabricates a GUID that no run record carries.
+    /// the instant-only name. The Warning names the base name THIS write actually lands under (the FAILED
+    /// path's carries the <c>-FAILED</c> suffix), so an operator locating the file is not sent to a sibling
+    /// name. Never throws, never fabricates a GUID that no run record carries.
     /// </summary>
-    private void WarnIfRunIdAbsent(Guid? runId, DateTimeOffset asOfUtc, string artifact)
+    private void WarnIfRunIdAbsent(Guid? runId, DateTimeOffset asOfUtc, string artifact, string writtenBaseName)
     {
         if (runId is null)
         {
@@ -118,7 +120,7 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
                     + "name {BaseName} (a same-instant run without an id would share it).",
                 artifact,
                 asOfUtc,
-                NewsTypingArtifactNames.BaseName(asOfUtc, runId: null));
+                writtenBaseName);
         }
     }
 }
