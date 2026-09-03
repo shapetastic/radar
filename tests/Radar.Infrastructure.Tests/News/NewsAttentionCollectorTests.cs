@@ -1197,6 +1197,121 @@ public sealed class NewsAttentionCollectorTests
             _ => throw new ArgumentOutOfRangeException(nameof(ticker), ticker, "Not a spec-200 fixture ticker."),
         };
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 207 §2/§3: the two collision-bearing feed identities of the AI-robotics batch (OUST / CMCO),
+    // exercised through the PUBLIC collection surface with the production company ids, tickers and phrases.
+    // `IsRelevant` stays private and unchanged — these pin what the exact seed phrases make it decide.
+    // The predicate reads the FEED TOKEN's phrase and ticker, never the seed company's own ticker (that one
+    // only reaches the company hint and the observation sidecar), so OUST's token deliberately carries no
+    // ticker= key and the reject cases below do not depend on the company ticker being absent.
+    // -------------------------------------------------------------------------------------------------
+
+    private static readonly Guid OustId = Guid.Parse("43ad746d-3a94-46b9-9cf6-d43bbc3cb8c4");
+    private static readonly Guid CmcoId = Guid.Parse("d903f447-79e6-43be-b3e1-e58b051c9ea1");
+
+    private const string OustPhrase = "Ouster Inc";
+    private const string OustToken = "query=Ouster Inc";
+
+    private const string CmcoPhrase = "Columbus McKinnon";
+    private const string CmcoToken = "query=Columbus McKinnon&ticker=CMCO";
+
+    public static TheoryData<string, string> Spec207RejectedHeadlines => new()
+    {
+        // OUST: "ouster" the common noun — the bare phrase "Ouster" or the ticker token "OUST" would admit
+        // every removal-from-office headline. The phrase includes "Inc" and there is no ticker token.
+        { "OUST", "Shareholders demand the CEO's ouster after proxy fight" },
+        // CMCO: the bare word "Columbus" is the city; the two-word phrase is what keeps the feed on-topic.
+        { "CMCO", "Columbus city council approves transit plan" },
+    };
+
+    public static TheoryData<string, string> Spec207AcceptedHeadlines => new()
+    {
+        { "OUST", "Ouster Inc. reports quarterly results" },
+        { "CMCO", "Columbus McKinnon expands automation line" },
+    };
+
+    [Theory]
+    [MemberData(nameof(Spec207RejectedHeadlines))]
+    public async Task CollectAsync_Spec207CollisionFeed_RejectsTheAdversarialHeadline(string ticker, string headline)
+    {
+        var (company, feed, phrase) = Spec207Fixture(ticker);
+        var reader = new FakeNewsSearchReader
+        {
+            [phrase] = [Article("https://reject.example/" + ticker, headline + " - Reuters")],
+        };
+
+        var result = await CreateCollector(reader)
+            .CollectAsync(new CollectionContext([company], [feed]), CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);
+        Assert.Empty(result.Evidence);
+        Assert.Empty(result.Observations ?? []);
+    }
+
+    [Theory]
+    [MemberData(nameof(Spec207AcceptedHeadlines))]
+    public async Task CollectAsync_Spec207CollisionFeed_AcceptsTheIssuerHeadline_ForTheIntendedCompany(
+        string ticker, string headline)
+    {
+        var (company, feed, phrase) = Spec207Fixture(ticker);
+        var reader = new FakeNewsSearchReader
+        {
+            [phrase] = [Article("https://accept.example/" + ticker, headline + " - Reuters")],
+        };
+
+        var result = await CreateCollector(reader)
+            .CollectAsync(new CollectionContext([company], [feed]), CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);
+        var item = Assert.Single(result.Evidence);
+        Assert.Equal("https://accept.example/" + ticker, item.SourceUrl);
+        // The evidence is bound to the INTENDED company: the hint comes from the seed company's own ticker
+        // (present even for OUST, whose feed token carries none) and the observation sidecar carries the
+        // company id itself.
+        Assert.Equal([ticker], item.CompanyHints);
+        var observation = Assert.Single(result.Observations!);
+        Assert.Equal(company.Id, observation.CompanyId);
+        Assert.Equal(ticker, observation.Ticker);
+    }
+
+    /// <summary>
+    /// The OUST recall side of the declared spec-207 §2 risk case, pinned so it is a known and counted miss
+    /// rather than a surprise: a headline that names the company ONLY as "Ouster (OUST)" — without "Inc" —
+    /// is dropped, because the phrase is <c>Ouster Inc</c> and there is no ticker token. If the three-run
+    /// read in <c>docs/cohorts/ai-robotics-2026-09.md</c> shows this starving the feed, the remedy is a
+    /// measured follow-up spec against the relevance predicate, never a quiet query edit (spec 207 §2).
+    /// </summary>
+    [Fact]
+    public async Task CollectAsync_Spec207OustFeed_TickerOnlyHeadline_IsMissedByDesign()
+    {
+        var (company, feed, phrase) = Spec207Fixture("OUST");
+        var reader = new FakeNewsSearchReader
+        {
+            [phrase] = [Article("https://miss.example/oust", "Ouster (OUST) shares rise on lidar order - Reuters")],
+        };
+
+        var result = await CreateCollector(reader)
+            .CollectAsync(new CollectionContext([company], [feed]), CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);
+        Assert.Empty(result.Evidence);
+        Assert.Empty(result.Observations ?? []);
+    }
+
+    private static (Company Company, CompanySourceFeed Feed, string Phrase) Spec207Fixture(string ticker) =>
+        ticker switch
+        {
+            "OUST" => (
+                Company(OustId, "Ouster", "OUST"),
+                Feed(Guid.Parse("eeeeeeee-0000-0000-0000-000000000001"), OustId, "Ouster — News", OustToken),
+                OustPhrase),
+            "CMCO" => (
+                Company(CmcoId, "Columbus McKinnon", "CMCO"),
+                Feed(Guid.Parse("eeeeeeee-0000-0000-0000-000000000002"), CmcoId, "Columbus McKinnon — News", CmcoToken),
+                CmcoPhrase),
+            _ => throw new ArgumentOutOfRangeException(nameof(ticker), ticker, "Not a spec-207 fixture ticker."),
+        };
+
     private static void AssertNoAdviceLanguage(CollectedEvidence item)
     {
         string[] banned = ["buy", "sell", "guaranteed upside", "safe bet"];

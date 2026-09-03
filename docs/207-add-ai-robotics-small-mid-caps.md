@@ -9,7 +9,8 @@ US-listed AI/robotics companies**, selected on 2026-09-02 for fit with the under
 rather than fame: the well-known theme names (Serve Robotics, Ondas, SoundHound, BigBear.ai, Symbotic) were
 deliberately **excluded** as heavily covered or too large, Richtech Robotics was excluded because its ticker
 `RR` is unusable as a news token (Rolls-Royce), and FARO (acquired by AMETEK 2025-07) and iRobot (Chapter 11
-2025-12, ownership transferred to Shenzhen PICEA 2026-01) are not investable additions.
+2025-12, ownership transferred to Shenzhen PICEA 2026-01) were excluded because neither is an independent
+US-listed company any longer.
 
 Additions only. No removals, renames, re-tiers or feed changes to existing companies. `benchmark-universe-v1`
 stays byte-identical; the additions report `NotInBenchmarkUniverse`; no v2 is declared.
