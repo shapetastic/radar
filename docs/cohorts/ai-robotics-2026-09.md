@@ -42,7 +42,7 @@ quieter half sits in mid-cap component and subsystem suppliers, not in the well-
 Ondas, SoundHound, BigBear.ai, Symbotic — were deliberately **excluded** as heavily covered or too large;
 Richtech Robotics was excluded because its ticker `RR` is unusable as a news token (Rolls-Royce); FARO
 (acquired by AMETEK 2025-07) and iRobot (Chapter 11 2025-12, ownership transferred to Shenzhen PICEA
-2026-01) are not investable additions.
+2026-01) were excluded because neither is an independent US-listed company any longer.
 
 **Predicted attention bands: low < 55 / mid 55–70 / high > 70** (against the stored 60-day `AttentionScore`).
 

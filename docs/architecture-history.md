@@ -2649,9 +2649,9 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     `ProductionCompanySeedTests.Spec207Ciks` OWNS those values. The heavily covered theme names (Serve
     Robotics, Ondas, SoundHound, BigBear.ai, Symbotic) were excluded as covered or too large; Richtech
     Robotics because its ticker `RR` is unusable as a news token (Rolls-Royce); FARO (acquired) and iRobot
-    (Chapter 11) as not investable. Each row carries exactly the four standard feeds (sec / secform4 /
-    sec13dg / newssearch) — **no rss/IR press feed** for this batch; per-company IR feeds stay a separate,
-    measured decision.
+    (Chapter 11) because neither is an independent US-listed company any longer. Each row carries exactly
+    the four standard feeds (sec / secform4 / sec13dg / newssearch) — **no rss/IR press feed** for this
+    batch; per-company IR feeds stay a separate, measured decision.
   - **Exact newssearch identities, chosen against the unanchored substring predicate at the seed — the
     spec-198/200 lesson applied BEFORE first collection.** `query=Palladyne AI&ticker=PDYN`,
     `query=Stereotaxis&ticker=STXS`, `query=Columbus McKinnon&ticker=CMCO` (never shorten to the bare
