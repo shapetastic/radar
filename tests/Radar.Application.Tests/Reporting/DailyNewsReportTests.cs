@@ -59,7 +59,7 @@ public sealed class DailyNewsReportRendererTests
 
         // Cell content is one escaped line: the pipe survives escaped and the newline is collapsed.
         Assert.Contains("3 GW \\| buildout continues", markdown, StringComparison.Ordinal);
-        Assert.DoesNotContain("- ⚠", markdown, StringComparison.Ordinal); // no unresolved warning at 0
+        Assert.DoesNotContain("could not be resolved", markdown, StringComparison.Ordinal); // no unresolved line at 0
     }
 
     [Fact]

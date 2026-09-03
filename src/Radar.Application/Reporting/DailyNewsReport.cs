@@ -113,10 +113,13 @@ public static class DailyNewsReportRenderer
         sb.Append("- skips: ").AppendLine(skips.Length == 0 ? "none" : skips);
         if (report.MaterializedNotResolved > 0)
         {
-            sb.Append("- ⚠ ").Append(report.MaterializedNotResolved)
+            sb.Append("- ").Append(report.MaterializedNotResolved)
                 .AppendLine(" materialized signal(s) could not be resolved from the durable store under this"
-                    + " run's judgment ids (a failed durable write, or a reused judgment carrying its original"
-                    + " id). Counted here rather than silently narrowing the table above.");
+                    + " run's judgment ids. The common benign cause (measured 2026-09-03) is a RE-JUDGED"
+                    + " article whose cross-run duplicate collapsed to an earlier run's copy — news that"
+                    + " already appeared in a prior day's view, correctly absent from a day table. A failed"
+                    + " durable write or a reused judgment id would also land here, so a count that exceeds"
+                    + " the re-judged overlap deserves a look. Counted rather than silently narrowed.");
         }
 
         return sb.ToString();
