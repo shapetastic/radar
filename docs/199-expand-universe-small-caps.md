@@ -161,12 +161,17 @@ identify under-covered names, which is worth knowing before any further expansio
 > **query relevance, capture shape and early calibration** — it is **NOT proof** that a company is durably
 > under-covered, and **no company may be removed, re-tiered or have its feed tuned** because of it. The mature
 > descriptive read is the first successful run whose 60-day attention window starts no earlier than the first
-> post-199 collection instant; that date is to be recorded (spec 200 Phase B) once the first run exists.
+> post-199 collection instant; that date was recorded by spec 200 Phase B on 2026-09-03: the first successful
+> run whose `WindowEndUtc` ≥ **2026-10-28T21:44:52Z** (first post-199 collection instant 2026-08-29T21:44:52Z
+> + 60 days) — operationally the 2026-10-28 nightly slot if its as-of instant falls at or after 21:44:52Z,
+> otherwise the 2026-10-29 slot; descriptive only, not a gate.
 
 **The ship condition is that the typing backlog is still draining after expansion.** ⚠ **SUPERSEDED BY SPEC
 200:** this condition was a LIVE-measurement condition and was never measured on the code that shipped — the
 batch shipped on a projection while the required post-198 measurement was still owed (see the Recorded section
-below). The measurement is now spec 200 §5, over the first three successful post-199 full runs. The original
+below). The measurement is now spec 200 §5, over the first three successful post-199 full runs. **MEASURED
+2026-09-03: DRAINING** — `untypedRemaining` 2,172 (run 1, seed burst) → 1,941 → 1,816; see spec 200 §5
+record. The original
 wording, kept for the record: if the measured post-198
 drain is materially below the projected ~140/run, say so and reduce the batch size rather than shipping the
 full ~20 — the point is to expand as far as capacity genuinely allows, not to a round number.
@@ -209,14 +214,18 @@ Implemented on `feature/expand-universe-small-caps`, PR #204. Universe **74 → 
 **The selection hypothesis is committed as a prediction** in `docs/cohorts/under-covered-2026-08.md` — one row
 per addition with ticker, CIK, sector, a one-line obscurity reason and a predicted attention band (**9 low /
 11 mid / 0 high**). The band sets there are byte-equal to the ones in the CLAUDE.md spec-199 bullet, so the two
-records cannot disagree. The three-run retrospective is recorded there as **OWED, NOT YET DONE**, and a result
-clustering above 70 is to be reported as a FAILED heuristic rather than absorbed. EPM is pre-registered as the
-most likely miss.
+records cannot disagree. The three-run retrospective was recorded there as OWED and was **PERFORMED
+2026-09-03 (spec 200 Phase B, cold-start read)**: 0 of 20 above 70 (the FAILED-heuristic condition is not
+triggered); low 8/9; mid 0/11; overall 8/20; EPM (pre-registered as the most likely miss) measured 40, low —
+the precommitted investor-platform/dividend risk did not materialise; the whole mid band measured low, the
+cold-start effect of three days of capture inside a 60-day window, and no prediction was revised and no
+company is removed, re-tiered or feed-tuned.
 
 **§5 — PROJECTED, NOT MEASURED — and the gap stated plainly: NO post-198 baseline run existed at
 implementation time.** The
 latest run was `fa50b516`, 2026-08-28T21:40Z, which is pre-198, so the capacity premise was checked against the
-last three PRE-198 runs plus spec 198's own live measurement. The post-198 check is still owed. ⚠ **Spec 200
+last three PRE-198 runs plus spec 198's own live measurement. The post-198 check was still owed at the time
+and was MEASURED by spec 200 §5 on 2026-09-03 (DRAINING). ⚠ **Spec 200
 amendment:** every post-198 / post-199 number below (~225, ~115, ~286, ~54 per run, ~34 runs) is a PROJECTION
 from pre-198 runs, not a measurement; the pre-expansion post-198 baseline no longer exists and **must not be
 manufactured** after the fact. The live measurement is spec 200 §5.
@@ -243,7 +252,13 @@ batch.~~ ⚠ **SUPERSEDED BY SPEC 200:** the ship condition was NOT met — it w
 the batch shipped on a projection while the required post-198 measurement was still owed. A projection may
 justify taking a reversible operational risk; it cannot satisfy a live-measurement condition after the fact.
 The FULL 20 did ship; whether the backlog drains under the 94-company seed is measured by spec 200 §5 over the
-first three successful post-199 full runs, with the first run reported separately as a one-time seed burst.
+first three successful post-199 full runs, with the first run reported separately as a one-time seed burst —
+**MEASURED 2026-09-03: DRAINING.** The seed burst raised `untypedRemaining` from 1,821 (2026-08-28) to 2,172
+(+351, one-time); the steady-state runs then drained it 2,172 → 1,941 → 1,816 (−231, −125; aggregate −356),
+i.e. 125–231/run against the PROJECTED ~54/run above, with steady-state admitted inflow 114–215/run against
+the projected ~286 upper bound. Sources and the per-run tables are in the spec 200 §5 record (run 3's typing
+accounting from its scheduled-run log, because the date-keyed typing artifact was overwritten by the
+same-day run 4).
 
 **Spec 200 §1 feed-identity repairs, applied BEFORE first collection (spec 200 §2 found zero history for all
 three ids against the latest durable run `fa50b516`, 2026-08-28T21:40Z, 74 companies):** `UTMD`
@@ -255,4 +270,6 @@ phrase-only additions, not four). Seed-only edits; no scoring identity moved.
 
 **Nothing in the scoring identity moved**: `benchmark-universe-v1.json` is byte-unchanged with no v2 created,
 `ScoringConfigFingerprintTests` is untouched, all six pins are unchanged, and **no operator identity-record
-clear is required for this slice** — the outstanding spec-198 step is unchanged and still owed.
+clear is required for this slice** — the outstanding spec-198 step was unchanged by spec 199 and was CLOSED
+by run 1 on 2026-08-29 (first identity recorded for `default`: `radar-scoring-fp-11240da5aeb0`; spec 200 §5
+record).

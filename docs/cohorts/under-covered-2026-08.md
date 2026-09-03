@@ -90,21 +90,73 @@ the paired AD-15 claim** exclude all 20 as `NotInBenchmarkUniverse` under frozen
 until a prospective `benchmark-universe-v2` is declared — no v2 exists and the 2026-09-29 AD-15 boundary
 is unmoved.
 
-## Retrospective — OWED, NOT YET DONE
+## Retrospective — PERFORMED 2026-09-03 (spec 200 Phase B, cold-start read)
 
-After **three** successful post-199 baseline runs, report:
+After **three** successful post-199 baseline runs (run 1 `70f256e3` 2026-08-29, run 2 `b6d52f64`
+2026-08-30, run 3 `7d4dbce3` 2026-09-01; qualification and sources in the spec 200 §5 record), the report:
 
-1. **Predicted band vs measured `AttentionScore`, per company** — all 20 rows, measured value beside the
-   band predicted above.
-2. **The hit rate** — how many of the 20 landed in their predicted band, split low/mid so a heuristic that
-   is right about the quiet names and wrong about the rest is visible as such.
-3. **The above-70 clustering test** — how many additions measure above 70. Per spec 199 §5, clustering
-   above 70 means the under-covered heuristic FAILED and must be reported as a failed heuristic.
-4. **EPM specifically**, recorded above as the risk case: an investor-platform-covered dividend payer is
-   the most likely single miss, and calling it in advance is what makes the retrospective honest.
+1. **Predicted band vs measured `AttentionScore`, per company** — all 20 rows are in the table below, the
+   measured value beside the band predicted above. Source: the `default` snapshot of each run under
+   `data/scores/{companyId}/{snapshotId}.json` (`attentionScore`; `scoringConfigVersion`
+   `radar-scoring-fp-11240da5aeb0`); run-3 `WindowEndUtc` 2026-09-01T02:50:16.5514898Z.
+2. **The hit rate** — **8 of 20 (40 %)** landed in their predicted band, split: **low 8/9** (SENEA the
+   miss) and **mid 0/11** (every mid prediction measured low, range 33–46). The heuristic was right about the
+   quiet names and wrong about the rest — but see the cold-start mechanics below before reading that as a
+   result about the companies.
+3. **The above-70 clustering test** — **0 of 20** measure above 70. The FAILED-heuristic condition is NOT
+   triggered.
+4. **EPM specifically** — measured **40, low** (predicted mid). The precommitted investor-platform/dividend
+   coverage risk did NOT materialise in this window; the miss is in the opposite direction (less attention
+   than predicted) and is the same cohort-wide cold-start effect as the other ten mid misses.
+
+| ticker | predicted | run 1 | run 2 | **run 3** | run-3 band | hit? | note on a material miss |
+| --- | --- | ---: | ---: | ---: | --- | --- | --- |
+| GHM | mid | 32 | 32 | **36** | low | MISS | cohort-wide cold-start depression; its rss IR feed failed (transport error) on runs 2 and 3, so attention rests on newssearch alone |
+| CLMB | mid | 38 | 38 | **38** | low | MISS | cohort-wide cold-start depression |
+| UTMD | low | 35 | 35 | **42** | low | HIT | |
+| MLAB | mid | 32 | 32 | **35** | low | MISS | cohort-wide cold-start depression |
+| JOUT | mid | 41 | 43 | **43** | low | MISS | cohort-wide cold-start depression |
+| FLXS | low | 33 | 39 | **42** | low | HIT | |
+| ITIC | low | 29 | 29 | **29** | low | HIT | |
+| ESQ | mid | 28 | 31 | **33** | low | MISS | cohort-wide cold-start depression |
+| SGA | low | 31 | 31 | **33** | low | HIT | hit the 25-item limit on runs 2 and 3 (69 → 67 valid items, 0 relevant tail) |
+| OOMA | mid | 39 | 40 | **42** | low | MISS | cohort-wide cold-start depression; hit the 25-item limit on runs 2 and 3 (63 → 48 valid items, 37 → 22 relevant tail) |
+| JBSS | mid | 42 | 45 | **46** | low | MISS | cohort-wide cold-start depression |
+| SENEA | low | 46 | 52 | **57** | mid | MISS | the only row to reach mid: saturated the 25-item retained prefix on runs 2 AND 3 (`maxValidItemsObserved` 49, 24 unadmitted relevant tail items each run) — the noisiest name in the cohort by relevant volume within a 7-day window |
+| NWPX | mid | 45 | 46 | **46** | low | MISS | cohort-wide cold-start depression |
+| KOP | mid | 35 | 37 | **39** | low | MISS | cohort-wide cold-start depression |
+| GEOS | low | 26 | 26 | **26** | low | HIT | the lowest: 0 and 1 valid items on runs 2 and 3 |
+| EPM | mid (RISK CASE) | 36 | 39 | **40** | low | MISS | the precommitted investor-platform/dividend coverage risk did NOT materialise in this window; the miss is in the opposite direction, the same cold-start effect as the other mid misses |
+| CTO | mid | 33 | 33 | **34** | low | MISS | cohort-wide cold-start depression |
+| OLP | low | 36 | 36 | **33** | low | HIT | |
+| UTL | low | 35 | 35 | **37** | low | HIT | |
+| RGCO | low | 36 | 36 | **36** | low | HIT | |
+
+**Totals: low 8/9; mid 0/11; overall 8/20 (40 %); above 70 = 0 of 20; EPM 40, low; unresolved 0;
+contaminated 0; sensitivity total excluding contaminated rows = primary total (8/20).** (Supplementary,
+context only, NOT in the hit/miss — run 4 as-of 2026-09-01T21:46:09Z / run 5 as-of 2026-09-02T21:50:03Z:
+GHM 36/36, CLMB 38/39, UTMD 42/42, MLAB 35/36, JOUT 46/46, FLXS 43/47, ITIC 29/33, ESQ 34/34, SGA 33/33,
+OOMA 43/50, JBSS 49/49, SENEA 57/57, NWPX 48/51, KOP 41/41, GEOS 26/26, EPM 42/44, CTO 34/34, OLP 35/38,
+UTL 38/38, RGCO 36/39.)
+
+**The mechanical reason for the material miss — the whole mid band measuring low — without revising the
+hypothesis:** `AttentionScore` is a 60-day window (run-3 `windowStartUtc` 2026-07-03 → `windowEndUtc`
+2026-09-01), but these 20 were first collected at 2026-08-29T21:44Z, so by run 3 they held roughly three
+days of capture (one unfiltered first-collection pull capped at the 25-item retained prefix per feed, then
+two 7-day-windowed pulls admitting 29 and 40 observations across all 20) against incumbents carrying a full
+60 days (the `small` tier measured mean 62.0 at spec 199). The cohort is mechanically depressed as a whole
+(26–57) and the within-cohort mid/low separation cannot be tested yet — the spec 200 §4 cold-start caveat
+in effect. Within the cohort the ordering tracks capture volume (per-company `companyCoverage` rows in the
+run-2/run-3 batch records `data/news-observations/batches/20260830T214625Z.json` and
+`20260901T025016Z.json`). The read tested query relevance (every one of the 20 companies returned relevant
+items on run 1; no company returned zero relevant items in all three runs), capture shape and early
+calibration;
+it does NOT validate the under-coverage thesis. **No company is removed, re-tiered or feed-tuned as a result;
+no predicted band, reason or band total above was changed.** Full record with sources: spec 200 §6 record.
 
 Name the reason for any material miss rather than revising the hypothesis to fit the measurement. This
-retrospective **has not been performed** — no post-199 run exists at the time of writing.
+retrospective **was performed on 2026-09-03** on the snapshot fixed in advance: run 3
+`7d4dbce3-f24d-4eff-bd5f-1ebccd5cfc93`, strategy `default`, `WindowEndUtc` 2026-09-01T02:50:16.5514898Z.
 
 **What the three-run read CAN and CANNOT mean (spec 200 §4 cold-start caveat).** The stored
 `AttentionScore` uses a **60-day** window; after three daily runs these companies have only a few days of
@@ -112,6 +164,9 @@ locally captured history. The read therefore tests **query relevance, capture sh
 calibration**. It is **NOT proof** that any company is durably under-covered, and **no company may be
 removed, re-tiered or have its feed tuned** on the strength of it. The mature descriptive read is the first
 successful run whose 60-day attention window starts no earlier than the first post-199 collection instant;
-that date is to be recorded here (spec 200 Phase B) once the first run exists. The run-3 snapshot is fixed
+that date was recorded here by spec 200 Phase B on 2026-09-03: the first successful run whose `WindowEndUtc`
+≥ **2026-10-28T21:44:52Z** (first post-199 collection instant 2026-08-29T21:44:52Z + 60 days) —
+operationally the 2026-10-28 nightly slot if its as-of instant falls at or after 21:44:52Z, otherwise the
+2026-10-29 slot; descriptive only, not a gate. The run-3 snapshot is fixed
 in advance: the `default` primary-strategy snapshot of the third successful run and its exact
 `WindowEndUtc` (spec 200 §6).
