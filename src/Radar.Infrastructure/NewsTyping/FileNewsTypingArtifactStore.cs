@@ -15,9 +15,17 @@ public sealed class FileNewsTypingArtifactStoreOptions
 
 /// <summary>
 /// The news-typing artifact writer (spec 181 §5) over the shared <see cref="GracefulFileWriter"/>: the
-/// attention-decomposition pair at <c>{root}/live/attention-decomposition-{asOfDate}.md|.json</c> and the
-/// NAMED failed artifact at <c>{root}/live/attention-decomposition-{asOfDate}-FAILED.md</c>. Every write
-/// degrades gracefully — a disk hiccup never aborts (or rolls back) the already-durable Radar run.
+/// attention-decomposition pair at <c>{root}/live/attention-decomposition-{asOfInstant}-{runId}.md|.json</c>
+/// and the NAMED failed artifact at <c>{root}/live/attention-decomposition-{asOfInstant}-{runId}-FAILED.md</c>,
+/// both named by <see cref="NewsTypingArtifactNames"/> (<c>yyyyMMdd'T'HHmmss'Z'</c> instant + <c>D</c>-format
+/// run id). The identity was widened from the as-of DATE by spec 208: under the date-keyed
+/// <c>attention-decomposition-{yyyy-MM-dd}</c> name two full runs on one UTC date wrote the same path, and on
+/// 2026-09-01 the 21:46Z scheduled run overwrote the 02:50Z run's artifact — run 3 of the spec-200 §5
+/// capacity verdict, whose typing accounting then survived only in the wrapper log. One PAIR per run, never
+/// one per day. Accrued date-keyed files are never renamed, migrated or rewritten (heal forward only). An
+/// absent run id (not reachable today — typing runs only in unfiltered full mode, which always mints one)
+/// falls back to the instant-only name with ONE Warning; no GUID is ever fabricated. Every write degrades
+/// gracefully — a disk hiccup never aborts (or rolls back) the already-durable Radar run.
 /// </summary>
 public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
 {
@@ -34,17 +42,18 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
     }
 
     public async Task WriteDecompositionAsync(
-        string asOfDateToken,
+        DateTimeOffset asOfUtc,
+        Guid? runId,
         string markdown,
         NewsTypingDecompositionDocument document,
         CancellationToken ct)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(asOfDateToken);
         ArgumentNullException.ThrowIfNull(markdown);
         ArgumentNullException.ThrowIfNull(document);
 
+        WarnIfRunIdAbsent(runId, asOfUtc, "decomposition");
         var basePath = Path.Combine(
-            _options.RootDirectory, "live", $"attention-decomposition-{asOfDateToken}");
+            _options.RootDirectory, "live", NewsTypingArtifactNames.BaseName(asOfUtc, runId));
         var markdownWritten = await GracefulFileWriter
             .TryWriteAllTextAsync(basePath + ".md", markdown, _logger, ct)
             .ConfigureAwait(false);
@@ -71,14 +80,14 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
         }
     }
 
-    public async Task WriteFailedAsync(string asOfDateToken, string reason, CancellationToken ct)
+    public async Task WriteFailedAsync(DateTimeOffset asOfUtc, Guid? runId, string reason, CancellationToken ct)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(asOfDateToken);
-
+        WarnIfRunIdAbsent(runId, asOfUtc, "FAILED");
         var path = Path.Combine(
-            _options.RootDirectory, "live", $"attention-decomposition-{asOfDateToken}-FAILED.md");
+            _options.RootDirectory, "live", NewsTypingArtifactNames.FailedBaseName(asOfUtc, runId) + ".md");
+        var runLabel = runId is { } id ? $"run {id:D}" : "run id ABSENT";
         var content =
-            $"# News-typing pass FAILED — {asOfDateToken}\n\n"
+            $"# News-typing pass FAILED — {asOfUtc:o} ({runLabel})\n\n"
                 + "The typing step failed and typed nothing. The Radar run itself is unaffected — no score, "
                 + "label, rank or report was rolled back or relabelled.\n\n"
                 + $"Reason: {reason}\n";
@@ -93,6 +102,23 @@ public sealed class FileNewsTypingArtifactStore : INewsTypingArtifactStore
                 "News-typing FAILED artifact could NOT be written to {Path} ({Reason}): the write degraded gracefully.",
                 path,
                 reason);
+        }
+    }
+
+    /// <summary>
+    /// Spec 208: the absent-run-id fallback is COUNTED (one Warning per write) and the write still lands under
+    /// the instant-only name. Never throws, never fabricates a GUID that no run record carries.
+    /// </summary>
+    private void WarnIfRunIdAbsent(Guid? runId, DateTimeOffset asOfUtc, string artifact)
+    {
+        if (runId is null)
+        {
+            _logger.LogWarning(
+                "News-typing {Artifact} artifact for as-of {AsOfUtc:o} has NO run id: writing the instant-only "
+                    + "name {BaseName} (a same-instant run without an id would share it).",
+                artifact,
+                asOfUtc,
+                NewsTypingArtifactNames.BaseName(asOfUtc, runId: null));
         }
     }
 }

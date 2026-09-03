@@ -1,7 +1,9 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.News;
@@ -185,9 +187,8 @@ public sealed class FileNewsTypingArtifactStoreTests : IDisposable
         var store = new FileNewsTypingArtifactStore(
             new FileNewsTypingArtifactStoreOptions { RootDirectory = _root },
             NullLogger<FileNewsTypingArtifactStore>.Instance);
-        await store.WriteDecompositionAsync("2026-08-23", "# md", document, CancellationToken.None);
-        return await File.ReadAllTextAsync(
-            Path.Combine(_root, "live", "attention-decomposition-2026-08-23.json"));
+        await store.WriteDecompositionAsync(Instant0250Z, RunA, "# md", document, CancellationToken.None);
+        return await File.ReadAllTextAsync(LivePath(PinnedBaseNameA + ".json"));
     }
 
     [Fact]
@@ -478,5 +479,240 @@ public sealed class FileNewsTypingArtifactStoreTests : IDisposable
 
         Assert.NotNull(parsed);
         Assert.Equal(0, Assert.Single(Assert.Single(parsed.Companies).Cohorts).ReservedWithoutOutcome);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 208 — run-scoped artifact identity: as-of INSTANT + run id, never the as-of date alone. The
+    // date-keyed name let the 2026-09-01 21:46Z run overwrite the 02:50Z run's artifact (run 3 of spec 200
+    // §5); these tests are the mutation proof that a same-day run can no longer do that.
+    // ---------------------------------------------------------------------------------------------------
+
+    private static readonly DateTimeOffset Instant0250Z = new(2026, 9, 1, 2, 50, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Instant2146Z = new(2026, 9, 1, 21, 46, 0, TimeSpan.Zero);
+    private static readonly Guid RunA = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
+    private static readonly Guid RunB = Guid.Parse("7c9e6679-7425-40de-944b-e07fc1f90ae7");
+
+    /// <summary>
+    /// The pinned shape for <see cref="Instant0250Z"/> + <see cref="RunA"/>: <c>yyyyMMdd'T'HHmmss'Z'</c>
+    /// instant + <c>D</c>-format GUID.
+    /// </summary>
+    private const string PinnedBaseNameA =
+        "attention-decomposition-20260901T025000Z-0f8fad5b-d9cb-469f-a165-70867728950e";
+
+    private FileNewsTypingArtifactStore Store(ILogger<FileNewsTypingArtifactStore>? logger = null) => new(
+        new FileNewsTypingArtifactStoreOptions { RootDirectory = _root },
+        logger ?? NullLogger<FileNewsTypingArtifactStore>.Instance);
+
+    private string LivePath(string fileName) => Path.Combine(_root, "live", fileName);
+
+    private string[] LiveFileNames()
+    {
+        var live = Path.Combine(_root, "live");
+        return Directory.Exists(live)
+            ? [.. Directory.GetFiles(live).Select(f => Path.GetFileName(f)).Order(StringComparer.Ordinal)]
+            : [];
+    }
+
+    [Fact]
+    public void BaseName_MatchesThePinnedInstantPlusRunIdShape_Exactly()
+    {
+        Assert.Equal(PinnedBaseNameA, NewsTypingArtifactNames.BaseName(Instant0250Z, RunA));
+        Assert.Equal(PinnedBaseNameA + "-FAILED", NewsTypingArtifactNames.FailedBaseName(Instant0250Z, RunA));
+        Assert.Equal(
+            "attention-decomposition-20260901T025000Z",
+            NewsTypingArtifactNames.BaseName(Instant0250Z, runId: null));
+        // A non-UTC offset is normalised to UTC before formatting: 04:50+02:00 IS 02:50Z.
+        Assert.Equal(
+            PinnedBaseNameA,
+            NewsTypingArtifactNames.BaseName(new DateTimeOffset(2026, 9, 1, 4, 50, 0, TimeSpan.FromHours(2)), RunA));
+    }
+
+    [Fact]
+    public async Task EmittedFileName_MatchesThePinnedShape_Exactly()
+    {
+        await Store().WriteDecompositionAsync(
+            Instant0250Z, RunA, "# md", Document(retryExhausted: 0), CancellationToken.None);
+
+        Assert.Equal(new[] { PinnedBaseNameA + ".json", PinnedBaseNameA + ".md" }, LiveFileNames());
+        Assert.True(File.Exists(LivePath(
+            "attention-decomposition-20260901T025000Z-0f8fad5b-d9cb-469f-a165-70867728950e.md")));
+    }
+
+    /// <summary>
+    /// The mutation proof: revert to the date-keyed name and the second write clobbers the first, so the
+    /// FIRST pair's content assertions fail.
+    /// </summary>
+    [Fact]
+    public async Task SameInstant_DifferentRunIds_ProduceTwoSurvivingPairs_WithTheFirstIntact()
+    {
+        var store = Store();
+        var first = Document(retryExhausted: 1) with { RunId = RunA };
+        var second = Document(retryExhausted: 2) with { RunId = RunB };
+
+        await store.WriteDecompositionAsync(Instant0250Z, RunA, "# run A", first, CancellationToken.None);
+        await store.WriteDecompositionAsync(Instant0250Z, RunB, "# run B", second, CancellationToken.None);
+
+        var baseA = NewsTypingArtifactNames.BaseName(Instant0250Z, RunA);
+        var baseB = NewsTypingArtifactNames.BaseName(Instant0250Z, RunB);
+        Assert.NotEqual(baseA, baseB);
+        Assert.Equal(
+            new[] { baseA + ".json", baseA + ".md", baseB + ".json", baseB + ".md" },
+            LiveFileNames());
+
+        Assert.Equal("# run A", await File.ReadAllTextAsync(LivePath(baseA + ".md")));
+        var parsedA = JsonSerializer.Deserialize<NewsTypingDecompositionDocument>(
+            await File.ReadAllTextAsync(LivePath(baseA + ".json")), ReaderOptions);
+        Assert.NotNull(parsedA);
+        Assert.Equal(RunA, parsedA.RunId);
+        Assert.Equal(1, Assert.Single(Assert.Single(parsedA.Companies).Cohorts).RetryExhausted);
+
+        Assert.Equal("# run B", await File.ReadAllTextAsync(LivePath(baseB + ".md")));
+        var parsedB = JsonSerializer.Deserialize<NewsTypingDecompositionDocument>(
+            await File.ReadAllTextAsync(LivePath(baseB + ".json")), ReaderOptions);
+        Assert.NotNull(parsedB);
+        Assert.Equal(RunB, parsedB.RunId);
+        Assert.Equal(2, Assert.Single(Assert.Single(parsedB.Companies).Cohorts).RetryExhausted);
+    }
+
+    /// <summary>The 2026-09-01 shape: run 3 at 02:50Z, run 4 at 21:46Z, one UTC date.</summary>
+    [Fact]
+    public async Task SameDate_DifferentInstants_Coexist_WithTheEarlierIntact()
+    {
+        var store = Store();
+
+        await store.WriteDecompositionAsync(
+            Instant0250Z,
+            RunA,
+            "# run 3 (02:50Z)",
+            Document(retryExhausted: 1) with { RunId = RunA },
+            CancellationToken.None);
+        await store.WriteDecompositionAsync(
+            Instant2146Z,
+            RunB,
+            "# run 4 (21:46Z)",
+            Document(retryExhausted: 2) with { RunId = RunB },
+            CancellationToken.None);
+
+        var base0250 = NewsTypingArtifactNames.BaseName(Instant0250Z, RunA);
+        var base2146 = NewsTypingArtifactNames.BaseName(Instant2146Z, RunB);
+        Assert.Equal(
+            "attention-decomposition-20260901T214600Z-7c9e6679-7425-40de-944b-e07fc1f90ae7", base2146);
+        Assert.Equal(
+            new[] { base0250 + ".json", base0250 + ".md", base2146 + ".json", base2146 + ".md" },
+            LiveFileNames());
+        Assert.Equal("# run 3 (02:50Z)", await File.ReadAllTextAsync(LivePath(base0250 + ".md")));
+        Assert.Equal("# run 4 (21:46Z)", await File.ReadAllTextAsync(LivePath(base2146 + ".md")));
+    }
+
+    [Fact]
+    public async Task FailedArtifact_CarriesTheRunScopedName()
+    {
+        await Store().WriteFailedAsync(Instant0250Z, RunA, "boom", CancellationToken.None);
+
+        Assert.Equal(new[] { PinnedBaseNameA + "-FAILED.md" }, LiveFileNames());
+        var content = await File.ReadAllTextAsync(LivePath(PinnedBaseNameA + "-FAILED.md"));
+        Assert.StartsWith(
+            "# News-typing pass FAILED — 2026-09-01T02:50:00.0000000+00:00 "
+                + "(run 0f8fad5b-d9cb-469f-a165-70867728950e)",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains("Reason: boom", content, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Spec 208 §2: accrued date-keyed artifacts heal forward only — a legacy pair (and FAILED file) on disk
+    /// is byte-for-byte untouched by a run-scoped write on the same date.
+    /// </summary>
+    [Fact]
+    public async Task LegacyDateKeyedFiles_AreByteForByteUntouched_ByASameDateRunScopedWrite()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "live"));
+        var legacyMd = LivePath("attention-decomposition-2026-09-01.md");
+        var legacyJson = LivePath("attention-decomposition-2026-09-01.json");
+        var legacyFailed = LivePath("attention-decomposition-2026-09-01-FAILED.md");
+        var mdBytes = Encoding.UTF8.GetBytes("# legacy 2026-09-01 (the surviving 21:46Z run)\n");
+        var jsonBytes = Encoding.UTF8.GetBytes(
+            "{\"schemaVersion\":\"news-typing-decomposition-v4\",\"runId\":\"35b57cfd-0000-0000-0000-000000000000\"}");
+        var failedBytes = Encoding.UTF8.GetBytes("# News-typing pass FAILED — 2026-09-01\n");
+        await File.WriteAllBytesAsync(legacyMd, mdBytes);
+        await File.WriteAllBytesAsync(legacyJson, jsonBytes);
+        await File.WriteAllBytesAsync(legacyFailed, failedBytes);
+
+        var store = Store();
+        await store.WriteDecompositionAsync(
+            Instant2146Z,
+            RunB,
+            "# new run",
+            Document(retryExhausted: 0) with { RunId = RunB },
+            CancellationToken.None);
+        await store.WriteFailedAsync(Instant2146Z, RunB, "reason", CancellationToken.None);
+
+        Assert.Equal(mdBytes, await File.ReadAllBytesAsync(legacyMd));
+        Assert.Equal(jsonBytes, await File.ReadAllBytesAsync(legacyJson));
+        Assert.Equal(failedBytes, await File.ReadAllBytesAsync(legacyFailed));
+        Assert.Equal(6, LiveFileNames().Length);
+    }
+
+    /// <summary>
+    /// The absent-run-id fallback (unreachable today — typing runs only in unfiltered full mode, which always
+    /// mints a run id): the instant-only pair is still written, ONE Warning names the missing id, nothing
+    /// throws and no GUID is fabricated.
+    /// </summary>
+    [Fact]
+    public async Task AbsentRunId_WritesTheInstantOnlyPair_AndWarnsExactlyOnce()
+    {
+        var logger = new CapturingLogger<FileNewsTypingArtifactStore>();
+
+        await Store(logger).WriteDecompositionAsync(
+            Instant0250Z, runId: null, "# md", Document(retryExhausted: 0), CancellationToken.None);
+
+        Assert.Equal(
+            new[]
+            {
+                "attention-decomposition-20260901T025000Z.json",
+                "attention-decomposition-20260901T025000Z.md",
+            },
+            LiveFileNames());
+        var warning = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("NO run id", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("attention-decomposition-20260901T025000Z", warning.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Information
+                && e.Message.StartsWith("Attention-decomposition artifact written", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AbsentRunId_OnTheFailedPath_WritesTheInstantOnlyName_AndWarnsOnceAboutTheId()
+    {
+        var logger = new CapturingLogger<FileNewsTypingArtifactStore>();
+
+        await Store(logger).WriteFailedAsync(Instant0250Z, runId: null, "boom", CancellationToken.None);
+
+        Assert.Equal(new[] { "attention-decomposition-20260901T025000Z-FAILED.md" }, LiveFileNames());
+        Assert.Single(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("NO run id", StringComparison.Ordinal));
+        Assert.Contains(
+            "(run id ABSENT)",
+            await File.ReadAllTextAsync(LivePath("attention-decomposition-20260901T025000Z-FAILED.md")),
+            StringComparison.Ordinal);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 }

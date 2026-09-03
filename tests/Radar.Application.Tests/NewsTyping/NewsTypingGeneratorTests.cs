@@ -185,23 +185,25 @@ public sealed class NewsTypingGeneratorTests
 
     private sealed class InMemoryArtifactStore : INewsTypingArtifactStore
     {
-        public List<(string DateToken, string Markdown, NewsTypingDecompositionDocument Document)> Live { get; } = [];
+        // Spec 208: the fake records the as-of INSTANT and run id the generator threads through explicitly.
+        public List<(DateTimeOffset AsOfUtc, Guid? RunId, string Markdown, NewsTypingDecompositionDocument Document)> Live { get; } = [];
 
-        public List<(string DateToken, string Reason)> Failed { get; } = [];
+        public List<(DateTimeOffset AsOfUtc, Guid? RunId, string Reason)> Failed { get; } = [];
 
         public Task WriteDecompositionAsync(
-            string asOfDateToken,
+            DateTimeOffset asOfUtc,
+            Guid? runId,
             string markdown,
             NewsTypingDecompositionDocument document,
             CancellationToken ct)
         {
-            Live.Add((asOfDateToken, markdown, document));
+            Live.Add((asOfUtc, runId, markdown, document));
             return Task.CompletedTask;
         }
 
-        public Task WriteFailedAsync(string asOfDateToken, string reason, CancellationToken ct)
+        public Task WriteFailedAsync(DateTimeOffset asOfUtc, Guid? runId, string reason, CancellationToken ct)
         {
-            Failed.Add((asOfDateToken, reason));
+            Failed.Add((asOfUtc, runId, reason));
             return Task.CompletedTask;
         }
     }
@@ -594,7 +596,7 @@ public sealed class NewsTypingGeneratorTests
         // Cap 1: one observation stays untyped, so the company must be marked incomplete.
         await harness.Build(maxNewTypingsPerRun: 1).GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, markdown, document) = Assert.Single(harness.ArtifactStore.Live);
+        var (_, _, markdown, document) = Assert.Single(harness.ArtifactStore.Live);
         Assert.Contains(NewsTypingDecompositionDocument.Caveat181, markdown);
         var company = Assert.Single(document.Companies);
         Assert.Equal(2, company.ObservationsInWindow);
@@ -639,7 +641,7 @@ public sealed class NewsTypingGeneratorTests
 
         await harness.Build().GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, _, document) = Assert.Single(harness.ArtifactStore.Live);
+        var (_, _, _, document) = Assert.Single(harness.ArtifactStore.Live);
         var cohort = Assert.Single(Assert.Single(document.Companies).Cohorts);
         Assert.Equal(3, cohort.FamilyCount);
 
@@ -684,7 +686,7 @@ public sealed class NewsTypingGeneratorTests
 
         await harness.Build().GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, _, document) = Assert.Single(harness.ArtifactStore.Live);
+        var (_, _, _, document) = Assert.Single(harness.ArtifactStore.Live);
         Assert.True(document.CaptureProvenThisRun);
         Assert.False(Assert.Single(document.Companies).Incomplete);
     }
@@ -698,7 +700,7 @@ public sealed class NewsTypingGeneratorTests
 
         await harness.Build().GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, _, document) = Assert.Single(harness.ArtifactStore.Live);
+        var (_, _, _, document) = Assert.Single(harness.ArtifactStore.Live);
         Assert.Null(document.CaptureProvenThisRun);
         Assert.True(Assert.Single(document.Companies).Incomplete);
     }
@@ -715,7 +717,7 @@ public sealed class NewsTypingGeneratorTests
 
         await harness.Build().GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, _, document) = Assert.Single(harness.ArtifactStore.Live);
+        var (_, _, _, document) = Assert.Single(harness.ArtifactStore.Live);
         var company = Assert.Single(document.Companies);
         Assert.Equal(2, company.Cohorts.Count);
         Assert.Equal(
@@ -751,8 +753,11 @@ public sealed class NewsTypingGeneratorTests
 
         await generator.GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, reason) = Assert.Single(harness.ArtifactStore.Failed);
+        var (failedAsOfUtc, failedRunId, reason) = Assert.Single(harness.ArtifactStore.Failed);
         Assert.Contains("InvalidOperationException", reason);
+        // Spec 208: the FAILED artifact is run-scoped too — anchored on the NOW instant, carrying the run id.
+        Assert.Equal(RunId, failedRunId);
+        Assert.Equal(harness.Time.GetUtcNow(), failedAsOfUtc);
         Assert.Empty(harness.ArtifactStore.Live);
     }
 
@@ -761,6 +766,30 @@ public sealed class NewsTypingGeneratorTests
     // ---------------------------------------------------------------------------------------------------
 
     /// <summary>Registers and returns a fresh run id, so each simulated pass is a genuinely NEW run.</summary>
+    /// <summary>
+    /// Spec 208: the decomposition write receives the run's as-of INSTANT (the run record's
+    /// <c>CreatedAtUtc</c>, not the clock) and the run id EXPLICITLY — the store names the pair per run
+    /// rather than per day, so two same-day runs can no longer overwrite each other's typing accounting.
+    /// </summary>
+    [Fact]
+    public async Task TheDecompositionWrite_CarriesTheRunsAsOfInstant_AndRunId()
+    {
+        var harness = new Harness();
+        harness.RunStore.Records.Add(RunRecord());
+        harness.Archive.Observations.Add(Observation("Company faces legal scrutiny", AsOf.AddDays(-2)));
+
+        await harness.Build().GenerateAsync(RunId, CancellationToken.None);
+
+        var (asOfUtc, runId, _, document) = Assert.Single(harness.ArtifactStore.Live);
+        Assert.Equal(AsOf, asOfUtc);
+        // The clock sits 10 minutes past AsOf: the instant is the run record's, not "now".
+        Assert.NotEqual(harness.Time.GetUtcNow(), asOfUtc);
+        Assert.Equal(RunId, runId);
+        Assert.Equal(RunId, document.RunId);
+        Assert.Equal(AsOf, document.WindowEndUtc);
+        Assert.Empty(harness.ArtifactStore.Failed);
+    }
+
     private static Guid NextRun(Harness harness)
     {
         var id = Guid.NewGuid();
@@ -799,7 +828,7 @@ public sealed class NewsTypingGeneratorTests
         // legacy `Failed` and never a retryable failure.
         Assert.Equal(
             NewsTypingCompleteness.RetryExhausted, cohort.TypingCompletenessByCompany[CompanyId]);
-        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        var (_, _, markdown, document) = harness.ArtifactStore.Live[^1];
         var company = Assert.Single(document.Companies);
         var companyCohort = Assert.Single(company.Cohorts);
         Assert.Equal(1, companyCohort.RetryExhausted);
@@ -1208,7 +1237,7 @@ public sealed class NewsTypingGeneratorTests
         Assert.Single(harness.Extractor.ObservationsSeen);
         Assert.Equal([1, 2], harness.Ledger.Reservations.Select(r => r.AttemptOrdinal).Order());
 
-        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        var (_, _, markdown, document) = harness.ArtifactStore.Live[^1];
         Assert.Equal(1, Assert.Single(Assert.Single(document.Companies).Cohorts).ReservedWithoutOutcome);
         Assert.Contains("reserved without outcome 1", markdown, StringComparison.Ordinal);
     }
@@ -1889,7 +1918,7 @@ public sealed class NewsTypingGeneratorTests
 
         await harness.Build().GenerateAsync(RunId, CancellationToken.None, fixture.Plan);
 
-        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        var (_, _, markdown, document) = harness.ArtifactStore.Live[^1];
         Assert.Equal("news-typing-decomposition-v4", document.SchemaVersion);
 
         var noisy = document.Companies.Single(c => c.CompanyId == NoisyCompanyId);
@@ -2740,7 +2769,7 @@ public sealed class NewsTypingGeneratorTests
 
         await harness.Build().GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        var (_, _, markdown, document) = harness.ArtifactStore.Live[^1];
         var summary = Assert.Single(document.ReaderSummaries!);
         var windowCalls = document.Companies.Sum(c => c.Cohorts.Sum(r => r.ProviderCallsAttempted));
 
@@ -2775,7 +2804,7 @@ public sealed class NewsTypingGeneratorTests
 
         await harness.Build().GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        var (_, _, markdown, document) = harness.ArtifactStore.Live[^1];
         Assert.Equal(batchId, document.NewsObservationBatchId);
         Assert.Equal(252, document.ObservationsCapturedThisRun);
         Assert.Contains("new observations 252", markdown);
@@ -2811,7 +2840,7 @@ public sealed class NewsTypingGeneratorTests
 
         await harness.Build().GenerateAsync(RunId, CancellationToken.None);
 
-        var (_, markdown, document) = harness.ArtifactStore.Live[^1];
+        var (_, _, markdown, document) = harness.ArtifactStore.Live[^1];
         Assert.Equal(batchId, document.NewsObservationBatchId);
         Assert.Null(document.ObservationsCapturedThisRun);
         Assert.Contains("new observations not recorded", markdown);
