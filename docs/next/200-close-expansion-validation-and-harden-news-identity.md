@@ -177,8 +177,10 @@ provenance and scoring output. Record failures and partial runs for operations, 
 the three.
 
 **Precondition, owed since spec 198 — VERIFIED 2026-08-29 20:25Z: `data/scoring-configs/strategies/` is
-EMPTY (cleared 12:35 local), so no deletion is required.** Only the first-run fingerprint verification remains
-owed. (Had records been present: delete or re-record them — git-ignored, never fabricate — or
+EMPTY (cleared 12:35 local), so no deletion is required.** The first-run fingerprint verification was
+performed on run 1 (`70f256e3`, 2026-08-29): the first identity recorded for `default` was
+`radar-scoring-fp-11240da5aeb0` (log line cited in the §5 record below), so nothing remains owed on this
+precondition. (Had records been present: delete or re-record them — git-ignored, never fabricate — or
 `StrategyIdentityGuard` halts run 1 before collection; that halt is CORRECT, and a halted run does not count
 toward the three.)
 
@@ -316,7 +318,243 @@ Inspected the durable stores read-only (per-company directories under `data/scor
 Phase A (§1–§4) is implemented: the three seed urls are corrected, `ESQ` is on the colliding-ticker
 allowlist, the exact urls and six adversarial accept/reject headlines are pinned, and the spec-199 doc /
 CLAUDE.md bullet / cohort file are amended in place. **§5 (three-run capacity measurement) and §6 (the
-20-row attention retrospective) are STILL OWED** and land in the Phase B follow-up after three successful
-post-199 full runs — which is why this spec stays in `docs/next/` and was NOT promoted. The spec-198
-operator precondition (clear/re-record `data/scoring-configs/strategies/{name}.json`, verify
-`radar-scoring-fp-11240da5aeb0`) is unchanged and still owed before run 1.
+20-row attention retrospective) were RECORDED BY PHASE B on 2026-09-03** — see "§5 record (Phase B,
+2026-09-03)" and "§6 record (Phase B, 2026-09-03)" below — after the three successful post-199 full runs of
+2026-08-29, 2026-08-30 and 2026-09-01; until then this spec stayed in `docs/next/` and was NOT promoted
+(the Phase B PR promotes it). The spec-198 operator precondition (clear/re-record
+`data/scoring-configs/strategies/{name}.json`, verify `radar-scoring-fp-11240da5aeb0`) was CLOSED by run 1
+on 2026-08-29: `logs/baseline-20260829T213002Z.log` carries the line "Recorded first identity for scoring
+strategy default: radar-scoring-fp-11240da5aeb0." and `data/scoring-configs/strategies/default.json` holds
+that fingerprint (see the §5 record).
+
+## §5 record (Phase B, 2026-09-03)
+
+Recorded 2026-09-03 from the live durable stores under `data/` and the scheduled-run logs under `logs/`,
+read only; nothing was rewritten. Every value names its source; a value the sources do not hold is rendered
+`not recorded`, never 0. Run 1 is the deliberate ONE-TIME SEED BURST and is reported separately from the two
+steady-state runs.
+
+### The three successful post-199 full runs
+
+Qualification, identical for all three: default profile, `RunMode=full`, exit 0, `companiesScored` 94, all
+11 strategies executed (run-record `strategies`; `primaryStrategy` `default`), durable run record + report +
+news-observation batch present, `collectionWarnings` empty, every `*NotPersisted` counter 0. No failed or
+partial run occurred between them, so nothing was excluded from the count.
+
+| field (source) | run 1 — SEED BURST | run 2 | run 3 |
+| --- | --- | --- | --- |
+| run id (run record `id`) | `70f256e3-1589-44c2-aa7a-85c235bf77b2` | `b6d52f64-0521-4b3a-9f9b-0ae8c5705c32` | `7d4dbce3-f24d-4eff-bd5f-1ebccd5cfc93` |
+| run record | `data/runs/2026/08/run-20260829T214452540Z-70f256e3-1589-44c2-aa7a-85c235bf77b2.json` | `data/runs/2026/08/run-20260830T214625510Z-b6d52f64-0521-4b3a-9f9b-0ae8c5705c32.json` | `data/runs/2026/09/run-20260901T025016551Z-7d4dbce3-f24d-4eff-bd5f-1ebccd5cfc93.json` |
+| scheduled-run log | `logs/baseline-20260829T213002Z.log` | `logs/baseline-20260830T213001Z.log` | `logs/baseline-20260901T021014Z.log` |
+| script start UTC (log `Started:`) | 2026-08-29 21:30:02 | 2026-08-30 21:30:01 | 2026-09-01 02:10:14 |
+| run as-of instant (run record `createdAtUtc` = every snapshot's `WindowEndUtc`) | 2026-08-29T21:44:52.5407443Z | 2026-08-30T21:46:25.5105658Z | 2026-09-01T02:50:16.5514898Z |
+| pipeline complete (log "Radar pipeline run completed at") | 2026-08-29T22:44:00Z | 2026-08-30T21:47:39Z | 2026-09-01T03:28:15Z |
+| script end UTC (log `Ended  :`) | 2026-08-29 23:18:49 | 2026-08-30 22:22:48 | 2026-09-01 08:41:00 |
+| total wall-clock (log `Elapsed:`) | 01:48:47 (exit 0) — seed burst, not steady state | 00:52:46 (exit 0) | 06:30:46 (exit 0) — NOT steady-state comparable, see the note below |
+| completion status | full, exit 0, report `541ccc3a-2132-40bc-ac1f-8346dce1055e` | full, exit 0, report `72ccffa1-920c-4bb4-8926-2229f32d4a33` | full, exit 0, report `16c6d7ea-e85b-447c-b135-5e36247fd7e6` |
+| universe (`companiesScored`) | 94 | 94 | 94 |
+| strategies executed (`strategies`) | 11 (`default` primary) | 11 | 11 |
+| `evidenceCollected` / `evidenceNew` | 7,252 / 1,903 | 6,870 / 127 | 6,833 / 254 |
+| `signalsExtracted` / `signalsApproved` / `signalsNeedingReview` | 1,646 / 1,619 / 27 | 127 / 127 / 0 | 247 / 247 / 0 |
+| `sourcesChecked` / `sourcesFailed` | 425 / 3 | 425 / 6 | 425 / 8 |
+| collector failures (run record `collectorRuns[].failures[]`: `sourceName` / `reason`) | rss: ServisFirst, Helios, ProPetro (transport error) | rss: Graham Corporation (= GHM, a spec-199 addition), ServisFirst, Helios, ProPetro, Select Water, Cryoport (all transport error) | rss: Graham Corporation (GHM, transport error), Aehr Test Systems (request timed out), ATN International (transport error); newssearch: The Bancorp (TBBK), First Industrial Realty, Hormel (HRL), Winmark (WINA), Mercury Systems (MRCY) (all transport error) — 91/96 newssearch feeds succeeded |
+| `collectionWarnings` | none (empty array) | none | none |
+| `signalsNotPersisted` / `scoreSnapshotsNotPersisted` / `reportsNotPersisted` / `scoringConfigsNotPersisted` | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `strategiesSkippedForUnpersistedConfig` | not recorded (field absent on this record) | null | null |
+| `hydrationElapsed` / `scoringElapsed` | not recorded (fields absent on this record) | 00:05:15 / 00:00:27 | 00:36:22 / 00:34:05 |
+| price acquisition (AD-14, outside the pipeline; log "Price history acquisition complete") | 94/94 tickers, 23,594 bars — this is where the one-year backfill for the 20 new tickers happened | 94/94, 23,594 bars | 93/94, 23,343 bars, 1 source unreadable (JNJ, transport error) |
+| news-judgment pass (log "News-judgment pass complete") | 22 judgment records | 21 | 18 |
+| live 60-day AI-ON fingerprint for `default` (every `default` snapshot's `scoringConfigVersion`; `data/scoring-configs/strategies/default.json`) | `radar-scoring-fp-11240da5aeb0` — FIRST identity recorded on this run (log "Recorded first identity for scoring strategy default: radar-scoring-fp-11240da5aeb0.") | `radar-scoring-fp-11240da5aeb0` | `radar-scoring-fp-11240da5aeb0` |
+
+**Run 3's wall-clock is not steady-state comparable.** The log's own caveat says a large excess over the
+awake-rate expectation means the host was suspended mid-run: the typing stage shows one provider call of
+5,214,325 ms (87 min) and stage elapsed 17,779,051 ms, and the run record shows `hydrationElapsed` 00:36:22 /
+`scoringElapsed` 00:34:05 against 00:05:15 / 00:00:27 on run 2. The run itself is complete and successful
+(exit 0, 94 scored, all durable counters 0), so it counts toward the three; only its duration is excluded
+from any steady-state reading.
+
+**The spec-198 operator precondition is CLOSED.** `data/scoring-configs/strategies/` was empty before run 1
+(verified 2026-08-29 20:25Z, above), and run 1 recorded the first identity for `default` as
+`radar-scoring-fp-11240da5aeb0` (`logs/baseline-20260829T213002Z.log`, "Recorded first identity for scoring
+strategy default: radar-scoring-fp-11240da5aeb0."). Every `default` snapshot of runs 1–3 (and of the later
+runs 4–5) carries `scoringConfigVersion` `radar-scoring-fp-11240da5aeb0`, the expected live 60-day AI-ON
+value. No independently approved later identity boundary superseded it in this window.
+
+### Observations (news-observation batch records)
+
+| field (source: `data/news-observations/batches/{file}` unless stated) | run 1 — SEED BURST | run 2 | run 3 |
+| --- | --- | --- | --- |
+| batch file / `batchId` | `20260829T214452Z.json` / `cfad07d0-91e6-43d9-b4eb-ff5c73e9a575` | `20260830T214625Z.json` / `462024ca-579c-4997-9294-6765d3292c3d` | `20260901T025016Z.json` / `69f0133c-6f34-4ba4-aa1a-31a41f5f1bc3` |
+| `observationsAttempted` / `observationsWritten` / `observationsCrossRunDeduped` / `observationsFailed` | 1,240 / 693 / 547 / 0 | 888 / 114 / 774 / 0 | 821 / 215 / 606 / 0 |
+| `captureProven` / `fullUniverse` | true / true | true / true | true / true |
+| newssearch feeds expected / succeeded (sum over `collectors[0].companyCoverage[]` of `expectedFeedCount` / `successfulFeedCount`) | 96 / 96 | 96 / 96 | 96 / 91 |
+| companies with `confirmedLocalTruncation` / sum of `unadmittedRelevantTailItemCount` (same `companyCoverage`) | 50 / 1,326 | 35 / 512 | 31 / 372 |
+| recency window (log "News search recency-window audit"; configured window `when:7d`) | 75 feeds issued the windowed query, **21 issued the unfiltered first-collection query**; 20 companies on first collection | 96 windowed / 0 unfiltered / 0 companies on first collection | 96 windowed / 0 / 0 |
+| admitted under the windowed (recent-window) query vs under first-collection/unfiltered behaviour (ALTERNATE SOURCE — see below) | **239 windowed (the 74 incumbents) / 454 unfiltered first-collection (the 20 additions)** — total 693 | 114 windowed (29 for the 20 additions + 85 incumbents) / 0 unfiltered | 215 windowed (40 additions + 175 incumbents) / 0 unfiltered |
+
+**Alternate source for the admitted split.** The batch record does not split admitted observations by query
+mode. The split was derived from the observation store `data/news-observations/observations/2026/{08,09}/*.json`
+by counting files whose `firstObservedAtUtc` falls inside each run's script window (run 1 2026-08-29
+21:30–23:20Z; run 2 2026-08-30 21:30–22:23Z; run 3 2026-09-01 02:10–08:42Z), split by whether `companyId` is
+one of the 20 spec-199 ids. The per-run totals (693 / 114 / 215) reconcile EXACTLY to `observationsWritten`,
+which validates the method. Of the 454 run-1 observations for the additions, 332 carried a `publishedAtUtc`
+at least 7 days before observation — items the 7-day window would have excluded, admitted only because first
+collection is unfiltered (spec 198 §2). All 20 companies' first-collection feeds hit the effective result
+limit of 25 on run 1 (per-company `companyCoverage` rows, `unfilteredFirstCollectionFeedCount` = 1 per
+company, 2 for NWPX — NWPX's two feeds counted jointly, because the coverage rows and observation files are
+per-company).
+
+### Typing (the verdict-bearing field)
+
+Typing reader on every run: `deepinfra-deepseek` (openai:deepseek-ai/DeepSeek-V4-Flash), cohort key
+`openai:deepseek-ai/DeepSeek-V4-Flash|news-typing-prompt-v1|news-typing-schema-v1|news-event-taxonomy-v1`;
+budget 350 new typings per run (`Radar:NewsResearch:Typing:MaxNewTypingsPerRun=350`, unchanged by this
+spec). The pre-199 reference column is the last pre-expansion run, for the seed-burst comparison only.
+
+| field | pre-199 reference (2026-08-28, run `fa50b516`) | run 1 — SEED BURST | run 2 | run 3 |
+| --- | --- | --- | --- | --- |
+| source | `data/news-typing/live/attention-decomposition-2026-08-28.json` (`readerSummaries[0]`) | `data/news-typing/live/attention-decomposition-2026-08-29.json` (`runId` 70f256e3, `readerSummaries[0]`) | `data/news-typing/live/attention-decomposition-2026-08-30.json` (`runId` b6d52f64, `readerSummaries[0]`) | **`logs/baseline-20260901T021014Z.log`** (ALTERNATE SOURCE — the durable artifact was overwritten, see the defect note): the lines "350 new typing(s) this pass — lanes: 5 retry, 120 judgment-candidate priority, 225 general (1816 untyped observation(s) remain)", "350/350 call(s) attempted, 340 persisted completed typing(s), failures 0 provider / 0 parse / 10 validation" and "2 observation(s) have spent all 3 typing attempt(s)" |
+| `providerCallsAttempted` | 350 | 350 | 350 | 350 |
+| `completedOutcomesPersisted` | 340 | 341 | 344 | 340 |
+| provider / parse / validation failures | 0 / 0 / 10 | 0 / 0 / 9 | 0 / 0 / 6 | 0 / 0 / 10 |
+| `retryExhausted` | 0 | 1 | 2 | 2 |
+| `reservationsRefused` / `outcomeWritesFailed` / `reservedWithoutOutcome` | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | not recorded (the log does not print these three, and the artifact that would have is overwritten) |
+| lanes retry / judgment-candidate priority / general (`retrySelected` / `candidatePrioritySelected` / `generalSelected`; log "lanes:") | 13 / 150 / 187 | 10 / 150 / 190 | 8 / 150 / 192 | 5 / 120 / 225 |
+| **`untypedRemaining` at run end** | 1,821 | **2,172** | **1,941** | **1,816** |
+
+The log value and the artifact value are the SAME quantity from the same code path (`NewsTypingGenerator`):
+on runs 1 and 2 the log lines read "2172 untyped observation(s) remain" and "1941 untyped observation(s)
+remain" while the artifacts say 2172 and 1941 — identical. So run 3's log figure is the same measure, read
+from its only surviving source.
+
+### Backlog deltas and verdict
+
+- **Seed burst, reported separately:** run 1 RAISED the backlog from 1,821 (2026-08-28, pre-199) to
+  **2,172 (+351)** — the one-time effect of 454 unfiltered first-collection observations for the 20
+  additions (plus the 20 tickers' one-year price backfill on the same run, outside the pipeline). This is
+  not steady state and is not part of the two steady-state deltas.
+- **Steady-state deltas:** `run2 − run1` = 1,941 − 2,172 = **−231**; `run3 − run2` = 1,816 − 1,941 =
+  **−125**; aggregate `run3 − run1` = 1,816 − 2,172 = **−356**.
+- **Verdict: DRAINING.** `untypedRemaining` at run 3 (1,816) is below run 1 (2,172), with both per-run
+  deltas negative. All three verdict-bearing checkpoints are present: runs 1 and 2 from the durable typing
+  artifacts, run 3 from its scheduled-run log (named above). Had that log not existed the verdict would have
+  been **UNRESOLVED** — missing data is never treated as zero — and that dependence is stated plainly here.
+- **Against the projection:** the steady-state drain measured **125–231 per run** against spec 199's
+  PROJECTED ~54/run (the projection was pessimistic); steady-state admitted inflow measured 114–215/run
+  against the projected ~286 upper bound.
+- **Supplementary, NOT part of the verdict:** the next two successful runs have DURABLE artifacts and
+  continue the drain — run 4 `35b57cfd-defc-48d5-bf8c-751248d701de` (as-of 2026-09-01T21:46:09Z,
+  `data/news-typing/live/attention-decomposition-2026-09-01.json`) **1,688**; run 5
+  `fd2575b7-b60a-451e-8cc9-1f3a004ece57` (as-of 2026-09-02T21:50:03Z,
+  `attention-decomposition-2026-09-02.json`) **1,585**.
+- **Consequence:** universe expansion is NOT frozen by this verdict (spec 207's gate reads this verdict).
+  No typing-budget, capture, scoring or universe change follows from this spec.
+
+### Defect FOUND, recorded, NOT fixed here (out of Phase B scope; needs its own spec)
+
+`FileNewsTypingArtifactStore` writes the decomposition artifact to
+`{root}/live/attention-decomposition-{asOfDate}.md|.json`, keyed by as-of DATE. Two successful full runs
+happened on 2026-09-01 (run 3 at 02:50Z and run 4 at 21:46Z), so run 4 silently OVERWROTE run 3's artifact:
+`attention-decomposition-2026-09-01.json` carries `runId` `35b57cfd`, and run 3's durable typing accounting
+exists only in its log. This violates "nothing may be discarded without being counted". Every other §5
+field for run 3 IS durable (run record, batch record, snapshots); only the typing accounting fell back to
+the log. The fix is owed to a follow-up spec (see Phase B status).
+
+## §6 record (Phase B, 2026-09-03)
+
+**Fixed snapshot, chosen in advance:** the run-3 `default` snapshot, `WindowEndUtc`
+2026-09-01T02:50:16.5514898Z (= run 3 `createdAtUtc`), `scoringConfigVersion` `radar-scoring-fp-11240da5aeb0`,
+read from `data/scores/{companyId}/{snapshotId}.json` with `strategyName` `default`; `AttentionScore` is the
+snapshot's `attentionScore`. Run-1 and run-2 values are the same company's `default` snapshots at
+`WindowEndUtc` 2026-08-29T21:44:52.5407443Z and 2026-08-30T21:46:25.5105658Z. Bands are the predeclared low
+< 55 / mid 55–70 / high > 70. All 20 companies have a run-1, run-2 and run-3 `default` snapshot — **0
+unresolved**; §2 found zero pre-correction history, so **0 contaminated** and the sensitivity total
+excluding contaminated rows equals the primary total. No predicted band was revised.
+
+| ticker | companyId | predicted | run 1 | run 2 | **run 3** | run-3 snapshot id (prefix) | run-3 band | hit? |
+| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |
+| GHM | `03d83435-a25a-46d9-8c0b-ccd6ae2f6370` | mid | 32 | 32 | **36** | `ac505f40` | low | MISS |
+| CLMB | `3ec8fa0f-0be7-425b-9d18-d3f2cf9c7cce` | mid | 38 | 38 | **38** | `62803935` | low | MISS |
+| UTMD | `28243c9e-eb18-4a85-acec-8f93aeb8cdef` | low | 35 | 35 | **42** | `d3d55444` | low | HIT |
+| MLAB | `6546421b-76ce-40cf-ad5a-67850e8a6a14` | mid | 32 | 32 | **35** | `1ce63fcd` | low | MISS |
+| JOUT | `345739cf-7b3b-4a5e-9282-9a08d00dbf95` | mid | 41 | 43 | **43** | `6d932235` | low | MISS |
+| FLXS | `977ab7ef-84c4-4415-914e-225445f5bf77` | low | 33 | 39 | **42** | `7e981812` | low | HIT |
+| ITIC | `2ae6e6da-b714-416f-9d90-b6432f6eac2b` | low | 29 | 29 | **29** | `6635aad9` | low | HIT |
+| ESQ | `971ea074-e524-4d6d-baf2-ead26449a0dc` | mid | 28 | 31 | **33** | `8b059925` | low | MISS |
+| SGA | `b9114ba4-4a9e-444a-b295-e5ee4d6e75c3` | low | 31 | 31 | **33** | `9cf28cd6` | low | HIT |
+| OOMA | `6abb319e-7404-4771-a7e4-1392afcdd106` | mid | 39 | 40 | **42** | `2ce874ff` | low | MISS |
+| JBSS | `9033c658-5451-4eb6-a75d-6ee934e0d0ae` | mid | 42 | 45 | **46** | `f67751cd` | low | MISS |
+| SENEA | `28a12288-2bef-4e98-9c20-2243eb8c7a3a` | low | 46 | 52 | **57** | `ac18f802` | mid | MISS |
+| NWPX | `5a2b18f8-a612-4d50-9987-4aa182205a5f` | mid | 45 | 46 | **46** | `161fec2b` | low | MISS |
+| KOP | `0ca2bef7-aebf-4e2b-acdc-d5383c5e9acf` | mid | 35 | 37 | **39** | `33a0419a` | low | MISS |
+| GEOS | `77b0bd01-7b66-4b56-b192-954476183ec6` | low | 26 | 26 | **26** | `c27176ce` | low | HIT |
+| EPM | `a86391fc-476a-41ef-8fae-b259b052eec9` | mid (declared RISK CASE) | 36 | 39 | **40** | `6391adf7` | low | MISS |
+| CTO | `2f6db469-4729-4c7b-af2c-89ec30b7285b` | mid | 33 | 33 | **34** | `4437e7ea` | low | MISS |
+| OLP | `de02b7db-8c25-4252-96a1-64093e3a5e3a` | low | 36 | 36 | **33** | `04896c1a` | low | HIT |
+| UTL | `db2f28fc-75f0-42c7-9480-04dd4b5e4326` | low | 35 | 35 | **37** | `f1955a46` | low | HIT |
+| RGCO | `1f2c8b48-1daa-41fb-bd08-1cbdc30dcb3b` | low | 36 | 36 | **36** | `304b86d5` | low | HIT |
+
+**Totals (run-3 band against predicted band):**
+
+- **low-band hit rate 8/9** — SENEA is the miss (measured 57, mid).
+- **mid-band hit rate 0/11** — every mid prediction measured low (range 33–46).
+- **overall 8/20 = 40 %.**
+- **count above 70: 0 of 20** — the "clustered above 70 ⇒ heuristic FAILED" test is NOT triggered.
+- **EPM (declared RISK CASE): 40, low** — predicted mid. The precommitted risk (investor-platform/dividend
+  coverage making it measure as COVERED) did NOT materialise in this cold-start window; the miss is in the
+  opposite direction (less attention than predicted) and is the same cohort-wide cold-start effect as the
+  other ten mid misses.
+- **unresolved rows: 0; contaminated rows: 0**; sensitivity total excluding contaminated rows = 8/20
+  (identical to the primary total).
+
+**Supplementary, later durable snapshots (context only, NOT in the hit/miss):** run 4 (as-of
+2026-09-01T21:46:09Z) / run 5 (as-of 2026-09-02T21:50:03Z) — GHM 36/36, CLMB 38/39, UTMD 42/42, MLAB 35/36,
+JOUT 46/46, FLXS 43/47, ITIC 29/33, ESQ 34/34, SGA 33/33, OOMA 43/50, JBSS 49/49, SENEA 57/57, NWPX 48/51,
+KOP 41/41, GEOS 26/26, EPM 42/44, CTO 34/34, OLP 35/38, UTL 38/38, RGCO 36/39.
+
+**Mechanical explanation of the material miss (the whole mid band measuring low) — no prediction is
+revised.** `AttentionScore` is computed over a 60-day window (run-3 snapshot `windowStartUtc` 2026-07-03 →
+`windowEndUtc` 2026-09-01), but the 20 additions were first collected at 2026-08-29T21:44Z, so by run 3 they
+held roughly three days of capture: one unfiltered first-collection pull capped at the 25-item retained
+prefix per feed, then two 7-day-windowed pulls admitting 29 and 40 observations across all 20. Incumbents
+carry a full 60 days of accrual (spec 199 measured the `small` tier at mean 62.0). The cohort is therefore
+mechanically depressed as a whole (26–57), and the within-cohort mid/low separation cannot be tested yet —
+which is exactly the §4 cold-start caveat. Within the cohort the ordering tracks capture volume (per-company
+`companyCoverage` rows in the run-2 and run-3 batch records): SENEA, the only row to reach mid (57),
+saturated the 25-item retained prefix on runs 2 AND 3 (`maxValidItemsObserved` 49 with 24 unadmitted
+relevant tail items each run) — the noisiest name in the cohort by relevant volume within a 7-day window;
+OOMA (63 → 48 valid items, 37 → 22 tail) and SGA (69 → 67 valid items, but 0 relevant tail) also hit the
+limit. GEOS (26, the lowest) returned 0 and 1 valid items on runs 2 and 3. GHM's rss IR feed failed with a
+transport error on runs 2 and 3 (recorded in `collectorRuns`), so its attention rests on newssearch alone.
+
+**What this read is and is not.** It tested query relevance (every one of the 20 companies returned
+relevant items on run 1; no company returned zero relevant items in all three runs), capture shape and early
+calibration. It does NOT validate the under-coverage thesis, and **NO company is removed, re-tiered or
+feed-tuned** as a result. No scoring or universe action follows from it.
+
+## §4 mature read date (Phase B, 2026-09-03)
+
+First post-199 collection instant = run 1 as-of **2026-08-29T21:44:52Z**. The mature descriptive read is the
+first successful run whose `WindowEndUtc` ≥ **2026-10-28T21:44:52Z** (that instant + 60 days), i.e. the
+first run whose 60-day attention window starts no earlier than first collection. Operationally: the
+2026-10-28 nightly slot IF its as-of instant falls at or after 21:44:52Z (the slot's as-of has ranged
+21:44:52Z–21:50:03Z across the nightly-slot runs 1, 2, 4 and 5; run 3 was the 02:50Z off-slot run),
+otherwise the 2026-10-29 slot. It is an operational follow-up,
+descriptive only — not an efficacy gate.
+
+## Phase B status (2026-09-03)
+
+Phase B is complete: the §5 three-run capacity record, the §6 20-row cold-start attention read and the §4
+mature read date are recorded above from the named durable sources. **Capacity verdict: DRAINING** (2,172 →
+1,941 → 1,816; seed burst +351 reported separately; steady-state deltas −231 and −125). This PR promotes the
+spec to `docs/`. Phase B changed no code, test, seed, config or data; spec 200 moved no scoring fingerprint
+in either phase.
+
+Owed follow-ups:
+
+1. **The mature 60-day attention read** of the 20 additions — first successful run with `WindowEndUtc` ≥
+   2026-10-28T21:44:52Z; descriptive only, no gate.
+2. **A spec for the artifact-overwrite defect**: stop `FileNewsTypingArtifactStore`'s date-keyed
+   `attention-decomposition-{asOfDate}` artifact silently overwriting an earlier same-day run (run 3 of §5
+   lost its durable typing accounting this way).
+3. **Spec 207** may now read the DRAINING verdict at its gate.

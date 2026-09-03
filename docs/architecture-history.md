@@ -2488,7 +2488,10 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     exactly as spec 198 set them — 30d `radar-scoring-fp-56c8e882beed`/`radar-scoring-fp-7d2b0cf537c4`, **60d
     live** `radar-scoring-fp-0ff442a14c1b`/**`radar-scoring-fp-11240da5aeb0`**, 120d
     `radar-scoring-fp-adf455313d35`/`radar-scoring-fp-7eece22968a4`. **199 adds no operator step of its
-    own**, and the spec-198 one is UNCHANGED and STILL OWED: before the first post-198 baseline,
+    own**, and the spec-198 one was UNCHANGED by 199 and was CLOSED by run 1 on 2026-08-29 (spec 200 §5
+    record): `data/scoring-configs/strategies/` was verified empty beforehand and the first post-199 run
+    recorded the first identity for `default` as **`radar-scoring-fp-11240da5aeb0`**
+    (`logs/baseline-20260829T213002Z.log`). The step as it stood: before the first post-198 baseline,
     delete or re-record every configured `data/scoring-configs/strategies/{name}.json` (git-ignored, so
     it can never ride in a PR and must never be fabricated) and verify the first run reports
     **`radar-scoring-fp-11240da5aeb0`**.
@@ -2508,12 +2511,14 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     hold only a few days of capture, so the three-run read tests query relevance, capture shape and early
     calibration — it is NOT proof of durable under-coverage, and no company may be removed, re-tiered or
     feed-tuned from it; the mature read is the first successful run whose 60-day window starts no earlier
-    than the first post-199 collection instant (date recorded under spec 200 Phase B once it exists).
+    than the first post-199 collection instant — recorded by spec 200 Phase B on 2026-09-03 as the first
+    successful run whose `WindowEndUtc` ≥ 2026-10-28T21:44:52Z (first post-199 collection instant
+    2026-08-29T21:44:52Z + 60 days; descriptive only, no gate).
   - **The capacity premise, MEASURED — and the spec's own projection was wrong in BOTH directions.**
-    ⚠ **No post-198 baseline exists yet** (the latest run is `fa50b516`, 2026-08-28T21:40Z, which is
-    PRE-198), so §5's "measure against the first post-198 run" is measured here from the last three PRE-198
-    runs plus spec 198's own live measurement, and **the post-198 check is still OWED on the first post-198
-    baseline**. Measured typing drain, `untypedRemaining` per run: 2026-08-26 **2,028** → 08-27 **1,927** →
+    ⚠ **No post-198 baseline existed yet at spec 199** (the latest run was `fa50b516`, 2026-08-28T21:40Z,
+    which is PRE-198), so §5's "measure against the first post-198 run" is measured here from the last three
+    PRE-198 runs plus spec 198's own live measurement, and **the post-198 check was still OWED on the first
+    post-198 baseline — since MEASURED by spec 200 §5 (2026-09-03, DRAINING)**. Measured typing drain, `untypedRemaining` per run: 2026-08-26 **2,028** → 08-27 **1,927** →
     08-28 **1,821**, i.e. **101 and 106 per run** — so the spec's premise of "~58/run today" **understated**
     current capacity. Per run: 350 provider calls attempted, ~337–342 completed outcomes persisted, 0
     provider/parse failures, 10 validation failures (08-28). Observations captured: 08-26 **255**, 08-27
@@ -2530,7 +2535,9 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     batch shipped on a projection while the post-198 measurement was still owed; the pre-expansion post-198
     baseline no longer exists and must not be manufactured. The live measurement is **spec 200 §5** (first
     three successful post-199 full runs, run 1 reported separately as the one-time seed burst; verdict
-    DRAINING / NOT DRAINING / UNRESOLVED, missing data never read as zero). No
+    DRAINING / NOT DRAINING / UNRESOLVED, missing data never read as zero). **MEASURED 2026-09-03: DRAINING**
+    (2,172 → 1,941 → 1,816; steady-state drain 125–231/run against the projected ~54; run 3's typing
+    accounting from its log because the date-keyed artifact was overwritten by the same-day run). No
     typing or judgment budget was changed — a budget change is a separate decision.
   - **Expected operational consequences, recorded NOT discovered, so the first post-199 run is read
     correctly and nothing reads as a regression**: per-run scorings rise **740 → ≈940** (94 companies × 10
@@ -2552,3 +2559,79 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     tier, feeds or identity; any new collector, feed kind or provider; any typing/judgment budget change;
     and backfilling evidence, prices or scores for the additions (they accrue forward, like every other
     company did).
+- **The expansion is VALIDATED on live runs — capacity DRAINING, the cold-start attention read recorded
+  honestly, and three feed identities repaired before they could accrue history (spec 200, two phases:
+  Phase A 2026-08-29, Phase B 2026-09-03).** Spec 199's record carried three defects: three `newssearch`
+  phrases loose enough for `NewsAttentionCollector.IsRelevant`'s unanchored substring rule to admit the
+  wrong company, a capacity ship condition declared "met" from a projection, and "they enter the efficacy
+  series" wording that conflated three products. Spec 200 repaired all three and then measured the
+  expansion on the first three successful post-199 full runs.
+  - **Phase A (2026-08-29, PR #205, merged BEFORE the first post-199 collection — the boundary was clean).**
+    §2 inspected the durable stores read-only (per-company `data/scores`/`signals`/`prices`/`news-typing`
+    directories, `companyId` in `data/news-observations`, the run records; no recursive flat grep) and found
+    **ZERO history** for all three ids against the latest durable run `fa50b516` (2026-08-28, 74 companies,
+    pre-199), so the corrections landed at the seed with no migration, no contamination label and nothing
+    rewritten. The three repairs, exact: UTMD `query=Utah Medical&ticker=UTMD` → `query=Utah Medical
+    Products&ticker=UTMD` (the old phrase admitted "University of Utah Medical …"); ITIC `query=Investors
+    Title` → `query=Investors Title Company`; ESQ `query=Esquire Financial&ticker=ESQ` → `query=Esquire
+    Financial` — **ESQ joins the colliding-ticker allowlist** ("Esquire" is an ordinary word AND a publisher
+    name), making FIVE phrase-only additions. The exact urls and six adversarial accept/reject headlines are
+    pinned through the collector's public surface (`ProductionCompanySeedTests`,
+    `NewsAttentionCollectorTests`). **Deliberately NO global `IsRelevant` change**: a boundary-aware ticker
+    predicate would re-decide accepted history for every ticker-bearing feed and needs its own corpus-wide
+    audit; it is recorded as deferred, not smuggled in. Spec 199's capacity claim was relabelled
+    **PROJECTED, NOT MEASURED** in place (its "ship condition met" struck through as superseded — the batch
+    shipped on a projection while the post-198 measurement was owed, and the pre-expansion post-198 baseline
+    no longer exists and must not be manufactured), and its efficacy wording was replaced by the explicit
+    **three-way boundary**: (1) live strategy/report scoring is immediate for all 94; (2) raw forward-return
+    diagnostics appear once a horizon resolves and grant no benchmark membership; (3) the official
+    benchmark-v1 leaderboard and the paired AD-15 claim exclude the 20 as `NotInBenchmarkUniverse` until a
+    prospective `benchmark-universe-v2` — none created, the 2026-09-29 AD-15 boundary unmoved. Phase A did
+    NOT promote the spec; it stayed in `docs/next/` until Phase B.
+  - **Phase B (2026-09-03) — §5 capacity verdict: DRAINING.** The three successful post-199 full runs
+    (default profile, exit 0, 94 scored, 11 strategies, `collectionWarnings` empty, every `*NotPersisted`
+    counter 0): run 1 `70f256e3` (as-of 2026-08-29T21:44:52Z, the ONE-TIME SEED BURST), run 2 `b6d52f64`
+    (2026-08-30T21:46:25Z), run 3 `7d4dbce3` (2026-09-01T02:50:16Z). `untypedRemaining` from the typing
+    reader `deepinfra-deepseek` (cohort `openai:deepseek-ai/DeepSeek-V4-Flash|news-typing-prompt-v1|
+    news-typing-schema-v1|news-event-taxonomy-v1`, budget 350/run unchanged): 1,821 (pre-199, 2026-08-28) →
+    **2,172** (run 1: the seed burst RAISED the backlog **+351**, 454 unfiltered first-collection observations
+    for the 20 additions, reported separately) → **1,941** (run 2, **−231**) → **1,816** (run 3, **−125**;
+    aggregate run3 − run1 **−356**). Sources: `data/news-typing/live/attention-decomposition-2026-08-28.json`,
+    `…-2026-08-29.json` (`runId` 70f256e3), `…-2026-08-30.json` (`runId` b6d52f64), and for run 3
+    **`logs/baseline-20260901T021014Z.log`** ("1816 untyped observation(s) remain") — the same quantity from
+    the same code path, proven identical to the artifact value on runs 1 and 2. Steady-state drain measured
+    **125–231/run against the PROJECTED ~54/run** (the projection was pessimistic); steady-state admitted
+    inflow 114–215/run (batch `observationsWritten` 693 seed / 114 / 215) against the projected ~286 upper
+    bound. Supplementary, NOT part of the verdict: runs 4 `35b57cfd` and 5 `fd2575b7` have DURABLE artifacts
+    and continue the drain, **1,688** and **1,585**. Consequence: universe expansion is NOT frozen; spec 207's
+    gate may read this verdict. Run 3's 06:30:46 wall-clock is not steady-state comparable (the host was
+    suspended mid-run: one 87-minute provider call, `hydrationElapsed` 00:36:22 vs 00:05:15 on run 2) but the
+    run is complete and counts. The spec-198 operator precondition CLOSED on run 1: the directory was
+    verified empty beforehand and the first identity recorded for `default` was
+    **`radar-scoring-fp-11240da5aeb0`** (`logs/baseline-20260829T213002Z.log`); every `default` snapshot of
+    runs 1–5 carries it.
+  - **Phase B — §6 cold-start attention read, all 20 rows retained, no prediction revised.** Fixed snapshot:
+    run 3's `default` snapshot, `WindowEndUtc` 2026-09-01T02:50:16.5514898Z. **0 of 20 above 70** (the
+    FAILED-heuristic condition is not triggered); **low 8/9** (SENEA the miss at 57, the only row to reach
+    mid — it saturated the 25-item retained prefix on runs 2 and 3); **mid 0/11** (every mid prediction
+    measured low, 33–46); overall 8/20; **EPM, the declared RISK CASE, 40 low** — the precommitted
+    investor-platform/dividend coverage risk did NOT materialise, the miss is in the opposite direction;
+    0 unresolved, 0 contaminated (§2's zero-history finding). The mechanical reason for the whole mid band
+    measuring low is cold start, not the companies: three days of capture inside a 60-day window against
+    incumbents carrying 60 days (`small` mean 62.0 at spec 199), so the cohort is depressed as a whole
+    (26–57) and within-cohort separation cannot be tested yet. The read tested query relevance (every one of
+    the 20 companies returned relevant items on run 1), capture shape and early calibration; it does NOT
+    validate the under-coverage thesis and **no company is removed, re-tiered or feed-tuned**. Full table in
+    `docs/cohorts/under-covered-2026-08.md` and the spec's §6 record. **Mature read date (§4):** the first
+    successful run whose `WindowEndUtc` ≥ **2026-10-28T21:44:52Z** (first post-199 collection instant
+    2026-08-29T21:44:52Z + 60 days) — descriptive only, not a gate.
+  - **Defect FOUND, recorded, NOT fixed — owed a spec of its own.** `FileNewsTypingArtifactStore` keys the
+    decomposition artifact by as-of DATE (`{root}/live/attention-decomposition-{asOfDate}.md|.json`); two
+    successful full runs on 2026-09-01 (run 3 at 02:50Z, run 4 at 21:46Z) meant run 4 silently OVERWROTE run
+    3's artifact (`attention-decomposition-2026-09-01.json` carries `runId` 35b57cfd), so run 3's typing
+    accounting survives only in its log — a "nothing may be discarded without being counted" violation. Had
+    the log not existed the §5 verdict would have been UNRESOLVED.
+  - **Nothing moved.** Phase B changed no code, test, seed, config or data; Phase A's seed-only query edits
+    are not a hashed input. **Spec 200 moved nothing**: no formula, weight, strategy, channel, prompt, typing
+    budget, recency window or fingerprint pin; `benchmark-universe-v1` byte-identical, no v2; the 2026-09-29
+    AD-15 boundary unmoved. The spec was promoted from `docs/next/` to `docs/` by the Phase B PR.

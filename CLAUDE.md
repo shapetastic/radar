@@ -348,9 +348,13 @@ authoritative record:
   frozen at 74 members — additions report `NotInBenchmarkUniverse` until a prospective v2 is
   declared. Pooled efficacy is benchmark-adjusted; the paired AD-15 path deliberately is not
   (spec 183).
-- **Owed follow-ups**: spec 200 Phase B (capacity verdict + the 20-row attention read after
-  three successful post-199 full runs, then promote spec 200 from `docs/next/`); the
-  spec-199 predicted-attention-band review carries the spec 200 §4 cold-start caveat.
+- **Owed follow-ups**: spec 200 Phase B is DONE (2026-09-03; capacity verdict DRAINING; spec
+  200 promoted to `docs/`). Still owed: (i) the mature 60-day attention read of the 20 spec-199
+  additions — the first successful run with `WindowEndUtc` ≥ 2026-10-28T21:44:52Z, descriptive
+  only, no gate (the cold-start read carried the spec 200 §4 caveat); (ii) a spec to stop
+  `FileNewsTypingArtifactStore`'s date-keyed `attention-decomposition-{asOfDate}` artifact
+  silently overwriting an earlier same-day run (run 3 of spec 200 §5 lost its durable typing
+  accounting this way).
 
 ### General conventions
 
