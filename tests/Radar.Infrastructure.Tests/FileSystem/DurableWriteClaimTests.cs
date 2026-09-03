@@ -390,8 +390,8 @@ public sealed class DurableWriteClaimTests : IDisposable
         var store = new FileNewsTypingArtifactStore(
             new FileNewsTypingArtifactStoreOptions { RootDirectory = await BlockedRootAsync("news-typing") }, logger);
 
-        await store.WriteDecompositionAsync("2026-08-29", "# md\n", DecompositionDocument(), CancellationToken.None);
-        await store.WriteFailedAsync("2026-08-29", "reason", CancellationToken.None);
+        await store.WriteDecompositionAsync(Instant, Spec208RunId, "# md\n", DecompositionDocument(), CancellationToken.None);
+        await store.WriteFailedAsync(Instant, Spec208RunId, "reason", CancellationToken.None);
 
         AssertNoSuccessLine(logger.Entries, "artifact written");
         Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("Attention-decomposition artifact NOT", StringComparison.Ordinal));
@@ -405,7 +405,7 @@ public sealed class DurableWriteClaimTests : IDisposable
         var store = new FileNewsTypingArtifactStore(
             new FileNewsTypingArtifactStoreOptions { RootDirectory = Path.Combine(_tempDir, "news-typing") }, logger);
 
-        await store.WriteDecompositionAsync("2026-08-29", "# md\n", DecompositionDocument(), CancellationToken.None);
+        await store.WriteDecompositionAsync(Instant, Spec208RunId, "# md\n", DecompositionDocument(), CancellationToken.None);
 
         Assert.Contains(logger.Entries, e => e.Level == LogLevel.Information && e.Message.StartsWith("Attention-decomposition artifact written", StringComparison.Ordinal));
     }
@@ -491,6 +491,9 @@ public sealed class DurableWriteClaimTests : IDisposable
         Companies: [],
         ObservationsWithoutCompany: 0,
         GeneratedAtUtc: Instant);
+
+    /// <summary>Spec 208: the typing artifact is run-scoped, so the store takes an instant + run id.</summary>
+    private static readonly Guid Spec208RunId = new("aaaaaaaa-0000-0000-0000-000000000208");
 
     private sealed class CapturingLogger<T> : ILogger<T>
     {

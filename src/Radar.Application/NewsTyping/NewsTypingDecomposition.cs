@@ -1,10 +1,13 @@
+using System.Globalization;
+
 using Radar.Application.News;
 
 namespace Radar.Application.NewsTyping;
 
 /// <summary>
-/// The JSON side of the attention-decomposition artifact (spec 181 §5) — one document per run day, mirrored
-/// by the rendered markdown.
+/// The JSON side of the attention-decomposition artifact (spec 181 §5) — one document per TYPING PASS, named
+/// by as-of instant + run id (spec 208; it was one per run DAY until the 2026-09-01 same-day overwrite),
+/// mirrored by the rendered markdown.
 /// <para>
 /// Spec 189 §3 adds the run's CAPTURE INFLOW (<see cref="NewsObservationBatchId"/> +
 /// <see cref="ObservationsCapturedThisRun"/>) and the AUTHORITATIVE pass-wide
@@ -201,17 +204,59 @@ public sealed record NewsTypingDecompositionTypeRow(
     int FamilyCount);
 
 /// <summary>
+/// The ONE naming rule for the attention-decomposition artifact (spec 208): the durable identity is the
+/// run's as-of INSTANT plus its run id, never the as-of date alone. Pure and deterministic so the live pair,
+/// the FAILED variant and the tests cannot drift from each other.
+/// <para>
+/// Shape: <c>attention-decomposition-{yyyyMMdd'T'HHmmss'Z'}-{runId:D}</c> (UTC, invariant culture, no
+/// milliseconds — the family-checkpoint / observation-archive instant convention, so the artifacts sort and
+/// correlate with the run records on sight). When the run id is absent the name is instant-only; the STORE
+/// owns the Warning for that case, this helper only names. Until spec 208 the name was
+/// <c>attention-decomposition-{yyyy-MM-dd}</c>, which let the 2026-09-01 21:46Z run overwrite the 02:50Z
+/// run's artifact (run 3 of spec 200 §5).
+/// </para>
+/// </summary>
+public static class NewsTypingArtifactNames
+{
+    public const string Prefix = "attention-decomposition-";
+
+    public const string FailedSuffix = "-FAILED";
+
+    public const string InstantFormat = "yyyyMMdd'T'HHmmss'Z'";
+
+    /// <summary>The as-of instant as the pinned <c>yyyyMMdd'T'HHmmss'Z'</c> token (UTC, invariant culture).</summary>
+    public static string Instant(DateTimeOffset asOfUtc) =>
+        asOfUtc.UtcDateTime.ToString(InstantFormat, CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// <c>attention-decomposition-{instant}-{runId:D}</c>, or <c>attention-decomposition-{instant}</c> when
+    /// <paramref name="runId"/> is absent. No extension.
+    /// </summary>
+    public static string BaseName(DateTimeOffset asOfUtc, Guid? runId) =>
+        runId is { } id
+            ? Prefix + Instant(asOfUtc) + "-" + id.ToString("D")
+            : Prefix + Instant(asOfUtc);
+
+    /// <summary><see cref="BaseName"/> + <c>-FAILED</c>. No extension.</summary>
+    public static string FailedBaseName(DateTimeOffset asOfUtc, Guid? runId) =>
+        BaseName(asOfUtc, runId) + FailedSuffix;
+}
+
+/// <summary>
 /// The typing artifact write seam (spec 181 §5), implemented in Infrastructure over the shared graceful
-/// writer: <c>{root}/live/attention-decomposition-{asOfDate}.md|.json</c>, plus a NAMED failed artifact —
-/// a typing failure never rolls back or relabels the already-durable Radar run.
+/// writer: <c>{root}/live/{NewsTypingArtifactNames.BaseName}.md|.json</c>, plus a NAMED failed artifact at
+/// <c>{root}/live/{NewsTypingArtifactNames.FailedBaseName}.md</c> — a typing failure never rolls back or
+/// relabels the already-durable Radar run. Both writes take the run's as-of instant and run id EXPLICITLY
+/// (spec 208) so two same-day runs can never share a path.
 /// </summary>
 public interface INewsTypingArtifactStore
 {
     Task WriteDecompositionAsync(
-        string asOfDateToken,
+        DateTimeOffset asOfUtc,
+        Guid? runId,
         string markdown,
         NewsTypingDecompositionDocument document,
         CancellationToken ct);
 
-    Task WriteFailedAsync(string asOfDateToken, string reason, CancellationToken ct);
+    Task WriteFailedAsync(DateTimeOffset asOfUtc, Guid? runId, string reason, CancellationToken ct);
 }

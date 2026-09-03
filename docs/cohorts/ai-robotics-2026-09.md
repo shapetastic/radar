@@ -125,9 +125,10 @@ snapshot of the THIRD successful post-207 run and its exact `WindowEndUtc`:
    runs, using exactly the arithmetic spec 200 §5 defined. The eight unfiltered first collections (the
    spec-198 first-collection exemption — each new company's FIRST collection is unfiltered by design, which
    is what seeds it) are a deliberate seed spike; the question is whether the backlog drains after it, not
-   whether it rises on run 1. The per-run typing accounting is read from the durable
-   `attention-decomposition-{asOfDate}` artifact where it survived, and from the run log where a same-day
-   run overwrote it (the spec 200 §5 defect, still owed its own spec).
+   whether it rises on run 1. The per-run typing accounting is read from the durable typing artifact —
+   `attention-decomposition-{yyyy-MM-dd}` for runs before spec 208 merged (one per DAY, so a same-day run may
+   have overwritten it: fall back to the run log, as spec 200 §5 did for its run 3), and
+   `attention-decomposition-{yyyyMMdd'T'HHmmss'Z'}-{runId}` (spec 208) for runs after, one pair per run.
 
 **What the three-run read CAN and CANNOT mean (cold-start caveat, identical to spec 200 §4).** The stored
 `AttentionScore` uses a **60-day** window; after three daily runs these companies will hold only a few days

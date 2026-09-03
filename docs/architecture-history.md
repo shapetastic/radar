@@ -2625,8 +2625,10 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     `docs/cohorts/under-covered-2026-08.md` and the spec's §6 record. **Mature read date (§4):** the first
     successful run whose `WindowEndUtc` ≥ **2026-10-28T21:44:52Z** (first post-199 collection instant
     2026-08-29T21:44:52Z + 60 days) — descriptive only, not a gate.
-  - **Defect FOUND, recorded, NOT fixed — owed a spec of its own.** `FileNewsTypingArtifactStore` keys the
-    decomposition artifact by as-of DATE (`{root}/live/attention-decomposition-{asOfDate}.md|.json`); two
+  - **Defect FOUND, recorded, NOT fixed by spec 200 — FIXED by spec 208 (2026-09-03, run-scoped
+    `attention-decomposition-{instant}-{runId}` name; see the spec-208 bullet).**
+    `FileNewsTypingArtifactStore` keyed the decomposition artifact by as-of DATE
+    (`{root}/live/attention-decomposition-{asOfDate}.md|.json`); two
     successful full runs on 2026-09-01 (run 3 at 02:50Z, run 4 at 21:46Z) meant run 4 silently OVERWROTE run
     3's artifact (`attention-decomposition-2026-09-01.json` carries `runId` 35b57cfd), so run 3's typing
     accounting survives only in its log — a "nothing may be discarded without being counted" violation. Had
@@ -2686,3 +2688,27 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     `benchmark-universe-v1` byte-identical, no v2 — the eight report `NotInBenchmarkUniverse`; no AD-15/AD-16
     boundary movement; no global change to the relevance predicate (OUST's allowlist entry is the whole
     predicate change).
+- **The typing decomposition artifact is run-scoped — as-of instant + run id, never the as-of date alone
+  (spec 208, 2026-09-03).** `FileNewsTypingArtifactStore` named the pair
+  `attention-decomposition-{yyyy-MM-dd}.md|.json` (and `…-FAILED.md`), so two full runs on one UTC date wrote
+  the same path and the second silently destroyed the first — measured, not hypothetical: on 2026-09-01 the
+  21:46Z scheduled run overwrote the 02:50Z run's artifact (run 3 of spec 200 §5), whose `untypedRemaining`
+  checkpoint then survived only in the scheduled-run wrapper log. The identity is now
+  `attention-decomposition-{yyyyMMdd'T'HHmmss'Z'}-{runId:D}` (FAILED: `…-{instant}-{runId}-FAILED.md`), owned by
+  ONE pure helper, `NewsTypingArtifactNames` (Application, beside `INewsTypingArtifactStore`), so the live
+  pair, the FAILED variant and the tests cannot drift; the interface takes `(DateTimeOffset asOfUtc, Guid?
+  runId)` explicitly and `NewsTypingGenerator` threads the run id and the run record's `CreatedAtUtc` through
+  both call sites (the failure path stays anchored on the NOW instant, as before, and is run-scoped too). An
+  absent run id — unreachable today, typing runs only in unfiltered full mode which always mints one — writes
+  the instant-only name and logs ONE Warning; nothing throws and no GUID is fabricated. Mutation-proven in
+  `FileNewsTypingArtifactStoreTests`: same instant + two run ids → two surviving pairs with the first intact;
+  the 2026-09-01 shape (02:50Z then 21:46Z) coexists; the pinned name
+  `attention-decomposition-20260901T025000Z-0f8fad5b-d9cb-469f-a165-70867728950e.md` is asserted byte-exact.
+  - **Accrued date-keyed artifacts heal forward only.** Existing `attention-decomposition-{yyyy-MM-dd}.*`
+    files are not renamed, migrated, rewritten or reconstructed (a legacy pair on disk is proven
+    byte-for-byte untouched by a same-date run-scoped write); the 02:50Z 2026-09-01 artifact is permanently
+    lost and spec 200 §5's wrapper-log alternate source stands. Nothing in `src/` reads these artifacts and
+    spec 208 adds no reader. CLAUDE.md owed follow-up (ii) is amended in place to DONE.
+  - **Spec 208 moved nothing.** No scoring, formula, weight, strategy, channel, prompt, typing budget,
+    recency window, report writer (the weekly/daily same-day overwrite is correct for derived views and is
+    out of scope) or fingerprint pin; `ScoringConfigFingerprintTests` unchanged.

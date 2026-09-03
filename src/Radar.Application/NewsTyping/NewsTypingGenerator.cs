@@ -169,8 +169,9 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
     public async Task<NewsTypingRunResult?> GenerateAsync(
         Guid? runId, CancellationToken ct, NewsJudgmentCandidatePlan? candidatePlan = null)
     {
-        var fallbackDateToken = _timeProvider.GetUtcNow().UtcDateTime
-            .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        // Spec 208: the failure path may have no run record, so it is anchored on the NOW instant; the run
+        // id (when present) is threaded through so the FAILED artifact is still run-scoped.
+        var fallbackAsOfUtc = _timeProvider.GetUtcNow();
         try
         {
             return await GenerateCoreAsync(runId, candidatePlan, ct).ConfigureAwait(false);
@@ -185,7 +186,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             // failed artifact (itself best-effort) and return null (no stage-1 outcome for the judge).
             _logger.LogError(ex, "News-typing pass failed; writing the named failed artifact.");
             await _artifactStore
-                .WriteFailedAsync(fallbackDateToken, $"{ex.GetType().Name}: {ex.Message}", ct)
+                .WriteFailedAsync(fallbackAsOfUtc, runId, $"{ex.GetType().Name}: {ex.Message}", ct)
                 .ConfigureAwait(false);
             return null;
         }
@@ -201,7 +202,6 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         var now = _timeProvider.GetUtcNow();
         var runRecord = runId is { } id ? await FindRunRecordAsync(id, ct).ConfigureAwait(false) : null;
         var asOfUtc = runRecord?.CreatedAtUtc ?? now;
-        var asOfDateToken = asOfUtc.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var windowStartUtc = asOfUtc.AddDays(-_options.LookbackDays);
 
         // Capture provenance for THIS run, resolved fail-closed: no resolvable batch manifest means
@@ -298,7 +298,7 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
             now);
         await _artifactStore
             .WriteDecompositionAsync(
-                asOfDateToken, NewsTypingDecompositionRenderer.RenderMarkdown(document), document, ct)
+                asOfUtc, runId, NewsTypingDecompositionRenderer.RenderMarkdown(document), document, ct)
             .ConfigureAwait(false);
 
         _logger.LogInformation(

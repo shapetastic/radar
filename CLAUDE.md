@@ -351,10 +351,12 @@ authoritative record:
 - **Owed follow-ups**: spec 200 Phase B is DONE (2026-09-03; capacity verdict DRAINING; spec
   200 promoted to `docs/`). Still owed: (i) the mature 60-day attention read of the 20 spec-199
   additions — the first successful run with `WindowEndUtc` ≥ 2026-10-28T21:44:52Z, descriptive
-  only, no gate (the cold-start read carried the spec 200 §4 caveat); (ii) a spec to stop
-  `FileNewsTypingArtifactStore`'s date-keyed `attention-decomposition-{asOfDate}` artifact
-  silently overwriting an earlier same-day run (run 3 of spec 200 §5 lost its durable typing
-  accounting this way); (iii) the spec-207 three-run retrospective (predicted-band vs measured
+  only, no gate (the cold-start read carried the spec 200 §4 caveat); (ii) DONE by spec 208
+  (2026-09-03): `FileNewsTypingArtifactStore` now names the typing artifact
+  `attention-decomposition-{asOfInstant}-{runId}` (owned by `NewsTypingArtifactNames`), so a same-day run
+  can no longer overwrite an earlier one; run 3 of spec 200 §5 lost its durable typing accounting under
+  the date-keyed name and that artifact stays lost — accrued date-keyed files heal forward only;
+  (iii) the spec-207 three-run retrospective (predicted-band vs measured
   `AttentionScore` for the eight AI-robotics additions, plus the post-spike `untypedRemaining`
   drain check using spec 200 §5's arithmetic) owed in `docs/cohorts/ai-robotics-2026-09.md`
   after three successful post-207 full runs — descriptive only, no removal/re-tier/feed tuning.
