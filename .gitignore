@@ -159,9 +159,16 @@ secrets.json
 /data/ai-debug/
 /data/fcc-cache/
 /.playwright-mcp
-/data/replays/backtest-infer-on/strategies
+# Nothing under data/replays is tracked - the narrower backtest-infer-on rule widened 2026-09-03
+# (spec 200 Phase B reviewer: live data/ subdirs were one `git add -A` from a public commit).
+/data/replays/
 /data/calibration-audit
 /data/calibration-audit-164/shadow
+/data/audits/
+/data/guidance-typing-audit/
+/data/news-observations/
+/data/news-risk/
+/data/news-typing/
 
 # Scheduled-run wrapper logs (spec 171): host-local operational output produced by
 # scripts/run-baseline-scheduled.ps1, pruned by its -LogRetentionDays. Never repo content.
