@@ -7,6 +7,7 @@ using Radar.Application.Collectors;
 using Radar.Application.Lifecycle;
 using Radar.Application.Pipeline;
 using Radar.Application.Scoring;
+using Radar.Application.SignalExtraction;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Reports;
@@ -292,10 +293,18 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             var comparable = previous is not null
                 && ScoreSeriesKey.SameSeries(c.Current.StrategyName, previous.StrategyName);
 
+            // Spec 209/210: each distinct evidence id behind the snapshot is loaded ONCE, before Decide,
+            // and that single load feeds THREE consumers — the contributing-signal refs (the source class
+            // behind each signal, which the policy's floor rationale names), the evidence-ref block and the
+            // insider-activity aggregate. Never fetched twice, and no second per-company evidence pass.
+            var loadedEvidence = await LoadLinkedEvidenceAsync(c.Current, links, ct).ConfigureAwait(false);
+
             // The contributing signal set is built BEFORE Decide because the policy's corroboration
-            // floor measures agreement across it (and the report's "why noticed" block reuses the very
-            // same list — built once, never fetched twice).
-            var signals = await BuildSignalRefsAsync(c.Current, links, ct).ConfigureAwait(false);
+            // floor measures agreement across it and (spec 210) names each counted type's support —
+            // source class, observed date, judgment-derived — from these refs; the report's "why noticed"
+            // block reuses the very same list (built once, never fetched twice).
+            var signals = await BuildSignalRefsAsync(c.Current, links, loadedEvidence, ct)
+                .ConfigureAwait(false);
 
             var action = _policy.Decide(new ReportActionContext(
                 c.Current,
@@ -303,9 +312,6 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 PreviousComparable: comparable,
                 ContributingSignals: signals,
                 FollowingTier: c.Company.FollowingTier));
-            // Spec 209: each distinct evidence id behind the snapshot is loaded ONCE and shared by the
-            // evidence-ref block and the insider-activity aggregate (never fetched twice).
-            var loadedEvidence = await LoadLinkedEvidenceAsync(c.Current, links, ct).ConfigureAwait(false);
             var evidence = BuildEvidenceRefs(links, loadedEvidence);
             var insiderActivity = BuildInsiderActivitySummary(c.Current, loadedEvidence);
             entries.Add(new WeeklyReportEntry(
@@ -680,14 +686,16 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
 
     /// <summary>
     /// Loads every DISTINCT evidence id the snapshot's links cite exactly once (spec 209): the same item is
-    /// commonly linked through several signals, and both the evidence-ref block and the insider-activity
-    /// aggregate read from this one load. A missing item is kept as <c>null</c> (never dropped) so the ref
-    /// block can render its placeholder and warn.
+    /// commonly linked through several signals, and the contributing-signal refs (spec 210), the
+    /// evidence-ref block and the insider-activity aggregate all read from this one load. A missing item
+    /// is kept as <c>null</c> (never dropped) so the ref block renders its placeholder; the missing ids
+    /// are counted into ONE warning per snapshot (never one line per evidence id).
     /// </summary>
     private async Task<IReadOnlyDictionary<Guid, EvidenceItem?>> LoadLinkedEvidenceAsync(
         CompanyScoreSnapshot current, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct)
     {
         var loaded = new Dictionary<Guid, EvidenceItem?>();
+        var missing = new List<Guid>();
         foreach (var link in links)
         {
             if (loaded.ContainsKey(link.EvidenceId))
@@ -701,15 +709,24 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
 
             if (evidence is null)
             {
-                // Never drop provenance silently: keep the link's reason but flag the missing evidence.
-                _logger.LogWarning(
-                    "Evidence {EvidenceId} referenced by score snapshot {SnapshotId} (signal {SignalId}) was not found; rendering placeholder.",
-                    link.EvidenceId,
-                    current.Id,
-                    link.SignalId);
+                missing.Add(link.EvidenceId);
             }
 
             loaded[link.EvidenceId] = evidence;
+        }
+
+        if (missing.Count > 0)
+        {
+            // Never drop provenance silently: the links keep their reasons and render placeholders, and the
+            // gap is surfaced once per snapshot with every missing id (the list is bounded by the
+            // snapshot's distinct links, so nothing is truncated).
+            _logger.LogWarning(
+                "Score snapshot {SnapshotId} (company {CompanyId}): {Count} of {Distinct} distinct linked evidence item(s) were not found in the store; rendering placeholders. Missing: {MissingIds}",
+                current.Id,
+                current.CompanyId,
+                missing.Count,
+                loaded.Count,
+                string.Join(", ", missing));
         }
 
         return loaded;
@@ -780,8 +797,22 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         return summary;
     }
 
+    /// <summary>
+    /// Resolves the snapshot's distinct contributing signals and (spec 210) stamps each ref with the
+    /// provenance the action policy's floor rationale names: the signal's observed instant, the CANONICAL
+    /// source type of the evidence it cites, and whether it is judgment-derived (the ONE parser,
+    /// <see cref="NewsDirectionalSignalMetadata.IsJudgmentDerived"/>). The source type comes from
+    /// <paramref name="loadedEvidence"/> — the single per-snapshot evidence load — never from a second
+    /// fetch. A signal's <c>EvidenceId</c> is its link's <c>EvidenceId</c>, so the load covers it; a signal
+    /// whose cited evidence is NOT in the load (or was not found) is a provenance gap: its source type
+    /// stays <c>null</c> (rendered "source unknown", never a default) and the gaps are counted in ONE
+    /// aggregated warning per snapshot.
+    /// </summary>
     private async Task<IReadOnlyList<ReportSignalRef>> BuildSignalRefsAsync(
-        CompanyScoreSnapshot current, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct)
+        CompanyScoreSnapshot current,
+        IReadOnlyList<ScoreEvidenceLink> links,
+        IReadOnlyDictionary<Guid, EvidenceItem?> loadedEvidence,
+        CancellationToken ct)
     {
         // The same signal can back multiple evidence links; collapse to distinct contributing
         // signals so the "why noticed" block lists each signal once.
@@ -791,6 +822,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             .ToList();
 
         var refs = new List<ReportSignalRef>(distinctSignalIds.Count);
+        var evidenceNotLinked = 0;   // the signal cites an evidence id none of the snapshot's links carry
+        var evidenceNotFound = 0;    // linked, loaded, but the store returned null (already warned per link)
         foreach (var signalId in distinctSignalIds)
         {
             var signal = await _signalRepository
@@ -808,7 +841,41 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 continue;
             }
 
-            refs.Add(new ReportSignalRef(signal.Id, signal.Type, signal.Direction, signal.Reason));
+            EvidenceSourceType? sourceType = null;
+            if (!loadedEvidence.TryGetValue(signal.EvidenceId, out var cited))
+            {
+                evidenceNotLinked++;
+            }
+            else if (cited is null)
+            {
+                evidenceNotFound++;
+            }
+            else
+            {
+                sourceType = cited.SourceType;
+            }
+
+            refs.Add(new ReportSignalRef(
+                signal.Id,
+                signal.Type,
+                signal.Direction,
+                signal.Reason,
+                ObservedAtUtc: signal.ObservedAtUtc,
+                SourceType: sourceType,
+                IsJudgmentDerived: NewsDirectionalSignalMetadata.IsJudgmentDerived(signal)));
+        }
+
+        if (evidenceNotLinked + evidenceNotFound > 0)
+        {
+            // One line per snapshot, never one per signal: the refs carry a null source type (rendered as
+            // "source unknown") for exactly these signals.
+            _logger.LogWarning(
+                "Score snapshot {SnapshotId} (company {CompanyId}): {Count} contributing signal(s) have no loaded evidence behind them ({NotLinked} cite an evidence id outside the snapshot's links; {NotFound} cite linked evidence the store did not return); their source class is recorded as unknown.",
+                current.Id,
+                current.CompanyId,
+                evidenceNotLinked + evidenceNotFound,
+                evidenceNotLinked,
+                evidenceNotFound);
         }
 
         // Deterministic order: by Type (enum order), then Direction, then SignalId (AD-3 spirit).

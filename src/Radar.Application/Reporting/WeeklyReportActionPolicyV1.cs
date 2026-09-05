@@ -1,6 +1,8 @@
 namespace Radar.Application.Reporting;
 
+using System.Globalization;
 using Radar.Domain.Companies;
+using Radar.Domain.Evidence;
 using Radar.Domain.Reports;
 using Radar.Domain.Signals;
 
@@ -24,6 +26,17 @@ using Radar.Domain.Signals;
 /// <c>Ignore → Watch</c> and nothing else: it never reaches <see cref="RadarReportAction.Investigate"/>
 /// and never overrides thin evidence or an improving/deteriorating thesis.
 /// </para>
+/// <para>
+/// <b>The floor names what it counted (v3, spec 210).</b> One real-world announcement can wear two
+/// extractors' clothes — a keyword-typed signal from a filing plus a judgment-derived
+/// <see cref="SignalType.MediaAttention"/> from the same event's coverage — and satisfy the count without
+/// independent corroboration. v3 does NOT change the count, the threshold or any label outcome; it changes
+/// the rationale CONTRACT so a reader can see the shape: for every counted type, every distinct
+/// (source class, observed date, judgment-derived) support tuple is rendered in a deterministic order, or,
+/// past a small cap, the type's distinct-date count and date range. Nothing picks a "first" or "latest"
+/// tuple silently — arbitrarily choosing one could manufacture or hide an echo. Missing provenance renders
+/// as unknown, never as false. Still pure: no clock, no I/O.
+/// </para>
 /// </summary>
 public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
 {
@@ -44,8 +57,14 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
     // rows): two independent axes agreeing (e.g. CustomerWin + StrategicPartnership), not the same
     // phrase matched twice. Tunable — a follow-up may raise it after a live re-measure.
     private const int MinCorroboratingSignalTypes = 2;
+    // Spec 210: above this many DISTINCT support tuples for one counted type, the rationale renders the
+    // type's distinct-date count + date range + tuple count instead of every tuple. A summary, never a
+    // silently-chosen subset.
+    private const int MaxRenderedSupportTuplesPerType = 3;
 
-    public string Version => "weekly-report-action-v2";
+    // v3 (spec 210): the Watch-floor rationale names each counted type's support tuples. Labels, the
+    // count and the threshold are byte-identical to v2 — only the rationale contract moved.
+    public string Version => "weekly-report-action-v3";
 
     public ReportActionResult Decide(ReportActionContext context)
     {
@@ -118,17 +137,24 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
         if (context.FollowingTier is FollowingTier.Small or FollowingTier.Mid
             && current.TrajectoryScore >= NeutralTrajectory)
         {
-            var positiveTypeCount = context.ContributingSignals
+            // Grouped by type in enum order (spec 210): the COUNT is the number of groups — byte-identical
+            // to v2's Distinct().Count() — and the groups are what the rationale names below.
+            var positiveByType = context.ContributingSignals
                 .Where(s => s.Direction == SignalDirection.Positive)
-                .Select(s => s.Type)
-                .Distinct()
-                .Count();
+                .GroupBy(s => s.Type)
+                .OrderBy(g => g.Key)
+                .ToList();
+            var positiveTypeCount = positiveByType.Count;
 
             if (positiveTypeCount >= MinCorroboratingSignalTypes)
             {
+                var named = string.Join(
+                    " + ",
+                    positiveByType.Select(g => $"{g.Key} ({DescribeSupport(g)})"));
+
                 return new ReportActionResult(
                     RadarReportAction.Watch,
-                    $"Opportunity {current.OpportunityScore} below {WatchOpportunity} but {positiveTypeCount} corroborating positive signal types across an under-followed name; floored to Watch (not Ignore).");
+                    $"Opportunity {current.OpportunityScore} below {WatchOpportunity} but {positiveTypeCount} corroborating positive signal types across an under-followed name; floored to Watch (not Ignore): {named}.");
             }
         }
 
@@ -138,4 +164,111 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
             RadarReportAction.Ignore,
             $"Opportunity {current.OpportunityScore} below {WatchOpportunity} with adequate evidence; low signal.");
     }
+
+    /// <summary>
+    /// Spec 210: the support behind one counted type — every DISTINCT (source class, observed date,
+    /// judgment-derived) tuple among its positive signals, ordered by date (unknown last), then source
+    /// class, then judgment flag; or, above <see cref="MaxRenderedSupportTuplesPerType"/>, the honest
+    /// range summary. Two positive signals of the same type from the same (source, date, flag) are ONE
+    /// tuple: the rationale is about distinct support, not row count.
+    /// </summary>
+    private static string DescribeSupport(IEnumerable<ReportSignalRef> positiveSignalsOfOneType)
+    {
+        var tuples = positiveSignalsOfOneType
+            .Select(s => new SupportTuple(
+                DescribeSourceClass(s.SourceType),
+                s.ObservedAtUtc is { } observed ? DateOnly.FromDateTime(observed.UtcDateTime) : null,
+                s.IsJudgmentDerived))
+            .Distinct()
+            .OrderBy(t => t.Date is null)            // known dates first, unknown last
+            .ThenBy(t => t.Date)
+            .ThenBy(t => t.SourceClass, StringComparer.Ordinal)
+            .ThenBy(t => JudgmentRank(t.IsJudgmentDerived))
+            .ToList();
+
+        if (tuples.Count <= MaxRenderedSupportTuplesPerType)
+        {
+            return string.Join("; ", tuples.Select(RenderTuple));
+        }
+
+        // Over the cap: distinct KNOWN dates with their range, unknown-date tuples counted separately
+        // (never folded into the range, never dropped), and the total tuple count.
+        var knownDates = tuples
+            .Where(t => t.Date is not null)
+            .Select(t => t.Date!.Value)
+            .Distinct()
+            .OrderBy(d => d)
+            .ToList();
+        var unknownDateTuples = tuples.Count(t => t.Date is null);
+
+        var dates = knownDates.Count switch
+        {
+            0 => "0 distinct dates",
+            1 => $"1 distinct date {RenderDate(knownDates[0])}",
+            _ => $"{knownDates.Count} distinct dates {RenderDate(knownDates[0])}–{RenderDate(knownDates[^1])}",
+        };
+        var unknown = unknownDateTuples switch
+        {
+            0 => string.Empty,
+            1 => " (+1 date unknown)",
+            _ => $" (+{unknownDateTuples} dates unknown)",
+        };
+
+        return $"{dates}{unknown}, {tuples.Count} support tuples";
+    }
+
+    private static string RenderTuple(SupportTuple tuple)
+    {
+        var date = tuple.Date is { } d ? RenderDate(d) : "date unknown";
+        var judgment = tuple.IsJudgmentDerived switch
+        {
+            true => ", judgment",
+            false => string.Empty,
+            null => ", judgment unknown",
+        };
+        return $"{tuple.SourceClass} {date}{judgment}";
+    }
+
+    private static string RenderDate(DateOnly date) =>
+        date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    // Deterministic order of the judgment flag within a (date, source) tie: false, true, then unknown.
+    private static int JudgmentRank(bool? isJudgmentDerived) => isJudgmentDerived switch
+    {
+        false => 0,
+        true => 1,
+        null => 2,
+    };
+
+    /// <summary>
+    /// The ONE deterministic display mapping from the canonical <see cref="EvidenceSourceType"/> to the
+    /// source class the rationale prints. <c>null</c> (not recorded) and any enum value this switch does
+    /// not know (an appended member, or an undefined integer hydrated from a stale store) both fall back
+    /// to "source unknown" explicitly — never to the enum's name and never to an exception. Internal so a
+    /// test can prove every DEFINED member maps to a non-fallback string.
+    /// </summary>
+    internal static string DescribeSourceClass(EvidenceSourceType? sourceType) => sourceType switch
+    {
+        EvidenceSourceType.Filing => "filing",
+        EvidenceSourceType.NewsArticle => "news",
+        EvidenceSourceType.PressRelease => "press release",
+        EvidenceSourceType.RssFeed => "feed",
+        EvidenceSourceType.CompanyBlog => "company blog",
+        EvidenceSourceType.EarningsTranscript => "transcript",
+        EvidenceSourceType.GovernmentContract => "government contract",
+        EvidenceSourceType.JobPosting => "job posting",
+        EvidenceSourceType.Patent => "patent",
+        EvidenceSourceType.SocialMedia => "social",
+        EvidenceSourceType.RegulatoryAnnouncement => "regulatory announcement",
+        EvidenceSourceType.InsiderTransaction => "insider filing",
+        EvidenceSourceType.ConferenceMention => "conference",
+        EvidenceSourceType.RegulatoryApproval => "regulatory approval",
+        EvidenceSourceType.Trademark => "trademark",
+        EvidenceSourceType.Manual => "manual",
+        EvidenceSourceType.LocalFile => "local file",
+        _ => "source unknown",
+    };
+
+    /// <summary>One distinct unit of support behind a counted type (spec 210).</summary>
+    private sealed record SupportTuple(string SourceClass, DateOnly? Date, bool? IsJudgmentDerived);
 }

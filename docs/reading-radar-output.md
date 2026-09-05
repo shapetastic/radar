@@ -55,7 +55,7 @@ Only six labels exist, and none of them is advice: `Investigate`, `Watch`, `Igno
 `Needs more evidence`, `Thesis improving`, `Thesis deteriorating`. Words like "buy", "sell", or
 "upside" are banned from the output by rule.
 
-The mapping (`weekly-report-action-v2`) is deterministic, first match wins:
+The mapping (`weekly-report-action-v3`) is deterministic, first match wins:
 
 1. **Needs more evidence** — Evidence confidence below 35. Overrides everything: with too little
    evidence, no other claim is made.
@@ -67,7 +67,12 @@ The mapping (`weekly-report-action-v2`) is deterministic, first match wins:
    name with neutral-or-better trajectory and **two or more distinct positive signal types** is
    floored from Ignore up to Watch. Independent axes agreeing is exactly the pattern Radar exists to
    surface, even when a mixed quarter drags the composite below 40. The floor never fires for
-   large/mega names and never lifts anything above Watch.
+   large/mega names and never lifts anything above Watch. Since spec 210 the floor's "Why" line names
+   what it counted — for every counted type, each distinct `(source class, observed date[, judgment])`
+   support tuple (e.g. `GuidanceChange (filing 2026-07-29) + MediaAttention (news 2026-09-02, judgment)`), or
+   past three tuples the type's distinct-date range and tuple count — so one announcement echoed
+   through two extractors on the same day is visible on the line rather than hidden inside a count.
+   Missing provenance prints as `source unknown` / `date unknown` / `judgment unknown`, never as absent.
 6. **Ignore** — adequate evidence, low opportunity. This is "genuine low signal", not "bad company".
 
 Note the comparability gate on rules 2–3: trajectory is only diffed against a prior snapshot from the
