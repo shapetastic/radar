@@ -20,7 +20,8 @@ and in both cases the per-filing machinery behaved as designed — the defect is
 `HttpSecForm4Reader.Classify` treats a 10b5-1 plan filing as Neutral **before** reading transaction codes,
 shares or prices (`HttpSecForm4Reader.cs` — "a 10b5-1 plan forces every transaction Neutral"), and the
 durable evidence for such filings retains only the plan marker, **no transaction value**. Discretionary
-filings retain a net dollar aggregate, not separate purchase/sale totals. Therefore historical plan
+filings retain a single stored magnitude whose mixed-filing meaning is neither net nor total
+(`Math.Max(purchaseValue, saleValue)`), not separate purchase/sale totals. Therefore historical plan
 filings' codes and values are UNKNOWN and stay unknown (no backfill, no re-fetch of accrued filings); every
 aggregate below must render what was captured and say "not captured" for the rest.
 
@@ -91,7 +92,7 @@ evidence items inside the snapshot's exact window:
   the shared home the implementation either duplicates magic strings or inverts the dependency direction
   (both forbidden; reuse-over-copy);
 - no fuzzy cadence adjective: the span is stated objectively as "N planned-disposition filings across D
-  days" (D = inclusive days between first and last filing date in the window; omitted when N < 2);
+  days" (D = `(lastDate - firstDate).Days`, elapsed days; omitted when N < 2);
 - `null`/absent renders "not captured", never 0 — a plan filing with no persisted value is counted as a
   filing and excluded from every value total;
 - the rendered NWPX line reads like: "11 planned-disposition filings across 29 days; transaction value not
