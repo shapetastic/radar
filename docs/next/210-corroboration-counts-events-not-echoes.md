@@ -3,64 +3,92 @@
 ## Overview
 
 `WeeklyReportActionPolicyV1` floors an under-followed company from Ignore up to Watch when it counts
-`>= MinCorroboratingSignalTypes` distinct positive signal TYPES among contributing signals
-(`WeeklyReportActionPolicyV1.cs`, the `positiveTypeCount` rule). The 2026-09-04 NWPX skeptic review showed
-the count can be satisfied by ONE real-world event wearing two extractors' clothes: the Serpentix
-acquisition produced a keyword `StrategicPartnership (Positive)` from the 8-K AND a judgment-derived
-`MediaAttention (Positive)` from the press release — two "corroborating types", one announcement, ~2.5% of
-revenue. The floor's rationale line then presents the count as independent corroboration.
+`>= MinCorroboratingSignalTypes` distinct positive signal TYPES among contributing signals. The concern
+(raised by the 2026-09-04 NWPX skeptic review) is that one real-world announcement can wear two extractors'
+clothes — a keyword-typed signal from a filing plus a judgment-derived `MediaAttention` from the same
+event's press coverage — and satisfy the count without independent corroboration.
 
-True cross-source event identity (recognizing that an 8-K and a syndicated PR describe the same deal) does
-not exist in the codebase and is NOT built here — that would be a large, easily-wrong system. What this
-slice does is make the floor honest and measurable: the rationale must SHOW what it counted, and the audit
-must say how often the floor rests on plausibly-single-event pairs.
+**Corrected framing (2026-09-05 pre-spec review): the echo is a HYPOTHESIS to measure, not a demonstrated
+live defect.** The motivating NWPX example did not survive inspection: its current floor rests on
+`EarningsTrajectory` from the 2026-07-29 earnings 8-K plus `MediaAttention` from September news — separate
+dates and apparently separate events, and no `StrategicPartnership` signal exists for the Serpentix
+acquisition. The mechanism is still structurally possible (nothing prevents a same-event pair from
+counting), so this slice makes the floor's rationale transparent, measures how often the suspicious shape
+actually occurs, and pins the behaviour with a **synthetic** same-event fixture unless the audit finds a
+genuine live example.
+
+True cross-source event identity is NOT built here.
 
 ## Assignment
 
-Worktree: any. Dependencies: none beyond current main; independent of spec 209 (different files — dispatch
-either order, but not concurrently, both touch the weekly report surface). Use `run-next.ps1 -Spec 210`.
+Worktree: any. Dependencies: none beyond current main; not concurrent with spec 209 (both touch the weekly
+report surface). Use `run-next.ps1 -Spec 210`.
 
 Estimated implementation time: UNMEASURED. Record actual dispatch→PR time in the PR body.
 
-## 1. The rationale names what it counted
+## 1. Thread the provenance the rationale needs into the action context
 
-When the Watch floor fires, its rationale line changes from the bare count to a named list: each
-corroborating type with its evidence date and source class, e.g.
+`ReportSignalRef` today carries only `(SignalId, Type, Direction, Reason)` — no date, no evidence source
+class, no judgment-derived flag — and `WeeklyReportBuilder` loads evidence only AFTER the policy decides.
+Extend additively:
 
-> floored to Watch: StrategicPartnership (filing 2026-09-02) + MediaAttention (news 2026-09-02, judgment)
+- add to `ReportSignalRef` (trailing, so existing construction sites stay source-compatible): the signal's
+  `ObservedAtUtc`, the evidence source class (filing / news / government-contract / press-release), and
+  whether the signal is judgment-derived (`NewsDirectionalSignalMetadata.IsJudgmentDerived` — reuse, no
+  second parser);
+- populate them by REUSING one evidence lookup: restructure the builder so the evidence read that already
+  happens for the entry also feeds the action context, rather than adding a second per-company evidence
+  pass (the spec-203 lesson: no per-call disk scans).
 
-- derived entirely from the contributing signals already in `ReportActionContext` — no new lookups;
-- same-date pairs from different source classes are exactly the suspicious shape; showing the dates is what
-  lets a human spot them (the NWPX line would have read as two 2026-09-02 items — self-evidently one event);
-- the existing count/threshold logic and every OTHER policy rule stay byte-identical: this changes the
-  rationale STRING of one rule only. Update the pinned rationale tests accordingly — pin the new shape, and
-  keep a case proving the count itself did not change.
+## 2. The rationale names what it counted
 
-## 2. Measure how often the floor rests on echoes (read-only)
+When the Watch floor fires, its rationale changes from the bare count to a named list. Because one TYPE can
+have several supporting signals, the rendering must not silently pick one: for each corroborating type,
+render every distinct (source class, observed date) support tuple — or, where that exceeds a small cap, the
+type's distinct-date count and date range — in a deterministic order (type, then date, then source class).
+Example shape:
 
-Over the accrued run history (or, minimally, the last 14 daily reports/snapshot sets):
+> floored to Watch: EarningsTrajectory (filing 2026-07-29) + MediaAttention (news 2026-09-02, judgment;
+> news 2026-09-03, judgment)
 
-- how many Watch-floor firings occurred; for each, the counted types with evidence dates;
-- how many rest entirely on same-day type-pairs (the plausibly-single-event shape) vs types separated by
-  distinct dates/events;
-- record the table in the PR body. If same-day pairs dominate, the follow-up DECISION (raise
-  `MinCorroboratingSignalTypes`, require distinct dates, or build real event identity) belongs to the
-  maintainer with that measurement in hand — do not change the threshold or add a date-separation rule in
-  this spec, because either would silently change which companies get floored without a human having seen
-  the distribution first.
+Arbitrarily choosing a first/latest tuple could manufacture or hide an echo; showing them all (or the
+honest range summary) is the point. The count, threshold and every label outcome stay byte-identical —
+pin with a full-report fixture whose only diff is rationale text.
+
+Because the rationale CONTRACT changes while labels do not, bump the policy's declared version:
+`weekly-report-action-v2 → v3` (`WeeklyReportActionPolicyV1.Version`), with its version-consuming
+tests/pins updated in the same slice.
+
+## 3. Pin the echo shape synthetically; measure it live
+
+- **Fixture:** a synthetic company whose floor is satisfied by a same-day filing-typed positive plus a
+  judgment-derived `MediaAttention` positive citing same-day news — the rendered rationale must make the
+  same-day pair visible on one line. This is the guard for the hypothesized shape regardless of whether it
+  currently occurs live.
+- **Audit (read-only, PR body):** over the accrued reports/snapshots, count Watch-floor firings TWO ways —
+  raw report occurrences AND deduplicated support episodes keyed by (company, contributing type + evidence
+  set), because fourteen nightly reports can repeat one unchanged floor fourteen times and inflate the
+  count. For each distinct episode: the counted types with dates/source classes, and whether it matches the
+  same-day cross-extractor shape. If a genuine live echo is found, name it and add it beside the synthetic
+  fixture; if none is found, say so — that is the hypothesis measured, not a wasted slice.
+- Any follow-up that would change which companies get floored (threshold, distinct-date requirement, real
+  event identity) is the maintainer's decision with this table in hand — not this spec's.
 
 ## Non-goals
 
-No cross-source event-identity system; no change to the floor's count, threshold, or any label outcome
-(every company gets the same label before and after this spec — pin that with a fixture); no scoring,
-fingerprint or signal change; no change to the daily news report.
+No cross-source event-identity system; no change to the floor's count, threshold, or any label outcome; no
+scoring, fingerprint or signal change; no change to the daily news report; no second per-company evidence
+pass in the builder.
 
 ## Acceptance criteria
 
-- [ ] The Watch-floor rationale names each corroborating type with evidence date and source class; a fixture
-      reproducing the NWPX shape renders the same-day pair visibly.
-- [ ] Label outcomes are byte-identical for a full report fixture before/after (rationale text is the only
-      diff).
-- [ ] The §2 echo-frequency table is in the PR body with its follow-up decision left to the maintainer.
+- [ ] `ReportSignalRef` carries observed date, source class and judgment-derived provenance, populated from
+      one reused evidence lookup; existing construction sites compile unchanged.
+- [ ] The Watch-floor rationale renders every corroborating type's distinct support tuples (or capped
+      range+count) deterministically; the synthetic same-event fixture makes the same-day pair visible.
+- [ ] Label outcomes are byte-identical on a full-report fixture; only rationale text differs; the policy
+      version is `weekly-report-action-v3` with its pins updated.
+- [ ] The §3 audit reports raw firings AND deduplicated episodes, names a live echo or states none was
+      found.
 - [ ] All six fingerprint pins unchanged; build, full suite and `git diff --check` clean; actual elapsed
       time in the PR body.
