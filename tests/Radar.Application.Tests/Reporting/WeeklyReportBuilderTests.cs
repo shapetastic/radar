@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
@@ -292,7 +293,10 @@ public sealed partial class WeeklyReportBuilderTests
             IScoreSnapshotFileStore? scoreFiles = null,
             IReadOnlyList<TestStrategy>? strategies = null,
             IOperatingCallSource? operatingCalls = null,
-            IStrategyEvidenceFactsSource? evidenceFacts = null)
+            IStrategyEvidenceFactsSource? evidenceFacts = null,
+            // Spec 210: a capturing logger lets a test prove the builder's aggregated provenance-gap
+            // warning fires once per snapshot; the default stays silent.
+            ILogger<WeeklyReportBuilder>? logger = null)
         {
             CountingSignals = new CountingSignalRepository(Signals);
             CountingEvidence = new CountingEvidenceRepository(Evidence);
@@ -320,7 +324,7 @@ public sealed partial class WeeklyReportBuilderTests
                 evidenceFacts ?? UnavailableStrategyEvidenceFactsSource.Instance,
                 options ?? new WeeklyReportOptions(),
                 new FixedTimeProvider(FixedNow),
-                NullLogger<WeeklyReportBuilder>.Instance);
+                logger ?? NullLogger<WeeklyReportBuilder>.Instance);
         }
 
         /// <summary>The score repository a non-primary strategy's snapshots must be seeded into.</summary>
@@ -440,35 +444,56 @@ public sealed partial class WeeklyReportBuilderTests
     }
 
     // Seeds a stored signal plus a score-evidence link (with stored evidence) referencing it, so the
-    // builder's "why noticed" assembly resolves the signal. Returns the signal id.
+    // builder's "why noticed" assembly resolves the signal. Returns the signal id. The signal cites the
+    // SAME evidence id the link carries (as production does), so the spec-210 provenance stamp resolves
+    // its source type from the single evidence load. The trailing optional knobs are spec-210 provenance
+    // controls; their defaults keep every earlier caller's seeded shape unchanged.
     private static async Task<Guid> SeedSignalLinkAsync(
         Harness h,
         Guid snapshotId,
         Guid signalId,
         SignalType type,
         SignalDirection direction,
-        string reason)
+        string reason,
+        EvidenceSourceType sourceType = EvidenceSourceType.PressRelease,
+        DateTimeOffset? observedAtUtc = null,
+        string? metadataJson = null,
+        Guid? evidenceId = null,
+        // When set, the SIGNAL cites this id instead of the linked one (a provenance gap on purpose).
+        Guid? signalEvidenceId = null,
+        // False leaves the linked evidence id unstored, so the builder loads it as null (missing).
+        bool storeEvidence = true)
     {
-        var signal = new SignalBuilder()
+        var linkedEvidenceId = evidenceId ?? Guid.NewGuid();
+
+        var signalBuilder = new SignalBuilder()
             .WithId(signalId)
+            .WithEvidenceId(signalEvidenceId ?? linkedEvidenceId)
             .WithType(type)
             .WithDirection(direction)
             .WithReason(reason)
-            .Build();
-        await h.Signals.AddAsync(signal, default);
+            .WithMetadataJson(metadataJson);
+        if (observedAtUtc is { } observed)
+        {
+            signalBuilder.WithObservedAtUtc(observed);
+        }
+        await h.Signals.AddAsync(signalBuilder.Build(), default);
 
-        var evidenceId = Guid.NewGuid();
-        var evidence = new EvidenceBuilder()
-            .WithId(evidenceId)
-            .WithContentHash($"hash-{evidenceId}")
-            .Build();
-        await h.Evidence.AddIfNewAsync(evidence, default);
+        if (storeEvidence)
+        {
+            var evidence = new EvidenceBuilder()
+                .WithId(linkedEvidenceId)
+                .WithSourceType(sourceType)
+                .WithContentHash($"hash-{linkedEvidenceId}")
+                .Build();
+            await h.Evidence.AddIfNewAsync(evidence, default);
+        }
 
         var link = new ScoreEvidenceLink(
             Id: Guid.NewGuid(),
             ScoreSnapshotId: snapshotId,
             SignalId: signalId,
-            EvidenceId: evidenceId,
+            EvidenceId: linkedEvidenceId,
             ContributionReason: "Contributed to the score.",
             ContributionWeight: 5);
         await h.Scores.AddEvidenceLinkAsync(link, default);

@@ -2773,3 +2773,50 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     collection window, fetch depth, `KeywordSignalExtractor.RuleSetVersion`, phrase table or fingerprint pin
     (`ScoringConfigFingerprintTests` unchanged); `SecForm4TransactionCode.Classify` and the
     10b5-1-forces-Neutral rule untouched.
+- **The Watch floor names what it counted — every counted type's distinct (source class, observed date,
+  judgment-derived) support tuples, or an honest range summary; labels, count and threshold byte-identical
+  (spec 210, 2026-09-05).** The 2026-09-04 NWPX skeptic review raised the hypothesis that one real-world
+  announcement can wear two extractors' clothes — a keyword-typed filing signal plus a judgment-derived
+  `MediaAttention` from the same event's coverage — and satisfy `WeeklyReportActionPolicyV1`'s
+  `>= MinCorroboratingSignalTypes` distinct-positive-TYPES floor without independent corroboration. The
+  pre-spec review reframed it as a hypothesis to MEASURE (NWPX's live floor rests on a 2026-07-29 8-K plus
+  September news — separate dates), so this slice makes the shape visible and pins it synthetically; no
+  cross-source event identity is built. Three changes:
+  - **`ReportSignalRef` gained three TRAILING, DEFAULTED, NULLABLE members** — `ObservedAtUtc`,
+    `SourceType` (the CANONICAL `EvidenceSourceType`, never an informal class) and `IsJudgmentDerived`
+    (from the ONE parser, `NewsDirectionalSignalMetadata.IsJudgmentDerived`). `null` = not recorded, never
+    a silent false: a missing member renders `source unknown` / `date unknown` / `judgment unknown`. Every
+    pre-210 positional construction site compiles unchanged.
+  - **`WeeklyReportBuilder` loads evidence BEFORE `Decide`, and the single spec-209 load
+    (`LoadLinkedEvidenceAsync`, one lookup per distinct evidence id) now feeds THREE consumers**: the
+    contributing-signal refs (source type via `signal.EvidenceId`, which is the link's id), the
+    evidence-ref block and the insider-activity aggregate. No second per-company evidence pass (the spec-203
+    lesson). A signal whose cited evidence is not in the load — an id outside the links, or a linked item the
+    store did not return — keeps `SourceType == null` and is counted in ONE aggregated warning per snapshot
+    (both causes named), never one line per signal and never a fabricated default.
+  - **`WeeklyReportActionPolicyV1.Version` is `weekly-report-action-v2 → v3`** because the rationale
+    CONTRACT changed while labels did not. The floor's count logic is byte-identical (`GroupBy(Type).Count`
+    ≡ the old `Distinct().Count()`), the rationale keeps its v2 prefix verbatim and appends `: ` plus, per
+    counted type in enum order joined by ` + `, `Type (tuple; tuple; …)` — tuples DISTINCT on (source class,
+    date, judgment flag), ordered date (unknown last) → source class → flag, rendered `{source} {yyyy-MM-dd}`
+    with `, judgment` when judgment-derived. Above `MaxRenderedSupportTuplesPerType = 3` the type renders
+    `{k} distinct dates {earliest}–{latest} (+{u} date unknown), {n} support tuples` (singular form for one
+    date; parenthetical only when u > 0) — nothing picks a "first" or "latest" tuple silently, because an
+    arbitrary choice could manufacture or hide an echo. The source-class display is ONE internal `switch`
+    (`DescribeSourceClass`) with an explicit `source unknown` fallback for `null`/undefined values, and a
+    test proves every defined `EvidenceSourceType` member maps to a named class. **The stored `SignalType`
+    token is rendered** (`GuidanceChange`, not the renderer's `EarningsTrajectory` relabel): spec 167 pins
+    that the display token never leaks into a policy rationale, so the spec's example shape is realised with
+    the stored token. Synthetic same-day fixture pinned byte-exact at policy and builder level:
+    `GuidanceChange (filing 2026-09-02) + MediaAttention (news 2026-09-02, judgment)`.
+  - **Spec 210 moved nothing else.** No label outcome (a full-report fixture and a representative-matrix sweep
+    prove null-vs-populated provenance decides identically on every tier — only the floored rationale differs),
+    no count, threshold, scoring, signal, formula, weight or fingerprint pin (`ScoringConfigFingerprintTests`
+    unchanged); the daily news report is untouched. The §3 live audit (raw floor firings vs deduplicated
+    support episodes; whether a genuine same-day cross-extractor echo occurs) is recorded in
+    `docs/cohorts/watch-floor-episodes-2026-09.md` (measured 2026-09-05): 288 raw firings over 41 weekly
+    reports collapse to 55 support episodes; 9 of 55 match the same-day filing-typed + judgment-derived
+    `MediaAttention` shape, and title inspection confirms a GENUINE live echo — Ooma, 2026-08-26, whose floor in
+    `radar-weekly-2026-08-30` rested entirely on one earnings 8-K and same-day coverage of it — now pinned beside
+    the synthetic fixture as `Floor_Rationale_Makes_Live_Ooma_2026_08_26_Same_Day_Echo_Visible`. Whether that
+    changes what gets floored is the maintainer's call; spec 210 changed no label.
