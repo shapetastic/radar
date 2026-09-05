@@ -2712,3 +2712,64 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
   - **Spec 208 moved nothing.** No scoring, formula, weight, strategy, channel, prompt, typing budget,
     recency window, report writer (the weekly/daily same-day overwrite is correct for derived views and is
     out of scope) or fingerprint pin; `ScoringConfigFingerprintTests` unchanged.
+- **The insider channel tells the truth in aggregate and in its label — one shared metadata contract, a
+  presentation-only relabel over BOTH render paths, and a structured window summary that says "not captured"
+  (spec 209, 2026-09-05).** Two 2026-09-04 skeptic reviews found the channel misfiring in opposite directions
+  with every per-filing rule behaving as designed: NWPX's eleven weekly 10b5-1 planned dispositions each
+  rendered as `InsiderBuying (Neutral)` (an inverted label over a disposition stream, and no per-filing rule
+  can see a six-week cadence), while AGX's externally reported ~$119M H1 sales reached the store as one $3.3M
+  `discretionary-sale`. The §1 audit (`docs/cohorts/insider-flow-audit-2026-09.md`, persisted data only) is
+  the measurement; the code changes are three:
+  - **The classification tokens and metadata keys moved to Application.** The five spec-156 tokens
+    (`plan-10b5-1`, `discretionary-buy`, `discretionary-sale`, `mixed-buy-sell`,
+    `no-discretionary-transactions`) lived in Infrastructure's `SecForm4ClassificationReasons` while the
+    report builder that must read them is Application — so the reader either duplicated magic strings or
+    inverted the layering. They now live verbatim (byte-exact pinned; they are persisted data) in
+    `InsiderActivityMetadata` (`Radar.Application.Collectors`, beside `EvidenceMetadata`) together with the
+    key consts (`insiderClassificationReason`, `insiderNetValue`, `insiderCluster`, `insiderDirection`,
+    `form`/`4`, `filingDate`) and a never-throwing `TryRead(EvidenceItem) → InsiderActivityRead?` (null for
+    a non-Form-4; every member null means "not captured", never 0). `HttpSecForm4Reader`,
+    `SecForm4Collector` (whose `MetadataMarkerKey` is now `= InsiderActivityMetadata.DirectionKey`) and
+    `KeywordSignalExtractor` write/read through it; the Infrastructure class is DELETED. Zero behaviour
+    change on the write side or in extraction (existing tests unchanged).
+  - **`InsiderBuying` is rendered as `InsiderActivity` on BOTH paths the token reaches the reader.** The
+    stored `SignalType.InsiderBuying` member is untouched (accrued signals deserialize unchanged; no enum
+    rename, no JSON rewrite). `MarkdownWeeklyReportRenderer.DisplaySignalType` maps it at the
+    renderer-owned type site, AND `DisplayProvenanceText` (a compiled whole-token `\bInsiderBuying\b`
+    regex) rewrites the exact token inside stored evidence-link contribution reasons and signal reasons at
+    render time. **This partially supersedes spec 167's stance that the display mapping "must NEVER be
+    applied to stored provenance text"** — amended in place in the renderer comment — for that ONE exact
+    token only, because a legend cannot un-invert a label a reader sees eleven times; GuidanceChange's
+    stored text still renders byte-verbatim with its legend, and every other byte of stored text is
+    unchanged (pinned: `NotInsiderBuyingX` is not rewritten). One legend line is added after the
+    GuidanceChange one; it deliberately does not name the stored token because the report-language tests
+    forbid the substrings "buy"/"sell", so all new wording uses "purchase value" / "sale value" /
+    "planned disposition" / "mixed purchase-and-sale".
+  - **`WeeklyReportEntry.InsiderActivity` (an `InsiderActivitySummary?`) — report-side, numerically inert,
+    not persisted, no scoring input, no fingerprint input.** Built by `InsiderActivitySummary.From` (pure,
+    static, unit-tested alone) over the DISTINCT evidence items (by id) behind the snapshot's links — the
+    builder now loads each distinct evidence id ONCE (`LoadLinkedEvidenceAsync`) and both the evidence-ref
+    block and the summary read that one load; nothing calls `GetAllAsync`. Buckets mirror the persisted
+    taxonomy exactly: filing count; planned-disposition count with first/last filing date and a span in
+    elapsed days (`(last − first).Days`, stated ONLY when ≥ 2 plan filings and ALL are dated — an undated
+    one is counted in `PlannedDispositionUndatedCount` and the span renders "not established"); discretionary
+    purchase count + summed captured value (null when none captured, never 0) + not-captured count; the same
+    for sales; a **mixed count with NO value member at all** (the persisted magnitude is
+    `Math.Max(purchase, sale)`, neither net nor total, and is never summed into any value column);
+    no-discretionary count; unknown (legacy, no token) count; and an unrecognised-token count (a stored
+    token outside the closed set is counted AND named in ONE aggregated warning per company). The window
+    rule is the scoring convention, exclusive-start inclusive-end `(WindowStartUtc, WindowEndUtc]` on
+    `PublishedAtUtc ?? CollectedAtUtc`; anything outside lands in `OutsideWindowCount` — excluded from every
+    other bucket, never silently dropped. Null on the entry means no Form 4 evidence is linked at all and
+    the renderer prints nothing (never a fabricated "0 filings"). The rendered line is ONE line in a fixed
+    clause order; the NWPX shape is pinned byte-exact:
+    `- Insider activity (Form 4, this window): 11 filings; 11 planned-disposition filings across 29 days; transaction value not captured`.
+  - **§4 forward transaction-code capture is DEFERRED** to its own slice: per-filing code tallies and gross
+    purchase/sale values for NEW filings (even when the plan flag forces Neutral) are not implemented here,
+    not partially. Historical plan filings' codes and values are UNKNOWN and stay unknown (no backfill, no
+    re-fetch of accrued filings) — every aggregate renders what was captured and says "not captured" for
+    the rest.
+  - **Spec 209 moved nothing.** No scoring, formula, weight, strategy, channel, tier, cluster boost,
+    collection window, fetch depth, `KeywordSignalExtractor.RuleSetVersion`, phrase table or fingerprint pin
+    (`ScoringConfigFingerprintTests` unchanged); `SecForm4TransactionCode.Classify` and the
+    10b5-1-forces-Neutral rule untouched.

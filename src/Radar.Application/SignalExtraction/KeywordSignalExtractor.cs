@@ -370,10 +370,11 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         // Parse each materiality key ONCE per evidence (not per rule) for determinism and efficiency. Any
         // absent/blank/unparseable/malformed input yields false and never throws.
         var hasAwardAmount = TryGetDecimalMetadata(evidence, "awardAmount", out var awardAmount);
-        var hasInsiderNetValue = TryGetDecimalMetadata(evidence, "insiderNetValue", out var insiderNetValue);
+        var hasInsiderNetValue = TryGetDecimalMetadata(
+            evidence, InsiderActivityMetadata.NetValueKey, out var insiderNetValue);
         // Multi-insider cluster flag (spec 93): parsed ONCE per evidence, applied only to a directional
         // InsiderBuying signal below (a +1 boost to the materiality tier Strength, capped at the domain max).
-        var insiderCluster = TryGetBoolMetadata(evidence, "insiderCluster");
+        var insiderCluster = TryGetBoolMetadata(evidence, InsiderActivityMetadata.ClusterKey);
 
         var emittedTypes = new HashSet<SignalType>();
         var matches = new List<(KeywordSignalRule Rule, int Index)>();

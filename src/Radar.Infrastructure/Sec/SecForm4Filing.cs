@@ -1,3 +1,4 @@
+using Radar.Application.Collectors;
 using Radar.Domain.Signals;
 
 namespace Radar.Infrastructure.Sec;
@@ -8,7 +9,7 @@ namespace Radar.Infrastructure.Sec;
 /// per the deterministic transaction-code table (the 10b5-1 plan override forces every transaction Neutral);
 /// the collector synthesizes an advice-free evidence phrase from these real fields and never fabricates
 /// filing body text. <see cref="IndexUrl"/> is the stable filing landing page (provenance).
-/// <see cref="ClassificationReason"/> is the stable <see cref="SecForm4ClassificationReasons"/> token
+/// <see cref="ClassificationReason"/> is the stable <see cref="InsiderActivityMetadata"/> classification token
 /// naming the classification branch taken (spec 156) — persisted as additive evidence metadata so the
 /// WHY of an insider classification is recoverable from the store going forward.
 /// </summary>

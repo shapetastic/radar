@@ -25,7 +25,10 @@ public sealed class MarkdownWeeklyReportStrategySectionTests
     // gloss, directly under the notedness caveat). That line is part of EVERY report, so it belongs in
     // this pin too; spec 167's own before/after guard lives in
     // MarkdownWeeklyReportEarningsTrajectoryRelabelTests, whose pre-167 pin was captured from the
-    // unmodified renderer. Everything else here is byte-unchanged.
+    // unmodified renderer. AMENDED AGAIN BY SPEC 209: a second legend line (the "InsiderActivity" gloss,
+    // directly under the GuidanceChange one) is likewise part of EVERY report and belongs here too; its own
+    // before/after guard lives in MarkdownWeeklyReportInsiderActivityTests. Everything else here is
+    // byte-unchanged.
     private static readonly string PreSpec150Golden = string.Join("\n",
     [
         "# Radar Weekly — 2026-06-01 to 2026-06-08",
@@ -40,6 +43,8 @@ public sealed class MarkdownWeeklyReportStrategySectionTests
         "> \"GuidanceChange\" in evidence lines is a historical earnings-release signal type — either a "
             + "deterministic Neutral earnings-filing marker or an AI earnings-trajectory read; it does "
             + "not by itself mean the company issued or changed guidance.",
+        "> \"InsiderActivity\" rows are SEC Form 4 insider filings of any kind; a Neutral row is a routine "
+            + "or planned filing, not a discretionary transaction.",
         "",
         "## Highest opportunity",
         "",

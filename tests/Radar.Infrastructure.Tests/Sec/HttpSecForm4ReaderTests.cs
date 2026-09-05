@@ -3,6 +3,7 @@ using System.Text;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
+using Radar.Application.Collectors;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.Sec;
 
@@ -263,7 +264,7 @@ public sealed class HttpSecForm4ReaderTests
         Assert.Equal("MRCY", filing.IssuerTicker);
         Assert.False(filing.Is10b5Plan);
         Assert.False(filing.HasCluster);
-        Assert.Equal(SecForm4ClassificationReasons.DiscretionaryBuy, filing.ClassificationReason);
+        Assert.Equal(InsiderActivityMetadata.DiscretionaryBuy, filing.ClassificationReason);
     }
 
     [Fact]
@@ -274,7 +275,7 @@ public sealed class HttpSecForm4ReaderTests
         Assert.Equal(SignalDirection.Negative, filing.Direction);
         Assert.Equal(915_750m, filing.NetValue); // (8000 + 1250) * 99
         Assert.False(filing.Is10b5Plan);
-        Assert.Equal(SecForm4ClassificationReasons.DiscretionarySale, filing.ClassificationReason);
+        Assert.Equal(InsiderActivityMetadata.DiscretionarySale, filing.ClassificationReason);
     }
 
     [Fact]
@@ -287,7 +288,7 @@ public sealed class HttpSecForm4ReaderTests
         Assert.True(filing.Is10b5Plan);
         // Checked FIRST in Classify: a plan skips every transaction, so without the priority it would
         // misreport as no-discretionary-transactions.
-        Assert.Equal(SecForm4ClassificationReasons.Plan10b51, filing.ClassificationReason);
+        Assert.Equal(InsiderActivityMetadata.Plan10b51, filing.ClassificationReason);
     }
 
     [Fact]
@@ -297,7 +298,7 @@ public sealed class HttpSecForm4ReaderTests
 
         Assert.Equal(SignalDirection.Neutral, filing.Direction);
         Assert.True(filing.Is10b5Plan);
-        Assert.Equal(SecForm4ClassificationReasons.Plan10b51, filing.ClassificationReason);
+        Assert.Equal(InsiderActivityMetadata.Plan10b51, filing.ClassificationReason);
     }
 
     [Fact]
@@ -308,7 +309,7 @@ public sealed class HttpSecForm4ReaderTests
         Assert.Equal(SignalDirection.Neutral, filing.Direction);
         Assert.Equal(0m, filing.NetValue);
         // Grants-only (NeutralExcluded codes) leaves no discretionary value on either side.
-        Assert.Equal(SecForm4ClassificationReasons.NoDiscretionaryTransactions, filing.ClassificationReason);
+        Assert.Equal(InsiderActivityMetadata.NoDiscretionaryTransactions, filing.ClassificationReason);
     }
 
     [Theory]
@@ -321,7 +322,7 @@ public sealed class HttpSecForm4ReaderTests
 
         Assert.Equal(SignalDirection.Neutral, filing.Direction);
         Assert.Equal(0m, filing.NetValue);
-        Assert.Equal(SecForm4ClassificationReasons.NoDiscretionaryTransactions, filing.ClassificationReason);
+        Assert.Equal(InsiderActivityMetadata.NoDiscretionaryTransactions, filing.ClassificationReason);
     }
 
     [Fact]
@@ -331,7 +332,7 @@ public sealed class HttpSecForm4ReaderTests
 
         Assert.Equal(SignalDirection.Neutral, filing.Direction);
         Assert.Equal(5000m, filing.NetValue); // max(100*10=1000, 500*10=5000)
-        Assert.Equal(SecForm4ClassificationReasons.MixedBuySell, filing.ClassificationReason);
+        Assert.Equal(InsiderActivityMetadata.MixedBuySell, filing.ClassificationReason);
     }
 
     [Fact]
@@ -352,7 +353,7 @@ public sealed class HttpSecForm4ReaderTests
         Assert.Equal(SignalDirection.Neutral, filing.Direction);
         Assert.Equal(0m, filing.NetValue);
         // An empty/holdings-only filing: no transactions at all, hence no discretionary value.
-        Assert.Equal(SecForm4ClassificationReasons.NoDiscretionaryTransactions, filing.ClassificationReason);
+        Assert.Equal(InsiderActivityMetadata.NoDiscretionaryTransactions, filing.ClassificationReason);
     }
 
     [Fact]

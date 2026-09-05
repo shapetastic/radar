@@ -8,6 +8,7 @@ using Radar.Application.Lifecycle;
 using Radar.Application.Pipeline;
 using Radar.Application.Scoring;
 using Radar.Domain.Companies;
+using Radar.Domain.Evidence;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
@@ -302,7 +303,11 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 PreviousComparable: comparable,
                 ContributingSignals: signals,
                 FollowingTier: c.Company.FollowingTier));
-            var evidence = await BuildEvidenceRefsAsync(c.Current, links, ct).ConfigureAwait(false);
+            // Spec 209: each distinct evidence id behind the snapshot is loaded ONCE and shared by the
+            // evidence-ref block and the insider-activity aggregate (never fetched twice).
+            var loadedEvidence = await LoadLinkedEvidenceAsync(c.Current, links, ct).ConfigureAwait(false);
+            var evidence = BuildEvidenceRefs(links, loadedEvidence);
+            var insiderActivity = BuildInsiderActivitySummary(c.Current, loadedEvidence);
             entries.Add(new WeeklyReportEntry(
                 CompanyId: c.Current.CompanyId,
                 CompanyName: c.Company.Name,
@@ -317,7 +322,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 PreviousOpportunityScore: comparable ? previous!.OpportunityScore : (int?)null,
                 PreviousTrajectoryScore: comparable ? previous!.TrajectoryScore : (int?)null,
                 PreviousScoringChanged: previous is not null && !comparable,
-                FollowingTier: c.Company.FollowingTier));
+                FollowingTier: c.Company.FollowingTier,
+                InsiderActivity: insiderActivity));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.
@@ -672,18 +678,23 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         return sections;
     }
 
-    private async Task<IReadOnlyList<ReportEvidenceRef>> BuildEvidenceRefsAsync(
+    /// <summary>
+    /// Loads every DISTINCT evidence id the snapshot's links cite exactly once (spec 209): the same item is
+    /// commonly linked through several signals, and both the evidence-ref block and the insider-activity
+    /// aggregate read from this one load. A missing item is kept as <c>null</c> (never dropped) so the ref
+    /// block can render its placeholder and warn.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<Guid, EvidenceItem?>> LoadLinkedEvidenceAsync(
         CompanyScoreSnapshot current, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct)
     {
-        // Order by ContributionWeight descending, then SignalId (deterministic).
-        var ordered = links
-            .OrderByDescending(l => l.ContributionWeight)
-            .ThenBy(l => l.SignalId)
-            .ToList();
-
-        var refs = new List<ReportEvidenceRef>(ordered.Count);
-        foreach (var link in ordered)
+        var loaded = new Dictionary<Guid, EvidenceItem?>();
+        foreach (var link in links)
         {
+            if (loaded.ContainsKey(link.EvidenceId))
+            {
+                continue;
+            }
+
             var evidence = await _evidenceRepository
                 .GetByIdAsync(link.EvidenceId, ct)
                 .ConfigureAwait(false);
@@ -696,7 +707,28 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                     link.EvidenceId,
                     current.Id,
                     link.SignalId);
+            }
 
+            loaded[link.EvidenceId] = evidence;
+        }
+
+        return loaded;
+    }
+
+    private static IReadOnlyList<ReportEvidenceRef> BuildEvidenceRefs(
+        IReadOnlyList<ScoreEvidenceLink> links, IReadOnlyDictionary<Guid, EvidenceItem?> loadedEvidence)
+    {
+        // Order by ContributionWeight descending, then SignalId (deterministic).
+        var ordered = links
+            .OrderByDescending(l => l.ContributionWeight)
+            .ThenBy(l => l.SignalId)
+            .ToList();
+
+        var refs = new List<ReportEvidenceRef>(ordered.Count);
+        foreach (var link in ordered)
+        {
+            if (!loadedEvidence.TryGetValue(link.EvidenceId, out var evidence) || evidence is null)
+            {
                 refs.Add(new ReportEvidenceRef(
                     EvidenceId: link.EvidenceId,
                     SignalId: link.SignalId,
@@ -717,6 +749,35 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         }
 
         return refs;
+    }
+
+    /// <summary>
+    /// Spec 209: the Form 4 aggregate over the snapshot's distinct loaded evidence, inside the snapshot's
+    /// exact <c>(WindowStartUtc, WindowEndUtc]</c> window. Report-side and numerically inert. A stored token
+    /// outside the closed classification set is counted on the summary AND named in ONE aggregated warning
+    /// per company (never one line per item).
+    /// </summary>
+    private InsiderActivitySummary? BuildInsiderActivitySummary(
+        CompanyScoreSnapshot current, IReadOnlyDictionary<Guid, EvidenceItem?> loadedEvidence)
+    {
+        var unrecognisedTokens = new SortedSet<string>(StringComparer.Ordinal);
+        var summary = InsiderActivitySummary.From(
+            loadedEvidence.Values.OfType<EvidenceItem>(),
+            current.WindowStartUtc,
+            current.WindowEndUtc,
+            unrecognisedTokens);
+
+        if (summary is { UnrecognisedClassificationCount: > 0 })
+        {
+            _logger.LogWarning(
+                "Score snapshot {SnapshotId} (company {CompanyId}): {Count} Form 4 evidence item(s) carry an unrecognised insider classification token ({Tokens}); counted as unrecognised in the report summary.",
+                current.Id,
+                current.CompanyId,
+                summary.UnrecognisedClassificationCount,
+                string.Join(", ", unrecognisedTokens));
+        }
+
+        return summary;
     }
 
     private async Task<IReadOnlyList<ReportSignalRef>> BuildSignalRefsAsync(

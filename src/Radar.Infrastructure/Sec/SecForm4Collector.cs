@@ -60,7 +60,8 @@ internal sealed class SecForm4Collector : IEvidenceCollector
     /// collected before spec 146 began recording the producing collector. Renaming or dropping it
     /// un-attributes this collector's accrued history.
     /// </summary>
-    internal const string MetadataMarkerKey = "insiderDirection";
+    // Spec 209: defined by the shared Application-level contract the report builder reads through.
+    internal const string MetadataMarkerKey = InsiderActivityMetadata.DirectionKey;
 
     /// <inheritdoc />
     public string CollectorName => Name;
@@ -176,8 +177,8 @@ internal sealed class SecForm4Collector : IEvidenceCollector
             ["quality"] = "High",
             ["secFeedUrl"] = feed.Url,
             ["accessionNumber"] = filing.Accession,
-            ["form"] = "4",
-            ["filingDate"] = filing.FilingDate,
+            [InsiderActivityMetadata.FormKey] = InsiderActivityMetadata.Form4,
+            [InsiderActivityMetadata.FilingDateKey] = filing.FilingDate,
             // Debug/traceability only — NOT read by the extractor (direction rides the fixed phrase).
             [MetadataMarkerKey] = filing.Direction.ToString(),
             // Spec 156: the reader's classification branch (10b5-1 plan / discretionary buy / discretionary
@@ -185,14 +186,14 @@ internal sealed class SecForm4Collector : IEvidenceCollector
             // the store going forward — the audit found it permanently Unknown for all accrued evidence.
             // ADDITIVE metadata only, never Title/RawText: evidence identity is the normalized title+body
             // hash alone (spec 145), so ContentHash, the evidence id and AddIfNewAsync decisions are unmoved.
-            ["insiderClassificationReason"] = filing.ClassificationReason,
+            [InsiderActivityMetadata.ClassificationReasonKey] = filing.ClassificationReason,
         };
 
         // The extractor's materiality key: written ONLY when the discretionary $ value is positive, so a
         // Neutral no-value filing omits it and the InsiderBuying signal keeps its baseline Strength.
         if (filing.NetValue > 0m)
         {
-            metadata["insiderNetValue"] = filing.NetValue.ToString(CultureInfo.InvariantCulture);
+            metadata[InsiderActivityMetadata.NetValueKey] = filing.NetValue.ToString(CultureInfo.InvariantCulture);
         }
 
         // Multi-insider cluster (>= 2 distinct reporting owners transacting the same direction) — the reader
@@ -201,7 +202,7 @@ internal sealed class SecForm4Collector : IEvidenceCollector
         // insiderNetValue (a single-insider filing omits the key).
         if (filing.HasCluster)
         {
-            metadata["insiderCluster"] = "true";
+            metadata[InsiderActivityMetadata.ClusterKey] = "true";
         }
 
         if (!string.IsNullOrWhiteSpace(filing.IssuerTicker))
