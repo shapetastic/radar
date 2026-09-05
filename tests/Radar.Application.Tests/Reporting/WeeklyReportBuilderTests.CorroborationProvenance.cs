@@ -143,6 +143,47 @@ public sealed partial class WeeklyReportBuilderTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task MissingLinkedEvidenceIsCountedInOneWarningPerSnapshotNeverOnePerItem()
+    {
+        var logger = new CapturingLogger<WeeklyReportBuilder>();
+        var h = new Harness(logger: logger);
+        var companyId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        await SeedFloorCandidateAsync(h, companyId, snapshotId);
+
+        // Two DISTINCT linked evidence ids the store does not hold; the per-item log line this replaces
+        // would have fired twice here.
+        var missingA = Guid.NewGuid();
+        var missingB = Guid.NewGuid();
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.CustomerWin, SignalDirection.Positive,
+            "Production order booked.", observedAtUtc: InPeriod, evidenceId: missingA, storeEvidence: false);
+        await SeedSignalLinkAsync(
+            h, snapshotId, Guid.NewGuid(), SignalType.StrategicPartnership, SignalDirection.Positive,
+            "Joint development partnership signed.", observedAtUtc: InPeriod, evidenceId: missingB,
+            storeEvidence: false);
+
+        var result = await h.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        // Exactly ONE load-side warning for the snapshot, carrying the count, the distinct-link denominator
+        // and both ids — the per-evidence line is gone.
+        var warning = Assert.Single(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning
+                && e.Message.Contains("linked evidence item(s) were not found in the store", StringComparison.Ordinal));
+        Assert.Contains("2 of 3 distinct linked evidence item(s)", warning.Message, StringComparison.Ordinal);
+        Assert.Contains(missingA.ToString(), warning.Message, StringComparison.Ordinal);
+        Assert.Contains(missingB.ToString(), warning.Message, StringComparison.Ordinal);
+
+        // Nothing was dropped: both links still render their placeholder refs.
+        var context = Assert.Single(h.Policy.Contexts);
+        Assert.Equal(2, context.ContributingSignals.Count(s => s.SourceType is null));
+        Assert.Single(result.Items);
+        var entry = Assert.Single(h.Renderer.LastModel!.Entries);
+        Assert.Equal(2, entry.Evidence.Count(r => r.Title == "(evidence unavailable)"));
+    }
+
     // ---- Full-report label identity: provenance moves rationale text and nothing else ----------------
 
     private static readonly Guid FlooredCompanyId = Guid.Parse("a0000000-0000-0000-0000-000000000001");

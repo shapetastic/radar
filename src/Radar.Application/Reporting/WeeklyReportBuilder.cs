@@ -688,12 +688,14 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     /// Loads every DISTINCT evidence id the snapshot's links cite exactly once (spec 209): the same item is
     /// commonly linked through several signals, and the contributing-signal refs (spec 210), the
     /// evidence-ref block and the insider-activity aggregate all read from this one load. A missing item
-    /// is kept as <c>null</c> (never dropped) so the ref block can render its placeholder and warn.
+    /// is kept as <c>null</c> (never dropped) so the ref block renders its placeholder; the missing ids
+    /// are counted into ONE warning per snapshot (never one line per evidence id).
     /// </summary>
     private async Task<IReadOnlyDictionary<Guid, EvidenceItem?>> LoadLinkedEvidenceAsync(
         CompanyScoreSnapshot current, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct)
     {
         var loaded = new Dictionary<Guid, EvidenceItem?>();
+        var missing = new List<Guid>();
         foreach (var link in links)
         {
             if (loaded.ContainsKey(link.EvidenceId))
@@ -707,15 +709,24 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
 
             if (evidence is null)
             {
-                // Never drop provenance silently: keep the link's reason but flag the missing evidence.
-                _logger.LogWarning(
-                    "Evidence {EvidenceId} referenced by score snapshot {SnapshotId} (signal {SignalId}) was not found; rendering placeholder.",
-                    link.EvidenceId,
-                    current.Id,
-                    link.SignalId);
+                missing.Add(link.EvidenceId);
             }
 
             loaded[link.EvidenceId] = evidence;
+        }
+
+        if (missing.Count > 0)
+        {
+            // Never drop provenance silently: the links keep their reasons and render placeholders, and the
+            // gap is surfaced once per snapshot with every missing id (the list is bounded by the
+            // snapshot's distinct links, so nothing is truncated).
+            _logger.LogWarning(
+                "Score snapshot {SnapshotId} (company {CompanyId}): {Count} of {Distinct} distinct linked evidence item(s) were not found in the store; rendering placeholders. Missing: {MissingIds}",
+                current.Id,
+                current.CompanyId,
+                missing.Count,
+                loaded.Count,
+                string.Join(", ", missing));
         }
 
         return loaded;
