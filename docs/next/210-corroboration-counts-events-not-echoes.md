@@ -32,10 +32,14 @@ Estimated implementation time: UNMEASURED. Record actual dispatch→PR time in t
 class, no judgment-derived flag — and `WeeklyReportBuilder` loads evidence only AFTER the policy decides.
 Extend additively:
 
-- add to `ReportSignalRef` (trailing, so existing construction sites stay source-compatible): the signal's
-  `ObservedAtUtc`, the evidence source class (filing / news / government-contract / press-release), and
-  whether the signal is judgment-derived (`NewsDirectionalSignalMetadata.IsJudgmentDerived` — reuse, no
-  second parser);
+- add to `ReportSignalRef` — trailing AND defaulted, because trailing alone is not source-compatible for
+  positional construction: `DateTimeOffset? ObservedAtUtc = null`, `EvidenceSourceType? SourceType = null`,
+  `bool? IsJudgmentDerived = null`. Nullable deliberately: `null` means "not recorded", never a silent
+  false — missing provenance must render as unknown, not as "not judgment-derived";
+- `SourceType` carries the CANONICAL `EvidenceSourceType` enum, not an informal four-value class (the
+  domain has many source types — patents, job postings, regulatory approvals, …). Rendering goes through
+  one deterministic display mapping with an explicit unknown fallback for `null`/unmapped values;
+- the judgment-derived flag reuses `NewsDirectionalSignalMetadata.IsJudgmentDerived` — no second parser;
 - populate them by REUSING one evidence lookup: restructure the builder so the evidence read that already
   happens for the entry also feeds the action context, rather than adding a second per-company evidence
   pass (the spec-203 lesson: no per-call disk scans).
@@ -66,9 +70,12 @@ tests/pins updated in the same slice.
   same-day pair visible on one line. This is the guard for the hypothesized shape regardless of whether it
   currently occurs live.
 - **Audit (read-only, PR body):** over the accrued reports/snapshots, count Watch-floor firings TWO ways —
-  raw report occurrences AND deduplicated support episodes keyed by (company, contributing type + evidence
-  set), because fourteen nightly reports can repeat one unchanged floor fourteen times and inflate the
-  count. For each distinct episode: the counted types with dates/source classes, and whether it matches the
+  raw report occurrences AND deduplicated support episodes. The episode key is
+  (company, the positive signal types that satisfied the floor, their supporting evidence ids SORTED) —
+  deliberately excluding neutral/other contributing evidence, because keying on the full contributing set
+  would mint a spurious "new episode" every time unrelated neutral evidence arrived while the floor's
+  actual support stood unchanged. Fourteen nightly reports repeating one unchanged floor count as one
+  episode and fourteen occurrences. For each distinct episode: the counted types with dates/source classes, and whether it matches the
   same-day cross-extractor shape. If a genuine live echo is found, name it and add it beside the synthetic
   fixture; if none is found, say so — that is the hypothesis measured, not a wasted slice.
 - Any follow-up that would change which companies get floored (threshold, distinct-date requirement, real
@@ -82,8 +89,9 @@ pass in the builder.
 
 ## Acceptance criteria
 
-- [ ] `ReportSignalRef` carries observed date, source class and judgment-derived provenance, populated from
-      one reused evidence lookup; existing construction sites compile unchanged.
+- [ ] `ReportSignalRef` carries nullable-defaulted `ObservedAtUtc`/`SourceType` (canonical
+      `EvidenceSourceType`)/`IsJudgmentDerived`, populated from one reused evidence lookup; null renders
+      as unknown, never as false; existing construction sites compile unchanged.
 - [ ] The Watch-floor rationale renders every corroborating type's distinct support tuples (or capped
       range+count) deterministically; the synthetic same-event fixture makes the same-day pair visible.
 - [ ] Label outcomes are byte-identical on a full-report fixture; only rationale text differs; the policy

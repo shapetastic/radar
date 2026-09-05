@@ -39,9 +39,16 @@ Estimated implementation time: UNMEASURED. Record actual dispatch→PR time in t
 Audit the accrued store across the live universe, from persisted classification reasons and captured
 discretionary values ONLY:
 
-- per company over the current 60-day window: Form 4 evidence count; filings by persisted class
-  (plan/routine vs discretionary purchase vs discretionary sale vs excluded) and, where a discretionary
-  net value was captured, that value;
+- per company over the current 60-day window: Form 4 evidence count; filings by the ACTUAL persisted
+  classification tokens (`SecForm4ClassificationReasons`): `plan-10b5-1`, `discretionary-buy`,
+  `discretionary-sale`, `mixed-buy-sell`, `no-discretionary-transactions`, plus a **missing/unknown**
+  bucket for legacy evidence that predates the tokens. There is no separable "excluded" class — grants,
+  holdings-only and empty filings all land in `no-discretionary-transactions` and cannot be told apart
+  after the fact; the audit says so rather than inventing a split. Where a discretionary value was
+  captured, report it — noting that for `mixed-buy-sell` the persisted figure is
+  `Math.Max(purchaseValue, saleValue)` (`HttpSecForm4Reader.cs`), NOT a net or a total, so it must never
+  be summed into any value column: report the mixed-filing COUNT and state that its purchase/sale split
+  and total were not captured;
 - **NWPX case study:** what the durable data can actually say — expected shape "11 planned-disposition
   filings; transaction value not captured; recurring cadence" — plus explicit confirmation that per-filing
   codes/values for plan filings were never persisted (that absence IS the finding);
@@ -72,23 +79,30 @@ Add a structured `InsiderActivitySummary` to `WeeklyReportEntry` (report-side on
 new signal, no scoring input, no fingerprint move), assembled in the report builder from the DISTINCT Form 4
 evidence items inside the snapshot's exact window:
 
-- filings count; planned-disposition count; discretionary purchase-value and sale-value totals where the
-  reader captured them; an **unallocated/mixed** bucket for filings whose persisted net value cannot be
-  split into purchase vs sale (the reader retains only a net aggregate); and a cadence note derivable from
-  filing dates (e.g. "recurring weekly");
+- buckets mirroring the persisted taxonomy exactly: filings count; planned-disposition count;
+  `discretionary-buy` purchase-value total and `discretionary-sale` sale-value total where captured; a
+  **mixed-buy-sell count** whose value is deliberately NOT totalled (the persisted figure is
+  `Math.Max(purchaseValue, saleValue)` — neither a net nor a total; render "split and total not
+  captured"); a `no-discretionary-transactions` count; and an **unknown** count for legacy evidence with
+  no classification token;
+- the summary is read through ONE shared contract: an Application-level `InsiderActivityMetadata`
+  reader/record that Infrastructure WRITES through — the classification tokens currently live in
+  `SecForm4ClassificationReasons` (Infrastructure) while `WeeklyReportBuilder` is Application, so without
+  the shared home the implementation either duplicates magic strings or inverts the dependency direction
+  (both forbidden; reuse-over-copy);
+- no fuzzy cadence adjective: the span is stated objectively as "N planned-disposition filings across D
+  days" (D = inclusive days between first and last filing date in the window; omitted when N < 2);
 - `null`/absent renders "not captured", never 0 — a plan filing with no persisted value is counted as a
   filing and excluded from every value total;
-- the rendered NWPX line reads like: "11 planned-disposition filings; transaction value not captured;
-  recurring cadence" — legible without opening eleven filings, and claiming nothing the store cannot back.
+- the rendered NWPX line reads like: "11 planned-disposition filings across 29 days; transaction value not
+  captured" — legible without opening eleven filings, and claiming nothing the store cannot back.
 
-## 4. Optional, forward-only: capture what tonight's filings actually say
+## 4. Forward transaction-code capture is DEFERRED to its own slice
 
-At the implementer's discretion (skippable if it inflates the slice): begin persisting, for NEW Form 4
-evidence only, per-filing diagnostic counts — transaction-code tally and gross purchase/sale values even
-when the plan flag forces the signal Neutral. Constraints if taken: forward-only (historical filings remain
-unknown; no backfill); additive fields; and it must be shown NOT to perturb evidence identity/content-hash
-or any fingerprint — if it would, put it in a diagnostic sidecar (the ai-debug pattern) instead of the
-evidence record, or drop it and record the deferral.
+Persisting per-filing code tallies and gross purchase/sale values for new filings (even when the plan flag
+forces Neutral) is explicitly OUT of this spec — one spec must have one implementation, and this slice is
+already large. Record it as a deferred follow-up in the PR body; when specced, it is forward-only, additive
+and must be shown identity/fingerprint-inert (sidecar if not).
 
 ## 5. Only measured follow-ups may tune
 
@@ -109,10 +123,11 @@ JSON rewrite; no re-fetch/backfill of accrued filings; no adoption of external f
       or explicitly "not established"; the plan-filings-carry-no-value constraint is stated where relied on.
 - [ ] No report surface (type rendering OR verbatim reason lines) renders "Buying" for this channel;
       accrued signals deserialize unchanged; wording passes the existing forbidden-substring tests.
-- [ ] `InsiderActivitySummary` is structured on the entry, built from distinct window evidence, with
-      purchase/sale/unallocated buckets and "not captured" semantics; the NWPX shape is legible from the
-      line alone.
-- [ ] If §4 is taken: forward-only, additive, and demonstrably identity/fingerprint-inert (or explicitly
-      deferred).
+- [ ] `InsiderActivitySummary` is structured on the entry, built from distinct window evidence through the
+      shared Application-level `InsiderActivityMetadata` contract (Infrastructure writes through it), with
+      buckets mirroring the persisted tokens (incl. mixed and unknown), mixed values never totalled, the
+      deterministic "N filings across D days" span, and "not captured" semantics; the NWPX shape is legible
+      from the line alone.
+- [ ] Forward transaction-code capture is deferred (recorded in the PR body), not partially implemented.
 - [ ] All six fingerprint pins byte-identical; no `RuleSetVersion` change; build, full suite,
       `git diff --check` clean; actual elapsed time in the PR body.
