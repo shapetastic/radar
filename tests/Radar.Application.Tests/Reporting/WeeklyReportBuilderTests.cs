@@ -9,6 +9,7 @@ using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.Storage;
 using Radar.Domain.Companies;
+using Radar.Domain.Evidence;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
 using Radar.Domain.Signals;
@@ -234,6 +235,26 @@ public sealed partial class WeeklyReportBuilderTests
     private static readonly IReadOnlyList<TestStrategy> SingleDefaultStrategy =
         [new TestStrategy("default", IsPrimary: true)];
 
+    // Counts GetByIdAsync calls so a test can prove the builder loads each DISTINCT linked evidence id once
+    // (spec 209: the evidence-ref block and the insider-activity aggregate share ONE load).
+    private sealed class CountingEvidenceRepository(InMemoryEvidenceRepository inner) : IEvidenceRepository
+    {
+        public int GetByIdCallCount { get; private set; }
+
+        public Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct) => inner.AddIfNewAsync(item, ct);
+
+        public Task<EvidenceItem?> GetByIdAsync(Guid id, CancellationToken ct)
+        {
+            GetByIdCallCount++;
+            return inner.GetByIdAsync(id, ct);
+        }
+
+        public Task<EvidenceItem?> GetByContentHashAsync(string contentHash, CancellationToken ct) =>
+            inner.GetByContentHashAsync(contentHash, ct);
+
+        public Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct) => inner.GetAllAsync(ct);
+    }
+
     private sealed class Harness
     {
         public InMemoryCompanyRepository Companies { get; } = new();
@@ -243,6 +264,7 @@ public sealed partial class WeeklyReportBuilderTests
         public InMemorySignalReviewRepository SignalReviews { get; } = new();
         public InMemoryReportRepository Reports { get; } = new();
         public CountingSignalRepository CountingSignals { get; }
+        public CountingEvidenceRepository CountingEvidence { get; }
         public RecordingActionPolicy Policy { get; }
         public CapturingRenderer Renderer { get; }
         public FakeScoringStrategyFactory StrategyFactory { get; }
@@ -273,6 +295,7 @@ public sealed partial class WeeklyReportBuilderTests
             IStrategyEvidenceFactsSource? evidenceFacts = null)
         {
             CountingSignals = new CountingSignalRepository(Signals);
+            CountingEvidence = new CountingEvidenceRepository(Evidence);
             Policy = new RecordingActionPolicy(new WeeklyReportActionPolicyV1());
             Renderer = new CapturingRenderer(new MarkdownWeeklyReportRenderer());
             StrategyFactory = new FakeScoringStrategyFactory(strategies ?? SingleDefaultStrategy);
@@ -282,7 +305,7 @@ public sealed partial class WeeklyReportBuilderTests
             Builder = new WeeklyReportBuilder(
                 Companies,
                 Scores,
-                Evidence,
+                CountingEvidence,
                 CountingSignals,
                 SignalReviews,
                 Policy,

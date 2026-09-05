@@ -5,6 +5,7 @@ using System.Xml.Linq;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Collectors;
 using Radar.Domain.Signals;
 
 namespace Radar.Infrastructure.Sec;
@@ -354,23 +355,23 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
         string classificationReason;
         if (is10b5Plan)
         {
-            classificationReason = SecForm4ClassificationReasons.Plan10b51;
+            classificationReason = InsiderActivityMetadata.Plan10b51;
         }
         else if (buyValue > 0m && sellValue == 0m)
         {
-            classificationReason = SecForm4ClassificationReasons.DiscretionaryBuy;
+            classificationReason = InsiderActivityMetadata.DiscretionaryBuy;
         }
         else if (sellValue > 0m && buyValue == 0m)
         {
-            classificationReason = SecForm4ClassificationReasons.DiscretionarySale;
+            classificationReason = InsiderActivityMetadata.DiscretionarySale;
         }
         else if (buyValue > 0m && sellValue > 0m)
         {
-            classificationReason = SecForm4ClassificationReasons.MixedBuySell;
+            classificationReason = InsiderActivityMetadata.MixedBuySell;
         }
         else
         {
-            classificationReason = SecForm4ClassificationReasons.NoDiscretionaryTransactions;
+            classificationReason = InsiderActivityMetadata.NoDiscretionaryTransactions;
         }
 
         return new SecForm4Filing(

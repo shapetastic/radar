@@ -2,6 +2,7 @@ namespace Radar.Application.Reporting;
 
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using Radar.Application.Lifecycle;
 using Radar.Application.Scoring;
 using Radar.Domain.Companies;
@@ -52,11 +53,32 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
     // REPORTED and is never asked whether guidance changed, and the deterministic spec-57 earnings-8-K
     // signal carries the same member for a plain earnings FILING — so printing "GuidanceChange" reads
     // as a guidance event that never happened. This is the ONE renderer-owned mapping site: every place
-    // the renderer itself stringifies a SignalType routes through it. It must NEVER be applied to stored
-    // provenance text (evidence-link reasons authored at scoring time render byte-verbatim) — the legend
-    // line in AppendDisclaimers explains the literal token where it appears inside that stored text.
+    // the renderer itself stringifies a SignalType routes through it.
+    //
+    // Spec 209 adds a second relabel, InsiderBuying -> "InsiderActivity": the stored member covers every
+    // Form 4 (a planned disposition stream renders as Neutral rows of it), so the literal token is an
+    // inverted label over a disposition. Spec 167's stance that this mapping "must NEVER be applied to
+    // stored provenance text" is SUPERSEDED for that ONE exact token only: DisplayProvenanceText rewrites
+    // the whole-word InsiderBuying inside stored evidence-link reasons and signal reasons at render time
+    // (both paths the token reaches the reader), because a legend cannot un-invert a label the reader sees
+    // eleven times. The GuidanceChange stance is unchanged — its stored text still renders byte-verbatim
+    // and the legend line in AppendDisclaimers explains the literal token where it appears.
     private static string DisplaySignalType(SignalType type) =>
-        type == SignalType.GuidanceChange ? "EarningsTrajectory" : type.ToString();
+        type switch
+        {
+            SignalType.GuidanceChange => "EarningsTrajectory",
+            SignalType.InsiderBuying => "InsiderActivity",
+            _ => type.ToString(),
+        };
+
+    // Spec 209: the presentation-only seam over STORED text (evidence-link contribution reasons and signal
+    // reasons, both authored at scoring time). Exactly one whole-word token is rewritten; every other byte
+    // renders verbatim. The stored JSON is never touched — accrued signals keep deserializing unchanged.
+    private static readonly Regex StoredInsiderTypeToken =
+        new(@"\bInsiderBuying\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static string DisplayProvenanceText(string stored) =>
+        StoredInsiderTypeToken.Replace(stored, "InsiderActivity");
 
     // Short, purely descriptive gloss of the curated following tier (AD-9: a research statistic — how
     // covered the name already is — never a valuation or an advice word).
@@ -180,6 +202,11 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append("> \"GuidanceChange\" in evidence lines is a historical earnings-release signal type ")
             .Append("— either a deterministic Neutral earnings-filing marker or an AI earnings-trajectory ")
             .Append("read; it does not by itself mean the company issued or changed guidance.")
+            .Append(Lf);
+        // Spec 209: the insider channel's rendered name. Deliberately does NOT quote the stored token (the
+        // report-language rule forbids its substring); the legend explains what a Neutral row of it is.
+        sb.Append("> \"InsiderActivity\" rows are SEC Form 4 insider filings of any kind; a Neutral row is ")
+            .Append("a routine or planned filing, not a discretionary transaction.")
             .Append(Lf);
         sb.Append(Lf);
     }
@@ -813,6 +840,13 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         }
         sb.Append(Lf);
 
+        // Spec 209: the Form 4 aggregate behind this snapshot, inside its exact window. Null means no Form 4
+        // evidence is linked at all, and nothing is printed — never a fabricated "0 filings".
+        if (entry.InsiderActivity is { } insider)
+        {
+            AppendInsiderActivity(sb, insider);
+        }
+
         sb.Append("- Why: ").Append(entry.Rationale).Append(Lf);
         sb.Append("- Score snapshot: ")
             .Append(entry.ScoreSnapshotId.ToString())
@@ -883,6 +917,110 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             : delta.ToString(CultureInfo.InvariantCulture);
     }
 
+    // Spec 209: ONE line, fixed clause order, only non-zero buckets after the filing count. Every value is
+    // what the store captured: a null value renders "not captured", never 0; the mixed bucket carries no
+    // value at all (its persisted magnitude is Math.Max(purchase, sale) — neither net nor total); the span
+    // is stated only when it was computed over the whole dated plan set. Invariant culture throughout, and
+    // no wording here may contain the forbidden report-language substrings.
+    private static void AppendInsiderActivity(StringBuilder sb, InsiderActivitySummary insider)
+    {
+        var clauses = new List<string>
+        {
+            Plural(insider.FilingCount, "filing"),
+        };
+
+        if (insider.PlannedDispositionCount > 0)
+        {
+            var clause = Plural(insider.PlannedDispositionCount, "planned-disposition filing");
+            if (insider.PlannedDispositionSpanDays is { } span)
+            {
+                clause += " across " + Plural(span, "day");
+            }
+            else if (insider.PlannedDispositionUndatedCount > 0)
+            {
+                clause += " (span not established: "
+                    + insider.PlannedDispositionUndatedCount.ToString(CultureInfo.InvariantCulture)
+                    + " undated)";
+            }
+
+            clauses.Add(clause);
+            clauses.Add("transaction value not captured");
+        }
+
+        if (insider.DiscretionaryPurchaseCount > 0)
+        {
+            clauses.Add(
+                Plural(insider.DiscretionaryPurchaseCount, "discretionary purchase filing")
+                + ", purchase value "
+                + FormatCapturedValue(
+                    insider.DiscretionaryPurchaseValue, insider.DiscretionaryPurchaseValueNotCapturedCount));
+        }
+
+        if (insider.DiscretionarySaleCount > 0)
+        {
+            clauses.Add(
+                Plural(insider.DiscretionarySaleCount, "discretionary sale filing")
+                + ", sale value "
+                + FormatCapturedValue(
+                    insider.DiscretionarySaleValue, insider.DiscretionarySaleValueNotCapturedCount));
+        }
+
+        if (insider.MixedCount > 0)
+        {
+            clauses.Add(
+                Plural(insider.MixedCount, "mixed purchase-and-sale filing") + "; split and total not captured");
+        }
+
+        if (insider.NoDiscretionaryTransactionsCount > 0)
+        {
+            clauses.Add(
+                insider.NoDiscretionaryTransactionsCount.ToString(CultureInfo.InvariantCulture)
+                + " with no discretionary transactions");
+        }
+
+        if (insider.UnknownClassificationCount > 0)
+        {
+            clauses.Add(
+                insider.UnknownClassificationCount.ToString(CultureInfo.InvariantCulture)
+                + " with classification not captured");
+        }
+
+        if (insider.UnrecognisedClassificationCount > 0)
+        {
+            clauses.Add(
+                insider.UnrecognisedClassificationCount.ToString(CultureInfo.InvariantCulture)
+                + " with unrecognised classification");
+        }
+
+        if (insider.OutsideWindowCount > 0)
+        {
+            clauses.Add(
+                insider.OutsideWindowCount.ToString(CultureInfo.InvariantCulture) + " outside the window");
+        }
+
+        sb.Append("- Insider activity (Form 4, this window): ")
+            .Append(string.Join("; ", clauses))
+            .Append(Lf);
+    }
+
+    // "$X" when every filing's value was captured; "not captured" when none was; "$X (k not captured)"
+    // for the partial case — a partial sum is never presented as the whole.
+    private static string FormatCapturedValue(decimal? value, int notCapturedCount)
+    {
+        if (value is not { } captured)
+        {
+            return "not captured";
+        }
+
+        var text = "$" + captured.ToString("N0", CultureInfo.InvariantCulture);
+        return notCapturedCount > 0
+            ? text + " (" + notCapturedCount.ToString(CultureInfo.InvariantCulture) + " not captured)"
+            : text;
+    }
+
+    private static string Plural(int count, string singular) =>
+        count.ToString(CultureInfo.InvariantCulture) + " " + singular + (count == 1 ? string.Empty : "s");
+
     private static void AppendSignals(StringBuilder sb, WeeklyReportEntry entry)
     {
         if (entry.Signals.Count == 0)
@@ -899,7 +1037,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                 .Append(signal.Direction.ToString())
                 .Append(')');
 
-            var reason = signal.Reason.Trim();
+            var reason = DisplayProvenanceText(signal.Reason.Trim());
             if (reason.Length > 0)
             {
                 sb.Append(": ").Append(reason);
@@ -920,7 +1058,11 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         {
             sb.Append(ev.Title);
         }
-        sb.Append(" — ").Append(ev.SourceName).Append(": ").Append(ev.ContributionReason).Append(Lf);
+        sb.Append(" — ")
+            .Append(ev.SourceName)
+            .Append(": ")
+            .Append(DisplayProvenanceText(ev.ContributionReason))
+            .Append(Lf);
     }
 
     private static void AppendThesisSection(

@@ -153,14 +153,23 @@ public sealed class MarkdownWeeklyReportEarningsTrajectoryRelabelTests
         return model with { Entries = entries };
     }
 
+    // The spec-209 legend line that follows the spec-167 one in every report (its own guard lives in
+    // MarkdownWeeklyReportInsiderActivityTests); carried here so the pre-167 captures still produce the
+    // EXPECTED current bytes. Must stay in sync with MarkdownWeeklyReportRenderer.AppendDisclaimers.
+    private const string Spec209LegendLine =
+        "> \"InsiderActivity\" rows are SEC Form 4 insider filings of any kind; a Neutral row is a routine "
+        + "or planned filing, not a discretionary transaction.";
+
     // Inserts the spec-167 legend line at its one sanctioned position (directly under the notedness
-    // caveat) into a captured pre-167 document, producing the EXPECTED post-167 bytes.
+    // caveat) into a captured pre-167 document — followed by the spec-209 legend line, which is the only
+    // other header delta since the capture — producing the EXPECTED current bytes.
     private static string WithLegendInserted(string pre167Document)
     {
         const string Anchor = "a research signal, not a valuation.\n";
         var anchorIndex = pre167Document.IndexOf(Anchor, StringComparison.Ordinal);
         Assert.True(anchorIndex >= 0, "The notedness caveat must be present in the pre-167 capture.");
-        return pre167Document.Insert(anchorIndex + Anchor.Length, LegendLine + "\n");
+        return pre167Document.Insert(
+            anchorIndex + Anchor.Length, LegendLine + "\n" + Spec209LegendLine + "\n");
     }
 
     private static int CountOccurrences(string haystack, string needle) =>
@@ -244,7 +253,11 @@ public sealed class MarkdownWeeklyReportEarningsTrajectoryRelabelTests
         // The enum member itself never reaches a renderer-owned type site ("GuidanceChange (" cannot
         // occur elsewhere here: this fixture has no evidence text and the legend says "GuidanceChange").
         Assert.DoesNotContain("GuidanceChange (", output, StringComparison.Ordinal);
-        foreach (var type in Enum.GetValues<SignalType>().Where(t => t != SignalType.GuidanceChange))
+        // AMENDED BY SPEC 209: InsiderBuying is the SECOND relabelled member (rendered "InsiderActivity",
+        // and — unlike GuidanceChange — its exact token is also rewritten inside stored reason text); its
+        // own guard lives in MarkdownWeeklyReportInsiderActivityTests. Every remaining member is unchanged.
+        foreach (var type in Enum.GetValues<SignalType>()
+                     .Where(t => t is not SignalType.GuidanceChange and not SignalType.InsiderBuying))
         {
             Assert.Contains($"  - {type} (Positive): reason for {type}", output, StringComparison.Ordinal);
         }

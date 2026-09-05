@@ -64,14 +64,14 @@ public sealed class SecForm4CollectorTests
             // a Neutral filing with NetValue > 0 is the mixed buy+sell branch (netValue = max(buy, sell)),
             // while Neutral with NetValue == 0 is the no-discretionary-transactions branch.
             ClassificationReason: classificationReason ?? (is10b5Plan
-                ? SecForm4ClassificationReasons.Plan10b51
+                ? InsiderActivityMetadata.Plan10b51
                 : direction == SignalDirection.Positive
-                    ? SecForm4ClassificationReasons.DiscretionaryBuy
+                    ? InsiderActivityMetadata.DiscretionaryBuy
                     : direction == SignalDirection.Negative
-                        ? SecForm4ClassificationReasons.DiscretionarySale
+                        ? InsiderActivityMetadata.DiscretionarySale
                         : netValue > 0m
-                            ? SecForm4ClassificationReasons.MixedBuySell
-                            : SecForm4ClassificationReasons.NoDiscretionaryTransactions));
+                            ? InsiderActivityMetadata.MixedBuySell
+                            : InsiderActivityMetadata.NoDiscretionaryTransactions));
 
     private static SecForm4Collector CreateCollector(
         FakeSecForm4Reader reader, SecForm4CollectorOptions? options = null) =>
@@ -112,7 +112,7 @@ public sealed class SecForm4CollectorTests
         Assert.Equal("50000", item.Metadata["insiderNetValue"]);
         Assert.Equal("Positive", item.Metadata["insiderDirection"]);
         Assert.Equal(
-            SecForm4ClassificationReasons.DiscretionaryBuy, item.Metadata["insiderClassificationReason"]);
+            InsiderActivityMetadata.DiscretionaryBuy, item.Metadata["insiderClassificationReason"]);
         Assert.Equal(["MRCY"], item.CompanyHints);
     }
 
@@ -300,11 +300,11 @@ public sealed class SecForm4CollectorTests
     // --- Spec 156: the insiderClassificationReason metadata key (forward-only fix) ---
 
     [Theory]
-    [InlineData(SecForm4ClassificationReasons.Plan10b51)]
-    [InlineData(SecForm4ClassificationReasons.DiscretionaryBuy)]
-    [InlineData(SecForm4ClassificationReasons.DiscretionarySale)]
-    [InlineData(SecForm4ClassificationReasons.MixedBuySell)]
-    [InlineData(SecForm4ClassificationReasons.NoDiscretionaryTransactions)]
+    [InlineData(InsiderActivityMetadata.Plan10b51)]
+    [InlineData(InsiderActivityMetadata.DiscretionaryBuy)]
+    [InlineData(InsiderActivityMetadata.DiscretionarySale)]
+    [InlineData(InsiderActivityMetadata.MixedBuySell)]
+    [InlineData(InsiderActivityMetadata.NoDiscretionaryTransactions)]
     public async Task CollectAsync_WritesInsiderClassificationReasonMetadata_WithFilingToken(string token)
     {
         const string url = "https://data.sec.gov/submissions/CIK.json";

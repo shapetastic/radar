@@ -23,4 +23,8 @@ public sealed record WeeklyReportEntry(
     // Carried purely so the report can SHOW the notedness inputs behind the Opportunity discount; the
     // renderer never recomputes the formula's discount from it. Defaults to the enum's own fail-safe
     // Small so existing construction sites keep compiling.
-    FollowingTier FollowingTier = FollowingTier.Small);
+    FollowingTier FollowingTier = FollowingTier.Small,
+    // Spec 209: the structured Form 4 aggregate behind this snapshot (report-side only, numerically inert).
+    // Null means NO Form 4 evidence is linked to the snapshot at all, and the renderer then prints nothing
+    // for it — never a fabricated "0 filings".
+    InsiderActivitySummary? InsiderActivity = null);
