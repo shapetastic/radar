@@ -1,5 +1,12 @@
 # Insider-flow audit — what the Form 4 channel can currently see (spec 209 §1)
 
+> **Rendered wording changed after this audit (spec 211, 2026-09-06).** Every measured row below is verbatim
+> as of 2026-09-05 and quotes the spec-209 rendering `N planned-disposition filings`; since spec 211 the
+> report renders `N 10b5-1 plan filings` (a plan filing's transaction direction is never captured, so the
+> old name stated a direction the store does not carry), and floor-rationale type names are now the
+> presentation labels `EarningsTrajectory` / `InsiderActivity`. A future re-audit that parses rendered lines
+> from `data/reports/weekly/*.md` must normalise BOTH spellings before comparing.
+
 **Read-only, from persisted data only.** Source: `data/evidence/raw/filing/**/*.json` filtered to
 `metadata.form == "4"` (1,847 files; 1,847 distinct evidence ids; 1,847 distinct content hashes — no
 duplicates). Window: the current 60-day scoring window of the latest full run,

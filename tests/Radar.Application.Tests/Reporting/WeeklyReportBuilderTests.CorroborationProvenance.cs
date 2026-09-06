@@ -75,10 +75,13 @@ public sealed partial class WeeklyReportBuilderTests
         // signal refs read the same load as the evidence block and the insider aggregate — no second pass.
         Assert.Equal(3, h.CountingEvidence.GetByIdCallCount);
 
-        // The floored entry's rationale names the same-day pair, and it reaches the rendered "Why" line.
+        // The floored entry's rationale names the same-day pair, and it reaches the rendered "Why" line —
+        // with the report's PRESENTATION label (spec 211, v4): the stored GuidanceChange type prints as
+        // EarningsTrajectory on the Why line exactly as it does in the "Why noticed" block.
         var item = Assert.Single(result.Items);
         Assert.Equal(RadarReportAction.Watch, item.SuggestedAction);
-        const string named = "GuidanceChange (filing 2026-02-05) + MediaAttention (news 2026-02-05, judgment).";
+        const string named = "EarningsTrajectory (filing 2026-02-05) + MediaAttention (news 2026-02-05, judgment).";
+        Assert.DoesNotContain("GuidanceChange (", result.Report.MarkdownContent, StringComparison.Ordinal);
         Assert.EndsWith(FloorRationaleMarker + named, item.Summary, StringComparison.Ordinal);
         Assert.Contains("- Why: " + item.Summary, result.Report.MarkdownContent, StringComparison.Ordinal);
     }

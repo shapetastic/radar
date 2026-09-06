@@ -284,7 +284,9 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
 
         foreach (var txn in transactions)
         {
-            // A 10b5-1 plan forces every transaction Neutral: a planned sale is not a discretionary signal.
+            // A 10b5-1 plan forces every transaction Neutral: a planned transaction, whose direction is not
+            // read (codes/shares/prices are skipped, so Radar cannot say acquisition or disposition), is
+            // not a discretionary signal.
             if (is10b5Plan)
             {
                 continue;

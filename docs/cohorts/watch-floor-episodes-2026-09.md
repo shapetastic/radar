@@ -1,5 +1,13 @@
 # Watch-floor corroboration audit — raw firings vs support episodes (spec 210 §3)
 
+> **Rendered wording changed after this audit (spec 211, 2026-09-06).** The `- Why:` lines counted below
+> were rendered under `weekly-report-action-v3`, which printed STORED type names (`GuidanceChange`,
+> `InsiderBuying`); since spec 211 (v4) the floor rationale prints the report's presentation labels
+> (`EarningsTrajectory`, `InsiderActivity`), and insider lines render `10b5-1 plan filing` instead of
+> `planned-disposition`. A future re-audit that parses `- Why:` lines from `data/reports/weekly/*.md` must
+> normalise BOTH spellings before keying episodes; the episode key itself uses the STORED enum names read
+> from signal files and is unaffected. Measured rows below are verbatim.
+
 **Read-only, from persisted data only.** Measured 2026-09-05 (dispatch of spec 210) with a Python pass over
 the main checkout's store; no code path was run. Sources: `data/reports/weekly/*.md` (59 reports,
 2026-06-30 → 2026-09-05) for the firings (every `- Why:` line containing `floored to Watch`, each paired with

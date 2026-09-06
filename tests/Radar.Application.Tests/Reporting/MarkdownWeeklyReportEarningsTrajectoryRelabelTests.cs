@@ -274,8 +274,9 @@ public sealed class MarkdownWeeklyReportEarningsTrajectoryRelabelTests
     [Fact]
     public void ActionPolicy_DecisionsAreUnchanged_ForFixturesContainingGuidanceChangeSignals()
     {
-        // The policy consumes the SignalType ENUM (never the display string), so spec 167 must not move
-        // any decision. Pin the two decision paths a GuidanceChange signal can influence or accompany:
+        // The policy DECIDES on the SignalType ENUM (the display label is presentation only), so spec 167
+        // must not move any decision. Pin the two decision paths a GuidanceChange signal can influence or
+        // accompany:
         var policy = new WeeklyReportActionPolicyV1();
 
         // 1. Corroboration floor: sub-Watch opportunity, under-followed, trajectory at/above neutral, and
@@ -315,8 +316,14 @@ public sealed class MarkdownWeeklyReportEarningsTrajectoryRelabelTests
 
         Assert.Equal(RadarReportAction.Investigate, investigate.Action);
 
-        // The display token is a renderer concern only; it must never leak into a policy rationale.
-        Assert.DoesNotContain("EarningsTrajectory", floored.Rationale, StringComparison.Ordinal);
+        // AMENDED BY SPEC 211 (a REVERSAL of the spec-167 stance this assertion used to pin — "the display
+        // token is a renderer concern only; it must never leak into a policy rationale"): the floored
+        // rationale DOES print the presentation label now, through the ONE shared SignalTypeDisplay seam, so
+        // the reader never meets the stored misnomer on a "Why" line; the Investigate rationale names no
+        // type at all. Decisions are unchanged either way.
+        Assert.Contains("EarningsTrajectory", floored.Rationale, StringComparison.Ordinal);
+        Assert.DoesNotContain("GuidanceChange", floored.Rationale, StringComparison.Ordinal);
         Assert.DoesNotContain("EarningsTrajectory", investigate.Rationale, StringComparison.Ordinal);
+        Assert.DoesNotContain("GuidanceChange", investigate.Rationale, StringComparison.Ordinal);
     }
 }

@@ -2715,9 +2715,9 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
 - **The insider channel tells the truth in aggregate and in its label — one shared metadata contract, a
   presentation-only relabel over BOTH render paths, and a structured window summary that says "not captured"
   (spec 209, 2026-09-05).** Two 2026-09-04 skeptic reviews found the channel misfiring in opposite directions
-  with every per-filing rule behaving as designed: NWPX's eleven weekly 10b5-1 planned dispositions each
-  rendered as `InsiderBuying (Neutral)` (an inverted label over a disposition stream, and no per-filing rule
-  can see a six-week cadence), while AGX's externally reported ~$119M H1 sales reached the store as one $3.3M
+  with every per-filing rule behaving as designed: NWPX's eleven weekly 10b5-1 plan filings each rendered
+  as `InsiderBuying (Neutral)` (a directional label over filings whose direction the store never captured —
+  wording amended by spec 211 — and no per-filing rule can see a six-week cadence), while AGX's externally reported ~$119M H1 sales reached the store as one $3.3M
   `discretionary-sale`. The §1 audit (`docs/cohorts/insider-flow-audit-2026-09.md`, persisted data only) is
   the measurement; the code changes are three:
   - **The classification tokens and metadata keys moved to Application.** The five spec-156 tokens
@@ -2744,15 +2744,15 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     unchanged (pinned: `NotInsiderBuyingX` is not rewritten). One legend line is added after the
     GuidanceChange one; it deliberately does not name the stored token because the report-language tests
     forbid the substrings "buy"/"sell", so all new wording uses "purchase value" / "sale value" /
-    "planned disposition" / "mixed purchase-and-sale".
+    "10b5-1 plan filing" (spec 211 amended this from "planned disposition") / "mixed purchase-and-sale".
   - **`WeeklyReportEntry.InsiderActivity` (an `InsiderActivitySummary?`) — report-side, numerically inert,
     not persisted, no scoring input, no fingerprint input.** Built by `InsiderActivitySummary.From` (pure,
     static, unit-tested alone) over the DISTINCT evidence items (by id) behind the snapshot's links — the
     builder now loads each distinct evidence id ONCE (`LoadLinkedEvidenceAsync`) and both the evidence-ref
     block and the summary read that one load; nothing calls `GetAllAsync`. Buckets mirror the persisted
-    taxonomy exactly: filing count; planned-disposition count with first/last filing date and a span in
+    taxonomy exactly: filing count; 10b5-1 plan-filing count with first/last filing date and a span in
     elapsed days (`(last − first).Days`, stated ONLY when ≥ 2 plan filings and ALL are dated — an undated
-    one is counted in `PlannedDispositionUndatedCount` and the span renders "not established"); discretionary
+    one is counted in `Plan10b51UndatedCount` and the span renders "not established"); discretionary
     purchase count + summed captured value (null when none captured, never 0) + not-captured count; the same
     for sales; a **mixed count with NO value member at all** (the persisted magnitude is
     `Math.Max(purchase, sale)`, neither net nor total, and is never summed into any value column);
@@ -2763,7 +2763,11 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     other bucket, never silently dropped. Null on the entry means no Form 4 evidence is linked at all and
     the renderer prints nothing (never a fabricated "0 filings"). The rendered line is ONE line in a fixed
     clause order; the NWPX shape is pinned byte-exact:
-    `- Insider activity (Form 4, this window): 11 filings; 11 planned-disposition filings across 29 days; transaction value not captured`.
+    `- Insider activity (Form 4, this window): 11 filings; 11 10b5-1 plan filings across 29 days; transaction value not captured`.
+    **Spec 211 corrected this bucket's name in place** (`PlannedDisposition*` → `Plan10b51*`, rendered
+    "planned-disposition" → "10b5-1 plan filing") because the reader forces every plan transaction Neutral
+    BEFORE reading its codes, so a plan filing's transaction direction is never captured and the original
+    name stated an inference the store does not carry.
   - **§4 forward transaction-code capture is DEFERRED** to its own slice: per-filing code tallies and gross
     purchase/sale values for NEW filings (even when the plan flag forces Neutral) are not implemented here,
     not partially. Historical plan filings' codes and values are UNKNOWN and stay unknown (no backfill, no
@@ -2804,11 +2808,15 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     date; parenthetical only when u > 0) — nothing picks a "first" or "latest" tuple silently, because an
     arbitrary choice could manufacture or hide an echo. The source-class display is ONE internal `switch`
     (`DescribeSourceClass`) with an explicit `source unknown` fallback for `null`/undefined values, and a
-    test proves every defined `EvidenceSourceType` member maps to a named class. **The stored `SignalType`
-    token is rendered** (`GuidanceChange`, not the renderer's `EarningsTrajectory` relabel): spec 167 pins
-    that the display token never leaks into a policy rationale, so the spec's example shape is realised with
-    the stored token. Synthetic same-day fixture pinned byte-exact at policy and builder level:
-    `GuidanceChange (filing 2026-09-02) + MediaAttention (news 2026-09-02, judgment)`.
+    test proves every defined `EvidenceSourceType` member maps to a named class. **v3 rendered the STORED
+    `SignalType` token** (`GuidanceChange`, `InsiderBuying`), reasoning from spec 167's pin that the display
+    token never leaks into a policy rationale — **SUPERSEDED by spec 211 (v4)**: that bypassed the report's
+    presentation relabels (`GuidanceChange` on 15 of 19 live floored lines; the forbidden `InsiderBuying`
+    substring on LBRT's), so the printed name now goes through the shared `SignalTypeDisplay` seam and the
+    same synthetic same-day fixture is pinned byte-exact at policy level as
+    `EarningsTrajectory (filing 2026-09-02) + MediaAttention (news 2026-09-02, judgment)` (the builder-level
+    fixture in `WeeklyReportBuilderTests.CorroborationProvenance` pins the same shape dated 2026-02-05);
+    grouping, ordering and the count still run on the stored enum.
   - **Spec 210 moved nothing else.** No label outcome (a full-report fixture and a representative-matrix sweep
     prove null-vs-populated provenance decides identically on every tier — only the floored rationale differs),
     no count, threshold, scoring, signal, formula, weight or fingerprint pin (`ScoringConfigFingerprintTests`
@@ -2820,3 +2828,40 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     `radar-weekly-2026-08-30` rested entirely on one earnings 8-K and same-day coverage of it — now pinned beside
     the synthetic fixture as `Floor_Rationale_Makes_Live_Ooma_2026_08_26_Same_Day_Echo_Visible`. Whether that
     changes what gets floored is the maintainer's call; spec 210 changed no label.
+- **Two display-truth corrections left by specs 209/210 — a 10b5-1 plan filing has no known direction, and
+  the Watch-floor rationale prints the report's labels through ONE shared seam (spec 211, 2026-09-06).** The
+  2026-09-05 post-merge review found both live in `radar-weekly-2026-09-05.md`: 17 insider lines said
+  "planned-disposition" although `HttpSecForm4Reader` forces every plan transaction Neutral BEFORE reading
+  its codes (the store cannot say acquisition or disposition), and 15 of 19 floored `- Why:` lines printed
+  `GuidanceChange` — plus `InsiderBuying`, the forbidden substring, on LBRT's — because the renderer's two
+  relabels were private to the renderer and the policy never saw them. Presentation only; three changes:
+  - **`InsiderActivitySummary.PlannedDisposition*` → `Plan10b51*`** (named for the persisted token
+    `InsiderActivityMetadata.Plan10b51`); the doc-comment states the direction is not captured; the rendered
+    clause is `N 10b5-1 plan filing(s)` through the existing `Plural` helper, with NWPX re-pinned byte-exact:
+    `- Insider activity (Form 4, this window): 11 filings; 11 10b5-1 plan filings across 29 days; transaction value not captured`.
+    The renderer, `HttpSecForm4Reader` and `SecForm4TransactionCode` comments that called a plan filing a
+    disposition/sale were amended in place; no reader behaviour changed.
+  - **`SignalTypeDisplay` (`Radar.Application.Reporting`, references Domain only) is THE owner of the
+    presentation mapping**: `Label(SignalType)` (`GuidanceChange → EarningsTrajectory`, `InsiderBuying →
+    InsiderActivity`, every other member its own name) and `RewriteStoredProvenance` (the spec-209 whole-token
+    `\bInsiderBuying\b` rewrite, semantics unchanged — `NotInsiderBuyingX` untouched, stored `GuidanceChange`
+    verbatim). The renderer's private `DisplaySignalType` / `StoredInsiderTypeToken` / `DisplayProvenanceText`
+    are DELETED (not kept as a second copy) and its three sites route through the seam; the spec-167/209
+    "why" comment block moved onto the type. `WeeklyReportActionPolicyV1` names each floor-support group with
+    `SignalTypeDisplay.Label(g.Key)` while `GroupBy(Type).OrderBy(Key)` and the count stay on the stored
+    enum, and its `Version` is `weekly-report-action-v3 → v4` (rationale contract changed; every label
+    byte-identical, proven by a matrix × tier sweep that reconstructs the v3 text and diffs it by exactly the
+    two names). `SignalTypeDisplayGuardrailTests` scans the renderer and the policy source (comments
+    stripped) and fails on any `SignalType`-to-string site other than the seam — a `SignalType.X =>` arm, the
+    label literals, the stored token in code, a `{g.Key}` / `{x.Type}` interpolation — with a self-test that
+    the patterns catch the exact shapes that shipped the defect. The LBRT shape (`InsiderBuying` +
+    `StrategicPartnership`, both filings) and the `GuidanceChange` + `MediaAttention` shape are crossed into
+    the policy's forbidden-language sweep, so the substring that slipped through now fails at test time.
+  - **Spec 211 moved nothing.** No signal, score, weight, strategy, channel, stored JSON or accrued file;
+    nothing hashes `WeeklyReportActionPolicyV1.Version` into `ScoringConfigVersion` (grep-verified in the
+    PR), so no fingerprint pin moved (`ScoringConfigFingerprintTests` unchanged). Docs amended IN PLACE (spec
+    209's wording, the spec-209/210 bullets above, `docs/reading-radar-output.md` → v4 with the
+    presentation-label note); both 2026-09-05 cohort audits keep their measured rows verbatim under a
+    wording-changed note. **Owed:** the §4 before/after table (floored `- Why:` lines containing
+    `GuidanceChange` / `InsiderBuying`; insider lines containing `planned-disposition` / `10b5-1 plan
+    filing`) from the first post-merge full run — descriptive, no gate.

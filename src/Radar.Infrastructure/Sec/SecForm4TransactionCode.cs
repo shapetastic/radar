@@ -23,8 +23,8 @@ internal enum InsiderTxnClassification
 /// EDGAR ownership XSL legend. Only <c>P</c> (purchase) and <c>S</c> (sale) are directional; every other
 /// modelled code is compensation/mechanical/tax/gift/ambiguous and classifies as
 /// <see cref="InsiderTxnClassification.NeutralExcluded"/>, as does any unknown/blank code (conservative
-/// default). The 10b5-1 pre-arranged-plan override (a planned sale is not discretionary) lives in the
-/// reader, not here — this table classifies the raw code only.
+/// default). The 10b5-1 pre-arranged-plan override (a planned transaction, whose direction is not read, is
+/// not discretionary) lives in the reader, not here — this table classifies the raw code only.
 /// <para>
 /// Code legend: <c>P</c> open-market/private purchase; <c>S</c> open-market/private sale; <c>A</c>
 /// grant/award/other acquisition from the issuer; <c>M</c> exercise/conversion of a derivative security;

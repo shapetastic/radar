@@ -24,7 +24,7 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
 
     // The exact NWPX shape from the audit (docs/cohorts/insider-flow-audit-2026-09.md), pinned byte-exact.
     private const string NwpxLine =
-        "- Insider activity (Form 4, this window): 11 filings; 11 planned-disposition filings across 29 days; "
+        "- Insider activity (Form 4, this window): 11 filings; 11 10b5-1 plan filings across 29 days; "
         + "transaction value not captured";
 
     // The stored provenance shape RadarScoreFormulaV8 authors at scoring time for the insider channel.
@@ -48,11 +48,11 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
         int outside = 0) =>
         new(
             FilingCount: filings,
-            PlannedDispositionCount: plans,
-            PlannedDispositionFirstFilingDate: plans > 0 ? new DateOnly(2026, 8, 5) : null,
-            PlannedDispositionLastFilingDate: plans > 0 ? new DateOnly(2026, 9, 3) : null,
-            PlannedDispositionSpanDays: planSpan,
-            PlannedDispositionUndatedCount: planUndated,
+            Plan10b51Count: plans,
+            Plan10b51FirstFilingDate: plans > 0 ? new DateOnly(2026, 8, 5) : null,
+            Plan10b51LastFilingDate: plans > 0 ? new DateOnly(2026, 9, 3) : null,
+            Plan10b51SpanDays: planSpan,
+            Plan10b51UndatedCount: planUndated,
             DiscretionaryPurchaseCount: purchases,
             DiscretionaryPurchaseValue: purchaseValue,
             DiscretionaryPurchaseValueNotCapturedCount: purchasesNotCaptured,
@@ -110,10 +110,10 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
         }
     }
 
-    // --- (a) the NWPX planned-disposition stream, over both render paths ---
+    // --- (a) the NWPX 10b5-1 plan-filing stream, over both render paths ---
 
     [Fact]
-    public void PlannedDispositionStream_RendersNwpxLineByteExact_AndNeverTheWordBuying()
+    public void Plan10b51Stream_RendersNwpxLineByteExact_AndNeverTheWordBuying()
     {
         var signalId = Guid.NewGuid();
         var evidence = new List<ReportEvidenceRef>
@@ -187,7 +187,9 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
             output, StringComparison.Ordinal);
     }
 
-    // --- (c) whole-token only ---
+    // --- (c) whole-token only — the RENDER-PATH proof that both provenance paths route through the shared
+    // SignalTypeDisplay.RewriteStoredProvenance seam (spec 211); the unit pins on the mapping itself,
+    // including NotInsiderBuyingX, live in SignalTypeDisplayTests ---
 
     [Theory]
     [InlineData("NotInsiderBuyingX (Neutral)", "NotInsiderBuyingX (Neutral)")]
@@ -262,7 +264,7 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
     public void SinglePlanFiling_UsesSingularAndNoSpan()
     {
         Assert.Equal(
-            "- Insider activity (Form 4, this window): 1 filing; 1 planned-disposition filing; "
+            "- Insider activity (Form 4, this window): 1 filing; 1 10b5-1 plan filing; "
                 + "transaction value not captured",
             RenderLine(Summary(filings: 1, plans: 1)));
     }
@@ -271,7 +273,7 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
     public void PlanFilingsWithAnUndatedOne_SaySpanNotEstablished()
     {
         Assert.Equal(
-            "- Insider activity (Form 4, this window): 3 filings; 3 planned-disposition filings "
+            "- Insider activity (Form 4, this window): 3 filings; 3 10b5-1 plan filings "
                 + "(span not established: 1 undated); transaction value not captured",
             RenderLine(Summary(filings: 3, plans: 3, planUndated: 1)));
     }
@@ -280,7 +282,7 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
     public void TwoSameDayPlanFilings_RenderZeroDaySpan()
     {
         Assert.Equal(
-            "- Insider activity (Form 4, this window): 2 filings; 2 planned-disposition filings across 0 days; "
+            "- Insider activity (Form 4, this window): 2 filings; 2 10b5-1 plan filings across 0 days; "
                 + "transaction value not captured",
             RenderLine(Summary(filings: 2, plans: 2, planSpan: 0)));
     }
@@ -368,7 +370,7 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
             mixed: 1, noDiscretionary: 1, unknown: 1, unrecognised: 1, outside: 1));
 
         Assert.Equal(
-            "- Insider activity (Form 4, this window): 9 filings; 2 planned-disposition filings across 7 days; "
+            "- Insider activity (Form 4, this window): 9 filings; 2 10b5-1 plan filings across 7 days; "
                 + "transaction value not captured; 1 discretionary purchase filing, purchase value $10; "
                 + "1 discretionary sale filing, sale value $20; 1 mixed purchase-and-sale filing; "
                 + "split and total not captured; 1 with no discretionary transactions; "

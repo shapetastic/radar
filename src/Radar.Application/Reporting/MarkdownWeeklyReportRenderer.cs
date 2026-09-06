@@ -2,7 +2,6 @@ namespace Radar.Application.Reporting;
 
 using System.Globalization;
 using System.Text;
-using System.Text.RegularExpressions;
 using Radar.Application.Lifecycle;
 using Radar.Application.Scoring;
 using Radar.Domain.Companies;
@@ -48,37 +47,10 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             [RadarReportAction.ThesisDeteriorating] = "Thesis deteriorating",
         };
 
-    // Spec 167: display-only relabel of the stored GuidanceChange signal type. The stored token is a
-    // taxonomy misnomer (spec-75 lineage): the AI filing reader classifies the business trajectory AS
-    // REPORTED and is never asked whether guidance changed, and the deterministic spec-57 earnings-8-K
-    // signal carries the same member for a plain earnings FILING — so printing "GuidanceChange" reads
-    // as a guidance event that never happened. This is the ONE renderer-owned mapping site: every place
-    // the renderer itself stringifies a SignalType routes through it.
-    //
-    // Spec 209 adds a second relabel, InsiderBuying -> "InsiderActivity": the stored member covers every
-    // Form 4 (a planned disposition stream renders as Neutral rows of it), so the literal token is an
-    // inverted label over a disposition. Spec 167's stance that this mapping "must NEVER be applied to
-    // stored provenance text" is SUPERSEDED for that ONE exact token only: DisplayProvenanceText rewrites
-    // the whole-word InsiderBuying inside stored evidence-link reasons and signal reasons at render time
-    // (both paths the token reaches the reader), because a legend cannot un-invert a label the reader sees
-    // eleven times. The GuidanceChange stance is unchanged — its stored text still renders byte-verbatim
-    // and the legend line in AppendDisclaimers explains the literal token where it appears.
-    private static string DisplaySignalType(SignalType type) =>
-        type switch
-        {
-            SignalType.GuidanceChange => "EarningsTrajectory",
-            SignalType.InsiderBuying => "InsiderActivity",
-            _ => type.ToString(),
-        };
-
-    // Spec 209: the presentation-only seam over STORED text (evidence-link contribution reasons and signal
-    // reasons, both authored at scoring time). Exactly one whole-word token is rewritten; every other byte
-    // renders verbatim. The stored JSON is never touched — accrued signals keep deserializing unchanged.
-    private static readonly Regex StoredInsiderTypeToken =
-        new(@"\bInsiderBuying\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static string DisplayProvenanceText(string stored) =>
-        StoredInsiderTypeToken.Replace(stored, "InsiderActivity");
+    // Spec 167 / 209 / 211: every place the renderer stringifies a SignalType, or renders stored provenance
+    // text that may carry the stored InsiderBuying token, routes through the SHARED SignalTypeDisplay seam
+    // (the policy's floor rationale uses the same one). The WHY of each relabel lives on that type; no
+    // private copy of the mapping may exist here (SignalTypeDisplayGuardrailTests).
 
     // Short, purely descriptive gloss of the curated following tier (AD-9: a research statistic — how
     // covered the name already is — never a valuation or an advice word).
@@ -929,17 +901,17 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             Plural(insider.FilingCount, "filing"),
         };
 
-        if (insider.PlannedDispositionCount > 0)
+        if (insider.Plan10b51Count > 0)
         {
-            var clause = Plural(insider.PlannedDispositionCount, "planned-disposition filing");
-            if (insider.PlannedDispositionSpanDays is { } span)
+            var clause = Plural(insider.Plan10b51Count, "10b5-1 plan filing");
+            if (insider.Plan10b51SpanDays is { } span)
             {
                 clause += " across " + Plural(span, "day");
             }
-            else if (insider.PlannedDispositionUndatedCount > 0)
+            else if (insider.Plan10b51UndatedCount > 0)
             {
                 clause += " (span not established: "
-                    + insider.PlannedDispositionUndatedCount.ToString(CultureInfo.InvariantCulture)
+                    + insider.Plan10b51UndatedCount.ToString(CultureInfo.InvariantCulture)
                     + " undated)";
             }
 
@@ -1032,12 +1004,12 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         foreach (var signal in entry.Signals)
         {
             sb.Append("  - ")
-                .Append(DisplaySignalType(signal.Type))
+                .Append(SignalTypeDisplay.Label(signal.Type))
                 .Append(" (")
                 .Append(signal.Direction.ToString())
                 .Append(')');
 
-            var reason = DisplayProvenanceText(signal.Reason.Trim());
+            var reason = SignalTypeDisplay.RewriteStoredProvenance(signal.Reason.Trim());
             if (reason.Length > 0)
             {
                 sb.Append(": ").Append(reason);
@@ -1061,7 +1033,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append(" — ")
             .Append(ev.SourceName)
             .Append(": ")
-            .Append(DisplayProvenanceText(ev.ContributionReason))
+            .Append(SignalTypeDisplay.RewriteStoredProvenance(ev.ContributionReason))
             .Append(Lf);
     }
 
