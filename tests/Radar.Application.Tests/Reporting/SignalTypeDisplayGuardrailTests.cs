@@ -144,17 +144,27 @@ public sealed class SignalTypeDisplayGuardrailTests
         }
 
         // Comment handling: a whole-line comment naming the stored token and a trailing comment after code
-        // are both dropped; a `//` inside a string literal is NOT treated as a comment.
+        // are both dropped — including a trailing comment AFTER a closed string literal (Copilot review on
+        // PR #218: the earlier prefix-contains-quote check kept that one); a `//` inside a string literal
+        // (ordinary, escaped-quote or verbatim) is NOT treated as a comment.
         var stripped = StripComments(
         [
             "    // the stored InsiderBuying token is explained here",
             "    /// <c>SignalType.InsiderBuying</c> => \"InsiderActivity\" in prose",
             "    var x = 1; // InsiderBuying trailing",
             "    var url = \"https://example/InsiderBuying\";",
+            "    var s = \"x\"; // InsiderBuying after a closed string",
+            "    var q = \"say \\\"hi\\\" //InsiderBuying\"; // InsiderBuying after an escaped quote",
+            "    var v = @\"c:\\dir\\\"; // InsiderBuying after a verbatim string",
+            "    var vv = @\"\"\"//InsiderBuying\"\"\";",
         ]);
-        Assert.Equal(2, stripped.Count);
+        Assert.Equal(6, stripped.Count);
         Assert.Equal("    var x = 1; ", stripped[0].Text);
         Assert.Equal("    var url = \"https://example/InsiderBuying\";", stripped[1].Text);
+        Assert.Equal("    var s = \"x\"; ", stripped[2].Text);
+        Assert.Equal("    var q = \"say \\\"hi\\\" //InsiderBuying\"; ", stripped[3].Text);
+        Assert.Equal("    var v = @\"c:\\dir\\\"; ", stripped[4].Text);
+        Assert.Equal("    var vv = @\"\"\"//InsiderBuying\"\"\";", stripped[5].Text);
     }
 
     /// <summary>
@@ -174,8 +184,8 @@ public sealed class SignalTypeDisplayGuardrailTests
                 continue;
             }
 
-            var marker = line.IndexOf("//", StringComparison.Ordinal);
-            if (marker >= 0 && !line[..marker].Contains('"'))
+            var marker = IndexOfCommentStart(line);
+            if (marker >= 0)
             {
                 line = line[..marker];
             }
@@ -184,6 +194,55 @@ public sealed class SignalTypeDisplayGuardrailTests
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Index of the first <c>//</c> that sits OUTSIDE a string literal, or -1. Tracks quote state across
+    /// the line so <c>var s = "x"; // note</c> is a comment (the string closed before it) while
+    /// <c>"https://…"</c> is not. Handles <c>\"</c> escapes in ordinary/interpolated strings and
+    /// <c>""</c> escapes in verbatim (<c>@"…"</c>) strings, which is every literal shape the guarded files use.
+    /// </summary>
+    private static int IndexOfCommentStart(string line)
+    {
+        var inString = false;
+        var verbatim = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (inString)
+            {
+                if (!verbatim && c == '\\')
+                {
+                    i++;
+                }
+                else if (c == '"')
+                {
+                    if (verbatim && i + 1 < line.Length && line[i + 1] == '"')
+                    {
+                        i++;
+                    }
+                    else
+                    {
+                        inString = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                verbatim = (i > 0 && line[i - 1] == '@')
+                    || (i > 1 && line[i - 1] == '$' && line[i - 2] == '@');
+            }
+            else if (c == '/' && i + 1 < line.Length && line[i + 1] == '/')
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private static string LocateRepositoryRoot()
