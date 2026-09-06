@@ -111,6 +111,14 @@ grep and say so in the PR body) — no fingerprint pin moves.
 - `docs/architecture-history.md` spec-210 bullet: note that v3's rationale printed STORED enum names and
   that spec 211 routes it through `SignalTypeDisplay` (v4). Append a spec-211 bullet there (NOT to
   CLAUDE.md).
+- **`docs/reading-radar-output.md` — the CURRENT operator guide, not history — must move with the code:**
+  L58 declares the mapping as `weekly-report-action-v3` → `v4`; the rule-5 example at ~L72 deliberately
+  shows the raw token (`GuidanceChange (filing 2026-07-29) + MediaAttention (…)`) → `EarningsTrajectory
+  (filing 2026-07-29) + MediaAttention (…)`; and add one sentence there that the type names on the "Why"
+  line are the report's presentation labels (`EarningsTrajectory`, `InsiderActivity`) while the counting
+  and grouping still run on the STORED signal types — so a name on the line and a type in a signal file
+  can differ by exactly those two relabels. Check the same file for any "planned-disposition" wording and
+  amend it identically (a grep at spec time found none — verify, don't assume).
 - `docs/cohorts/insider-flow-audit-2026-09.md` L146/155 and `docs/cohorts/watch-floor-episodes-2026-09.md`:
   these are HISTORY (measured 2026-09-05 under the old wording) — leave the measured rows verbatim, add a
   one-line note at the top that the rendered wording changed in spec 211 (`planned-disposition` →
@@ -131,6 +139,27 @@ Report, against the run's weekly report:
 
 If the first post-merge run has not happened by PR time, state so and label the "after" column
 UNMEASURED rather than predicting it; the maintainer runs the check after merge.
+
+## Acceptance criteria
+
+- [ ] `InsiderActivitySummary` names the plan bucket `Plan10b51*`; the rendered clause is
+      "N 10b5-1 plan filing(s)" with no direction word; the NWPX byte-exact line is re-pinned; the
+      renderer and `HttpSecForm4Reader` comments no longer call a plan filing a disposition/sale.
+- [ ] `planned-disposition` does not appear in a freshly rendered report (renderer fixture sweep AND the
+      §4 live table).
+- [ ] `SignalTypeDisplay` is the ONLY `SignalType`→label site in the renderer and the policy (guard test);
+      the floor rationale renders `EarningsTrajectory` and `InsiderActivity`, never `GuidanceChange` /
+      `InsiderBuying`; the LBRT-shaped case passes the forbidden-word loop; `NotInsiderBuyingX` still
+      not rewritten; stored `GuidanceChange` provenance text still verbatim.
+- [ ] `WeeklyReportActionPolicyV1.Version` is `weekly-report-action-v4` with its test pin updated.
+- [ ] Label outcomes byte-identical on a full-report fixture (only rationale/insider TEXT differs);
+      grouping/count/order still on the stored enum; all six fingerprint pins unchanged and the PR body
+      states that nothing hashes the policy version.
+- [ ] `docs/reading-radar-output.md` says v4, shows `EarningsTrajectory` in the example, and carries the
+      presentation-label note; spec 209/210 claims and the architecture-history bullets amended IN PLACE;
+      both cohort audits carry the wording-changed note with their measured rows untouched.
+- [ ] §4 before/after table in the PR body (after column UNMEASURED if no post-merge run yet).
+- [ ] `dotnet build` / full suite / `git diff --check` clean; actual dispatch→PR time in the PR body.
 
 ## Out of scope
 
