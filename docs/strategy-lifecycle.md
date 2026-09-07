@@ -2,7 +2,8 @@
 
 Append-only, audit-only (spec 184 §3). **The Worker never parses this file** — the only runtime input to
 call resolution is `data/strategy-operating-calls.json`. One line per event
-(declared / retuned-as-new-name / retired / call-made / call-overridden / call-resolved / labels-set), with strategy,
+(declared / retuned-as-new-name / retired / call-made / call-reviewed — a review that KEEPS a call and
+sets its next review-by / call-overridden / call-resolved / labels-set / finding), with strategy,
 date, basis, actor, and — for resolutions — the outcome and an evidence reference. Retirement is config
 removal plus a line here; changing `Radar:PrimaryStrategy` (storage/series identity only) likewise. No
 automation for either. **A `call-made … Lead` must land in the same change as that arm's `Labels`
@@ -88,6 +89,51 @@ after 2026-08-23 is appended as it happens.
   breadth-rejection changed nothing measurable. Lead stays (precommitted; the gate, not this note, resolves
   it). Entry condition for a call: if the two remain within 0.01 at the 2026-09-05 review, journal v11's
   structural change as null and consider retiring the control · actor: human (maintainer-directed).
+- 2026-09-07 · call-reviewed · `disclosure-led-v11` · **Lead KEPT** (review-by 2026-09-05 passed; reviewed
+  2026-09-07 against the 2026-09-06 23:58Z run's `data/efficacy/strategy-leaderboard.md` and
+  `strategy-paired-comparison.md`) · evidence: descriptive oos ρ 0.0324 [−0.031, 0.095] over 962 obs
+  (74 × 13 oos dates 2026-08-03..08-18), ranked #2 of 10 in-sample — no discrimination shown, none refuted;
+  the gate CANNOT evaluate: eligible joint support 0 (precommitted boundary 2026-09-29 not reached), AD-16
+  screen pending, no gate verdict id. Recorded because it is uncomfortable: all three deliberately-dumb
+  comparators' oos intervals exclude zero POSITIVELY (media-only +0.144 [0.082, 0.206], activity-only
+  +0.093 [0.030, 0.156], earnings-only +0.077 [0.013, 0.139]) while the Lead's spans zero on the same 962
+  obs. Basis for keeping: the resolution rule references the GATE event; superseding a precommitted claim on
+  13 pre-boundary development dates is exactly the move the claim discipline forbids, and 13 pooled dates in
+  one regime are not a stronger result than the one the arm was declared on. Precommitted trigger for the
+  next review, so this is a decision rather than a deferral: if at the 2026-10-06 review the leaderboard
+  shows ≥ 20 oos dates AND the Lead's oos interval still spans zero AND at least two comparators' intervals
+  still exclude zero positively, journal Lead → Trial (this call superseded, outcome Unresolved) whether or
+  not the gate has evaluated · actor: human (maintainer-directed: "re-review the lead call") · review by
+  2026-10-06T00:00:00Z (the first review after the 2026-09-29 boundary can admit an eligible joint date) ·
+  resolution rule unchanged.
+- 2026-09-07 · finding · `disclosure-led-v11` vs `disclosure-led-v10-control` · the 2026-08-29 entry
+  condition ("within 0.01 at the 2026-09-05 review") is MET: in-sample 0.1052 vs 0.1096 (Δ 0.004), oos
+  0.0324 vs 0.0353 (Δ 0.003), identical support (346 / 962). v11's breadth-rejection is journalled as
+  measured NULL to date — the control edges it on both windows. Decision: the control is NOT retired. It is
+  the only direct test of v11's one structural change, and removing it before the boundary would make that
+  change unfalsifiable at exactly the point it becomes testable; its scoring cost is negligible. Retire
+  condition: still within 0.01 at the 2026-10-06 review → journal `retired` and remove it from the live
+  profile (spec 141: its accrued series is never rewritten) · actor: human (maintainer-directed).
+- 2026-09-07 · call-reviewed · `default` · **DoNotLead KEPT** · oos ρ −0.0205 [−0.081, 0.041] over 1036
+  obs (74 × 14), spans zero; the rule keys to the gate instant and nothing has happened · review by
+  2026-10-06T00:00:00Z · actor: human (maintainer-directed).
+- 2026-09-07 · call-reviewed · `narrative-led-v2` · **Trial KEPT** · oos ρ 0.0144 [−0.049, 0.078] over
+  962 obs, ranked #4; nothing distinguishes it in either direction · review by 2026-10-06T00:00:00Z · actor:
+  human (maintainer-directed).
+- 2026-09-07 · finding · `default-noattn` · the 2026-08-29 falsification test (noattn oos ρ ≤ default oos ρ)
+  is UNMEASURABLE on the leaderboard: the arm is dropped (`insufficient-in-sample-observations`, 0 in-sample
+  obs) because its series starts 2026-08-29 while the chronological split's in-sample window ends
+  2026-08-02 and the oos window ends 2026-08-18 (nothing later has a resolved 21-day forward window yet). It
+  cannot be ranked until the split advances past 2026-08-29 — at one as-of date per run, roughly mid-October.
+  No call on an unmeasured hypothesis; entry condition: the first leaderboard that ranks it. If it is still
+  dropped at the 2026-10-06 review, the open question is whether a spec-139 replay of `default-noattn` over
+  2026-06-30..08-18 (replay ⊆ forward, field-for-field) is an admissible comparison — a spec decision, not a
+  call · actor: human (maintainer-directed).
+- 2026-09-07 · finding · `filings-led-v2`, `filings-led-halfnoted`, `filings-led-nonoted` · NOT due (review
+  by 2026-10-30) but recorded so it is not forgotten: the Stop basis has weakened — on 14 oos dates all three
+  intervals now SPAN zero (−0.055 [−0.116, 0.006] / −0.024 [−0.085, 0.037] / −0.027 [−0.088, 0.035]) where
+  they excluded it on 12. The Wrong condition (upper bound above zero at ≥ 24 oos dates) is not evaluable
+  yet; v2's upper bound is 0.006. Stop stands · actor: human (maintainer-directed).
 - 2026-09-07 · labels-set · `disclosure-led-v11` (Lead) · `Labels { Investigate 20, Watch 15 }` in
   `scripts/run-profiles/default.json` (spec 212). Prevalence chosen at: Watch 15 ≈ the v8 primary's ≈ 2 %
   ≥ 40 share on v11's 3,471 accrued snapshots (implementation-time re-measure by nearest rank: exactly 15
