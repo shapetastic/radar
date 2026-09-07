@@ -51,7 +51,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$DataRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'data'),
+    [string]$DataRoot = '',   # defaults to <repo>/data (parent of scripts/); resolved below - $PSScriptRoot can be EMPTY at param binding under `powershell -File` from a wrapped host (the run-next.ps1 precedent)
     [string]$Profile = 'default',
     [string]$Strategy,
     [string]$MatchPrevalenceOf,
@@ -84,7 +84,15 @@ if ($OutFile) {
 
 # --- Configured lines from the run profile ------------------------------------------------------------
 
-$profilePath = Join-Path (Join-Path $PSScriptRoot 'run-profiles') ($Profile + '.json')
+# Resolve the script's own directory robustly (run-next.ps1 precedent): $PSScriptRoot can come back empty
+# when launched via `powershell -File` from a nested/wrapped host, which made the old Split-Path param
+# default throw before the script ran at all. Fall back to $PSCommandPath / $MyInvocation.
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir -and $PSCommandPath) { $ScriptDir = Split-Path -Parent $PSCommandPath }
+if (-not $ScriptDir -and $MyInvocation.MyCommand.Path) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $ScriptDir) { throw "Could not determine script directory; pass -DataRoot explicitly." }
+if (-not $DataRoot) { $DataRoot = Join-Path (Split-Path -Parent $ScriptDir) 'data' }
+$profilePath = Join-Path (Join-Path $ScriptDir 'run-profiles') ($Profile + '.json')
 if (-not (Test-Path -LiteralPath $profilePath)) { throw "No run profile at '$profilePath'." }
 
 $script:IsCoreEdition = $PSVersionTable.PSEdition -eq 'Core'
