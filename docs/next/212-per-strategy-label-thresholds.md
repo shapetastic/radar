@@ -143,13 +143,18 @@ config and is NOT done.
   lines when they differ from the primary's (fixture: Lead call on a non-primary arm); (f) a declared Lead whose
   `Labels` is null fails `OperatingCallReducer.Validate` with the arm name and config path in the message
   (test beside the reducer's existing Lead-validity cases); (f2) **gate-promoted Lead:** strategy A is the
-  declared Lead WITH labels, strategy B is Trial with NO labels, a passing gate verdict for B makes B the
-  effective Lead — `Reduce` fails naming B, its `GateDefault` provenance and B's missing `Labels`; (f3)
-  **StopAll preservation:** under a declared StopAll AND under the zero-Lead fallback, the rendered report
-  is byte-identical to its pre-212 pin — no narrative, no company labels, no threshold banner — even when
-  every arm's `Labels` is null (StopAll must not trip the Lead requirement); (g) a
-  full-report renderer fixture under `Default` with no Lead whose ONLY diff from the pre-212 pin is the
-  §4 banner line.
+  declared Lead WITH labels and receives a FAILING gate verdict (gate default wins: A is demoted to Stop);
+  strategy B is Trial with NO labels and receives a PASSING gate verdict, becoming the SOLE effective Lead —
+  `Validate` passes (the declared Lead is labelled), `Reduce` fails naming B, its `GateDefault` provenance
+  and B's missing `Labels` (two simultaneous Leads would trip the existing multiple-Lead error first, so the
+  fixture must demote A); (f3a) **declared StopAll preservation:** `globalCall: StopAll` with EVERY arm's
+  `Labels` null — the rendered report is byte-identical to its pre-212 pin (no narrative, no company labels,
+  no threshold banner); StopAll must not trip the Lead requirement; (f3b) **gate-produced StopAll
+  preservation:** the declared Lead HAS labels (it must, or `Validate` stops the fixture first) and is
+  demoted by a failing gate verdict with no other arm promoted, so the zero-Lead fallback StopAll applies —
+  again byte-identical to the pre-212 pin, no narrative, no banner; (g) a
+  full-report renderer fixture under `Default` with NO operating-calls file (the undeclared state) whose
+  ONLY diff from the pre-212 pin is the §4 banner line.
 
 ## 4. The report states the lines in effect — once
 
@@ -233,8 +238,9 @@ Investigate. If no post-merge run exists at PR time, the "after" column is UNMEA
       null `Labels` (overridden or gate-promoted) fails `Reduce` before `WithLead` — both surfaced by the
       report build with the arm, provenance and config path named (tests f, f2).
 - [ ] The three states are pinned: undeclared ⇒ primary narrative on `Labels ?? Default` with the defaults
-      banner; effective Lead ⇒ Lead narrative on its explicit lines; StopAll (declared or fallback) ⇒ no
-      narrative, no labels, no banner, byte-identical to the pre-212 pin (test f3).
+      banner (test g); effective Lead ⇒ Lead narrative on its explicit lines; StopAll (declared, test f3a;
+      gate-produced fallback, test f3b) ⇒ no narrative, no labels, no banner, byte-identical to the pre-212
+      pin.
 - [ ] `ReportActionContext.Thresholds` is nullable-defaulted; the builder passes the LEAD's lines; every
       existing policy test is byte-identical under `Default`; the renderer fixture differs from its pre-212
       pin by the banner line only.
