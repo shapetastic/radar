@@ -127,7 +127,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         var sb = new StringBuilder();
 
         AppendHeading(sb, model);
-        AppendDisclaimers(sb);
+        AppendDisclaimers(sb, model);
         AppendLiveStrategyLeaders(sb, model);
         AppendHighestOpportunity(sb, model);
         AppendThesisSection(sb, model, RadarReportAction.ThesisImproving, "Thesis improving");
@@ -159,7 +159,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append(Lf);
     }
 
-    private static void AppendDisclaimers(StringBuilder sb)
+    private static void AppendDisclaimers(StringBuilder sb, WeeklyReportModel model)
     {
         sb.Append("> Not financial advice.").Append(Lf);
         sb.Append("> For research only.").Append(Lf);
@@ -180,7 +180,43 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append("> \"InsiderActivity\" rows are SEC Form 4 insider filings of any kind; a Neutral row is ")
             .Append("a routine or planned filing, not a discretionary transaction.")
             .Append(Lf);
+        // Spec 212 §4: the label lines in effect, stated ONCE, here — the first place a reader hits — and
+        // rendered from the model (arm, lines, explicit/defaulted, Lead/primary-by-default, policy version),
+        // never from a constant. Absent (null) when no label was minted: StopAll renders no narrative, no
+        // labels and therefore no banner, byte-identical to pre-212.
+        if (model.Labels is { } labels)
+        {
+            AppendLabelLinesBanner(sb, labels);
+        }
+
         sb.Append(Lf);
+    }
+
+    // Spec 212 §4 — the one threshold banner. The second sentence is fixed honesty wording, pinned by tests:
+    // the lines are fixed operating (triage) thresholds chosen by prevalence, connected to no outcome, and
+    // a label is comparable only across reports labelled on the same arm and lines.
+    private const string LabelLinesHonestyLine =
+        "These are fixed operating thresholds set by prevalence, not validated evidence of opportunity; a "
+            + "label is comparable only across reports labelled on the same arm and lines.";
+
+    private static void AppendLabelLinesBanner(StringBuilder sb, ReportLabelLines labels)
+    {
+        var basis = (labels.LeadDeclared, labels.Explicit) switch
+        {
+            (true, true) => "explicit lines on the Lead arm",
+            (true, false) => "defaults on the Lead arm",
+            (false, true) => "explicit lines on the storage primary; no operating call declared",
+            (false, false) => "defaults (no operating calls declared)",
+        };
+
+        sb.Append("> Labels in this report follow ").Append(labels.StrategyName)
+            .Append(" at Investigate ≥ ")
+            .Append(labels.Thresholds.Investigate.ToString(CultureInfo.InvariantCulture))
+            .Append(" / Watch ≥ ")
+            .Append(labels.Thresholds.Watch.ToString(CultureInfo.InvariantCulture))
+            .Append(" (").Append(basis).Append("; ").Append(labels.PolicyVersion).Append("). ")
+            .Append(LabelLinesHonestyLine)
+            .Append(Lf);
     }
 
     // Spec 176: the compact live summary — AT MOST this many rows per strategy. A PRESENTATION constant,

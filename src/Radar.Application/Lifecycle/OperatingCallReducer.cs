@@ -31,7 +31,16 @@ namespace Radar.Application.Lifecycle;
 /// <item>Validation fails (an <see cref="InvalidOperationException"/> naming the file and the rule) on:
 /// unknown strategy, a call on a Comparator, a duplicate call, multiple declared Leads, zero declared Leads
 /// without StopAll, a declared Lead alongside StopAll, and a resolution block whose call lacks a
-/// <c>resolutionRule</c>. (Unknown TOKENS fail earlier, in the file reader, equally naming the file.)</item>
+/// <c>resolutionRule</c>. (Unknown TOKENS fail earlier, in the file reader, equally naming the file.)
+/// <para>
+/// Spec 212 adds one more rule about a valid Lead, in the same place as every other one: a declared Lead
+/// whose <see cref="ScoringStrategyDefinition.Labels"/> is <c>null</c> fails <see cref="Validate"/>, and —
+/// because the EFFECTIVE Lead can differ from the declared one (a gate default promotes a gate-PASSED arm)
+/// — <see cref="Reduce"/> re-checks the final effective Lead immediately before it is returned. A Lead's
+/// Investigate / Watch lines decide what a human inspects; defaulting them silently is the fail-open
+/// shape. Every failure names the arm, its provenance and the exact config path
+/// (<c>Radar:Strategies:{i}:Labels</c>, <c>i</c> = the arm's position in the configured strategy order).
+/// </para></item>
 /// </list>
 /// Order-independence: the result is keyed by the CONFIGURED strategy order, never by file order, and every
 /// per-arm decision depends only on that arm's (unique) call and verdict — shuffling the file's calls or
@@ -118,6 +127,56 @@ public static class OperatingCallReducer
                 "zero Lead calls without globalCall StopAll — declare exactly one Lead, or declare StopAll "
                     + "explicitly (spec 184 §2 rule 3)");
         }
+
+        // Spec 212: a declared Lead must carry explicit label lines. Checked here — beside every other rule
+        // about a valid Lead — so the Worker refuses at startup, before any collection is spent.
+        if (declaredLeads.Count == 1)
+        {
+            RequireLabels(file, strategies, declaredLeads[0], "declared");
+        }
+    }
+
+    /// <summary>
+    /// Spec 212 §2: the Lead's <see cref="ScoringStrategyDefinition.Labels"/> must be explicit. The failure
+    /// names the arm, how it became Lead (<paramref name="provenance"/>: declared / overridden /
+    /// gate-promoted) and the exact config path, so the remedy is unambiguous.
+    /// </summary>
+    private static void RequireLabels(
+        StrategyOperatingCallsFile file,
+        IReadOnlyList<ScoringStrategyDefinition> strategies,
+        string leadStrategyName,
+        string provenance)
+    {
+        var index = -1;
+        for (var i = 0; i < strategies.Count; i++)
+        {
+            if (string.Equals(strategies[i].Name, leadStrategyName, StringComparison.OrdinalIgnoreCase))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        // Unreachable for a validated file (unknown strategies fail earlier), kept explicit so this method
+        // can never index past the list.
+        if (index < 0)
+        {
+            throw Fail(file, $"Lead '{leadStrategyName}' is not a configured strategy");
+        }
+
+        if (strategies[index].Labels is not null)
+        {
+            return;
+        }
+
+        throw Fail(
+            file,
+            $"{provenance} Lead '{strategies[index].Name}' has no Labels — a Lead's Investigate/Watch "
+                + "Opportunity lines decide what a human inspects, so they must be set explicitly at "
+                + $"Radar:Strategies:{index}:Labels (e.g. {{ \"Investigate\": 20, \"Watch\": 15 }}); "
+                + "defaulting them silently is the fail-open shape (spec 212 §2). Choose the lines by "
+                + "prevalence on this arm's accrued distribution (scripts/audit-label-thresholds.ps1) and "
+                + "journal them in docs/strategy-lifecycle.md");
     }
 
     /// <summary>
@@ -208,6 +267,10 @@ public static class OperatingCallReducer
         var leads = resolved.Where(c => c.Call == OperatingCall.Lead).ToList();
         if (leads.Count == 1)
         {
+            // Spec 212: the EFFECTIVE Lead may not be the declared one (a GatePassed default promoted it,
+            // or a declared override held it against the gate), so the labels rule is re-applied to the
+            // final answer here, immediately before it is returned — one rule, one type, every provenance.
+            RequireLabels(file, strategies, leads[0].StrategyName, DescribeLeadProvenance(leads[0]));
             return ResolvedOperatingCalls.WithLead(leads[0].StrategyName, resolved);
         }
 
@@ -254,6 +317,15 @@ public static class OperatingCallReducer
             ? new StaleGateOverride(
                 strategyName, declared.OverridesVerdictId ?? string.Empty, verdict.VerdictId)
             : null;
+
+    /// <summary>How the effective Lead became Lead, for the spec-212 labels failure message.</summary>
+    private static string DescribeLeadProvenance(ResolvedStrategyCall lead) => lead switch
+    {
+        { Provenance: ResolvedCallProvenance.GateDefault } => "gate-promoted",
+        { Provenance: ResolvedCallProvenance.DeclaredCall, Declared.OverridesGate: true, GateVerdict: not null }
+            => "overridden (declared Lead holding against the gate verdict)",
+        _ => "declared",
+    };
 
     private static InvalidOperationException Fail(StrategyOperatingCallsFile file, string rule) =>
         new($"Operating-calls file '{file.Source}': {rule}.");

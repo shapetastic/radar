@@ -206,6 +206,7 @@ public sealed partial class WeeklyReportBuilderTests
                     {
                         Formula = s.Formula,
                         Purpose = s.Purpose,
+                        Labels = s.Labels,
                     },
                     new NonScoringEngine(new EffectiveScoringConfig(
                         Fingerprint: s.Fingerprint,
@@ -231,7 +232,9 @@ public sealed partial class WeeklyReportBuilderTests
         bool IsPrimary,
         string Fingerprint = "radar-scoring-fp-000000000000",
         string Formula = ScoreFormulaVersions.V8,
-        StrategyPurpose Purpose = StrategyPurpose.Research);
+        StrategyPurpose Purpose = StrategyPurpose.Research,
+        // Spec 212: the arm's label lines; null = omitted (a Lead requires them non-null).
+        LabelThresholds? Labels = null);
 
     private static readonly IReadOnlyList<TestStrategy> SingleDefaultStrategy =
         [new TestStrategy("default", IsPrimary: true)];
@@ -1768,7 +1771,30 @@ public sealed partial class WeeklyReportBuilderTests
     // label, evidence block or "why noticed": those stay primary-only, deliberately.
     // ---------------------------------------------------------------------------------------------
 
+    // Spec 212: the arm these fixtures declare as Lead (filings-led) carries explicit label lines — a Lead
+    // REQUIRES them — while the storage primary deliberately omits them, so the undeclared state exercises
+    // the LabelThresholds.Default fallback and states it as such. Fixtures that need `default` as Lead use
+    // TwoStrategiesDefaultLabelled; the declared-StopAll pin uses TwoStrategiesUnlabelled.
+    private static readonly LabelThresholds LeadLines = new(20, 15);
+
     private static readonly IReadOnlyList<TestStrategy> TwoStrategies =
+    [
+        new TestStrategy("default", IsPrimary: true, "radar-scoring-fp-111111111111"),
+        new TestStrategy(
+            "filings-led", IsPrimary: false, "radar-scoring-fp-222222222222", "radar-formula-v9",
+            Labels: LeadLines),
+    ];
+
+    private static readonly IReadOnlyList<TestStrategy> TwoStrategiesDefaultLabelled =
+    [
+        new TestStrategy(
+            "default", IsPrimary: true, "radar-scoring-fp-111111111111", Labels: LabelThresholds.Default),
+        new TestStrategy(
+            "filings-led", IsPrimary: false, "radar-scoring-fp-222222222222", "radar-formula-v9",
+            Labels: LeadLines),
+    ];
+
+    private static readonly IReadOnlyList<TestStrategy> TwoStrategiesUnlabelled =
     [
         new TestStrategy("default", IsPrimary: true, "radar-scoring-fp-111111111111"),
         new TestStrategy("filings-led", IsPrimary: false, "radar-scoring-fp-222222222222", "radar-formula-v9"),

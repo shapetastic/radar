@@ -1,4 +1,5 @@
 using Radar.Application.Reporting;
+using Radar.Application.Scoring;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Reports;
@@ -26,10 +27,170 @@ public sealed class WeeklyReportActionPolicyV1Tests
     [Fact]
     public void Version_Is_Stable_Identifier()
     {
-        // v4 (spec 211): the Watch-floor rationale prints each counted type's PRESENTATION label via the
-        // shared SignalTypeDisplay seam; labels, the count, the threshold and the v3 tuple contract are
-        // byte-identical to v3. Nothing hashes this token into ScoringConfigVersion.
-        Assert.Equal("weekly-report-action-v4", CreatePolicy().Version);
+        // v5 (spec 212): the Investigate / Watch lines are INPUTS (ReportActionContext.Thresholds) rather
+        // than two constants — the mapping CONTRACT changed, so the version moves even though every result
+        // under LabelThresholds.Default is byte-identical to v4 (proven by the sweep below). Nothing
+        // hashes this token into ScoringConfigVersion.
+        Assert.Equal("weekly-report-action-v5", CreatePolicy().Version);
+    }
+
+    // ---- Spec 212: the lines are inputs; Default is byte-identical to v4 --------------------------------
+
+    [Theory]
+    [MemberData(nameof(RepresentativeMatrixWithSignalShapes))]
+    public void Under_Default_Lines_Every_Result_Is_ByteIdentical_To_Null_Thresholds(
+        int trajectory, int opportunity, int evidence, int? previousTrajectory, string signalShape)
+    {
+        // (a) The spec-210 400-case sweep, crossed with the three signal shapes, re-asserted against
+        // LabelThresholds.Default: an explicit (60, 40) and an omitted pair decide identically — label AND
+        // rationale — on every cell, so the pre-212 policy results are unchanged by construction.
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(trajectory)
+            .WithOpportunityScore(opportunity)
+            .WithEvidenceConfidenceScore(evidence)
+            .Build();
+        var previous = previousTrajectory is null
+            ? null
+            : new ScoreSnapshotBuilder().WithTrajectoryScore(previousTrajectory.Value).Build();
+        var signals = SignalShape(signalShape);
+
+        var omitted = CreatePolicy().Decide(new ReportActionContext(
+            current, previous, ContributingSignals: signals, FollowingTier: FollowingTier.Small));
+        var explicitDefault = CreatePolicy().Decide(new ReportActionContext(
+            current, previous, ContributingSignals: signals, FollowingTier: FollowingTier.Small,
+            Thresholds: LabelThresholds.Default));
+
+        Assert.Equal(omitted.Action, explicitDefault.Action);
+        Assert.Equal(omitted.Rationale, explicitDefault.Rationale);
+    }
+
+    private static readonly LabelThresholds V11Lines = new(20, 15);
+
+    private static ReportActionResult DecideOnV11Lines(
+        int opportunity, FollowingTier tier = FollowingTier.Small, params ReportSignalRef[] signals) =>
+        CreatePolicy().Decide(new ReportActionContext(
+            new ScoreSnapshotBuilder()
+                .WithTrajectoryScore(50)
+                .WithOpportunityScore(opportunity)
+                .WithEvidenceConfidenceScore(70)
+                .Build(),
+            null,
+            ContributingSignals: signals,
+            FollowingTier: tier,
+            Thresholds: V11Lines));
+
+    [Fact]
+    public void V11_Lines_Opportunity_16_Is_Watch_By_Score_With_The_Arms_Line_In_The_Rationale()
+    {
+        // (b) Under the Lead's (20, 15): 16 clears the arm's Watch line and labels BY SCORE — the score
+        // rationale names the line actually applied (15, never 40) and no floor text appears, even with
+        // two corroborating positive types present.
+        var result = DecideOnV11Lines(
+            16,
+            FollowingTier.Small,
+            SignalRef(SignalType.GuidanceChange, SignalDirection.Positive, Sep2, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.MediaAttention, SignalDirection.Positive, Sep2, EvidenceSourceType.NewsArticle, true));
+
+        Assert.Equal(RadarReportAction.Watch, result.Action);
+        Assert.Equal("Opportunity 16 (>= 15); watch for further signals.", result.Rationale);
+        Assert.DoesNotContain("floored", result.Rationale, StringComparison.Ordinal);
+        Assert.DoesNotContain("40", result.Rationale, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void V11_Lines_Opportunity_12_With_Two_Corroborating_Types_Is_Floored_Against_The_Arms_Line()
+    {
+        var result = DecideOnV11Lines(
+            12,
+            FollowingTier.Small,
+            SignalRef(SignalType.GuidanceChange, SignalDirection.Positive, Sep2, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.MediaAttention, SignalDirection.Positive, Sep2, EvidenceSourceType.NewsArticle, true));
+
+        Assert.Equal(RadarReportAction.Watch, result.Action);
+        Assert.Equal(
+            "Opportunity 12 below 15 but 2 corroborating positive signal types across an under-followed name; "
+                + "floored to Watch (not Ignore): EarningsTrajectory (filing 2026-09-02) + MediaAttention "
+                + "(news 2026-09-02, judgment).",
+            result.Rationale);
+    }
+
+    [Fact]
+    public void V11_Lines_Opportunity_21_Is_Investigate_Naming_The_Arms_Line()
+    {
+        var result = DecideOnV11Lines(21);
+
+        Assert.Equal(RadarReportAction.Investigate, result.Action);
+        Assert.Equal("Opportunity 21 (>= 20); worth investigating.", result.Rationale);
+    }
+
+    [Theory]
+    [InlineData(20, RadarReportAction.Investigate)]
+    [InlineData(19, RadarReportAction.Watch)]
+    [InlineData(15, RadarReportAction.Watch)]
+    [InlineData(14, RadarReportAction.Ignore)]
+    [InlineData(0, RadarReportAction.Ignore)]
+    public void V11_Lines_Are_Inclusive_At_The_Line_And_Ignore_Below_Watch_Without_Corroboration(
+        int opportunity, RadarReportAction expected)
+    {
+        var result = DecideOnV11Lines(opportunity);
+        Assert.Equal(expected, result.Action);
+    }
+
+    [Fact]
+    public void V11_Lines_Ignore_Rationale_Names_The_Arms_Watch_Line()
+    {
+        var result = DecideOnV11Lines(14, FollowingTier.Large);
+
+        Assert.Equal(RadarReportAction.Ignore, result.Action);
+        Assert.Equal("Opportunity 14 below 15 with adequate evidence; low signal.", result.Rationale);
+    }
+
+    [Fact]
+    public void V11_Lines_Floor_Never_Lifts_Above_Watch_And_Never_Fires_Once_The_Line_Is_Cleared()
+    {
+        // The floor is a floor against the ARM's Watch line: at 15 the label is by score (same label,
+        // score rationale); at 19 with corroboration the floor is irrelevant and Investigate is not reached.
+        var atLine = DecideOnV11Lines(
+            15,
+            FollowingTier.Small,
+            SignalRef(SignalType.CustomerWin, SignalDirection.Positive, Sep2, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.StrategicPartnership, SignalDirection.Positive, Sep2, EvidenceSourceType.Filing, false));
+        Assert.Equal(RadarReportAction.Watch, atLine.Action);
+        Assert.Equal("Opportunity 15 (>= 15); watch for further signals.", atLine.Rationale);
+
+        var belowInvestigate = DecideOnV11Lines(
+            19,
+            FollowingTier.Small,
+            SignalRef(SignalType.CustomerWin, SignalDirection.Positive, Sep2, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.StrategicPartnership, SignalDirection.Positive, Sep2, EvidenceSourceType.Filing, false));
+        Assert.Equal(RadarReportAction.Watch, belowInvestigate.Action);
+        Assert.DoesNotContain("floored", belowInvestigate.Rationale, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [MemberData(nameof(RepresentativeMatrixWithSignalShapes))]
+    public void V11_Lines_Rationales_Are_Free_Of_Advice_Language(
+        int trajectory, int opportunity, int evidence, int? previousTrajectory, string signalShape)
+    {
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(trajectory)
+            .WithOpportunityScore(opportunity)
+            .WithEvidenceConfidenceScore(evidence)
+            .Build();
+        var previous = previousTrajectory is null
+            ? null
+            : new ScoreSnapshotBuilder().WithTrajectoryScore(previousTrajectory.Value).Build();
+
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, previous, ContributingSignals: SignalShape(signalShape),
+            FollowingTier: FollowingTier.Small, Thresholds: V11Lines));
+
+        Assert.Contains(result.Action, AllowedActions);
+        Assert.False(string.IsNullOrWhiteSpace(result.Rationale));
+        foreach (var forbidden in ForbiddenWords)
+        {
+            Assert.DoesNotContain(forbidden, result.Rationale, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     public static IEnumerable<object?[]> RepresentativeMatrix()

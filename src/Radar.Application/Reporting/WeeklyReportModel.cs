@@ -31,4 +31,10 @@ public sealed record WeeklyReportModel(
     // NULL there means "no judgment step is registered" and every leader row renders the honest
     // `? unassessed (no-judgment)`. Trailing and defaulted so every existing construction site keeps
     // compiling. Display metadata only — never a score, rank, ordering, label or snapshot change.
-    NewsJudgmentMarkerReportModel? NewsJudgment = null);
+    NewsJudgmentMarkerReportModel? NewsJudgment = null,
+    // Spec 212 §4: the label lines this report's entries were minted at — arm, Investigate / Watch lines,
+    // explicit-or-defaulted, Lead-or-primary-by-default, and the policy version — rendered as ONE banner
+    // line from this record, never from a constant. NULL means no label was minted (StopAll: no narrative,
+    // no labels, no banner), and for direct-model callers that predate it (byte-identical to pre-212).
+    // Trailing and defaulted so every existing construction site keeps compiling.
+    ReportLabelLines? Labels = null);

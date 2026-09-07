@@ -208,13 +208,19 @@ public sealed class FileOperatingCallSourceTests : IDisposable
         Define("baseline-earnings-only", purpose: StrategyPurpose.Comparator),
         Define("baseline-activity-only", purpose: StrategyPurpose.Comparator),
         Define("baseline-media-only", purpose: StrategyPurpose.Comparator),
-        Define("disclosure-led-v11"),
+        // Spec 212: the live Lead carries explicit label lines in scripts/run-profiles/default.json (the
+        // values there are the owner; this mirror only needs them NON-NULL for the reducer's Lead rule).
+        // DefaultRunProfileTests binds the REAL profile against the committed calls file.
+        Define("disclosure-led-v11", labels: new LabelThresholds(20, 15)),
         Define("disclosure-led-v10-control", purpose: StrategyPurpose.Comparator),
     ];
 
     private static ScoringStrategyDefinition Define(
-        string name, bool isPrimary = false, StrategyPurpose purpose = StrategyPurpose.Research) =>
-        new(name, name, new ScoringWeights(), isPrimary) { Purpose = purpose };
+        string name,
+        bool isPrimary = false,
+        StrategyPurpose purpose = StrategyPurpose.Research,
+        LabelThresholds? labels = null) =>
+        new(name, name, new ScoringWeights(), isPrimary) { Purpose = purpose, Labels = labels };
 
     [Fact]
     public async Task CommittedCallsFile_Parses_Validates_AndReducesToTheDeclaredLead()

@@ -22,7 +22,9 @@ using Radar.Domain.Signals;
 /// <see cref="RadarReportItem"/> per surfaced company. Contains no scoring math and no label
 /// thresholds — labels come from the policy, layout from the renderer. Every item carries its
 /// <see cref="RadarReportItem.ScoreSnapshotId"/> so a reported company is reproducible from stored
-/// data: report → snapshot → signals/evidence.
+/// data: report → snapshot → signals/evidence. (Spec 212: the builder still holds no threshold — it
+/// hands the narrative arm's configured <see cref="LabelThresholds"/> to the policy and states them on
+/// the model.)
 /// <para>
 /// Everything above is the PRIMARY strategy's series (spec 137) and stays that way. Spec 150 adds one
 /// additional, purely-numeric <see cref="StrategyReportSection"/> per configured strategy when more than one
@@ -188,11 +190,25 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         var narrativeRepository = _scoreRepository;
         var narrativeFileStore = _scoreSnapshotFileStore;
         var buildNarrative = true;
+
+        // Spec 212: the label lines the narrative arm's labels are minted at. Three states, pinned:
+        // undeclared ⇒ the storage primary's `Labels ?? Default` (stated as defaults on the report);
+        // effective Lead ⇒ the Lead's EXPLICIT lines (required non-null by OperatingCallReducer — the
+        // guard below is unreachable for a reduced file and exists so the builder can never quietly
+        // default a Lead); StopAll ⇒ no narrative, no labels, no lines (null).
+        var primaryDefinition = _scoringStrategies.Primary.Definition;
+        ReportLabelLines? labelLines = new ReportLabelLines(
+            primaryDefinition.Name,
+            primaryDefinition.Labels ?? LabelThresholds.Default,
+            Explicit: primaryDefinition.Labels is not null,
+            LeadDeclared: false,
+            _policy.Version);
         if (lifecycle is not null && lifecycle.Calls.HasDeclaredCalls)
         {
             if (lifecycle.Calls.StopAll)
             {
                 buildNarrative = false;
+                labelLines = null;
             }
             else
             {
@@ -206,6 +222,17 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                     narrativeRepository = _scoreRepositoryFactory.ForStrategy(leadRuntime.Definition);
                     narrativeFileStore = _scoreSnapshotFileStores.ForStrategy(leadRuntime.Definition);
                 }
+
+                var leadLabels = leadRuntime.Definition.Labels
+                    ?? throw new InvalidOperationException(
+                        $"Lead strategy '{leadRuntime.Definition.Name}' reached the report builder with no "
+                            + "Labels; OperatingCallReducer must have rejected it (spec 212 §2).");
+                labelLines = new ReportLabelLines(
+                    leadRuntime.Definition.Name,
+                    leadLabels,
+                    Explicit: true,
+                    LeadDeclared: true,
+                    _policy.Version);
             }
         }
 
@@ -306,12 +333,15 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             var signals = await BuildSignalRefsAsync(c.Current, links, loadedEvidence, ct)
                 .ConfigureAwait(false);
 
+            // Spec 212: the narrative arm's lines travel with the context; the narrative is only built when
+            // labelLines is non-null (StopAll builds none), so this never defaults silently.
             var action = _policy.Decide(new ReportActionContext(
                 c.Current,
                 previous,
                 PreviousComparable: comparable,
                 ContributingSignals: signals,
-                FollowingTier: c.Company.FollowingTier));
+                FollowingTier: c.Company.FollowingTier,
+                Thresholds: labelLines!.Thresholds));
             var evidence = BuildEvidenceRefs(links, loadedEvidence);
             var insiderActivity = BuildInsiderActivitySummary(c.Current, loadedEvidence);
             entries.Add(new WeeklyReportEntry(
@@ -454,7 +484,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             Health: health,
             Strategies: strategySections,
             Lifecycle: lifecycle,
-            NewsJudgment: judgmentMarkers);
+            NewsJudgment: judgmentMarkers,
+            Labels: labelLines);
 
         var markdown = _renderer.Render(model);
 

@@ -687,6 +687,124 @@ public sealed class ScoringStrategyBindingTests
         Assert.Contains("Radar:Strategies:0:Purpose", ex.Message, StringComparison.Ordinal);
     }
 
+    // ---- spec 212: Radar:Strategies[i].Labels ------------------------------------------------------------
+
+    private static Dictionary<string, string?> AlphaWith(params (string Key, string? Value)[] extra)
+    {
+        var config = new Dictionary<string, string?>
+        {
+            ["Radar:Strategies:0:Name"] = "alpha",
+            ["Radar:PrimaryStrategy"] = "alpha",
+        };
+        foreach (var (key, value) in extra)
+        {
+            config[key] = value;
+        }
+
+        return config;
+    }
+
+    [Fact]
+    public void AbsentLabels_BindAsNull_NotAsTheDefaultPair()
+    {
+        // Nullable is the point: omitted ≠ an explicit { 60, 40 }; only the latter satisfies the Lead rule.
+        var set = Resolve(AlphaWith());
+        Assert.Null(Assert.Single(set.Strategies).Labels);
+    }
+
+    [Fact]
+    public void ExplicitDefaultLabels_BindNonNull_AndEqualTheDefaultByValue()
+    {
+        var set = Resolve(AlphaWith(
+            ("Radar:Strategies:0:Labels:Investigate", "60"),
+            ("Radar:Strategies:0:Labels:Watch", "40")));
+
+        var labels = Assert.Single(set.Strategies).Labels;
+        Assert.NotNull(labels);
+        Assert.Equal(LabelThresholds.Default, labels);
+    }
+
+    [Fact]
+    public void Labels_BindCaseInsensitively_WithWhitespaceTolerated()
+    {
+        var set = Resolve(AlphaWith(
+            ("Radar:Strategies:0:labels:investigate", " 20 "),
+            ("Radar:Strategies:0:labels:WATCH", "15")));
+
+        Assert.Equal(new LabelThresholds(20, 15), Assert.Single(set.Strategies).Labels);
+    }
+
+    [Theory]
+    [InlineData("Investigate")]
+    [InlineData("Watch")]
+    public void HalfSetLabels_FailStartup_NamingTheMissingLineAndTheLabelsPath(string onlyKey)
+    {
+        // (d) A half-set pair is a startup failure naming the path, never a silent default.
+        var ex = Rejects(AlphaWith(($"Radar:Strategies:0:Labels:{onlyKey}", "20")));
+
+        var missing = onlyKey == "Investigate" ? "Watch" : "Investigate";
+        Assert.Contains($"Radar:Strategies:0:Labels:{missing}", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Radar:Strategies:0:Labels", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("BOTH Investigate and Watch are required", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnknownLabelsChildKey_FailsStartup_NamingTheExactPathAndTheValidSet()
+    {
+        var ex = Rejects(AlphaWith(
+            ("Radar:Strategies:0:Labels:Investigat", "20"),
+            ("Radar:Strategies:0:Labels:Watch", "15")));
+
+        Assert.Contains("Radar:Strategies:0:Labels:Investigat", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Investigate, Watch", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ScalarLabels_IsRejected_RatherThanSilentlyMeaningOmitted()
+    {
+        var ex = Rejects(AlphaWith(("Radar:Strategies:0:Labels", "20/15")));
+
+        Assert.Contains("Radar:Strategies:0:Labels", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("must be an object", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NonIntegerLabelLine_FailsStartup_NamingTheLinePath()
+    {
+        var ex = Rejects(AlphaWith(
+            ("Radar:Strategies:0:Labels:Investigate", "twenty"),
+            ("Radar:Strategies:0:Labels:Watch", "15")));
+
+        Assert.Contains("Radar:Strategies:0:Labels:Investigate", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("not an integer", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("40", "40")]   // Watch == Investigate
+    [InlineData("15", "20")]   // Watch > Investigate
+    [InlineData("20", "0")]    // Watch not positive
+    [InlineData("101", "40")]  // Investigate > 100
+    public void InvariantViolations_FailStartup_NamingTheLabelsPath(string investigate, string watch)
+    {
+        // (c) The invariant belongs to LabelThresholds; the binder rethrows it naming the config path.
+        var ex = Rejects(AlphaWith(
+            ("Radar:Strategies:0:Labels:Investigate", investigate),
+            ("Radar:Strategies:0:Labels:Watch", watch)));
+
+        Assert.Contains("Radar:Strategies:0:Labels is invalid", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("0 < Watch < Investigate <= 100", ex.Message, StringComparison.Ordinal);
+        Assert.IsType<ArgumentOutOfRangeException>(ex.InnerException);
+    }
+
+    [Fact]
+    public void TypodLabelsEntryKey_FailsStartup_AndTheValidSetNamesLabels()
+    {
+        var ex = Rejects(AlphaWith(("Radar:Strategies:0:Lables:Investigate", "20")));
+
+        Assert.Contains("Radar:Strategies:0:Lables", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Purpose, Labels.", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ComparatorPrimary_FailsStartup_NamingThePrimaryAndTheRemedy()
     {

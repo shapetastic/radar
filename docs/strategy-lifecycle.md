@@ -2,10 +2,13 @@
 
 Append-only, audit-only (spec 184 §3). **The Worker never parses this file** — the only runtime input to
 call resolution is `data/strategy-operating-calls.json`. One line per event
-(declared / retuned-as-new-name / retired / call-made / call-overridden / call-resolved), with strategy,
+(declared / retuned-as-new-name / retired / call-made / call-overridden / call-resolved / labels-set), with strategy,
 date, basis, actor, and — for resolutions — the outcome and an evidence reference. Retirement is config
 removal plus a line here; changing `Radar:PrimaryStrategy` (storage/series identity only) likewise. No
-automation for either.
+automation for either. **A `call-made … Lead` must land in the same change as that arm's `Labels`
+(`Radar:Strategies[i].Labels`, the Investigate / Watch lines) in the live profile** — the Worker refuses
+to build the report otherwise (spec 212) — and the journal line records the values and the prevalence they
+were chosen at (a workload decision connected to no outcome, never a claim about opportunity).
 
 The maintainer's guidance, quoted exactly as given (2026-08-23):
 
@@ -85,3 +88,12 @@ after 2026-08-23 is appended as it happens.
   breadth-rejection changed nothing measurable. Lead stays (precommitted; the gate, not this note, resolves
   it). Entry condition for a call: if the two remain within 0.01 at the 2026-09-05 review, journal v11's
   structural change as null and consider retiring the control · actor: human (maintainer-directed).
+- 2026-09-07 · labels-set · `disclosure-led-v11` (Lead) · `Labels { Investigate 20, Watch 15 }` in
+  `scripts/run-profiles/default.json` (spec 212). Prevalence chosen at: Watch 15 ≈ the v8 primary's ≈ 2 %
+  ≥ 40 share on v11's 3,471 accrued snapshots (implementation-time re-measure by nearest rank: exactly 15
+  over the spec's 2026-07-29 → window, 16 over the whole store — both within the spec's ±1 tolerance, 15
+  stood as pinned; at 15 the v11 share is 3.8 %); Investigate 20 = the top
+  ≈ 0.3 % (max 21), a stated workload judgement since v8 has no ≥ 60 prevalence to match. Fixed operating
+  (triage) thresholds, connected to no outcome; report-layer only, no fingerprint moved. Until this change
+  every `Watch` since 2026-08-23 came from the corroboration floor and `Investigate` never fired on the
+  Lead · actor: maintainer (spec-pinned).

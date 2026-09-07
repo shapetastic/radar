@@ -348,6 +348,15 @@ authoritative record:
   94 → 102); `benchmark-universe-v1` stays frozen at 74 members — additions report
   `NotInBenchmarkUniverse` until a prospective v2 is declared. Pooled efficacy is
   benchmark-adjusted; the paired AD-15 path deliberately is not (spec 183).
+- **Label lines are per-strategy config, not constants** (spec 212): `Radar:Strategies[i].Labels`
+  (`{ Investigate, Watch }`, nullable — omitted ≠ explicit 60/40) binds onto
+  `ScoringStrategyDefinition.Labels`; a declared OR effective (gate-promoted) Lead with null `Labels` is
+  refused by `OperatingCallReducer` at startup and at report build, naming the arm and config path. The
+  report mints labels on the Lead's lines, states them in ONE banner line, and `LabelThresholds.Default`
+  (60/40) applies only when no operating call is declared. Report-layer only — NOT a fingerprint input.
+  The lines are fixed triage prevalence (how many names a morning puts in front of a human), connected
+  to no outcome; `scripts/audit-label-thresholds.ps1` reproduces the measurement, and
+  `default.json` is the owner of the live values.
 - **Owed follow-ups**: spec 200 Phase B is DONE (2026-09-03; capacity verdict DRAINING; spec
   200 promoted to `docs/`). Still owed: (i) the mature 60-day attention read of the 20 spec-199
   additions — the first successful run with `WindowEndUtc` ≥ 2026-10-28T21:44:52Z, descriptive

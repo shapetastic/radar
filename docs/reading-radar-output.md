@@ -55,19 +55,19 @@ Only six labels exist, and none of them is advice: `Investigate`, `Watch`, `Igno
 `Needs more evidence`, `Thesis improving`, `Thesis deteriorating`. Words like "buy", "sell", or
 "upside" are banned from the output by rule.
 
-The mapping (`weekly-report-action-v4`) is deterministic, first match wins:
+The mapping (`weekly-report-action-v5`) is deterministic, first match wins:
 
 1. **Needs more evidence** — Evidence confidence below 35. Overrides everything: with too little
    evidence, no other claim is made.
 2. **Thesis deteriorating** — Trajectory fell ≥ 5 points versus the prior *comparable* snapshot
    (checked before improvement, to stay honest).
 3. **Thesis improving** — Trajectory rose ≥ 5 points and sits at/above neutral (50).
-4. **Investigate** — Opportunity ≥ 60.
-5. **Watch** — Opportunity ≥ 40, **or** the corroboration floor: an under-followed (small/mid tier)
-   name with neutral-or-better trajectory and **two or more distinct positive signal types** is
-   floored from Ignore up to Watch. Independent axes agreeing is exactly the pattern Radar exists to
-   surface, even when a mixed quarter drags the composite below 40. The floor never fires for
-   large/mega names and never lifts anything above Watch. Since spec 210 the floor's "Why" line names
+4. **Investigate** — Opportunity at or above **the Lead's Investigate line**.
+5. **Watch** — Opportunity at or above **the Lead's Watch line**, **or** the corroboration floor: an
+   under-followed (small/mid tier) name with neutral-or-better trajectory and **two or more distinct
+   positive signal types** is floored from Ignore up to Watch. Independent axes agreeing is exactly the
+   pattern Radar exists to surface, even when a mixed quarter drags the composite below the Watch line.
+   The floor never fires for large/mega names and never lifts anything above Watch. Since spec 210 the floor's "Why" line names
    what it counted — for every counted type, each distinct `(source class, observed date[, judgment])`
    support tuple (e.g. `EarningsTrajectory (filing 2026-07-29) + MediaAttention (news 2026-09-02, judgment)`), or
    past three tuples the type's distinct-date range and tuple count — so one announcement echoed
@@ -78,6 +78,38 @@ The mapping (`weekly-report-action-v4`) is deterministic, first match wins:
    the STORED signal types — so a name on the line and a type in a signal file can differ by exactly those
    two relabels (`GuidanceChange`, `InsiderBuying`).
 6. **Ignore** — adequate evidence, low opportunity. This is "genuine low signal", not "bad company".
+
+**The lines in rules 4–5 belong to the ARM, not to Radar** (spec 212). Every formula emits one headline
+Opportunity on 0–100, but the scales are not comparable — 20 under the v11 Lead does not mean what 20
+means under v8, and two v8 arms can differ as much as two formulas do. So each strategy entry may carry
+its own `Labels` (`Radar:Strategies[i].Labels`, `{ "Investigate": n, "Watch": m }`, both required when
+present, `0 < Watch < Investigate ≤ 100`), and the report's labels are minted on the **Lead's** lines.
+The report states the lines it used in one banner line under the header
+(`> Labels in this report follow <arm> at Investigate ≥ n / Watch ≥ m (…; weekly-report-action-v5)`),
+and every score rationale interpolates the line it applied (`Opportunity 16 (>= 15)`), so a label is
+comparable only across reports labelled on the same arm and lines.
+
+- **A declared Lead REQUIRES explicit lines, enforced at runtime.** The Worker refuses at startup (and
+  the report build refuses) when the declared — or the effective, gate-promoted — Lead's `Labels` is
+  omitted, naming the arm and `Radar:Strategies:{i}:Labels`. Omitted is not the same as an explicit
+  `{ 60, 40 }`: only the latter satisfies the rule.
+- **60 / 40 are the defaults only when no operating call is declared** (the storage primary keeps the
+  narrative by default and the banner says "defaults (no operating calls declared)"). Under StopAll no
+  company is labelled and no banner renders.
+- **The lines are fixed operating (triage) thresholds chosen by prevalence — how many names a morning's
+  report puts in front of a human — not evidence calibrated against any outcome** (returns, attention
+  arrival, thesis survival). `scripts/audit-label-thresholds.ps1` reproduces the measurement
+  (`-Strategy X -MatchPrevalenceOf default` prints X's value at `default`'s ≥ 40 share); once chosen a
+  line is fixed, never a daily quantile.
+
+The live profile's configured lines (`scripts/run-profiles/default.json` is the owner — verify there):
+
+| arm | formula | lines |
+| --- | --- | --- |
+| `disclosure-led-v11` (**Lead**) | v11 | Investigate 20 / Watch 15 — pinned by spec 212: Watch 15 sits at the v8 primary's historical ≈ 2 % ≥ 40 prevalence on v11's accrued distribution (the prevalence match is 15 over the spec's 2026-07-29 → window and 16 over the whole store; 15 was pinned); Investigate 20 is the top ≈ 0.3 % (observed max 21) — a stated workload judgement, since v8 has no ≥ 60 prevalence to match |
+| `default` (storage primary) | v8 | none set — its own 60 / 40 by definition, applying only when no call is declared |
+| `filings-led-v2` / `-halfnoted` / `-nonoted`, `narrative-led-v2`, `default-noattn` | v9 / v8 | none set — a Lead call on any of these must add its `Labels` in the same change |
+| comparators (`baseline-*`, `disclosure-led-v10-control`) | — | none — comparators cannot lead, so lines would be dead config |
 
 Note the comparability gate on rules 2–3: trajectory is only diffed against a prior snapshot from the
 **same scoring configuration**. When the scoring logic changed between runs, no improving/deteriorating
