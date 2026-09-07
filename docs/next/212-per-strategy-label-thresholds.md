@@ -89,15 +89,34 @@ declared Leads) — add "declared Lead whose `Labels` is null" to that list rath
 definition of a valid Lead in the builder. The failure is an `InvalidOperationException` naming the arm
 and the exact config path (`Radar:Strategies:{i}:Labels`) and stating why (a Lead's labels decide what a
 human inspects; defaulting them silently is the fail-open shape); `WeeklyReportBuilder` (~L199) surfaces
-it unchanged. This is independent of formula version —
+it unchanged.
+
+**`Validate` alone is a hole: the EFFECTIVE Lead can differ from the declared one.** `Reduce` promotes a
+gate-PASSED arm to Lead as a gate default (`OperatingCallReducer.cs` ~L163, `gateCall = verdict.Passed ?
+Lead : Stop`, provenance `GateDefault`), and a declared human override can move the Lead too — so an arm
+with `Labels = null` that was never the declared Lead can pass `Validate` and reach the builder as the
+Lead. Therefore, in addition to the declared-Lead check, `Reduce` validates the FINAL effective Lead
+immediately before `ResolvedOperatingCalls.WithLead(...)` is returned (~L116 of `ResolvedOperatingCalls`):
+if that arm's `Labels` is null, reduction fails with the same exception shape, naming the arm, its
+provenance (declared / overridden / gate-promoted) and the config path. Declared, overridden and
+gate-promoted Leads are thereby all covered by one rule in one type. This is independent of formula version —
 `default-noattn` (v8) shows a formula version says nothing about an arm's scale. It mirrors
 `StrategyIdentityGuard`'s stance: a halt with a named remedy is correct; a report labelled on lines nobody
 chose is not.
 
-When NO Lead call exists the narrative follows the storage primary (pre-184 path) and uses
-`Labels ?? LabelThresholds.Default`; the report banner (§4) then says "defaults (no Lead declared)".
-Non-Lead research arms and comparators may omit `Labels`; comparators cannot carry a call
-(`OperatingCallReducer`), so configuring them is dead config and is NOT done.
+**Three states, pinned** (the builder already distinguishes them, `WeeklyReportBuilder` ~L185–L199:
+`HasDeclaredCalls`, `StopAll`, `LeadStrategyName`) — "no Lead" is NOT one state:
+
+| operating-call state | narrative | lines used | banner |
+| --- | --- | --- | --- |
+| no operating-calls file (undeclared) | storage primary (pre-184 path) | primary's `Labels ?? LabelThresholds.Default` | "defaults (no operating calls declared)" |
+| effective Lead (declared, overridden, or gate-promoted) | the Lead | the Lead's explicit `Labels` (required, above) | arm + lines + version |
+| **StopAll** — declared `globalCall: StopAll` OR the predeclared zero-Lead fallback | **none** (today's `buildNarrative = false`) | none — no company is labelled | **no threshold banner** |
+
+StopAll deliberately suppresses the narrative today ("no arm holds the front page"); this slice preserves
+that byte-for-byte: no labels are minted, so no lines are stated. Non-Lead research arms and comparators
+may omit `Labels`; comparators cannot carry a call (`OperatingCallReducer`), so configuring them is dead
+config and is NOT done.
 
 ## 3. The policy reads the labelled arm's lines; version v4 → v5
 
@@ -121,9 +140,14 @@ Non-Lead research arms and comparators may omit `Labels`; comparators cannot car
   opportunity 12 with two corroborating positive types ⇒ floor rationale; opportunity 21 ⇒ `Investigate`;
   (c) invariant violations (`Watch >= Investigate`, zero, > 100) throw naming the path; (d) a half-set
   `Labels` object fails startup naming `Radar:Strategies:{i}:Labels`; (e) the builder passes the LEAD's
-  lines when they differ from the primary's (fixture: Lead call on a non-primary arm); (f) a Lead whose
+  lines when they differ from the primary's (fixture: Lead call on a non-primary arm); (f) a declared Lead whose
   `Labels` is null fails `OperatingCallReducer.Validate` with the arm name and config path in the message
-  (test beside the reducer's existing Lead-validity cases); (g) a
+  (test beside the reducer's existing Lead-validity cases); (f2) **gate-promoted Lead:** strategy A is the
+  declared Lead WITH labels, strategy B is Trial with NO labels, a passing gate verdict for B makes B the
+  effective Lead — `Reduce` fails naming B, its `GateDefault` provenance and B's missing `Labels`; (f3)
+  **StopAll preservation:** under a declared StopAll AND under the zero-Lead fallback, the rendered report
+  is byte-identical to its pre-212 pin — no narrative, no company labels, no threshold banner — even when
+  every arm's `Labels` is null (StopAll must not trip the Lead requirement); (g) a
   full-report renderer fixture under `Default` with no Lead whose ONLY diff from the pre-212 pin is the
   §4 banner line.
 
@@ -205,9 +229,12 @@ Investigate. If no post-merge run exists at PR time, the "after" column is UNMEA
 - [ ] `ScoringStrategyDefinition.Labels` is nullable (omitted ≠ explicit 60/40);
       `Radar:Strategies[i].Labels` binds, is validated (both-or-neither, unknown child keys, path in the
       error), and `"Labels"` is in `StrategyEntryKeys` and its error text.
-- [ ] A declared Lead with null `Labels` fails validation in `OperatingCallReducer.Validate` (surfaced by
-      the report build) with the arm and config path named; no Lead ⇒ primary's lines or `Default`, and
-      the banner says so.
+- [ ] A declared Lead with null `Labels` fails `OperatingCallReducer.Validate`, and an EFFECTIVE Lead with
+      null `Labels` (overridden or gate-promoted) fails `Reduce` before `WithLead` — both surfaced by the
+      report build with the arm, provenance and config path named (tests f, f2).
+- [ ] The three states are pinned: undeclared ⇒ primary narrative on `Labels ?? Default` with the defaults
+      banner; effective Lead ⇒ Lead narrative on its explicit lines; StopAll (declared or fallback) ⇒ no
+      narrative, no labels, no banner, byte-identical to the pre-212 pin (test f3).
 - [ ] `ReportActionContext.Thresholds` is nullable-defaulted; the builder passes the LEAD's lines; every
       existing policy test is byte-identical under `Default`; the renderer fixture differs from its pre-212
       pin by the banner line only.
