@@ -1,6 +1,7 @@
 namespace Radar.Application.Reporting;
 
 using System.Globalization;
+using Radar.Application.Scoring;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
 using Radar.Domain.Reports;
@@ -45,6 +46,18 @@ using Radar.Domain.Signals;
 /// seam, so the rationale prints <c>EarningsTrajectory</c> / <c>InsiderActivity</c>. Count, threshold,
 /// grouping, ordering and every label outcome are unchanged and still run on the stored enum.
 /// </para>
+/// <para>
+/// <b>The lines are inputs (v5, spec 212).</b> The Investigate / Watch Opportunity lines used to be two
+/// private constants (60 / 40) tuned for <c>radar-formula-v8</c>'s multi-channel composite; since spec 184
+/// the labels follow the LEAD arm, whose scale is not comparable (the v11 Lead never reached 40 across
+/// 3,471 accrued snapshots, so every score-era Watch since 2026-08-23 came from the floor below). The policy
+/// now reads the labelled arm's <see cref="LabelThresholds"/> from <see cref="ReportActionContext.Thresholds"/>
+/// (<c>null</c> ⇒ <see cref="LabelThresholds.Default"/>, byte-identical to v4). Rule order is unchanged; the
+/// rationale interpolates the line it actually applied; the corroboration floor floors against the arm's
+/// Watch line and never above it. Trajectory / evidence-confidence / thesis-delta constants stay: those
+/// components are computed by the shared <c>ScoreSignalMath</c> on the same scale for every formula — only
+/// Opportunity changed scale.
+/// </para>
 /// </summary>
 public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
 {
@@ -57,9 +70,9 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
     private const int NeutralTrajectory = 50;
     // Minimum trajectory change vs the previous snapshot to call a thesis improving/deteriorating.
     private const int ThesisDelta = 5;
-    // Opportunity thresholds for the steady-state labels.
-    private const int InvestigateOpportunity = 60;
-    private const int WatchOpportunity = 40;
+    // The Investigate / Watch Opportunity lines are NOT constants here (spec 212): they are the labelled
+    // arm's LabelThresholds, read from the context in Decide. LabelThresholds.Default is the single owner
+    // of the pre-212 60 / 40.
     // Minimum number of DISTINCT positive-direction signal types among the contributing signals for a
     // sub-Watch, under-followed company to be floored to Watch instead of Ignore. Distinct TYPES (not
     // rows): two independent axes agreeing (e.g. CustomerWin + StrategicPartnership), not the same
@@ -70,11 +83,12 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
     // silently-chosen subset.
     private const int MaxRenderedSupportTuplesPerType = 3;
 
-    // v4 (spec 211): the Watch-floor rationale prints each counted type's PRESENTATION label via the shared
-    // SignalTypeDisplay seam (EarningsTrajectory / InsiderActivity, never the stored GuidanceChange /
-    // InsiderBuying). Labels, the count, the threshold and the v3 tuple contract are byte-identical to v3 —
-    // only the type names on the rationale moved. Nothing hashes this token into ScoringConfigVersion.
-    public string Version => "weekly-report-action-v4";
+    // v5 (spec 212): the Investigate / Watch lines are INPUTS (ReportActionContext.Thresholds) rather than
+    // two constants — the mapping CONTRACT changed, so the version moves even though every result under
+    // LabelThresholds.Default is byte-identical to v4. v4 (spec 211) made the Watch-floor rationale print
+    // each counted type's PRESENTATION label via the shared SignalTypeDisplay seam. Nothing hashes this
+    // token into ScoringConfigVersion (spec 211 verified; spec 212 re-verified).
+    public string Version => "weekly-report-action-v5";
 
     public ReportActionResult Decide(ReportActionContext context)
     {
@@ -83,6 +97,9 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
 
         var current = context.Current;
         var previous = context.Previous;
+
+        // Spec 212: the labelled arm's lines; an absent pair is the pre-212 default, never a silent zero.
+        var lines = context.Thresholds ?? LabelThresholds.Default;
 
         // Decision precedence (first match wins):
         //   1. Thin evidence overrides everything.
@@ -126,21 +143,21 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
         }
 
         // 4. Steady-state by opportunity.
-        if (current.OpportunityScore >= InvestigateOpportunity)
+        if (current.OpportunityScore >= lines.Investigate)
         {
             return new ReportActionResult(
                 RadarReportAction.Investigate,
-                $"Opportunity {current.OpportunityScore} (>= {InvestigateOpportunity}); worth investigating.");
+                $"Opportunity {current.OpportunityScore} (>= {lines.Investigate}); worth investigating.");
         }
 
-        if (current.OpportunityScore >= WatchOpportunity)
+        if (current.OpportunityScore >= lines.Watch)
         {
             return new ReportActionResult(
                 RadarReportAction.Watch,
-                $"Opportunity {current.OpportunityScore} (>= {WatchOpportunity}); watch for further signals.");
+                $"Opportunity {current.OpportunityScore} (>= {lines.Watch}); watch for further signals.");
         }
 
-        // 4b. Corroboration floor (v2): opportunity is below the Watch line, but an under-followed name
+        // 4b. Corroboration floor (v2): opportunity is below the ARM's Watch line (spec 212), but an under-followed name
         // whose trajectory is not below neutral and whose contributing signals agree across several
         // independent axes is a research lead, not noise. Floor it to Watch — never higher, and never
         // for already-noticed (Large/Mega) names.
@@ -166,7 +183,7 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
 
                 return new ReportActionResult(
                     RadarReportAction.Watch,
-                    $"Opportunity {current.OpportunityScore} below {WatchOpportunity} but {positiveTypeCount} corroborating positive signal types across an under-followed name; floored to Watch (not Ignore): {named}.");
+                    $"Opportunity {current.OpportunityScore} below {lines.Watch} but {positiveTypeCount} corroborating positive signal types across an under-followed name; floored to Watch (not Ignore): {named}.");
             }
         }
 
@@ -174,7 +191,7 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
         // this is a genuine low signal, not a gap in the evidence — label it Ignore.
         return new ReportActionResult(
             RadarReportAction.Ignore,
-            $"Opportunity {current.OpportunityScore} below {WatchOpportunity} with adequate evidence; low signal.");
+            $"Opportunity {current.OpportunityScore} below {lines.Watch} with adequate evidence; low signal.");
     }
 
     /// <summary>

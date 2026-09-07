@@ -95,4 +95,21 @@ public sealed record ScoringStrategyDefinition(
     /// </para>
     /// </summary>
     public StrategyPurpose Purpose { get; init; } = StrategyPurpose.Research;
+
+    /// <summary>
+    /// The Investigate / Watch Opportunity lines this arm's labels are minted at (spec 212), or
+    /// <c>null</c> when the config omitted them. <b>Nullable is the point</b>: <c>null</c> means "omitted"
+    /// and an explicit <c>{ 60, 40 }</c> means "chose the defaults" — the two are distinguishable, and only
+    /// the second satisfies the Lead requirement: a declared or effective Lead with <c>null</c> here fails
+    /// <c>OperatingCallReducer</c> (a Lead's lines decide what a human inspects, so defaulting them silently
+    /// is the fail-open shape). Non-Lead research arms and comparators may omit them; the storage primary
+    /// falls back to <see cref="LabelThresholds.Default"/> only when no operating call is declared.
+    /// <para>
+    /// Like <see cref="Purpose"/> — and unlike <see cref="SignalTypes"/>/<see cref="Channels"/> — it is
+    /// deliberately <b>NOT</b> a fingerprint input: a label line is a presentation decision, so a
+    /// labels-only edit moves no fingerprint, forks no series and never trips <c>StrategyIdentityGuard</c>.
+    /// Additive and init-only so every existing construction site keeps compiling.
+    /// </para>
+    /// </summary>
+    public LabelThresholds? Labels { get; init; } = null;
 }

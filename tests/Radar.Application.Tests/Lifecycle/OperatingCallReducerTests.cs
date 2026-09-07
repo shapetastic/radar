@@ -21,14 +21,22 @@ public sealed class OperatingCallReducerTests
     private const string VerdictId = "9f1c0e7a2b4d";
     private const string OtherVerdictId = "0000deadbeef";
 
+    // Spec 212: a Lead REQUIRES explicit label lines, so the arms these fixtures declare or promote as Lead
+    // (default, alpha) carry them; beta deliberately does NOT — it is the arm the labels-rule fixtures
+    // below promote or declare as Lead to prove the rule fires.
+    private static readonly LabelThresholds AlphaLines = new(20, 15);
+
     private static ScoringStrategyDefinition Strategy(
-        string name, bool isPrimary = false, StrategyPurpose purpose = StrategyPurpose.Research) =>
-        new(name, name, new ScoringWeights(), isPrimary) { Purpose = purpose };
+        string name,
+        bool isPrimary = false,
+        StrategyPurpose purpose = StrategyPurpose.Research,
+        LabelThresholds? labels = null) =>
+        new(name, name, new ScoringWeights(), isPrimary) { Purpose = purpose, Labels = labels };
 
     private static readonly IReadOnlyList<ScoringStrategyDefinition> Strategies =
     [
-        Strategy("default", isPrimary: true),
-        Strategy("alpha"),
+        Strategy("default", isPrimary: true, labels: LabelThresholds.Default),
+        Strategy("alpha", labels: AlphaLines),
         Strategy("beta"),
         Strategy("baseline-noise", purpose: StrategyPurpose.Comparator),
     ];
@@ -320,6 +328,147 @@ public sealed class OperatingCallReducerTests
         var ex = Assert.Throws<InvalidOperationException>(
             () => OperatingCallReducer.Validate(file, Strategies));
         Assert.Contains("StopAll is declared alongside a Lead", ex.Message);
+    }
+
+    // ---- spec 212: a Lead requires explicit label lines ------------------------------------------------
+
+    [Fact]
+    public void Validation_DeclaredLeadWithoutLabels_Fails_NamingArmAndConfigPath()
+    {
+        // (f) beta is a configured Research arm with Labels == null (index 2 in the configured order).
+        var file = File(stopAll: false, Call("beta", OperatingCall.Lead));
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => OperatingCallReducer.Validate(file, Strategies));
+
+        Assert.Contains(Source, ex.Message);
+        Assert.Contains("declared Lead 'beta' has no Labels", ex.Message);
+        Assert.Contains("Radar:Strategies:2:Labels", ex.Message);
+        Assert.Contains("spec 212", ex.Message);
+    }
+
+    [Fact]
+    public void Validation_DeclaredLeadWithLabels_Passes_AndNonLeadArmsMayOmitThem()
+    {
+        // alpha is labelled; beta (Trial, unlabelled) and default (DoNotLead) carry no requirement.
+        var file = File(
+            stopAll: false,
+            Call("alpha", OperatingCall.Lead),
+            Call("beta", OperatingCall.Trial),
+            Call("default", OperatingCall.DoNotLead));
+
+        OperatingCallReducer.Validate(file, Strategies);
+        Assert.Equal("alpha", OperatingCallReducer.Reduce(file, Strategies, []).LeadStrategyName);
+    }
+
+    [Fact]
+    public void Validation_DeclaredLeadWithExplicitDefaultLines_Passes_OmittedIsWhatFails()
+    {
+        // Omitted ≠ explicit 60/40: a Lead that explicitly chose the defaults satisfies the rule.
+        var explicitDefault = new List<ScoringStrategyDefinition>(Strategies)
+        {
+            [2] = Strategy("beta", labels: new LabelThresholds(60, 40)),
+        };
+        var file = File(stopAll: false, Call("beta", OperatingCall.Lead));
+
+        OperatingCallReducer.Validate(file, explicitDefault);
+        Assert.Equal("beta", OperatingCallReducer.Reduce(file, explicitDefault, []).LeadStrategyName);
+    }
+
+    [Fact]
+    public void Reduce_GatePromotedLeadWithoutLabels_Fails_NamingArmProvenanceAndConfigPath()
+    {
+        // (f2) alpha is the declared Lead WITH labels and receives a FAILING verdict (gate default wins:
+        // alpha → Stop). beta is Trial with NO labels and receives a PASSING verdict, becoming the SOLE
+        // effective Lead. Validate passes (the declared Lead is labelled); Reduce must fail naming beta,
+        // its GateDefault provenance and the config path — a report labelled on lines nobody chose is
+        // exactly the fail-open shape.
+        var file = File(
+            stopAll: false,
+            Call("alpha", OperatingCall.Lead),
+            Call("beta", OperatingCall.Trial));
+        var verdicts = new[]
+        {
+            new StrategyGateVerdict("alpha", Passed: false, VerdictId),
+            new StrategyGateVerdict("beta", Passed: true, OtherVerdictId),
+        };
+
+        OperatingCallReducer.Validate(file, Strategies); // the declared Lead is labelled
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => OperatingCallReducer.Reduce(file, Strategies, verdicts));
+
+        Assert.Contains(Source, ex.Message);
+        Assert.Contains("gate-promoted Lead 'beta' has no Labels", ex.Message);
+        Assert.Contains("Radar:Strategies:2:Labels", ex.Message);
+    }
+
+    [Fact]
+    public void Reduce_GatePromotedLeadWithLabels_Passes()
+    {
+        // The same fixture with beta labelled reduces to beta as the gate-promoted Lead.
+        var labelledBeta = new List<ScoringStrategyDefinition>(Strategies)
+        {
+            [2] = Strategy("beta", labels: new LabelThresholds(30, 10)),
+        };
+        var file = File(
+            stopAll: false,
+            Call("alpha", OperatingCall.Lead),
+            Call("beta", OperatingCall.Trial));
+        var verdicts = new[]
+        {
+            new StrategyGateVerdict("alpha", Passed: false, VerdictId),
+            new StrategyGateVerdict("beta", Passed: true, OtherVerdictId),
+        };
+
+        var resolved = OperatingCallReducer.Reduce(file, labelledBeta, verdicts);
+
+        Assert.Equal("beta", resolved.LeadStrategyName);
+        Assert.Equal(ResolvedCallProvenance.GateDefault, resolved.For("beta")!.Provenance);
+        Assert.Equal(OperatingCall.Stop, resolved.For("alpha")!.Call);
+    }
+
+    [Fact]
+    public void Reduce_OverriddenLeadWithoutLabels_Fails_AtValidation_NamingTheDeclaredLead()
+    {
+        // A declared override that HOLDS beta as Lead against a failing verdict is still a DECLARED Lead,
+        // so Validate catches it first — one rule covers declared, overridden and gate-promoted Leads.
+        var file = File(
+            stopAll: false,
+            Call("beta", OperatingCall.Lead, overridesGate: true, overridesVerdictId: VerdictId));
+        var verdicts = new[] { new StrategyGateVerdict("beta", Passed: false, VerdictId) };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => OperatingCallReducer.Reduce(file, Strategies, verdicts));
+
+        Assert.Contains("Lead 'beta' has no Labels", ex.Message);
+        Assert.Contains("Radar:Strategies:2:Labels", ex.Message);
+    }
+
+    [Fact]
+    public void StopAll_NeverTripsTheLabelsRule_DeclaredOrGateProduced()
+    {
+        // (f3) With EVERY arm unlabelled: declared StopAll reduces without touching the labels rule — no
+        // Lead, no labels, nothing to require.
+        var unlabelled = new List<ScoringStrategyDefinition>
+        {
+            Strategy("default", isPrimary: true),
+            Strategy("alpha"),
+            Strategy("beta"),
+        };
+
+        var declared = OperatingCallReducer.Reduce(
+            File(stopAll: true, Call("default", OperatingCall.DoNotLead)), unlabelled, []);
+        Assert.True(declared.StopAll);
+
+        // Gate-produced: the declared Lead HAS labels (it must, or Validate stops the fixture) and is
+        // demoted with no other arm promoted — the zero-Lead fallback applies, no labels rule fires.
+        var fallback = OperatingCallReducer.Reduce(
+            File(stopAll: false, Call("alpha", OperatingCall.Lead)),
+            Strategies,
+            [new StrategyGateVerdict("alpha", Passed: false, VerdictId)]);
+        Assert.True(fallback.StopAll);
+        Assert.Contains("zero Leads after reduction", fallback.StopAllReason);
     }
 
     [Fact]

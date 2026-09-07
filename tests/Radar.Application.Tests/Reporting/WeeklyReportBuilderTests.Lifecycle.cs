@@ -348,7 +348,8 @@ public sealed partial class WeeklyReportBuilderTests
             stopAll: false,
             LifecycleCall("default", OperatingCall.Lead),
             LifecycleCall("filings-led", OperatingCall.Stop, basis: "stopped by the fixture")));
-        var h = new Harness(strategies: TwoStrategies, operatingCalls: calls);
+        // default is the Lead here, so it must carry explicit lines (spec 212).
+        var h = new Harness(strategies: TwoStrategiesDefaultLabelled, operatingCalls: calls);
         var acmeId = Guid.NewGuid();
         await SeedCompanyAsync(h, acmeId, Guid.NewGuid(), opportunity: 70, name: "Acme Dynamics",
             ticker: "ACME");

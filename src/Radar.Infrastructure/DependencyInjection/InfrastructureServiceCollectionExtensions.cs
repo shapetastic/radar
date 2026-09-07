@@ -513,6 +513,9 @@ public static class InfrastructureServiceCollectionExtensions
                 // Spec 176: the declared reporting purpose. Report metadata only — never a fingerprint
                 // input — so an omitted key is byte-identical to before the key existed.
                 Purpose = ResolvePurpose(entry),
+                // Spec 212: the arm's Investigate / Watch label lines. Report-layer metadata only — never a
+                // fingerprint input; nullable, and REQUIRED for a Lead (enforced by OperatingCallReducer).
+                Labels = ResolveLabels(entry),
             });
         }
 
@@ -751,7 +754,16 @@ public static class InfrastructureServiceCollectionExtensions
     /// </summary>
     private static readonly HashSet<string> StrategyEntryKeys = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Name", "ScoringProfile", "Weights", "SignalTypes", "Formula", "Channels", "Purpose",
+        "Name", "ScoringProfile", "Weights", "SignalTypes", "Formula", "Channels", "Purpose", "Labels",
+    };
+
+    /// <summary>
+    /// The complete valid child-key set of a <c>Radar:Strategies[i]:Labels</c> object (spec 212). Both are
+    /// REQUIRED when the object is present; see <see cref="ResolveLabels"/>.
+    /// </summary>
+    private static readonly HashSet<string> LabelKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Investigate", "Watch",
     };
 
     /// <summary>
@@ -771,7 +783,7 @@ public static class InfrastructureServiceCollectionExtensions
                     $"{child.Path} names '{child.Key}', which is not a Radar:Strategies entry key, so it "
                         + "would be silently ignored and the strategy would run with the corresponding "
                         + "default while appearing configured. Valid keys: "
-                        + "Name, ScoringProfile, Weights, SignalTypes, Formula, Channels, Purpose.");
+                        + "Name, ScoringProfile, Weights, SignalTypes, Formula, Channels, Purpose, Labels.");
             }
         }
     }
@@ -814,6 +826,90 @@ public static class InfrastructureServiceCollectionExtensions
         throw new InvalidOperationException(
             $"{section.Path} is '{raw}', which is not a strategy purpose (valid values: Research, "
                 + "Comparator). Omit Purpose entirely for a Research strategy.");
+    }
+
+    /// <summary>
+    /// Resolves ONE strategy's optional <c>Labels</c> object (spec 212) into a validated
+    /// <see cref="LabelThresholds"/>, or <c>null</c> when the key is absent — nullable is the point: an
+    /// omitted pair and an explicit <c>{ 60, 40 }</c> are distinguishable, and only the latter satisfies the
+    /// Lead requirement. When the object IS present, BOTH <c>Investigate</c> and <c>Watch</c> are required
+    /// (a half-set pair is a startup failure naming the path, never a silent default — the spec-176
+    /// fail-closed shape), unknown child keys fail naming the exact path and the valid set, a scalar where
+    /// the object was meant is rejected for the same reason as the <c>Purpose</c>/<c>Channels</c> shape
+    /// guards, and the invariant (<c>0 &lt; Watch &lt; Investigate ≤ 100</c>) belongs to
+    /// <see cref="LabelThresholds"/> so it holds however a definition is composed — its message is rethrown
+    /// here naming <c>Radar:Strategies:{i}:Labels</c>.
+    /// </summary>
+    private static LabelThresholds? ResolveLabels(IConfigurationSection entry)
+    {
+        var section = entry.GetSection("Labels");
+        var children = section.GetChildren().ToList();
+        if (children.Count == 0)
+        {
+            if (!string.IsNullOrWhiteSpace(section.Value))
+            {
+                throw new InvalidOperationException(
+                    $"{section.Path} is the scalar '{section.Value}'; a strategy's Labels must be an object "
+                        + "{ \"Investigate\": n, \"Watch\": m }. Omit Labels entirely for an arm that is not "
+                        + "the Lead (a Lead requires explicit lines).");
+            }
+
+            return null;
+        }
+
+        foreach (var child in children)
+        {
+            if (!LabelKeys.Contains(child.Key))
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path} names '{child.Key}', which is not a Labels key, so it would be silently "
+                        + "ignored while appearing configured. Valid keys: Investigate, Watch (both "
+                        + "required when Labels is present).");
+            }
+        }
+
+        var investigate = RequireLabelLine(section, "Investigate");
+        var watch = RequireLabelLine(section, "Watch");
+
+        try
+        {
+            return new LabelThresholds(investigate, watch);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            throw new InvalidOperationException(
+                $"{section.Path} is invalid: {ex.Message} A label line must satisfy "
+                    + "0 < Watch < Investigate <= 100.",
+                ex);
+        }
+    }
+
+    private static int RequireLabelLine(IConfigurationSection labels, string key)
+    {
+        var line = labels.GetSection(key);
+        if (line.GetChildren().Any())
+        {
+            throw new InvalidOperationException(
+                $"{line.Path} is not a scalar; a label line must be a single integer Opportunity value.");
+        }
+
+        var raw = line.Value;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            throw new InvalidOperationException(
+                $"{line.Path} is missing or blank; when {labels.Path} is present BOTH Investigate and Watch "
+                    + "are required (a half-set pair would silently default the other line). Set both, or "
+                    + "omit Labels entirely for an arm that is not the Lead.");
+        }
+
+        if (!int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+        {
+            throw new InvalidOperationException(
+                $"{line.Path} is '{raw}', which is not an integer; a label line is an integer Opportunity "
+                    + "value on the 0–100 scale.");
+        }
+
+        return value;
     }
 
     /// <summary>

@@ -4,9 +4,12 @@ using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
+using Radar.Application.Lifecycle;
 using Radar.Application.Scoring;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.DependencyInjection;
+using Radar.Infrastructure.FileSystem;
+using Radar.TestSupport;
 
 namespace Radar.Worker.Tests;
 
@@ -234,6 +237,45 @@ public sealed class DefaultRunProfileTests
         Assert.All(
             set.Strategies.Where(s => s.Purpose == StrategyPurpose.Comparator),
             s => Assert.False(s.IsPrimary));
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 212 — the Lead's label lines are PINNED in the profile and REQUIRED by the committed calls file
+    // ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void DefaultProfile_PinsTheLeadsLabelLines_AndNoOtherArmCarriesLabels()
+    {
+        // Spec 212 §5: disclosure-led-v11 carries exactly { Investigate 20, Watch 15 }; `default` is its own
+        // 60/40 by definition (LabelThresholds.Default applies only when no call is declared), comparators
+        // cannot lead (dead config), and the other research arms are documented as "no lines set".
+        var set = DefaultProfileStrategies();
+
+        var lead = set.Strategies.Single(s => s.Name == "disclosure-led-v11");
+        Assert.Equal(new LabelThresholds(20, 15), lead.Labels);
+
+        Assert.All(
+            set.Strategies.Where(s => s.Name != "disclosure-led-v11"),
+            s => Assert.Null(s.Labels));
+    }
+
+    [Fact]
+    public async Task CommittedCallsFile_ReducesAgainstTheBoundProfile_SoTheLeadIsLabelled()
+    {
+        // The cross-file guard: the committed operating calls are reduced against the strategies bound from
+        // the REAL default.json, so a Lead call that lands without that arm's Labels (or a Labels edit that
+        // strands the Lead) fails HERE rather than at the Worker's first report build.
+        var repoRoot = Path.GetFullPath(Path.Combine(RunProfileMirror.ProfilesDirectory(), "..", ".."));
+        var path = Path.Combine(repoRoot, "data", "strategy-operating-calls.json");
+        Assert.True(File.Exists(path), $"The committed operating-calls file is missing at {path}.");
+
+        var file = await new FileOperatingCallSource(new FileOperatingCallSourceOptions(path)).ReadAsync(default);
+        Assert.NotNull(file);
+
+        var resolved = OperatingCallReducer.Reduce(file, DefaultProfileStrategies().Strategies, []);
+
+        Assert.False(resolved.StopAll);
+        Assert.Equal("disclosure-led-v11", resolved.LeadStrategyName);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 namespace Radar.Application.Reporting;
 
+using Radar.Application.Scoring;
 using Radar.Domain.Companies;
 using Radar.Domain.Scoring;
 
@@ -15,13 +16,17 @@ using Radar.Domain.Scoring;
 /// <paramref name="FollowingTier"/> is the company's curated "how noticed already" tier (AD-14; never
 /// derived from price), letting a policy treat an under-followed name differently from a mega-cap.
 /// Both default to conservative values (no signals / <see cref="FollowingTier.Small"/>).
+/// <paramref name="Thresholds"/> (spec 212) are the labelled arm's Investigate / Watch Opportunity lines;
+/// <c>null</c> resolves to <see cref="LabelThresholds.Default"/> inside the policy (the pre-212 60 / 40),
+/// trailing and defaulted so every existing construction site keeps compiling.
 /// </summary>
 public sealed record ReportActionContext(
     CompanyScoreSnapshot Current,
     CompanyScoreSnapshot? Previous,
     bool PreviousComparable = true,
     IReadOnlyList<ReportSignalRef>? ContributingSignals = null,
-    FollowingTier FollowingTier = FollowingTier.Small)
+    FollowingTier FollowingTier = FollowingTier.Small,
+    LabelThresholds? Thresholds = null)
 {
     /// <summary>
     /// The signals behind <see cref="Current"/>; never null (an absent set reads as "no corroboration").

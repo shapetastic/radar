@@ -2779,7 +2779,13 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     10b5-1-forces-Neutral rule untouched.
 - **The Watch floor names what it counted — every counted type's distinct (source class, observed date,
   judgment-derived) support tuples, or an honest range summary; labels, count and threshold byte-identical
-  (spec 210, 2026-09-05).** The 2026-09-04 NWPX skeptic review raised the hypothesis that one real-world
+  (spec 210, 2026-09-05).** ⚠ **AMENDED IN PLACE BY SPEC 212 (2026-09-07):** "threshold byte-identical"
+  was true of spec 210 only. From 2026-08-23 (the Lead taking the narrative, spec 184) until spec 212 the
+  floor had been the ONLY source of `Watch` labels — every one of the 307 accrued `Watch` labels in that
+  span, 18 of 18 on the 2026-09-06 report — because the number it floors against was a v8-tuned constant
+  (40) that the v11 Lead never reached (max 21 over 3,471 snapshots). That number is now the labelled
+  arm's per-Lead Watch line (`Radar:Strategies[i].Labels`, spec 212); the floor's rule, count, tiers and
+  rationale contract are unchanged. The 2026-09-04 NWPX skeptic review raised the hypothesis that one real-world
   announcement can wear two extractors' clothes — a keyword-typed filing signal plus a judgment-derived
   `MediaAttention` from the same event's coverage — and satisfy `WeeklyReportActionPolicyV1`'s
   `>= MinCorroboratingSignalTypes` distinct-positive-TYPES floor without independent corroboration. The
@@ -2865,3 +2871,84 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     wording-changed note. **Owed:** the §4 before/after table (floored `- Why:` lines containing
     `GuidanceChange` / `InsiderBuying`; insider lines containing `planned-disposition` / `10b5-1 plan
     filing`) from the first post-merge full run — descriptive, no gate.
+- **The Investigate / Watch lines are per-Lead config, explicit, fixed, REQUIRED for every declared Lead
+  and stated on the report — no longer two constants tuned for one formula (spec 212, 2026-09-07).**
+  `WeeklyReportActionPolicyV1` labelled `Investigate` at Opportunity ≥ 60 and `Watch` at ≥ 40 from two
+  private constants set when `radar-formula-v8`'s multi-channel composite was the only formula. Since spec
+  184 the labels follow the LEAD (`disclosure-led-v11`), whose Opportunity is `100 × S × P × notedness`
+  over the FILINGS channel alone — both saturating terms tuned for all-channel mass, so on one channel the
+  composite collapses (Opportunity 40 needs mass ≈ 10.6 undiscounted / ≈ 17 at a 0.75 discount; 60 needs
+  ≈ 21.6 / ≈ 54; EDGAR supplies 2–4 directional reads per window and the best company carries mass ≈ 6).
+  **Measured 2026-09-07, read-only over every accrued snapshot under `data/scores/` +
+  `data/scores/strategies/` (as-of dates 2026-07-29 → 2026-09-06; the spec's own pre-implementation
+  measurement — `scripts/audit-label-thresholds.ps1 -FromDate 2026-07-29` re-measures it at implementation
+  time and reports `default` ≥ 40 as 75 of 3,545, see the re-measurement paragraph below):**
+
+  | arm | formula | n | dates | max | p99 | p90 | p50 | ≥ 60 | ≥ 40 | share ≥ 40 |
+  | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | disclosure-led-v11 (**Lead**) | v11 | 3,471 | 35 | 21 | 18 | 12 | 0 | 0 | 0 | 0.0% |
+  | disclosure-led-v10-control | v10 | 3,471 | 35 | 21 | 18 | 13 | 0 | 0 | 0 | 0.0% |
+  | filings-led-v2 / -halfnoted / -nonoted | v9 | ≈3,650 | 37–38 | 28 / 31 / 39 | 25 / 30 / 37 | 22 / 27 / 32 | 12 / 17 / 21 | 0 | 0 | 0.0% |
+  | narrative-led-v2 | v9 | 3,557 | 36 | 39 | 27 | 21 | 17 | 0 | 0 | 0.0% |
+  | default (storage primary) | v8 | 3,545 | 36 | 44 | 42 | 31 | 18 | 0 | 74 | 2.1% |
+  | default-noattn | v8, no discount | 878 | 7 | 76 | 71 | 52 | 30 | 21 | 174 | 19.8% |
+  | baseline-earnings-only | comparator | 3,471 | 35 | 52 | 50 | 42 | 15 | 0 | 602 | 17.3% |
+  | baseline-media-only | comparator | 3,471 | 35 | 50 | 43 | 39 | 31 | 0 | 203 | 5.8% |
+  | baseline-activity-only | comparator | 3,471 | 35 | 41 | 33 | 24 | 17 | 0 | 5 | 0.1% |
+
+  The scales are not comparable — `default-noattn` (v8 without the discount) puts 19.8% of snapshots at
+  ≥ 40 against `default`'s 2.1%, so a line is a property of the ARM, not the formula version. From the 60
+  accrued reports: `Investigate` rendered 4 times ever (all single-strategy era); the last score-based
+  `Watch` is in the 2026-08-14 report; since the Lead took the narrative (2026-08-23) zero labels came from
+  a score — the CLAUDE.md live-distribution defect exactly (a near-constant against a fixed threshold,
+  provably correct, discriminating nothing). What shipped:
+  - **`LabelThresholds(Investigate, Watch)` in `Radar.Application.Scoring`** beside `StrategyPurpose` (so
+    Scoring never depends back on Reporting), invariant `0 < Watch < Investigate ≤ 100` in the constructor,
+    `Default = (60, 40)` the ONLY definition of those numbers; the policy's constants are deleted.
+    `ScoringStrategyDefinition.Labels` is **nullable** — omitted ≠ an explicit `{ 60, 40 }`. Bound from
+    `Radar:Strategies[i].Labels` (both keys required when present, unknown child keys / scalar / non-integer
+    / invariant failures all name `Radar:Strategies:{i}:Labels`; `"Labels"` joined `StrategyEntryKeys`).
+    **NOT a fingerprint input** — `ScoringConfigFingerprint`, `FormulaIdentity`, `StrategyIdentityGuard`
+    and the strategy-config files are untouched (AD-10 as amended: the fingerprint stamps what changes a
+    SCORE); `ScoringConfigFingerprintTests` passed unchanged.
+  - **A Lead REQUIRES explicit lines, at runtime.** `OperatingCallReducer.Validate` fails a declared Lead
+    whose `Labels` is null (beside every other rule about a valid Lead, so the Worker halts at startup
+    before collection), and `Reduce` re-checks the FINAL effective Lead immediately before `WithLead` —
+    gate-promoted (`GateDefault`) and override-held Leads are covered by the same rule in the same type.
+    The failure names the arm, its provenance (declared / overridden / gate-promoted) and
+    `Radar:Strategies:{i}:Labels`. Mirrors `StrategyIdentityGuard`'s stance: a halt with a named remedy is
+    correct; a report labelled on lines nobody chose is not.
+  - **Three states, pinned** (builder tests with pre-212 byte captures): no operating-calls file ⇒ the
+    storage primary's `Labels ?? Default`, banner "defaults (no operating calls declared)", differing from
+    the pre-212 bytes by the one banner line; effective Lead ⇒ the Lead's explicit lines reach the policy
+    (`ReportActionContext.Thresholds`, trailing/defaulted; `null` ⇒ `Default`, byte-identical to v4);
+    **StopAll (declared, or the zero-Lead fallback) ⇒ no narrative, no labels, NO banner, byte-identical
+    to pre-212.** The banner is rendered ONCE from `WeeklyReportModel.Labels` (`ReportLabelLines`: arm,
+    lines, explicit/defaulted, Lead/primary-by-default, policy version), never from a constant, directly
+    under the legend lines. Policy `weekly-report-action-v4 → v5` (the CONTRACT changed: the lines are
+    inputs); rationales interpolate the applied line (`Opportunity 16 (>= 15)`); the corroboration floor
+    floors against the arm's Watch line and never above it; `NeutralTrajectory` / `EvidenceConfidenceFloor`
+    / `ThesisDelta` / `MinCorroboratingSignalTypes` stay constants (computed on the same scale by the shared
+    `ScoreSignalMath` for every formula — only Opportunity changed scale). Nothing hashes the policy version.
+  - **Live profile values, PINNED by the spec (`scripts/run-profiles/default.json` is the owner):**
+    `disclosure-led-v11` `Labels { Investigate 20, Watch 15 }`; NO other arm sets `Labels` (`default` is
+    its own 60/40 by definition; comparators cannot lead — dead config; the v9 arms and `default-noattn`
+    are "no lines set — a Lead call must add them"). **Principle: prevalence-match once, then FIX.** A
+    line's operational meaning is the share of snapshots it puts in front of a reader; Watch 15 was chosen
+    to reproduce the v8 primary's ≈ 2% ≥ 40 prevalence on v11's accrued distribution, Investigate 20 is the
+    top ≈ 0.3% (max 21) — a stated workload JUDGEMENT, since v8 has no ≥ 60 prevalence to match. These are
+    fixed operating (triage) thresholds connected to no outcome and are labelled as such everywhere they
+    render; they say nothing about whether a value is a strong opportunity, and a universal cross-arm
+    score is a stated non-goal.
+    Implementation-time re-measurement (`scripts/audit-label-thresholds.ps1 -Strategy disclosure-led-v11
+    -MatchPrevalenceOf default`, 2026-09-07): over the spec's window (`-FromDate 2026-07-29`) `default`'s
+    ≥ 40 share is 2.1% (75/3,545) and the matched v11 value is **15** exactly (k = 73rd largest); over the
+    whole store (3,760 `default` snapshots, 2.0%) it is **16** (k = 69th; share ≥ 16: 2.1%, 72 snapshots) —
+    both within the spec's ±1 tolerance, so 15 stood; at 15 the v11 share is 3.8% (131 snapshots). On the
+    2026-09-06 report those lines would have labelled AGX `Investigate` (20) and ESQ/JOUT/DGII `Watch` by
+    score (17/16/15) — noted, not a justification.
+  - **Spec 212 moved nothing.** No score, weight, formula, channel, snapshot field, stored JSON, accrued
+    file or fingerprint pin; the formula constants (`3`, `10`) are untouched — retuning them is a
+    composition change (v12 / `CompositionRevision`) and a different, later decision. **Owed:** the first
+    post-merge report's Lead label counts by score vs by floor vs `Investigate` (the "after" column) —
+    UNMEASURED at PR time, descriptive, no gate.
