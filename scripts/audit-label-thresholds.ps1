@@ -68,6 +68,14 @@ if (($Strategy -and -not $MatchPrevalenceOf) -or ($MatchPrevalenceOf -and -not $
 
 # --- Resolve + guard paths (read-only over the store) -------------------------------------------------
 
+# Resolve the script's own directory robustly (run-next.ps1 precedent): $PSScriptRoot can come back empty
+# when launched via `powershell -File` from a nested/wrapped host, which made the old Split-Path param
+# default throw before the script ran at all. Fall back to $PSCommandPath / $MyInvocation.
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir -and $PSCommandPath) { $ScriptDir = Split-Path -Parent $PSCommandPath }
+if (-not $ScriptDir -and $MyInvocation.MyCommand.Path) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $ScriptDir) { throw "Could not determine script directory; pass -DataRoot explicitly." }
+if (-not $DataRoot) { $DataRoot = Join-Path (Split-Path -Parent $ScriptDir) 'data' }
 $resolvedRoot = (Resolve-Path -LiteralPath $DataRoot).ProviderPath.TrimEnd('\', '/')
 $scoresRoot = Join-Path $resolvedRoot 'scores'
 $strategiesRoot = Join-Path $scoresRoot 'strategies'
@@ -84,14 +92,6 @@ if ($OutFile) {
 
 # --- Configured lines from the run profile ------------------------------------------------------------
 
-# Resolve the script's own directory robustly (run-next.ps1 precedent): $PSScriptRoot can come back empty
-# when launched via `powershell -File` from a nested/wrapped host, which made the old Split-Path param
-# default throw before the script ran at all. Fall back to $PSCommandPath / $MyInvocation.
-$ScriptDir = $PSScriptRoot
-if (-not $ScriptDir -and $PSCommandPath) { $ScriptDir = Split-Path -Parent $PSCommandPath }
-if (-not $ScriptDir -and $MyInvocation.MyCommand.Path) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
-if (-not $ScriptDir) { throw "Could not determine script directory; pass -DataRoot explicitly." }
-if (-not $DataRoot) { $DataRoot = Join-Path (Split-Path -Parent $ScriptDir) 'data' }
 $profilePath = Join-Path (Join-Path $ScriptDir 'run-profiles') ($Profile + '.json')
 if (-not (Test-Path -LiteralPath $profilePath)) { throw "No run profile at '$profilePath'." }
 
