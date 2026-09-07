@@ -50,8 +50,9 @@ discretionary values ONLY:
   `Math.Max(purchaseValue, saleValue)` (`HttpSecForm4Reader.cs`), NOT a net or a total, so it must never
   be summed into any value column: report the mixed-filing COUNT and state that its purchase/sale split
   and total were not captured;
-- **NWPX case study:** what the durable data can actually say — expected shape "11 planned-disposition
-  filings; transaction value not captured; recurring cadence" — plus explicit confirmation that per-filing
+- **NWPX case study:** what the durable data can actually say — expected shape "11 10b5-1 plan
+  filings; transaction value not captured; recurring cadence" (wording amended by spec 211: a plan filing's
+  transaction direction is never captured, so "planned-disposition" asserted what the store cannot know) — plus explicit confirmation that per-filing
   codes/values for plan filings were never persisted (that absence IS the finding);
 - **AGX case study:** reconcile Radar's captured discretionary value against the externally reported ~$119M
   H1 figure into named buckets: outside the window / plan-classified (value not captured) / never
@@ -69,10 +70,11 @@ The audit lands in the PR body (or `data/audits/` with the PR quoting totals).
 the token reaches the reader (2026-09-05 review): the signal-type rendering AND the evidence-contribution
 reason lines that `MarkdownWeeklyReportRenderer` currently renders verbatim. An exact-token,
 presentation-layer replacement (e.g. `InsiderBuying` → `InsiderActivity`) applied at render time in both
-paths; every other type renders exactly as today. Pin with a test that a planned-disposition stream row
+paths; every other type renders exactly as today. Pin with a test that a 10b5-1 plan-filing stream row
 never renders the word "Buying" — and note the report-language tests already forbid the bare substrings
 "buy"/"sell" (`MarkdownWeeklyReportRendererTests.ForbiddenWords`), so all new wording uses
-**"purchase value" / "sale value" / "planned disposition"**.
+**"purchase value" / "sale value" / "10b5-1 plan filing"** (the last amended by spec 211 from
+"planned disposition", a direction the store never captures).
 
 ## 3. Aggregate visibility — a structured summary, honest about what was captured
 
@@ -80,7 +82,7 @@ Add a structured `InsiderActivitySummary` to `WeeklyReportEntry` (report-side on
 new signal, no scoring input, no fingerprint move), assembled in the report builder from the DISTINCT Form 4
 evidence items inside the snapshot's exact window:
 
-- buckets mirroring the persisted taxonomy exactly: filings count; planned-disposition count;
+- buckets mirroring the persisted taxonomy exactly: filings count; 10b5-1 plan-filing count (direction not captured);
   `discretionary-buy` purchase-value total and `discretionary-sale` sale-value total where captured; a
   **mixed-buy-sell count** whose value is deliberately NOT totalled (the persisted figure is
   `Math.Max(purchaseValue, saleValue)` — neither a net nor a total; render "split and total not
@@ -91,11 +93,11 @@ evidence items inside the snapshot's exact window:
   `SecForm4ClassificationReasons` (Infrastructure) while `WeeklyReportBuilder` is Application, so without
   the shared home the implementation either duplicates magic strings or inverts the dependency direction
   (both forbidden; reuse-over-copy);
-- no fuzzy cadence adjective: the span is stated objectively as "N planned-disposition filings across D
+- no fuzzy cadence adjective: the span is stated objectively as "N 10b5-1 plan filings across D
   days" (D = `(lastDate - firstDate).Days`, elapsed days; omitted when N < 2);
 - `null`/absent renders "not captured", never 0 — a plan filing with no persisted value is counted as a
   filing and excluded from every value total;
-- the rendered NWPX line reads like: "11 planned-disposition filings across 29 days; transaction value not
+- the rendered NWPX line reads like: "11 10b5-1 plan filings across 29 days; transaction value not
   captured" — legible without opening eleven filings, and claiming nothing the store cannot back.
 
 ## 4. Forward transaction-code capture is DEFERRED to its own slice

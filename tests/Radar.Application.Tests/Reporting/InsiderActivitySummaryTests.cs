@@ -88,11 +88,11 @@ public sealed class InsiderActivitySummaryTests
 
         Assert.NotNull(summary);
         Assert.Equal(11, summary.FilingCount);
-        Assert.Equal(11, summary.PlannedDispositionCount);
-        Assert.Equal(new DateOnly(2026, 8, 5), summary.PlannedDispositionFirstFilingDate);
-        Assert.Equal(new DateOnly(2026, 9, 3), summary.PlannedDispositionLastFilingDate);
-        Assert.Equal(29, summary.PlannedDispositionSpanDays);
-        Assert.Equal(0, summary.PlannedDispositionUndatedCount);
+        Assert.Equal(11, summary.Plan10b51Count);
+        Assert.Equal(new DateOnly(2026, 8, 5), summary.Plan10b51FirstFilingDate);
+        Assert.Equal(new DateOnly(2026, 9, 3), summary.Plan10b51LastFilingDate);
+        Assert.Equal(29, summary.Plan10b51SpanDays);
+        Assert.Equal(0, summary.Plan10b51UndatedCount);
         Assert.Equal(0, summary.DiscretionaryPurchaseCount);
         Assert.Null(summary.DiscretionaryPurchaseValue);
         Assert.Equal(0, summary.DiscretionarySaleCount);
@@ -133,7 +133,7 @@ public sealed class InsiderActivitySummaryTests
 
         Assert.NotNull(summary);
         Assert.Equal(2, summary.FilingCount);
-        Assert.Equal(2, summary.PlannedDispositionCount);
+        Assert.Equal(2, summary.Plan10b51Count);
         Assert.Equal(3, summary.OutsideWindowCount);
         // The out-of-window sale contributes to NO in-window bucket.
         Assert.Equal(0, summary.DiscretionarySaleCount);
@@ -243,10 +243,10 @@ public sealed class InsiderActivitySummaryTests
         var summary = Summarise([Form4(InsiderActivityMetadata.Plan10b51, "2026-08-05")]);
 
         Assert.NotNull(summary);
-        Assert.Equal(1, summary.PlannedDispositionCount);
-        Assert.Equal(new DateOnly(2026, 8, 5), summary.PlannedDispositionFirstFilingDate);
-        Assert.Equal(new DateOnly(2026, 8, 5), summary.PlannedDispositionLastFilingDate);
-        Assert.Null(summary.PlannedDispositionSpanDays);
+        Assert.Equal(1, summary.Plan10b51Count);
+        Assert.Equal(new DateOnly(2026, 8, 5), summary.Plan10b51FirstFilingDate);
+        Assert.Equal(new DateOnly(2026, 8, 5), summary.Plan10b51LastFilingDate);
+        Assert.Null(summary.Plan10b51SpanDays);
     }
 
     [Fact]
@@ -259,12 +259,12 @@ public sealed class InsiderActivitySummaryTests
         ]);
 
         Assert.NotNull(summary);
-        Assert.Equal(3, summary.PlannedDispositionCount);
-        Assert.Equal(1, summary.PlannedDispositionUndatedCount);
-        Assert.Null(summary.PlannedDispositionSpanDays);
+        Assert.Equal(3, summary.Plan10b51Count);
+        Assert.Equal(1, summary.Plan10b51UndatedCount);
+        Assert.Null(summary.Plan10b51SpanDays);
         // The dated bounds are still reported — they are real — only the span is withheld.
-        Assert.Equal(new DateOnly(2026, 8, 5), summary.PlannedDispositionFirstFilingDate);
-        Assert.Equal(new DateOnly(2026, 9, 3), summary.PlannedDispositionLastFilingDate);
+        Assert.Equal(new DateOnly(2026, 8, 5), summary.Plan10b51FirstFilingDate);
+        Assert.Equal(new DateOnly(2026, 9, 3), summary.Plan10b51LastFilingDate);
     }
 
     [Fact]
@@ -276,7 +276,7 @@ public sealed class InsiderActivitySummaryTests
         ]);
 
         Assert.NotNull(summary);
-        Assert.Equal(0, summary.PlannedDispositionSpanDays);
+        Assert.Equal(0, summary.Plan10b51SpanDays);
     }
 
     [Fact]
@@ -293,7 +293,7 @@ public sealed class InsiderActivitySummaryTests
             Form4(InsiderActivityMetadata.Plan10b51, "2026-08-18"),
         ]);
 
-        Assert.Equal(29, ascending!.PlannedDispositionSpanDays);
+        Assert.Equal(29, ascending!.Plan10b51SpanDays);
         Assert.Equal(ascending, shuffled);
     }
 

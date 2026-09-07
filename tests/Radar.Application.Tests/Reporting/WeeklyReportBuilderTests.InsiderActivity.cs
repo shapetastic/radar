@@ -129,15 +129,15 @@ public sealed partial class WeeklyReportBuilderTests
         var entry = Assert.Single(h.Renderer.LastModel!.Entries);
         var insider = Assert.IsType<InsiderActivitySummary>(entry.InsiderActivity);
         Assert.Equal(11, insider.FilingCount);
-        Assert.Equal(11, insider.PlannedDispositionCount);
-        Assert.Equal(29, insider.PlannedDispositionSpanDays);
+        Assert.Equal(11, insider.Plan10b51Count);
+        Assert.Equal(29, insider.Plan10b51SpanDays);
         Assert.Null(insider.DiscretionarySaleValue);
         Assert.Equal(0, insider.DiscretionarySaleCount);
         Assert.Equal(1, insider.OutsideWindowCount);
 
         var markdown = result.Report.MarkdownContent;
         Assert.Contains(
-            "- Insider activity (Form 4, this window): 11 filings; 11 planned-disposition filings across 29 days; "
+            "- Insider activity (Form 4, this window): 11 filings; 11 10b5-1 plan filings across 29 days; "
                 + "transaction value not captured; 1 outside the window\n",
             markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("Buying", markdown, StringComparison.Ordinal);
@@ -211,6 +211,6 @@ public sealed partial class WeeklyReportBuilderTests
         Assert.Contains(entry.Evidence, e => e.Title == "(evidence unavailable)");
         var insider = Assert.IsType<InsiderActivitySummary>(entry.InsiderActivity);
         Assert.Equal(1, insider.FilingCount);
-        Assert.Equal(1, insider.PlannedDispositionCount);
+        Assert.Equal(1, insider.Plan10b51Count);
     }
 }

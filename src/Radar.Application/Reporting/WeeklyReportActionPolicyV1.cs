@@ -37,6 +37,14 @@ using Radar.Domain.Signals;
 /// tuple silently — arbitrarily choosing one could manufacture or hide an echo. Missing provenance renders
 /// as unknown, never as false. Still pure: no clock, no I/O.
 /// </para>
+/// <para>
+/// <b>The floor prints the report's labels (v4, spec 211).</b> v3 inserted the STORED
+/// <see cref="SignalType"/> name into the rationale, bypassing the report's presentation relabels
+/// (<c>GuidanceChange</c> reappeared in 15 of 19 live floored lines; <c>InsiderBuying</c> — the forbidden
+/// substring — in LBRT's). v4 names each counted type through the shared <see cref="SignalTypeDisplay"/>
+/// seam, so the rationale prints <c>EarningsTrajectory</c> / <c>InsiderActivity</c>. Count, threshold,
+/// grouping, ordering and every label outcome are unchanged and still run on the stored enum.
+/// </para>
 /// </summary>
 public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
 {
@@ -62,9 +70,11 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
     // silently-chosen subset.
     private const int MaxRenderedSupportTuplesPerType = 3;
 
-    // v3 (spec 210): the Watch-floor rationale names each counted type's support tuples. Labels, the
-    // count and the threshold are byte-identical to v2 — only the rationale contract moved.
-    public string Version => "weekly-report-action-v3";
+    // v4 (spec 211): the Watch-floor rationale prints each counted type's PRESENTATION label via the shared
+    // SignalTypeDisplay seam (EarningsTrajectory / InsiderActivity, never the stored GuidanceChange /
+    // InsiderBuying). Labels, the count, the threshold and the v3 tuple contract are byte-identical to v3 —
+    // only the type names on the rationale moved. Nothing hashes this token into ScoringConfigVersion.
+    public string Version => "weekly-report-action-v4";
 
     public ReportActionResult Decide(ReportActionContext context)
     {
@@ -138,7 +148,9 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
             && current.TrajectoryScore >= NeutralTrajectory)
         {
             // Grouped by type in enum order (spec 210): the COUNT is the number of groups — byte-identical
-            // to v2's Distinct().Count() — and the groups are what the rationale names below.
+            // to v2's Distinct().Count() — and the groups are what the rationale names below. Grouping,
+            // ordering and the count run on the STORED enum; only the printed name goes through the shared
+            // SignalTypeDisplay seam (spec 211, v4).
             var positiveByType = context.ContributingSignals
                 .Where(s => s.Direction == SignalDirection.Positive)
                 .GroupBy(s => s.Type)
@@ -150,7 +162,7 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
             {
                 var named = string.Join(
                     " + ",
-                    positiveByType.Select(g => $"{g.Key} ({DescribeSupport(g)})"));
+                    positiveByType.Select(g => $"{SignalTypeDisplay.Label(g.Key)} ({DescribeSupport(g)})"));
 
                 return new ReportActionResult(
                     RadarReportAction.Watch,

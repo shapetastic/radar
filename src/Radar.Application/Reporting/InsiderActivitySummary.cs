@@ -11,27 +11,32 @@ using Radar.Domain.Evidence;
 /// <para>
 /// <b>Numerically inert.</b> This is a presentation aggregate only: it is no signal, no scoring input, no
 /// weight, is never persisted, and is no fingerprint input (<c>ScoringConfigVersion</c> is untouched). It
-/// exists so a reader can see "11 planned-disposition filings across 29 days" without opening eleven filings.
+/// exists so a reader can see "11 10b5-1 plan filings across 29 days" without opening eleven filings.
 /// </para>
 /// <para>
 /// <b>What the store cannot say.</b> A 10b5-1 plan filing retains only its plan marker — no transaction
-/// value (the reader forces every plan transaction Neutral before reading codes/shares/prices), so the plan
-/// bucket carries a count and a date span only. A <c>mixed-buy-sell</c> filing's persisted magnitude is
+/// value AND no transaction DIRECTION (the reader forces every plan transaction Neutral before reading
+/// codes/shares/prices, so Radar cannot know whether the plan's transactions were acquisitions or
+/// dispositions). The plan bucket is therefore a count and a date span, nothing more — which is why it is
+/// named for the persisted token (<see cref="InsiderActivityMetadata.Plan10b51"/>, <c>plan-10b5-1</c>) and
+/// not for a direction (spec 211 renamed it: the spec-209 name asserted a disposition, a direction the store
+/// never captured). A <c>mixed-buy-sell</c> filing's persisted magnitude is
 /// <c>Math.Max(purchaseValue, saleValue)</c> — neither a net nor a total — so the mixed bucket is a COUNT
 /// with deliberately NO value member; it must never be summed into either value total.
 /// </para>
 /// </summary>
 /// <param name="FilingCount">Distinct Form 4 evidence items inside the window (every in-window bucket below
 /// partitions this count).</param>
-/// <param name="PlannedDispositionCount"><c>plan-10b5-1</c> filings.</param>
-/// <param name="PlannedDispositionFirstFilingDate">Earliest dated plan filing, or <c>null</c> when none
+/// <param name="Plan10b51Count"><c>plan-10b5-1</c> filings — a count only; the direction of a plan filing's
+/// transactions is not captured.</param>
+/// <param name="Plan10b51FirstFilingDate">Earliest dated plan filing, or <c>null</c> when none
 /// carried a date.</param>
-/// <param name="PlannedDispositionLastFilingDate">Latest dated plan filing, or <c>null</c> when none carried
+/// <param name="Plan10b51LastFilingDate">Latest dated plan filing, or <c>null</c> when none carried
 /// a date.</param>
-/// <param name="PlannedDispositionSpanDays">Elapsed days from the first to the last plan filing date
+/// <param name="Plan10b51SpanDays">Elapsed days from the first to the last plan filing date
 /// (<c>(last - first).Days</c>); <c>null</c> when fewer than two plan filings OR any plan filing lacks a
 /// parseable filing date (a span over a partial set would be a fabricated number).</param>
-/// <param name="PlannedDispositionUndatedCount">Plan filings whose filing date was absent/unparseable.</param>
+/// <param name="Plan10b51UndatedCount">Plan filings whose filing date was absent/unparseable.</param>
 /// <param name="DiscretionaryPurchaseCount"><c>discretionary-buy</c> filings.</param>
 /// <param name="DiscretionaryPurchaseValue">Sum of the captured values of <c>discretionary-buy</c> filings;
 /// <c>null</c> when NO such filing carried a value (never 0).</param>
@@ -55,11 +60,11 @@ using Radar.Domain.Evidence;
 /// is discarded invisibly.</param>
 public sealed record InsiderActivitySummary(
     int FilingCount,
-    int PlannedDispositionCount,
-    DateOnly? PlannedDispositionFirstFilingDate,
-    DateOnly? PlannedDispositionLastFilingDate,
-    int? PlannedDispositionSpanDays,
-    int PlannedDispositionUndatedCount,
+    int Plan10b51Count,
+    DateOnly? Plan10b51FirstFilingDate,
+    DateOnly? Plan10b51LastFilingDate,
+    int? Plan10b51SpanDays,
+    int Plan10b51UndatedCount,
     int DiscretionaryPurchaseCount,
     decimal? DiscretionaryPurchaseValue,
     int DiscretionaryPurchaseValueNotCapturedCount,
@@ -193,11 +198,11 @@ public sealed record InsiderActivitySummary(
 
         return new InsiderActivitySummary(
             FilingCount: filings,
-            PlannedDispositionCount: plans,
-            PlannedDispositionFirstFilingDate: planFirst,
-            PlannedDispositionLastFilingDate: planLast,
-            PlannedDispositionSpanDays: spanDays,
-            PlannedDispositionUndatedCount: planUndated,
+            Plan10b51Count: plans,
+            Plan10b51FirstFilingDate: planFirst,
+            Plan10b51LastFilingDate: planLast,
+            Plan10b51SpanDays: spanDays,
+            Plan10b51UndatedCount: planUndated,
             DiscretionaryPurchaseCount: purchases,
             DiscretionaryPurchaseValue: purchaseValue,
             DiscretionaryPurchaseValueNotCapturedCount: purchasesNoValue,

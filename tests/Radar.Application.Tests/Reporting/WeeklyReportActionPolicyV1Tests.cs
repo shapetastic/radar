@@ -26,9 +26,10 @@ public sealed class WeeklyReportActionPolicyV1Tests
     [Fact]
     public void Version_Is_Stable_Identifier()
     {
-        // v3 (spec 210): the Watch-floor rationale names each counted type's support tuples; labels, the
-        // count and the threshold are byte-identical to v2.
-        Assert.Equal("weekly-report-action-v3", CreatePolicy().Version);
+        // v4 (spec 211): the Watch-floor rationale prints each counted type's PRESENTATION label via the
+        // shared SignalTypeDisplay seam; labels, the count, the threshold and the v3 tuple contract are
+        // byte-identical to v3. Nothing hashes this token into ScoringConfigVersion.
+        Assert.Equal("weekly-report-action-v4", CreatePolicy().Version);
     }
 
     public static IEnumerable<object?[]> RepresentativeMatrix()
@@ -271,9 +272,50 @@ public sealed class WeeklyReportActionPolicyV1Tests
         Assert.Equal(RadarReportAction.Watch, result.Action);
     }
 
+    // Spec 211: the two live shapes whose STORED type names carry a report relabel — LBRT's (episode 39 of
+    // docs/cohorts/watch-floor-episodes-2026-09.md: InsiderBuying + StrategicPartnership, both filings) and
+    // the GuidanceChange + MediaAttention shape behind 15 of 19 floored lines in the 2026-09-05 report.
+    // Under v3 the floored rationale printed the stored name, so "InsiderBuying" — the forbidden "buy"
+    // substring — slipped past the sweep below because no fixture floored on it. The sweep now crosses the
+    // numeric matrix with these shapes (and the empty set), on the Small tier so the floor can fire.
+    private const string NoSignalShape = "none";
+    private const string LbrtSignalShape = "lbrt: InsiderBuying + StrategicPartnership";
+    private const string EarningsSignalShape = "GuidanceChange + MediaAttention";
+
+    private static readonly DateTimeOffset Jun25 = new(2026, 6, 25, 0, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Jul30 = new(2026, 7, 30, 0, 0, 0, TimeSpan.Zero);
+
+    private static IReadOnlyList<ReportSignalRef> SignalShape(string shape) => shape switch
+    {
+        NoSignalShape => [],
+        LbrtSignalShape =>
+        [
+            SignalRef(SignalType.InsiderBuying, SignalDirection.Positive, Jul30, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.StrategicPartnership, SignalDirection.Positive, Jun25, EvidenceSourceType.Filing, false),
+        ],
+        EarningsSignalShape =>
+        [
+            SignalRef(SignalType.GuidanceChange, SignalDirection.Positive, Sep2, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.MediaAttention, SignalDirection.Positive, Sep2, EvidenceSourceType.NewsArticle, true),
+        ],
+        _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "Unknown signal shape."),
+    };
+
+    public static IEnumerable<object?[]> RepresentativeMatrixWithSignalShapes()
+    {
+        foreach (var row in RepresentativeMatrix())
+        {
+            foreach (var shape in new[] { NoSignalShape, LbrtSignalShape, EarningsSignalShape })
+            {
+                yield return [.. row, shape];
+            }
+        }
+    }
+
     [Theory]
-    [MemberData(nameof(RepresentativeMatrix))]
-    public void Rationale_Is_NonEmpty_And_Free_Of_Advice_Language(int trajectory, int opportunity, int evidence, int? previousTrajectory)
+    [MemberData(nameof(RepresentativeMatrixWithSignalShapes))]
+    public void Rationale_Is_NonEmpty_And_Free_Of_Advice_Language(
+        int trajectory, int opportunity, int evidence, int? previousTrajectory, string signalShape)
     {
         var current = new ScoreSnapshotBuilder()
             .WithTrajectoryScore(trajectory)
@@ -285,7 +327,10 @@ public sealed class WeeklyReportActionPolicyV1Tests
             ? null
             : new ScoreSnapshotBuilder().WithTrajectoryScore(previousTrajectory.Value).Build();
 
-        var result = CreatePolicy().Decide(new ReportActionContext(current, previous));
+        // Small tier: wherever the numbers allow, the corroboration floor fires and its rationale names the
+        // signal types — the one rationale that can carry a stored token's substring.
+        var result = CreatePolicy().Decide(new ReportActionContext(
+            current, previous, ContributingSignals: SignalShape(signalShape), FollowingTier: FollowingTier.Small));
 
         Assert.False(string.IsNullOrWhiteSpace(result.Rationale));
         foreach (var forbidden in ForbiddenWords)
@@ -564,8 +609,10 @@ public sealed class WeeklyReportActionPolicyV1Tests
     // ---- Spec 210: the floor NAMES what it counted (v3) --------------------------------------------
     //
     // Labels, the count and the threshold are byte-identical to v2 (proven by the sweep at the end);
-    // only the rationale contract moved. The stored SignalType token is rendered — the renderer's
-    // display relabel (GuidanceChange -> EarningsTrajectory, spec 167) never leaks into a rationale.
+    // only the rationale contract moved. AMENDED BY SPEC 211 (v4): v3 rendered the STORED SignalType
+    // token, which put the spec-167 misnomer (GuidanceChange) back on 15 of 19 live floored lines and the
+    // forbidden InsiderBuying substring on LBRT's; the type name now goes through the shared
+    // SignalTypeDisplay seam, so these pins print EarningsTrajectory / InsiderActivity.
 
     private static readonly DateTimeOffset Sep2 = new(2026, 9, 2, 14, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset Sep2Later = new(2026, 9, 2, 21, 45, 0, TimeSpan.Zero);
@@ -608,7 +655,7 @@ public sealed class WeeklyReportActionPolicyV1Tests
 
         Assert.Equal(RadarReportAction.Watch, result.Action);
         Assert.Equal(
-            FloorPrefix + "GuidanceChange (filing 2026-09-02) + MediaAttention (news 2026-09-02, judgment).",
+            FloorPrefix + "EarningsTrajectory (filing 2026-09-02) + MediaAttention (news 2026-09-02, judgment).",
             result.Rationale);
         Assert.Contains("2 corroborating positive signal types", result.Rationale, StringComparison.Ordinal);
     }
@@ -641,7 +688,7 @@ public sealed class WeeklyReportActionPolicyV1Tests
 
         Assert.Equal(RadarReportAction.Watch, result.Action);
         Assert.Contains(
-            "GuidanceChange (filing 2026-08-26) + MediaAttention (news 2026-08-26, judgment)",
+            "EarningsTrajectory (filing 2026-08-26) + MediaAttention (news 2026-08-26, judgment)",
             result.Rationale,
             StringComparison.Ordinal);
         Assert.Contains("2 corroborating positive signal types", result.Rationale, StringComparison.Ordinal);
@@ -883,6 +930,116 @@ public sealed class WeeklyReportActionPolicyV1Tests
             else
             {
                 Assert.Equal(withoutProvenance.Rationale, withProvenance.Rationale);
+            }
+        }
+    }
+
+    // ---- Spec 211: the floor prints the report's PRESENTATION labels (v4) --------------------------
+    //
+    // v3 inserted the stored SignalType name into the rationale, bypassing the renderer-owned relabels.
+    // v4 routes the printed name through the shared SignalTypeDisplay seam; labels, the count, grouping,
+    // ordering and the v3 tuple contract still run on the STORED enum and are byte-identical to v3.
+
+    [Fact]
+    public void Lbrt_Shaped_Floor_Prints_InsiderActivity_Never_The_Stored_InsiderBuying_Token()
+    {
+        // LBRT, episode 39 of the spec-210 audit: Small tier, trajectory at/above neutral, opportunity
+        // below the Watch line, adequate evidence, positives InsiderBuying (filing, 2026-07-30) +
+        // StrategicPartnership (filing, 2026-06-25). Live under v3 this line read
+        // "… InsiderBuying (filing 2026-07-30) + …" — the forbidden "buy" substring on a rendered report.
+        var result = DecideFloorCandidate([.. SignalShape(LbrtSignalShape)]);
+
+        Assert.Equal(RadarReportAction.Watch, result.Action);
+        Assert.Equal(
+            FloorPrefix + "StrategicPartnership (filing 2026-06-25) + InsiderActivity (filing 2026-07-30).",
+            result.Rationale);
+        Assert.Contains("InsiderActivity (filing 2026-07-30)", result.Rationale, StringComparison.Ordinal);
+        Assert.DoesNotContain("InsiderBuying", result.Rationale, StringComparison.Ordinal);
+        foreach (var forbidden in ForbiddenWords)
+        {
+            Assert.DoesNotContain(forbidden, result.Rationale, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void GuidanceChange_Positive_Floor_Prints_EarningsTrajectory_Never_The_Stored_Token()
+    {
+        var result = DecideFloorCandidate([.. SignalShape(EarningsSignalShape)]);
+
+        Assert.Equal(RadarReportAction.Watch, result.Action);
+        Assert.Contains("EarningsTrajectory (filing 2026-09-02)", result.Rationale, StringComparison.Ordinal);
+        Assert.DoesNotContain("GuidanceChange", result.Rationale, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Grouping_Count_And_Order_Still_Run_On_The_Stored_Enum_Not_The_Label()
+    {
+        // Two InsiderBuying rows + one StrategicPartnership: 2 distinct STORED types (not 3), named in
+        // ENUM order — StrategicPartnership precedes InsiderBuying in SignalType, whereas the labels sort
+        // the other way alphabetically ("InsiderActivity" < "StrategicPartnership"). The relabel is
+        // applied to the printed name only, after grouping and ordering.
+        var result = DecideFloorCandidate(
+            SignalRef(SignalType.InsiderBuying, SignalDirection.Positive, Jul30, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.InsiderBuying, SignalDirection.Positive, Sep2, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.StrategicPartnership, SignalDirection.Positive, Jun25, EvidenceSourceType.Filing, false));
+
+        Assert.Equal(RadarReportAction.Watch, result.Action);
+        Assert.Contains("2 corroborating positive signal types", result.Rationale, StringComparison.Ordinal);
+        Assert.Equal(
+            FloorPrefix + "StrategicPartnership (filing 2026-06-25) + InsiderActivity (filing 2026-07-30; filing 2026-09-02).",
+            result.Rationale);
+    }
+
+    [Theory]
+    [MemberData(nameof(RepresentativeMatrix))]
+    public void Relabelled_Types_Decide_The_Same_Label_And_Differ_From_V3_Only_In_The_Printed_Name(
+        int trajectory, int opportunity, int evidence, int? previousTrajectory)
+    {
+        // The v3 -> v4 contract, swept over the representative matrix and every tier: (a) a signal set whose
+        // stored types carry a relabel decides the SAME label as the same shape over unrelabelled types — the
+        // label depends on the count of distinct stored types, never on the printed name; (b) where the
+        // floor fired, the v4 rationale equals the v3 text (reconstructed by putting the stored names back)
+        // with exactly the two printed names swapped, so the tuple contract is byte-identical; (c) every
+        // other rationale is byte-identical to the unrelabelled shape's.
+        var current = new ScoreSnapshotBuilder()
+            .WithTrajectoryScore(trajectory)
+            .WithOpportunityScore(opportunity)
+            .WithEvidenceConfidenceScore(evidence)
+            .Build();
+        var previous = previousTrajectory is null
+            ? null
+            : new ScoreSnapshotBuilder().WithTrajectoryScore(previousTrajectory.Value).Build();
+
+        IReadOnlyList<ReportSignalRef> unrelabelled =
+        [
+            SignalRef(SignalType.CustomerWin, SignalDirection.Positive, Jul30, EvidenceSourceType.Filing, false),
+            SignalRef(SignalType.ProductLaunch, SignalDirection.Positive, Jun25, EvidenceSourceType.Filing, false),
+        ];
+
+        foreach (var tier in Enum.GetValues<FollowingTier>())
+        {
+            var plain = CreatePolicy().Decide(new ReportActionContext(
+                current, previous, ContributingSignals: unrelabelled, FollowingTier: tier));
+            var lbrt = CreatePolicy().Decide(new ReportActionContext(
+                current, previous, ContributingSignals: SignalShape(LbrtSignalShape), FollowingTier: tier));
+            var earnings = CreatePolicy().Decide(new ReportActionContext(
+                current, previous, ContributingSignals: SignalShape(EarningsSignalShape), FollowingTier: tier));
+
+            Assert.Equal(plain.Action, lbrt.Action);
+            Assert.Equal(plain.Action, earnings.Action);
+
+            if (plain.Rationale.Contains("corroborating", StringComparison.Ordinal))
+            {
+                Assert.Equal(RadarReportAction.Watch, lbrt.Action);
+                var v3Lbrt = $"Opportunity {opportunity} below 40 but 2 corroborating positive signal types across an under-followed name; floored to Watch (not Ignore): StrategicPartnership (filing 2026-06-25) + InsiderBuying (filing 2026-07-30).";
+                var v3Earnings = $"Opportunity {opportunity} below 40 but 2 corroborating positive signal types across an under-followed name; floored to Watch (not Ignore): GuidanceChange (filing 2026-09-02) + MediaAttention (news 2026-09-02, judgment).";
+                Assert.Equal(v3Lbrt.Replace("InsiderBuying", "InsiderActivity", StringComparison.Ordinal), lbrt.Rationale);
+                Assert.Equal(v3Earnings.Replace("GuidanceChange", "EarningsTrajectory", StringComparison.Ordinal), earnings.Rationale);
+            }
+            else
+            {
+                Assert.Equal(plain.Rationale, lbrt.Rationale);
+                Assert.Equal(plain.Rationale, earnings.Rationale);
             }
         }
     }
