@@ -2868,9 +2868,10 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     PR), so no fingerprint pin moved (`ScoringConfigFingerprintTests` unchanged). Docs amended IN PLACE (spec
     209's wording, the spec-209/210 bullets above, `docs/reading-radar-output.md` → v4 with the
     presentation-label note); both 2026-09-05 cohort audits keep their measured rows verbatim under a
-    wording-changed note. **Owed:** the §4 before/after table (floored `- Why:` lines containing
-    `GuidanceChange` / `InsiderBuying`; insider lines containing `planned-disposition` / `10b5-1 plan
-    filing`) from the first post-merge full run — descriptive, no gate.
+    wording-changed note. **§4 MEASURED (first post-merge full run, 2026-09-07 21:30Z, report
+    `radar-weekly-2026-09-07.md`; before = the 2026-09-05 report):** floored `- Why:` lines containing
+    `GuidanceChange` 15 of 19 → **0**; containing `InsiderBuying` 1 (LBRT) → **0**; insider lines saying
+    `planned-disposition` 17 → **0**; saying `10b5-1 plan filing` 0 → **18**. Descriptive, no gate.
 - **The Investigate / Watch lines are per-Lead config, explicit, fixed, REQUIRED for every declared Lead
   and stated on the report — no longer two constants tuned for one formula (spec 212, 2026-09-07).**
   `WeeklyReportActionPolicyV1` labelled `Investigate` at Opportunity ≥ 60 and `Watch` at ≥ 40 from two
@@ -2949,6 +2950,10 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     score (17/16/15) — noted, not a justification.
   - **Spec 212 moved nothing.** No score, weight, formula, channel, snapshot field, stored JSON, accrued
     file or fingerprint pin; the formula constants (`3`, `10`) are untouched — retuning them is a
-    composition change (v12 / `CompositionRevision`) and a different, later decision. **Owed:** the first
-    post-merge report's Lead label counts by score vs by floor vs `Investigate` (the "after" column) —
-    UNMEASURED at PR time, descriptive, no gate.
+    composition change (v12 / `CompositionRevision`) and a different, later decision. **MEASURED (first
+    post-merge full run, 2026-09-07 21:30Z, report `radar-weekly-2026-09-07.md`, Lead lines 20/15):**
+    `Investigate` **1** (AGX, Opportunity 20 — the first score-based label on any research arm since
+    2026-08-14 and the first `Investigate` since the single-strategy era); `Watch` 18 = **4 by score**
+    (ESQ 17, JOUT 15, DGII 15, one more at 15) + **15 by floor**; the banner rendered once with the arm,
+    lines, "explicit", v5 and the "operating thresholds, not validated evidence" sentence. Before
+    (2026-09-06 report): 0 / 0 / 18 by floor. Descriptive, no gate.
