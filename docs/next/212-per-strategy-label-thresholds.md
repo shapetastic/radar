@@ -10,8 +10,8 @@ and labels follow the **Lead** arm (`disclosure-led-v11`, `radar-formula-v11`), 
 (`RadarScoreFormulaV11`, `ScoreSignalMath.Saturate` / `.Preponderance`, `TrajectoryCorroborationK = 10`).
 Both saturating terms were tuned for all-channel mass; multiplied on one channel's mass the composite
 collapses. With every filing read positive, `S × P = M²/((M+3)(M+10))`, so the mass a company needs
-depends on its notedness discount: **Opportunity 40 needs M ≈ 10.6 with no discount and ≈ 16 at a discount
-of 0.75; Opportunity 60 needs ≈ 21.6 and ≈ 48.** There is no universal mass requirement — but EDGAR supplies
+depends on its notedness discount: **Opportunity 40 needs M ≈ 10.6 with no discount and ≈ 17 at a discount
+of 0.75; Opportunity 60 needs ≈ 21.6 and ≈ 54.** There is no universal mass requirement — but EDGAR supplies
 2–4 directional reads per 60-day window, and the best company in the universe carries mass ≈ 6 (AGX,
 composite 0.259). The lines never moved when the formula did.
 
@@ -81,11 +81,15 @@ Estimated implementation time: UNMEASURED. Record actual dispatch→PR time in t
 
 ## 2. Every declared Lead REQUIRES explicit lines — at runtime, not by documentation
 
-The Lead is known only when `data/strategy-operating-calls.json` is read (report time, `WeeklyReportBuilder`
-~L199, `lifecycle.Calls.LeadStrategyName`), so the requirement is enforced THERE, fail-closed: if the
-resolved Lead's `Definition.Labels is null`, the builder throws `InvalidOperationException` naming the arm
+The Lead is known only when `data/strategy-operating-calls.json` is read, so the requirement is enforced at
+that point, fail-closed. **Preferred placement: `OperatingCallReducer.Validate(file, strategies)`**
+(`OperatingCallReducer.cs` L47), which already receives the `ScoringStrategyDefinition`s and already owns
+every other rule about a valid Lead (unknown strategy, call on a Comparator, duplicate, multiple/zero
+declared Leads) — add "declared Lead whose `Labels` is null" to that list rather than minting a second
+definition of a valid Lead in the builder. The failure is an `InvalidOperationException` naming the arm
 and the exact config path (`Radar:Strategies:{i}:Labels`) and stating why (a Lead's labels decide what a
-human inspects; defaulting them silently is the fail-open shape). This is independent of formula version —
+human inspects; defaulting them silently is the fail-open shape); `WeeklyReportBuilder` (~L199) surfaces
+it unchanged. This is independent of formula version —
 `default-noattn` (v8) shows a formula version says nothing about an arm's scale. It mirrors
 `StrategyIdentityGuard`'s stance: a halt with a named remedy is correct; a report labelled on lines nobody
 chose is not.
@@ -118,7 +122,8 @@ Non-Lead research arms and comparators may omit `Labels`; comparators cannot car
   (c) invariant violations (`Watch >= Investigate`, zero, > 100) throw naming the path; (d) a half-set
   `Labels` object fails startup naming `Radar:Strategies:{i}:Labels`; (e) the builder passes the LEAD's
   lines when they differ from the primary's (fixture: Lead call on a non-primary arm); (f) a Lead whose
-  `Labels` is null makes the builder throw with the arm name and config path in the message; (g) a
+  `Labels` is null fails `OperatingCallReducer.Validate` with the arm name and config path in the message
+  (test beside the reducer's existing Lead-validity cases); (g) a
   full-report renderer fixture under `Default` with no Lead whose ONLY diff from the pre-212 pin is the
   §4 banner line.
 
@@ -200,8 +205,9 @@ Investigate. If no post-merge run exists at PR time, the "after" column is UNMEA
 - [ ] `ScoringStrategyDefinition.Labels` is nullable (omitted ≠ explicit 60/40);
       `Radar:Strategies[i].Labels` binds, is validated (both-or-neither, unknown child keys, path in the
       error), and `"Labels"` is in `StrategyEntryKeys` and its error text.
-- [ ] A declared Lead with null `Labels` fails the report build with the arm and config path named; no Lead
-      ⇒ primary's lines or `Default`, and the banner says so.
+- [ ] A declared Lead with null `Labels` fails validation in `OperatingCallReducer.Validate` (surfaced by
+      the report build) with the arm and config path named; no Lead ⇒ primary's lines or `Default`, and
+      the banner says so.
 - [ ] `ReportActionContext.Thresholds` is nullable-defaulted; the builder passes the LEAD's lines; every
       existing policy test is byte-identical under `Default`; the renderer fixture differs from its pre-212
       pin by the banner line only.
