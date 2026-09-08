@@ -45,21 +45,31 @@ static, applied at judge-INPUT time to each family's representative statement (n
 stage-1 cohort key is untouched, so NO re-typing of the ~2,000 in-window observations is triggered; the
 350-call/run typing budget would take days to drain a re-type):
 
-- Output enum `NewsFactComparisonBasis { Event, StatedComparison, LevelOnly, NotQuantified }`:
-  - `NotQuantified` — no number/currency/percentage in the statement.
-  - `StatedComparison` — a number AND a comparison marker (a closed phrase table in the classifier:
-    record / all-time / up from / down from / compared / versus / vs / increase / decrease / grew / rose /
-    fell / declined / higher / lower / year-over-year / sequential / from X to Y / beat / missed / above /
-    below / doubled / halved / raised / cut / wider / narrower / percentages, …). The table is the
-    classifier's identity — changing it is `comparison-basis-v2`.
-  - `LevelOnly` — a number attached to a STOCK-QUANTITY noun (backlog / order book / pipeline / cash /
-    cash and investments / debt / headcount / employees / market cap / shares outstanding / assets /
-    book value / capacity / fleet / stores / subscribers / users — a closed noun table, likewise identity)
-    with NO comparison marker.
-  - `Event` — a number with neither: an order, award, contract, financing, acquisition, launch — the
-    quantity sizes an event that is directional in itself. `EventTypes` is a tie-breaker only
-    (`EarningsOrGuidance` with a bare number and no stock noun → `LevelOnly`, because a bare earnings
-    figure is a level).
+- Output enum `NewsFactComparisonBasis { StatedComparison, LevelOnly, Event, NotQuantified }`, decided by
+  PRECEDENCE — the first rule that matches wins, and a number is NOT required for the two directional
+  classes (review round 1: a numberless statement can state a comparison or an event, and a bare
+  percentage is a level, not a comparison):
+  1. **`StatedComparison`** — explicit comparison/trend language, with or without a number: a closed
+     phrase table (record / all-time / up from / down from / compared / versus / vs / increase /
+     decrease / grew / rose / fell / declined / higher / lower / wider / narrower / year-over-year /
+     sequential / from X to Y / beat / missed / above / below / doubled / halved / raised / cut /
+     reaffirmed / …). "Backlog declined during the quarter" → StatedComparison. **A bare percentage
+     ("gross margin was 24%") is NOT a comparison marker** — a percent sign never qualifies on its own;
+     only the phrase table does.
+  2. **`LevelOnly`** — a quantified STOCK or FLOW metric with no comparison marker: a number attached to
+     a metric noun from a closed table (stock: backlog / order book / pipeline / cash / cash and
+     investments / debt / headcount / employees / market cap / shares outstanding / assets / book value /
+     capacity / fleet / stores / subscribers / users; flow: revenue / sales / net income / earnings / EPS /
+     margin / operating income / cash flow / bookings), and a bare number or percentage on an
+     `EarningsOrGuidance` statement. "Backlog hits $2.5B" and "gross margin was 24%" → LevelOnly.
+  3. **`Event`** — a recognised event, with or without a number: an order / award / contract / customer
+     win / approval / clearance / launch / acquisition / financing / listing / delisting / recall /
+     lawsuit filed or settled, from a closed event-verb table with `EventTypes` as a tie-breaker
+     (`ContractOrCustomerWin`, `RegulatoryOrLegal`, `ProductOrTechnology`, `MergerAcquisitionOrStake`,
+     `FinancingOrDilution` statements that name such an event). "The company won a major government
+     contract" and "The FDA approved the product" → Event; "$22 Million Follow-On Order" → Event.
+  4. **`NotQuantified`** — none of the above.
+  The three tables are the classifier's identity — changing any of them is `comparison-basis-v2`.
 - Rendered to the judge per family as one line: `ComparisonBasis: LevelOnly — a stated level, not a
   trend` / `StatedComparison` / `Event` / `NotQuantified`. Persisted on the judgment record per consumed
   family (additive field, nullable = written pre-214, never defaulted).
@@ -77,17 +87,40 @@ stage-1 cohort key is untouched, so NO re-typing of the ~2,000 in-window observa
   unchanged by this spec.
 - **Validator** (`NewsJudgmentValidator`): after fact-id resolution, compute `trajectoryBasis` over the
   cited `TrajectoryFactIds`: `Supported` when ≥ 1 cited fact is `StatedComparison` or `Event`; `LevelOnly`
-  when every cited fact is `LevelOnly`/`NotQuantified` and the trajectory is Improving/Deteriorating.
+  `LevelOnly` when every cited fact is `LevelOnly`/`NotQuantified` and the trajectory is Improving/Deteriorating;
+  null (never written) only on records produced before this spec.
   `LevelOnly` is NOT a validation failure (the judgment is persisted, `status: Judged`, the model's read is
   kept verbatim — a wrong call recorded beats a call rewritten) — it is a persisted marker
   (`trajectoryBasis`, additive, nullable pre-214) plus a per-run aggregated count.
-- **Materializer gate** (`NewsJudgmentSignalMaterializer`, `news-judgment-signal-v2 → v3`): a judgment
-  with `trajectoryBasis == LevelOnly` mints NO signal, counted under a new
-  `NewsJudgmentSignalSkipReason.LevelOnlyTrajectory` (rendered by `DescribeSkips` in the daily news
-  report's accounting and in the live artifact, beside `not-judged` / `non-directional-trajectory`).
-  Fail-closed: a direction with no directional basis produces no scoring input. v2 stays in
-  `SupportedJudgmentSignalVersions` (accrued v2 signals remain valid, exactly the spec-197 v1→v2 pattern;
-  an existing valid v2 id is prior-version occupancy and mints no v3 duplicate).
+- **Materializer gate — an ALLOWLIST, not a denylist** (`NewsJudgmentSignalMaterializer`,
+  `news-judgment-signal-v2 → v3`): a judgment materializes ONLY when its `trajectoryBasis` is an explicitly
+  allowlisted value — under this spec **`Supported` alone**; spec 215 adds `ReferenceSupported`. Everything
+  else mints nothing, each under its OWN named skip reason: `LevelOnlyTrajectory` (basis LevelOnly),
+  `TrajectoryBasisNotRecorded` (basis null — a pre-214 record reached the v3 materializer; it cannot be
+  re-derived without re-judging, so it is counted, never assumed Supported), `TrajectoryBasisUnrecognised`
+  (any other value — a future basis nobody allowlisted). All three render through `DescribeSkips` in the
+  daily news report's accounting and the live artifact beside `not-judged` / `non-directional-trajectory`.
+  Fail-closed means the default outcome is "no signal": a direction whose basis is absent, unknown or
+  level-only produces no scoring input.
+- **Durable record schema `news-judgment-v4 → v5`** (`NewsJudgmentRecord.CurrentSchemaVersion`, L193 —
+  distinct from the MODEL-RESPONSE schema `news-judgment-schema-v3`, which this spec does not change):
+  `trajectoryBasis` and the per-family `ComparisonBasis` change what a persisted judgment MEANS — whether
+  it can become a scoring signal — which is the same precedent that moved the record tag for
+  `TrajectoryFactIds`. v4 records stay readable (basis null ⇒ `TrajectoryBasisNotRecorded` above).
+- **v3 signals and accrued v2 signals — what actually happens on the first run.** A materialized signal's
+  id is `DeterministicGuid("radar:news-judgment-signal:" + version + ":" + judgmentId)`
+  (`SignalIdFor`, `NewsJudgmentSignalMaterializer.cs` L147–149). The prompt/cohort fork gives every
+  re-judged company a NEW judgment id, so a v3 signal can never collide with, or be found by a
+  prior-version lookup for, the v2 signal of the OLD judgment — prior-version occupancy does NOT prevent
+  a second signal here (review round 1 corrected the earlier claim). Therefore: v1 and v2 stay in
+  `SupportedJudgmentSignalVersions` as accepted historical versions; new-cohort v3 judgments MAY mint new
+  signals; where the old v2 signal and the new v3 signal cite the SAME evidence, the existing
+  latest-judgment supersede (`NewsJudgmentSignalSupersede`, `news-judgment-supersede-v1`) resolves them —
+  the later judgment's signal replaces the earlier over that evidence in both windows; where they cite
+  DIFFERENT evidence anchors they may coexist, and that is measured, not assumed. **The first post-214 run
+  reports, per company: v2 signals in window, v3 signals minted, same-evidence pairs resolved by
+  supersede, and different-evidence coexistences** — descriptive, in the PR body's post-merge follow-up,
+  no gate.
 - **Nothing is rewritten.** Accrued judgments keep their trajectory; accrued v2 signals stay on disk and in
   scoring (AD-8). The AGX judgment of 2026-09-07 is history; the first post-214 run re-judges AGX once
   (the cohort key forks) and that re-judgment either cites the record-revenue facts (StatedComparison →
@@ -142,16 +175,21 @@ citing the test, never by transcribing them into prose.
 
 ## Acceptance criteria
 
-- [ ] `StatementComparisonClassifier` (`comparison-basis-v1`) is pure, closed-table, unit-tested on each
-      of the four classes with the AGX backlog statement → `LevelOnly`, "record revenue of $384 million" →
-      `StatedComparison`, "$22 Million Follow-On Order" → `Event`, a bare-number earnings statement →
-      `LevelOnly`; its token is in the judgment cohort key and thus the `news=` segment.
+- [ ] `StatementComparisonClassifier` (`comparison-basis-v1`) is pure, closed-table, PRECEDENCE-ordered,
+      unit-tested on: the AGX backlog statement → `LevelOnly`; "record revenue of $384 million" →
+      `StatedComparison`; "Backlog declined during the quarter" (no number) → `StatedComparison`; "The
+      company won a major government contract" (no number) → `Event`; "The FDA approved the product" →
+      `Event`; "$22 Million Follow-On Order" → `Event`; "gross margin was 24%" → `LevelOnly` (a bare
+      percentage is never a comparison); a bare-number earnings statement → `LevelOnly`; its token is in
+      the judgment cohort key and thus the `news=` segment.
 - [ ] Every supplied family renders its `ComparisonBasis` line; prompt v4 carries rule 11 verbatim in
       spirit; schema v3 unchanged.
-- [ ] `trajectoryBasis` persisted (nullable pre-214) and computed only over resolved cited facts; a
-      `LevelOnly` judgment stays `Judged` and mints nothing under `news-judgment-signal-v3`, counted as
-      `LevelOnlyTrajectory` in the run summary, the daily report accounting and the live artifact; v2 stays
-      supported and re-mints nothing.
+- [ ] `trajectoryBasis` persisted (nullable pre-214) and computed only over resolved cited facts; record
+      schema `news-judgment-v5` with v4 readable; the materializer ALLOWLISTS `Supported` only — `LevelOnly`,
+      null and unrecognised each mint nothing under their own skip reason (`LevelOnlyTrajectory`,
+      `TrajectoryBasisNotRecorded`, `TrajectoryBasisUnrecognised`) in the run summary, the daily report
+      accounting and the live artifact; v1/v2 stay accepted historical versions; the first-run
+      v2/v3 overlap is measured and reported, not claimed away.
 - [ ] §3 live distribution in the PR body with the AGX four-fact classification; the sanity bounds hold.
 - [ ] Appendix `basis` column, operator-guide paragraph, history bullets (new + the 194 in-place amendment),
       CLAUDE.md bullet amended in place.
