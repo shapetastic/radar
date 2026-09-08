@@ -312,6 +312,7 @@ public sealed class StatementComparisonClassifierTests
     [InlineData("Napco Security Technologies Crushes Q4 2026 Profit Estimates by 31.6%")]
     [InlineData("Revenue growth of 12% in the quarter")]
     [InlineData("The company posted 12% revenue growth")]
+    [InlineData("Reported 12.5% revenue growth")] // a decimal percent is one whole figure
     [InlineData("A record-breaking quarter for bookings")]
     [InlineData("Above-average demand lifted the outlook")] // the explicit hyphenated phrase
     [InlineData("Record-high revenue of $384 million")]

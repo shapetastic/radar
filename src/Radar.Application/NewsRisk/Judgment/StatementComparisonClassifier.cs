@@ -164,12 +164,15 @@ public static class StatementComparisonClassifier
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     /// <summary>
-    /// <c>growth</c> beside a figure: "growth of 12%", "revenue growth to $5M", "12% revenue growth". The bare
-    /// word is NOT in the table — "growth strategy outlined" states no comparison (live sample, 2026-09-08).
+    /// <c>growth</c> beside a figure: "growth of 12%", "revenue growth to $5M", "12% revenue growth",
+    /// "12.5% growth". The bare word is NOT in the table — "growth strategy outlined" states no comparison
+    /// (live sample, 2026-09-08). The figure is matched whole (<c>\d+</c>, optional decimal before a percent)
+    /// so the match starts at its first digit, not its last; the classifier only asks whether the regex
+    /// matches, so this is clarity, not a behaviour change.
     /// </summary>
     private static readonly Regex GrowthFigureRegex = new(
-        @"(?<![\w-])growth\s+(?:of\s+|rate\s+of\s+|to\s+)?(?:about\s+|approximately\s+|roughly\s+|nearly\s+|over\s+|~)?[\$€£]?\d"
-            + @"|\d\s*(?:%|percent)\s+(?:\w+\s+){0,2}growth(?![\w-])",
+        @"(?<![\w-])growth\s+(?:of\s+|rate\s+of\s+|to\s+)?(?:about\s+|approximately\s+|roughly\s+|nearly\s+|over\s+|~)?[\$€£]?\d+"
+            + @"|\d+(?:\.\d+)?\s*(?:%|percent)\s+(?:\w+\s+){0,2}growth(?![\w-])",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     /// <summary>
