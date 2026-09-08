@@ -188,6 +188,15 @@ $claudeArgs = @()
 if (-not [string]::IsNullOrWhiteSpace($Model))          { $claudeArgs += @("--model", $Model) }
 if (-not [string]::IsNullOrWhiteSpace($PermissionFlag)) { $claudeArgs += $PermissionFlag }
 if ($claudeArgs.Count -gt 0) { Write-Host "claude extra args: $($claudeArgs -join ' ')" -ForegroundColor DarkGray }
+# Headless `claude -p` terminates itself when a BACKGROUND task (the orchestrator's coder/reviewer
+# sub-agent) is still running after 600s ("Background tasks still running after 600s; terminating.
+# Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely."). Spec 213's dispatch on 2026-09-08
+# died exactly that way mid-review-loop, leaving seven modified files uncommitted in the worktree and no
+# PR; the earlier runs only survived because their sub-agents happened to finish inside the ceiling.
+# A review loop legitimately waits longer than 10 minutes, so lift the ceiling for BOTH headless
+# dispatches below (implementation and the Copilot fix pass). Scoped to this script's process.
+$env:CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = '0'
+
 
 Push-Location $worktreePath
 try {
