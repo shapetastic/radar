@@ -214,3 +214,15 @@ reading discipline.
 10. **When a number surprises you, walk the chain.** Report entry → score snapshot id → contributing
     signals → evidence links. The chain is complete by construction; a surprise that survives the
     walk is interesting, and one that doesn't was a misreading.
+11. **A level is not a trend.** A quantity stated as a balance — backlog, cash, debt, headcount,
+    capacity — establishes no direction by itself, however large. A measured example: on 2026-09-07
+    the news judge read Argan as `Improving` on "backlog hits $2.5B" when the backlog had fallen 14 %
+    over the year; nothing Radar supplied said so. Since spec 214 every fact the judge sees carries a
+    deterministic `ComparisonBasis` (`StatedComparison` / `LevelOnly` / `Event` / `NotQuantified`),
+    the judge is told only a stated comparison or an event may support a trajectory, and each
+    directional judgment on the weekly report's judgment provenance appendix shows `basis: Supported`
+    or `basis: LevelOnly` (`basis: (pre-214)` for records written before the rule). A `LevelOnly`
+    judgment is kept verbatim — its trajectory and rationale still render — but it **mints no scoring
+    signal**: the daily news report's accounting line counts it as `level-only-trajectory`. When a
+    semantic-read marker says `trajectory improving` beside `basis: LevelOnly`, read it as "the judge
+    saw a big number", not as evidence of improvement.

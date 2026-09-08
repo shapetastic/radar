@@ -153,15 +153,16 @@ public sealed class NewsJudgmentArchitectureGuardTests
         Assert.Equal(typeof(IReadOnlyList<Guid>), persisted!.PropertyType);
         // The TRAILING-NULLABLE block, pinned by position. Spec 187 §7 appended a second member to it
         // (ProviderDurationMs — observational latency provenance), spec 192 §2 a third and fourth (the
-        // rationale-length facts) and spec 197 §2.2 a fifth (FactIdPrefixExpansionCount), so
-        // TrajectoryFactIds is no longer the very last parameter. What the pin protects is unchanged and is
-        // asserted directly: every member after the required block is optional and nullable, so a v1 record
-        // on disk still hydrates losslessly with "not recorded" for each of them.
+        // rationale-length facts), spec 197 §2.2 a fifth (FactIdPrefixExpansionCount) and spec 214 §2 a
+        // sixth (TrajectoryBasis — the enum, never prose), so TrajectoryFactIds is no longer the very last
+        // parameter. What the pin protects is unchanged and is asserted directly: every member after the
+        // required block is optional and nullable, so a v1 record on disk still hydrates losslessly with
+        // "not recorded" for each of them.
         var trailing = typeof(NewsJudgmentRecord)
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(5)
+            .TakeLast(6)
             .ToList();
         Assert.Equal(
             [
@@ -170,6 +171,7 @@ public sealed class NewsJudgmentArchitectureGuardTests
                 nameof(NewsJudgmentRecord.RationaleLength),
                 nameof(NewsJudgmentRecord.RationaleOverSoftLimit),
                 nameof(NewsJudgmentRecord.FactIdPrefixExpansionCount),
+                nameof(NewsJudgmentRecord.TrajectoryBasis),
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

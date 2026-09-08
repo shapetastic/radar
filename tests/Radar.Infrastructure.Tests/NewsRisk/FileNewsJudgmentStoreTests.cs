@@ -147,7 +147,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Equal(1_228, hydrated.RationaleLength);
         Assert.True(hydrated.RationaleOverSoftLimit);
         Assert.Equal(1_228, hydrated.Rationale!.Length); // the full text, never truncated on the way out
-        Assert.Equal("news-judgment-v4", hydrated.SchemaVersion); // spec 197 §2.2 moved the tag
+        Assert.Equal("news-judgment-v5", hydrated.SchemaVersion); // spec 197 §2.2 moved the tag to v4, spec 214 §2 to v5
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -235,7 +235,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(4, hydrated.FactIdPrefixExpansionCount);
-        Assert.Equal("news-judgment-v4", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v5", hydrated.SchemaVersion);
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -264,6 +264,91 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
     }
 
     /// <summary>
+    /// Spec 214 §2: <c>trajectoryBasis</c> and the per-family <c>comparisonBasis</c> persist as TOKENS and
+    /// round-trip, and a v4 file (neither property) hydrates BOTH as <c>null</c> — "not recorded / not
+    /// applicable", never a fabricated Supported (which would let a pre-214 level-read materialize).
+    /// </summary>
+    [Fact]
+    public async Task TrajectoryBasisAndComparisonBasis_RoundTrip_AndAV4FileHydratesBothAsNull()
+    {
+        var record = Record() with
+        {
+            BusinessTrajectory = NewsJudgmentTrajectory.Improving,
+            TrajectoryBasis = NewsTrajectoryBasis.LevelOnly,
+            Families =
+            [
+                new NewsJudgmentFamilyRef(
+                    Guid.NewGuid(), TrajectoryFactId, 2, 2, NewsFactComparisonBasis.LevelOnly),
+            ],
+        };
+        Assert.True(await NewStore().WriteAsync(record, CancellationToken.None));
+
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var text = await File.ReadAllTextAsync(file);
+        Assert.Contains("\"trajectoryBasis\": \"LevelOnly\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"comparisonBasis\": \"LevelOnly\"", text, StringComparison.Ordinal);
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal("news-judgment-v5", hydrated.SchemaVersion);
+        Assert.Equal(NewsTrajectoryBasis.LevelOnly, hydrated.TrajectoryBasis);
+        Assert.Equal(NewsFactComparisonBasis.LevelOnly, Assert.Single(hydrated.Families).ComparisonBasis);
+
+        // A v4 file: no trajectoryBasis, families without comparisonBasis.
+        var document = JsonNode.Parse(text)!.AsObject();
+        Assert.True(document.Remove("trajectoryBasis"));
+        document["schemaVersion"] = "news-judgment-v4";
+        foreach (var family in document["families"]!.AsArray())
+        {
+            Assert.True(family!.AsObject().Remove("comparisonBasis"));
+        }
+
+        await File.WriteAllTextAsync(file, document.ToJsonString());
+
+        var legacy = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal("news-judgment-v4", legacy.SchemaVersion);
+        Assert.Null(legacy.TrajectoryBasis);
+        Assert.Null(Assert.Single(legacy.Families).ComparisonBasis);
+        // …and the rest of the record still reads correctly.
+        Assert.Equal(NewsJudgmentTrajectory.Improving, legacy.BusinessTrajectory);
+        Assert.Equal(TrajectoryFactId, Assert.Single(legacy.TrajectoryFactIds!));
+    }
+
+    /// <summary>
+    /// Spec 214 §2: an UNKNOWN <c>trajectoryBasis</c> token on disk never reaches the materializer — the
+    /// strict enum converter (<c>allowIntegerValues: false</c>, no unknown names) fails the whole record
+    /// as unreadable, which the store counts on its existing unreadable axis. A defined-but-unallowlisted
+    /// value is the materializer's <c>TrajectoryBasisNotAllowlisted</c>; an undefined token is THIS. (The
+    /// shared converter reads member NAMES case-insensitively, so a differently-cased spelling of a defined
+    /// member is not an unknown token — an integer or an undefined name is.)
+    /// </summary>
+    [Theory]
+    [InlineData("\"ReferenceSupported\"")]
+    [InlineData("\"Level-Only\"")]
+    [InlineData("1")]
+    public async Task AnUnknownTrajectoryBasisTokenOnDisk_MakesTheRecordUnreadable_NotSilentlyDefaulted(
+        string token)
+    {
+        var record = Record() with
+        {
+            BusinessTrajectory = NewsJudgmentTrajectory.Improving,
+            TrajectoryBasis = NewsTrajectoryBasis.Supported,
+        };
+        Assert.True(await NewStore().WriteAsync(record, CancellationToken.None));
+
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var text = await File.ReadAllTextAsync(file);
+        Assert.Contains("\"trajectoryBasis\": \"Supported\"", text, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(
+            file,
+            text.Replace(
+                "\"trajectoryBasis\": \"Supported\"",
+                "\"trajectoryBasis\": " + token,
+                StringComparison.Ordinal));
+
+        Assert.Empty(await NewStore().GetAllAsync(CancellationToken.None));
+    }
+
+    /// <summary>
     /// Spec 189 §2: the new typing-completeness tokens persist and round-trip as TOKENS (the shared
     /// file-store JSON options reject integers on read), and a LEGACY <c>Failed</c> file hydrates unchanged —
     /// never re-classified into a guessed retryable/exhausted state (AD-8).
@@ -287,7 +372,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var reloaded = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(completeness, reloaded.TypingCompleteness);
-        Assert.Equal("news-judgment-v4", reloaded.SchemaVersion);
+        Assert.Equal("news-judgment-v5", reloaded.SchemaVersion);
     }
 
     /// <summary>

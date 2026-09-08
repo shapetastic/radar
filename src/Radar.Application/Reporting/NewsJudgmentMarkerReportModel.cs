@@ -30,7 +30,13 @@ public sealed record NewsJudgmentLeaderMarker(
     string? ChallengeSummary = null,
     bool TypingIncomplete = false,
     string? Trajectory = null,
-    Guid? JudgmentId = null)
+    Guid? JudgmentId = null,
+    // Spec 214 §4: the judgment's trajectory-basis display token (`Supported` / `LevelOnly` /
+    // `(pre-214)`), set by the policy ONLY for a judged marker with a DIRECTIONAL trajectory — a Mixed or
+    // Unknown read has no basis to state, and an unassessed row has no judgment. Rendered on the report's
+    // judgment provenance appendix, never in the leaders cell. A string token, like Trajectory, so this
+    // display type still references no judgment type.
+    string? TrajectoryBasis = null)
 {
     /// <summary>
     /// The rendered marker cell — a total function over the state, so an absent/blank marker text is

@@ -19,10 +19,11 @@ namespace Radar.Application.SignalExtraction;
 /// </para>
 /// <para>
 /// <b>SPEC 197 §1.3 — the materializer identity is now VERSIONED, not singular.</b> The current token is
-/// <c>news-judgment-signal-v2</c> and <c>news-judgment-signal-v1</c> is retired but still ACCEPTED: v1
-/// signals are on disk, they were grounded in the evidence their judgment cited, and they remain valid. One
-/// classifier answers for both; a PRESENT but unsupported (or blank) token fails closed as malformed rather
-/// than falling through as an unrelated bag.
+/// <see cref="JudgmentSignalVersionValue"/> (<c>news-judgment-signal-v3</c> since spec 214 §2; v2 under
+/// spec 197) and every retired token — <c>news-judgment-signal-v1</c>, <c>news-judgment-signal-v2</c> — is
+/// still ACCEPTED: those signals are on disk, they were grounded in the evidence their judgment cited, and
+/// they remain valid. One classifier answers for all of them; a PRESENT but unsupported (or blank) token
+/// fails closed as malformed rather than falling through as an unrelated bag.
 /// </para>
 /// <para>
 /// The envelope's <c>companyHints</c> array is written EMPTY: a signal carries no collector company hints.
@@ -64,14 +65,29 @@ public static class NewsDirectionalSignalMetadata
     public const string RetiredJudgmentSignalVersionV1 = "news-judgment-signal-v1";
 
     /// <summary>
-    /// The value <see cref="JudgmentSignalVersionKey"/> currently carries — advanced to
-    /// <c>news-judgment-signal-v2</c> by spec 197 §1.3, because the observation→evidence match ladder
-    /// changed WHICH judgments can produce a scoring input, and that is not a silent fix under the v1
-    /// identity. A signal claiming this version is asserting the full §1.2 provenance chain (judgment →
-    /// cited facts → observations → evidence); a signal claiming it without carrying that provenance is
-    /// malformed, and the §1.4 transform fails it closed to Neutral rather than trusting the claim.
+    /// SPEC 214 §2 — the second RETIRED materializer identity, the one spec 197 §1.3 minted under. Accrued
+    /// v2 signals are valid grounded directions, append-only and never rewritten (AD-8/AD-1); the shared
+    /// classifier accepts them. Unlike v1 it is NOT looked up for prior-version occupancy: a v2 signal can
+    /// only exist for a PRE-214 judgment id, and every such record reaches the v3 materializer with a null
+    /// <c>TrajectoryBasis</c>, which the fail-closed basis gate stops (<c>TrajectoryBasisNotRecorded</c>)
+    /// before any id is derived. The v2/v3 overlap on the first post-214 run is MEASURED, not prevented
+    /// (spec 214 §2): the prompt fork gives every re-judged company a NEW judgment id, so a v3 signal and
+    /// the old v2 signal are resolved by the latest-judgment supersede where they cite the same evidence.
     /// </summary>
-    public const string JudgmentSignalVersionValue = "news-judgment-signal-v2";
+    public const string JudgmentSignalVersionV2 = "news-judgment-signal-v2";
+
+    /// <summary>
+    /// The value <see cref="JudgmentSignalVersionKey"/> currently carries — advanced to
+    /// <c>news-judgment-signal-v3</c> by spec 214 §2, because the materializer now ALLOWLISTS a judgment's
+    /// <c>TrajectoryBasis</c> (Supported alone mints; LevelOnly, null and any unallowlisted value mint
+    /// nothing), which again changes WHICH judgments can produce a scoring input and is not a silent fix
+    /// under the v2 identity (spec 197 §1.3 advanced it to v2 for the observation→evidence ladder on the
+    /// same reasoning). A signal claiming this version is asserting the full §1.2 provenance chain
+    /// (judgment → cited facts → observations → evidence) AND a Supported basis; a signal claiming it
+    /// without carrying that provenance is malformed, and the §1.4 transform fails it closed to Neutral
+    /// rather than trusting the claim.
+    /// </summary>
+    public const string JudgmentSignalVersionValue = "news-judgment-signal-v3";
 
     /// <summary>
     /// Every materializer identity a well-formed judgment-derived envelope may claim: the current one and
@@ -83,6 +99,7 @@ public static class NewsDirectionalSignalMetadata
     public static readonly IReadOnlyList<string> SupportedJudgmentSignalVersions =
     [
         RetiredJudgmentSignalVersionV1,
+        JudgmentSignalVersionV2,
         JudgmentSignalVersionValue,
     ];
 

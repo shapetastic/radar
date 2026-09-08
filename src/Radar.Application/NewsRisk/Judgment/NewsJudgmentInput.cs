@@ -12,6 +12,12 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// <see cref="DistinctPublisherCount"/> are corroboration of REPORTING — however many syndicated copies
 /// asserted the claim, it reaches the judge as ONE supplied fact (the 40-outlets problem must not be reborn
 /// at the judgment seam). Deliberately NO raw article text, headline, score, rank, label or price member.
+/// <para>
+/// <see cref="ComparisonBasis"/> (spec 214 §1) is the deterministic <see cref="StatementComparisonClassifier"/>
+/// read of <see cref="Statement"/> + <see cref="EventTypes"/>, computed at judge-INPUT time (never at
+/// typing time, so the stage-1 cohort is untouched). It is rendered to the judge as one line per family
+/// and persisted per consumed family on the judgment record.
+/// </para>
 /// </summary>
 public sealed record NewsJudgmentInputFamily(
     Guid FamilyId,
@@ -24,7 +30,8 @@ public sealed record NewsJudgmentInputFamily(
     double Confidence,
     IReadOnlyList<string> Citations,
     int MemberCount,
-    int DistinctPublisherCount);
+    int DistinctPublisherCount,
+    NewsFactComparisonBasis ComparisonBasis);
 
 /// <summary>One assembled judgment input: the ordered supplied families, the family-bundle completeness and the available count.</summary>
 public sealed record NewsJudgmentInputBundle(
@@ -93,7 +100,10 @@ public static class NewsJudgmentInputBuilder
                 Confidence: fact.Fact.Confidence,
                 Citations: fact.Fact.Citations,
                 MemberCount: family.MemberCount,
-                DistinctPublisherCount: family.DistinctPublisherCount));
+                DistinctPublisherCount: family.DistinctPublisherCount,
+                // Spec 214 §1: classified HERE, from exactly the statement and event types the judge sees.
+                ComparisonBasis: StatementComparisonClassifier.Classify(
+                    fact.Fact.Statement, fact.Fact.EventTypes)));
         }
 
         return new NewsJudgmentInputBundle(
@@ -110,6 +120,13 @@ public static class NewsJudgmentInputBuilder
     /// family's identity, representative fact, typed content (citations included) and size metadata — so a
     /// changed statement, an edited citation, a grown family, a re-typed representative or a reordering is a
     /// different cache entry, never a silent reuse.
+    /// <para>
+    /// Spec 214 deliberately does NOT fold <see cref="NewsJudgmentInputFamily.ComparisonBasis"/> in: it is
+    /// a pure function of <c>Statement</c> + <c>EventTypes</c>, both already hashed, so adding it would
+    /// change no distinctness and only move every accrued family-set hash. The classifier VERSION forks
+    /// the cohort key instead (<see cref="NewsJudgmentContract.CohortKey"/>), which is where a table change
+    /// belongs.
+    /// </para>
     /// </summary>
     public static string ComputeFamilySetHash(IReadOnlyList<NewsJudgmentInputFamily> families)
     {

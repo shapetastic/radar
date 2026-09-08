@@ -39,6 +39,13 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// provenance appendix can make the traceability claim TRUE rather than assert it.</item>
 /// </list>
 /// </para>
+/// <para>
+/// Spec 214 §4 — a judged marker with a DIRECTIONAL trajectory also carries its
+/// <see cref="NewsJudgmentLeaderMarker.TrajectoryBasis"/> token (<see cref="TrajectoryBasisToken"/>):
+/// <c>Supported</c>, <c>LevelOnly</c>, or <c>(pre-214)</c> when the record predates the basis. Mixed and
+/// Unknown carry none (the basis is not applicable), so the appendix never states a basis for a
+/// non-direction.
+/// </para>
 /// </summary>
 public static class NewsJudgmentMarkerPolicy
 {
@@ -69,7 +76,8 @@ public static class NewsJudgmentMarkerPolicy
                 NewsJudgmentMarkerState.Challenged,
                 ChallengeSummary: TopFindingSummary(record.Findings),
                 Trajectory: TrajectoryToken(record.BusinessTrajectory.Value),
-                JudgmentId: record.JudgmentId),
+                JudgmentId: record.JudgmentId,
+                TrajectoryBasis: TrajectoryBasisToken(record)),
             // Zero findings but a deteriorating factual trajectory: an ABSENCE claim would be rendered
             // beside the same record's contrary PRESENCE evidence. The axis is the challenge.
             NewsJudgmentStatus.Judged
@@ -78,12 +86,14 @@ public static class NewsJudgmentMarkerPolicy
                     NewsJudgmentMarkerState.Challenged,
                     ChallengeSummary: DeterioratingTrajectorySummary,
                     Trajectory: TrajectoryToken(NewsJudgmentTrajectory.Deteriorating),
-                    JudgmentId: record.JudgmentId),
+                    JudgmentId: record.JudgmentId,
+                    TrajectoryBasis: TrajectoryBasisToken(record)),
             NewsJudgmentStatus.Judged => new NewsJudgmentLeaderMarker(
                 NewsJudgmentMarkerState.NoChallengeFound,
                 TypingIncomplete: record.TypingCompleteness != NewsTypingCompleteness.Complete,
                 Trajectory: TrajectoryToken(record.BusinessTrajectory.Value),
-                JudgmentId: record.JudgmentId),
+                JudgmentId: record.JudgmentId,
+                TrajectoryBasis: TrajectoryBasisToken(record)),
             NewsJudgmentStatus.InsufficientFacts => new NewsJudgmentLeaderMarker(
                 NewsJudgmentMarkerState.Unassessed,
                 NewsJudgmentMarkerReasons.InsufficientFacts,
@@ -119,6 +129,25 @@ public static class NewsJudgmentMarkerPolicy
     /// <summary>The factual trajectory display token: <c>improving</c> / <c>deteriorating</c> / <c>mixed</c> / <c>unknown</c>.</summary>
     internal static string TrajectoryToken(NewsJudgmentTrajectory trajectory) =>
         KebabToken(trajectory.ToString());
+
+    /// <summary>The display token for a record written before spec 214, whose basis was never computed.</summary>
+    internal const string PreSpec214BasisToken = "(pre-214)";
+
+    /// <summary>
+    /// Spec 214 §4 — the trajectory-basis display token for a JUDGED record: the enum name
+    /// (<c>Supported</c> / <c>LevelOnly</c>) when recorded, <see cref="PreSpec214BasisToken"/> when a
+    /// directional record carries none, and <c>null</c> (no token at all) for a Mixed/Unknown/absent
+    /// trajectory, where a basis is not applicable and must not be invented.
+    /// </summary>
+    internal static string? TrajectoryBasisToken(NewsJudgmentRecord record)
+    {
+        if (record.BusinessTrajectory is not (NewsJudgmentTrajectory.Improving or NewsJudgmentTrajectory.Deteriorating))
+        {
+            return null;
+        }
+
+        return record.TrajectoryBasis is { } basis ? basis.ToString() : PreSpec214BasisToken;
+    }
 
     /// <summary>The top finding's compact summary: severity descending, then confidence descending, then category (AD-3).</summary>
     private static string TopFindingSummary(IReadOnlyList<NewsJudgmentValidatedFinding> findings)

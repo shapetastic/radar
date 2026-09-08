@@ -81,7 +81,8 @@ public sealed class NewsQueryScoringIdentity
 
     /// <summary>
     /// The identity of a composition with the recency filter DISABLED. Its <see cref="Segment"/> is empty,
-    /// so the composed descriptor is byte-identical to a pre-198 one — the spec-198 §3 additivity proof.
+    /// so the composed descriptor is byte-identical to the same descriptor without the newsquery segment —
+    /// the spec-198 §3 additivity proof.
     /// </summary>
     public static NewsQueryScoringIdentity None { get; } = ForWindowDays(0);
 

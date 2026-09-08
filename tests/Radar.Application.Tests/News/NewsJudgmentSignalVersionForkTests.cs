@@ -9,13 +9,15 @@ using Radar.TestSupport;
 namespace Radar.Application.Tests.News;
 
 /// <summary>
-/// SPEC 197 §1.3 — the materializer identity fork to <c>news-judgment-signal-v2</c>.
+/// SPEC 197 §1.3 — the materializer identity fork to <c>news-judgment-signal-v2</c>, and SPEC 214 §2 — the
+/// fork on to <c>news-judgment-signal-v3</c> (the fail-closed trajectory-basis allowlist).
 /// <para>
-/// The fork is honest rather than silent because §1.1's match ladder changes WHICH judgments can produce a
-/// scoring input. Two properties have to hold together: accrued v1 signals stay valid grounded directions
-/// (they are on disk, append-only, and were grounded in the evidence their judgment cited), and every shared
-/// scoring transform must answer the version question through the ONE classifier — never three copied
-/// checks, which is how a signal becomes "valid enough to supersede" while "malformed enough to neutralize".
+/// Each fork is honest rather than silent because it changes WHICH judgments can produce a scoring input
+/// (§1.1's match ladder under 197; the basis allowlist under 214). Two properties have to hold together:
+/// accrued v1 AND v2 signals stay valid grounded directions (they are on disk, append-only, and were
+/// grounded in the evidence their judgment cited), and every shared scoring transform must answer the
+/// version question through the ONE classifier — never three copied checks, which is how a signal becomes
+/// "valid enough to supersede" while "malformed enough to neutralize".
 /// </para>
 /// </summary>
 public sealed class NewsJudgmentSignalVersionForkTests
@@ -30,16 +32,25 @@ public sealed class NewsJudgmentSignalVersionForkTests
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public void TheCurrentTokenIsV2_TheRetiredOneIsStillDeclared_AndBothAreSupported()
+    public void TheCurrentTokenIsV3_TheRetiredOnesAreStillDeclared_AndAllThreeAreSupported()
     {
-        Assert.Equal("news-judgment-signal-v2", NewsDirectionalSignalMetadata.JudgmentSignalVersionValue);
+        // Spec 214 §2: v3 is current; v1 (spec 194) and v2 (spec 197) are retired but ACCEPTED — their
+        // signals are on disk and remain valid grounded directions.
+        Assert.Equal("news-judgment-signal-v3", NewsDirectionalSignalMetadata.JudgmentSignalVersionValue);
+        Assert.Equal("news-judgment-signal-v2", NewsDirectionalSignalMetadata.JudgmentSignalVersionV2);
         Assert.Equal("news-judgment-signal-v1", NewsDirectionalSignalMetadata.RetiredJudgmentSignalVersionV1);
-        Assert.NotEqual(
-            NewsDirectionalSignalMetadata.RetiredJudgmentSignalVersionV1,
-            NewsDirectionalSignalMetadata.JudgmentSignalVersionValue);
+        Assert.Equal(
+            3,
+            new[]
+            {
+                NewsDirectionalSignalMetadata.RetiredJudgmentSignalVersionV1,
+                NewsDirectionalSignalMetadata.JudgmentSignalVersionV2,
+                NewsDirectionalSignalMetadata.JudgmentSignalVersionValue,
+            }.Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(
             [
                 NewsDirectionalSignalMetadata.RetiredJudgmentSignalVersionV1,
+                NewsDirectionalSignalMetadata.JudgmentSignalVersionV2,
                 NewsDirectionalSignalMetadata.JudgmentSignalVersionValue,
             ],
             NewsDirectionalSignalMetadata.SupportedJudgmentSignalVersions);
@@ -50,10 +61,10 @@ public sealed class NewsJudgmentSignalVersionForkTests
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public void TheV2SignalId_IsDeterministic_AndDerivesFromTheV2Token()
+    public void TheCurrentSignalId_IsDeterministic_AndDerivesFromTheV3Token()
     {
         var expected = DeterministicGuid.FromCanonicalString(
-            "radar:news-judgment-signal:news-judgment-signal-v2:" + JudgmentId.ToString("D"));
+            "radar:news-judgment-signal:news-judgment-signal-v3:" + JudgmentId.ToString("D"));
 
         Assert.Equal(expected, NewsJudgmentSignalMaterializer.SignalIdFor(JudgmentId));
         Assert.Equal(
@@ -62,7 +73,7 @@ public sealed class NewsJudgmentSignalVersionForkTests
     }
 
     [Fact]
-    public void TheRetiredV1Id_IsDerivedFromTheV1Token_AndDiffersFromTheV2Id()
+    public void TheRetiredV1Id_IsDerivedFromTheV1Token_AndDiffersFromTheCurrentId()
     {
         // The whole reason the occupancy check exists: forking the token MOVES the deterministic id, so a
         // judgment already materialized under v1 would otherwise mint a second signal for one verdict.
@@ -76,7 +87,7 @@ public sealed class NewsJudgmentSignalVersionForkTests
     }
 
     [Fact]
-    public void TheV2Envelope_IsDeterministic_AndStampsTheCurrentToken()
+    public void TheCurrentEnvelope_IsDeterministic_AndStampsTheCurrentToken()
     {
         var first = Envelope(NewsDirectionalSignalMetadata.JudgmentSignalVersionValue);
         var second = Envelope(NewsDirectionalSignalMetadata.JudgmentSignalVersionValue);
@@ -84,18 +95,19 @@ public sealed class NewsJudgmentSignalVersionForkTests
         Assert.Equal(first, second);
         Assert.True(EvidenceMetadata.TryRead(first, out var metadata, out _));
         Assert.Equal(
-            "news-judgment-signal-v2",
+            "news-judgment-signal-v3",
             metadata[NewsDirectionalSignalMetadata.JudgmentSignalVersionKey]);
     }
 
     // ---------------------------------------------------------------------------------------------
-    // §5.2 item 7 — the ONE classifier: v1 and v2 accepted, an unsupported claim fails CLOSED.
+    // §5.2 item 7 — the ONE classifier: v1, v2 and v3 accepted, an unsupported claim fails CLOSED.
     // ---------------------------------------------------------------------------------------------
 
     [Theory]
     [InlineData("news-judgment-signal-v1")]
     [InlineData("news-judgment-signal-v2")]
-    public void AWellFormedEnvelopeOfEitherSupportedVersion_IsJudgmentDerived(string version)
+    [InlineData("news-judgment-signal-v3")]
+    public void AWellFormedEnvelopeOfAnySupportedVersion_IsJudgmentDerived(string version)
     {
         Assert.Equal(
             NewsJudgmentSignalProvenance.JudgmentDerived,
@@ -103,8 +115,8 @@ public sealed class NewsJudgmentSignalVersionForkTests
     }
 
     [Theory]
-    [InlineData("news-judgment-signal-v3")]
-    [InlineData("news-judgment-signal-V2")]
+    [InlineData("news-judgment-signal-v4")]
+    [InlineData("news-judgment-signal-V3")]
     [InlineData("")]
     [InlineData("   ")]
     public void APresentButUnsupportedOrBlankVersion_FailsClosedAsMalformed(string version)
@@ -162,7 +174,8 @@ public sealed class NewsJudgmentSignalVersionForkTests
     [Theory]
     [InlineData("news-judgment-signal-v1")]
     [InlineData("news-judgment-signal-v2")]
-    public void LegacyNeutralization_LeavesEitherSupportedVersionsDirectionIntact(string version)
+    [InlineData("news-judgment-signal-v3")]
+    public void LegacyNeutralization_LeavesAnySupportedVersionsDirectionIntact(string version)
     {
         // The §1.4 legacy matcher keys on the VERSIONED TOKEN, never on `Direction != Neutral` — so a v2
         // signal is not legacy, exactly as a v1 signal is not.
@@ -178,7 +191,7 @@ public sealed class NewsJudgmentSignalVersionForkTests
     [Fact]
     public void LegacyNeutralization_StillSuppressesAnUnsupportedVersionClaim_AsMalformed()
     {
-        var signal = JudgmentDerivedSignal(SignalId(0xB2), "news-judgment-signal-v3");
+        var signal = JudgmentDerivedSignal(SignalId(0xB2), "news-judgment-signal-v4");
 
         var result = LegacyNewsInheritanceNeutralization.Apply(new List<Signal> { signal });
 
@@ -193,7 +206,8 @@ public sealed class NewsJudgmentSignalVersionForkTests
     [Theory]
     [InlineData("news-judgment-signal-v1")]
     [InlineData("news-judgment-signal-v2")]
-    public void Supersede_LetsEitherSupportedVersionReplaceTheOrdinaryArticleSignal(string version)
+    [InlineData("news-judgment-signal-v3")]
+    public void Supersede_LetsAnySupportedVersionReplaceTheOrdinaryArticleSignal(string version)
     {
         var grounded = JudgmentDerivedSignal(SignalId(0xC1), version);
         var ordinary = OrdinaryNewsSignal(SignalId(0xC2));
@@ -208,7 +222,7 @@ public sealed class NewsJudgmentSignalVersionForkTests
     [Fact]
     public void Supersede_IgnoresAnUnsupportedVersionClaim_SoNothingIsRemoved()
     {
-        var unverifiable = JudgmentDerivedSignal(SignalId(0xC3), "news-judgment-signal-v3");
+        var unverifiable = JudgmentDerivedSignal(SignalId(0xC3), "news-judgment-signal-v4");
         IReadOnlyList<Signal> input = [OrdinaryNewsSignal(SignalId(0xC4)), unverifiable];
 
         var result = NewsJudgmentSignalSupersede.Apply(input);
@@ -220,7 +234,8 @@ public sealed class NewsJudgmentSignalVersionForkTests
     [Theory]
     [InlineData("news-judgment-signal-v1")]
     [InlineData("news-judgment-signal-v2")]
-    public void MediaCollapse_PrefersEitherSupportedVersionAsTheBucketRepresentative(string version)
+    [InlineData("news-judgment-signal-v3")]
+    public void MediaCollapse_PrefersAnySupportedVersionAsTheBucketRepresentative(string version)
     {
         // media-collapse-v2's representative rule: a structurally valid judgment-derived signal beats an
         // EARLIER ordinary media signal in the same event bucket. Both supported versions must qualify, or a

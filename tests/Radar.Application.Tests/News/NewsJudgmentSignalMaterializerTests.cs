@@ -248,6 +248,122 @@ public sealed class NewsJudgmentSignalMaterializerTests
         Assert.Equal(1, summary.SkipCount(NewsJudgmentSignalSkipReason.NoTrajectoryFactIds));
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // SPEC 214 §2 — the trajectory-basis ALLOWLIST gate (news-judgment-signal-v3).
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ALevelOnlyTrajectory_MaterializesNothing_AndIsNamed()
+    {
+        // The Argan shape: a directional judgment whose every cited fact was a stated LEVEL. Persisted
+        // verbatim by the generator, minted into nothing here, counted on its own axis.
+        var scenario = Scenario.Build(trajectoryBasis: NewsTrajectoryBasis.LevelOnly);
+
+        var summary = await scenario.Materializer().MaterializeAsync(
+            scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(0, summary.Eligible);
+        Assert.Equal(0, summary.Materialized);
+        Assert.Equal(1, summary.SkipCount(NewsJudgmentSignalSkipReason.LevelOnlyTrajectory));
+        Assert.Empty(scenario.FileStore.Writes);
+        // NOT attempted: no candidate survived the cheap gates, so neither store was read.
+        Assert.Null(summary.JoinCounts);
+    }
+
+    [Fact]
+    public async Task ANullTrajectoryBasis_IsAPre214DirectionalRecord_AndIsCountedNeverAssumedSupported()
+    {
+        // By gate ORDER a null that reaches the basis gate is a directional Judged record written before
+        // spec 214. It cannot be re-derived without re-judging, so it is counted — never treated as
+        // Supported and never as a non-direction.
+        var scenario = Scenario.Build(trajectoryBasis: null);
+
+        var summary = await scenario.Materializer().MaterializeAsync(
+            scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(0, summary.Eligible);
+        Assert.Equal(1, summary.SkipCount(NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded));
+        Assert.Equal(0, summary.SkipCount(NewsJudgmentSignalSkipReason.NonDirectionalTrajectory));
+        Assert.Empty(scenario.FileStore.Writes);
+    }
+
+    [Fact]
+    public async Task ABasisTheAllowlistDoesNotName_MaterializesNothing_AndIsNamed()
+    {
+        // The gate is an ALLOWLIST: a value is admitted by being named, never by not being denied. Under
+        // spec 214 the enum defines only Supported and LevelOnly, and LevelOnly has its own reason, so no
+        // DEFINED member reaches this branch yet (spec 215's ReferenceSupported will be the first, and it
+        // must be allowlisted explicitly to mint). The branch is exercised with a value the enum does not
+        // yet define — the same code path a defined-but-unallowlisted member takes, and impossible from
+        // disk (the strict enum converter fails such a record as unreadable before the materializer sees it).
+        var scenario = Scenario.Build(trajectoryBasis: (NewsTrajectoryBasis)999);
+
+        var summary = await scenario.Materializer().MaterializeAsync(
+            scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(0, summary.Eligible);
+        Assert.Equal(1, summary.SkipCount(NewsJudgmentSignalSkipReason.TrajectoryBasisNotAllowlisted));
+        Assert.Empty(scenario.FileStore.Writes);
+    }
+
+    [Fact]
+    public void TheAllowlist_IsExactlySupported_AndTheEnumIsExactlySupportedAndLevelOnly()
+    {
+        // Pinned STRUCTURALLY, because the fail-closed property is the whole point: every defined basis
+        // outside the allowlist mints nothing. Spec 215 widens BOTH sets (ReferenceSupported) in one change.
+        Assert.Equal(
+            new HashSet<NewsTrajectoryBasis> { NewsTrajectoryBasis.Supported },
+            NewsJudgmentSignalMaterializer.AllowlistedTrajectoryBases);
+        Assert.Equal(
+            [NewsTrajectoryBasis.Supported, NewsTrajectoryBasis.LevelOnly],
+            Enum.GetValues<NewsTrajectoryBasis>());
+        Assert.False(Enum.IsDefined(default(NewsTrajectoryBasis))); // a defaulted zero is undefined
+
+        // Every defined value NOT on the allowlist is LevelOnly, which carries its own reason above; the
+        // NotAllowlisted branch therefore has no defined instance under 214 — asserted, not assumed.
+        var unallowlisted = Enum.GetValues<NewsTrajectoryBasis>()
+            .Except(NewsJudgmentSignalMaterializer.AllowlistedTrajectoryBases)
+            .ToList();
+        Assert.Equal([NewsTrajectoryBasis.LevelOnly], unallowlisted);
+    }
+
+    [Fact]
+    public async Task ASupportedTrajectory_StillMaterializes_UnderTheV3Token()
+    {
+        var scenario = Scenario.Build(trajectoryBasis: NewsTrajectoryBasis.Supported);
+
+        var summary = await scenario.Materializer().MaterializeAsync(
+            scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(1, summary.Eligible);
+        Assert.Equal(1, summary.Materialized);
+        var written = Assert.Single(scenario.FileStore.Writes);
+        Assert.True(EvidenceMetadata.TryRead(written.Signal.MetadataJson, out var metadata, out _));
+        Assert.Equal(
+            "news-judgment-signal-v3", metadata[NewsDirectionalSignalMetadata.JudgmentSignalVersionKey]);
+        Assert.Equal(NewsJudgmentSignalMaterializer.SignalIdFor(scenario.JudgmentId), written.Signal.Id);
+    }
+
+    [Fact]
+    public void TheThreeBasisSkipReasons_RenderAsKebabTokens_InDeclarationOrder()
+    {
+        var summary = NewsJudgmentSignalMaterializationSummary.Empty with
+        {
+            Skips = new Dictionary<NewsJudgmentSignalSkipReason, int>
+            {
+                [NewsJudgmentSignalSkipReason.TrajectoryBasisNotAllowlisted] = 1,
+                [NewsJudgmentSignalSkipReason.LevelOnlyTrajectory] = 3,
+                [NewsJudgmentSignalSkipReason.NonDirectionalTrajectory] = 2,
+                [NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded] = 4,
+            },
+        };
+
+        Assert.Equal(
+            "non-directional-trajectory 2, level-only-trajectory 3, trajectory-basis-not-recorded 4, "
+                + "trajectory-basis-not-allowlisted 1",
+            summary.DescribeSkips());
+    }
+
     [Fact]
     public async Task PartiallyResolvableCitationSet_MaterializesNothing_AndIsNamed()
     {
@@ -884,7 +1000,7 @@ public sealed class NewsJudgmentSignalMaterializerTests
     }
 
     [Fact]
-    public async Task NoRecordAtTheV1Id_IsNotOccupancy_AndTheV2SignalCarriesTheV2Token()
+    public async Task NoRecordAtTheV1Id_IsNotOccupancy_AndTheNewSignalCarriesTheCurrentToken()
     {
         var scenario = Scenario.Build();
 
@@ -897,8 +1013,10 @@ public sealed class NewsJudgmentSignalMaterializerTests
         var signal = Assert.Single(scenario.FileStore.Writes).Signal;
         Assert.Equal(NewsJudgmentSignalMaterializer.SignalIdFor(scenario.JudgmentId), signal.Id);
         Assert.True(EvidenceMetadata.TryRead(signal.MetadataJson, out var metadata, out _));
+        // Spec 214 §2 advanced the token to v3 (the allowlisted trajectory basis); the literal is asserted
+        // so a silent re-versioning cannot hide behind the constant.
         Assert.Equal(
-            "news-judgment-signal-v2",
+            "news-judgment-signal-v3",
             metadata[NewsDirectionalSignalMetadata.JudgmentSignalVersionKey]);
     }
 
@@ -961,12 +1079,15 @@ public sealed class NewsJudgmentSignalMaterializerTests
         + summary.SkipCount(NewsJudgmentSignalSkipReason.ExcerptNotInEvidence)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.UnexpectedFailure);
 
-    /// <summary>The four gates evaluated once per RECORD, before eligibility is decided.</summary>
+    /// <summary>The seven gates evaluated once per RECORD, before eligibility is decided (three of them the spec-214 basis gates).</summary>
     private static int PerRecordGates(NewsJudgmentSignalMaterializationSummary summary) =>
         summary.SkipCount(NewsJudgmentSignalSkipReason.NotPresentationCohort)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.NotJudged)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.NonDirectionalTrajectory)
-        + summary.SkipCount(NewsJudgmentSignalSkipReason.NoTrajectoryFactIds);
+        + summary.SkipCount(NewsJudgmentSignalSkipReason.NoTrajectoryFactIds)
+        + summary.SkipCount(NewsJudgmentSignalSkipReason.LevelOnlyTrajectory)
+        + summary.SkipCount(NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded)
+        + summary.SkipCount(NewsJudgmentSignalSkipReason.TrajectoryBasisNotAllowlisted);
 
     /// <summary>
     /// One constructed end-to-end situation: a company, Monday's cited article, Tuesday's uncited article,
@@ -1002,7 +1123,10 @@ public sealed class NewsJudgmentSignalMaterializerTests
             // Distinguishes two scenarios built in ONE pass. The join is fail-closed on ambiguity, so two
             // companies sharing a normalized headline would legitimately resolve to nothing — real
             // behaviour, but not what a multi-company test is about.
-            string label = "")
+            string label = "",
+            // Spec 214 §2: Supported by default (see MaterializerFixture.Judgment); the basis-gate tests
+            // pass the other values explicitly.
+            NewsTrajectoryBasis? trajectoryBasis = NewsTrajectoryBasis.Supported)
         {
             var companyId = Guid.NewGuid();
             var judgmentId = Guid.NewGuid();
@@ -1036,7 +1160,8 @@ public sealed class NewsJudgmentSignalMaterializerTests
                 status,
                 judgmentId,
                 findings,
-                typingCompleteness);
+                typingCompleteness,
+                trajectoryBasis: trajectoryBasis);
 
             var evidence = new InMemoryEvidenceRepository();
             evidence.AddIfNewAsync(mondayEvidence, CancellationToken.None).GetAwaiter().GetResult();

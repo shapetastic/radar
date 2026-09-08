@@ -52,12 +52,37 @@ public enum NewsJudgmentFamilyBundle
     Complete,
 }
 
-/// <summary>One supplied family's provenance reference — enough to resolve judgment → family → representative fact → excerpt → observation → archive through the typing store.</summary>
+/// <summary>
+/// What a persisted directional judgment's cited trajectory facts could establish (spec 214 §2). Values
+/// are explicit and start at 1 so a defaulted zero is UNDEFINED (refused by the strict file-store enum
+/// converter) rather than silently meaningful. Spec 215 adds <c>ReferenceSupported</c> (a level plus a
+/// cited company-reported reference value for the same metric).
+/// </summary>
+public enum NewsTrajectoryBasis
+{
+    /// <summary>At least one cited trajectory fact is a <see cref="NewsFactComparisonBasis.StatedComparison"/> or an <see cref="NewsFactComparisonBasis.Event"/> — the direction rests on something that can carry one.</summary>
+    Supported = 1,
+
+    /// <summary>EVERY cited trajectory fact is <see cref="NewsFactComparisonBasis.LevelOnly"/> or <see cref="NewsFactComparisonBasis.NotQuantified"/> — the judge read a level as a trend. Persisted verbatim, never rewritten; mints no signal.</summary>
+    LevelOnly = 2,
+}
+
+/// <summary>
+/// One supplied family's provenance reference — enough to resolve judgment → family → representative fact →
+/// excerpt → observation → archive through the typing store.
+/// <para>
+/// <see cref="ComparisonBasis"/> (spec 214 §1) is TRAILING and NULLABLE: the deterministic
+/// <see cref="StatementComparisonClassifier"/> read of the family's representative statement as it was
+/// SUPPLIED to the judge. <c>null</c> means the record was written before spec 214 — never defaulted,
+/// never re-derived on read (the statement could be re-classified, but the judge never saw the line).
+/// </para>
+/// </summary>
 public sealed record NewsJudgmentFamilyRef(
     Guid FamilyId,
     Guid RepresentativeFactId,
     int MemberCount,
-    int DistinctPublisherCount);
+    int DistinctPublisherCount,
+    NewsFactComparisonBasis? ComparisonBasis = null);
 
 /// <summary>
 /// The cost/safety limits in force for an attempt (recorded on every judgment, hashed into NO scoring
@@ -158,7 +183,17 @@ public sealed record NewsJudgmentRecord(
     //   positive = that many raw citation occurrences were expanded, INCLUDING expansions observed before
     //              a different validation error failed the response.
     // Observational provenance only: it enters no id, cohort key, marker decision, score or fingerprint.
-    int? FactIdPrefixExpansionCount = null)
+    int? FactIdPrefixExpansionCount = null,
+    // Spec 214 §2: what the cited TrajectoryFactIds could establish, computed by the validator ONLY for a
+    // current, Judged, DIRECTIONAL (Improving/Deteriorating) record over the RESOLVED cited facts. TRAILING
+    // and NULLABLE, and `null` means NOT APPLICABLE — a Mixed or Unknown trajectory, a validation failure,
+    // an InsufficientFacts/ProviderFailure/ParseFailure/AttemptsExhausted attempt — OR a pre-214 record.
+    // The two nulls are distinguishable by the materializer's gate ORDER: status and direction are gated
+    // BEFORE the basis, so a null that REACHES the basis gate is, by construction, a pre-214 directional
+    // record (skip reason TrajectoryBasisNotRecorded). It is never defaulted to Supported, never re-derived
+    // on read, and enters no id, cohort key, cache key or fingerprint. It DOES decide whether the judgment
+    // can become a scoring signal: the materializer ALLOWLISTS Supported alone (spec 214 §2).
+    NewsTrajectoryBasis? TrajectoryBasis = null)
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
@@ -189,8 +224,17 @@ public sealed record NewsJudgmentRecord(
     /// pre-v4 record stays readable, is never rewritten, and hydrates the new field as <c>null</c> = NOT
     /// RECORDED (AD-8).
     /// </para>
+    /// <para>
+    /// <b>Spec 214 §2 moves it to <c>v5</c></b> for <see cref="TrajectoryBasis"/> and the per-family
+    /// <see cref="NewsJudgmentFamilyRef.ComparisonBasis"/>. The bump is owed on the same "changes what a
+    /// record MEANS" test: whether a persisted directional judgment can become a scoring signal now depends
+    /// on its basis, and a reader must be able to tell a v4 record — where the basis was never computed, so
+    /// the materializer counts it <c>TrajectoryBasisNotRecorded</c> — from a v5 record that recorded one.
+    /// Every pre-v5 record stays readable, is never rewritten, and hydrates both fields as <c>null</c>
+    /// (AD-8).
+    /// </para>
     /// </summary>
-    public const string CurrentSchemaVersion = "news-judgment-v4";
+    public const string CurrentSchemaVersion = "news-judgment-v5";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named

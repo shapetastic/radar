@@ -357,7 +357,8 @@ public sealed class NewsJudgmentCitationRecoveryTests
         const string Stage1 = "openai:extractor|p|s|news-event-taxonomy-v1";
         var current = NewsJudgmentContract.CohortKey("openai", "judge-model", Stage1);
 
-        Assert.Contains("news-judgment-prompt-v3", current, StringComparison.Ordinal);
+        // Spec 214 §2 forked the prompt on to v4; the v3 citation grammar (schema-v3) is unchanged.
+        Assert.Contains("news-judgment-prompt-v4", current, StringComparison.Ordinal);
         Assert.Contains("news-judgment-schema-v3", current, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-prompt-v2", current, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-schema-v2", current, StringComparison.Ordinal);
@@ -384,7 +385,7 @@ public sealed class NewsJudgmentCitationRecoveryTests
         // Three accrued call-producing attempts under the RETIRED v2 cohort key: the v3 contract can accept
         // citations v2 rejected, so those attempts must not spend the new contract's budget.
         var retired = template.CohortKey
-            .Replace("news-judgment-prompt-v3", "news-judgment-prompt-v2", StringComparison.Ordinal)
+            .Replace(NewsJudgmentContract.PromptVersion, "news-judgment-prompt-v2", StringComparison.Ordinal)
             .Replace("news-judgment-schema-v3", "news-judgment-schema-v2", StringComparison.Ordinal);
         Assert.NotEqual(template.CohortKey, retired);
 

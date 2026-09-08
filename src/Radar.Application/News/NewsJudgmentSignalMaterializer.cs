@@ -55,6 +55,18 @@ public interface INewsJudgmentSignalMaterializer
 /// produced it, and no consumer downstream could tell.  The named skip is the honest answer.
 /// </para>
 /// <para>
+/// <b>SPEC 214 §2 — the trajectory-basis gate is an ALLOWLIST, not a denylist (<c>news-judgment-signal-v3</c>).</b>
+/// After the status, direction and cited-facts gates, a record materializes ONLY when its persisted
+/// <see cref="NewsJudgmentRecord.TrajectoryBasis"/> is in <see cref="AllowlistedTrajectoryBases"/> —
+/// <see cref="NewsTrajectoryBasis.Supported"/> alone under this spec. Everything else mints nothing, each
+/// under its own reason: <see cref="NewsJudgmentSignalSkipReason.LevelOnlyTrajectory"/> (the judge read a
+/// level as a trend), <see cref="NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded"/> (a null basis
+/// reached this gate — by gate order a PRE-214 directional record, never assumed Supported), and
+/// <see cref="NewsJudgmentSignalSkipReason.TrajectoryBasisNotAllowlisted"/> (a defined value nobody
+/// allowlisted). Fail-closed means the default outcome is "no signal": a direction whose basis is absent,
+/// unknown or level-only produces no scoring input.
+/// </para>
+/// <para>
 /// <b>One signal per judgment.</b> Not one per citation (that would re-multiply a single verdict,
 /// differently) and not one per later article (that was the 191 defect). Its id is a pure function of the
 /// judgment id, so re-running the same judgment is an idempotent no-op: an existing signal is
@@ -144,6 +156,25 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
     public static Guid RetiredV1SignalIdFor(Guid judgmentId) =>
         SignalIdFor(NewsDirectionalSignalMetadata.RetiredJudgmentSignalVersionV1, judgmentId);
 
+    /// <summary>
+    /// SPEC 214 §2/§3 — the id the retired <c>news-judgment-signal-v2</c> materializer minted for the same
+    /// judgment. Declared here so the canonical-string shape has exactly ONE definition, but deliberately
+    /// NOT consulted by <see cref="MaterializeAsync"/>: a v2 signal exists only for a pre-214 judgment id,
+    /// which the basis gate stops before any id is derived. It exists for the §3 read-only live
+    /// measurement and the first-run v2/v3 overlap report — a measurement key, never an occupancy check.
+    /// </summary>
+    public static Guid RetiredV2SignalIdFor(Guid judgmentId) =>
+        SignalIdFor(NewsDirectionalSignalMetadata.JudgmentSignalVersionV2, judgmentId);
+
+    /// <summary>
+    /// SPEC 214 §2 — the ONE allowlist of trajectory bases a judgment may materialize under. Under this spec
+    /// it is exactly <c>{ Supported }</c>; spec 215 adds <c>ReferenceSupported</c>. A basis is admitted by
+    /// being NAMED here, never by not being denied — pinned by test, because the fail-closed property is
+    /// the whole point.
+    /// </summary>
+    public static readonly IReadOnlySet<NewsTrajectoryBasis> AllowlistedTrajectoryBases =
+        new HashSet<NewsTrajectoryBasis> { NewsTrajectoryBasis.Supported };
+
     private static Guid SignalIdFor(string materializerVersion, Guid judgmentId) =>
         DeterministicGuid.FromCanonicalString(
             "radar:news-judgment-signal:" + materializerVersion + ":" + judgmentId.ToString("D"));
@@ -215,6 +246,30 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
                 // fact (the v2 validator requires it). A v1 record simply never recorded the field, and
                 // `null` there means NOT RECORDED — which is exactly why it cannot ground a direction.
                 Count(skips, NewsJudgmentSignalSkipReason.NoTrajectoryFactIds);
+                continue;
+            }
+
+            // SPEC 214 §2 — the ALLOWLIST gate, deliberately AFTER status, direction and cited facts: a
+            // null that reaches here is a pre-214 directional record (the field was never computed), not a
+            // non-direction, and it is counted on its own axis rather than assumed Supported. A LevelOnly
+            // basis is the Argan shape — persisted verbatim, minted into nothing. A DEFINED value that is
+            // not allowlisted is a future basis nobody admitted; an undefined token on disk never gets
+            // this far (the strict enum converter fails the record as unreadable).
+            if (record.TrajectoryBasis is not { } basis)
+            {
+                Count(skips, NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded);
+                continue;
+            }
+
+            if (basis == NewsTrajectoryBasis.LevelOnly)
+            {
+                Count(skips, NewsJudgmentSignalSkipReason.LevelOnlyTrajectory);
+                continue;
+            }
+
+            if (!AllowlistedTrajectoryBases.Contains(basis))
+            {
+                Count(skips, NewsJudgmentSignalSkipReason.TrajectoryBasisNotAllowlisted);
                 continue;
             }
 
@@ -435,6 +490,13 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
         // Only a STRUCTURALLY VALID v1 record counts as occupancy: the shared classifier is the one
         // definition of that (it accepts every supported materializer version), and a missing or malformed
         // record at the v1 id is NOT a grounded direction, so it must not suppress an honest v2 attempt.
+        //
+        // SPEC 214 §2 — there is deliberately NO v2 occupancy lookup. A v2 signal exists only for a PRE-214
+        // judgment id, and every such record carries a null TrajectoryBasis that the allowlist gate above
+        // already stopped (TrajectoryBasisNotRecorded), so no judgment reaching this point can hold a v2
+        // signal. The v2/v3 overlap across DIFFERENT judgment ids (the re-judged cohort) is resolved by the
+        // latest-judgment supersede over shared evidence and MEASURED on the first post-214 run, not
+        // prevented here.
         var retiredId = RetiredV1SignalIdFor(record.JudgmentId);
         var retired = await _signalRepository.GetByIdAsync(retiredId, ct).ConfigureAwait(false);
         if (retired is not null && NewsDirectionalSignalMetadata.IsJudgmentDerived(retired))

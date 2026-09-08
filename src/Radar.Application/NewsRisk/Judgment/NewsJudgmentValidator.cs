@@ -29,7 +29,14 @@ public sealed record NewsJudgmentValidationResult(
     // ALWAYS measured here (this type is only ever produced by Validate, so "not recorded" is
     // unrepresentable — that state exists only on a pre-197 record on disk), and it INCLUDES expansions
     // performed before a later, unrelated validation error failed the response.
-    int FactIdPrefixExpansionCount);
+    int FactIdPrefixExpansionCount,
+    // Spec 214 §2: what the RESOLVED cited TrajectoryFactIds could establish. Computed ONLY when the result
+    // is Judged AND the trajectory is Improving/Deteriorating: Supported when at least one cited family's
+    // ComparisonBasis is StatedComparison or Event, LevelOnly when every cited family is LevelOnly or
+    // NotQuantified. `null` everywhere else (Mixed, Unknown, any failure) = NOT APPLICABLE. LevelOnly is
+    // NOT a validation failure — the judge's call is persisted verbatim and marked; the materializer's
+    // allowlist is what keeps it out of scoring.
+    NewsTrajectoryBasis? TrajectoryBasis);
 
 /// <summary>
 /// Mechanical validation of one judge response (spec 185 §2, made STRICT by spec 187 §1), pure and
@@ -366,7 +373,36 @@ public static class NewsJudgmentValidator
             TrajectoryFactIds: trajectoryFactIds,
             RationaleLength: rationaleLength,
             RationaleOverSoftLimit: rationaleLength > MaxRationaleLength,
-            FactIdPrefixExpansionCount: citations.ExpansionCount);
+            FactIdPrefixExpansionCount: citations.ExpansionCount,
+            TrajectoryBasis: TrajectoryBasisFor(trajectory, trajectoryFactIds, familyByFactId));
+    }
+
+    /// <summary>
+    /// Spec 214 §2 — the trajectory-basis rule, in ONE place and evaluated only over the RESOLVED cited
+    /// facts of a DIRECTIONAL Judged result: <see cref="NewsTrajectoryBasis.Supported"/> when at least one
+    /// cited family is a <see cref="NewsFactComparisonBasis.StatedComparison"/> or an
+    /// <see cref="NewsFactComparisonBasis.Event"/>; otherwise <see cref="NewsTrajectoryBasis.LevelOnly"/>.
+    /// <c>null</c> for Mixed and Unknown — a non-direction has no basis to grade. Deliberately NOT a
+    /// validation failure: a wrong call recorded beats a call rewritten, and the fail-closed step is the
+    /// materializer's allowlist, not this validator.
+    /// </summary>
+    public static NewsTrajectoryBasis? TrajectoryBasisFor(
+        NewsJudgmentTrajectory trajectory,
+        IReadOnlyList<Guid> trajectoryFactIds,
+        IReadOnlyDictionary<Guid, NewsJudgmentInputFamily> familyByFactId)
+    {
+        ArgumentNullException.ThrowIfNull(trajectoryFactIds);
+        ArgumentNullException.ThrowIfNull(familyByFactId);
+
+        if (trajectory is not (NewsJudgmentTrajectory.Improving or NewsJudgmentTrajectory.Deteriorating))
+        {
+            return null;
+        }
+
+        return trajectoryFactIds.Any(id => familyByFactId[id].ComparisonBasis
+                is NewsFactComparisonBasis.StatedComparison or NewsFactComparisonBasis.Event)
+            ? NewsTrajectoryBasis.Supported
+            : NewsTrajectoryBasis.LevelOnly;
     }
 
     /// <summary>
@@ -494,5 +530,7 @@ public static class NewsJudgmentValidator
             RationaleOverSoftLimit: rationaleLength > MaxRationaleLength,
             // Spec 197 §2.2: expansions performed BEFORE the failure are still real, measured pressure on
             // the citation contract — they are recorded on the failed record, not discarded with it.
-            FactIdPrefixExpansionCount: factIdPrefixExpansionCount);
+            FactIdPrefixExpansionCount: factIdPrefixExpansionCount,
+            // Spec 214 §2: a failed validation has no directional claim left to grade — not applicable.
+            TrajectoryBasis: null);
 }

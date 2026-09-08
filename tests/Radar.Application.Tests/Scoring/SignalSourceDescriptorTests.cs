@@ -438,9 +438,9 @@ public sealed class SignalSourceDescriptorTests
     public void NewsQueryWindowDisabled_RendersNothing_ReproducingThePre198Descriptor()
     {
         // The additivity proof at the descriptor: a window of 0 renders the EMPTY segment, so the composed
-        // identity is byte-identical to the pre-198 one. That is what lets
-        // ScoringConfigFingerprintTests.Compute_NewsQueryWindowDisabled_ReproducesPost197Pins reproduce all
-        // six post-197 values exactly.
+        // identity is byte-identical to the same descriptor without the newsquery segment. That is what lets
+        // ScoringConfigFingerprintTests.Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins reproduce the
+        // six no-newsquery halves of the current pins exactly (AI-OFF unchanged since 198; AI-ON moved by 214).
         var disabled = BuildWithNewsQuery(NewsQueryScoringIdentity.None, "rss").CanonicalDescriptor();
 
         Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled, disabled);

@@ -29,7 +29,9 @@ public sealed class ChatNewsJudgmentAnalyzerTests
         Confidence: 0.9,
         Citations: ["announced an investigation"],
         MemberCount: 40,
-        DistinctPublisherCount: 25);
+        DistinctPublisherCount: 25,
+        // Spec 214 §1: through the production classifier, exactly as NewsJudgmentInputBuilder computes it.
+        ComparisonBasis: StatementComparisonClassifier.Classify(statement, [NewsEventType.RegulatoryOrLegal]));
 
     [Fact]
     public void SystemInstruction_CarriesTheFixedRubricVerbatim_AndTheAttributionRules()
@@ -92,7 +94,8 @@ public sealed class ChatNewsJudgmentAnalyzerTests
         // A prompt edit that keeps the same PromptVersion would silently pool incomparable judgments in one
         // cohort. This hash is the change-detector: if it fails, either revert the wording or bump
         // NewsJudgmentContract.PromptVersion (which forks the cohort) in the SAME change.
-        const string Pinned = "2564720dce46cf109e82bf1f195a2c58ae5428cc520661945c3d428dfd33c4cf";
+        // Spec 214 §2 moved this pin (rule 11 added) and forked the prompt to news-judgment-prompt-v4.
+        const string Pinned = "224fbdad8b040df969c174fc13ca00b11946a05b99cd29d9916fbad17716e10b";
         var actual = CanonicalHash.Sha256Hex(ChatNewsJudgmentAnalyzer.SystemInstruction);
         var matchesPin = string.Equals(Pinned, actual, StringComparison.Ordinal);
 
@@ -242,9 +245,56 @@ public sealed class ChatNewsJudgmentAnalyzerTests
             instruction,
             StringComparison.Ordinal);
 
-        // The forked contract, so the wording and the cohort it forks cannot drift apart.
-        Assert.Equal("news-judgment-prompt-v3", NewsJudgmentContract.PromptVersion);
+        // The forked contract, so the wording and the cohort it forks cannot drift apart (spec 214 §2
+        // carried the v3 rule forward unchanged into v4).
+        Assert.Equal("news-judgment-prompt-v4", NewsJudgmentContract.PromptVersion);
         Assert.Equal("news-judgment-schema-v3", NewsJudgmentContract.SchemaVersion);
+    }
+
+    [Fact]
+    public void SystemInstruction_StatesRule11_ALevelIsNotATrend()
+    {
+        // Spec 214 §2 — the v4 rule, stated as a RULE: a level establishes no direction; only a
+        // StatedComparison or Event fact may be cited as trajectory support; Unknown only when NO supplied
+        // fact is either; the set-aside levels are named in the rationale.
+        var instruction = ChatNewsJudgmentAnalyzer.SystemInstruction;
+
+        Assert.Contains("(11) A quantity stated as a LEVEL", instruction, StringComparison.Ordinal);
+        Assert.Contains(
+            "establishes NO direction by itself, however large", instruction, StringComparison.Ordinal);
+        Assert.Contains(
+            "Only a supplied fact that states the comparison (prior value, change, record, beat/miss) or "
+                + "an EVENT fact (an order, award, contract, launch, financing) can be cited in "
+                + "TrajectoryFactIds",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a LevelOnly or NotQuantified fact may be cited in a finding's FactIds as context, never as "
+                + "trajectory support",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Answer Unknown ONLY when no supplied fact is StatedComparison or Event",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "say in the Rationale which levels you set aside", instruction, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Backlog hits $2.5B.", "ComparisonBasis: LevelOnly — a stated level, not a trend")]
+    [InlineData("Backlog declined during the quarter.", "ComparisonBasis: StatedComparison")]
+    [InlineData("The FDA approved the product.", "ComparisonBasis: Event")]
+    [InlineData("The company will present at a conference.", "ComparisonBasis: NotQuantified")]
+    public void UserMessage_RendersEachFamilysComparisonBasisLine(string statement, string expectedLine)
+    {
+        // Spec 214 §1: one line per family, from the deterministic classifier — the fixture family is typed
+        // RegulatoryOrLegal, so "approved" is an event and "backlog hits $2.5B" a level.
+        var message = ChatNewsJudgmmentUserMessage(Family(statement));
+
+        Assert.Contains("Statement: " + statement, message, StringComparison.Ordinal);
+        Assert.Contains(expectedLine, message, StringComparison.Ordinal);
+        Assert.Equal(1, message.Split("ComparisonBasis: ").Length - 1);
     }
 
     [Fact]

@@ -47,7 +47,7 @@ public sealed class ScoringConfigFingerprintTests
     // through the real NewsQueryScoringIdentity.Default so it cannot drift from the shipped
     // NewsQueryScoringIdentity.DefaultRecencyWindowDays — which is also what NewsCollectorOptions and
     // NewsWorkerOptions default off, so this constant describes what a live run stamps. A window of 0
-    // renders an EMPTY segment, which is why Compute_NewsQueryWindowDisabled_ReproducesPost197Pins below can
+    // renders an EMPTY segment, which is why Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins below can
     // reproduce every pre-198 value exactly.
     private static readonly string SourceDescriptor =
         "rules=radar-keyword-rules-v8;"
@@ -325,7 +325,7 @@ public sealed class ScoringConfigFingerprintTests
         //
         // UNLIKE SPEC 194's SEGMENT, THIS ONE IS CONDITIONAL, AND THAT IS THE ADDITIVITY PROOF. A window of
         // 0 renders the EMPTY string, so a disabled configuration reproduces the post-197 descriptor
-        // byte-for-byte - asserted directly by Compute_NewsQueryWindowDisabled_ReproducesPost197Pins below,
+        // byte-for-byte - asserted directly by Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins below,
         // for BOTH AI-off and AI-on at all three windows. Spec 194 made the opposite choice because
         // "judgment off" and "a Radar that predates the judgment read" are different facts; here the input
         // is a plain magnitude with a code default, and rendering `newsquery=0d;` would have re-stamped
@@ -362,14 +362,25 @@ public sealed class ScoringConfigFingerprintTests
     }
 
     [Fact]
-    public void Compute_NewsQueryWindowDisabled_ReproducesPost197Pins()
+    public void Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins()
     {
         // THE SPEC 198 §3 ADDITIVITY PROOF, and the reason the segment is conditional rather than
         // unconditional. With the recency window set to 0 the news-query segment is EMPTY, so the composed
-        // descriptor is byte-identical to the post-197 one and every one of the six recorded post-197
-        // values is reproduced EXACTLY - which is what makes the move above attributable to the window and
-        // to nothing else. If any assertion here fails, something in this slice leaked into an input it has
-        // no business touching.
+        // descriptor is byte-identical to the CURRENT descriptor minus the newsquery segment, and the six
+        // values below are the no-newsquery halves of the current pins (AI-OFF unchanged since 198, AI-ON
+        // moved by 214) - which is what makes the spec-198 move attributable to the window and to nothing
+        // else. If an AI-OFF assertion here fails, something in the current slice leaked into an input it
+        // has no business touching. (Renamed by spec 214 from …ReproducesPost197Pins: the AI-ON halves are
+        // no longer the post-197 values.)
+        //
+        // SPEC 214 MOVED THE THREE AI-ON HALVES BELOW (30d radar-scoring-fp-e7317fd038ac →
+        // radar-scoring-fp-568a6612d541; 60d radar-scoring-fp-81a397434756 → radar-scoring-fp-c11b49eafb2e;
+        // 120d radar-scoring-fp-e9d9819a2b41 → radar-scoring-fp-333786375292) and NOT the three AI-OFF
+        // halves: the `news=enabled:…` segment carries the presentation cohort key (now
+        // news-judgment-prompt-v4 and the comparison-basis-v1 token) and the materializer identity (now
+        // news-judgment-signal-v3), while the disabled segment carries neither. The proof this test makes
+        // is unchanged: with the news-query segment empty, the values are the post-214 no-newsquery
+        // values, so the spec-198 segment is still exactly additive on top of them.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
@@ -377,7 +388,7 @@ public sealed class ScoringConfigFingerprintTests
             "radar-scoring-fp-54e845330f96",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-e7317fd038ac",
+            "radar-scoring-fp-568a6612d541",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
@@ -386,7 +397,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-81a397434756",
+            "radar-scoring-fp-c11b49eafb2e",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
@@ -396,7 +407,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-e9d9819a2b41",
+            "radar-scoring-fp-333786375292",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -644,12 +655,24 @@ public sealed class ScoringConfigFingerprintTests
         // citations resolved by the stronger deterministic ladder. History is preserved and never
         // regenerated, rewritten or backfilled (AD-8/AD-1) — and the pre-197 sparse-join segment must NOT be
         // presented as equivalent judgment coverage when interpreting news-direction efficacy.
-        // → SPEC 198 (radar-scoring-fp-e7317fd038ac → the value below): the news-feed QUERY identity, the
-        // trailing `newsquery=7d;` segment carrying Radar:News:RecencyWindowDays. Unlike spec 197 this moves
-        // BOTH sides, because the segment is not judgment-gated — see the AI-OFF pin above for the full
-        // reasoning, the live endpoint verification, the additivity control and the ordered operator action.
+        // → SPEC 198 (radar-scoring-fp-e7317fd038ac → radar-scoring-fp-7d2b0cf537c4): the news-feed QUERY
+        // identity, the trailing `newsquery=7d;` segment carrying Radar:News:RecencyWindowDays. Unlike spec
+        // 197 this moves BOTH sides, because the segment is not judgment-gated — see the AI-OFF pin above
+        // for the full reasoning, the live endpoint verification, the additivity control and the ordered
+        // operator action.
+        // → SPEC 214 MOVED IT (radar-scoring-fp-7d2b0cf537c4 → the value below), AI-ON side ONLY, the
+        // spec-197 pattern: three causes folded into ONE recomputation, all arriving through the `news=`
+        // segment — (a) comparison-basis-v1 joins the stage-2 cohort key (the per-family ComparisonBasis
+        // line is an input the judge sees); (b) news-judgment-prompt-v3 → v4 (rule 11: a level is not a
+        // trend); (c) news-judgment-signal-v2 → v3 (the materializer ALLOWLISTS TrajectoryBasis Supported
+        // alone, so it changes WHICH judgments can produce a scoring input). No formula, RuleSetVersion,
+        // media-collapse, supersede, neutralization, attention-tier, weight or news-query change. THE
+        // THREE AI-OFF PINS ARE UNCHANGED — asserted by Compute_DefaultConfig_MatchesPinnedFingerprint and
+        // Compute_LiveWindowAiOffStamps_ArePinned. Spec 215 moves the AI-ON side again (prompt v5, schema
+        // v4); the operator step (delete/re-record data/scoring-configs/strategies/{name}.json, verify the
+        // first run's stamp against Compute_LiveWindowAiOnStamps_ArePinned) is taken ONCE for both.
         Assert.Equal(
-            "radar-scoring-fp-7d2b0cf537c4",
+            "radar-scoring-fp-fc2a32b1c2ac",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -711,12 +734,24 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-11240da5aeb0; 120d radar-scoring-fp-e9d9819a2b41 ->
         // radar-scoring-fp-7eece22968a4. The cause is the trailing `newsquery=7d;` segment carrying
         // Radar:News:RecencyWindowDays, which is not judgment-gated and so folds in with or without the AI
-        // descriptor. radar-scoring-fp-11240da5aeb0 is the value the first post-198 baseline must report.
+        // descriptor. radar-scoring-fp-11240da5aeb0 was the value the first post-198 baseline reported
+        // (2026-08-29, run 1) and the value stamped live through 2026-09-07.
+        //
+        // SPEC 214 MOVES THEM TO THE VALUES BELOW, AI-ON side ONLY (the spec-197 pattern): 60d
+        // radar-scoring-fp-11240da5aeb0 → radar-scoring-fp-241097438af8; 120d radar-scoring-fp-7eece22968a4
+        // → radar-scoring-fp-dc0f9b905f5b, while the AI-OFF live values radar-scoring-fp-0ff442a14c1b /
+        // radar-scoring-fp-adf455313d35 are UNCHANGED and asserted so by
+        // Compute_LiveWindowAiOffStamps_ArePinned below. Three causes in one recomputation, all through the
+        // `news=` segment: comparison-basis-v1 in the cohort key, news-judgment-prompt-v4, and
+        // news-judgment-signal-v3 (see Compute_AiOnDefault_MatchesPinnedFingerprint). Spec 215 moves the
+        // same three pins again; merge 214 and 215 back-to-back so the operator step and the series
+        // discontinuity happen ONCE. The value the first post-214/215 baseline must report is whatever the
+        // 60-day assertion below says AFTER spec 215 lands — never a value quoted in prose.
         Assert.Equal(
-            "radar-scoring-fp-11240da5aeb0",
+            "radar-scoring-fp-241097438af8",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-7eece22968a4",
+            "radar-scoring-fp-dc0f9b905f5b",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -745,6 +780,10 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-8daa662a57a6 → radar-scoring-fp-0ff442a14c1b; 120d
         // radar-scoring-fp-f610244e23c6 → radar-scoring-fp-adf455313d35. See the AI-OFF unit pin for the
         // measured basis, the additivity control and the operator action.
+        //
+        // SPEC 214 MOVED NEITHER OF THESE, AND THAT NON-MOVE IS AN ASSERTED DELIVERABLE (the spec-197
+        // pattern): comparison-basis-v1, news-judgment-prompt-v4 and news-judgment-signal-v3 all travel
+        // inside the `news=enabled:…` segment, which the disabled descriptor never renders.
         Assert.Equal("radar-scoring-fp-0ff442a14c1b", DefaultFingerprint(window: TimeSpan.FromDays(60)));
         Assert.Equal("radar-scoring-fp-adf455313d35", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }

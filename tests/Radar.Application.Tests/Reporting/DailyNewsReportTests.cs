@@ -94,6 +94,35 @@ public sealed class DailyNewsReportRendererTests
     }
 
     [Fact]
+    public void TheAccountingLine_NamesTheSpec214BasisSkips_BesideTheOthers()
+    {
+        // Spec 214 §2: a level-only trajectory minting nothing is a NAMED count in the daily accounting —
+        // "0 signals" must never be readable as "the judge found no direction".
+        var report = new DailyNewsReport(
+            RunId: Guid.NewGuid(),
+            GeneratedAtUtc: new DateTimeOffset(2026, 9, 8, 21, 46, 0, TimeSpan.Zero),
+            Rows: [],
+            Accounting: EmptyAccounting with
+            {
+                JudgmentsConsidered = 4,
+                Skips = new Dictionary<NewsJudgmentSignalSkipReason, int>
+                {
+                    [NewsJudgmentSignalSkipReason.NonDirectionalTrajectory] = 2,
+                    [NewsJudgmentSignalSkipReason.LevelOnlyTrajectory] = 1,
+                    [NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded] = 1,
+                },
+            },
+            MaterializedNotResolved: 0);
+
+        var markdown = DailyNewsReportRenderer.Render(report);
+
+        Assert.Contains(
+            "- skips: non-directional-trajectory 2, level-only-trajectory 1, trajectory-basis-not-recorded 1",
+            markdown,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NeverEmitsForbiddenAdviceLanguage()
     {
         var report = new DailyNewsReport(

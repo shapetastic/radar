@@ -1781,7 +1781,11 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
       the new shared `NewsJudgmentPresentationCohort`, which `NewsJudgmentGenerator.BuildPresentationMarkers`
       was routed onto rather than copied — so the cohort whose direction is SCORED and the cohort whose
       marker is DISPLAYED cannot drift), `Status == Judged`, an `Improving`/`Deteriorating` trajectory
-      (`Mixed`/`Unknown` are honest non-directions via `NewsTrajectorySignalRules.DirectionFor`), a non-empty
+      (`Mixed`/`Unknown` are honest non-directions via `NewsTrajectorySignalRules.DirectionFor`; and, since
+      spec 214, a `LevelOnly` trajectory basis — every cited fact a stated level or unquantified — mints
+      nothing under its own `LevelOnlyTrajectory` skip, with `TrajectoryBasisNotRecorded` for a pre-214
+      directional record and `TrajectoryBasisNotAllowlisted` for a defined-but-unallowlisted basis: the
+      basis gate is an ALLOWLIST of `Supported` alone), a non-empty
       `TrajectoryFactIds`, and **every** cited fact resolving through the stage-1 cohort's `FactsById` to a
       source observation that resolves through `NewsObservationEvidenceJoin` to exactly one news evidence
       item **for the same company**. A partially resolvable citation set records a NAMED skip and creates no
@@ -2333,9 +2337,11 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     fingerprint HASHES cannot drift (pinned by test). The `newsquery={n}d;` segment is appended **LAST**, after
     the spec-194 `news=` segment, so the whole post-197 prefix stays byte-stable.
   - ⚠ **THE SEGMENT IS CONDITIONAL, UNLIKE SPEC 194's — and that is the additivity proof.** A window of `0`
-    renders the **EMPTY** string, so a disabled configuration reproduces the post-197 descriptor byte-for-byte;
-    `Compute_NewsQueryWindowDisabled_ReproducesPost197Pins` asserts all six post-197 values are then reproduced
-    EXACTLY, for BOTH AI-off and AI-on at all three windows. Spec 194 chose the opposite because "judgment off"
+    renders the **EMPTY** string, so a disabled configuration reproduces the same descriptor without the
+    newsquery segment byte-for-byte; `Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins` (named
+    `…ReproducesPost197Pins` until spec 214) asserts the six no-newsquery halves of the CURRENT pins are
+    reproduced EXACTLY at all three windows — AI-off unchanged since 198, AI-on moved by 214. Spec 194 chose
+    the opposite because "judgment off"
     and "a Radar that predates the judgment read" are different facts; here the input is a plain magnitude with
     a code default, and rendering `newsquery=0d;` would have re-stamped every composition for a filter that does
     nothing. The **null fallback in `SignalSourceDescriptor` is the DEFAULT, not `None`** — unlike the opt-in
@@ -2957,3 +2963,122 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     (ESQ 17, JOUT 15, DGII 15) + **15 by floor**; the banner rendered once with the arm,
     lines, "explicit", v5 and the "operating thresholds, not validated evidence" sentence. Before
     (2026-09-06 report): 0 / 0 / 18 by floor. Descriptive, no gate.
+- **The judge stops reading a level as a trend — a deterministic comparison-basis on every supplied fact,
+  prompt rule 11, and a fail-closed materializer ALLOWLIST (spec 214, 2026-09-08).** On the 2026-09-07 run
+  the stage-2 judge read Argan (AGX) as `Improving` on "Backlog reached $2.5B, indicating strong future
+  demand" — a LEVEL; the backlog was $2.93B on 2026-01-31 and had fallen 14% over the year, and nothing
+  Radar supplied could have said so (the typing store's only AGX backlog fact IS that statement). Rule 3
+  covers the absence of facts; nothing covered the presence of a number that carries no direction.
+  - **`StatementComparisonClassifier` (`comparison-basis-v1`, `Radar.Application.NewsRisk.Judgment`)** —
+    pure, static, closed-table, PRECEDENCE-ordered over `(Statement, EventTypes)`, applied at judge-INPUT
+    time in `NewsJudgmentInputBuilder` (never at typing time — the stage-1 cohort is untouched, so no
+    re-typing). (1) `StatedComparison`: a comparison phrase (`record`, `up from`, `versus`/`vs`, `grew`,
+    `fell`, `declined`, `year-over-year`, `beat`, `missed`, …), `up`/`down` immediately followed by a
+    figure, or `from X to Y`; no number required; a bare `%` NEVER qualifies. (2) `LevelOnly`: a figure
+    within 6 tokens of a stock/flow metric noun (backlog, cash, debt, headcount, revenue, margin, EPS, …),
+    or any figure on an `EarningsOrGuidance` statement — and a level OUTRANKS an event term ("wins a $50M
+    contract; backlog now $2.5B" is a level). (3) `Event`: an event term (order, award, contract, won,
+    approved, cleared, launched, acquired, financing, listing, recall, lawsuit, filed, settled, …) AND at
+    least one of the five event-bearing types — **both required; the type is the tie-breaker** ("the
+    company filed its quarterly report" under `EarningsOrGuidance` is not an event). (4) `NotQuantified`.
+    Whole words/phrases only, case-insensitive, bounded by a character that is neither a word character
+    nor a hyphen (a hyphenated compound is ONE token — `flat` never hits "flat-panel", `record` never
+    "record-breaking"; the hyphenated comparisons `record-breaking`/`record-setting`/`above-average`/
+    `below-average`/`year-over-year`/`all-time` are listed explicitly): `vs` never hits "investors",
+    `record` never "recorded", `cut` never "cutting-edge", `rose` never "Rosetta" — pinned. Two entries
+    are figure/noun-SCOPED rather than bare words, decided from the review-round-1 live sample: `growth`
+    counts only beside a figure ("growth of 12%", "12% growth"; "growth strategy outlined" does not) and
+    `lift(s)/lifted` only immediately before a metric noun ("lifts revenue and profit" — the Middlesex
+    Water statement the spec Overview names as genuinely directional; "Power projects lift Argan" does
+    not, which is what keeps the AGX backlog statement a level). `crushes`/`crushed` joined the beat/miss
+    family ("Crushes Q4 Profit Estimates by 31.6%"). The figure grammar takes thousands GROUPS only, never
+    a trailing comma ("In 2026, …" is a year, not a figure — a review-round-1 defect). Enum values start at
+    1 so a defaulted zero is undefined. The tables + window + boundary rule ARE the identity: a change is
+    `comparison-basis-v2`.
+  - **Judge input and contract.** `NewsJudgmentInputFamily.ComparisonBasis` (required); the user message
+    renders one `ComparisonBasis: …` line per family (`LevelOnly — a stated level, not a trend`);
+    `NewsJudgmentContract.PromptVersion` → `news-judgment-prompt-v4` (rule 11: a level establishes no
+    direction; only a StatedComparison or Event fact may be cited in `TrajectoryFactIds`; a LevelOnly fact
+    is finding context only; Unknown ONLY when no supplied fact is StatedComparison or Event; name the
+    set-aside levels in the rationale); `SchemaVersion` stays `news-judgment-schema-v3`; the cohort key
+    gains `|comparison=comparison-basis-v1` after `families=` (an input the model sees). The family-set
+    hash is deliberately NOT changed (the basis is a pure function of two already-hashed fields).
+  - **Record `news-judgment-v4 → v5`** (`NewsJudgmentRecord.CurrentSchemaVersion`): trailing nullable
+    `TrajectoryBasis` (`NewsTrajectoryBasis { Supported = 1, LevelOnly = 2 }`; spec 215 adds
+    `ReferenceSupported`) and per-family `NewsJudgmentFamilyRef.ComparisonBasis` (nullable = pre-214,
+    never defaulted). `null` TrajectoryBasis means NOT APPLICABLE — Mixed/Unknown/any failure — OR
+    pre-214; the two are distinguishable by the materializer's gate ORDER (status and direction before
+    basis). `NewsJudgmentValidator.TrajectoryBasisFor` computes it ONLY for a Judged Improving/Deteriorating
+    result over the RESOLVED cited facts: `Supported` iff ≥ 1 cited family is StatedComparison or Event,
+    else `LevelOnly` — NOT a validation failure (the call is persisted verbatim and marked). The cache-reuse
+    path carries the cached verdict's own basis. `NewsJudgmentGenerator` logs ONE line per cohort:
+    "{LevelOnly} of {Directional} directional judgment(s) called this pass rest ONLY on level/unquantified
+    facts" (never per item).
+  - **Materializer `news-judgment-signal-v2 → v3` — an ALLOWLIST, not a denylist.**
+    `NewsJudgmentSignalMaterializer.AllowlistedTrajectoryBases = { Supported }`; after the status,
+    direction and cited-facts gates: `null` → `TrajectoryBasisNotRecorded` (a pre-214 directional record —
+    counted, never assumed Supported), `LevelOnly` → `LevelOnlyTrajectory`, defined-but-unallowlisted →
+    `TrajectoryBasisNotAllowlisted`; an unknown token ON DISK never reaches the materializer (the strict
+    enum converter fails the record as unreadable, counted on the judgment store's unreadable axis —
+    pinned by test). All three are per-record gate reasons in the summary identity, render through
+    `DescribeSkips` in the daily news report's accounting line and the live artifact, and
+    `NewsDirectionalSignalMetadata.SupportedJudgmentSignalVersions = { v1, v2, v3 }` (v2 declared as
+    `JudgmentSignalVersionV2`). There is deliberately NO v2 occupancy lookup: a v2 signal exists only for a
+    pre-214 judgment id, which the null-basis gate stops first; `RetiredV2SignalIdFor` exists for
+    measurement only. The prompt fork gives every re-judged company a NEW judgment id, so v3 signals may
+    coexist with accrued v2 ones and the latest-judgment supersede resolves same-evidence pairs — the
+    first post-214 run REPORTS per company: v2 signals in window, v3 minted, same-evidence pairs
+    superseded, different-evidence coexistences (owed in the PR body's follow-up; descriptive, no gate).
+    Nothing accrued is rewritten (AD-8).
+  - **Report.** `NewsJudgmentLeaderMarker.TrajectoryBasis` (a string token, set by `NewsJudgmentMarkerPolicy`
+    only for a judged DIRECTIONAL marker: `Supported` / `LevelOnly` / `(pre-214)`; Mixed/Unknown carry
+    none) renders on the weekly report's judgment provenance appendix as ` · basis: …` — never in the
+    leaders cell. `docs/reading-radar-output.md` item 11: "A level is not a trend."
+  - **MEASURED (2026-09-08, read-only over the live store via `ComparisonBasisLiveMeasurementTests`,
+    env `RADAR_COMPARISON_BASIS_LIVE_DATA_ROOT`; the shipped tables, after two inspection passes):**
+    5,263 typed facts (5,150 typing records) — StatedComparison **895 (17.0%)**, LevelOnly **105 (2.0%)**,
+    Event **335 (6.4%)**, NotQuantified **3,928 (74.6%)**; of the 1,335 quantified facts, LevelOnly is
+    7.9% (bound > 30%: holds) and StatedComparison 67.0% (bound < 5%: holds). The harness prints the
+    first 12 statements of each class, and the two inspection passes each fixed defects ON MERIT, never to
+    a bound: pass 1 — a day-of-month figure ("to report results on August 6") read as a level on an
+    earnings statement; `slumps`/`swings to`/`reduced` missing ("Revenue Slumps 57%" was a level);
+    `divestiture`/`sale of` missing from the event table; pass 2 (review round 1) — a year followed by a
+    comma escaped the year exclusion; bare `growth` over-included ("Growth strategy outlined"); a hyphen
+    as a boundary let `flat`/`above` hit inside compounds ("Flat-panel display maker"); and `lift(s)`
+    before a metric noun / `crushes` were missing; review round 2 then added the hyphenated
+    `record-high`/`record-low` and the six `-than-expected` forms that the hyphen rule had made false
+    negatives (live impact: one statement, GEOS "Wider-than-Expected Loss", NotQuantified →
+    StatedComparison; no judgment moved) and let `lift(s)` take up to two qualifiers ("lifts its
+    full-year outlook"). Net of all passes against the first draft: StatedComparison −127 (the
+    `growth`/hyphen over-inclusion outweighed the additions), LevelOnly −28, Event +6, NotQuantified +149. 303 judgment records, 269 Judged, **182 directional**: would-be
+    Supported **163 (89.6%)**, would-be LevelOnly **10 (5.5%)** (bound above the crude 14.8%: holds; the
+    crude regex over-counted because it flagged event facts), no TrajectoryFactIds (pre-187 v1) 9,
+    unresolved citation 0. Of the 10 would-be LevelOnly judgments (WDFC ×3, SHEN, LBRT ×4, HWKN ×2
+    Deteriorating), **5 hold a materialized `news-judgment-signal-v2` signal** (0 hold v1) — those five
+    are the directions v3 would have refused. The scoping moved judgments BOTH ways, which is the point:
+    both MSEX judgments left the set once "lifts revenue and profit" counted, and one LBRT judgment
+    (`c18447d3`, 2026-09-01) entered it once bare `growth` stopped counting. **Seen and left for
+    `comparison-basis-v2`:** `Top 5 Analyst Questions` and `17% Undervalued` on `EarningsOrGuidance`
+    statements classify LevelOnly under the spec's bare-figure-on-earnings rule (harmless to the gate —
+    LevelOnly and NotQuantified are treated identically by validator and materializer, only the rendered
+    line differs); institutional-holding statements typed `MergerAcquisitionOrStake` by stage 1 ("30,456
+    Shares … Acquired by …") classify Event under the tie-breaker — a stage-1 typing matter, and prompt
+    rule 5 already tells the judge holdings are context. **AGX `928eb9f8-…` (Improving, v4, basis null):** its
+    four cited facts classify as StatedComparison ("Reports Record $384 Million Revenue…"),
+    StatedComparison ("Q2 Revenue $384.0M, vs. FactSet Est of $300.5M"), **LevelOnly ("Power projects
+    lift Argan … as backlog hits $2.5B")**, StatedComparison ("Beats Expectations By $1.12 EPS") — so
+    under v1 the judgment's would-be basis is **Supported** (three record/beat facts carry it; the backlog
+    level is the one fact the rule sets aside), and it holds a v2 signal. The classifier does what it
+    claims — it marks the backlog fact as a level the judge may not cite — and the AGX call itself was
+    not level-ONLY; the re-judgment under prompt v4 is recorded in the PR body, not predicted. Descriptive;
+    no table was tuned to any bound.
+  - **Identity.** The AI-ON pins moved (30d unit, 60d live, 120d long-window, and the three
+    no-newsquery additivity halves); the AI-OFF pins did NOT (asserted). Values are CITED, never
+    transcribed: `ScoringConfigFingerprintTests.Compute_AiOnDefault_MatchesPinnedFingerprint`,
+    `Compute_LiveWindowAiOnStamps_ArePinned`, `Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins`
+    (AI-ON halves) — history: 60d live AI-ON `radar-scoring-fp-11240da5aeb0` was the value stamped
+    2026-08-29 through 2026-09-07. `ChatNewsJudgmentAnalyzerTests` re-pinned the instruction hash. The
+    operator step (delete/re-record `data/scoring-configs/strategies/{name}.json`, verify the first run's
+    stamp against the test) is taken ONCE after specs 214 and 215 both merge; every candidate company is
+    re-judged once (~19 calls). No formula, weight, rule-set, collapse, supersede, neutralization,
+    attention-tier or news-query change; spec 214 moved no AI-OFF value.

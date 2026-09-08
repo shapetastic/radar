@@ -23,8 +23,15 @@ public static class NewsJudgmentContract
     /// <c>FactIds</c>. Five of nineteen live v2 calls shortened ids to eight characters and lost their whole
     /// response to validation as a result.
     /// </para>
+    /// <para>
+    /// <b>Spec 214 §2 forked it to <c>v4</c>.</b> The instruction gained rule (11): a quantity stated as a
+    /// LEVEL (backlog, cash, debt, headcount, capacity) establishes no direction by itself; only a
+    /// <c>StatedComparison</c> or <c>Event</c> fact may be cited in <c>TrajectoryFactIds</c>, and the user
+    /// message now renders each family's deterministic <c>ComparisonBasis</c> line. The 2026-09-07 Argan
+    /// judgment read "backlog hits $2.5B" as Improving while the backlog had fallen 14% over the year.
+    /// </para>
     /// </summary>
-    public const string PromptVersion = "news-judgment-prompt-v3";
+    public const string PromptVersion = "news-judgment-prompt-v4";
 
     /// <summary>
     /// Spec 187 §1 forked this to <c>v2</c>: the structured response gained <c>TrajectoryFactIds</c>, so
@@ -37,6 +44,7 @@ public static class NewsJudgmentContract
     /// earns the accrued v2 failures a FRESH attempt budget under a contract that can accept their
     /// citations, and guarantees no completed-or-failed v2 attempt is reused as a v3 one.
     /// </para>
+    /// <para>Spec 214 leaves it at <c>v3</c>: the response shape and the citation grammar are unchanged.</para>
     /// </summary>
     public const string SchemaVersion = "news-judgment-schema-v3";
 
@@ -47,10 +55,16 @@ public static class NewsJudgmentContract
     /// (extractor model, prompt, taxonomy) or a family-builder change is therefore a NEW stage-2 cohort BY
     /// CONSTRUCTION — never a silent reuse. The judge reader NAME is deliberately absent (the spec-179
     /// rule: display/provenance only, so renaming a reader forks no cohort).
+    /// <para>
+    /// Spec 214 §1 appends <c>comparison={StatementComparisonClassifier.Version}</c>: the per-family
+    /// <c>ComparisonBasis</c> line is an INPUT THE MODEL SEES, so a table change is a new cohort — and,
+    /// through the spec-194 §2 <c>news=</c> segment, a new <c>ScoringConfigVersion</c>.
+    /// </para>
     /// </summary>
     public static string CohortKey(string provider, string modelId, string stage1CohortKey) =>
         $"{provider}:{modelId}|{PromptVersion}|{SchemaVersion}|stage1={stage1CohortKey}"
-            + $"|families={FactFamilyBuilder.IdentityString}";
+            + $"|families={FactFamilyBuilder.IdentityString}"
+            + $"|comparison={StatementComparisonClassifier.Version}";
 }
 
 /// <summary>
