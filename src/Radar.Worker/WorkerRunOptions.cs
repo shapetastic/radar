@@ -18,4 +18,13 @@ public sealed class WorkerRunOptions
     /// actually selects the behaviour — so an unattended scheduled run says in one line which pass it was.
     /// </summary>
     public RadarRunMode Mode { get; init; } = RadarRunMode.Full;
+
+    /// <summary>
+    /// The weekly-report entry cap (<c>Radar:ReportMaxItems</c>), carried here so the Worker can refuse to
+    /// start when the seeded universe has outgrown it (spec 213 §4). Defaults to 25 to match
+    /// <see cref="RadarWorkerOptions.ReportMaxItems"/>: the composition root always copies the bound value in,
+    /// and sharing the default keeps a test-constructed instance consistent with a bound one rather than
+    /// silently disabling the guard (an <c>int.MaxValue</c> default would make the check vacuous by default).
+    /// </summary>
+    public int ReportMaxItems { get; init; } = 25;
 }

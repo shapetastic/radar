@@ -192,6 +192,12 @@ powershell -File scripts/run-radar.ps1 -Profile low-media -WhatIf   # print the 
   **on top of** it and carries only its delta (e.g. `low-media.json` overrides `MediaReachWeight`) — so the
   baseline is never lost and experiments are minimal diffs. This pairs with the config-driven `ScoringWeights`
   (a profile can set `Radar:Scoring:Profiles:{name}:*`), which the snapshot fingerprint (AD-10) then stamps.
+  Its `_comment` is **standing facts only** (spec 213): every value it names cites its owner
+  (`ScoringConfigFingerprintTests`, `ScoreFormulaVersions.All`, `KeywordSignalExtractor.RuleSetVersion`,
+  `data/companies.json`, …) and it quotes no pin; its per-spec history lives **verbatim** in
+  `docs/architecture-history.md` ("default.json _comment history"). `RunProfileCommentGuardTests` fails the
+  test suite if any profile's `_comment*` regrows a pin literal, a "verify the first run reports" imperative, or
+  past its length limit.
 - **A named profile writes to `data/experiments/<profile>/`** (baseline `data/` is untouched), so runs are
   comparable side-by-side.
 - **SEC User-Agent is not committed** (public repo): pass `-SecUserAgent "Name email"` or set
@@ -354,7 +360,9 @@ authoritative record:
   `newsquery=` segments (specs 194 §2 / 198 §3), so a `score`/`replay` pass needs the same
   news/judgment config validated as a `full` run.
 - **The universe is 102 companies** (spec 207; 59 `small` — spec 199 took it 74 → 94, spec 207
-  94 → 102); `benchmark-universe-v1` stays frozen at 74 members — additions report
+  94 → 102; a universe expansion must raise `Radar:ReportMaxItems` in the same change, because the
+  Worker refuses to start when the cap is below the seeded universe — spec 213); `benchmark-universe-v1`
+  stays frozen at 74 members — additions report
   `NotInBenchmarkUniverse` until a prospective v2 is declared. Pooled efficacy is
   benchmark-adjusted; the paired AD-15 path deliberately is not (spec 183).
 - **Label lines are per-strategy config, not constants** (spec 212): `Radar:Strategies[i].Labels`
