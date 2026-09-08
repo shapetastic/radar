@@ -178,7 +178,7 @@ NOT in scope (spec 201 owns that seam) — note the precedent in the PR body if 
 - PR body: the unit-level distribution of the new verifier over a fixture set is not a live distribution;
   the LIVE one is owed from the first post-merge run with the flag ON: records written / dropped per class
   (unverified, metric-not-in-quote, period-not-in-quote, fragment, unrecognised) / acknowledged /
-  unacknowledged; judgments handed ≥ 1 reference; `ReferenceSupported` count; `referencesExcludedNotPrior`.
+  unacknowledged; judgments handed ≥ 1 reference (by kind: Prior / StatedPrior); `ReferenceSupported` count; `referencesExcludedNewest` / `referencesExcludedLaterThanFact`; `pending` / `acknowledged` / `replayed`.
   **A verifier that drops > 50% of what the model returns is a prompt/table defect to investigate, not a
   finding** (spec 215 §3's bound, kept).
 - The LAST change in the PR flips `Radar:Ai:ReportedMetrics:Enabled` back to `true` in `default.json` and
