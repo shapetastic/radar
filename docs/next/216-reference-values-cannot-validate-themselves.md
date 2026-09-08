@@ -35,10 +35,10 @@ files, so nothing is polluted. Re-enable is the last acceptance line of this spe
    stand forever; record identity and the judgment's reference hashing exclude the policy. Not broken
    today (only v1 exists), but the documented heal-forward path is a promise the code cannot keep.
 
-None of this touches a score, weight or formula. The pins DO move: §1 bumps `references=` to v2 and §5
-adds an unconditional `reportedmetrics=` field to the `news=` segment, so BOTH the AI-ON and the AI-OFF pins
-move once in this slice (the AI-OFF move is the proof that enablement is hashed — spec 198's `newsquery=`
-precedent). The operator step (spec 214 §5) is performed once after merge; the boundary is 214–216.
+None of this touches a score, weight or formula. The AI-ON pins move once: §1 bumps `references=` to v2 in
+`news=`, and §5 adds the `rm=` field to the directional-filing `ai=` descriptor. The AI-OFF pins do NOT move
+(the `ai=` descriptor folds only with an AI filing read) and that non-move is an asserted deliverable. The
+operator step (spec 214 §5) is performed once after merge; the boundary is 214–216.
 
 ## Assignment
 
@@ -54,8 +54,9 @@ same-accession exclusion is generally impossible — stage-1 news facts carry ob
 never the SEC accession behind a company release. So the rule is structural, on the LEDGER's own order:
 
 - **The newest accession for a metric is never a reference.** Per (company, metric), ledger records are
-  ordered by filing date; the record from the LATEST accession is the "current" value and is EXCLUDED from
-  projection. A record becomes eligible as a reference only once a LATER accession has reported the same
+  ordered by filing date, then — deterministically, for same-day filings — by accession number (ordinal
+  string order, which is chronological within a filer's sequence), then by record id; the record from the
+  LATEST accession under that order is the "current" value and is EXCLUDED from projection. A record becomes eligible as a reference only once a LATER accession has reported the same
   metric. A metric reported once is therefore never a reference — that is the honest state of a young
   ledger, counted as `referencesExcludedNewest`.
 - **A complete prior pair from the newest filing IS projectable, separately.** When the newest record
@@ -68,9 +69,12 @@ never the SEC accession behind a company release. So the rule is structural, on 
   guard still applies on top of the structural rule: a reference whose filing date is LATER than the
   fact's `ObservedAtUtc` is excluded and counted (`referencesExcludedLaterThanFact`) — a newer filing may
   never be compared backwards against older news.
-- The validator enforces both on the OUTPUT: every cited `TrajectoryReferenceId` / finding `ReferenceId`
-  must resolve to a projected record; a citation of an unprojected id is dropped with a named reason
-  (`reference-not-projected`) and the basis falls back to what the remaining citations support.
+- The validator enforces both on the OUTPUT with the SAME strictness FactIds already have
+  (`NewsJudgmentValidator` ~L248): an unprojected `TrajectoryReferenceId` FAILS THE WHOLE JUDGMENT
+  (validation failure, named reason `reference-not-projected`, counted) — never a silent fallback to a
+  weaker basis, because a hallucinated trajectory reference is exactly the evidence-gate failure the
+  validator exists to catch (review round 2 corrected the earlier "drop and fall back" wording). An
+  unprojected reference on a FINDING drops that finding only, as an unresolved finding FactId does today.
 - Pin with tests: (a) one accession only → nothing projected, basis `LevelOnly`; (b) **the article appears
   the DAY AFTER the filing** whose value it quotes, with no earlier accession → nothing projected (the
   timestamp rule alone would have admitted it — this is the case the round-1 review named); (c) two
@@ -98,9 +102,17 @@ persisted, not re-derived:
   `attempts ≥ 3` still `Pending` is logged once per company per run as a durable defect — counted, named,
   never dropped, never retried silently forever (the replay continues, bounded only by the count of pending
   records, which is cheap: no I/O beyond the ledger write).
-- Null `reportedMetricsPolicy` (pre-215) stays the hit it is today; a record with a policy but no
-  extraction payload (the 215-era shape, if any ever existed) is treated as `Pending` with an empty
-  extraction and acknowledged on the first pass — nothing to replay, nothing lost that was ever held.
+- Null `reportedMetricsPolicy` (pre-215) stays the hit it is today. A record WITH a policy but NO
+  extraction payload (the 215-era shape) is NOT acknowledged as empty — such an entry may have produced
+  metrics that were never persisted, and treating it as an empty extraction would silently lose them
+  (review round 2). Measured 2026-09-08: the live cache holds ZERO such records (the ledger was disabled
+  before any post-215 run). The implementer ASSERTS that precondition over the store at implementation
+  time (count reported in the PR body) and the code FAILS CLOSED if one ever appears: the record is
+  counted on its own axis (`legacyPolicyWithoutPayload`), logged once per accession as a durable defect,
+  left `Pending` with attempts frozen, and never acknowledged — the only honest recovery is a conscious
+  re-analysis under the current policy, which is a maintainer step, not an automatic one.
+- **Missing persisted state reads as `Pending` with attempts 0** (a v7-era record written without the
+  fields, or a partially migrated one) — never as `Acknowledged`.
 - Test: a `NotPersisted` write leaves state `Pending` with attempts 1 and the next pass replays the SAME
   payload (asserted byte-identical) without invoking the analyzer; a `Succeeded` write acknowledges; a
   persisted attempts count of 3 triggers exactly one warning.
@@ -125,11 +137,18 @@ so this is **`reported-metrics-v2`**; there are no v1 files to migrate, and §5 
   only against "384.0". Same for the unit token. Dropped and counted (`metricsDroppedFragment`).
 - **Association, not co-presence (review round 1):** "cash was $100m and backlog was $2.5bn" must not let a
   Backlog entry with value 100 pass. The metric synonym, the value (with unit) and the period must all lie
-  within ONE bounded fragment of the quote: a sentence (split on `.`/`;`), or a table row (split on
-  newline / `|` / two-or-more spaces), whichever the quote is — and within that fragment the value must be
-  the NEAREST numeric token to the metric synonym (no other verified-shape number between them). Failing
-  entries are dropped and counted (`metricsDroppedNotAssociated`). Pinned with the reviewer's example and
-  with a two-row table where each row carries its own metric.
+  within ONE bounded fragment of the quote. Fragment boundaries are, in order of preference: a newline, a
+  `|`, a `;`, a run of two-or-more spaces (table cells), and a SENTENCE-ENDING period — defined as `.`
+  followed by whitespace-then-uppercase or end-of-text, so a decimal point inside `384.0`, `$0.79` or
+  `2.5B` is NEVER a boundary (review round 2: splitting on every `.` breaks the very values being
+  verified). Within that fragment the value must be the NEAREST numeric token to the metric synonym (no
+  other verified-shape number between them). Failing entries are dropped and counted
+  (`metricsDroppedNotAssociated`). Pinned with the reviewer's example, a two-row table where each row
+  carries its own metric, and a sentence containing `$0.79` and `384.0` that must stay one fragment.
+- **Negative synonym tests** are mandatory, one per metric at minimum: "cash flow" must NOT verify
+  `CashAndInvestments` (it is `FreeCashFlow`'s territory), "cost of sales" must NOT verify `Revenue`,
+  "gross profit" must NOT verify `GrossMargin`, "net debt" must NOT verify `TotalDebt` — whole-phrase
+  matching with the longest synonym winning, never a substring of a longer phrase.
 - Quote-in-body stays as is. Tests pin every drop class
 ## 4. The store writes atomically and never mistakes a fragment for a record
 
@@ -157,17 +176,22 @@ NOT in scope (spec 201 owns that seam) — note the precedent in the PR body if 
   persists, per consumed family, `ObservedAtUtc` (§1); per judgment, the reference POLICY token and the
   reference KIND (`Prior` / `StatedPrior`) of every projected and every cited reference; and the two new
   exclusion counts. v6 records stay readable (new fields null = not recorded).
-- **Enablement and verification policy enter scoring identity (review round 1 — P1).** Today only
-  `references=reference-projection-v1` is in the judge's cohort key, so switching the ledger on or off, or
-  changing the verification policy, changes what the judge sees WITHOUT moving a stamp — a future
-  policy-only change would pool two regimes under one series, the exact hole spec 194 §2 closed for the
-  judgment read. `NewsJudgmentScoringIdentity` (the `news=` composer, L186) gains a field
-  `reportedmetrics=disabled` or `reportedmetrics=reported-metrics-v2` (the VERIFICATION policy token, since
-  it decides which values exist), unconditional, so the AI-OFF descriptor carries it too as `disabled` — and
-  the AI-OFF pins therefore MOVE in this slice, deliberately, exactly as spec 198's `newsquery=` did: the
-  field is not judgment-gated, and an unchanged AI-OFF pin would mean enablement is not actually hashed.
-  Re-enabling the flag later (§6) then moves the AI-ON pins again by construction — that is the point: the
-  regime with references is a different series from the one without.
+- **Enablement and verification policy enter scoring identity (review round 1 — P1; placement corrected
+  in round 2).** Enabling metric extraction changes the FILING-ANALYSIS prompt itself — the model is asked
+  for more — even when the news judgment is disabled, so the token belongs where the filing read's other
+  hashed-by-value inputs live: the spec-106/160 DIRECTIONAL-FILING `ai=` descriptor (`str/nov/minconf/
+  model/cmpscan/cmpcap`), which gains a trailing `rm=disabled` or `rm=reported-metrics-v2` field (the
+  VERIFICATION policy token, since it decides which values exist). `news=` keeps ONLY the projection
+  identity (`references=reference-projection-v2`). Consequences, stated so the pins can be reconciled:
+  the `ai=` descriptor folds only when the AI filing read is registered, so the **AI-ON pins move** (this
+  slice: projection v2 + `rm=disabled`; later, re-enabling flips it to `rm=reported-metrics-v2` and moves
+  them again by construction — the regime with references is a different series) and the **AI-OFF pins do
+  NOT move** (no AI read ⇒ no extraction to hash; an AI-OFF move here would be scope leakage — the spec-197
+  proof pattern, reversing this spec's round-1 wording). **Identity state matrix, pinned by mutation
+  tests in `ScoringConfigFingerprintTests`:** (i) judgment OFF, `ReportedMetrics.Enabled` toggled ⇒ the
+  AI-ON descriptor CHANGES (the case the round-2 review named — extraction changes the filing prompt even
+  with no judge); (ii) judgment ON, flag toggled ⇒ changes; (iii) AI read OFF, flag toggled ⇒ descriptor
+  UNCHANGED (nothing to extract); (iv) policy token v2 → a fake v3 with the flag on ⇒ changes.
 - **Regime boundary:** the documented boundary "214+215" becomes **"214–216"** everywhere it is written
   (CLAUDE.md, `docs/architecture-history.md`, the operator guide) — one discontinuity spanning the three
   slices, with the **precommitted 2026-09-29 claim date unchanged** (moving it after outcomes exist would
@@ -196,22 +220,31 @@ NOT in scope (spec 201 owns that seam) — note the precedent in the PR body if 
 - [ ] `reference-projection-v2`: the newest accession per (company, metric) is never a reference; a
       verified prior pair from the newest filing projects as `StatedPrior`; a filing later than the fact's
       observation is excluded; both exclusions counted; validator drops `reference-not-projected`
-      citations; the five pinned cases (incl. article-the-day-after-the-filing) pass.
+      trajectory citations by FAILING the judgment (a finding's drops the finding only); same-day
+      accessions ordered by accession then record id; the five pinned cases (incl.
+      article-the-day-after-the-filing) pass.
 - [ ] The verified extraction, ledger state and attempt count are PERSISTED on the analyzed-filing record;
       `Pending` records replay the same payload (no fetch, no model call — asserted) until acknowledged; the
-      persisted attempt count drives the once-per-company warning at 3; null policy stays a hit.
+      persisted attempt count drives the once-per-company warning at 3; null policy stays a hit; missing
+      state reads `Pending`/0; a policy-without-payload record fails closed (counted, logged, never
+      acknowledged) and the PR body asserts the live count of such records is zero.
 - [ ] `reported-metrics-v2` verifier: metric synonym in quote, period in quote, whole-token value/unit/prior
       value, AND metric/value/period associated within one bounded fragment with the value nearest the
-      metric; each drop class counted; the reviewer's four examples (incl. "cash $100m and backlog $2.5bn")
-      are negative tests.
+      metric, with decimal points never a fragment boundary; each drop class counted; the reviewer's four
+      examples (incl. "cash $100m and backlog $2.5bn"), the `$0.79`/`384.0` single-fragment case, and the
+      per-metric negative synonym cases (cash flow ≠ CashAndInvestments, cost of sales ≠ Revenue) are
+      tests.
 - [ ] Atomic temp-file + no-overwrite move; fragment never reported `AlreadyOnDisk`; `corrupt-existing`
       counted and logged once.
 - [ ] Policy is an explicit `WriteIfNewAsync` argument, in the ledger path and the record id; projector
       reads the current policy only and counts skipped superseded files; v1/v2 side-by-side test; durable
       judgment record `news-judgment-v7` with v6 readable, persisting `ObservedAtUtc`, reference policy and
       reference kinds.
-- [ ] `news=` carries `reportedmetrics=disabled|<policy>` unconditionally; BOTH AI-ON and AI-OFF pins moved
-      once and asserted by `ScoringConfigFingerprintTests`; the regime boundary reads "214–216" with the
-      2026-09-29 claim date unchanged; operator step stated in the PR body.
+- [ ] The directional-filing `ai=` descriptor carries `rm=disabled|<policy>`; `news=` carries
+      `references=reference-projection-v2`; the four-case identity matrix (judgment off + flag toggled ⇒
+      changes; judgment on + toggled ⇒ changes; AI read off + toggled ⇒ unchanged; policy token changed ⇒
+      changes) is pinned by mutation tests; AI-ON pins moved once and asserted, AI-OFF proven unchanged;
+      the regime boundary reads "214–216" with the 2026-09-29 claim date unchanged; operator step stated in
+      the PR body.
 - [ ] `Enabled` back to `true` with the comment amended in place — or left `false` with the reason stated.
 - [ ] `dotnet build` / full suite / `git diff --check` clean; actual dispatch→PR time in the PR body.
