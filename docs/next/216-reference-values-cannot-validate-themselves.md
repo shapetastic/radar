@@ -35,9 +35,11 @@ files, so nothing is polluted. Re-enable is the last acceptance line of this spe
    stand forever; record identity and the judgment's reference hashing exclude the policy. Not broken
    today (only v1 exists), but the documented heal-forward path is a promise the code cannot keep.
 
-None of this touches a score, weight or formula. The AI-ON pins move once: §1 bumps `references=` to v2 in
-`news=`, and §5 adds the `rm=` field to the directional-filing `ai=` descriptor. The AI-OFF pins do NOT move
-(the `ai=` descriptor folds only with an AI filing read) and that non-move is an asserted deliverable. The
+None of this touches a score, weight or formula. The AI-ON pins move once, to values carrying
+`references=reference-projection-v2` and `rm=reported-metrics-v2` (§6 re-enables the ledger in this PR, so
+the shipped pin is the enabled one; `rm=disabled` is a test/profile state, not a regime). The AI-OFF pins do
+NOT move (the `ai=` descriptor folds only with an AI filing read) and that non-move is an asserted
+deliverable. The
 operator step (spec 214 §5) is performed once after merge; the boundary is 214–216.
 
 ## Assignment
@@ -82,40 +84,54 @@ never the SEC accession behind a company release. So the rule is structural, on 
   projects, basis `ReferenceSupported`; (e) a filing dated after the fact's observation → excluded and
   counted.
 
-## 2. The outbox CONTAINS the extraction — the cache replays it until the ledger acknowledges
+## 2. A real outbox: the complete, ready-to-write ledger payload is persisted in `CollectionPass` after company resolution
 
 Marking the cache "unacknowledged" and re-analyzing would re-fetch from SEC and re-run the model, which can
-return a DIFFERENT direction — contradicting "direction stays a hit" (review round 1). So the payload is
-persisted, not re-derived:
+return a DIFFERENT direction (review round 1). And `ReportedMetricExtraction` (`ReportedMetric.cs` L81)
+carries the metrics, accession, form and reader identity but NOT the resolved `CompanyId`, `EvidenceId` or
+`FilingDateUtc` a ledger record needs, while `IAnalyzedFilingCache` (L145) has no way to enumerate pending
+entries — those values exist only transiently in `CollectionPass` today (review round 3). So the outbox is
+its own durable store, written at the ONE point where every routing field is known:
 
-- `AnalyzedFilingRecord` gains `reportedMetricsExtraction` (nullable): the VERIFIED extraction exactly as
-  returned by the verifier (records + per-class drop counts), plus `reportedMetricsLedgerState`
-  (`Acknowledged | Pending`) and `reportedMetricsLedgerAttempts` (int). Written at analysis time with
-  state `Pending`, attempts 0. The direction/confidence/rationale of the read are never re-derived.
-- On every run, for each cached record with state `Pending`, `CollectionPass` REPLAYS the persisted
-  extraction into `IReportedMetricStore.WriteIfNewAsync(policy, …)` — no fetch, no model call — and on
-  `Succeeded`/`AlreadyOnDisk` for every record of the accession calls
-  `IAnalyzedFilingCache.AcknowledgeReportedMetricsAsync(accession)` (state → `Acknowledged`). On
-  `NotPersisted` or no-resolved-company it increments `reportedMetricsLedgerAttempts` and leaves the state
-  `Pending`. The aggregated line gains `pending {n} / acknowledged {n} / replayed {n}`.
-- The three-run warning reads the PERSISTED attempt count (it survives process restarts): a record with
-  `attempts ≥ 3` still `Pending` is logged once per company per run as a durable defect — counted, named,
-  never dropped, never retried silently forever (the replay continues, bounded only by the count of pending
-  records, which is cheap: no I/O beyond the ledger write).
-- Null `reportedMetricsPolicy` (pre-215) stays the hit it is today. A record WITH a policy but NO
-  extraction payload (the 215-era shape) is NOT acknowledged as empty — such an entry may have produced
-  metrics that were never persisted, and treating it as an empty extraction would silently lose them
-  (review round 2). Measured 2026-09-08: the live cache holds ZERO such records (the ledger was disabled
-  before any post-215 run). The implementer ASSERTS that precondition over the store at implementation
-  time (count reported in the PR body) and the code FAILS CLOSED if one ever appears: the record is
-  counted on its own axis (`legacyPolicyWithoutPayload`), logged once per accession as a durable defect,
-  left `Pending` with attempts frozen, and never acknowledged — the only honest recovery is a conscious
-  re-analysis under the current policy, which is a maintainer step, not an automatic one.
-- **Missing persisted state reads as `Pending` with attempts 0** (a v7-era record written without the
-  fields, or a partially migrated one) — never as `Acknowledged`.
-- Test: a `NotPersisted` write leaves state `Pending` with attempts 1 and the next pass replays the SAME
-  payload (asserted byte-identical) without invoking the analyzer; a `Succeeded` write acknowledges; a
-  persisted attempts count of 3 triggers exactly one warning.
+- **`IReportedMetricOutbox`** (Application) with a file implementation under
+  `data/reported-metrics/outbox/` (`RadarFileStoreJson`/`GracefulFileWriter`, atomic temp+move as §4):
+  `EnqueueAsync(envelope)`, `EnumeratePendingAsync(ct)` (deterministic order: companyId, accession),
+  `MarkAttemptAsync(id)` and `AcknowledgeAsync(id)`. An envelope is the COMPLETE ready-to-write payload:
+  `OutboxId` (content-derived from policy + accession), `Policy`, `CompanyId` (nullable — see unresolved
+  below), `EvidenceId`, `Accession`, `Form`, `FilingDateUtc`, reader identity, the verified
+  `ReportedMetricReading[]` plus the per-class drop counts, `Attempts` (int, missing ⇒ 0), `CreatedAtUtc`,
+  `LastAttemptAtUtc`. Nothing in it needs re-derivation: replay is `WriteIfNewAsync(policy, records)` per
+  envelope, no fetch, no model call — asserted by a test with a throwing analyzer.
+- **Ordering, so nothing is ever held only in memory when the cache says "done":** analysis (transient
+  extraction) → `CollectionPass` resolves the company → **outbox envelope written (durable)** → only on
+  `Succeeded`/`AlreadyOnDisk` of THAT write is the analyzed-filing record stamped `reportedMetricsPolicy =
+  <policy>` → ledger write attempted from the envelope → `AcknowledgeAsync`. If the process dies before the
+  envelope is durable, the cache is unstamped and the filing re-analyzes next run exactly as any uncached
+  read does today (nothing was ever persisted to lose; the direction of THAT re-read is the direction, as
+  for every first read). If it dies after, the envelope replays. The analyzed-filing cache therefore gains
+  NO payload and NO enumeration — only the policy stamp it already has, whose meaning becomes "an outbox
+  envelope exists for this accession under this policy".
+- **Replay each run:** `CollectionPass` enumerates pending envelopes BEFORE the fresh reads (so a stuck
+  envelope is retried before new work is added), replays each into the ledger, acknowledges on success,
+  otherwise `MarkAttemptAsync`. Acknowledged envelopes are moved to `outbox/acknowledged/` (append-only;
+  never deleted) so the ledger's provenance chain stays walkable. Aggregated line:
+  `outbox pending {n} / replayed {n} / acknowledged {n} / attempts-exhausted {n}`.
+- **Unresolved company is a routable state, not a loss:** an envelope whose company could not be resolved
+  at enqueue time is written with `CompanyId = null` under `outbox/unresolved/{accession}.{policy}.json`
+  and is re-run through company resolution on every replay (resolution may succeed later — a universe
+  addition, a hint fix); once resolved it is re-enqueued under the company and the unresolved copy is
+  acknowledged. Counted (`outboxUnresolvedCompany`) and, at `Attempts ≥ 3`, logged once per accession per
+  run as a durable defect — counted, named, never dropped, never retried silently forever.
+- **The three-run warning reads the PERSISTED `Attempts`** on the envelope (survives restarts); missing
+  ⇒ 0. Null `reportedMetricsPolicy` on a cache record (pre-215) stays the hit it is today. A cache record
+  WITH a policy stamp but NO matching outbox envelope (acknowledged or pending) is the 215-era shape:
+  NOT acknowledged as empty (review round 2) — counted (`policyStampWithoutEnvelope`), logged once per
+  accession, and recoverable only by a conscious maintainer re-analysis. Measured 2026-09-08: the live
+  cache holds ZERO such records; the implementer asserts that count in the PR body.
+- Tests: a `NotPersisted` ledger write leaves the envelope pending with `Attempts` 1 and the next pass
+  replays the byte-identical payload without invoking the analyzer; a `Succeeded` write acknowledges and
+  moves the envelope; an unresolved-company envelope is retried and re-enqueued once resolution succeeds;
+  `Attempts` 3 triggers exactly one warning; a policy stamp without an envelope fails closed.
 
 ## 3. Verification verifies the metric, the period and the WHOLE token
 
@@ -183,10 +199,11 @@ NOT in scope (spec 201 owns that seam) — note the precedent in the PR body if 
   model/cmpscan/cmpcap`), which gains a trailing `rm=disabled` or `rm=reported-metrics-v2` field (the
   VERIFICATION policy token, since it decides which values exist). `news=` keeps ONLY the projection
   identity (`references=reference-projection-v2`). Consequences, stated so the pins can be reconciled:
-  the `ai=` descriptor folds only when the AI filing read is registered, so the **AI-ON pins move** (this
-  slice: projection v2 + `rm=disabled`; later, re-enabling flips it to `rm=reported-metrics-v2` and moves
-  them again by construction — the regime with references is a different series) and the **AI-OFF pins do
-  NOT move** (no AI read ⇒ no extraction to hash; an AI-OFF move here would be scope leakage — the spec-197
+  the `ai=` descriptor folds only when the AI filing read is registered, so the **AI-ON pins move** — and
+  because §6 re-enables the ledger IN THIS SAME PR, the pins this slice ships carry
+  `rm=reported-metrics-v2` (with `references=reference-projection-v2`); `rm=disabled` is an intermediate
+  state that exists only in the mutation tests and in a profile that switches the ledger off, never a
+  separate later regime — and the **AI-OFF pins do NOT move** (no AI read ⇒ no extraction to hash; an AI-OFF move here would be scope leakage — the spec-197
   proof pattern, reversing this spec's round-1 wording). **Identity state matrix, pinned by mutation
   tests in `ScoringConfigFingerprintTests`:** (i) judgment OFF, `ReportedMetrics.Enabled` toggled ⇒ the
   AI-ON descriptor CHANGES (the case the round-2 review named — extraction changes the filing prompt even
@@ -205,10 +222,11 @@ NOT in scope (spec 201 owns that seam) — note the precedent in the PR body if 
   unacknowledged; judgments handed ≥ 1 reference (by kind: Prior / StatedPrior); `ReferenceSupported` count; `referencesExcludedNewest` / `referencesExcludedLaterThanFact`; `pending` / `acknowledged` / `replayed`.
   **A verifier that drops > 50% of what the model returns is a prompt/table defect to investigate, not a
   finding** (spec 215 §3's bound, kept).
-- The LAST change in the PR flips `Radar:Ai:ReportedMetrics:Enabled` back to `true` in `default.json` and
-  amends its `_comment` in place (drop the DISABLED sentence, cite this spec). If the implementer is not
-  confident all of §1–§4 hold, the flag stays `false` and the PR body says so — a disabled ledger is
-  honest; a self-validating one is not.
+- The PR flips `Radar:Ai:ReportedMetrics:Enabled` back to `true` in `default.json` and amends its
+  `_comment` in place (drop the DISABLED sentence, cite this spec); the live AI-ON pins asserted by
+  `ScoringConfigFingerprintTests` are computed WITH the flag on (`rm=reported-metrics-v2`). If the
+  implementer is not confident all of §1–§4 hold, the flag stays `false`, the asserted pins carry
+  `rm=disabled`, and the PR body says so — a disabled ledger is honest; a self-validating one is not.
 
 ## Non-goals
 
@@ -223,11 +241,13 @@ NOT in scope (spec 201 owns that seam) — note the precedent in the PR body if 
       trajectory citations by FAILING the judgment (a finding's drops the finding only); same-day
       accessions ordered by accession then record id; the five pinned cases (incl.
       article-the-day-after-the-filing) pass.
-- [ ] The verified extraction, ledger state and attempt count are PERSISTED on the analyzed-filing record;
-      `Pending` records replay the same payload (no fetch, no model call — asserted) until acknowledged; the
-      persisted attempt count drives the once-per-company warning at 3; null policy stays a hit; missing
-      state reads `Pending`/0; a policy-without-payload record fails closed (counted, logged, never
-      acknowledged) and the PR body asserts the live count of such records is zero.
+- [ ] `IReportedMetricOutbox` persists the COMPLETE ledger payload (company, evidence, accession, form,
+      filing date, reader, policy, verified records, drop counts, attempts) in `CollectionPass` after
+      company resolution and BEFORE the cache is stamped; pending envelopes are enumerated and replayed
+      each run (no fetch, no model call — asserted) until acknowledged; acknowledged envelopes are kept;
+      unresolved-company envelopes are retried through resolution; the persisted `Attempts` drives the
+      warning at 3; missing state reads `Pending`/0; null cache policy stays a hit; a policy stamp with no
+      envelope fails closed and the PR body asserts the live count of such records is zero.
 - [ ] `reported-metrics-v2` verifier: metric synonym in quote, period in quote, whole-token value/unit/prior
       value, AND metric/value/period associated within one bounded fragment with the value nearest the
       metric, with decimal points never a fragment boundary; each drop class counted; the reviewer's four
