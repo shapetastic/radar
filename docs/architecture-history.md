@@ -2953,7 +2953,7 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     composition change (v12 / `CompositionRevision`) and a different, later decision. **MEASURED (first
     post-merge full run, 2026-09-07 21:30Z, report `radar-weekly-2026-09-07.md`, Lead lines 20/15):**
     `Investigate` **1** (AGX, Opportunity 20 — the first score-based label on any research arm since
-    2026-08-14 and the first `Investigate` since the single-strategy era); `Watch` 18 = **4 by score**
-    (ESQ 17, JOUT 15, DGII 15, one more at 15) + **15 by floor**; the banner rendered once with the arm,
+    2026-08-14 and the first `Investigate` since the single-strategy era); `Watch` 18 = **3 by score**
+    (ESQ 17, JOUT 15, DGII 15) + **15 by floor**; the banner rendered once with the arm,
     lines, "explicit", v5 and the "operating thresholds, not validated evidence" sentence. Before
     (2026-09-06 report): 0 / 0 / 18 by floor. Descriptive, no gate.
