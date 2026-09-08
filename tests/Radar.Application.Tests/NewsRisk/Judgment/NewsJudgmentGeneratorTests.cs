@@ -69,7 +69,8 @@ public sealed class NewsJudgmentGeneratorTests
         StubAnalyzer analyzer,
         InMemoryJudgmentStore store,
         string judgeName = "deepinfra-deepseek",
-        ILogger<NewsJudgmentGenerator>? logger = null) =>
+        ILogger<NewsJudgmentGenerator>? logger = null,
+        Radar.Application.Filings.IReportedMetricStore? reportedMetrics = null) =>
         new(
             new NullBatchReader(),
             new NewsJudgmentReaderSet(
@@ -80,7 +81,184 @@ public sealed class NewsJudgmentGeneratorTests
             store,
             JudgmentOptions(),
             TimeProvider.System,
-            logger ?? NullLogger<NewsJudgmentGenerator>.Instance);
+            logger ?? NullLogger<NewsJudgmentGenerator>.Instance,
+            reportedMetrics);
+
+    /// <summary>Spec 215 §2: a one-family typing result whose statement NAMES a ledger metric (backlog).</summary>
+    private static NewsTypingRunResult BacklogTypingResult()
+    {
+        const string Statement = "Power projects lift Argan as backlog hits $2.5B";
+        var factRef = NewsJudgmentTestData.FactRef(
+            Eose, Guid.NewGuid(), Statement, NewsFactAssertionStatus.Reported, NewsFactAttribution.Publisher);
+        var families = FactFamilyBuilder.Build(
+        [
+            new FactFamilyInputFact(
+                FactId: factRef.Fact.FactId,
+                CompanyId: Eose,
+                EventTypes: factRef.Fact.EventTypes,
+                Statement: Statement,
+                FirstObservedAtUtc: NewsJudgmentTestData.ObservedAt,
+                Publisher: "Outlet",
+                ObservationId: factRef.ObservationId,
+                CaptureMode: NewsObservationCaptureMode.ProspectiveRss),
+        ]);
+
+        return new NewsTypingRunResult(
+            RunId: RunId,
+            WindowStartUtc: NewsJudgmentTestData.ObservedAt.AddDays(-30),
+            WindowEndUtc: NewsJudgmentTestData.ObservedAt.AddDays(1),
+            NewsObservationBatchId: null,
+            Cohorts:
+            [
+                new NewsTypingCohortRunResult(
+                    Reader: new NewsTypingReaderIdentity(
+                        "deepinfra-deepseek", "openai", "deepseek-ai/DeepSeek-V4-Flash"),
+                    Families: families,
+                    FactsById: new Dictionary<Guid, NewsTypingFactRef> { [factRef.Fact.FactId] = factRef },
+                    TypingCompletenessByCompany: new Dictionary<Guid, NewsTypingCompleteness>
+                    {
+                        [Eose] = NewsTypingCompleteness.Complete,
+                    },
+                    FactsDroppedInWindow: 0,
+                    RetryExhausted: 0),
+            ]);
+    }
+
+    private sealed class FixedLedger(IReadOnlyList<Radar.Application.Filings.ReportedMetricRecord> records, bool fail = false)
+        : Radar.Application.Filings.IReportedMetricStore
+    {
+        public Task<Radar.Application.Storage.DurableWriteResult> WriteIfNewAsync(
+            Guid companyId,
+            string accession,
+            IReadOnlyList<Radar.Application.Filings.ReportedMetricRecord> records,
+            CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<Radar.Application.Filings.ReportedMetricRecord>> GetForCompanyAsync(
+            Guid companyId, CancellationToken ct) =>
+            fail
+                ? throw new IOException("ledger unreadable")
+                : Task.FromResult<IReadOnlyList<Radar.Application.Filings.ReportedMetricRecord>>(
+                    [.. records.Where(r => r.CompanyId == companyId)]);
+    }
+
+    private static Radar.Application.Filings.ReportedMetricRecord BacklogLedgerRecord(Guid id) => new(
+        Id: id,
+        CompanyId: Eose,
+        Accession: "0000100591-26-000005",
+        EvidenceId: Guid.NewGuid(),
+        FilingDateUtc: new DateTimeOffset(2026, 4, 9, 20, 0, 0, TimeSpan.Zero),
+        Form: "8-K",
+        Metric: Radar.Application.Filings.ReportedMetric.Backlog,
+        Value: "2.929",
+        Unit: "billion",
+        Period: "as of January 31, 2026",
+        PriorValue: null,
+        PriorPeriod: null,
+        Quote: "Project backlog of $2.929 billion as of January 31, 2026.",
+        ReaderIdentity: "openai:deepseek",
+        Verification: Radar.Application.Filings.ReportedMetricVerification.Verbatim,
+        Policy: Radar.Application.Filings.ReportedMetricsPolicy.Version);
+
+    [Fact]
+    public async Task ALedgerReference_ReachesTheRequest_TheValidator_AndTheRecord_AndForksTheCacheKey()
+    {
+        // Spec 215 §2 end to end: the ledger's backlog value is projected because the supplied statement
+        // names backlog; the judge cites it beside the level; the basis is ReferenceSupported; the record
+        // carries the projected set and the cited set; and the family-set hash differs from the
+        // reference-free one, so the verdict made with references is never reused for one without.
+        var referenceId = Guid.Parse("1e5a0000-0000-4000-8000-000000000001");
+        var typing = BacklogTypingResult();
+        var analyzer = new StubAnalyzer(request => new NewsJudgmentAnalysisOutcome(
+            NewsJudgmentAnalysisFailure.None,
+            new NewsJudgmentModelResponse(
+                BusinessTrajectory: "Deteriorating",
+                ChallengeStrength: null,
+                Findings: [],
+                Rationale: "Backlog of $2.5B sits below the $2.929B reported as of January 31.",
+                TrajectoryFactIds: [request.Families[0].RepresentativeFactId.ToString("D")],
+                TrajectoryReferenceIds: [referenceId.ToString("D")]),
+            "raw-hash",
+            null));
+        var store = new InMemoryJudgmentStore();
+
+        var result = await Generator(analyzer, store, reportedMetrics: new FixedLedger([BacklogLedgerRecord(referenceId)]))
+            .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+
+        Assert.NotNull(result);
+        var request = Assert.Single(analyzer.Requests);
+        var reference = Assert.Single(request.References!);
+        Assert.Equal(referenceId, reference.ReferenceId);
+        Assert.Equal("2.929", reference.Value);
+
+        var record = Assert.Single(store.Written);
+        Assert.Equal(NewsJudgmentStatus.Judged, record.Status);
+        Assert.Equal(NewsTrajectoryBasis.ReferenceSupported, record.TrajectoryBasis);
+        Assert.Equal([referenceId], record.ReferenceIds);
+        Assert.Equal(0, record.ReferenceValuesOmitted);
+        Assert.Equal([referenceId], record.TrajectoryReferenceIds);
+        Assert.Equal("news-judgment-v6", record.SchemaVersion);
+
+        // The same families with NO ledger hash differently — a different cache entry, never a reuse.
+        var withoutLedger = new InMemoryJudgmentStore();
+        await Generator(new StubAnalyzer(_ => new NewsJudgmentAnalysisOutcome(
+                NewsJudgmentAnalysisFailure.ProviderError, null, null, "down")), withoutLedger)
+            .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+        var reference_free = Assert.Single(withoutLedger.Written);
+        Assert.NotEqual(record.FamilySetHash, reference_free.FamilySetHash);
+        Assert.Equal([], reference_free.ReferenceIds!);
+        Assert.Equal(0, reference_free.ReferenceValuesOmitted);
+    }
+
+    [Fact]
+    public async Task AnUnreadableLedger_IsOneWarning_AndTheJudgmentProceedsWithoutReferences()
+    {
+        var typing = BacklogTypingResult();
+        var analyzer = new StubAnalyzer(request => new NewsJudgmentAnalysisOutcome(
+            NewsJudgmentAnalysisFailure.None,
+            new NewsJudgmentModelResponse(
+                "Unknown", null, [], "No comparison available.", TrajectoryFactIds: []),
+            "raw-hash",
+            null));
+        var store = new InMemoryJudgmentStore();
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+
+        await Generator(analyzer, store, logger: logger, reportedMetrics: new FixedLedger([], fail: true))
+            .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+
+        var request = Assert.Single(analyzer.Requests);
+        Assert.Empty(request.References!);
+        var record = Assert.Single(store.Written);
+        Assert.Equal([], record.ReferenceIds!);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning
+                && e.Message.Contains("could not be read", StringComparison.Ordinal)
+                && e.Message.Contains("NO reference values", StringComparison.Ordinal));
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("1 of 1 candidate company ledger(s)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task NoLedgerRegistered_RecordsAnEmptyProjectedSet_AndReferencesAreNull_OnTheRequest()
+    {
+        var typing = BacklogTypingResult();
+        var analyzer = new StubAnalyzer(request => new NewsJudgmentAnalysisOutcome(
+            NewsJudgmentAnalysisFailure.None,
+            new NewsJudgmentModelResponse(
+                "Unknown", null, [], "No comparison available.", TrajectoryFactIds: []),
+            "raw-hash",
+            null));
+        var store = new InMemoryJudgmentStore();
+
+        await Generator(analyzer, store).GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
+
+        Assert.Empty(Assert.Single(analyzer.Requests).References!);
+        var record = Assert.Single(store.Written);
+        Assert.Equal([], record.ReferenceIds!);
+        Assert.Equal(0, record.ReferenceValuesOmitted);
+        Assert.Equal([], record.TrajectoryReferenceIds!);
+    }
 
     private static NewsJudgmentOptions JudgmentOptions() => new(
         outputDirectory: "unused",
@@ -331,7 +509,7 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal(NewsJudgmentStatus.Judged, reused.Status);
         // … while EVERY completeness dimension is this run's.
         Assert.Equal(NewsTypingCompleteness.RetryableFailure, reused.TypingCompleteness);
-        Assert.Equal("news-judgment-v5", reused.SchemaVersion);
+        Assert.Equal("news-judgment-v6", reused.SchemaVersion);
     }
 
     [Fact]

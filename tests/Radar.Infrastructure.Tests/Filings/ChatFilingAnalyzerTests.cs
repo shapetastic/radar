@@ -17,7 +17,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Improving","confidence":0.8,"rationale":"Record bookings and raised outlook."}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("Q3 results: record bookings.", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("Q3 results: record bookings.", CancellationToken.None)).Sentiment;
 
         Assert.Equal(FilingDirection.Improving, result.Direction);
         Assert.Equal(0.8m, result.Confidence);
@@ -32,7 +32,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Improving","confidence":1.7,"rationale":"x"}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         Assert.Equal(FilingDirection.Improving, result.Direction);
         Assert.Equal(1.0m, result.Confidence);
@@ -45,7 +45,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Deteriorating","confidence":-0.4,"rationale":"x"}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         Assert.Equal(FilingDirection.Deteriorating, result.Direction);
         Assert.Equal(0m, result.Confidence);
@@ -59,7 +59,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":99,"confidence":0.7,"rationale":"x"}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         Assert.Equal(FilingDirection.Unknown, result.Direction);
         Assert.Equal(0m, result.Confidence);
@@ -71,7 +71,7 @@ public sealed class ChatFilingAnalyzerTests
         var client = new FakeChatClient(string.Empty, throwOnCall: new InvalidOperationException("provider down"));
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         AssertUnknown(result);
     }
@@ -82,7 +82,7 @@ public sealed class ChatFilingAnalyzerTests
         var client = new FakeChatClient("   ");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         AssertUnknown(result);
     }
@@ -93,7 +93,7 @@ public sealed class ChatFilingAnalyzerTests
         var client = new FakeChatClient("not json");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         AssertUnknown(result);
     }
@@ -106,7 +106,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Sideways","confidence":0.5,"rationale":"x"}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         AssertUnknown(result);
     }
@@ -148,7 +148,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Improving","confidence":0.8,"rationale":"x"}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("", CancellationToken.None)).Sentiment;
 
         AssertUnknown(result);
         Assert.Equal(0, client.CallCount);
@@ -161,7 +161,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Improving","confidence":0.8,"rationale":"x"}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync(null!, CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync(null!, CancellationToken.None)).Sentiment;
 
         AssertUnknown(result);
         Assert.Equal(0, client.CallCount);
@@ -176,7 +176,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Improving","confidence":0.8,"rationale":"x"}""");
         var analyzer = Build(client, maxInputLength: maxInputLength);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         AssertUnknown(result);
         Assert.Equal(0, client.CallCount);
@@ -190,7 +190,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Improving","confidence":0.8,"rationale":"Strong quarter — a guaranteed safe bet, buy now."}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         Assert.Equal(FilingDirection.Improving, result.Direction);
         Assert.Equal(0.8m, result.Confidence);
@@ -205,7 +205,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Improving","confidence":0.7,"rationale":"Announced a share buyback; a top seller drove growth."}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         Assert.Equal(FilingDirection.Improving, result.Direction);
         Assert.Equal("Announced a share buyback; a top seller drove growth.", result.Rationale);
@@ -218,7 +218,7 @@ public sealed class ChatFilingAnalyzerTests
             """{"direction":"Improving","confidence":0.8,"rationale":"Record bookings and raised full-year outlook."}""");
         var analyzer = Build(client);
 
-        var result = await analyzer.AnalyzeAsync("some release text", CancellationToken.None);
+        var result = (await analyzer.AnalyzeAsync("some release text", CancellationToken.None)).Sentiment;
 
         foreach (var banned in new[] { "buy", "sell", "guaranteed", "safe bet" })
         {

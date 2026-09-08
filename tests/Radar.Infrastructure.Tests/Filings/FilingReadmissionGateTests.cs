@@ -327,11 +327,11 @@ public sealed class FilingReadmissionGateTests : IDisposable
     {
         public int AnalyzeCount { get; private set; }
 
-        public Task<FilingSentiment> AnalyzeAsync(string? earningsReleaseText, CancellationToken ct)
+        public Task<FilingRead> AnalyzeAsync(string? earningsReleaseText, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             AnalyzeCount++;
-            return Task.FromResult(sentiment);
+            return Task.FromResult(FilingRead.WithoutMetrics(sentiment));
         }
     }
 }

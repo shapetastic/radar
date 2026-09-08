@@ -1748,6 +1748,127 @@ public sealed class DirectionalFilingSignalSourceTests
         }
     }
 
+    // ── Spec 215 §1: the reported-metrics extraction rides a FRESH read; the cache stamps the policy ──
+
+    private static VerifiedReportedMetrics Verified() => new(
+        [new ReportedMetricReading(ReportedMetric.Revenue, "384.0", "million", "Q2 FY27", null, null, "Revenues of $384.0 million")],
+        DroppedUnrecognised: 1,
+        DroppedUnverified: 2,
+        DroppedDuplicate: 0,
+        PriorPairsDroppedIncomplete: 0);
+
+    [Fact]
+    public async Task AFreshRead_CarriesItsExtraction_WithAccessionFormAndReader_AndStampsThePolicy()
+    {
+        var evidence = EarningsFiling();
+        var cache = new FakeAnalyzedFilingCache();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenues of $384.0 million."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(
+            new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose."), Verified());
+
+        var result = await CreateSource(
+                reader, analyzer, new DirectionalFilingSignalOptions { ModelIdentity = "openai:deepseek" }, cache)
+            .ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        var extraction = Assert.IsType<ReportedMetricExtraction>(produced.ReportedMetrics);
+        Assert.Equal("0001049521-26-000011", extraction.Accession);
+        Assert.Equal("8-K", extraction.Form);
+        Assert.Equal("openai:deepseek", extraction.ReaderIdentity);
+        Assert.Single(extraction.Metrics.Verified);
+        Assert.Equal(1, extraction.Metrics.DroppedUnrecognised);
+        Assert.Equal(2, extraction.Metrics.DroppedUnverified);
+        Assert.Equal(ReportedMetricsPolicy.Version, cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
+    }
+
+    [Fact]
+    public async Task ANonDirectionalFreshRead_AlsoCarriesItsExtraction_OnTheReadSignal()
+    {
+        // The ledger does not care about direction: a Mixed release states figures too.
+        var evidence = EarningsFiling();
+        var cache = new FakeAnalyzedFilingCache();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Two-sided."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Mixed, 0.9m, "Both."), Verified());
+
+        var result = await CreateSource(reader, analyzer, cache: cache).ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal("Mixed", produced.Signal.Direction);
+        Assert.NotNull(produced.ReportedMetrics);
+        Assert.Equal(ReportedMetricsPolicy.Version, cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
+    }
+
+    [Fact]
+    public async Task AReadThatDidNotExtract_CarriesNull_AndStampsNoPolicy()
+    {
+        var evidence = EarningsFiling();
+        var cache = new FakeAnalyzedFilingCache();
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue rose."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Revenue rose."));
+
+        var result = await CreateSource(reader, analyzer, cache: cache).ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        Assert.Null(Assert.Single(result).ReportedMetrics);
+        Assert.Null(cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
+    }
+
+    [Fact]
+    public async Task ACacheReplay_CarriesNoExtraction_AndANullPolicyIsAHit()
+    {
+        // Heal-forward: a pre-215 record (null policy) replays with NO fetch, NO analysis and NO extraction.
+        var evidence = EarningsFiling();
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries["0001049521-26-000011"] = new AnalyzedFilingRecord(
+            "0001049521-26-000011",
+            AnalyzedFilingOutcome.DirectionalSignalProduced,
+            new ExtractedSignal(evidence.SourceName, "GuidanceChange", "Positive", 8, 6, 0.9m, evidence.Title, "cached"),
+            evidence.PublishedAtUtc,
+            AnalyzedFilingRecord.CurrentCacheVersion,
+            EarningsComparabilityScan.Policy(0.65m),
+            new ComparabilityMarkers([], []));
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("never read"), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "x"), Verified());
+
+        var result = await CreateSource(reader, analyzer, cache: cache).ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal("cached", produced.Signal.Reason);
+        Assert.Null(produced.ReportedMetrics);
+        Assert.Equal(0, analyzer.AnalyzeCount);
+        Assert.Equal(0, reader.ReadCount);
+    }
+
+    [Fact]
+    public async Task ADifferingReportedMetricsPolicyOnDisk_IsAMiss_AndTheReadIsRepeated()
+    {
+        var evidence = EarningsFiling();
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries["0001049521-26-000011"] = new AnalyzedFilingRecord(
+            "0001049521-26-000011",
+            AnalyzedFilingOutcome.DirectionalSignalProduced,
+            new ExtractedSignal(evidence.SourceName, "GuidanceChange", "Positive", 8, 6, 0.9m, evidence.Title, "cached"),
+            evidence.PublishedAtUtc,
+            AnalyzedFilingRecord.CurrentCacheVersion,
+            EarningsComparabilityScan.Policy(0.65m),
+            new ComparabilityMarkers([], []),
+            ReportedMetricsPolicy: "reported-metrics-v0");
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue rose."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "fresh"), Verified());
+
+        var result = await CreateSource(reader, analyzer, cache: cache).ProduceAsync([evidence], AsOf, CancellationToken.None);
+
+        var produced = Assert.Single(result);
+        Assert.Equal("fresh", produced.Signal.Reason);
+        Assert.NotNull(produced.ReportedMetrics);
+        Assert.Equal(1, analyzer.AnalyzeCount);
+        Assert.Equal(ReportedMetricsPolicy.Version, cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
+    }
+
     /// <summary>In-memory <see cref="IAnalyzedFilingCache"/> keyed by accession for the cache-behaviour tests.</summary>
     private sealed class FakeAnalyzedFilingCache : IAnalyzedFilingCache
     {
@@ -1767,15 +1888,16 @@ public sealed class DirectionalFilingSignalSourceTests
         }
     }
 
-    private sealed class FakeFilingAnalyzer(FilingSentiment sentiment) : IFilingAnalyzer
+    private sealed class FakeFilingAnalyzer(
+        FilingSentiment sentiment, VerifiedReportedMetrics? reportedMetrics = null) : IFilingAnalyzer
     {
         public int AnalyzeCount { get; private set; }
 
-        public Task<FilingSentiment> AnalyzeAsync(string? earningsReleaseText, CancellationToken ct)
+        public Task<FilingRead> AnalyzeAsync(string? earningsReleaseText, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             AnalyzeCount++;
-            return Task.FromResult(sentiment);
+            return Task.FromResult(new FilingRead(sentiment, reportedMetrics));
         }
     }
 }

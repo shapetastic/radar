@@ -35,8 +35,12 @@ public sealed record NewsJudgmentValidationResult(
     // ComparisonBasis is StatedComparison or Event, LevelOnly when every cited family is LevelOnly or
     // NotQuantified. `null` everywhere else (Mixed, Unknown, any failure) = NOT APPLICABLE. LevelOnly is
     // NOT a validation failure — the judge's call is persisted verbatim and marked; the materializer's
-    // allowlist is what keeps it out of scoring.
-    NewsTrajectoryBasis? TrajectoryBasis);
+    // allowlist is what keeps it out of scoring. Spec 215 §2 adds ReferenceSupported between the two:
+    // a cited LevelOnly fact whose statement names the metric of a cited reference value.
+    NewsTrajectoryBasis? TrajectoryBasis,
+    // Spec 215 §2: the validated PROJECTED reference ids the judge cited as the trajectory's comparison
+    // basis. Always non-null on a Judged result (empty when none were cited); empty on a failure.
+    IReadOnlyList<Guid> TrajectoryReferenceIds);
 
 /// <summary>
 /// Mechanical validation of one judge response (spec 185 §2, made STRICT by spec 187 §1), pure and
@@ -157,13 +161,24 @@ public static class NewsJudgmentValidator
     private static readonly string ContextOnlyTypeList =
         string.Join(", ", NewsJudgmentContextOnlyEventTypes.Members);
 
+    /// <param name="response">The raw typed response.</param>
+    /// <param name="suppliedFamilies">The families ACTUALLY supplied to the judge for this company.</param>
+    /// <param name="suppliedReferences">
+    /// Spec 215 §2: the reference values ACTUALLY projected into the judge's input (null = none). Every
+    /// <c>TrajectoryReferenceIds</c> / finding <c>ReferenceIds</c> citation is resolved against this set
+    /// through a SECOND <see cref="NewsJudgmentCitationResolver"/> instance (the same prefix grammar), so
+    /// a reference citation can never resolve to a fact and a fact citation never to a reference.
+    /// </param>
     public static NewsJudgmentValidationResult Validate(
-        NewsJudgmentModelResponse response, IReadOnlyList<NewsJudgmentInputFamily> suppliedFamilies)
+        NewsJudgmentModelResponse response,
+        IReadOnlyList<NewsJudgmentInputFamily> suppliedFamilies,
+        IReadOnlyList<NewsJudgmentReferenceValue>? suppliedReferences = null)
     {
         ArgumentNullException.ThrowIfNull(response);
         ArgumentNullException.ThrowIfNull(suppliedFamilies);
 
         var familyByFactId = suppliedFamilies.ToDictionary(f => f.RepresentativeFactId);
+        var referenceById = (suppliedReferences ?? []).ToDictionary(r => r.ReferenceId);
         var dropReasons = new List<string>();
         var rawFindings = response.Findings ?? [];
 
@@ -172,6 +187,12 @@ public static class NewsJudgmentValidator
         // counter, so "raw citation occurrences expanded across trajectory plus findings" has exactly one
         // definition and one accumulation point.
         var citations = new NewsJudgmentCitationResolver(familyByFactId.Keys);
+
+        // Spec 215 §2 — a SECOND resolver, scoped to the PROJECTED reference ids. Reference citations obey
+        // the same grammar as FactIds (a complete supplied GUID or a unique 8-31 hex prefix of one) but
+        // resolve only against references; its expansions are counted on its own instance and are NOT
+        // folded into the FactId expansion count, whose definition (spec 197 §2.2) is fact citations only.
+        var referenceCitations = new NewsJudgmentCitationResolver(referenceById.Keys);
 
         // Rationale: trimmed, then scrubbed through the ONE shared advice-language guard, and only THEN
         // measured (spec 192 §1's ordering fix — the scrub used to run AFTER the length check, so the one
@@ -215,6 +236,18 @@ public static class NewsJudgmentValidator
             citations,
             dropReasons,
             out var trajectoryFactIds))
+        {
+            return Failed(rawFindings.Count, rationale, dropReasons, rationaleLength, citations.ExpansionCount);
+        }
+
+        // Spec 215 §2: the trajectory's cited references — resolved, distinct after expansion, and every one
+        // in the PROJECTED set — or the whole response fails with a named `trajectory-reference-…` reason,
+        // exactly as an unsupplied FactId does. A reference is never REQUIRED (a Supported trajectory needs
+        // none), and by construction a reference alone can never carry a trajectory: the fact gate above
+        // already demanded at least one cited FACT for a directional call.
+        if (!TryResolveReferenceCitations(
+            response.TrajectoryReferenceIds, referenceCitations, "trajectory-", dropReasons,
+            out var trajectoryReferenceIds))
         {
             return Failed(rawFindings.Count, rationale, dropReasons, rationaleLength, citations.ExpansionCount);
         }
@@ -278,6 +311,16 @@ public static class NewsJudgmentValidator
                 continue;
             }
 
+            // Spec 215 §2: a finding's reference citations resolve against the projected set exactly as its
+            // FactIds resolve against the supplied families; an unsupplied/malformed/duplicate reference id
+            // drops the finding with its own `finding[i] reference-…` reason. Zero references is fine.
+            if (!TryResolveReferenceCitations(
+                finding.ReferenceIds, referenceCitations, $"finding[{i}] ", dropReasons,
+                out var findingReferenceIds))
+            {
+                continue;
+            }
+
             // Spec 187 §1: a finding standing ENTIRELY on other people's views, price/trading behaviour or
             // content mechanics is dropped individually — the YORW shape, where a 52-week share-price low
             // became a high-confidence business-execution finding. If a supplied business fact sits behind
@@ -314,7 +357,14 @@ public static class NewsJudgmentValidator
             }
 
             accepted.Add(new NewsJudgmentValidatedFinding(
-                category, severity, confidence, citedIds, string.IsNullOrEmpty(caveat) ? null : caveat));
+                category,
+                severity,
+                confidence,
+                citedIds,
+                string.IsNullOrEmpty(caveat) ? null : caveat,
+                // Spec 215 §2: a v6 finding ALWAYS records its (possibly empty) resolved reference set —
+                // null is reserved for pre-215 records on disk.
+                ReferenceIds: findingReferenceIds));
         }
 
         var total = rawFindings.Count;
@@ -374,14 +424,20 @@ public static class NewsJudgmentValidator
             RationaleLength: rationaleLength,
             RationaleOverSoftLimit: rationaleLength > MaxRationaleLength,
             FactIdPrefixExpansionCount: citations.ExpansionCount,
-            TrajectoryBasis: TrajectoryBasisFor(trajectory, trajectoryFactIds, familyByFactId));
+            TrajectoryBasis: TrajectoryBasisFor(
+                trajectory, trajectoryFactIds, familyByFactId, trajectoryReferenceIds, referenceById),
+            TrajectoryReferenceIds: trajectoryReferenceIds);
     }
 
     /// <summary>
     /// Spec 214 §2 — the trajectory-basis rule, in ONE place and evaluated only over the RESOLVED cited
-    /// facts of a DIRECTIONAL Judged result: <see cref="NewsTrajectoryBasis.Supported"/> when at least one
-    /// cited family is a <see cref="NewsFactComparisonBasis.StatedComparison"/> or an
-    /// <see cref="NewsFactComparisonBasis.Event"/>; otherwise <see cref="NewsTrajectoryBasis.LevelOnly"/>.
+    /// facts (and, spec 215 §2, the RESOLVED cited references) of a DIRECTIONAL Judged result, in fixed
+    /// precedence: <see cref="NewsTrajectoryBasis.Supported"/> when at least one cited family is a
+    /// <see cref="NewsFactComparisonBasis.StatedComparison"/> or an <see cref="NewsFactComparisonBasis.Event"/>
+    /// (unchanged); else <see cref="NewsTrajectoryBasis.ReferenceSupported"/> when at least one cited family is
+    /// <see cref="NewsFactComparisonBasis.LevelOnly"/> AND at least one cited reference value's metric is NAMED
+    /// in that family's statement under the projector's ONE metric-phrase table
+    /// (<see cref="ReferenceValueProjector.NamesMetric"/>); else <see cref="NewsTrajectoryBasis.LevelOnly"/>.
     /// <c>null</c> for Mixed and Unknown — a non-direction has no basis to grade. Deliberately NOT a
     /// validation failure: a wrong call recorded beats a call rewritten, and the fail-closed step is the
     /// materializer's allowlist, not this validator.
@@ -389,20 +445,80 @@ public static class NewsJudgmentValidator
     public static NewsTrajectoryBasis? TrajectoryBasisFor(
         NewsJudgmentTrajectory trajectory,
         IReadOnlyList<Guid> trajectoryFactIds,
-        IReadOnlyDictionary<Guid, NewsJudgmentInputFamily> familyByFactId)
+        IReadOnlyDictionary<Guid, NewsJudgmentInputFamily> familyByFactId,
+        IReadOnlyList<Guid> trajectoryReferenceIds,
+        IReadOnlyDictionary<Guid, NewsJudgmentReferenceValue> referenceById)
     {
         ArgumentNullException.ThrowIfNull(trajectoryFactIds);
         ArgumentNullException.ThrowIfNull(familyByFactId);
+        ArgumentNullException.ThrowIfNull(trajectoryReferenceIds);
+        ArgumentNullException.ThrowIfNull(referenceById);
 
         if (trajectory is not (NewsJudgmentTrajectory.Improving or NewsJudgmentTrajectory.Deteriorating))
         {
             return null;
         }
 
-        return trajectoryFactIds.Any(id => familyByFactId[id].ComparisonBasis
-                is NewsFactComparisonBasis.StatedComparison or NewsFactComparisonBasis.Event)
-            ? NewsTrajectoryBasis.Supported
-            : NewsTrajectoryBasis.LevelOnly;
+        if (trajectoryFactIds.Any(id => familyByFactId[id].ComparisonBasis
+                is NewsFactComparisonBasis.StatedComparison or NewsFactComparisonBasis.Event))
+        {
+            return NewsTrajectoryBasis.Supported;
+        }
+
+        var citedMetrics = trajectoryReferenceIds.Select(id => referenceById[id].Metric).Distinct().ToList();
+        if (citedMetrics.Count > 0
+            && trajectoryFactIds.Any(id =>
+                familyByFactId[id].ComparisonBasis == NewsFactComparisonBasis.LevelOnly
+                && citedMetrics.Any(m => ReferenceValueProjector.NamesMetric(familyByFactId[id].Statement, m))))
+        {
+            return NewsTrajectoryBasis.ReferenceSupported;
+        }
+
+        return NewsTrajectoryBasis.LevelOnly;
+    }
+
+    /// <summary>
+    /// Spec 215 §2 — resolves one reference-citation list (trajectory or finding) against the PROJECTED
+    /// reference set through the shared resolver: parse/expand, then distinctness AFTER expansion (the
+    /// spec-197 rule 5), each failure appended as <c>{scope}reference-{code}</c> /
+    /// <c>{scope}reference-duplicate</c>, with the resolver's fact-oriented wording re-pointed at
+    /// ReferenceIds. Returns <c>false</c> when the caller must fail or drop.
+    /// </summary>
+    private static bool TryResolveReferenceCitations(
+        IReadOnlyList<string>? rawReferenceIds,
+        NewsJudgmentCitationResolver referenceCitations,
+        string scope,
+        List<string> dropReasons,
+        out IReadOnlyList<Guid> referenceIds)
+    {
+        var ids = new List<Guid>();
+        var seen = new HashSet<Guid>();
+        foreach (var rawId in rawReferenceIds ?? [])
+        {
+            var resolution = referenceCitations.Resolve(rawId);
+            if (!resolution.Resolved)
+            {
+                var code = resolution.ReasonCode.Replace("fact-", string.Empty, StringComparison.Ordinal);
+                var detail = resolution.ReasonDetail
+                    .Replace("supplied representative fact id", "supplied ReferenceId", StringComparison.Ordinal)
+                    .Replace("FactId", "ReferenceId", StringComparison.Ordinal);
+                dropReasons.Add($"{scope}reference-{code}: '{rawId}' {detail}");
+                referenceIds = [];
+                return false;
+            }
+
+            if (!seen.Add(resolution.FactId))
+            {
+                dropReasons.Add($"{scope}reference-duplicate: '{rawId}' was cited more than once");
+                referenceIds = [];
+                return false;
+            }
+
+            ids.Add(resolution.FactId);
+        }
+
+        referenceIds = ids;
+        return true;
     }
 
     /// <summary>
@@ -532,5 +648,7 @@ public static class NewsJudgmentValidator
             // the citation contract — they are recorded on the failed record, not discarded with it.
             FactIdPrefixExpansionCount: factIdPrefixExpansionCount,
             // Spec 214 §2: a failed validation has no directional claim left to grade — not applicable.
-            TrajectoryBasis: null);
+            TrajectoryBasis: null,
+            // Spec 215 §2: no claim survived, so no reference set was cited for one.
+            TrajectoryReferenceIds: []);
 }

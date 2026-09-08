@@ -196,12 +196,15 @@ public sealed class NewsJudgmentTrajectoryBasisTests
         var level = Level();
         var byId = new Dictionary<Guid, NewsJudgmentInputFamily> { [level.RepresentativeFactId] = level };
 
+        var noReferences = new Dictionary<Guid, NewsJudgmentReferenceValue>();
+
         Assert.Equal(
             NewsTrajectoryBasis.LevelOnly,
             NewsJudgmentValidator.TrajectoryBasisFor(
-                NewsJudgmentTrajectory.Improving, [level.RepresentativeFactId], byId));
+                NewsJudgmentTrajectory.Improving, [level.RepresentativeFactId], byId, [], noReferences));
         Assert.Null(NewsJudgmentValidator.TrajectoryBasisFor(
-            NewsJudgmentTrajectory.Mixed, [level.RepresentativeFactId], byId));
-        Assert.Null(NewsJudgmentValidator.TrajectoryBasisFor(NewsJudgmentTrajectory.Unknown, [], byId));
+            NewsJudgmentTrajectory.Mixed, [level.RepresentativeFactId], byId, [], noReferences));
+        Assert.Null(NewsJudgmentValidator.TrajectoryBasisFor(
+            NewsJudgmentTrajectory.Unknown, [], byId, [], noReferences));
     }
 }

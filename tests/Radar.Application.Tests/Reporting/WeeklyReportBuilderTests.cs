@@ -299,7 +299,9 @@ public sealed partial class WeeklyReportBuilderTests
             IStrategyEvidenceFactsSource? evidenceFacts = null,
             // Spec 210: a capturing logger lets a test prove the builder's aggregated provenance-gap
             // warning fires once per snapshot; the default stays silent.
-            ILogger<WeeklyReportBuilder>? logger = null)
+            ILogger<WeeklyReportBuilder>? logger = null,
+            // Spec 215 §4: the optional reported-metrics ledger the builder joins to evidence refs.
+            Radar.Application.Filings.IReportedMetricStore? reportedMetrics = null)
         {
             CountingSignals = new CountingSignalRepository(Signals);
             CountingEvidence = new CountingEvidenceRepository(Evidence);
@@ -327,7 +329,8 @@ public sealed partial class WeeklyReportBuilderTests
                 evidenceFacts ?? UnavailableStrategyEvidenceFactsSource.Instance,
                 options ?? new WeeklyReportOptions(),
                 new FixedTimeProvider(FixedNow),
-                logger ?? NullLogger<WeeklyReportBuilder>.Instance);
+                logger ?? NullLogger<WeeklyReportBuilder>.Instance,
+                reportedMetrics: reportedMetrics);
         }
 
         /// <summary>The score repository a non-primary strategy's snapshots must be seeded into.</summary>

@@ -38,5 +38,14 @@ public interface IDirectionalFilingSignalSource
     string ScoringDescriptor();
 }
 
-/// <summary>An extracted directional filing signal paired with its source evidence (provenance).</summary>
-public sealed record DirectionalFilingSignal(ExtractedSignal Signal, EvidenceItem Evidence);
+/// <summary>
+/// An extracted directional filing signal paired with its source evidence (provenance). Since spec 215 it
+/// also carries what a FRESH analysis extracted for the reported-metrics ledger:
+/// <see cref="ReportedMetrics"/> is <c>null</c> for a cache replay or an extraction-disabled read ("not
+/// extracted this pass" — never an empty list meaning "none"), so the collection pass writes the ledger
+/// only when there is a genuine extraction to write, with the company id it resolved for the signal.
+/// </summary>
+public sealed record DirectionalFilingSignal(
+    ExtractedSignal Signal,
+    EvidenceItem Evidence,
+    ReportedMetricExtraction? ReportedMetrics = null);

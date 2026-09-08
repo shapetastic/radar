@@ -1,5 +1,6 @@
 using System.Text;
 
+using Radar.Application.Filings;
 using Radar.Application.Identity;
 using Radar.Application.NewsTyping;
 
@@ -33,12 +34,20 @@ public sealed record NewsJudgmentInputFamily(
     int DistinctPublisherCount,
     NewsFactComparisonBasis ComparisonBasis);
 
-/// <summary>One assembled judgment input: the ordered supplied families, the family-bundle completeness and the available count.</summary>
+/// <summary>
+/// One assembled judgment input: the ordered supplied families, the family-bundle completeness, the
+/// available count, the family-set hash, and (spec 215 §2) the ordered company-reported reference values
+/// projected from the ledger for the metrics the supplied statements name, with the COUNTED remainder the
+/// projection caps left out. <see cref="References"/> is empty — never null — when the ledger holds
+/// nothing the statements name.
+/// </summary>
 public sealed record NewsJudgmentInputBundle(
     IReadOnlyList<NewsJudgmentInputFamily> Families,
     NewsJudgmentFamilyBundle FamilyBundle,
     int FamiliesAvailable,
-    string FamilySetHash);
+    string FamilySetHash,
+    IReadOnlyList<NewsJudgmentReferenceValue> References,
+    int ReferenceValuesOmitted);
 
 /// <summary>
 /// Deterministic judge-input assembly (spec 185 §1/§5). Pure — no clock, no I/O:
@@ -50,17 +59,25 @@ public sealed record NewsJudgmentInputBundle(
 /// <item>joins each family's <c>RepresentativeFactId</c> to its validated fact; a family whose
 /// representative cannot be resolved is skipped and counted by the caller's logging (defensive — the
 /// representative is definitionally a member fact);</item>
-/// <item>hashes the ORDERED supplied family set (<see cref="ComputeFamilySetHash"/>) — the per-judgment
-/// cache identity input, modelled on the spec-179 input-bundle hash.</item>
+/// <item>hashes the ORDERED supplied family set (<see cref="ComputeFamilySetHash(IReadOnlyList{NewsJudgmentInputFamily}, IReadOnlyList{NewsJudgmentReferenceValue})"/>) — the per-judgment
+/// cache identity input, modelled on the spec-179 input-bundle hash;</item>
+/// <item>(spec 215 §2) projects the company's reported-metrics ledger through
+/// <see cref="ReferenceValueProjector"/> against the SUPPLIED statements, after the cap, so a reference
+/// value is offered only for a metric the judge will actually see named.</item>
 /// </list>
 /// </summary>
 public static class NewsJudgmentInputBuilder
 {
+    /// <param name="reportedMetrics">
+    /// The company's reported-metrics ledger (spec 215 §2), or null/empty when none is registered or none
+    /// is accrued — both project zero references and leave every family-set hash byte-identical.
+    /// </param>
     public static NewsJudgmentInputBundle Build(
         Guid companyId,
         IReadOnlyList<FactFamilyRecord> cohortFamilies,
         IReadOnlyDictionary<Guid, NewsTypingFactRef> factsById,
-        int maxFamiliesPerJudgment)
+        int maxFamiliesPerJudgment,
+        IReadOnlyList<ReportedMetricRecord>? reportedMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(cohortFamilies);
         ArgumentNullException.ThrowIfNull(factsById);
@@ -106,13 +123,17 @@ public static class NewsJudgmentInputBuilder
                     fact.Fact.Statement, fact.Fact.EventTypes)));
         }
 
+        var projection = ReferenceValueProjector.Project(supplied, reportedMetrics ?? []);
+
         return new NewsJudgmentInputBundle(
             Families: supplied,
             FamilyBundle: resolvable > supplied.Count
                 ? NewsJudgmentFamilyBundle.Capped
                 : NewsJudgmentFamilyBundle.Complete,
             FamiliesAvailable: resolvable,
-            FamilySetHash: ComputeFamilySetHash(supplied));
+            FamilySetHash: ComputeFamilySetHash(supplied, projection.References),
+            References: projection.References,
+            ReferenceValuesOmitted: projection.ReferenceValuesOmitted);
     }
 
     /// <summary>
@@ -127,10 +148,27 @@ public static class NewsJudgmentInputBuilder
     /// the cohort key instead (<see cref="NewsJudgmentContract.CohortKey"/>), which is where a table change
     /// belongs.
     /// </para>
+    /// <para>
+    /// <b>Spec 215 §2 DOES fold the projected reference ids in — and only when there are any.</b> The
+    /// distinction from ComparisonBasis is exact: a reference value is EXTERNAL input the model sees, not
+    /// a function of the already-hashed families, so the same families beside a grown ledger are a
+    /// different judge input and must be a different cache entry (a re-judgment), never a silent reuse of
+    /// a verdict made without the references. The <c>|refs:</c> segment is appended ONLY when the projected
+    /// list is non-empty, so every accrued hash and every reference-free judgment is byte-identical to
+    /// before (asserted by test) — the ledger is heal-forward, and until a company's first release is read
+    /// nothing about its judgments moves.
+    /// </para>
     /// </summary>
-    public static string ComputeFamilySetHash(IReadOnlyList<NewsJudgmentInputFamily> families)
+    public static string ComputeFamilySetHash(IReadOnlyList<NewsJudgmentInputFamily> families) =>
+        ComputeFamilySetHash(families, []);
+
+    /// <inheritdoc cref="ComputeFamilySetHash(IReadOnlyList{NewsJudgmentInputFamily})"/>
+    public static string ComputeFamilySetHash(
+        IReadOnlyList<NewsJudgmentInputFamily> families,
+        IReadOnlyList<NewsJudgmentReferenceValue> references)
     {
         ArgumentNullException.ThrowIfNull(families);
+        ArgumentNullException.ThrowIfNull(references);
 
         var canonical = new StringBuilder("radar:news-judgment-families:");
         foreach (var family in families)
@@ -162,6 +200,15 @@ public static class NewsJudgmentInputBuilder
                 .Append('|')
                 .Append(family.DistinctPublisherCount)
                 .Append(';');
+        }
+
+        if (references.Count > 0)
+        {
+            canonical.Append("|refs:");
+            foreach (var reference in references)
+            {
+                canonical.Append(reference.ReferenceId.ToString("D")).Append(';');
+            }
         }
 
         return CanonicalHash.Sha256Hex(canonical);

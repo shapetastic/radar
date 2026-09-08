@@ -559,6 +559,47 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
+    public void AiEnabled_DefaultConfig_RegistersTheReportedMetricsLedger_AndTheAnalyzerExtracts()
+    {
+        // Spec 215 §1: Radar:Ai:ReportedMetrics:Enabled defaults to TRUE — with AI enabled the ledger is
+        // registered and the filing analyzer is told to extract.
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+        Assert.NotNull(provider.GetService<IReportedMetricStore>());
+        Assert.True(provider.GetRequiredService<FilingAnalyzerOptions>().ExtractReportedMetrics);
+        Assert.EndsWith(
+            "reported-metrics",
+            provider.GetRequiredService<FileReportedMetricStoreOptions>().RootDirectory.TrimEnd('/', '\\'),
+            StringComparison.Ordinal);
+        Assert.NotNull(provider.GetService<IDirectionalFilingSignalSource>());
+    }
+
+    [Fact]
+    public void AiEnabled_ReportedMetricsDisabled_RegistersNoLedger_AndTheAnalyzerDoesNotExtract()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"),
+            ("Radar:Ai:ReportedMetrics:Enabled", "false"));
+
+        Assert.Null(provider.GetService<IReportedMetricStore>());
+        Assert.False(provider.GetRequiredService<FilingAnalyzerOptions>().ExtractReportedMetrics);
+    }
+
+    [Fact]
+    public void AiDisabled_RegistersNoReportedMetricsLedger_WhateverTheFlagSays()
+    {
+        // Only an AI read can extract a metric, so the ledger rides the Radar:Ai gate exactly as the cache does.
+        using var provider = BuildProvider(("Radar:Ai:ReportedMetrics:Enabled", "true"));
+
+        Assert.Null(provider.GetService<IReportedMetricStore>());
+    }
+
+    [Fact]
     public void DefaultConfig_RegistersNoPriceSeam_PricesDisabled()
     {
         // Radar:Prices:Enabled defaults to false: nothing price-related is registered, the collector list and

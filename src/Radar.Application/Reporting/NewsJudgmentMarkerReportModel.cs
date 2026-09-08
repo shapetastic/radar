@@ -36,7 +36,11 @@ public sealed record NewsJudgmentLeaderMarker(
     // Unknown read has no basis to state, and an unassessed row has no judgment. Rendered on the report's
     // judgment provenance appendix, never in the leaders cell. A string token, like Trajectory, so this
     // display type still references no judgment type.
-    string? TrajectoryBasis = null)
+    string? TrajectoryBasis = null,
+    // Spec 215 §4: the cited trajectory reference ids (company-reported reference values), comma-joined,
+    // set by the policy ONLY for a judged marker whose record cited any; null otherwise. Rendered on the
+    // appendix after the basis as ` · references: …`. A string token, so no judgment type is referenced.
+    string? ReferenceIds = null)
 {
     /// <summary>
     /// The rendered marker cell — a total function over the state, so an absent/blank marker text is

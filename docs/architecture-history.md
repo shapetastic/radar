@@ -3015,7 +3015,8 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     "{LevelOnly} of {Directional} directional judgment(s) called this pass rest ONLY on level/unquantified
     facts" (never per item).
   - **Materializer `news-judgment-signal-v2 → v3` — an ALLOWLIST, not a denylist.**
-    `NewsJudgmentSignalMaterializer.AllowlistedTrajectoryBases = { Supported }`; after the status,
+    `NewsJudgmentSignalMaterializer.AllowlistedTrajectoryBases = { Supported }` (spec 215 widened it to
+    `{ Supported, ReferenceSupported }` under the same `news-judgment-signal-v3`); after the status,
     direction and cited-facts gates: `null` → `TrajectoryBasisNotRecorded` (a pre-214 directional record —
     counted, never assumed Supported), `LevelOnly` → `LevelOnlyTrajectory`, defined-but-unallowlisted →
     `TrajectoryBasisNotAllowlisted`; an unknown token ON DISK never reaches the materializer (the strict
@@ -3082,3 +3083,168 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     stamp against the test) is taken ONCE after specs 214 and 215 both merge; every candidate company is
     re-judged once (~19 calls). No formula, weight, rule-set, collapse, supersede, neutralization,
     attention-tier or news-query change; spec 214 moved no AI-OFF value.
+- **Spec 215 — company-reported reference values: the filing read keeps what it reads, and the judge is
+  handed the company's own prior figure for any metric a news fact quotes (2026-09-08).** Spec 214 stopped
+  the judge treating a level as a trend; it could not make the judge RIGHT about the trend, because Radar
+  held no prior value to compare against — the EX-99.1 body `ChatFilingAnalyzer` read live was never
+  persisted, and the three backlog figures the skeptic compared were numbers Argan itself had reported in
+  filings Radar READ and then forgot. No earlier bullet claimed the body was "read and discarded", so
+  nothing here needed reversal; the seam line in `docs/radar-full-pipeline-spec.md` was amended in place.
+  - **The filing read returns the metrics the release STATES (`Radar.Application.Filings`).**
+    `IFilingAnalyzer.AnalyzeAsync` now returns `FilingRead(Sentiment, VerifiedReportedMetrics?)` — the
+    `FilingSentiment` half is byte-unchanged (the pre-215 directional instruction is pinned as
+    `ChatFilingAnalyzer.SentimentInstruction`, and the seam test asserts it is the exact spec-164 text);
+    `ReportedMetrics` is `null` when NO extraction was examined (extraction disabled via
+    `FilingAnalyzerOptions.ExtractReportedMetrics` — the reported-metrics paragraph is omitted and nothing
+    is examined or returned; the structured-output schema derived from the DTO still advertises the list —
+    no model call, an untrusted response) and non-null — a verified list plus FOUR measured counts
+    (`DroppedUnrecognised` / `DroppedUnverified` / `DroppedDuplicate` / `PriorPairsDroppedIncomplete`) —
+    when the response was examined. The typed model response is a NEW all-strings
+    wire DTO (`FilingReadModelResponse` + `ReportedMetricWire`, the spec-179 rule); `direction` is a string
+    parsed by the digit-rejecting shared token parser and an out-of-vocabulary token degrades the WHOLE
+    read to Unknown with nothing examined (the pre-215 behaviour, where enum deserialization rejected the
+    payload); `confidence` stays a JSON number because that is the shape every accrued live response has
+    carried and the schema the typed extension emits derives from the DTO. The closed `ReportedMetric`
+    enum (Revenue, NetIncome, DilutedEps, GrossMargin, OperatingIncome, Backlog, CashAndInvestments,
+    TotalDebt, FreeCashFlow — guidance deliberately absent; values start at 1) is spelled as a
+    compile-time constant in `ReportedMetricsInstruction` so `FilingAnalyzerPrompt.DefaultSystemInstruction`
+    stays a `const` alias, and a test pins the constant to the enum.
+    `AnalyzedFilingRecord.CurrentCacheVersion` was NOT bumped: the record gained trailing nullable
+    `ReportedMetricsPolicy` (null = written pre-215 or extraction disabled = HIT, the spec-160 `cmpscan`
+    null-policy precedent; a non-null value differing from `ReportedMetricsPolicy.Version` is a bounded
+    MISS in `DirectionalFilingSignalSource` pass 1), and the stamp is written ONLY when an extraction was
+    made, so a null on disk always means "not extracted", never "extracted nothing".
+  - **Verification is code, not the model's word (`ReportedMetricVerifier`, Infrastructure, pure).** It
+    lives beside `EarningsComparabilityScan` (the spec-160 shape) rather than in Application, because it
+    reuses the shared `FeedTargetRelevance.NormalizeWhitespace` collapser (Infrastructure) and runs over
+    the TRUNCATED body the analyzer actually sent (`FilingAnalyzerPrompt.Truncate`, same cap) — a pure
+    Application verifier would have needed a pasted second copy of the collapser. Rules, in order: a null
+    entry or a blank metric/value/period/quote is `DroppedUnverified`; a non-blank metric outside the
+    closed set is `DroppedUnrecognised`; the value, the prior value (when present) and the unit (when
+    non-blank) must appear verbatim (ordinal, whitespace-collapsed) inside the quote and the quote inside
+    the truncated body, else `DroppedUnverified` (so a quote past the `MaxInputLength` cap is a COUNTED
+    gap, never a silent zero); a repeated (metric, period) pair is `DroppedDuplicate` (the third count is
+    additive to the spec's two — one ledger record per pair, the repeat counted rather than collapsed). A
+    prior VALUE is kept only when its prior PERIOD was stated too (half a comparison cannot be placed in
+    time); an incomplete pair — a verified prior value without a period, or a period without a value — is
+    nulled on the record (the current value itself verified and is kept) and COUNTED as
+    `PriorPairsDroppedIncomplete`, the fourth measure, so a model that habitually returns half a comparison
+    shows up in the aggregated line rather than as silently prior-less records. Persisted strings are the trimmed, whitespace-collapsed
+    forms the check compared, so a record can never disagree with the scan that admitted it. No
+    arithmetic, no unit conversion, no number parsing anywhere.
+  - **The ledger (`IReportedMetricStore` → `FileReportedMetricStore`,
+    `{ReportedMetricsDirectory}/{companyId:D}/{sanitizedAccession}.json`).** One file per (company,
+    accession) holding that release's `ReportedMetricRecord` LIST (id, company, accession, evidence id,
+    filing date = `PublishedAtUtc ?? CollectedAtUtc`, form, metric, value/unit/period as stated, prior
+    pair, quote, reader identity, `Verification = Verbatim`, `Policy = reported-metrics-v1`); ids are
+    content-derived over `radar:reported-metric:{accession}:{metric}:{period}` so a re-read is a durable
+    no-op; the write is `FileMode.CreateNew` (an existing file is `AlreadyAvailable`, a disk failure a typed
+    `Failed`, never a throw); the read returns `FilingDateUtc` desc, metric, period, id. An EMPTY list still
+    claims the file (a release that verified nothing is a recorded fact). Written by `CollectionPass`, in
+    its existing directional loop, AFTER `MapResolveReviewStoreAsync` resolved the signal — the record is
+    filed under the RESOLVED company id (`SignalStoreResult` now carries it; resolution stays in one
+    place), through an optional `IReportedMetricStore?` (null ⇒ byte-identical). The extraction rides
+    `DirectionalFilingSignal.ReportedMetrics` (`ReportedMetricExtraction`: accession, form, reader,
+    metrics) and is null on a cache replay — "not extracted this pass", never an empty list. ONE aggregated
+    Information line per run: fresh reads that extracted / files written / already on disk / not persisted
+    / no resolved company / no ledger registered / records written / dropped unverified / unrecognised /
+    duplicate / prior pairs dropped incomplete. The counts were NOT added to `CollectionPassResult`/`PipelineRunRecord` (the log line is the
+    surface; a record field is owed only if a consumer needs it). Worker: `Radar:ReportedMetricsDirectory`
+    (default `data/reported-metrics`, overridden by `run-radar.ps1`) and `Radar:Ai:ReportedMetrics:Enabled`
+    (default true, declared in `default.json` with a one-line reason), registered inside the same AI gate as
+    the analyzed-filing cache; the analyzer's `ExtractReportedMetrics` follows the same flag so a disabled
+    ledger never leaves an extraction with nowhere to go.
+  - **The judge is handed reference values (`ReferenceValueProjector`, `reference-projection-v1`,
+    Application, pure).** A closed table maps each metric to the statement phrases that NAME it (Backlog:
+    backlog, order book; Revenue: revenue(s), sales; NetIncome: net income, net loss, net profit, profit,
+    earnings; DilutedEps: eps, earnings per share; GrossMargin: gross margin, margin(s); OperatingIncome:
+    operating income/profit; CashAndInvestments: cash, cash and (cash) equivalents, cash and investments;
+    TotalDebt: debt, net debt; FreeCashFlow: free cash flow, cash flow), matched under the SAME whole-word
+    boundary rule as `StatementComparisonClassifier` (its `WholeWordAlternation` became internal and is
+    reused, not copied). `NewsJudgmentInputBuilder.Build` takes the company's ledger, projects every record
+    whose metric is named in ANY supplied statement, most recent first, at most 4 per metric and 16 per
+    judgment, the remainder COUNTED as `ReferenceValuesOmitted`, and carries the ordered
+    `NewsJudgmentReferenceValue` list (ReferenceId = the ledger record id) on the bundle and the request.
+    **The family-set hash DOES fold the projected reference ids in — and only when there are any**: unlike
+    `ComparisonBasis` (a pure function of already-hashed fields, deliberately not folded by spec 214), a
+    reference value is EXTERNAL input the model sees, so the same families beside a grown ledger must be a
+    new cache entry (a re-judgment), while every accrued hash and every reference-free judgment stays
+    byte-identical (asserted). The user message renders, AFTER the families and only when non-empty,
+    `Company-reported reference values (from SEC filings Radar read; cite by ReferenceId):` then one
+    `ReferenceId: {id} · {Metric} · {value} {unit} · {period} · stated in {form} filed {yyyy-MM-dd} · "{quote}"`
+    line per value (the prior pair appended as `(prior …)` when stated). Prompt rule (12) verbatim from the
+    spec: a reference value is a comparison basis, not news — read the direction from the comparison, cite
+    BOTH the fact and the ReferenceId, never cite a ReferenceId as a trajectory fact on its own.
+    `NewsJudgmentContract.PromptVersion` → `news-judgment-prompt-v5`, `SchemaVersion` →
+    `news-judgment-schema-v4` (`TrajectoryReferenceIds`, per-finding `ReferenceIds`), and `CohortKey`
+    appends `|references=reference-projection-v1`.
+  - **Validation, basis, record.** `NewsJudgmentValidator.Validate` takes the projected references and
+    resolves every reference citation through a SECOND `NewsJudgmentCitationResolver` scoped to the
+    projected ids (same prefix grammar; a FactId cited as a reference is `not-supplied`, the two sets never
+    cross; reference expansions are NOT folded into `FactIdPrefixExpansionCount`, whose spec-197 definition
+    is fact citations only). An unsupplied/malformed/duplicate reference fails the trajectory
+    (`trajectory-reference-…`) or drops the finding (`finding[i] reference-…`) exactly as FactIds do; a
+    reference is never REQUIRED, and by construction a reference alone can never carry a trajectory (the
+    fact gate already demands ≥ 1 cited fact). `NewsTrajectoryBasis` gains `ReferenceSupported = 3`, and
+    `TrajectoryBasisFor` has a fixed precedence: `Supported` (≥ 1 cited StatedComparison/Event —
+    unchanged) → `ReferenceSupported` (≥ 1 cited LevelOnly fact whose statement NAMES the metric of ≥ 1
+    cited reference, under the projector's one table) → `LevelOnly`. `NewsJudgmentRecord` →
+    `news-judgment-v6` with trailing nullable `ReferenceIds` (the PROJECTED set, ids only; empty = projected
+    none, recorded on every attempt that assembled an input), `ReferenceValuesOmitted` and
+    `TrajectoryReferenceIds`; `NewsJudgmentValidatedFinding.ReferenceIds` (null pre-215, empty on a v6
+    finding with none); the cache-replay branch carries all three from the cached record.
+    `NewsJudgmentGenerator` takes an optional `IReportedMetricStore?`, reads each candidate's ledger ONCE
+    per pass (a read failure ⇒ empty + one Warning per company + one aggregated Warning, never a silent
+    empty), and its spec-214 cohort line gains the `ReferenceSupported` count beside `LevelOnly`, plus a
+    new line "{n} of {N} judgment(s) called this pass were handed at least one company-reported reference
+    value". **Materializer: `AllowlistedTrajectoryBases = { Supported, ReferenceSupported }` under the SAME
+    `news-judgment-signal-v3` identity** — the allowlist grew, the rule ("mint only an allowlisted basis")
+    did not, so no fourth version; `LevelOnly` still mints nothing (asserted). Report: the marker gains a
+    string `ReferenceIds` token (comma-joined cited trajectory reference ids, null when none) rendered on
+    the judgment provenance appendix as ` · references: …` after `basis: ReferenceSupported`; the evidence
+    line gains ` — reported: revenue 384.0 million (Q2 FY27), backlog 2.518 billion (as of 2026-07-31)`
+    (`ReportEvidenceRef.ReportedMetrics`, null = no ledger records for that evidence; `WeeklyReportBuilder`
+    takes an optional `IReportedMetricStore?`, reads the company ledger once per surfaced entry and joins by
+    `EvidenceId`; metric display names come from ONE `ReportedMetricDisplay.NameOf`, no direction word by
+    construction). `docs/reading-radar-output.md` item 12.
+  - **Identity.** Prompt v5, schema v4 and `reference-projection-v1` enter the `news=` segment: the six
+    AI-ON pins moved (30d unit, 60d live, 120d long-window, and the three no-newsquery additivity halves)
+    and the three AI-OFF pins did NOT (asserted). Values are CITED, never transcribed:
+    `ScoringConfigFingerprintTests.Compute_AiOnDefault_MatchesPinnedFingerprint`,
+    `Compute_LiveWindowAiOnStamps_ArePinned`, `Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins`
+    — history: the spec-214 60d value `radar-scoring-fp-241097438af8` was never stamped by a live run
+    (214 and 215 merge back-to-back), and `radar-scoring-fp-11240da5aeb0` remains the value stamped
+    2026-08-29 through 2026-09-07. `ChatNewsJudgmentAnalyzerTests` re-pinned the instruction hash;
+    `FilingAnalyzerPromptSeamTests` re-pinned the filing instruction (the directional half asserted
+    byte-identical to the spec-164 pin). The directional-filing scoring descriptor (`str/nov/minconf/
+    model/cmpscan/cmpcap`) is UNCHANGED — the filing prompt change is not a fingerprint input, on the
+    spec-119 reasoning that only what changes a signal's direction/magnitude is hashed, and the ledger
+    changes neither. The operator step (delete/re-record `data/scoring-configs/strategies/{name}.json`,
+    verify the first run's stamp against the test) is taken ONCE for 214 and 215 together.
+  - **MEASURED (2026-09-08, read-only over the live store via `ReferenceValueLiveMeasurementTests`, env
+    `RADAR_REFERENCE_VALUE_LIVE_DATA_ROOT`):** the ledger is heal-forward and therefore EMPTY at
+    implementation time (0 companies / 0 records); what was measured is the ground it will fill. Analyzed-
+    filing cache: **275** records readable under production rules (242 `DirectionalSignalProduced`, 33
+    `NoDirectionalSignal`; a further 225 files are stale-version misses — the spec-204 v2 no-signal
+    records — and are correctly NOT counted), **275 (100.0 %)** with a null `reportedMetricsPolicy`, 0
+    under `reported-metrics-v1`. Forward accrual rate, from the spec-115 debug store grouped by `asOfUtc`
+    (LAST attempt per accession, so a re-read filing is counted under the later run only): 2026-09-03 **48**
+    reads (15 directional / 33 no-directional-read), 2026-09-02 1, 2026-08-29 **50** (29 / 1 below-
+    confidence / 20), 2026-08-27 1, 2026-08-24 1 — i.e. the seed-burst runs read ~50 (the `MaxFilingsPerRun`
+    cap) and a steady-state run reads ≈ 1, so the ledger fills at the earnings calendar's pace. Projection
+    would-be hit rate on TODAY's facts: **250 of 269 Judged judgments (92.9 %)** have at least one supplied
+    family naming a ledger metric; **1,656 of 8,519 supplied families (19.4 %)** name one; 0 judgments had a
+    supplied family missing from the typing store. Per metric (families / judgments): Revenue 465 / 202,
+    NetIncome **1,173 / 242** (the `earnings` and `profit` phrases carry it — "Announces Earnings Results"
+    names NetIncome under v1; a narrower table is `reference-projection-v2`, recorded here, not tuned),
+    DilutedEps 197 / 103, GrossMargin 116 / 79, Backlog 37 / 32, CashAndInvestments 75 / 52, FreeCashFlow
+    30 / 21, OperatingIncome 0 / 0, TotalDebt 0 / 0. **AGX `928eb9f8-…` (Judged, Improving, v4, basis null,
+    referenceIds null):** its four cited facts name Revenue + NetIncome (StatedComparison), Revenue
+    (StatedComparison), **Backlog (LevelOnly — the one that could become `ReferenceSupported`)** and
+    NetIncome + DilutedEps (StatedComparison), so once ONE Argan release has been read all four would
+    receive a reference block and the backlog level would be the fact whose direction the reference
+    decides. The 50 % verification sanity bound of spec 215 §3 ("a ledger that verifies < 50 % of what the
+    model returns is a prompt/verification defect") is UNMEASURED until the first post-merge run and is
+    owed in that PR-body follow-up, together with ledger records written, metrics dropped unverified /
+    unrecognised / duplicate, judgments handed ≥ 1 reference value and the `ReferenceSupported` count.
+    Descriptive; no table was tuned to any number.

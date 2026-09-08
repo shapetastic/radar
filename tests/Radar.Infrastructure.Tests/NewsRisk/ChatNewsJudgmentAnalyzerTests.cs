@@ -94,8 +94,10 @@ public sealed class ChatNewsJudgmentAnalyzerTests
         // A prompt edit that keeps the same PromptVersion would silently pool incomparable judgments in one
         // cohort. This hash is the change-detector: if it fails, either revert the wording or bump
         // NewsJudgmentContract.PromptVersion (which forks the cohort) in the SAME change.
-        // Spec 214 §2 moved this pin (rule 11 added) and forked the prompt to news-judgment-prompt-v4.
-        const string Pinned = "224fbdad8b040df969c174fc13ca00b11946a05b99cd29d9916fbad17716e10b";
+        // Spec 214 §2 moved this pin (rule 11 added) and forked the prompt to news-judgment-prompt-v4;
+        // spec 215 §2 moved it again (rule 12 + the TrajectoryReferenceIds/ReferenceIds return clause) and
+        // forked the prompt to news-judgment-prompt-v5.
+        const string Pinned = "d63c9b26227a75c9d5f61884bd88053cecdd96106aec4de69e79619de2156b1d";
         var actual = CanonicalHash.Sha256Hex(ChatNewsJudgmentAnalyzer.SystemInstruction);
         var matchesPin = string.Equals(Pinned, actual, StringComparison.Ordinal);
 
@@ -246,9 +248,10 @@ public sealed class ChatNewsJudgmentAnalyzerTests
             StringComparison.Ordinal);
 
         // The forked contract, so the wording and the cohort it forks cannot drift apart (spec 214 §2
-        // carried the v3 rule forward unchanged into v4).
-        Assert.Equal("news-judgment-prompt-v4", NewsJudgmentContract.PromptVersion);
-        Assert.Equal("news-judgment-schema-v3", NewsJudgmentContract.SchemaVersion);
+        // carried the v3 rule forward unchanged into v4; spec 215 §2 into v5, and the same rule now applies
+        // to the reference citation lists too).
+        Assert.Equal("news-judgment-prompt-v5", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
     }
 
     [Fact]

@@ -79,11 +79,12 @@ public static class NewsDirectionalSignalMetadata
     /// <summary>
     /// The value <see cref="JudgmentSignalVersionKey"/> currently carries — advanced to
     /// <c>news-judgment-signal-v3</c> by spec 214 §2, because the materializer now ALLOWLISTS a judgment's
-    /// <c>TrajectoryBasis</c> (Supported alone mints; LevelOnly, null and any unallowlisted value mint
+    /// <c>TrajectoryBasis</c> (Supported mints, and since spec 215 §2 so does ReferenceSupported — the
+    /// allowlist grew under the SAME v3 identity; LevelOnly, null and any unallowlisted value mint
     /// nothing), which again changes WHICH judgments can produce a scoring input and is not a silent fix
     /// under the v2 identity (spec 197 §1.3 advanced it to v2 for the observation→evidence ladder on the
     /// same reasoning). A signal claiming this version is asserting the full §1.2 provenance chain
-    /// (judgment → cited facts → observations → evidence) AND a Supported basis; a signal claiming it
+    /// (judgment → cited facts → observations → evidence) AND an allowlisted basis; a signal claiming it
     /// without carrying that provenance is malformed, and the §1.4 transform fails it closed to Neutral
     /// rather than trusting the claim.
     /// </summary>

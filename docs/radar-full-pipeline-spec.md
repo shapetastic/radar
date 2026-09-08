@@ -529,7 +529,7 @@ purpose-built seams**, each with its own contract, cohort key and failure vocabu
 
 - `IChatClientFactory` — the one provider-facing seam (`Microsoft.Extensions.AI`).
 - `ISignalExtractor` — signal extraction from evidence.
-- `IDirectionalFilingSignalSource` — the AI earnings/filing directional read.
+- `IDirectionalFilingSignalSource` — the AI earnings/filing directional read (since spec 215 the same read also returns the metrics the release states, verified verbatim and kept in the reported-metrics ledger rather than discarded with the body).
 - the stage-1 typing reader and the stage-2 judge — see the two-stage news read above.
 - `INewsRiskAnalyzer` — the news-risk shadow read.
 

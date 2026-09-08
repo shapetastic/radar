@@ -58,7 +58,11 @@ public interface INewsJudgmentSignalMaterializer
 /// <b>SPEC 214 §2 — the trajectory-basis gate is an ALLOWLIST, not a denylist (<c>news-judgment-signal-v3</c>).</b>
 /// After the status, direction and cited-facts gates, a record materializes ONLY when its persisted
 /// <see cref="NewsJudgmentRecord.TrajectoryBasis"/> is in <see cref="AllowlistedTrajectoryBases"/> —
-/// <see cref="NewsTrajectoryBasis.Supported"/> alone under this spec. Everything else mints nothing, each
+/// <see cref="NewsTrajectoryBasis.Supported"/> under spec 214, plus
+/// <see cref="NewsTrajectoryBasis.ReferenceSupported"/> since spec 215 §2 (a level beside a cited
+/// company-reported reference value for the same metric IS a directional basis, so it is admitted under
+/// the SAME <c>news-judgment-signal-v3</c> identity — no fourth materializer version, because the gate's
+/// rule "mint only an allowlisted basis" is unchanged; only the allowlist grew). Everything else mints nothing, each
 /// under its own reason: <see cref="NewsJudgmentSignalSkipReason.LevelOnlyTrajectory"/> (the judge read a
 /// level as a trend), <see cref="NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded"/> (a null basis
 /// reached this gate — by gate order a PRE-214 directional record, never assumed Supported), and
@@ -167,13 +171,15 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
         SignalIdFor(NewsDirectionalSignalMetadata.JudgmentSignalVersionV2, judgmentId);
 
     /// <summary>
-    /// SPEC 214 §2 — the ONE allowlist of trajectory bases a judgment may materialize under. Under this spec
-    /// it is exactly <c>{ Supported }</c>; spec 215 adds <c>ReferenceSupported</c>. A basis is admitted by
-    /// being NAMED here, never by not being denied — pinned by test, because the fail-closed property is
-    /// the whole point.
+    /// SPEC 214 §2 — the ONE allowlist of trajectory bases a judgment may materialize under: exactly
+    /// <c>{ Supported, ReferenceSupported }</c> since spec 215 §2 (spec 214 shipped <c>{ Supported }</c>).
+    /// A basis is admitted by being NAMED here, never by not being denied — pinned by test, because the
+    /// fail-closed property is the whole point. Widening the set did NOT bump the materializer version
+    /// (spec 215 §2): the signal's claim — "a judgment-derived direction with a full provenance chain and
+    /// an allowlisted basis" — is unchanged.
     /// </summary>
     public static readonly IReadOnlySet<NewsTrajectoryBasis> AllowlistedTrajectoryBases =
-        new HashSet<NewsTrajectoryBasis> { NewsTrajectoryBasis.Supported };
+        new HashSet<NewsTrajectoryBasis> { NewsTrajectoryBasis.Supported, NewsTrajectoryBasis.ReferenceSupported };
 
     private static Guid SignalIdFor(string materializerVersion, Guid judgmentId) =>
         DeterministicGuid.FromCanonicalString(

@@ -373,13 +373,15 @@ public sealed class ScoringConfigFingerprintTests
         // has no business touching. (Renamed by spec 214 from …ReproducesPost197Pins: the AI-ON halves are
         // no longer the post-197 values.)
         //
-        // SPEC 214 MOVED THE THREE AI-ON HALVES BELOW (30d radar-scoring-fp-e7317fd038ac →
+        // SPEC 214 MOVED THE THREE AI-ON HALVES (30d radar-scoring-fp-e7317fd038ac →
         // radar-scoring-fp-568a6612d541; 60d radar-scoring-fp-81a397434756 → radar-scoring-fp-c11b49eafb2e;
         // 120d radar-scoring-fp-e9d9819a2b41 → radar-scoring-fp-333786375292) and NOT the three AI-OFF
-        // halves: the `news=enabled:…` segment carries the presentation cohort key (now
-        // news-judgment-prompt-v4 and the comparison-basis-v1 token) and the materializer identity (now
-        // news-judgment-signal-v3), while the disabled segment carries neither. The proof this test makes
-        // is unchanged: with the news-query segment empty, the values are the post-214 no-newsquery
+        // halves: the `news=enabled:…` segment carries the presentation cohort key and the materializer
+        // identity, while the disabled segment carries neither. SPEC 215 MOVED THE SAME THREE AI-ON HALVES
+        // AGAIN TO THE VALUES BELOW (30d radar-scoring-fp-568a6612d541 → radar-scoring-fp-6dce61d377d6; the
+        // 60d and 120d halves likewise — see the assertions) for news-judgment-prompt-v5, schema-v4 and
+        // reference-projection-v1 in the cohort key, and again NOT the AI-OFF halves. The proof this test
+        // makes is unchanged: with the news-query segment empty, the values are the post-215 no-newsquery
         // values, so the spec-198 segment is still exactly additive on top of them.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
@@ -388,7 +390,7 @@ public sealed class ScoringConfigFingerprintTests
             "radar-scoring-fp-54e845330f96",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-568a6612d541",
+            "radar-scoring-fp-6dce61d377d6",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
@@ -397,7 +399,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-c11b49eafb2e",
+            "radar-scoring-fp-771ac5fb8a83",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
@@ -407,7 +409,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-333786375292",
+            "radar-scoring-fp-7bfef3b8873b",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -668,11 +670,21 @@ public sealed class ScoringConfigFingerprintTests
         // alone, so it changes WHICH judgments can produce a scoring input). No formula, RuleSetVersion,
         // media-collapse, supersede, neutralization, attention-tier, weight or news-query change. THE
         // THREE AI-OFF PINS ARE UNCHANGED — asserted by Compute_DefaultConfig_MatchesPinnedFingerprint and
-        // Compute_LiveWindowAiOffStamps_ArePinned. Spec 215 moves the AI-ON side again (prompt v5, schema
-        // v4); the operator step (delete/re-record data/scoring-configs/strategies/{name}.json, verify the
-        // first run's stamp against Compute_LiveWindowAiOnStamps_ArePinned) is taken ONCE for both.
+        // Compute_LiveWindowAiOffStamps_ArePinned.
+        // → SPEC 215 MOVED IT (radar-scoring-fp-fc2a32b1c2ac → the value below), AI-ON side ONLY, the same
+        // pattern: three causes folded into ONE recomputation, all through the `news=` segment —
+        // (a) news-judgment-prompt-v4 → v5 (rule 12: reference values are a comparison basis, cite both);
+        // (b) news-judgment-schema-v3 → v4 (TrajectoryReferenceIds / per-finding ReferenceIds);
+        // (c) reference-projection-v1 joins the stage-2 cohort key after comparison= (the metric-phrase
+        // table and caps decide which reference values the model sees). The materializer identity did NOT
+        // move (news-judgment-signal-v3 — the allowlist grew, the rule did not). No formula, RuleSetVersion,
+        // media-collapse, supersede, neutralization, attention-tier, weight or news-query change. THE THREE
+        // AI-OFF PINS ARE UNCHANGED — asserted by Compute_DefaultConfig_MatchesPinnedFingerprint and
+        // Compute_LiveWindowAiOffStamps_ArePinned. The operator step (delete/re-record
+        // data/scoring-configs/strategies/{name}.json, verify the first run's stamp against
+        // Compute_LiveWindowAiOnStamps_ArePinned) is taken ONCE for 214 and 215 together.
         Assert.Equal(
-            "radar-scoring-fp-fc2a32b1c2ac",
+            "radar-scoring-fp-bd8135c65d98",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -743,15 +755,23 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-adf455313d35 are UNCHANGED and asserted so by
         // Compute_LiveWindowAiOffStamps_ArePinned below. Three causes in one recomputation, all through the
         // `news=` segment: comparison-basis-v1 in the cohort key, news-judgment-prompt-v4, and
-        // news-judgment-signal-v3 (see Compute_AiOnDefault_MatchesPinnedFingerprint). Spec 215 moves the
-        // same three pins again; merge 214 and 215 back-to-back so the operator step and the series
-        // discontinuity happen ONCE. The value the first post-214/215 baseline must report is whatever the
-        // 60-day assertion below says AFTER spec 215 lands — never a value quoted in prose.
+        // news-judgment-signal-v3 (see Compute_AiOnDefault_MatchesPinnedFingerprint).
+        //
+        // SPEC 215 MOVED THEM TO THE VALUES BELOW, AI-ON side ONLY, the same pattern: 60d
+        // radar-scoring-fp-241097438af8 → radar-scoring-fp-8590412af27c; 120d radar-scoring-fp-dc0f9b905f5b
+        // → radar-scoring-fp-a32785c416a6, while the AI-OFF live values are again UNCHANGED and asserted so by
+        // Compute_LiveWindowAiOffStamps_ArePinned. Three causes in one recomputation, all through the
+        // `news=` segment: news-judgment-prompt-v5, news-judgment-schema-v4 and reference-projection-v1 in
+        // the cohort key (see Compute_AiOnDefault_MatchesPinnedFingerprint); news-judgment-signal-v3 did not
+        // move. Specs 214 and 215 merge back-to-back so the operator step and the series discontinuity
+        // happen ONCE. The value the first post-214/215 baseline must report is whatever the 60-day
+        // assertion below says — never a value quoted in prose; radar-scoring-fp-241097438af8 (the 214-only
+        // value) was never stamped by a live run.
         Assert.Equal(
-            "radar-scoring-fp-241097438af8",
+            "radar-scoring-fp-8590412af27c",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-dc0f9b905f5b",
+            "radar-scoring-fp-a32785c416a6",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 

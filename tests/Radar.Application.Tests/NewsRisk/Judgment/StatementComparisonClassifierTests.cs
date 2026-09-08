@@ -343,7 +343,8 @@ public sealed class StatementComparisonClassifierTests
         Assert.Equal("comparison-basis-v1", StatementComparisonClassifier.Version);
 
         var key = NewsJudgmentContract.CohortKey("openai", "judge-model", "stage1-key");
-        Assert.EndsWith("|comparison=comparison-basis-v1", key, StringComparison.Ordinal);
+        // Spec 215 §2 appended the reference-projection token AFTER it.
+        Assert.Contains("|comparison=comparison-basis-v1|references=", key, StringComparison.Ordinal);
     }
 
     [Fact]

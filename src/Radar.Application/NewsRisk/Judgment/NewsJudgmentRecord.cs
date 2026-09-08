@@ -53,18 +53,28 @@ public enum NewsJudgmentFamilyBundle
 }
 
 /// <summary>
-/// What a persisted directional judgment's cited trajectory facts could establish (spec 214 §2). Values
-/// are explicit and start at 1 so a defaulted zero is UNDEFINED (refused by the strict file-store enum
-/// converter) rather than silently meaningful. Spec 215 adds <c>ReferenceSupported</c> (a level plus a
-/// cited company-reported reference value for the same metric).
+/// What a persisted directional judgment's cited trajectory facts could establish (spec 214 §2, widened by
+/// spec 215 §2). Values are explicit and start at 1 so a defaulted zero is UNDEFINED (refused by the strict
+/// file-store enum converter) rather than silently meaningful. Precedence is fixed by
+/// <see cref="NewsJudgmentValidator.TrajectoryBasisFor"/>: <see cref="Supported"/> first, then
+/// <see cref="ReferenceSupported"/>, else <see cref="LevelOnly"/>.
 /// </summary>
 public enum NewsTrajectoryBasis
 {
     /// <summary>At least one cited trajectory fact is a <see cref="NewsFactComparisonBasis.StatedComparison"/> or an <see cref="NewsFactComparisonBasis.Event"/> — the direction rests on something that can carry one.</summary>
     Supported = 1,
 
-    /// <summary>EVERY cited trajectory fact is <see cref="NewsFactComparisonBasis.LevelOnly"/> or <see cref="NewsFactComparisonBasis.NotQuantified"/> — the judge read a level as a trend. Persisted verbatim, never rewritten; mints no signal.</summary>
+    /// <summary>EVERY cited trajectory fact is <see cref="NewsFactComparisonBasis.LevelOnly"/> or <see cref="NewsFactComparisonBasis.NotQuantified"/> and no cited reference value names a cited level's metric — the judge read a level as a trend. Persisted verbatim, never rewritten; mints no signal.</summary>
     LevelOnly = 2,
+
+    /// <summary>
+    /// Spec 215 §2: no cited fact is a stated comparison or an event, but at least one cited trajectory fact
+    /// is <see cref="NewsFactComparisonBasis.LevelOnly"/> AND the judge cited a company-reported reference
+    /// value (<c>TrajectoryReferenceIds</c>) whose metric that fact's statement NAMES — "backlog $2.5B vs
+    /// $2.93B reported in January: down". A reference-supported comparison IS a directional basis, so it
+    /// materializes under <c>news-judgment-signal-v3</c> exactly as <see cref="Supported"/> does.
+    /// </summary>
+    ReferenceSupported = 3,
 }
 
 /// <summary>
@@ -192,8 +202,19 @@ public sealed record NewsJudgmentRecord(
     // BEFORE the basis, so a null that REACHES the basis gate is, by construction, a pre-214 directional
     // record (skip reason TrajectoryBasisNotRecorded). It is never defaulted to Supported, never re-derived
     // on read, and enters no id, cohort key, cache key or fingerprint. It DOES decide whether the judgment
-    // can become a scoring signal: the materializer ALLOWLISTS Supported alone (spec 214 §2).
-    NewsTrajectoryBasis? TrajectoryBasis = null)
+    // can become a scoring signal: the materializer ALLOWLISTS Supported and (spec 215) ReferenceSupported.
+    NewsTrajectoryBasis? TrajectoryBasis = null,
+    // Spec 215 §2: the PROJECTED reference set the judge was handed — ids only (the ledger resolves them);
+    // the projection caps' COUNTED remainder; and the reference ids the judge CITED as the trajectory's
+    // comparison basis. All three TRAILING and NULLABLE: `null` = a pre-215 record (not recorded) or an
+    // attempt that never assembled an input; an EMPTY ReferenceIds list on a v6 record means the ledger
+    // projected nothing for the supplied statements (a measured none); an empty TrajectoryReferenceIds on a
+    // Judged v6 record means the judge cited no reference. They enter no id or fingerprint; the projected
+    // ids DO enter the family-set hash (NewsJudgmentInputBuilder) when non-empty, which is what makes a
+    // grown ledger a re-judgment rather than a cache reuse.
+    IReadOnlyList<Guid>? ReferenceIds = null,
+    int? ReferenceValuesOmitted = null,
+    IReadOnlyList<Guid>? TrajectoryReferenceIds = null)
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
@@ -233,8 +254,19 @@ public sealed record NewsJudgmentRecord(
     /// Every pre-v5 record stays readable, is never rewritten, and hydrates both fields as <c>null</c>
     /// (AD-8).
     /// </para>
+    /// <para>
+    /// <b>Spec 215 §2 moves it to <c>v6</c></b> for <see cref="ReferenceIds"/>,
+    /// <see cref="ReferenceValuesOmitted"/>, <see cref="TrajectoryReferenceIds"/> and the per-finding
+    /// <see cref="NewsJudgmentValidatedFinding.ReferenceIds"/>. The bump is owed on the same "changes what a
+    /// record MEANS" test: the basis vocabulary a v6 record may carry is WIDER (<c>ReferenceSupported</c>
+    /// is a value a v5 record could never hold), and a v6 directional record's basis may rest on a cited
+    /// reference set that a v5 reader has no field for — so a reader must be able to tell a v5 record,
+    /// where no reference could have been supplied or cited, from a v6 record that measured an honest
+    /// empty set. Every pre-v6 record stays readable, is never rewritten, and hydrates the new fields as
+    /// <c>null</c> (AD-8).
+    /// </para>
     /// </summary>
-    public const string CurrentSchemaVersion = "news-judgment-v5";
+    public const string CurrentSchemaVersion = "news-judgment-v6";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named

@@ -30,8 +30,15 @@ public static class NewsJudgmentContract
     /// message now renders each family's deterministic <c>ComparisonBasis</c> line. The 2026-09-07 Argan
     /// judgment read "backlog hits $2.5B" as Improving while the backlog had fallen 14% over the year.
     /// </para>
+    /// <para>
+    /// <b>Spec 215 §2 forked it to <c>v5</c>.</b> The instruction gained rule (12): reference values are the
+    /// company's own prior statements of the same metric; when a supplied fact quotes a metric with a
+    /// reference value, read the direction from the comparison and cite BOTH the fact and the ReferenceId;
+    /// never cite a ReferenceId as a trajectory fact on its own. The user message renders the projected
+    /// <c>Company-reported reference values</c> block after the families whenever there is one.
+    /// </para>
     /// </summary>
-    public const string PromptVersion = "news-judgment-prompt-v4";
+    public const string PromptVersion = "news-judgment-prompt-v5";
 
     /// <summary>
     /// Spec 187 §1 forked this to <c>v2</c>: the structured response gained <c>TrajectoryFactIds</c>, so
@@ -45,8 +52,14 @@ public static class NewsJudgmentContract
     /// citations, and guarantees no completed-or-failed v2 attempt is reused as a v3 one.
     /// </para>
     /// <para>Spec 214 leaves it at <c>v3</c>: the response shape and the citation grammar are unchanged.</para>
+    /// <para>
+    /// <b>Spec 215 §2 forked it to <c>v4</c>.</b> The structured response gained
+    /// <c>TrajectoryReferenceIds</c> and per-finding <c>ReferenceIds</c> (complete ids, the same
+    /// copy-verbatim rule and the same prefix grammar as FactIds, resolved against the PROJECTED reference
+    /// set), so a v3 and a v4 response are not the same shape and must not share a cohort.
+    /// </para>
     /// </summary>
-    public const string SchemaVersion = "news-judgment-schema-v3";
+    public const string SchemaVersion = "news-judgment-schema-v4";
 
     /// <summary>
     /// The ONE stage-2 cohort-identity composition (spec 185 §3): judge provider + exact model id + this
@@ -60,11 +73,16 @@ public static class NewsJudgmentContract
     /// <c>ComparisonBasis</c> line is an INPUT THE MODEL SEES, so a table change is a new cohort — and,
     /// through the spec-194 §2 <c>news=</c> segment, a new <c>ScoringConfigVersion</c>.
     /// </para>
+    /// <para>
+    /// Spec 215 §2 appends <c>references={ReferenceValueProjector.Version}</c> on the same reasoning: the
+    /// metric-phrase table and the caps decide WHICH reference values the model sees.
+    /// </para>
     /// </summary>
     public static string CohortKey(string provider, string modelId, string stage1CohortKey) =>
         $"{provider}:{modelId}|{PromptVersion}|{SchemaVersion}|stage1={stage1CohortKey}"
             + $"|families={FactFamilyBuilder.IdentityString}"
-            + $"|comparison={StatementComparisonClassifier.Version}";
+            + $"|comparison={StatementComparisonClassifier.Version}"
+            + $"|references={ReferenceValueProjector.Version}";
 }
 
 /// <summary>
@@ -95,15 +113,19 @@ public enum NewsJudgmentAnalysisFailure
 
 /// <summary>
 /// What the judge receives (spec 185 §1): the company name/ticker plus the ordered canonical fact FAMILIES —
-/// and NOTHING else. No raw article prose, no headline, no Radar score/rank/label, no price series, no
-/// future outcome, no prior judgment. Family size and publisher breadth ride along as metadata the prompt
-/// states are corroboration of REPORTING, never N independent facts. Enforced structurally by the judgment
-/// architecture guard test (no raw-text member exists to carry prose).
+/// and, since spec 215 §2, the company-reported REFERENCE VALUES projected from the reported-metrics
+/// ledger for the metrics those families name — and NOTHING else. No raw article prose, no headline, no
+/// Radar score/rank/label, no price series, no future outcome, no prior judgment. Family size and
+/// publisher breadth ride along as metadata the prompt states are corroboration of REPORTING, never N
+/// independent facts. Enforced structurally by the judgment architecture guard test (no raw-text member
+/// exists to carry prose). <see cref="References"/> is trailing and defaults to null (= none) so every
+/// pre-215 construction site is unchanged; the analyzer renders the block only when it is non-empty.
 /// </summary>
 public sealed record NewsJudgmentAnalysisRequest(
     string CompanyName,
     string? Ticker,
-    IReadOnlyList<NewsJudgmentInputFamily> Families);
+    IReadOnlyList<NewsJudgmentInputFamily> Families,
+    IReadOnlyList<NewsJudgmentReferenceValue>? References = null);
 
 /// <summary>
 /// One judge invocation's outcome: the raw typed response (pre-validation) or a named failure, plus the
