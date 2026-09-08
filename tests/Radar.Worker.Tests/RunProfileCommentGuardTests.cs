@@ -6,10 +6,12 @@ namespace Radar.Worker.Tests;
 
 /// <summary>
 /// Spec 213 §3: every committed run profile's <c>_comment*</c> strings are STANDING FACTS that cite their
-/// owners — never a fingerprint pin literal (owner: <c>ScoringConfigFingerprintTests</c>), never a
-/// "verify the first … run reports" operator imperative, never a second architecture-history file. Per-spec
-/// history and every historical pin live verbatim in <c>docs/architecture-history.md</c> ("default.json
-/// _comment history"). Pure file/JSON assertions: no Worker is started, nothing is read but the profiles.
+/// owners. The guard enforces exactly three things — no fingerprint pin literal (owner:
+/// <c>ScoringConfigFingerprintTests</c>), no "verify the first … run reports" operator imperative, and a
+/// length limit (<see cref="DefaultProfileLimit"/> / <see cref="OverlayProfileLimit"/>) so the comment cannot
+/// regrow into a second architecture-history file. Per-spec history and every historical pin live verbatim in
+/// <c>docs/architecture-history.md</c> ("default.json _comment history"). Pure file/JSON assertions: no Worker
+/// is started, nothing is read but the profiles.
 /// <para>
 /// The predicate is one static method (<see cref="Violation"/>) so the positive controls below prove the guard
 /// BITES on each forbidden shape rather than merely passing on the committed files.
