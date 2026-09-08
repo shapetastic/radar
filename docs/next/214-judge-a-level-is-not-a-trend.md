@@ -87,7 +87,7 @@ stage-1 cohort key is untouched, so NO re-typing of the ~2,000 in-window observa
   unchanged by this spec.
 - **Validator** (`NewsJudgmentValidator`): after fact-id resolution, compute `trajectoryBasis` over the
   cited `TrajectoryFactIds`: `Supported` when ≥ 1 cited fact is `StatedComparison` or `Event`; `LevelOnly`
-  `LevelOnly` when every cited fact is `LevelOnly`/`NotQuantified` and the trajectory is Improving/Deteriorating;
+  when every cited fact is `LevelOnly`/`NotQuantified` and the trajectory is Improving/Deteriorating;
   null (never written) only on records produced before this spec.
   `LevelOnly` is NOT a validation failure (the judgment is persisted, `status: Judged`, the model's read is
   kept verbatim — a wrong call recorded beats a call rewritten) — it is a persisted marker
