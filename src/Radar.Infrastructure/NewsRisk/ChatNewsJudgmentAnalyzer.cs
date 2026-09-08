@@ -28,7 +28,7 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
 {
     /// <summary>
     /// Fixed, deterministic system instruction carrying the §2 judgment contract, FORKED to
-    /// <c>news-judgment-prompt-v3</c> by spec 197 §2.1 (and to <c>v2</c> by spec 187 §1). The FIXED rubric is verbatim ("the company's recent
+    /// <c>news-judgment-prompt-v4</c> by spec 214 §2 (to <c>v3</c> by spec 197 §2.1, to <c>v2</c> by spec 187 §1). The FIXED rubric is verbatim ("the company's recent
     /// business trajectory" — Radar's founding question); the attribution weighting rule is a PROMPT rule,
     /// not post-hoc (a plaintiff-firm solicitation is a weaker basis than a confirmed filing; "may face" is
     /// weaker than "was charged"); and the vocabularies are rendered from the same closed sets the
@@ -50,6 +50,14 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
     /// complete 36-character hyphenated form, shows one, and applies it explicitly to BOTH citation lists.
     /// Wording is not a recovery mechanism, so <see cref="NewsJudgmentCitationResolver"/> recovers a unique
     /// prefix deterministically — but the instruction is where the pressure should stop being generated.
+    /// </para>
+    /// <para>
+    /// <b>The v4 rule (11)</b> (spec 214 §2) exists because the 2026-09-07 judgment read Argan as
+    /// <c>Improving</c> on "backlog hits $2.5B" — a LEVEL, not a trend (the backlog had fallen 14% over the
+    /// year, and nothing Radar supplied could have said so). Rule 3 covers ABSENCE of facts; rule 11 covers
+    /// the presence of a number that carries no direction. Each family now also renders its deterministic
+    /// <c>ComparisonBasis</c> line (<see cref="StatementComparisonClassifier"/>), so the judge is told which
+    /// supplied facts CAN be cited as trajectory support rather than left to infer it.
     /// </para>
     /// <para>
     /// This text is PINNED by test. Changing it is a prompt-policy change: bump
@@ -100,6 +108,16 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             + "character. NEVER abbreviate, truncate, shorten, paraphrase, reformat or invent an id, and "
             + "never cite only its first few characters. This rule applies to BOTH TrajectoryFactIds AND "
             + "every finding's FactIds. "
+            + "(11) A quantity stated as a LEVEL — a balance such as backlog, cash, debt, headcount, "
+            + "capacity — establishes NO direction by itself, however large. Only a supplied fact that "
+            + "states the comparison (prior value, change, record, beat/miss) or an EVENT fact (an order, "
+            + "award, contract, launch, financing) can be cited in TrajectoryFactIds. Each family carries "
+            + "a ComparisonBasis line: StatedComparison and Event facts may be cited as trajectory "
+            + "support; a LevelOnly or NotQuantified fact may be cited in a finding's FactIds as context, "
+            + "never as trajectory support. Answer Unknown ONLY when no supplied fact is StatedComparison "
+            + "or Event — a numberless comparison (\"backlog declined\") or a numberless event (\"the FDA "
+            + "approved the product\") beside a quantified level still establishes direction; when that "
+            + "is the case, say in the Rationale which levels you set aside. "
             + "Return: BusinessTrajectory (\"Improving\" | \"Deteriorating\" | \"Mixed\" | "
             + "\"Unknown\" — a factual read over the families); TrajectoryFactIds (the supplied FactIds "
             + "that establish that trajectory, each the COMPLETE 36-character value; at least one for "
@@ -207,6 +225,7 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
                 $"FactId: {family.RepresentativeFactId:D}"));
             sb.AppendLine("EventTypes: " + string.Join(", ", family.EventTypes));
             sb.AppendLine("Statement: " + family.Statement);
+            sb.AppendLine("ComparisonBasis: " + ComparisonBasisLine(family.ComparisonBasis));
             if (family.TemporalScope is { Length: > 0 } scope)
             {
                 sb.AppendLine("TemporalScope: " + scope);
@@ -226,6 +245,21 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Spec 214 §1 — the per-family basis line, rendered from the deterministic classifier's value. The
+    /// LevelOnly form carries its gloss ("a stated level, not a trend") because that is the one the judge
+    /// is being told NOT to cite as trajectory support; the others are the bare token. Exhaustive over the
+    /// enum: an undefined value is a programming error, never a silently blank line.
+    /// </summary>
+    internal static string ComparisonBasisLine(NewsFactComparisonBasis basis) => basis switch
+    {
+        NewsFactComparisonBasis.StatedComparison => "StatedComparison",
+        NewsFactComparisonBasis.LevelOnly => "LevelOnly — a stated level, not a trend",
+        NewsFactComparisonBasis.Event => "Event",
+        NewsFactComparisonBasis.NotQuantified => "NotQuantified",
+        _ => throw new ArgumentOutOfRangeException(nameof(basis), basis, "Undefined comparison basis."),
+    };
 
     private static string HashText(string text) => CanonicalHash.Sha256Hex(text);
 }

@@ -52,6 +52,10 @@ public sealed class NewsRiskLiveSignalMaterializationRenderTests
                 [NewsJudgmentSignalSkipReason.NonDirectionalTrajectory] = 3,
                 [NewsJudgmentSignalSkipReason.NotPresentationCohort] = 2,
                 [NewsJudgmentSignalSkipReason.UnresolvedObservation] = 1,
+                // Spec 214 §2: the three basis gates render beside the others, in declaration order.
+                [NewsJudgmentSignalSkipReason.LevelOnlyTrajectory] = 5,
+                [NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded] = 6,
+                [NewsJudgmentSignalSkipReason.TrajectoryBasisNotAllowlisted] = 7,
             });
 
         var markdown = NewsRiskLiveArtifactRenderer.RenderMarkdown(Document(summary));
@@ -67,7 +71,8 @@ public sealed class NewsRiskLiveSignalMaterializationRenderTests
         // order, so the line is deterministic (AD-3).
         Assert.Contains(
             "Not materialized, by reason: not-presentation-cohort 2, non-directional-trajectory 3, "
-                + "unresolved-observation 1",
+                + "unresolved-observation 1, level-only-trajectory 5, trajectory-basis-not-recorded 6, "
+                + "trajectory-basis-not-allowlisted 7",
             markdown,
             StringComparison.Ordinal);
     }

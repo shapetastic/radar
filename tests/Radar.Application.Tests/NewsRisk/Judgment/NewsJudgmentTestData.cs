@@ -26,7 +26,10 @@ internal static class NewsJudgmentTestData
         Confidence: 0.9,
         Citations: ["quarterly revenue rose 12%"],
         MemberCount: memberCount,
-        DistinctPublisherCount: distinctPublisherCount);
+        DistinctPublisherCount: distinctPublisherCount,
+        // Spec 214 §1: through the production classifier, exactly as NewsJudgmentInputBuilder computes it,
+        // so a fixture family can never carry a basis its own statement would not earn.
+        ComparisonBasis: StatementComparisonClassifier.Classify(statement, [NewsEventType.EarningsOrGuidance]));
 
     public static NewsJudgmentModelFinding Finding(
         Guid factId,

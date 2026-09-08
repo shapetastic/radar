@@ -216,6 +216,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         var overSoftLimitRationalesByCohort = new Dictionary<string, int>(StringComparer.Ordinal);
         var prefixExpansionsByCohort = new Dictionary<string, (int Expansions, int Judgments)>(
             StringComparer.Ordinal);
+        var levelOnlyBasisByCohort = new Dictionary<string, (int LevelOnly, int Directional)>(
+            StringComparer.Ordinal);
         foreach (var cohort in typing.Cohorts)
         {
             foreach (var judge in _judges.Readers)
@@ -315,6 +317,20 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         var running = prefixExpansionsByCohort.GetValueOrDefault(record.CohortKey);
                         prefixExpansionsByCohort[record.CohortKey] =
                             (running.Expansions + expansions, running.Judgments + 1);
+                    }
+
+                    // Spec 214 §2: the level-read count, aggregated ONCE per cohort (the spec-145 precedent,
+                    // never a line per judgment), over the directional judgments this pass actually CALLED
+                    // the provider for (spec 188 §1 — a reused verdict carries its ORIGINAL basis and would
+                    // report old prose as current behaviour). The denominator is every directional Judged
+                    // call, so the share is legible beside the count.
+                    if (madeProviderCall && record.Status == NewsJudgmentStatus.Judged
+                        && record.TrajectoryBasis is { } basis)
+                    {
+                        var running = levelOnlyBasisByCohort.GetValueOrDefault(record.CohortKey);
+                        levelOnlyBasisByCohort[record.CohortKey] = (
+                            running.LevelOnly + (basis == NewsTrajectoryBasis.LevelOnly ? 1 : 0),
+                            running.Directional + 1);
                     }
 
                     // Spec 187 §1: the durable write's OUTCOME is checked. An unpersisted result is not a
@@ -419,6 +435,24 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 measured.Judgments,
                 NewsJudgmentCitationResolver.MinimumPrefixLength,
                 NewsJudgmentContract.PromptVersion);
+        }
+
+        // Spec 214 §2: one Information line per cohort that produced at least one directional call — the
+        // LevelOnly count is the measured rate at which the judge still reads a level as a trend under
+        // prompt rule 11, and every such judgment is persisted verbatim, marked, and minted into NO signal
+        // by the materializer's allowlist. A cohort with zero directional calls says nothing; a cohort
+        // with directional calls and zero LevelOnly says "0", which is a measured zero.
+        foreach (var (cohortKey, measured) in levelOnlyBasisByCohort.OrderBy(
+            e => e.Key, StringComparer.Ordinal))
+        {
+            _logger.LogInformation(
+                "News-judgment cohort {Cohort}: {LevelOnly} of {Directional} directional judgment(s) called "
+                    + "this pass rest ONLY on level/unquantified facts (trajectory basis LevelOnly under "
+                    + "{ClassifierVersion}); each is persisted verbatim and materializes no signal.",
+                cohortKey,
+                measured.LevelOnly,
+                measured.Directional,
+                StatementComparisonClassifier.Version);
         }
 
         var markers = BuildPresentationMarkers(judgments, typing, runId, candidates, unpersisted);
@@ -533,6 +567,10 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 // truthful provenance of the call that produced it. It is NOT reported as a current-pass
                 // normalization: the aggregate below counts only judgments this pass actually called for.
                 FactIdPrefixExpansionCount = cached.FactIdPrefixExpansionCount,
+                // Spec 214 §2: the replayed verdict's OWN basis travels with it — it is provenance of the
+                // call that produced the verdict, and the materializer must gate the reuse exactly as it
+                // gated the original. Never re-derived from this run's families.
+                TrajectoryBasis = cached.TrajectoryBasis,
                 ReusedFromJudgmentId = cached.JudgmentId,
             });
         }
@@ -657,6 +695,9 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         // that then failed for an unrelated reason — so 0 means "every accepted citation
                         // was already complete", never "not recorded".
                         FactIdPrefixExpansionCount = validated.FactIdPrefixExpansionCount,
+                        // Spec 214 §2: computed by the validator only for a directional Judged result;
+                        // null = not applicable (Mixed/Unknown/failure), never a defaulted Supported.
+                        TrajectoryBasis = validated.TrajectoryBasis,
                     },
                     callDuration);
             }
@@ -693,7 +734,12 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         FamilySetHash: bundle.FamilySetHash,
         Families: bundle.Families
             .Select(f => new NewsJudgmentFamilyRef(
-                f.FamilyId, f.RepresentativeFactId, f.MemberCount, f.DistinctPublisherCount))
+                f.FamilyId,
+                f.RepresentativeFactId,
+                f.MemberCount,
+                f.DistinctPublisherCount,
+                // Spec 214 §1: the basis exactly as it was rendered to the judge for this family.
+                f.ComparisonBasis))
             .ToList(),
         ArchiveCapture: coverage.ArchiveCapture,
         SearchEnumeration: coverage.SearchEnumeration,

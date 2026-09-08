@@ -22,8 +22,11 @@ public sealed class NewsJudgmentCompletenessSchemaTests
     [Fact]
     public void TheRecordTagAndTheContractVersions_ArePinned_AndTheTagIsNeverACohortKeyInput()
     {
-        Assert.Equal("news-judgment-v4", NewsJudgmentRecord.CurrentSchemaVersion);
-        Assert.Equal("news-judgment-prompt-v3", NewsJudgmentContract.PromptVersion);
+        // Spec 214 §2: the record tag moved to v5 (TrajectoryBasis + per-family ComparisonBasis change what
+        // a record MEANS — whether it can become a signal) and the prompt forked to v4 (rule 11); the
+        // response schema is unchanged.
+        Assert.Equal("news-judgment-v5", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-prompt-v4", NewsJudgmentContract.PromptVersion);
         Assert.Equal("news-judgment-schema-v3", NewsJudgmentContract.SchemaVersion);
 
         // The stage-2 cohort key, asserted against the literal composition rather than against itself: the
@@ -33,9 +36,11 @@ public sealed class NewsJudgmentCompletenessSchemaTests
         var cohortKey = NewsJudgmentContract.CohortKey("openai", "judge-model", Stage1);
 
         Assert.Equal(
-            "openai:judge-model|news-judgment-prompt-v3|news-judgment-schema-v3|"
-                + $"stage1={Stage1}|families={FactFamilyBuilder.IdentityString}",
+            "openai:judge-model|news-judgment-prompt-v4|news-judgment-schema-v3|"
+                + $"stage1={Stage1}|families={FactFamilyBuilder.IdentityString}"
+                + $"|comparison={StatementComparisonClassifier.Version}",
             cohortKey);
+        Assert.DoesNotContain("news-judgment-v5", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v4", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v3", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v2", cohortKey, StringComparison.Ordinal);
@@ -54,13 +59,14 @@ public sealed class NewsJudgmentCompletenessSchemaTests
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(3)
+            .TakeLast(4)
             .ToList();
         Assert.Equal(
             [
                 nameof(NewsJudgmentRecord.RationaleLength),
                 nameof(NewsJudgmentRecord.RationaleOverSoftLimit),
                 nameof(NewsJudgmentRecord.FactIdPrefixExpansionCount),
+                nameof(NewsJudgmentRecord.TrajectoryBasis), // spec 214 §2
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

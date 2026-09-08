@@ -35,8 +35,9 @@ namespace Radar.Application.Scoring;
 /// §1.2 judgment-DERIVED signal this correction exists to make room for. So a signal qualifies only when it
 /// carries the spec-191 provenance keys declared on <see cref="NewsDirectionalSignalMetadata"/> and carries
 /// NO <see cref="NewsDirectionalSignalMetadata.JudgmentSignalVersionKey"/> token at all — the current
-/// <c>news-judgment-signal-v2</c> identity and the retired-but-still-valid v1 one are BOTH judgment-derived
-/// and both pass through untouched (spec 197 §1.3). A <c>MediaAttention</c> signal with no metadata, or with
+/// materializer identity (<see cref="NewsDirectionalSignalMetadata.JudgmentSignalVersionValue"/>,
+/// <c>news-judgment-signal-v3</c> since spec 214 §2) and the retired-but-still-valid v1 and v2 ones are ALL
+/// judgment-derived and pass through untouched (spec 197 §1.3, extended by spec 214). A <c>MediaAttention</c> signal with no metadata, or with
 /// metadata that is not this shape, passes through as the very same instance.
 /// </para>
 /// <para>

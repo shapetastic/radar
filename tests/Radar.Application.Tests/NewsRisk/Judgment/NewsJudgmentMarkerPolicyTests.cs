@@ -387,4 +387,56 @@ public sealed class NewsJudgmentMarkerPolicyTests
                     }),
                 companyId));
     }
+    // ---------------------------------------------------------------------------------------------
+    // SPEC 214 §4 — the trajectory-basis display token for the judgment provenance appendix.
+    // ---------------------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(NewsTrajectoryBasis.Supported, "Supported")]
+    [InlineData(NewsTrajectoryBasis.LevelOnly, "LevelOnly")]
+    [InlineData(null, "(pre-214)")]
+    public void ADirectionalJudgedMarker_CarriesItsBasisToken_OrThePre214Placeholder(
+        NewsTrajectoryBasis? basis, string expected)
+    {
+        var record = Record(NewsJudgmentStatus.Judged, trajectory: NewsJudgmentTrajectory.Improving)
+            with { TrajectoryBasis = basis };
+
+        var marker = NewsJudgmentMarkerPolicy.Derive(record, RunId);
+
+        Assert.Equal(expected, marker.TrajectoryBasis);
+        // Display-only: the leaders cell is byte-identical with or without a basis.
+        Assert.Equal("· no challenge found in supplied facts · trajectory improving", marker.CellText);
+    }
+
+    [Theory]
+    [InlineData(NewsJudgmentTrajectory.Mixed)]
+    [InlineData(NewsJudgmentTrajectory.Unknown)]
+    public void ANonDirectionalJudgedMarker_CarriesNoBasis_BecauseNoneIsApplicable(
+        NewsJudgmentTrajectory trajectory)
+    {
+        var marker = NewsJudgmentMarkerPolicy.Derive(
+            Record(NewsJudgmentStatus.Judged, trajectory: trajectory), RunId);
+
+        Assert.Null(marker.TrajectoryBasis);
+    }
+
+    [Fact]
+    public void AChallengedDeterioratingMarker_CarriesItsBasisToo()
+    {
+        var record = Record(NewsJudgmentStatus.Judged, trajectory: NewsJudgmentTrajectory.Deteriorating)
+            with { TrajectoryBasis = NewsTrajectoryBasis.LevelOnly };
+
+        var marker = NewsJudgmentMarkerPolicy.Derive(record, RunId);
+
+        Assert.Equal(NewsJudgmentMarkerState.Challenged, marker.State);
+        Assert.Equal("LevelOnly", marker.TrajectoryBasis);
+    }
+
+    [Fact]
+    public void AnUnassessedMarker_CarriesNoBasis()
+    {
+        var marker = NewsJudgmentMarkerPolicy.Derive(Record(NewsJudgmentStatus.ProviderFailure), RunId);
+
+        Assert.Null(marker.TrajectoryBasis);
+    }
 }

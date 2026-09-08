@@ -378,9 +378,14 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                     if (markers.TryGetValue(row.CompanyId, out var marker)
                         && marker.JudgmentId is { } judgmentId)
                     {
+                        // Spec 214 §4: the basis rides the appendix row (never the leaders cell), and only
+                        // when the policy set one — a directional judged read. Absent token, absent text.
+                        var basis = marker.TrajectoryBasis is { Length: > 0 } token
+                            ? " · basis: " + token
+                            : string.Empty;
                         lines.Add(string.Create(
                             CultureInfo.InvariantCulture,
-                            $"- {row.CompanyName} — judgment `{judgmentId:D}` · {marker.CellText}"));
+                            $"- {row.CompanyName} — judgment `{judgmentId:D}` · {marker.CellText}{basis}"));
                     }
                 }
             }

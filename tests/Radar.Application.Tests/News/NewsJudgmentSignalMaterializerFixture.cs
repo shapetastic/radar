@@ -137,7 +137,11 @@ internal static class MaterializerFixture
         int findings = 0,
         NewsTypingCompleteness typingCompleteness = NewsTypingCompleteness.Backlog,
         string companyName = "Acme Corporation",
-        DateTimeOffset? createdAtUtc = null) => new(
+        DateTimeOffset? createdAtUtc = null,
+        // Spec 214 §2: the fixture's directional judgments carry a Supported basis by default, so every
+        // pre-214 scenario still reaches the provenance gates it exercises; a test about the basis gate
+        // passes LevelOnly, null or an unallowlisted value explicitly.
+        NewsTrajectoryBasis? trajectoryBasis = NewsTrajectoryBasis.Supported) => new(
         SchemaVersion: NewsJudgmentRecord.CurrentSchemaVersion,
         JudgmentId: judgmentId ?? Guid.NewGuid(),
         RunId: null,
@@ -176,7 +180,8 @@ internal static class MaterializerFixture
         Limits: new NewsJudgmentLimitsRecord(30, 50, 3),
         ReusedFromJudgmentId: null,
         CreatedAtUtc: createdAtUtc ?? Monday,
-        TrajectoryFactIds: trajectoryFactIds);
+        TrajectoryFactIds: trajectoryFactIds,
+        TrajectoryBasis: trajectoryBasis);
 
     private static IReadOnlyList<NewsJudgmentValidatedFinding> BuildFindings(int count) =>
     [

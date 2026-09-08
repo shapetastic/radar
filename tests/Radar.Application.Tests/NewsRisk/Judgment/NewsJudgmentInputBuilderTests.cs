@@ -182,9 +182,12 @@ public sealed class NewsJudgmentInputBuilderTests
         var stage1 = NewsTypingContract.CohortKey("openai", "deepseek-ai/DeepSeek-V4-Flash");
         var key = NewsJudgmentContract.CohortKey("openai", "judge-model", stage1);
 
-        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v3|news-judgment-schema-v3|", key);
+        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v4|news-judgment-schema-v3|", key);
         Assert.Contains("stage1=" + stage1, key);
         Assert.Contains("families=" + FactFamilyBuilder.IdentityString, key);
+        // Spec 214 §1: the comparison-basis classifier is an input the model sees, so its version is cohort
+        // identity — and therefore, through the news= segment, scoring identity.
+        Assert.Contains("|comparison=" + StatementComparisonClassifier.Version, key);
         // The stage-1 cohort key carries the extractor model, prompt/schema AND taxonomy version — so a
         // stage-1 change of any of them forks a NEW stage-2 cohort by construction.
         Assert.Contains(NewsTypingContract.TaxonomyVersion, key);
@@ -228,9 +231,13 @@ public sealed class NewsJudgmentInputBuilderTests
             NewsJudgmentRecord.IdentityFor(v2Key, companyId, "hash", runId: null),
             NewsJudgmentRecord.IdentityFor(currentKey, companyId, "hash", runId: null));
 
+        // Spec 214 §2: the v3-prompt cohort is retired the same way.
+        Assert.DoesNotContain("news-judgment-prompt-v3", currentKey, StringComparison.Ordinal);
+
         // …and newly written records stamp the CURRENT store schema while older files keep theirs. Spec 197
-        // §2.2 moved that tag to v4 for FactIdPrefixExpansionCount — a RECORD change, not a cohort change:
-        // the cohort keys above are unaffected by it (asserted in NewsJudgmentCompletenessSchemaTests).
-        Assert.Equal("news-judgment-v4", NewsJudgmentRecord.CurrentSchemaVersion);
+        // §2.2 moved that tag to v4 for FactIdPrefixExpansionCount and spec 214 §2 to v5 for
+        // TrajectoryBasis — RECORD changes, not cohort changes: the cohort keys above are unaffected by
+        // the tag (asserted in NewsJudgmentCompletenessSchemaTests).
+        Assert.Equal("news-judgment-v5", NewsJudgmentRecord.CurrentSchemaVersion);
     }
 }

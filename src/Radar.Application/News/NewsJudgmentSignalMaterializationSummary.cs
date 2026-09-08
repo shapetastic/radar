@@ -79,6 +79,29 @@ public enum NewsJudgmentSignalSkipReason
     /// impossible state can never be read as an ordinary coverage gap.
     /// </summary>
     JoinedEvidenceMissing,
+
+    /// <summary>
+    /// SPEC 214 §2 — a directional judgment whose persisted <c>TrajectoryBasis</c> is
+    /// <see cref="NewsTrajectoryBasis.LevelOnly"/>: every cited trajectory fact was a stated LEVEL or an
+    /// unquantified statement, so the judge read a level as a trend (the 2026-09-07 Argan shape). The
+    /// judgment is persisted verbatim and marked; it mints no signal. A per-record gate reason.
+    /// </summary>
+    LevelOnlyTrajectory,
+
+    /// <summary>
+    /// SPEC 214 §2 — a directional judgment with a NULL <c>TrajectoryBasis</c> reached the basis gate: by
+    /// gate order (status and direction are checked first) that is a PRE-214 record, whose basis cannot be
+    /// re-derived without re-judging. Counted, never assumed Supported. A per-record gate reason.
+    /// </summary>
+    TrajectoryBasisNotRecorded,
+
+    /// <summary>
+    /// SPEC 214 §2 — a DEFINED <see cref="NewsTrajectoryBasis"/> value that is not on the materializer's
+    /// allowlist (a future basis nobody allowlisted). An unknown or malformed token ON DISK never reaches
+    /// here: the strict file-store enum converter rejects the record as unreadable, counted on the
+    /// judgment store's existing unreadable axis. A per-record gate reason.
+    /// </summary>
+    TrajectoryBasisNotAllowlisted,
 }
 
 /// <summary>
@@ -102,11 +125,14 @@ public enum NewsJudgmentSignalSkipReason
 /// path, because the eligibility gates are evaluated before any of those can occur.
 /// </para>
 /// <para>
-/// The four PER-RECORD gate reasons (<see cref="NewsJudgmentSignalSkipReason.NotPresentationCohort"/>,
+/// The SEVEN PER-RECORD gate reasons (<see cref="NewsJudgmentSignalSkipReason.NotPresentationCohort"/>,
 /// <see cref="NewsJudgmentSignalSkipReason.NotJudged"/>,
-/// <see cref="NewsJudgmentSignalSkipReason.NonDirectionalTrajectory"/> and
-/// <see cref="NewsJudgmentSignalSkipReason.NoTrajectoryFactIds"/>) sum, with <see cref="Eligible"/>, to
-/// <see cref="JudgmentsConsidered"/> — with ONE named exception:
+/// <see cref="NewsJudgmentSignalSkipReason.NonDirectionalTrajectory"/>,
+/// <see cref="NewsJudgmentSignalSkipReason.NoTrajectoryFactIds"/> and, since spec 214 §2, the three basis
+/// gates <see cref="NewsJudgmentSignalSkipReason.LevelOnlyTrajectory"/>,
+/// <see cref="NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded"/> and
+/// <see cref="NewsJudgmentSignalSkipReason.TrajectoryBasisNotAllowlisted"/>) sum, with
+/// <see cref="Eligible"/>, to <see cref="JudgmentsConsidered"/> — with ONE named exception:
 /// <see cref="NewsJudgmentSignalSkipReason.PresentationCohortUnresolved"/>. That reason is a PASS-level
 /// fact, counted exactly ONCE per pass rather than once per record (one configuration condition is not N
 /// provenance failures), and the pass returns before any record is examined. On that path

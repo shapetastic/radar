@@ -333,11 +333,13 @@ public sealed class MarkdownWeeklyReportJudgmentMarkerTests
                         NewsJudgmentMarkerState.Challenged,
                         ChallengeSummary: "business-trajectory-deteriorating",
                         Trajectory: "deteriorating",
-                        JudgmentId: challengedJudgment),
+                        JudgmentId: challengedJudgment,
+                        TrajectoryBasis: "Supported"),
                     [clean] = new(
                         NewsJudgmentMarkerState.NoChallengeFound,
                         Trajectory: "improving",
-                        JudgmentId: cleanJudgment),
+                        JudgmentId: cleanJudgment,
+                        TrajectoryBasis: "LevelOnly"),
                 },
                 JudgmentStoreRoot: "data/news-risk/judgments"));
         var live = LiveSectionOf(markdown);
@@ -347,14 +349,17 @@ public sealed class MarkdownWeeklyReportJudgmentMarkerTests
         Assert.Equal(
             1,
             live.Split("Judgments store root: `data/news-risk/judgments`").Length - 1);
+        // Spec 214 §4: each directional row states its basis AFTER the marker text — the leaders cell is
+        // untouched (asserted by the marker-cell tests above), the appendix gains ` · basis: …`.
         Assert.Contains(
             "- Eos Energy — judgment `11111111-1111-1111-1111-111111111111` · "
-                + "⚠ challenged (business-trajectory-deteriorating) · trajectory deteriorating",
+                + "⚠ challenged (business-trajectory-deteriorating) · trajectory deteriorating · basis: Supported",
             live, StringComparison.Ordinal);
         Assert.Contains(
             "- Acme Dynamics — judgment `22222222-2222-2222-2222-222222222222` · "
-                + "· no challenge found in supplied facts · trajectory improving",
+                + "· no challenge found in supplied facts · trajectory improving · basis: LevelOnly",
             live, StringComparison.Ordinal);
+        Assert.DoesNotContain("basis: Supported |", markdown, StringComparison.Ordinal); // never in a cell
         // A row with no judgment record cites nothing — never an invented id.
         Assert.DoesNotContain("- Borealis — judgment", live, StringComparison.Ordinal);
     }
