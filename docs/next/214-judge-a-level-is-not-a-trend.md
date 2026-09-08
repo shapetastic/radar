@@ -69,7 +69,10 @@ stage-1 cohort key is untouched, so NO re-typing of the ~2,000 in-window observa
      `FinancingOrDilution` statements that name such an event). "The company won a major government
      contract" and "The FDA approved the product" → Event; "$22 Million Follow-On Order" → Event.
   4. **`NotQuantified`** — none of the above.
-  The three tables are the classifier's identity — changing any of them is `comparison-basis-v2`.
+  Every table matches WHOLE words/phrases only (token-boundary, case-insensitive, no substring hits): `vs`
+  must not match "investors", `record` must not match "recorded", `cut` must not match "cutting-edge",
+  `rose` must not match "Rosetta" — pinned by negative tests. The three tables and the boundary rule are
+  the classifier's identity — changing any of them is `comparison-basis-v2`.
 - Rendered to the judge per family as one line: `ComparisonBasis: LevelOnly — a stated level, not a
   trend` / `StatedComparison` / `Event` / `NotQuantified`. Persisted on the judgment record per consumed
   family (additive field, nullable = written pre-214, never defaulted).
@@ -82,13 +85,19 @@ stage-1 cohort key is untouched, so NO re-typing of the ~2,000 in-window observa
   backlog, cash, debt, headcount, capacity — establishes NO direction by itself, however large. Only a
   supplied fact that states the comparison (prior value, change, record, beat/miss) or an EVENT fact
   (an order, award, contract, launch, financing) can be cited in TrajectoryFactIds. A LevelOnly fact may be
-  cited in a finding's FactIds as context, never as trajectory support. If the only quantified facts are
-  levels, say so in the Rationale and answer Unknown." The response schema (`news-judgment-schema-v3`) is
-  unchanged by this spec.
-- **Validator** (`NewsJudgmentValidator`): after fact-id resolution, compute `trajectoryBasis` over the
-  cited `TrajectoryFactIds`: `Supported` when ≥ 1 cited fact is `StatedComparison` or `Event`; `LevelOnly`
-  when every cited fact is `LevelOnly`/`NotQuantified` and the trajectory is Improving/Deteriorating;
-  null (never written) only on records produced before this spec.
+  cited in a finding's FactIds as context, never as trajectory support. Answer Unknown ONLY when no
+  supplied fact is StatedComparison or Event — a numberless comparison ("backlog declined") or a
+  numberless event ("the FDA approved the product") beside a quantified level still establishes
+  direction; when that is the case, say in the Rationale which levels you set aside." The response
+  schema (`news-judgment-schema-v3`) is unchanged by this spec.
+- **Validator** (`NewsJudgmentValidator`): after fact-id resolution, compute `trajectoryBasis` ONLY for a
+  current, `Judged`, DIRECTIONAL record (BusinessTrajectory Improving or Deteriorating), over the cited
+  `TrajectoryFactIds`: `Supported` when ≥ 1 cited fact is `StatedComparison` or `Event`; `LevelOnly` when
+  every cited fact is `LevelOnly`/`NotQuantified`. For every other record — Mixed, Unknown, a validation
+  failure, an insufficient-facts or provider-failure attempt — the field is null, meaning "not
+  applicable"; it is also null on every pre-214 record. The two nulls are distinguishable by what the
+  materializer checks first: status and direction gate BEFORE the basis gate (as today), so a null that
+  REACHES the basis gate is, by construction, a pre-214 directional record.
   `LevelOnly` is NOT a validation failure (the judgment is persisted, `status: Judged`, the model's read is
   kept verbatim — a wrong call recorded beats a call rewritten) — it is a persisted marker
   (`trajectoryBasis`, additive, nullable pre-214) plus a per-run aggregated count.
@@ -97,8 +106,10 @@ stage-1 cohort key is untouched, so NO re-typing of the ~2,000 in-window observa
   allowlisted value — under this spec **`Supported` alone**; spec 215 adds `ReferenceSupported`. Everything
   else mints nothing, each under its OWN named skip reason: `LevelOnlyTrajectory` (basis LevelOnly),
   `TrajectoryBasisNotRecorded` (basis null — a pre-214 record reached the v3 materializer; it cannot be
-  re-derived without re-judging, so it is counted, never assumed Supported), `TrajectoryBasisUnrecognised`
-  (any other value — a future basis nobody allowlisted). All three render through `DescribeSkips` in the
+  re-derived without re-judging, so it is counted, never assumed Supported), `TrajectoryBasisNotAllowlisted`
+  (a DEFINED enum value that is not on the allowlist — a future basis nobody allowlisted; an unknown or
+  malformed token ON DISK never reaches the materializer at all, because the strict JSON enum converter
+  rejects the record as unreadable, which is counted on the existing unreadable-record axis). All three render through `DescribeSkips` in the
   daily news report's accounting and the live artifact beside `not-judged` / `non-directional-trajectory`.
   Fail-closed means the default outcome is "no signal": a direction whose basis is absent, unknown or
   level-only produces no scoring input.
@@ -138,10 +149,12 @@ A read-only harness (`tests/…/ComparisonBasisLiveMeasurementTests`, env-gated 
 | of those, how many currently HAVE a materialized v2 signal (i.e. would have minted nothing under v3) | n |
 | the AGX 2026-09-07 judgment's four cited facts, classified | 4 rows |
 
-**A classifier that puts > 30% of quantified facts in `LevelOnly`, or < 5% in `StatedComparison`, is a
-defect in the noun/phrase tables, not a finding** — retune the tables (still v1, it has not shipped) and
-re-measure. The `LevelOnly` share of judgments is expected to be well under the crude 14.8%; if it is
-ABOVE it, the tables are over-broad.
+**Sanity bounds, to INVESTIGATE if breached — not targets to tune to:** > 30% of quantified facts in
+`LevelOnly`, < 5% in `StatedComparison`, or a `LevelOnly` judgment share ABOVE the crude 14.8% each mean
+the implementer inspects a sample of the classified statements and reports what the tables did — a
+mis-tabled noun or a substring hit is a defect to fix; a genuinely level-heavy corpus is a finding to
+record. The share is not itself proof the classifier is wrong, and it must never be tuned to preserve
+signal volume — that would weaken the very fix this spec exists for.
 
 ## 4. Report and docs
 
@@ -186,8 +199,9 @@ citing the test, never by transcribing them into prose.
       spirit; schema v3 unchanged.
 - [ ] `trajectoryBasis` persisted (nullable pre-214) and computed only over resolved cited facts; record
       schema `news-judgment-v5` with v4 readable; the materializer ALLOWLISTS `Supported` only — `LevelOnly`,
-      null and unrecognised each mint nothing under their own skip reason (`LevelOnlyTrajectory`,
-      `TrajectoryBasisNotRecorded`, `TrajectoryBasisUnrecognised`) in the run summary, the daily report
+      null and defined-but-not-allowlisted each mint nothing under their own skip reason
+      (`LevelOnlyTrajectory`, `TrajectoryBasisNotRecorded`, `TrajectoryBasisNotAllowlisted`) in the run
+      summary, the daily report
       accounting and the live artifact; v1/v2 stay accepted historical versions; the first-run
       v2/v3 overlap is measured and reported, not claimed away.
 - [ ] §3 live distribution in the PR body with the AGX four-fact classification; the sanity bounds hold.
