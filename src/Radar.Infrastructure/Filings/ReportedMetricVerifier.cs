@@ -31,7 +31,7 @@ internal sealed record ReportedMetricWire(
 /// <c>DroppedUnverified</c> — there is nothing to verify against. (2) A non-blank metric outside the closed
 /// <see cref="ReportedMetric"/> set is <c>DroppedUnrecognised</c> (the digit-rejecting shared token parser,
 /// so "3" never becomes a metric). (3) The VALUE must appear verbatim inside the QUOTE, the PRIOR VALUE
-/// (when present) must too, the UNIT token (when non-blank) must too, and the QUOTE must appear verbatim
+/// and PRIOR PERIOD (each when present) must too, the UNIT token (when non-blank) must too, and the QUOTE must appear verbatim
 /// inside the TRUNCATED body the analyzer sent to the model — all ordinal, after collapsing whitespace runs
 /// on both sides, so a line break inside a sentence is not a mismatch. Any failure is
 /// <c>DroppedUnverified</c>; a quote whose text lies past the <c>MaxInputLength</c> cap therefore cannot
@@ -97,9 +97,12 @@ internal static class ReportedMetricVerifier
 
             var valueInQuote = quote.Contains(value, StringComparison.Ordinal);
             var unitInQuote = unit.Length == 0 || quote.Contains(unit, StringComparison.Ordinal);
-            var priorInQuote = priorValue.Length == 0 || quote.Contains(priorValue, StringComparison.Ordinal);
+            var priorValueInQuote = priorValue.Length == 0 || quote.Contains(priorValue, StringComparison.Ordinal);
+            // The prompt asks for the prior PERIOD "exactly as printed" too, so a supplied one is held to the
+            // same verbatim rule as the prior value: an invented period fails the entry, never persists.
+            var priorPeriodInQuote = priorPeriod.Length == 0 || quote.Contains(priorPeriod, StringComparison.Ordinal);
             var quoteInBody = body.Contains(quote, StringComparison.Ordinal);
-            if (!valueInQuote || !unitInQuote || !priorInQuote || !quoteInBody)
+            if (!valueInQuote || !unitInQuote || !priorValueInQuote || !priorPeriodInQuote || !quoteInBody)
             {
                 unverified++;
                 continue;

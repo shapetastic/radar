@@ -35,8 +35,10 @@ Estimated implementation time: UNMEASURED. Record actual dispatch→PR time in t
   The prompt asks for "the figures the release STATES, with the period they are stated for, and the
   prior-period figure ONLY if the release itself states it; never compute, never infer".
 - **Deterministic verification before anything is kept** (the spec-160 shape: the scan is code, not the
-  model's word): `value` (and `priorValue` when present) must appear VERBATIM — same digits, same unit
-  token — inside `quote`, and `quote` must appear verbatim in the stripped body the analyzer read. A metric
+  model's word): `value` (and `priorValue` / `priorPeriod` when present — the prior period was added to
+  the check in the PR #222 Copilot fix pass, since the prompt asks for it "exactly as printed") must appear
+  VERBATIM — same digits, same unit token — inside `quote`, and `quote` must appear verbatim in the
+  stripped body the analyzer read. A metric
   that fails either check is dropped and counted (`metricsDroppedUnverified`), never persisted. The
   `MaxInputLength` truncation applies as today; a quote beyond the truncation point cannot verify and is
   therefore dropped — counted, so a release whose numbers live past the cap shows up as a gap, not a zero.

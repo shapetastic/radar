@@ -5,7 +5,7 @@ namespace Radar.Infrastructure.Tests.Filings;
 
 /// <summary>
 /// Spec 215 §1 — the deterministic verbatim verification that stands between the model's reported-metrics
-/// list and the ledger. Every branch is pinned: the three drop classes, the four containment checks, the
+/// list and the ledger. Every branch is pinned: the three drop classes, the five containment checks, the
 /// truncation boundary, the blank rules and the prior-pair rule. The scan is code, not the model's word.
 /// </summary>
 public sealed class ReportedMetricVerifierTests
@@ -46,7 +46,7 @@ public sealed class ReportedMetricVerifierTests
     }
 
     [Fact]
-    public void APriorPair_IsKept_OnlyWhenBothHalvesAreStated_AndThePriorValueIsInTheQuote()
+    public void APriorPair_IsKept_OnlyWhenBothHalvesAreStated_AndBothAreInTheQuote()
     {
         var both = ReportedMetricVerifier.Verify(
             [Wire(priorValue: "227.0", priorPeriod: "prior-year quarter")], Body);
@@ -73,6 +73,14 @@ public sealed class ReportedMetricVerifierTests
             [Wire(priorValue: "199.0", priorPeriod: "prior-year quarter")], Body);
         Assert.Empty(invented.Verified);
         Assert.Equal(1, invented.DroppedUnverified);
+
+        // The same holds for the prior PERIOD: the prompt asks for it exactly as printed, so a period the
+        // quote never states fails the entry rather than persisting an invented placement in time.
+        var inventedPeriod = ReportedMetricVerifier.Verify(
+            [Wire(priorValue: "227.0", priorPeriod: "Q2 FY26")], Body);
+        Assert.Empty(inventedPeriod.Verified);
+        Assert.Equal(1, inventedPeriod.DroppedUnverified);
+        Assert.Equal(0, inventedPeriod.PriorPairsDroppedIncomplete);
     }
 
     [Theory]

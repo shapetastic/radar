@@ -3120,7 +3120,8 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     the TRUNCATED body the analyzer actually sent (`FilingAnalyzerPrompt.Truncate`, same cap) — a pure
     Application verifier would have needed a pasted second copy of the collapser. Rules, in order: a null
     entry or a blank metric/value/period/quote is `DroppedUnverified`; a non-blank metric outside the
-    closed set is `DroppedUnrecognised`; the value, the prior value (when present) and the unit (when
+    closed set is `DroppedUnrecognised`; the value, the prior value and prior period (each when present —
+    the prior period joined the check in the PR #222 Copilot fix pass) and the unit (when
     non-blank) must appear verbatim (ordinal, whitespace-collapsed) inside the quote and the quote inside
     the truncated body, else `DroppedUnverified` (so a quote past the `MaxInputLength` cap is a COUNTED
     gap, never a silent zero); a repeated (metric, period) pair is `DroppedDuplicate` (the third count is
