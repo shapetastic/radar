@@ -522,6 +522,67 @@ public sealed class WorkerTests
         Assert.Equal(["seed", "run"], callLog);
     }
 
+    [Fact]
+    public async Task ReportCapBelowSeededUniverse_FailsStartup_NamingKeyAndBothNumbers_BeforeThePipelineRuns()
+    {
+        // Spec 213 §4: the report cap fails loudly instead of promising headroom. Five seeded companies against a
+        // cap of four halt the run after seeding and BEFORE any collection — the StrategyIdentityGuard shape —
+        // naming the config key and both numbers so a universe expansion is forced to raise the cap consciously.
+        var callLog = new List<string>();
+        var seeder = new RecordingSeeder(callLog, seededCount: 5);
+        var pipeline = new RecordingPipeline(callLog, EmptyResult);
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            seeder,
+            pipeline,
+            lifetime,
+            new WorkerRunOptions { RunOnce = true, ReportMaxItems = 4 },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance);
+
+        // BackgroundService surfaces a synchronously-faulted ExecuteAsync from StartAsync itself, so both awaits
+        // sit inside the assertion; whichever one throws, ExecuteTask is the faulted task.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await worker.StartAsync(CancellationToken.None);
+            await worker.ExecuteTask!;
+        });
+
+        Assert.Contains("Radar:ReportMaxItems", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(" 4 ", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(" 5 ", ex.Message, StringComparison.Ordinal);
+        Assert.True(worker.ExecuteTask!.IsFaulted);
+        Assert.Equal(1, seeder.SeedCount);
+        Assert.Equal(0, pipeline.RunCount);
+        Assert.Equal(["seed"], callLog);
+    }
+
+    [Fact]
+    public async Task ReportCapEqualToSeededUniverse_Starts_RunsOnce_AndStopsApplication()
+    {
+        // Spec 213 §4: the cap is a bound, not headroom — a universe exactly at the cap starts normally.
+        var callLog = new List<string>();
+        var seeder = new RecordingSeeder(callLog, seededCount: 5);
+        var pipeline = new RecordingPipeline(callLog, EmptyResult);
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            seeder,
+            pipeline,
+            lifetime,
+            new WorkerRunOptions { RunOnce = true, ReportMaxItems = 5 },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance);
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(1, pipeline.RunCount);
+        Assert.Equal(["seed", "run"], callLog);
+        Assert.True(lifetime.ApplicationStopping.IsCancellationRequested);
+    }
+
     private sealed class RecordingReplayRunner(List<string> callLog) : IReplayRunner
     {
         public Task<ReplayResult> RunAsync(CancellationToken ct)
@@ -607,7 +668,12 @@ public sealed class WorkerTests
         }
     }
 
-    private sealed class RecordingSeeder(List<string> callLog) : ICompanyUniverseSeeder
+    /// <summary>
+    /// Records seed calls. Reports <paramref name="seededCount"/> companies when given (spec 213 §4 cap tests);
+    /// otherwise the running call count, as before — well below the default ReportMaxItems of 25, so the
+    /// existing tests never trip the cap guard.
+    /// </summary>
+    private sealed class RecordingSeeder(List<string> callLog, int? seededCount = null) : ICompanyUniverseSeeder
     {
         private int _seedCount;
 
@@ -620,7 +686,8 @@ public sealed class WorkerTests
                 callLog.Add("seed");
             }
 
-            return Task.FromResult(Interlocked.Increment(ref _seedCount));
+            var calls = Interlocked.Increment(ref _seedCount);
+            return Task.FromResult(seededCount ?? calls);
         }
     }
 

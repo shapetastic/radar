@@ -57,6 +57,15 @@ namespace Radar.Worker;
 /// whole-universe artifacts with a partial view. Unfiltered runs are unaffected in every mode: the dependency
 /// is <c>null</c> and the step runs exactly as before.
 /// </para>
+/// <para>
+/// Immediately after seeding, the report cap is checked (spec 213 §4): when
+/// <see cref="WorkerRunOptions.ReportMaxItems"/> (<c>Radar:ReportMaxItems</c>) is below the seeded company count
+/// the worker FAILS with an <see cref="InvalidOperationException"/> naming the key and both numbers, before any
+/// collection — the <c>StrategyIdentityGuard</c> shape. The cap is a config value that is deliberately NOT
+/// derived from the universe (a cap that silently tracks the universe is no cap): a universe expansion must
+/// consciously raise it in the same change. The check applies in every run mode, filtered or not, against
+/// whatever this run seeded.
+/// </para>
 /// </summary>
 public sealed class Worker : BackgroundService
 {
@@ -161,6 +170,23 @@ public sealed class Worker : BackgroundService
             // Seed the watch-universe once at startup (idempotent, AD-1) before any pipeline run.
             var seeded = await _seeder.SeedAsync(stoppingToken).ConfigureAwait(false);
             _logger.LogInformation("Seeded {Count} companies into the watch-universe.", seeded);
+
+            // Spec 213 §4: the report cap fails loudly instead of promising headroom. WeeklyReportOptions.MaxItems
+            // bounds the entries each strategy section renders ("showing top N of M" stays the counted truth), so
+            // a universe that has outgrown it means scored companies never reach the reader. The cap is
+            // deliberately NOT derived from the universe — a cap that tracks the universe is no cap — so a
+            // universe expansion must consciously raise Radar:ReportMaxItems in the same change. Applied in
+            // every run mode, filtered or not: the seeded count is whatever THIS run seeded. Same register as
+            // StrategyIdentityGuard — a misconfiguration costs no collection.
+            if (_options.ReportMaxItems < seeded)
+            {
+                throw new InvalidOperationException(
+                    $"Radar:ReportMaxItems is {_options.ReportMaxItems} but this run seeded {seeded} companies: "
+                    + $"the weekly report would render only the top {_options.ReportMaxItems} of {seeded} scored "
+                    + "companies per strategy section (spec 213 §4). The cap is deliberately NOT derived from the "
+                    + "universe (a cap that tracks the universe is no cap), so a universe expansion must "
+                    + "consciously raise Radar:ReportMaxItems in the same change. Halting before any collection.");
+            }
 
             // Explicit one-shot news observation migration (spec 177 §7): REPLACES the run entirely, like
             // a replay — it reads accrued raw news evidence (and, in retrospective mode, revisits saved

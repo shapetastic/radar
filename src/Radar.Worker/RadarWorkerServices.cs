@@ -105,6 +105,7 @@ internal static class RadarWorkerServices
             RunOnce = options.RunOnce,
             Interval = TimeSpan.FromMinutes(options.IntervalMinutes),
             Mode = runMode,
+            ReportMaxItems = options.ReportMaxItems,
         });
 
         // Attention source-quality tiers (spec 88): bind the optional Radar:Attention section and register it
