@@ -439,4 +439,33 @@ public sealed class NewsJudgmentMarkerPolicyTests
 
         Assert.Null(marker.TrajectoryBasis);
     }
+
+    [Fact]
+    public void AJudgedDirectionalMarker_CarriesTheReferenceSupportedToken_AndTheCitedReferenceIds()
+    {
+        // Spec 215 §4: the widened basis renders naturally, and the cited trajectory reference ids ride the
+        // marker as ONE comma-joined string token (display metadata — no judgment type on the marker).
+        var first = Guid.Parse("1e5a0000-0000-4000-8000-000000000001");
+        var second = Guid.Parse("1e5a0000-0000-4000-8000-000000000002");
+        var record = Record(NewsJudgmentStatus.Judged, trajectory: NewsJudgmentTrajectory.Deteriorating) with
+        {
+            TrajectoryBasis = NewsTrajectoryBasis.ReferenceSupported,
+            TrajectoryReferenceIds = [first, second],
+        };
+
+        var marker = NewsJudgmentMarkerPolicy.Derive(record, RunId);
+
+        Assert.Equal(NewsJudgmentMarkerState.Challenged, marker.State);
+        Assert.Equal("ReferenceSupported", marker.TrajectoryBasis);
+        Assert.Equal(first.ToString("D") + "," + second.ToString("D"), marker.ReferenceIds);
+
+        // None cited (a v6 empty list) and not recorded (a pre-215 null) both render NO token.
+        Assert.Null(NewsJudgmentMarkerPolicy.Derive(record with { TrajectoryReferenceIds = [] }, RunId).ReferenceIds);
+        Assert.Null(NewsJudgmentMarkerPolicy.Derive(record with { TrajectoryReferenceIds = null }, RunId).ReferenceIds);
+        // An unassessed row has no judgment to cite from.
+        Assert.Null(NewsJudgmentMarkerPolicy.Derive(record, Guid.NewGuid()).ReferenceIds);
+        // A non-directional read carries no basis, so it states no references either.
+        Assert.Null(NewsJudgmentMarkerPolicy.Derive(
+            record with { BusinessTrajectory = NewsJudgmentTrajectory.Mixed, TrajectoryBasis = null }, RunId).ReferenceIds);
+    }
 }

@@ -692,7 +692,13 @@ internal static class RadarWorkerServices
 
             // The filing analyzer rides the same opt-in gate: it consumes the IChatClient AddRadarAi just
             // registered, so it is only wired when a provider is configured. Blank Provider = neither runs.
-            services.AddRadarFilingAnalyzer(new FilingAnalyzerOptions { MaxInputLength = options.Ai.MaxInputLength });
+            services.AddRadarFilingAnalyzer(new FilingAnalyzerOptions
+            {
+                MaxInputLength = options.Ai.MaxInputLength,
+                // Spec 215 §1: the analyzer requests the release's stated metrics only when the ledger they
+                // feed is enabled, so a disabled ledger never leaves an extraction with nowhere to go.
+                ExtractReportedMetrics = options.Ai.ReportedMetrics.Enabled,
+            });
 
             // The directional filing signal source completes the arc: it composes the EX-99.1 earnings
             // reader + the filing analyzer into a confidence-gated directional GuidanceChange signal. Both
@@ -747,6 +753,15 @@ internal static class RadarWorkerServices
             if (options.Ai.Filings.PersistReadDebug)
             {
                 services.AddFileFilingReadDebugStore(options.FilingReadDebugDirectory);
+            }
+
+            // Reported-metrics ledger (spec 215 §1): rides the same AI gate as the cache — only an AI read
+            // can extract a metric — and is opt-out. When registered, CollectionPass writes it, the
+            // judgment generator projects it into the judge input and the weekly report joins it to the
+            // evidence lines; when not, each optional seam stays null and behaviour is byte-identical.
+            if (options.Ai.ReportedMetrics.Enabled)
+            {
+                services.AddFileReportedMetricStore(options.ReportedMetricsDirectory);
             }
         }
     }

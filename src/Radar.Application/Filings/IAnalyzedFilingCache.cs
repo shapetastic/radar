@@ -91,6 +91,15 @@ public enum FilingNoSignalCause
 /// record and the signal it replays cannot disagree; <c>null</c> = not recorded.</param>
 /// <param name="Rationale">SPEC 204 (trailing + nullable): the model's advice-scrubbed rationale for a
 /// no-signal read (empty for an Unknown read that produced none); <c>null</c> = not recorded.</param>
+/// <param name="ReportedMetricsPolicy">SPEC 215 §1 (trailing + nullable): the
+/// <see cref="Radar.Application.Filings.ReportedMetricsPolicy.Version"/> the read extracted its
+/// reported-metrics ledger entries under. <c>null</c> = NO extraction was made — a pre-215 record, or a
+/// read taken with extraction disabled — and is a HIT (the spec-160 null-policy precedent: the accrued
+/// cache is never mass-invalidated, so ONLY NEW filing reads extract metrics; a company's first reference
+/// value therefore appears at its NEXT release, heal-forward). A non-null value that differs from the
+/// current policy is a bounded automatic MISS, applied in <c>DirectionalFilingSignalSource</c> pass 1
+/// exactly as <see cref="ComparabilityPolicy"/> is. Deliberately NOT a <see cref="CurrentCacheVersion"/>
+/// bump.</param>
 public sealed record AnalyzedFilingRecord(
     string Accession,
     AnalyzedFilingOutcome Outcome,
@@ -102,7 +111,8 @@ public sealed record AnalyzedFilingRecord(
     FilingNoSignalCause? NoSignalCause = null,
     string? ReadDirection = null,
     decimal? ReadConfidence = null,
-    string? Rationale = null)
+    string? Rationale = null,
+    string? ReportedMetricsPolicy = null)
 {
     /// <summary>
     /// The current cache-schema version stamped on every write. Deliberately non-zero so a legacy file with no

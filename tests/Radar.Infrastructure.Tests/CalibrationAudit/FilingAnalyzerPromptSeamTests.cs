@@ -25,15 +25,33 @@ namespace Radar.Infrastructure.Tests.CalibrationAudit;
 /// </summary>
 public sealed class FilingAnalyzerPromptSeamTests
 {
-    /// <summary>The production system instruction as it stood BEFORE the spec-164 extraction.</summary>
-    private const string PreSpec164ProductionInstruction =
+    /// <summary>
+    /// The production system instruction, pinned as a full string. Captured from the pre-spec-164 source
+    /// and MOVED ONCE by spec 215 §1, which appended the reported-metrics paragraph
+    /// (<see cref="ChatFilingAnalyzer.ReportedMetricsInstruction"/>) after the unchanged directional
+    /// instruction (<see cref="ChatFilingAnalyzer.SentimentInstruction"/>, asserted below to be the exact
+    /// pre-215 text). The seam's byte-identical-by-default property is unchanged: production passes no
+    /// instruction and receives exactly this string.
+    /// </summary>
+    private const string ProductionInstruction =
+        """
+        You are Radar, a research assistant. You are given the plain text of a company's earnings-release press release. Classify the business trajectory the release DESCRIBES AS REPORTED — this is NOT a beat-vs-consensus judgement (there is no analyst-consensus feed) — into exactly one of: Improving (record bookings, organic growth, raised outlook), Deteriorating (revenue decline, guidance cut, impairment), Mixed (materially both), or Unknown. Weigh REPORTED profitability, gross margin, and cash burn against REPORTED top-line growth — a strong top line alone does not make the trajectory Improving. In particular: when record or growing revenue coexists with a deeply negative or deteriorating gross margin, with a guidance cut, or with heavy cash burn or dilution, the trajectory is Mixed (materially both), NOT Improving. This is not a bearish bias — a release reporting strong growth alongside solid or improving profitability is still Improving; Mixed is only for genuinely two-sided results. Return a confidence in [0,1] and a single-sentence rationale that quotes or paraphrases the release; when a profitability, margin, or cash-burn fact drives a Mixed classification, the rationale must name that fact. This is NOT investment advice: the rationale must contain NO advice language whatsoever — never "buy", "sell", "hold", "guaranteed", "safe bet", price targets, or any recommendation. When the text is ambiguous, boilerplate, or lacks reported results, return Unknown with a low confidence rather than manufacturing a directional read. Also return reportedMetrics: the figures the release STATES, with the period they are stated for, and the prior-period figure ONLY if the release itself states it; never compute, never infer. Each entry has: metric (exactly one of: Revenue, NetIncome, DilutedEps, GrossMargin, OperatingIncome, Backlog, CashAndInvestments, TotalDebt, FreeCashFlow — omit any figure that is not one of these); value (the figure exactly as printed, e.g. "384.0" or "2.518" or "24.5"); unit (the unit token exactly as printed beside it, e.g. "million", "billion", "%", or an empty string when none is printed); period (the period the figure is stated FOR, as the release words it — a quarter such as "second quarter of fiscal 2027" or a date such as "as of July 31, 2026"); priorValue and priorPeriod (only when the release states the prior-period figure for the same metric in the same passage, exactly as printed; otherwise omit both); and quote (the exact sentence or fragment of the release, copied character for character, that contains the value). Return an empty reportedMetrics list when the release states none of these metrics.
+        """;
+
+    /// <summary>The pre-spec-215 production instruction — now the directional half, byte-unchanged.</summary>
+    private const string PreSpec215ProductionInstruction =
         """
         You are Radar, a research assistant. You are given the plain text of a company's earnings-release press release. Classify the business trajectory the release DESCRIBES AS REPORTED — this is NOT a beat-vs-consensus judgement (there is no analyst-consensus feed) — into exactly one of: Improving (record bookings, organic growth, raised outlook), Deteriorating (revenue decline, guidance cut, impairment), Mixed (materially both), or Unknown. Weigh REPORTED profitability, gross margin, and cash burn against REPORTED top-line growth — a strong top line alone does not make the trajectory Improving. In particular: when record or growing revenue coexists with a deeply negative or deteriorating gross margin, with a guidance cut, or with heavy cash burn or dilution, the trajectory is Mixed (materially both), NOT Improving. This is not a bearish bias — a release reporting strong growth alongside solid or improving profitability is still Improving; Mixed is only for genuinely two-sided results. Return a confidence in [0,1] and a single-sentence rationale that quotes or paraphrases the release; when a profitability, margin, or cash-burn fact drives a Mixed classification, the rationale must name that fact. This is NOT investment advice: the rationale must contain NO advice language whatsoever — never "buy", "sell", "hold", "guaranteed", "safe bet", price targets, or any recommendation. When the text is ambiguous, boilerplate, or lacks reported results, return Unknown with a low confidence rather than manufacturing a directional read.
         """;
 
-    private const int PreSpec164InstructionLength = 1544;
+    private const int ProductionInstructionLength = 2662;
 
-    private const string PreSpec164InstructionSha256 =
+    private const string ProductionInstructionSha256 =
+        "ac7d34fadc18029524cca8ebd55bd03531a29fd9b23b9497363fb69a6a3cb999";
+
+    private const int PreSpec215InstructionLength = 1544;
+
+    private const string PreSpec215InstructionSha256 =
         "71622fcba90f5c3e213eacbf485a225b9b074f52530f153eddd395b458282e43";
 
     private static string Sha256Hex(string text) =>
@@ -42,9 +60,19 @@ public sealed class FilingAnalyzerPromptSeamTests
     [Fact]
     public void ProductionInstruction_IsUnchanged_ByTheExtraction()
     {
-        Assert.Equal(PreSpec164ProductionInstruction, ChatFilingAnalyzer.SystemInstruction, StringComparer.Ordinal);
-        Assert.Equal(PreSpec164InstructionLength, ChatFilingAnalyzer.SystemInstruction.Length);
-        Assert.Equal(PreSpec164InstructionSha256, Sha256Hex(ChatFilingAnalyzer.SystemInstruction));
+        Assert.Equal(ProductionInstruction, ChatFilingAnalyzer.SystemInstruction, StringComparer.Ordinal);
+        Assert.Equal(ProductionInstructionLength, ChatFilingAnalyzer.SystemInstruction.Length);
+        Assert.Equal(ProductionInstructionSha256, Sha256Hex(ChatFilingAnalyzer.SystemInstruction));
+
+        // Spec 215 §1 appended a paragraph; the directional instruction it follows is byte-identical to
+        // the pre-215 production prompt (the spec-164 pin), so the directional read's contract did not move.
+        Assert.Equal(PreSpec215ProductionInstruction, ChatFilingAnalyzer.SentimentInstruction, StringComparer.Ordinal);
+        Assert.Equal(PreSpec215InstructionLength, ChatFilingAnalyzer.SentimentInstruction.Length);
+        Assert.Equal(PreSpec215InstructionSha256, Sha256Hex(ChatFilingAnalyzer.SentimentInstruction));
+        Assert.Equal(
+            ChatFilingAnalyzer.SentimentInstruction + " " + ChatFilingAnalyzer.ReportedMetricsInstruction,
+            ChatFilingAnalyzer.SystemInstruction,
+            StringComparer.Ordinal);
 
         // The seam's default IS the analyzer's constant (a const alias), so the two cannot diverge.
         Assert.Equal(ChatFilingAnalyzer.SystemInstruction, FilingAnalyzerPrompt.DefaultSystemInstruction, StringComparer.Ordinal);
@@ -74,7 +102,7 @@ public sealed class FilingAnalyzerPromptSeamTests
         Assert.Equal(2, captured.Count);
         Assert.Equal(ChatRole.System, captured[0].Role);
         Assert.Equal(ChatRole.User, captured[1].Role);
-        Assert.Equal(PreSpec164ProductionInstruction, captured[0].Text, StringComparer.Ordinal);
+        Assert.Equal(ProductionInstruction, captured[0].Text, StringComparer.Ordinal);
 
         // The shared seam, called the way production calls it, reproduces the captured prompt exactly.
         var seam = FilingAnalyzerPrompt.Build(input, maxInputLength);

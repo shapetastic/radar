@@ -383,9 +383,14 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                         var basis = marker.TrajectoryBasis is { Length: > 0 } token
                             ? " · basis: " + token
                             : string.Empty;
+                        // Spec 215 §4: the cited reference ids ride the same row, after the basis — the
+                        // ledger record ids the judge compared against, so the comparison is traceable.
+                        var references = marker.ReferenceIds is { Length: > 0 } cited
+                            ? " · references: " + cited
+                            : string.Empty;
                         lines.Add(string.Create(
                             CultureInfo.InvariantCulture,
-                            $"- {row.CompanyName} — judgment `{judgmentId:D}` · {marker.CellText}{basis}"));
+                            $"- {row.CompanyName} — judgment `{judgmentId:D}` · {marker.CellText}{basis}{references}"));
                     }
                 }
             }
@@ -1074,8 +1079,33 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append(" — ")
             .Append(ev.SourceName)
             .Append(": ")
-            .Append(SignalTypeDisplay.RewriteStoredProvenance(ev.ContributionReason))
-            .Append(Lf);
+            .Append(SignalTypeDisplay.RewriteStoredProvenance(ev.ContributionReason));
+
+        // Spec 215 §4: the company-reported figures the ledger holds for THIS evidence, as stated — metric
+        // display name, value + unit, period in parentheses; no direction word, no arithmetic. Printed only
+        // when the ledger has at least one record for the evidence (null/empty ⇒ nothing, never "reported:").
+        if (ev.ReportedMetrics is { Count: > 0 } reported)
+        {
+            sb.Append(" — reported: ");
+            for (var i = 0; i < reported.Count; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(", ");
+                }
+
+                var line = reported[i];
+                sb.Append(line.Metric).Append(' ').Append(line.Value);
+                if (line.Unit.Length > 0)
+                {
+                    sb.Append(' ').Append(line.Unit);
+                }
+
+                sb.Append(" (").Append(line.Period).Append(')');
+            }
+        }
+
+        sb.Append(Lf);
     }
 
     private static void AppendThesisSection(

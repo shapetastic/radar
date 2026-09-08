@@ -334,7 +334,9 @@ public sealed class MarkdownWeeklyReportJudgmentMarkerTests
                         ChallengeSummary: "business-trajectory-deteriorating",
                         Trajectory: "deteriorating",
                         JudgmentId: challengedJudgment,
-                        TrajectoryBasis: "Supported"),
+                        TrajectoryBasis: "ReferenceSupported",
+                        // Spec 215 §4: the cited reference ids ride the appendix row after the basis.
+                        ReferenceIds: "1e5a0000-0000-4000-8000-000000000001,1e5a0000-0000-4000-8000-000000000002"),
                     [clean] = new(
                         NewsJudgmentMarkerState.NoChallengeFound,
                         Trajectory: "improving",
@@ -353,13 +355,17 @@ public sealed class MarkdownWeeklyReportJudgmentMarkerTests
         // untouched (asserted by the marker-cell tests above), the appendix gains ` · basis: …`.
         Assert.Contains(
             "- Eos Energy — judgment `11111111-1111-1111-1111-111111111111` · "
-                + "⚠ challenged (business-trajectory-deteriorating) · trajectory deteriorating · basis: Supported",
+                + "⚠ challenged (business-trajectory-deteriorating) · trajectory deteriorating · basis: ReferenceSupported"
+                + " · references: 1e5a0000-0000-4000-8000-000000000001,1e5a0000-0000-4000-8000-000000000002",
             live, StringComparison.Ordinal);
+        // A row that cited no reference states none — never an empty "references:".
+        Assert.DoesNotContain("basis: LevelOnly · references", live, StringComparison.Ordinal);
         Assert.Contains(
             "- Acme Dynamics — judgment `22222222-2222-2222-2222-222222222222` · "
                 + "· no challenge found in supplied facts · trajectory improving · basis: LevelOnly",
             live, StringComparison.Ordinal);
-        Assert.DoesNotContain("basis: Supported |", markdown, StringComparison.Ordinal); // never in a cell
+        Assert.DoesNotContain("basis: ReferenceSupported |", markdown, StringComparison.Ordinal); // never in a cell
+        Assert.DoesNotContain("references: 1e5a0000 |", markdown, StringComparison.Ordinal);
         // A row with no judgment record cites nothing — never an invented id.
         Assert.DoesNotContain("- Borealis — judgment", live, StringComparison.Ordinal);
     }

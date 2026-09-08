@@ -182,7 +182,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         // filing. A hit replays its result with NO www.sec.gov fetch or AI call (a DirectionalSignalProduced hit
         // re-emits its signal; a confirmed no-signal hit contributes nothing). Cache MISSES are collected in the
         // same newest-first order for pass 2. Cache hits never touch the cap and never touch the 429 breaker.
-        var misses = new List<(EvidenceItem Evidence, string Cik, string Accession)>();
+        var misses = new List<(EvidenceItem Evidence, string Cik, string Accession, string Form)>();
         foreach (var (evidence, read) in eligible)
         {
             ct.ThrowIfCancellationRequested();
@@ -193,7 +193,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 var cached = await _cache.TryGetAsync(accession, ct).ConfigureAwait(false);
                 if (cached is null)
                 {
-                    misses.Add((evidence, read.Value.Cik, accession));
+                    misses.Add((evidence, read.Value.Cik, accession, read.Value.Form));
                     continue;
                 }
 
@@ -213,7 +213,25 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         accession,
                         cached.ComparabilityPolicy,
                         _comparabilityPolicy);
-                    misses.Add((evidence, read.Value.Cik, accession));
+                    misses.Add((evidence, read.Value.Cik, accession, read.Value.Form));
+                    continue;
+                }
+
+                // Reported-metrics policy rule (spec 215 §1), the SAME shape as the comparability rule above:
+                // a NULL policy is a HIT (a pre-215 record, or a read taken with extraction disabled — the
+                // accrued cache is never mass-invalidated, so the ledger is heal-forward and a company's
+                // first reference value appears at its NEXT release); a non-null policy that differs from
+                // the current token (the metric enum or the verification rule changed) is a bounded MISS.
+                if (cached.ReportedMetricsPolicy is not null
+                    && !string.Equals(cached.ReportedMetricsPolicy, ReportedMetricsPolicy.Version, StringComparison.Ordinal))
+                {
+                    _logger.LogDebug(
+                        "Analyzed-filing cache record for accession {Accession} was produced under reported-metrics "
+                            + "policy '{Stored}' (current '{Current}'); treating as a cache miss (re-analyze).",
+                        accession,
+                        cached.ReportedMetricsPolicy,
+                        ReportedMetricsPolicy.Version);
+                    misses.Add((evidence, read.Value.Cik, accession, read.Value.Form));
                     continue;
                 }
 
@@ -284,7 +302,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 break;
             }
 
-            var (evidence, cik, accession) = misses[i];
+            var (evidence, cik, accession, form) = misses[i];
 
             // A genuine new analysis attempt consumes one cap slot regardless of its outcome (fetch failure,
             // 429, non-authoritative body, or a produced/no signal all count) — this bounds cost, not results.
@@ -292,7 +310,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
             try
             {
-                var analysis = await AnalyzeFilingAsync(evidence, cik, accession, asOfUtc, ct)
+                var analysis = await AnalyzeFilingAsync(evidence, cik, accession, form, asOfUtc, ct)
                     .ConfigureAwait(false);
                 var outcome = analysis.Outcome;
 
@@ -311,7 +329,11 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                     {
                         // Directional read (Improving/Deteriorating at-or-above the gate): unchanged pre-204
                         // path — the whole signal rides the record so a replay is field-identical.
-                        produced.Add(new DirectionalFilingSignal(analysis.Signal, evidence));
+                        // Spec 215 §1: a FRESH read carries its reported-metrics extraction to the pass
+                        // (null when the analyzer did not extract), and the record is stamped with the
+                        // policy ONLY when an extraction was made — a null stamp must keep meaning "not
+                        // extracted", never "extracted nothing".
+                        produced.Add(new DirectionalFilingSignal(analysis.Signal, evidence, analysis.ReportedMetrics));
                         await _cache.PutAsync(
                             new AnalyzedFilingRecord(
                                 accession,
@@ -320,7 +342,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                                 evidence.PublishedAtUtc ?? evidence.CollectedAtUtc,
                                 AnalyzedFilingRecord.CurrentCacheVersion,
                                 _comparabilityPolicy,
-                                analysis.Markers),
+                                analysis.Markers,
+                                ReportedMetricsPolicy: ReportedMetricsPolicyFor(analysis)),
                             ct).ConfigureAwait(false);
                     }
                     else
@@ -336,7 +359,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         // miss when the policy changes.
                         if (analysis.Signal is not null)
                         {
-                            produced.Add(new DirectionalFilingSignal(analysis.Signal, evidence));
+                            produced.Add(new DirectionalFilingSignal(analysis.Signal, evidence, analysis.ReportedMetrics));
                         }
 
                         await _cache.PutAsync(
@@ -351,7 +374,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                                 analysis.NoSignalCause,
                                 analysis.ReadDirection,
                                 analysis.ReadConfidence,
-                                analysis.Rationale),
+                                analysis.Rationale,
+                                ReportedMetricsPolicy: ReportedMetricsPolicyFor(analysis)),
                             ct).ConfigureAwait(false);
                     }
                 }
@@ -414,7 +438,19 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         FilingNoSignalCause? NoSignalCause = null,
         string? ReadDirection = null,
         decimal? ReadConfidence = null,
-        string? Rationale = null);
+        string? Rationale = null,
+        // Spec 215 §1: what the analyzer extracted for the reported-metrics ledger — null when it did not
+        // extract (feature off, or no parseable response), never an empty extraction meaning "none".
+        ReportedMetricExtraction? ReportedMetrics = null);
+
+    /// <summary>
+    /// The reported-metrics policy stamp for a fresh cache write (spec 215 §1): the current
+    /// <see cref="ReportedMetricsPolicy.Version"/> when the read extracted metrics, <c>null</c> when it did
+    /// not — so a null on disk always means "not extracted" (a HIT that never re-reads) and can never be
+    /// mistaken for "extracted under the current policy".
+    /// </summary>
+    private static string? ReportedMetricsPolicyFor(FilingAnalysis analysis) =>
+        analysis.ReportedMetrics is null ? null : ReportedMetricsPolicy.Version;
 
     /// <summary>
     /// Reads the EX-99.1 body, analyzes it, applies the confidence gate + direction mapping, and returns the
@@ -441,7 +477,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
     /// </para>
     /// </summary>
     private async Task<FilingAnalysis> AnalyzeFilingAsync(
-        EvidenceItem evidence, string cik, string accession, DateTimeOffset asOfUtc, CancellationToken ct)
+        EvidenceItem evidence, string cik, string accession, string form, DateTimeOffset asOfUtc, CancellationToken ct)
     {
         var read = await _reader.ReadAsync(cik, accession, ct).ConfigureAwait(false);
         if (!read.IsSuccess)
@@ -482,7 +518,16 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         // analyzer's own MaxInputLength truncation, so a marker past the truncation point still counts.
         var markers = EarningsComparabilityScan.Scan(read.PlainText);
 
-        var sentiment = await _analyzer.AnalyzeAsync(read.PlainText, ct).ConfigureAwait(false);
+        var filingRead = await _analyzer.AnalyzeAsync(read.PlainText, ct).ConfigureAwait(false);
+        var sentiment = filingRead.Sentiment;
+
+        // Spec 215 §1: the verified metrics ride to the collection pass (which resolves the company and
+        // writes the ledger) with the accession, form and reader identity the ledger record needs. Null
+        // when the analyzer did not extract — the pass then writes nothing for this filing.
+        var reportedMetrics = filingRead.ReportedMetrics is { } verified
+            ? new ReportedMetricExtraction(
+                accession, form, _options.ModelIdentity?.Trim() ?? string.Empty, verified)
+            : null;
 
         // Comparability cap (spec 160): when the release itself declares a comparability break, the persisted
         // confidence is bounded by min(readConfidence, cap) — the model's read is kept; only the weight Radar
@@ -519,7 +564,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 NoSignalCause: cause,
                 ReadDirection: readDirection,
                 ReadConfidence: confidence,
-                Rationale: sentiment.Rationale);
+                Rationale: sentiment.Rationale,
+                ReportedMetrics: reportedMetrics);
         }
 
         // Spec 204 classification order — Unknown FIRST, at any confidence: an Unknown verdict never claimed
@@ -613,7 +659,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 SupportingExcerpt: evidence.Title,
                 Reason: reason),
             Cacheable: true,
-            Markers: markers);
+            Markers: markers,
+            ReportedMetrics: reportedMetrics);
     }
 
     /// <summary>
@@ -745,10 +792,11 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
     /// <summary>
     /// Confirms the evidence is an earnings 8-K (form 8-K + item 2.02) and returns its CIK + dashed
-    /// accession parsed from the index <see cref="EvidenceItem.SourceUrl"/>, or <c>null</c> when it is not
-    /// an earnings 8-K or the URL cannot be parsed (never guess a CIK/accession — skip instead).
+    /// accession parsed from the index <see cref="EvidenceItem.SourceUrl"/> plus the form token the
+    /// evidence metadata declares (spec 215: the ledger records "stated in {form}"), or <c>null</c> when it
+    /// is not an earnings 8-K or the URL cannot be parsed (never guess a CIK/accession — skip instead).
     /// </summary>
-    private (string Cik, string Accession)? TryResolveFiling(EvidenceItem evidence)
+    private (string Cik, string Accession, string Form)? TryResolveFiling(EvidenceItem evidence)
     {
         if (evidence.SourceType != EvidenceSourceType.Filing)
         {
@@ -758,7 +806,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         EvidenceMetadata.TryRead(evidence.MetadataJson, out var metadata, out _);
 
         var form = metadata.TryGetValue("form", out var f) ? f : null;
-        if (!string.Equals(form, "8-K", StringComparison.OrdinalIgnoreCase))
+        if (form is null || !string.Equals(form, "8-K", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
@@ -796,7 +844,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
             return null;
         }
 
-        return parsed;
+        return (parsed.Value.Cik, parsed.Value.Accession, form);
     }
 
     private static bool ContainsEarningsItem(string? items)

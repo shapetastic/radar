@@ -28,7 +28,7 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
 {
     /// <summary>
     /// Fixed, deterministic system instruction carrying the §2 judgment contract, FORKED to
-    /// <c>news-judgment-prompt-v4</c> by spec 214 §2 (to <c>v3</c> by spec 197 §2.1, to <c>v2</c> by spec 187 §1). The FIXED rubric is verbatim ("the company's recent
+    /// <c>news-judgment-prompt-v5</c> by spec 215 §2 (to <c>v4</c> by spec 214 §2, to <c>v3</c> by spec 197 §2.1, to <c>v2</c> by spec 187 §1). The FIXED rubric is verbatim ("the company's recent
     /// business trajectory" — Radar's founding question); the attribution weighting rule is a PROMPT rule,
     /// not post-hoc (a plaintiff-firm solicitation is a weaker basis than a confirmed filing; "may face" is
     /// weaker than "was charged"); and the vocabularies are rendered from the same closed sets the
@@ -58,6 +58,16 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
     /// the presence of a number that carries no direction. Each family now also renders its deterministic
     /// <c>ComparisonBasis</c> line (<see cref="StatementComparisonClassifier"/>), so the judge is told which
     /// supplied facts CAN be cited as trajectory support rather than left to infer it.
+    /// </para>
+    /// <para>
+    /// <b>The v5 rule (12)</b> (spec 215 §2) exists because rule 11 can only stop the judge treating a level
+    /// as a trend — it cannot make the judge RIGHT about the trend, because until spec 215 Radar held no
+    /// prior value to compare against. The user message now renders, after the families, the
+    /// company-reported reference values projected from the reported-metrics ledger for the metrics the
+    /// supplied statements name (<see cref="ReferenceValueProjector"/>), each with its own citable
+    /// ReferenceId; rule 12 tells the judge to read the direction from the comparison and cite BOTH the
+    /// fact and the reference, and never to cite a reference as a trajectory fact on its own — a reference
+    /// value is a comparison basis, not news.
     /// </para>
     /// <para>
     /// This text is PINNED by test. Changing it is a prompt-policy change: bump
@@ -118,14 +128,23 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             + "or Event — a numberless comparison (\"backlog declined\") or a numberless event (\"the FDA "
             + "approved the product\") beside a quantified level still establishes direction; when that "
             + "is the case, say in the Rationale which levels you set aside. "
+            + "(12) Reference values are the company's own prior statements of the same metric. When a "
+            + "supplied fact quotes a metric with a reference value, read the DIRECTION from the "
+            + "comparison and cite BOTH the fact and the ReferenceId. Never cite a ReferenceId as a "
+            + "trajectory fact on its own — a reference value is a comparison basis, not news. "
             + "Return: BusinessTrajectory (\"Improving\" | \"Deteriorating\" | \"Mixed\" | "
             + "\"Unknown\" — a factual read over the families); TrajectoryFactIds (the supplied FactIds "
             + "that establish that trajectory, each the COMPLETE 36-character value; at least one for "
-            + "Improving, Deteriorating or Mixed; EMPTY for Unknown; no duplicates); ChallengeStrength (0-100, or null when you record no "
+            + "Improving, Deteriorating or Mixed; EMPTY for Unknown; no duplicates); TrajectoryReferenceIds "
+            + "(the supplied ReferenceIds you read that trajectory's direction against, each the COMPLETE "
+            + "36-character value copied character for character; EMPTY when you used none); "
+            + "ChallengeStrength (0-100, or null when you record no "
             + "findings); Findings, each with: Category (one of: "
             + string.Join(", ", Enum.GetNames<NewsRiskCategory>())
             + "); Severity (Low | Medium | High); Confidence (number in [0,1]); FactIds (one or more "
-            + "supplied fact ids, each the COMPLETE 36-character value); AttributionCaveat (required per rule 8, otherwise optional); and a "
+            + "supplied fact ids, each the COMPLETE 36-character value); ReferenceIds (zero or more supplied "
+            + "ReferenceIds the finding compares against, each the COMPLETE 36-character value); "
+            + "AttributionCaveat (required per rule 8, otherwise optional); and a "
             + "REQUIRED non-blank factual Rationale of at most "
             + NewsJudgmentValidator.MaxRationaleLength.ToString(CultureInfo.InvariantCulture)
             + " characters.";
@@ -243,7 +262,43 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             sb.AppendLine();
         }
 
+        // Spec 215 §2: the company-reported reference block, AFTER the families and ONLY when the ledger
+        // projected any — a company whose releases Radar has not yet read gets a byte-identical message.
+        // Values are rendered AS STATED (no arithmetic), each line citable by its ReferenceId.
+        if (request.References is { Count: > 0 } references)
+        {
+            sb.AppendLine(
+                "Company-reported reference values (from SEC filings Radar read; cite by ReferenceId):");
+            foreach (var reference in references)
+            {
+                sb.AppendLine(ReferenceValueLine(reference));
+            }
+
+            sb.AppendLine();
+        }
+
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// One reference line, exactly the spec-215 shape:
+    /// <c>ReferenceId: {id} · {Metric} · {value} {unit} · {period} · stated in {form} filed {yyyy-MM-dd} · "{quote}"</c>,
+    /// with the prior pair appended as <c>(prior {priorValue} {unit}, {priorPeriod})</c> only when the
+    /// release stated one. The unit is omitted when blank; the filing date is UTC (AD-3).
+    /// </summary>
+    internal static string ReferenceValueLine(NewsJudgmentReferenceValue reference)
+    {
+        var unit = reference.Unit.Length > 0 ? " " + reference.Unit : string.Empty;
+        var prior = reference.PriorValue is { Length: > 0 } priorValue
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $" (prior {priorValue}{unit}, {reference.PriorPeriod})")
+            : string.Empty;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"ReferenceId: {reference.ReferenceId:D} · {reference.Metric} · {reference.Value}{unit}{prior} · "
+                + $"{reference.Period} · stated in {reference.Form} filed {reference.FilingDateUtc:yyyy-MM-dd} · "
+                + $"\"{reference.Quote}\"");
     }
 
     /// <summary>

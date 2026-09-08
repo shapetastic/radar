@@ -40,7 +40,13 @@ public sealed record NewsJudgmentModelResponse(
     // as data the validator NAMES instead of being coerced. Optional/trailing on the WIRE only, so a model
     // that omits the field produces a named validation failure rather than a deserialization exception; a
     // valid v2 response always carries it, and it is EMPTY iff the trajectory is Unknown.
-    IReadOnlyList<string>? TrajectoryFactIds = null);
+    IReadOnlyList<string>? TrajectoryFactIds = null,
+    // Spec 215 §2 (schema v4): the supplied ReferenceIds — company-reported reference values — the model
+    // says it read the trajectory's direction AGAINST. Strings on the wire (the all-strings rule), resolved
+    // by the validator against the PROJECTED reference set with the same prefix grammar as FactIds; an
+    // unsupplied or malformed id fails the trajectory with its own named reason. Optional/trailing on the
+    // WIRE only; empty when no reference was used.
+    IReadOnlyList<string>? TrajectoryReferenceIds = null);
 
 /// <summary>
 /// One raw model finding: spec-179 risk-taxonomy category/severity tokens, confidence, the supporting
@@ -52,7 +58,10 @@ public sealed record NewsJudgmentModelFinding(
     string? Severity,
     double? Confidence,
     IReadOnlyList<string>? FactIds,
-    string? AttributionCaveat);
+    string? AttributionCaveat,
+    // Spec 215 §2 (schema v4): the supplied ReferenceIds a finding compares against, if any. Same wire
+    // rule and same resolution as FactIds; an unsupplied or malformed id drops the finding, named.
+    IReadOnlyList<string>? ReferenceIds = null);
 
 /// <summary>
 /// A validated finding: typed category/severity (the spec-179 vocabularies, REUSED not copied), confidence
@@ -65,7 +74,10 @@ public sealed record NewsJudgmentValidatedFinding(
     NewsRiskSeverity Severity,
     double Confidence,
     IReadOnlyList<Guid> FactIds,
-    string? AttributionCaveat);
+    string? AttributionCaveat,
+    // Spec 215 §2: the RESOLVED reference ids the finding cited. TRAILING and NULLABLE for old-record
+    // hydration: null on a pre-215 finding ("not recorded"), an EMPTY list on a v6 finding that cited none.
+    IReadOnlyList<Guid>? ReferenceIds = null);
 
 /// <summary>
 /// Spec 187 §1 — the CONTEXT-ONLY event types: facts that describe OTHER PEOPLE'S VIEWS

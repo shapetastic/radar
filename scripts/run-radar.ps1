@@ -168,6 +168,7 @@ $dirArgs = [ordered]@{
     "Radar:AuditsDirectory"          = (Join-Path $outRoot  "audits")   # spec 172 read-only score-move denominator audit (only written when Radar:Efficacy:DenominatorAudit:Enabled)
     "Radar:ReplayDirectory"          = (Join-Path $outRoot  "replays")  # spec 139 historical as-of replay output; its OWN root, never under scores\ (only written when Radar:Replay:Enabled)
     "Radar:AnalyzedFilingCacheDirectory" = (Join-Path $outRoot "filings-cache")   # spec 107 per-accession earnings analysis-result cache (AD-14 analogue)
+    "Radar:ReportedMetricsDirectory" = (Join-Path $outRoot "reported-metrics")   # spec 215 append-only company-reported metrics ledger (judge reference values + report evidence line; never a score input)
     "Radar:NewsResearch:ObservationDirectory" = (Join-Path $outRoot "news-observations")   # spec 177 point-in-time news observation archive (observational only; never evidence/score input)
     "Radar:NewsResearch:Shadow:OutputDirectory" = (Join-Path $outRoot "news-risk")   # spec 179 news-risk shadow read output (live artifacts + durable assessments + evaluator; never a score/label/fingerprint input)
     "Radar:NewsResearch:Typing:OutputDirectory" = (Join-Path $outRoot "news-typing")   # spec 181 news event-typing output (typing records + fact-family checkpoints + attention decomposition; never a score/label/fingerprint input)

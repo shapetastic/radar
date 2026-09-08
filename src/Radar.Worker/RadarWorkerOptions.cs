@@ -222,6 +222,15 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public string FilingReadDebugDirectory { get; init; } = "data/ai-debug/filings";
 
+    /// <summary>
+    /// Root directory of the append-only reported-metrics ledger (spec 215 §1): one
+    /// <c>{companyId}/{accession}.json</c> per earnings release the AI filing read extracted verified
+    /// metrics from. Only used when AI directional filing signals are enabled (a provider is configured)
+    /// AND "Radar:Ai:ReportedMetrics:Enabled" is true (the default). Feeds the stage-2 judge's reference
+    /// values and the weekly report's evidence line; never a scoring or fingerprint input.
+    /// </summary>
+    public string ReportedMetricsDirectory { get; init; } = "data/reported-metrics";
+
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
 
@@ -632,6 +641,23 @@ public sealed class AiWorkerOptions
 
     /// <summary>AI filing-read diagnostics config (bound from "Radar:Ai:Filings"). Only read when a provider is configured.</summary>
     public AiFilingsWorkerOptions Filings { get; init; } = new();
+
+    /// <summary>Reported-metrics ledger config (bound from "Radar:Ai:ReportedMetrics", spec 215 §1). Only read when a provider is configured.</summary>
+    public AiReportedMetricsWorkerOptions ReportedMetrics { get; init; } = new();
+}
+
+/// <summary>
+/// Reported-metrics ledger configuration (bound from "Radar:Ai:ReportedMetrics", spec 215 §1). ENABLED by
+/// default: the AI filing read also asks for the metrics a release STATES, verifies them verbatim, and the
+/// collection pass files them under <see cref="RadarWorkerOptions.ReportedMetricsDirectory"/>; the judge
+/// and the weekly report read them back. With <see cref="Enabled"/> false the analyzer omits the
+/// reported-metrics paragraph, no ledger is registered, nothing is written, and every consumer renders
+/// byte-for-byte as before. Never a scoring or fingerprint input.
+/// </summary>
+public sealed class AiReportedMetricsWorkerOptions
+{
+    /// <summary>Whether the filing read extracts, verifies and files the metrics a release states. Default true.</summary>
+    public bool Enabled { get; init; } = true;
 }
 
 /// <summary>

@@ -67,6 +67,13 @@ public sealed class CollectionPass : ICollectionPass
     private readonly INewsObservationArchive? _newsObservationArchive;
     private readonly NewsObservationCaptureOptions _newsObservationCaptureOptions;
 
+    // OPT-IN reported-metrics ledger (spec 215 §1). Null when the AI path is disabled or the ledger is not
+    // registered, in which case a fresh filing read's extraction is COUNTED as unwritten in the one
+    // aggregated line below and the pass is otherwise byte-for-byte unchanged. Written HERE, not in the
+    // directional source, because the ledger record needs the RESOLVED company id and company resolution
+    // lives in exactly one place (MapResolveReviewStoreAsync).
+    private readonly IReportedMetricStore? _reportedMetricStore;
+
     public CollectionPass(
         IEnumerable<IEvidenceCollector> collectors,
         CollectedEvidenceMapper mapper,
@@ -85,7 +92,8 @@ public sealed class CollectionPass : ICollectionPass
         IAttentionSourceWeights attentionSourceWeights,
         IDirectionalFilingSignalSource? directionalFilingSignals = null,
         INewsObservationArchive? newsObservationArchive = null,
-        NewsObservationCaptureOptions? newsObservationCaptureOptions = null)
+        NewsObservationCaptureOptions? newsObservationCaptureOptions = null,
+        IReportedMetricStore? reportedMetricStore = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
         ArgumentNullException.ThrowIfNull(mapper);
@@ -138,6 +146,7 @@ public sealed class CollectionPass : ICollectionPass
         _directionalFilingSignals = directionalFilingSignals;
         _newsObservationArchive = newsObservationArchive;
         _newsObservationCaptureOptions = newsObservationCaptureOptions ?? new NewsObservationCaptureOptions();
+        _reportedMetricStore = reportedMetricStore;
     }
 
     /// <summary>The collector names that will run, in the stable order fixed in the constructor.</summary>
@@ -420,6 +429,12 @@ public sealed class CollectionPass : ICollectionPass
         // map -> resolve -> review -> store path as keyword signals (provenance preserved). Each
         // directional GuidanceChange has already superseded the deterministic Neutral over the same
         // filing evidence in the extract loop above.
+        //
+        // Spec 215 §1: the reported-metrics ledger accounting for THIS run, aggregated into ONE line after
+        // the loop (the spec-145 precedent) — never a line per filing. Every extraction a fresh read
+        // produced ends in exactly one of: a file written, a file already on disk, a file not persisted,
+        // no resolved company to file it under, or no ledger registered — so nothing is discarded uncounted.
+        var ledger = new ReportedMetricLedgerTally();
         foreach (var d in directional)
         {
             ct.ThrowIfCancellationRequested();
@@ -453,6 +468,36 @@ public sealed class CollectionPass : ICollectionPass
                 case SignalStoreOutcome.Dropped:
                     break;
             }
+
+            if (d.ReportedMetrics is { } extraction)
+            {
+                await WriteReportedMetricsAsync(
+                    extraction, d.Evidence, directionalStored.CompanyId, ledger, ct).ConfigureAwait(false);
+            }
+        }
+
+        if (ledger.Extractions > 0 || (_reportedMetricStore is not null && directional.Count > 0))
+        {
+            // ONE aggregated Information line per run (the spec-145 precedent). A measured zero renders as
+            // a zero; a run whose reads were all cache replays says "0 extraction(s)" rather than nothing.
+            _logger.LogInformation(
+                "Reported-metrics ledger ({Policy}): {Extractions} fresh earnings read(s) extracted metrics; "
+                    + "ledger files written {Written} / already on disk {AlreadyOnDisk} / not persisted "
+                    + "{NotPersisted} / no resolved company {NoCompany} / no ledger registered {NoStore}; "
+                    + "records written {Records}; metrics dropped unverified {Unverified} / unrecognised "
+                    + "{Unrecognised} / duplicate {Duplicate}; prior pairs dropped incomplete {IncompletePriorPairs}.",
+                ReportedMetricsPolicy.Version,
+                ledger.Extractions,
+                ledger.FilesWritten,
+                ledger.FilesAlreadyOnDisk,
+                ledger.FilesNotPersisted,
+                ledger.NoResolvedCompany,
+                ledger.NoStoreRegistered,
+                ledger.RecordsWritten,
+                ledger.DroppedUnverified,
+                ledger.DroppedUnrecognised,
+                ledger.DroppedDuplicate,
+                ledger.PriorPairsDroppedIncomplete);
         }
 
         // Spec 193 §1: ONE aggregated Warning per store per run (the spec-145 aggregation precedent), never
@@ -823,7 +868,96 @@ public sealed class CollectionPass : ICollectionPass
             _ => SignalStoreOutcome.OtherValid,
         };
 
-        return SignalStoreResult.Of(storeOutcome, durable.Outcome == DurableWriteOutcome.Failed);
+        return SignalStoreResult.Of(
+            storeOutcome, durable.Outcome == DurableWriteOutcome.Failed, outcome.ReviewedSignal.CompanyId);
+    }
+
+    /// <summary>
+    /// Spec 215 §1 — files ONE fresh earnings read's verified metrics in the reported-metrics ledger under
+    /// the company the signal RESOLVED to, and tallies the outcome. Never throws for a store failure (the
+    /// store returns a typed <see cref="DurableWriteResult"/>); only caller cancellation propagates. An
+    /// unresolved company (or a signal the mapper dropped) has nothing to file under and is counted, never
+    /// guessed; an unregistered ledger is counted too, so an extraction that reached this pass and went
+    /// nowhere is visible in the aggregated line.
+    /// </summary>
+    private async Task WriteReportedMetricsAsync(
+        ReportedMetricExtraction extraction,
+        EvidenceItem evidence,
+        Guid? companyId,
+        ReportedMetricLedgerTally ledger,
+        CancellationToken ct)
+    {
+        ledger.Extractions++;
+        ledger.DroppedUnverified += extraction.Metrics.DroppedUnverified;
+        ledger.DroppedUnrecognised += extraction.Metrics.DroppedUnrecognised;
+        ledger.DroppedDuplicate += extraction.Metrics.DroppedDuplicate;
+        ledger.PriorPairsDroppedIncomplete += extraction.Metrics.PriorPairsDroppedIncomplete;
+
+        if (_reportedMetricStore is null)
+        {
+            ledger.NoStoreRegistered++;
+            return;
+        }
+
+        if (companyId is not { } resolvedCompanyId)
+        {
+            ledger.NoResolvedCompany++;
+            return;
+        }
+
+        var filingDateUtc = evidence.PublishedAtUtc ?? evidence.CollectedAtUtc;
+        var records = extraction.Metrics.Verified
+            .Select(m => new ReportedMetricRecord(
+                Id: ReportedMetricRecord.IdentityFor(extraction.Accession, m.Metric, m.Period),
+                CompanyId: resolvedCompanyId,
+                Accession: extraction.Accession,
+                EvidenceId: evidence.Id,
+                FilingDateUtc: filingDateUtc,
+                Form: extraction.Form,
+                Metric: m.Metric,
+                Value: m.Value,
+                Unit: m.Unit,
+                Period: m.Period,
+                PriorValue: m.PriorValue,
+                PriorPeriod: m.PriorPeriod,
+                Quote: m.Quote,
+                ReaderIdentity: extraction.ReaderIdentity,
+                Verification: ReportedMetricVerification.Verbatim,
+                Policy: ReportedMetricsPolicy.Version))
+            .ToList();
+
+        var write = await _reportedMetricStore
+            .WriteIfNewAsync(resolvedCompanyId, extraction.Accession, records, ct)
+            .ConfigureAwait(false);
+        switch (write.Outcome)
+        {
+            case DurableWriteOutcome.Written:
+                ledger.FilesWritten++;
+                ledger.RecordsWritten += records.Count;
+                break;
+            case DurableWriteOutcome.AlreadyAvailable:
+                ledger.FilesAlreadyOnDisk++;
+                break;
+            default:
+                ledger.FilesNotPersisted++;
+                break;
+        }
+    }
+
+    /// <summary>The per-run reported-metrics ledger tally (spec 215 §1), rendered in ONE aggregated line.</summary>
+    private sealed class ReportedMetricLedgerTally
+    {
+        public int Extractions;
+        public int FilesWritten;
+        public int FilesAlreadyOnDisk;
+        public int FilesNotPersisted;
+        public int NoResolvedCompany;
+        public int NoStoreRegistered;
+        public int RecordsWritten;
+        public int DroppedUnverified;
+        public int DroppedUnrecognised;
+        public int DroppedDuplicate;
+        public int PriorPairsDroppedIncomplete;
     }
 
     /// <summary>
@@ -864,10 +998,16 @@ public sealed class CollectionPass : ICollectionPass
     /// invisible. A <see cref="SignalStoreOutcome.Dropped"/> signal never reaches the store, so it can never
     /// carry a durable-write failure.
     /// </summary>
-    private readonly record struct SignalStoreResult(SignalStoreOutcome Outcome, bool NotPersisted)
+    private readonly record struct SignalStoreResult(
+        SignalStoreOutcome Outcome,
+        bool NotPersisted,
+        // Spec 215 §1: the company the stored signal RESOLVED to (null when unresolved or Dropped), so the
+        // reported-metrics ledger files under the same company as the signal — resolution stays in one place.
+        Guid? CompanyId)
     {
-        public static SignalStoreResult Of(SignalStoreOutcome outcome, bool notPersisted = false) =>
-            new(outcome, notPersisted);
+        public static SignalStoreResult Of(
+            SignalStoreOutcome outcome, bool notPersisted = false, Guid? companyId = null) =>
+            new(outcome, notPersisted, companyId);
     }
 
     /// <summary>

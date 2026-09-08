@@ -42,9 +42,11 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// <para>
 /// Spec 214 §4 — a judged marker with a DIRECTIONAL trajectory also carries its
 /// <see cref="NewsJudgmentLeaderMarker.TrajectoryBasis"/> token (<see cref="TrajectoryBasisToken"/>):
-/// <c>Supported</c>, <c>LevelOnly</c>, or <c>(pre-214)</c> when the record predates the basis. Mixed and
-/// Unknown carry none (the basis is not applicable), so the appendix never states a basis for a
-/// non-direction.
+/// <c>Supported</c>, <c>LevelOnly</c>, <c>ReferenceSupported</c> (spec 215), or <c>(pre-214)</c> when the
+/// record predates the basis. Mixed and Unknown carry none (the basis is not applicable), so the appendix
+/// never states a basis for a non-direction. Spec 215 §4 adds
+/// <see cref="NewsJudgmentLeaderMarker.ReferenceIds"/> (<see cref="ReferenceIdsToken"/>): the cited
+/// trajectory reference ids, comma-joined, on a judged marker that cited any; null otherwise.
 /// </para>
 /// </summary>
 public static class NewsJudgmentMarkerPolicy
@@ -77,7 +79,8 @@ public static class NewsJudgmentMarkerPolicy
                 ChallengeSummary: TopFindingSummary(record.Findings),
                 Trajectory: TrajectoryToken(record.BusinessTrajectory.Value),
                 JudgmentId: record.JudgmentId,
-                TrajectoryBasis: TrajectoryBasisToken(record)),
+                TrajectoryBasis: TrajectoryBasisToken(record),
+                ReferenceIds: ReferenceIdsToken(record)),
             // Zero findings but a deteriorating factual trajectory: an ABSENCE claim would be rendered
             // beside the same record's contrary PRESENCE evidence. The axis is the challenge.
             NewsJudgmentStatus.Judged
@@ -87,13 +90,15 @@ public static class NewsJudgmentMarkerPolicy
                     ChallengeSummary: DeterioratingTrajectorySummary,
                     Trajectory: TrajectoryToken(NewsJudgmentTrajectory.Deteriorating),
                     JudgmentId: record.JudgmentId,
-                    TrajectoryBasis: TrajectoryBasisToken(record)),
+                    TrajectoryBasis: TrajectoryBasisToken(record),
+                    ReferenceIds: ReferenceIdsToken(record)),
             NewsJudgmentStatus.Judged => new NewsJudgmentLeaderMarker(
                 NewsJudgmentMarkerState.NoChallengeFound,
                 TypingIncomplete: record.TypingCompleteness != NewsTypingCompleteness.Complete,
                 Trajectory: TrajectoryToken(record.BusinessTrajectory.Value),
                 JudgmentId: record.JudgmentId,
-                TrajectoryBasis: TrajectoryBasisToken(record)),
+                TrajectoryBasis: TrajectoryBasisToken(record),
+                ReferenceIds: ReferenceIdsToken(record)),
             NewsJudgmentStatus.InsufficientFacts => new NewsJudgmentLeaderMarker(
                 NewsJudgmentMarkerState.Unassessed,
                 NewsJudgmentMarkerReasons.InsufficientFacts,
@@ -148,6 +153,18 @@ public static class NewsJudgmentMarkerPolicy
 
         return record.TrajectoryBasis is { } basis ? basis.ToString() : PreSpec214BasisToken;
     }
+
+    /// <summary>
+    /// Spec 215 §4 — the cited trajectory reference ids for a JUDGED DIRECTIONAL record, comma-joined in
+    /// record order (<c>D</c> format), or <c>null</c> when the record cited none, predates the field, or has
+    /// no basis to render beside (a Mixed/Unknown read — the validator forbids a cited reference there in
+    /// practice, and the appendix must never state references for a non-direction). Rendered on the
+    /// judgment provenance appendix beside the basis, never in the leaders cell.
+    /// </summary>
+    internal static string? ReferenceIdsToken(NewsJudgmentRecord record) =>
+        TrajectoryBasisToken(record) is not null && record.TrajectoryReferenceIds is { Count: > 0 } ids
+            ? string.Join(",", ids.Select(id => id.ToString("D")))
+            : null;
 
     /// <summary>The top finding's compact summary: severity descending, then confidence descending, then category (AD-3).</summary>
     private static string TopFindingSummary(IReadOnlyList<NewsJudgmentValidatedFinding> findings)

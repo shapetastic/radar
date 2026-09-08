@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 
 using Radar.Application.Ai;
+using Radar.Application.Filings;
 using Radar.Application.News;
 using Radar.Application.NewsTyping;
 using Radar.Application.Reporting;
@@ -122,13 +123,19 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<NewsJudgmentGenerator> _logger;
 
+    // OPT-IN reported-metrics ledger (spec 215 §2). Null when no ledger is registered: every judgment is
+    // then assembled with zero references and every family-set hash, prompt and record is byte-identical
+    // to a reference-free judgment. MS DI supplies the null default when the seam is not registered.
+    private readonly IReportedMetricStore? _reportedMetrics;
+
     public NewsJudgmentGenerator(
         INewsObservationBatchReader batchReader,
         NewsJudgmentReaderSet judges,
         INewsJudgmentStore store,
         NewsJudgmentOptions options,
         TimeProvider timeProvider,
-        ILogger<NewsJudgmentGenerator> logger)
+        ILogger<NewsJudgmentGenerator> logger,
+        IReportedMetricStore? reportedMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(batchReader);
         ArgumentNullException.ThrowIfNull(judges);
@@ -151,6 +158,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _reportedMetrics = reportedMetrics;
     }
 
     public async Task<NewsJudgmentRunResult?> GenerateAsync(
@@ -216,8 +224,16 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         var overSoftLimitRationalesByCohort = new Dictionary<string, int>(StringComparer.Ordinal);
         var prefixExpansionsByCohort = new Dictionary<string, (int Expansions, int Judgments)>(
             StringComparer.Ordinal);
-        var levelOnlyBasisByCohort = new Dictionary<string, (int LevelOnly, int Directional)>(
+        var levelOnlyBasisByCohort = new Dictionary<string, (int LevelOnly, int ReferenceSupported, int Directional)>(
             StringComparer.Ordinal);
+        var referencesSuppliedByCohort = new Dictionary<string, (int WithReferences, int Judgments)>(
+            StringComparer.Ordinal);
+
+        // Spec 215 §2: each candidate's ledger is read ONCE per pass (not once per judge × cohort) and a
+        // read failure degrades to "no references" — counted, and reported once per company, never a
+        // silent empty. Without a registered ledger nothing is read and nothing is counted.
+        var ledgerByCompany = await LoadLedgersAsync(candidates, ct).ConfigureAwait(false);
+
         foreach (var cohort in typing.Cohorts)
         {
             foreach (var judge in _judges.Readers)
@@ -258,7 +274,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 {
                     ct.ThrowIfCancellationRequested();
                     var outcome = await JudgeOneAsync(
-                        judge, cohort, candidate, runId, batch, history, ct).ConfigureAwait(false);
+                        judge, cohort, candidate, runId, batch, history,
+                        ledgerByCompany.GetValueOrDefault(candidate.CompanyId, []), ct).ConfigureAwait(false);
                     var record = outcome.Record;
                     if (record.Status == NewsJudgmentStatus.AttemptsExhausted)
                     {
@@ -330,7 +347,20 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         var running = levelOnlyBasisByCohort.GetValueOrDefault(record.CohortKey);
                         levelOnlyBasisByCohort[record.CohortKey] = (
                             running.LevelOnly + (basis == NewsTrajectoryBasis.LevelOnly ? 1 : 0),
+                            running.ReferenceSupported + (basis == NewsTrajectoryBasis.ReferenceSupported ? 1 : 0),
                             running.Directional + 1);
+                    }
+
+                    // Spec 215 §2: how many judgments this pass actually CALLED for were handed at least one
+                    // company-reported reference value — the projection's live hit rate, aggregated once
+                    // per cohort (spec 188 §1: a reused verdict carries its ORIGINAL reference set and is
+                    // not current activity).
+                    if (madeProviderCall && record.ReferenceIds is { } projected)
+                    {
+                        var running = referencesSuppliedByCohort.GetValueOrDefault(record.CohortKey);
+                        referencesSuppliedByCohort[record.CohortKey] = (
+                            running.WithReferences + (projected.Count > 0 ? 1 : 0),
+                            running.Judgments + 1);
                     }
 
                     // Spec 187 §1: the durable write's OUTCOME is checked. An unpersisted result is not a
@@ -448,11 +478,31 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             _logger.LogInformation(
                 "News-judgment cohort {Cohort}: {LevelOnly} of {Directional} directional judgment(s) called "
                     + "this pass rest ONLY on level/unquantified facts (trajectory basis LevelOnly under "
-                    + "{ClassifierVersion}); each is persisted verbatim and materializes no signal.",
+                    + "{ClassifierVersion}); each is persisted verbatim and materializes no signal. "
+                    + "{ReferenceSupported} rest on a level beside a cited company-reported reference value "
+                    + "(ReferenceSupported under {ProjectionVersion}) and materialize normally.",
                 cohortKey,
                 measured.LevelOnly,
                 measured.Directional,
-                StatementComparisonClassifier.Version);
+                StatementComparisonClassifier.Version,
+                measured.ReferenceSupported,
+                ReferenceValueProjector.Version);
+        }
+
+        // Spec 215 §2: one Information line per cohort that made at least one call — the share of called
+        // judgments that were handed >= 1 reference value. A measured 0 says "0 of N" (the ledger is
+        // heal-forward, so this reads 0 until companies' releases have been read post-215); a cohort that
+        // made no call says nothing.
+        foreach (var (cohortKey, measured) in referencesSuppliedByCohort.OrderBy(
+            e => e.Key, StringComparer.Ordinal))
+        {
+            _logger.LogInformation(
+                "News-judgment cohort {Cohort}: {WithReferences} of {Judgments} judgment(s) called this pass "
+                    + "were handed at least one company-reported reference value ({ProjectionVersion}).",
+                cohortKey,
+                measured.WithReferences,
+                measured.Judgments,
+                ReferenceValueProjector.Version);
         }
 
         var markers = BuildPresentationMarkers(judgments, typing, runId, candidates, unpersisted);
@@ -494,6 +544,65 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         public static JudgmentPassOutcome WithoutCall(NewsJudgmentRecord record) => new(record, null);
     }
 
+    /// <summary>
+    /// Spec 215 §2 — reads each candidate's reported-metrics ledger ONCE per pass. A read failure for one
+    /// company degrades to an empty ledger for that company (its judgments are assembled with zero
+    /// references, byte-identical to the pre-215 input) and is reported in ONE Warning per company —
+    /// never silently, and never a failure of the pass. No registered ledger => an empty map, no read.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<Guid, IReadOnlyList<ReportedMetricRecord>>> LoadLedgersAsync(
+        IReadOnlyList<NewsRiskCandidate> candidates, CancellationToken ct)
+    {
+        var ledgers = new Dictionary<Guid, IReadOnlyList<ReportedMetricRecord>>();
+        if (_reportedMetrics is null)
+        {
+            return ledgers;
+        }
+
+        var unreadable = 0;
+        foreach (var candidate in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (ledgers.ContainsKey(candidate.CompanyId))
+            {
+                continue;
+            }
+
+            try
+            {
+                ledgers[candidate.CompanyId] = await _reportedMetrics
+                    .GetForCompanyAsync(candidate.CompanyId, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                unreadable++;
+                ledgers[candidate.CompanyId] = [];
+                _logger.LogWarning(
+                    ex,
+                    "Reported-metrics ledger for company {Company} ({CompanyId}) could not be read; its "
+                        + "judgments this pass are assembled with NO reference values.",
+                    candidate.CompanyName,
+                    candidate.CompanyId);
+            }
+        }
+
+        if (unreadable > 0)
+        {
+            _logger.LogWarning(
+                "Reported-metrics ledger: {Unreadable} of {Companies} candidate company ledger(s) could not "
+                    + "be read this pass (each named above); those judgments carry no reference values.",
+                unreadable,
+                ledgers.Count);
+        }
+
+        return ledgers;
+    }
+
     private async Task<JudgmentPassOutcome> JudgeOneAsync(
         NewsJudgmentReader judge,
         NewsTypingCohortRunResult cohort,
@@ -501,11 +610,14 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         Guid? runId,
         NewsObservationBatch? batch,
         JudgmentAttemptHistory history,
+        IReadOnlyList<ReportedMetricRecord> ledger,
         CancellationToken ct)
     {
         var cohortKey = judge.Identity.CohortKeyFor(cohort.Reader.CohortKey);
+        // Spec 215 §2: the company's ledger is projected against the SUPPLIED statements inside the builder,
+        // so the references (and the family-set hash they fold into when non-empty) are decided in one place.
         var bundle = NewsJudgmentInputBuilder.Build(
-            candidate.CompanyId, cohort.Families, cohort.FactsById, _options.MaxFamiliesPerJudgment);
+            candidate.CompanyId, cohort.Families, cohort.FactsById, _options.MaxFamiliesPerJudgment, ledger);
         var coverage = NewsRiskCoverageEvaluator.Evaluate(
             batch, candidate.CompanyId, _options.NewsSearchCollectorName);
 
@@ -571,6 +683,12 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 // call that produced the verdict, and the materializer must gate the reuse exactly as it
                 // gated the original. Never re-derived from this run's families.
                 TrajectoryBasis = cached.TrajectoryBasis,
+                // Spec 215 §2: the replayed verdict's OWN reference provenance travels with it — the set
+                // the judge was handed and the ids it cited when the verdict was made. The cache key
+                // already folds the projected ids, so a grown ledger never reaches this branch.
+                ReferenceIds = cached.ReferenceIds,
+                ReferenceValuesOmitted = cached.ReferenceValuesOmitted,
+                TrajectoryReferenceIds = cached.TrajectoryReferenceIds,
                 ReusedFromJudgmentId = cached.JudgmentId,
             });
         }
@@ -613,7 +731,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         // The model request carries the company name/ticker and the canonical families ONLY (spec 185 §1):
         // no raw prose, no score, rank or label, no price, no prior judgment.
         var request = new NewsJudgmentAnalysisRequest(
-            candidate.CompanyName, candidate.Ticker, bundle.Families);
+            candidate.CompanyName, candidate.Ticker, bundle.Families, bundle.References);
 
         // Spec 187 §7: the provider call is bracketed by the injected TimeProvider's MONOTONIC timestamp
         // APIs. The measurement covers the throwing path too (the elapsed read sits AFTER the catch), so a
@@ -669,7 +787,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     callDuration);
             default:
             {
-                var validated = NewsJudgmentValidator.Validate(outcome.Response!, bundle.Families);
+                var validated = NewsJudgmentValidator.Validate(
+                    outcome.Response!, bundle.Families, bundle.References);
                 return new JudgmentPassOutcome(
                     record with
                     {
@@ -698,6 +817,10 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         // Spec 214 §2: computed by the validator only for a directional Judged result;
                         // null = not applicable (Mixed/Unknown/failure), never a defaulted Supported.
                         TrajectoryBasis = validated.TrajectoryBasis,
+                        // Spec 215 §2: the reference ids the judge CITED for the trajectory (empty on a
+                        // failure or when none was cited); the projected set and the omitted count are
+                        // already on the base record.
+                        TrajectoryReferenceIds = validated.TrajectoryReferenceIds,
                     },
                     callDuration);
             }
@@ -763,7 +886,12 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         FailureDetail: null,
         Limits: _options.ToLimitsRecord(),
         ReusedFromJudgmentId: null,
-        CreatedAtUtc: _timeProvider.GetUtcNow());
+        CreatedAtUtc: _timeProvider.GetUtcNow(),
+        // Spec 215 §2: the PROJECTED reference set (ids only) and the caps' counted remainder, recorded on
+        // every attempt that assembled an input — including InsufficientFacts and failures — so "which
+        // references was this judge handed" is answerable from the record alone.
+        ReferenceIds: bundle.References.Select(r => r.ReferenceId).ToList(),
+        ReferenceValuesOmitted: bundle.ReferenceValuesOmitted);
 
     /// <summary>
     /// The leaders-marker map, derived from the DESIGNATED presentation cohort only (spec 185 §4): the

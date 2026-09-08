@@ -290,12 +290,12 @@ public sealed class NewsJudgmentSignalMaterializerTests
     [Fact]
     public async Task ABasisTheAllowlistDoesNotName_MaterializesNothing_AndIsNamed()
     {
-        // The gate is an ALLOWLIST: a value is admitted by being named, never by not being denied. Under
-        // spec 214 the enum defines only Supported and LevelOnly, and LevelOnly has its own reason, so no
-        // DEFINED member reaches this branch yet (spec 215's ReferenceSupported will be the first, and it
-        // must be allowlisted explicitly to mint). The branch is exercised with a value the enum does not
-        // yet define — the same code path a defined-but-unallowlisted member takes, and impossible from
-        // disk (the strict enum converter fails such a record as unreadable before the materializer sees it).
+        // The gate is an ALLOWLIST: a value is admitted by being named, never by not being denied. The enum
+        // defines Supported, LevelOnly and (spec 215) ReferenceSupported; the first and third are allowlisted
+        // and LevelOnly has its own reason, so no DEFINED member reaches this branch. The branch is
+        // exercised with a value the enum does not define — the same code path a defined-but-unallowlisted
+        // member would take, and impossible from disk (the strict enum converter fails such a record as
+        // unreadable before the materializer sees it).
         var scenario = Scenario.Build(trajectoryBasis: (NewsTrajectoryBasis)999);
 
         var summary = await scenario.Materializer().MaterializeAsync(
@@ -307,24 +307,40 @@ public sealed class NewsJudgmentSignalMaterializerTests
     }
 
     [Fact]
-    public void TheAllowlist_IsExactlySupported_AndTheEnumIsExactlySupportedAndLevelOnly()
+    public void TheAllowlist_IsExactlySupportedAndReferenceSupported_AndTheEnumHasExactlyThreeMembers()
     {
         // Pinned STRUCTURALLY, because the fail-closed property is the whole point: every defined basis
-        // outside the allowlist mints nothing. Spec 215 widens BOTH sets (ReferenceSupported) in one change.
+        // outside the allowlist mints nothing. Spec 215 §2 widened BOTH sets (ReferenceSupported) in one
+        // change, under the SAME news-judgment-signal-v3 identity.
         Assert.Equal(
-            new HashSet<NewsTrajectoryBasis> { NewsTrajectoryBasis.Supported },
+            new HashSet<NewsTrajectoryBasis> { NewsTrajectoryBasis.Supported, NewsTrajectoryBasis.ReferenceSupported },
             NewsJudgmentSignalMaterializer.AllowlistedTrajectoryBases);
         Assert.Equal(
-            [NewsTrajectoryBasis.Supported, NewsTrajectoryBasis.LevelOnly],
+            [NewsTrajectoryBasis.Supported, NewsTrajectoryBasis.LevelOnly, NewsTrajectoryBasis.ReferenceSupported],
             Enum.GetValues<NewsTrajectoryBasis>());
         Assert.False(Enum.IsDefined(default(NewsTrajectoryBasis))); // a defaulted zero is undefined
 
         // Every defined value NOT on the allowlist is LevelOnly, which carries its own reason above; the
-        // NotAllowlisted branch therefore has no defined instance under 214 — asserted, not assumed.
+        // NotAllowlisted branch therefore still has no defined instance — asserted, not assumed.
         var unallowlisted = Enum.GetValues<NewsTrajectoryBasis>()
             .Except(NewsJudgmentSignalMaterializer.AllowlistedTrajectoryBases)
             .ToList();
         Assert.Equal([NewsTrajectoryBasis.LevelOnly], unallowlisted);
+    }
+
+    [Fact]
+    public async Task AReferenceSupportedTrajectory_Materializes_UnderTheV3Token()
+    {
+        // Spec 215 §2: a level beside a cited company-reported reference value IS a directional basis and
+        // mints exactly as Supported does — no fourth materializer version.
+        var scenario = Scenario.Build(trajectoryBasis: NewsTrajectoryBasis.ReferenceSupported);
+
+        var summary = await scenario.Materializer().MaterializeAsync(
+            scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(1, summary.Eligible);
+        Assert.Equal(1, summary.Materialized);
+        Assert.Equal(0, summary.SkipCount(NewsJudgmentSignalSkipReason.TrajectoryBasisNotAllowlisted));
     }
 
     [Fact]

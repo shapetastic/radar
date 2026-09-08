@@ -3321,6 +3321,27 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the append-only reported-metrics ledger (spec 215 §1, <see cref="FileReportedMetricStore"/>)
+    /// behind the Application <see cref="IReportedMetricStore"/> seam, writing one
+    /// <c>{companyId}/{accession}.json</c> record LIST under <paramref name="rootDirectory"/> via the shared
+    /// <c>RadarFileStoreJson.Options</c> shape with <see cref="FileMode.CreateNew"/> semantics (an existing
+    /// file is <c>AlreadyAvailable</c>, never overwritten; a disk failure is a typed <c>Failed</c>, never a
+    /// throw). Three optional consumers pick it up when it is registered — <c>CollectionPass</c> (writes the
+    /// ledger for a fresh earnings read), <c>NewsJudgmentGenerator</c> (projects reference values into the
+    /// judge input) and <c>WeeklyReportBuilder</c> (the evidence line's <c>— reported:</c> clause) — and
+    /// each is byte-identical when this is NOT called. Never evidence, never a signal source, never a
+    /// scoring or fingerprint input.
+    /// </summary>
+    public static IServiceCollection AddFileReportedMetricStore(
+        this IServiceCollection services, string rootDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
+        services.AddSingleton(new FileReportedMetricStoreOptions { RootDirectory = rootDirectory });
+        services.AddSingleton<IReportedMetricStore, FileReportedMetricStore>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the local-file company watch-universe seed source and the idempotent seeder. The seed file
     /// at <paramref name="filePath"/> defines the companies/aliases that entity resolution can match
     /// against. Safe to invoke the seeder on every startup (upsert-by-Id, AD-1).

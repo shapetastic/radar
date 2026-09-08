@@ -4,6 +4,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
+using Radar.Application.Filings;
 using Radar.Application.Lifecycle;
 using Radar.Application.Pipeline;
 using Radar.Application.Scoring;
@@ -54,6 +55,11 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     private readonly ILogger<WeeklyReportBuilder> _logger;
     private readonly IWeeklyReportJudgmentRerenderer? _judgmentRerenderer;
 
+    // Spec 215 §4: OPTIONAL by design — the reported-metrics ledger is registered only on the AI path, and
+    // its absence renders no "reported:" clause anywhere (byte-identical). Read-side only: the ledger never
+    // enters a score, a label or a fingerprint.
+    private readonly IReportedMetricStore? _reportedMetrics;
+
     public WeeklyReportBuilder(
         ICompanyRepository companyRepository,
         IScoreRepository scoreRepository,
@@ -88,7 +94,10 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         // carry the `? unassessed (judgment-pending)` markers (absent ⇒ the honest `no-judgment` default).
         // A null here is therefore a meaningful state, not a silent wiring hole: the rendered report states
         // it either way.
-        IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null)
+        IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null,
+        // Spec 215 §4: the reported-metrics ledger, joined to each entry's evidence by EvidenceId. Optional
+        // for the same reason as the rerenderer — registered only on the AI path — and null ⇒ no clause.
+        IReportedMetricStore? reportedMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(companyRepository);
         ArgumentNullException.ThrowIfNull(scoreRepository);
@@ -146,6 +155,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _timeProvider = timeProvider;
         _logger = logger;
         _judgmentRerenderer = judgmentRerenderer;
+        _reportedMetrics = reportedMetrics;
     }
 
     public async Task<WeeklyReportResult> GenerateAsync(
@@ -342,7 +352,10 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 ContributingSignals: signals,
                 FollowingTier: c.Company.FollowingTier,
                 Thresholds: labelLines!.Thresholds));
-            var evidence = BuildEvidenceRefs(links, loadedEvidence);
+            // Spec 215 §4: the company's ledger is read ONCE per surfaced entry and joined by EvidenceId;
+            // a read failure degrades to "no clause" with one Warning per company, never a missing report.
+            var reportedByEvidence = await LoadReportedMetricsAsync(c.Current.CompanyId, ct).ConfigureAwait(false);
+            var evidence = BuildEvidenceRefs(links, loadedEvidence, reportedByEvidence);
             var insiderActivity = BuildInsiderActivitySummary(c.Current, loadedEvidence);
             entries.Add(new WeeklyReportEntry(
                 CompanyId: c.Current.CompanyId,
@@ -763,8 +776,53 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         return loaded;
     }
 
+    /// <summary>
+    /// Spec 215 §4 — the company's reported-metrics ledger grouped by <c>EvidenceId</c>, projected to
+    /// display lines in ledger order (most recent filing first, then metric, period, id — the store's own
+    /// order). Empty when no ledger is registered, none is accrued, or the read failed (logged ONCE per
+    /// company, never per evidence item).
+    /// </summary>
+    private async Task<IReadOnlyDictionary<Guid, IReadOnlyList<ReportedMetricLine>>> LoadReportedMetricsAsync(
+        Guid companyId, CancellationToken ct)
+    {
+        if (_reportedMetrics is null)
+        {
+            return new Dictionary<Guid, IReadOnlyList<ReportedMetricLine>>();
+        }
+
+        IReadOnlyList<ReportedMetricRecord> records;
+        try
+        {
+            records = await _reportedMetrics.GetForCompanyAsync(companyId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Reported-metrics ledger for company {CompanyId} could not be read; the report's evidence lines "
+                    + "carry no reported figures for it.",
+                companyId);
+            return new Dictionary<Guid, IReadOnlyList<ReportedMetricLine>>();
+        }
+
+        return records
+            .GroupBy(r => r.EvidenceId)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyList<ReportedMetricLine>)g
+                    .Select(r => new ReportedMetricLine(
+                        ReportedMetricDisplay.NameOf(r.Metric), r.Value, r.Unit, r.Period))
+                    .ToList());
+    }
+
     private static IReadOnlyList<ReportEvidenceRef> BuildEvidenceRefs(
-        IReadOnlyList<ScoreEvidenceLink> links, IReadOnlyDictionary<Guid, EvidenceItem?> loadedEvidence)
+        IReadOnlyList<ScoreEvidenceLink> links,
+        IReadOnlyDictionary<Guid, EvidenceItem?> loadedEvidence,
+        IReadOnlyDictionary<Guid, IReadOnlyList<ReportedMetricLine>> reportedByEvidence)
     {
         // Order by ContributionWeight descending, then SignalId (deterministic).
         var ordered = links
@@ -793,7 +851,11 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 SourceName: evidence.SourceName,
                 SourceUrl: evidence.SourceUrl,
                 Title: evidence.Title,
-                ContributionReason: link.ContributionReason));
+                ContributionReason: link.ContributionReason,
+                // Spec 215 §4: null when the ledger holds nothing for this evidence — never an empty list.
+                ReportedMetrics: reportedByEvidence.TryGetValue(evidence.Id, out var reported) && reported.Count > 0
+                    ? reported
+                    : null));
         }
 
         return refs;
