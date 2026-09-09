@@ -137,13 +137,20 @@ function Get-RadarForwardMove {
     $p1 = $Series.Close[$fut[$ForwardSessions]]
     if ($p0 -le 0) { return [pscustomobject]@{ Status = 'NonPositiveAnchor' } }
     if ($p1 -le 0) { return [pscustomobject]@{ Status = 'NonPositiveEnd' } }
+    # The GAP between the score date and the bar the window anchors on is reported, never swallowed. A score
+    # date before the price history begins anchors on the first available bar - possibly years later - and
+    # would otherwise render as a measured forward move from the score date. The caller decides what an
+    # unacceptable gap is; this function refuses to hide it.
+    $anchorGap = ([datetime]::ParseExact($fut[0], 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) -
+                  [datetime]::ParseExact($ScoreDate, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)).Days
     return [pscustomobject]@{
-        Status      = 'Ok'
-        AnchorDate  = $fut[0]
-        WindowEnd   = $fut[$ForwardSessions]
-        AnchorClose = $p0
-        EndClose    = $p1
-        ForwardPct  = 100.0 * ($p1 / $p0 - 1.0)
+        Status        = 'Ok'
+        AnchorDate    = $fut[0]
+        AnchorGapDays = $anchorGap
+        WindowEnd     = $fut[$ForwardSessions]
+        AnchorClose   = $p0
+        EndClose      = $p1
+        ForwardPct    = 100.0 * ($p1 / $p0 - 1.0)
     }
 }
 

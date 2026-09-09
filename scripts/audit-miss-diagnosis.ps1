@@ -7,15 +7,18 @@
     audit-score-vs-price-misses.ps1 FINDS the rows where the score and the forward price move disagreed. It
     stops there, on purpose. This script takes one of those rows and reconstructs the provenance behind it:
 
-        1. THE DIVERGENCE      the score, its within-date percentile, and the forward move that followed.
+        1. THE DIVERGENCE          the score, its within-date percentile, and the forward move that followed.
         2. WHAT REACHED THE SCORE  every signal the score snapshot links to, with the type, direction,
-                                   strength and confidence recorded on the link itself.
-        3. THE EVIDENCE IT READ    the article/filing behind each of those links - title, publisher, date.
-        4. WHAT THE JUDGE CONCLUDED  the news judgment(s) in the window: BusinessTrajectory and the cited
-                                     rationale, verbatim.
-        5. WHAT ARRIVED TOO LATE   evidence for this company published AFTER the score date but inside the
-                                   forward window. This is the discriminator that matters: news Radar could
-                                   NOT have seen is not a Radar failure, and news it COULD have seen is.
+                                   strength and confidence recorded on the link itself - and, on the same
+                                   line, the article/filing behind it (published date, reason, title).
+        3. WHAT THE JUDGE CONCLUDED  the news judgment(s) available at score time: BusinessTrajectory,
+                                     status, and the cited rationale verbatim.
+        4. WHAT ARRIVED AFTER THE SCORE  evidence for this company published AFTER the score date but inside
+                                   the forward window. This is the discriminator that matters: news Radar
+                                   could NOT have seen is not a Radar failure, and news it COULD have seen is.
+        5. OBSERVATIONS            mechanical conditions only, each one checkable against the sections above.
+
+    The numbering above IS the rendered section numbering - the two must not drift.
 
     IT DIAGNOSES, IT DOES NOT VERDICT. Every line is a recorded fact plus its source; the OBSERVATIONS
     section states only mechanical, deterministic conditions (for example "every contributing signal was
@@ -121,6 +124,7 @@ $c = [ordered]@{
     BarsUnusable               = 0
     BarDatesDuplicated         = 0
     ItemsWithheldByMaxItems    = 0
+    ForwardAnchorGapDays       = 0
 }
 
 # --- resolve the company -------------------------------------------------------------------------------
@@ -346,6 +350,14 @@ if ($null -eq $row) {
 }
 if ($move.Status -eq 'Ok') {
     Emit ("  Forward {0,2} sessions   : {1:N1}%  ({2} {3:N2} -> {4} {5:N2})" -f $ForwardSessions, $move.ForwardPct, $move.AnchorDate, $move.AnchorClose, $move.WindowEnd, $move.EndClose)
+    # A weekend/holiday gap is a few days; anything larger means the score date sits before the price
+    # history and this is NOT the move that followed the score. Said out loud rather than left to a reader
+    # who happens to compare two dates in the line above.
+    if ($move.AnchorGapDays -gt 7) {
+        $c.ForwardAnchorGapDays = $move.AnchorGapDays
+        Emit ("  !! ANCHOR IS {0} DAYS AFTER THE SCORE DATE - the price series does not cover {1}, so this is" -f $move.AnchorGapDays, $scoreDateIso)
+        Emit  "     the move that followed the FIRST AVAILABLE BAR, not the move that followed the score."
+    }
 } else {
     Emit ("  Forward {0,2} sessions   : not measurable ({1})" -f $ForwardSessions, $move.Status)
 }
@@ -401,9 +413,15 @@ else {
 }
 Emit ""
 
-Emit "---- 4. WHAT ARRIVED AFTER THE SCORE (inside the forward window) ----"
+Emit "---- 4. WHAT ARRIVED AFTER THE SCORE ----"
+# The upper bound is NAMED, because it is not always the forward window: when the move could not be
+# measured there IS no window, and the list is bounded by the scanned months instead. Printing "inside the
+# forward window" in that case would describe a bound that was never applied.
+if ($move.Status -eq 'Ok') { Emit ("  Bounded by the forward window: published after {0}, up to and including {1}." -f $scoreDateIso, $move.WindowEnd) }
+else { Emit ("  No forward window could be measured ({0}), so this list is bounded by the scanned months only." -f $move.Status) }
 Emit "  Radar could NOT have read these when it scored. News here explains the move without implicating"
-Emit "  the score; an EMPTY list means the move was not driven by anything this store captured."
+Emit "  the score. An EMPTY list is NOT evidence that nothing drove the move: it means only that no item"
+Emit "  carrying this ticker hint, in the months scanned below, was published inside the window."
 if ($forwardEvidence.Count -eq 0) { EmitNone }
 else {
     $rendered2 = New-Object System.Collections.Generic.List[string]
@@ -459,7 +477,9 @@ if ($c.JudgmentsInWindow -eq 0) {
 if ($c.ForwardEvidenceForCompany -gt 0) {
     $obs.Add(("  * {0} item(s) mentioning {1} were published AFTER the score date and inside the forward window." -f $c.ForwardEvidenceForCompany, $tickerUpper)) | Out-Null
 } else {
-    $obs.Add(("  * NOTHING mentioning {0} was captured after the score date: the move is unexplained by this store." -f $tickerUpper)) | Out-Null
+    # Stated as a property of THIS SCAN, not of the store: the match is a ticker-hint heuristic over a
+    # bounded month range, so "found none" and "none exist" are different facts and must read differently.
+    $obs.Add(("  * No item carrying the {0} ticker hint was found after the score date in the scanned months; this scan does not explain the move (it does not establish that nothing does)." -f $tickerUpper)) | Out-Null
 }
 if ($c.LinksEvidenceUnresolved -gt 0) {
     $obs.Add(("  * {0} link(s) point at evidence not found in the scanned months: their titles are unknown, not absent." -f $c.LinksEvidenceUnresolved)) | Out-Null
