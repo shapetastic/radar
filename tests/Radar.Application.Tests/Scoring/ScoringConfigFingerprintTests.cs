@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using Radar.Application.Filings;
 using Radar.Application.News;
 using Radar.Application.NewsRisk.Judgment;
 using Radar.Application.NewsTyping;
@@ -380,9 +381,14 @@ public sealed class ScoringConfigFingerprintTests
         // identity, while the disabled segment carries neither. SPEC 215 MOVED THE SAME THREE AI-ON HALVES
         // AGAIN TO THE VALUES BELOW (30d radar-scoring-fp-568a6612d541 → radar-scoring-fp-6dce61d377d6; the
         // 60d and 120d halves likewise — see the assertions) for news-judgment-prompt-v5, schema-v4 and
-        // reference-projection-v1 in the cohort key, and again NOT the AI-OFF halves. The proof this test
-        // makes is unchanged: with the news-query segment empty, the values are the post-215 no-newsquery
-        // values, so the spec-198 segment is still exactly additive on top of them.
+        // reference-projection-v1 in the cohort key, and again NOT the AI-OFF halves. SPEC 216 MOVED THE
+        // SAME THREE AI-ON HALVES AGAIN TO THE VALUES BELOW (30d radar-scoring-fp-6dce61d377d6 →
+        // radar-scoring-fp-0dfa4463ddd3; 60d radar-scoring-fp-771ac5fb8a83 → radar-scoring-fp-0dc1d67de19d;
+        // 120d radar-scoring-fp-7bfef3b8873b → radar-scoring-fp-66434c0af13f) for the ai= descriptor's new
+        // rm= field, reported-metrics-v2 and reference-projection-v2 + news-judgment-prompt-v6, and AGAIN
+        // NOT the AI-OFF halves. The proof this test makes is unchanged: with the news-query segment empty,
+        // the values are the post-216 no-newsquery values, so the spec-198 segment is still exactly
+        // additive on top of them.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
@@ -390,7 +396,7 @@ public sealed class ScoringConfigFingerprintTests
             "radar-scoring-fp-54e845330f96",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-6dce61d377d6",
+            "radar-scoring-fp-0dfa4463ddd3",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
@@ -399,7 +405,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-771ac5fb8a83",
+            "radar-scoring-fp-0dc1d67de19d",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
@@ -409,7 +415,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-7bfef3b8873b",
+            "radar-scoring-fp-66434c0af13f",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -502,8 +508,23 @@ public sealed class ScoringConfigFingerprintTests
     // the comparability-scan structure identity (cmpscan=cmpscan-v1) and the comparability confidence cap by
     // value (cmpcap, default 0.65, G29 like minconf): the cap bounds the confidence of emitted signals, a
     // comparability input exactly like MinConfidence and the reading model.
-    private const string AiDirectionalDescriptor =
-        "directional-filing:str=8;nov=6;minconf=0.6;model=openai:deepseek-ai/DeepSeek-V4-Flash;cmpscan=cmpscan-v1;cmpcap=0.65";
+    //
+    // SPEC 216 §5 APPENDS `rm=` LAST — the reported-metrics policy token, `disabled` or the current
+    // ReportedMetricsPolicy.Version. It is spliced from the CONST rather than written as a literal so a
+    // policy bump moves these pins on its own instead of leaving a stale copy here. It carries the ENABLED
+    // token because scripts/run-profiles/default.json re-enables the ledger in this same slice.
+    private static readonly string AiDirectionalDescriptor =
+        "directional-filing:str=8;nov=6;minconf=0.6;model=openai:deepseek-ai/DeepSeek-V4-Flash;cmpscan=cmpscan-v1;cmpcap=0.65"
+            + $";rm={ReportedMetricsPolicy.Version}";
+
+    /// <summary>
+    /// The same descriptor with metric extraction OFF (spec 216 §5). It is an INTERMEDIATE state that
+    /// exists only in the mutation tests below and in a profile that switches the ledger off — never a
+    /// separate shipped regime, because §6 re-enables the ledger in the same PR that adds the field.
+    /// </summary>
+    private static readonly string AiDirectionalDescriptorWithoutReportedMetrics =
+        "directional-filing:str=8;nov=6;minconf=0.6;model=openai:deepseek-ai/DeepSeek-V4-Flash;cmpscan=cmpscan-v1;cmpcap=0.65"
+            + $";rm={ReportedMetricsPolicy.DisabledToken}";
 
     // The AI-ON signal-source descriptor (spec 106): the rules= identity with the directional-filing
     // descriptor appended as an ESCAPED ai=… segment. Built through the real DescriptorEscaping (not a hand-written
@@ -683,8 +704,37 @@ public sealed class ScoringConfigFingerprintTests
         // Compute_LiveWindowAiOffStamps_ArePinned. The operator step (delete/re-record
         // data/scoring-configs/strategies/{name}.json, verify the first run's stamp against
         // Compute_LiveWindowAiOnStamps_ArePinned) is taken ONCE for 214 and 215 together.
+        // → SPEC 216 MOVED IT (radar-scoring-fp-bd8135c65d98 → the value below), AI-ON side ONLY, with
+        // THREE causes folded into ONE recomputation — and, for the first time in this arc, one of them
+        // does NOT travel through `news=`:
+        //   (a) §5 — the DIRECTIONAL-FILING `ai=` descriptor gains a trailing `rm=` field carrying the
+        //       reported-metrics policy token (`disabled` or `reported-metrics-v<N>`). It belongs there,
+        //       not in `news=`, because enabling metric extraction changes the FILING-ANALYSIS PROMPT
+        //       ITSELF — the model is asked for the release's stated metrics as well as its direction —
+        //       even when the news judgment is disabled, and the VERIFICATION policy decides which values
+        //       exist at all. That is spec 119's reading-model argument applied to the read's other
+        //       prompt-shaping input. The shipped token is the ENABLED one because §6 re-enables the
+        //       ledger in this same PR; `rm=disabled` exists only in the mutation matrix
+        //       (Compute_ReportedMetricsIdentityMatrix_IsPinned_AiOnMovesAiOffCannot) and in a profile
+        //       that switches the ledger off — never a separate later regime.
+        //   (b) §3 — reported-metrics-v1 → v2. The verification rule is part of the policy token, and v2
+        //       verifies three things v1 did not: the quote must NAME the labelled metric, the period must
+        //       be the release's own wording, and the value must be a WHOLE token ASSOCIATED with the
+        //       metric inside one bounded fragment. Under v1 a cash figure labelled Backlog verified.
+        //   (c) §1 — reference-projection-v1 → v2 and news-judgment-prompt-v5 → v6, both through the
+        //       `news=` segment. The projection now EXCLUDES the newest accession per metric (a fact's own
+        //       release could otherwise be its own "reference"), projects a verified StatedPrior pair
+        //       separately, and excludes a filing later than the news; the prompt states the rule and the
+        //       rendered reference line carries the kind.
+        // The record tag moved to news-judgment-v7 and the response schema did NOT move (still
+        // news-judgment-schema-v4 — the response shape is unchanged). No formula, RuleSetVersion,
+        // media-collapse, supersede, neutralization, attention-tier, weight or news-query change. THE
+        // THREE AI-OFF PINS ARE UNCHANGED — asserted by Compute_DefaultConfig_MatchesPinnedFingerprint and
+        // Compute_LiveWindowAiOffStamps_ArePinned, and REQUIRED to be: with no AI read registered there is
+        // no `ai=` segment to carry rm= and no `news=enabled:` segment to carry the projection version, so
+        // a move there would be scope leakage (the spec-197 proof pattern).
         Assert.Equal(
-            "radar-scoring-fp-bd8135c65d98",
+            "radar-scoring-fp-bae6a8c18dc1",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -699,6 +749,65 @@ public sealed class ScoringConfigFingerprintTests
         Assert.NotEqual(
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),
             DefaultFingerprint(sourceDescriptor: changed));
+    }
+
+    [Fact]
+    public void Compute_ReportedMetricsIdentityMatrix_IsPinned_AiOnMovesAiOffCannot()
+    {
+        // SPEC 216 §5's four-case matrix, in one place so the placement argument is checkable rather than
+        // asserted in prose. The token rides the DIRECTIONAL-FILING `ai=` descriptor because enabling
+        // extraction changes the FILING-ANALYSIS PROMPT ITSELF — the model is asked for the release's
+        // stated metrics as well as its direction — and the VERIFICATION policy decides which values exist
+        // at all. That is spec 119's argument for the reading model, applied to the read's other
+        // prompt-shaping input.
+        //
+        // (i) JUDGMENT OFF, flag toggled ⇒ the AI-ON descriptor CHANGES. This is the case the round-2
+        // review named: extraction changes the filing prompt even with no judge, so it cannot live in the
+        // `news=` segment.
+        var judgmentOffOn = DefaultFingerprint(
+            sourceDescriptor: "rules=radar-keyword-rules-v8;"
+                + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptor)};"
+                + NewsJudgmentScoringIdentity.Disabled.Segment
+                + NewsQueryScoringIdentity.Default.Segment);
+        var judgmentOffOff = DefaultFingerprint(
+            sourceDescriptor: "rules=radar-keyword-rules-v8;"
+                + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptorWithoutReportedMetrics)};"
+                + NewsJudgmentScoringIdentity.Disabled.Segment
+                + NewsQueryScoringIdentity.Default.Segment);
+        Assert.NotEqual(judgmentOffOn, judgmentOffOff);
+
+        // (ii) JUDGMENT ON, flag toggled ⇒ changes.
+        Assert.NotEqual(
+            DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),
+            DefaultFingerprint(
+                sourceDescriptor: AiOnSourceDescriptorWith(AiDirectionalDescriptorWithoutReportedMetrics)));
+
+        // (iii) AI READ OFF, flag toggled ⇒ UNCHANGED — and the literal "toggle the flag with no AI read"
+        // mutation is UNCONSTRUCTIBLE, which is the honest way to state this case. The option lives on the
+        // DIRECTIONAL FILING SOURCE; with the AI read off that source is not registered, so no ai= segment
+        // is folded and there is no field for the flag to change. The proof is therefore STRUCTURAL rather
+        // than a comparison: the AI-OFF descriptor carries no `rm=` field at all, so no value of the flag
+        // can reach the AI-OFF fingerprint — which is why the AI-OFF pins cannot move in this slice.
+        // (An Assert.Equal of the AI-OFF fingerprint against ITSELF stood here until the spec-216 review:
+        // it compared a value to itself, could never fail, and made this case look like it pinned more
+        // than it did.)
+        Assert.DoesNotContain("rm=", SourceDescriptor, StringComparison.Ordinal);
+
+        // (iv) POLICY TOKEN v2 → a fake v3 with the flag on ⇒ changes. The verification rule decides which
+        // values exist, so two policies are two different scorings.
+        Assert.NotEqual(
+            DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),
+            DefaultFingerprint(
+                sourceDescriptor: AiOnSourceDescriptorWith(
+                    AiDirectionalDescriptor.Replace(
+                        ReportedMetricsPolicy.Version, "reported-metrics-v3", StringComparison.Ordinal))));
+
+        // Non-vacuity: the two descriptors really do differ in exactly the rm= field.
+        Assert.EndsWith($";rm={ReportedMetricsPolicy.Version}", AiDirectionalDescriptor, StringComparison.Ordinal);
+        Assert.EndsWith(
+            $";rm={ReportedMetricsPolicy.DisabledToken}",
+            AiDirectionalDescriptorWithoutReportedMetrics,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -763,15 +872,45 @@ public sealed class ScoringConfigFingerprintTests
         // Compute_LiveWindowAiOffStamps_ArePinned. Three causes in one recomputation, all through the
         // `news=` segment: news-judgment-prompt-v5, news-judgment-schema-v4 and reference-projection-v1 in
         // the cohort key (see Compute_AiOnDefault_MatchesPinnedFingerprint); news-judgment-signal-v3 did not
-        // move. Specs 214 and 215 merge back-to-back so the operator step and the series discontinuity
-        // happen ONCE. The value the first post-214/215 baseline must report is whatever the 60-day
-        // assertion below says — never a value quoted in prose; radar-scoring-fp-241097438af8 (the 214-only
-        // value) was never stamped by a live run.
+        // move. Specs 214 and 215 merged back-to-back, so ONE operator step covered both — and it WAS
+        // PERFORMED, on 2026-09-08. The first post-214/215 baseline then reported
+        // radar-scoring-fp-8590412af27c, which stamped 102 companies (strategy 'default', earliest score
+        // 2026-09-08T21:46:22.311Z) under prompt v5 / schema v4 / reference-projection-v1 with the
+        // reported-metrics ledger DISABLED (766c925), so that cohort projected ZERO references. That value
+        // is HISTORY, quoted so accrued snapshots stay reconcilable — spec 216 moved it again (below), and
+        // the 60-day assertion at the end of this method is the only authority for the current value.
+        // radar-scoring-fp-241097438af8 (the 214-only value) was never stamped by a live run, because 214
+        // and 215 merged back-to-back.
+        //
+        // SPEC 216 MOVES THEM TO THE VALUES BELOW, AI-ON side ONLY, the same pattern: 60d
+        // radar-scoring-fp-8590412af27c → radar-scoring-fp-d7dbbcf89304; 120d radar-scoring-fp-a32785c416a6
+        // → radar-scoring-fp-cb9a65795fb3, while the AI-OFF live values are again UNCHANGED and asserted so
+        // by Compute_LiveWindowAiOffStamps_ArePinned. Three causes in one recomputation — the trailing
+        // `rm=reported-metrics-v2` field on the ai= descriptor (§5, the FIRST cause in this arc that does
+        // not travel through news=), the reported-metrics verification policy v1 → v2 (§3), and
+        // reference-projection-v2 + news-judgment-prompt-v6 in the cohort key (§1). See
+        // Compute_AiOnDefault_MatchesPinnedFingerprint for the full reasoning.
+        //
+        // ⚠ THE OPERATOR STEP IS OWED ONCE MORE — a SECOND, SEPARATE step, not one shared with 214/215,
+        // whose step was already performed on 2026-09-08 and whose composition stamped a live run (above).
+        // Whatever the 60-day assertion below says is the value the first post-216 baseline must report.
+        // Delete or
+        // re-record every configured data/scoring-configs/strategies/{name}.json BEFORE that run (the path
+        // is git-ignored, so those records cannot ride in a PR and MUST NEVER be fabricated); if the step
+        // is missed, StrategyIdentityGuard halts the run before collection — that halt is CORRECT.
+        //
+        // ⚠ DO NOT POOL ACROSS 214–216. It is treated as ONE COMPARABILITY boundary spanning the three
+        // slices — the level-only gate, the reference values, and the correction that stops a reference
+        // validating itself — but that is a deliberate CALL over TWO identity discontinuities, not a
+        // shared identity move: radar-scoring-fp-8590412af27c stamped one 102-company run between them
+        // (ledger off ⇒ zero references projected). Pooling 214–216 pools that cohort in knowingly. The
+        // precommitted 2026-09-29 claim date is UNCHANGED — the boundary describes comparability, not the
+        // claim.
         Assert.Equal(
-            "radar-scoring-fp-8590412af27c",
+            "radar-scoring-fp-d7dbbcf89304",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-a32785c416a6",
+            "radar-scoring-fp-cb9a65795fb3",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -803,7 +942,17 @@ public sealed class ScoringConfigFingerprintTests
         //
         // SPEC 214 MOVED NEITHER OF THESE, AND THAT NON-MOVE IS AN ASSERTED DELIVERABLE (the spec-197
         // pattern): comparison-basis-v1, news-judgment-prompt-v4 and news-judgment-signal-v3 all travel
-        // inside the `news=enabled:…` segment, which the disabled descriptor never renders.
+        // inside the `news=enabled:…` segment, which the disabled descriptor never renders. NEITHER DID
+        // SPEC 215, on the same reasoning.
+        //
+        // SPEC 216 MOVED NEITHER EITHER, AND THAT NON-MOVE IS AN ASSERTED DELIVERABLE — this time for TWO
+        // independent reasons, because spec 216 has an input that does NOT ride the news= segment. Its
+        // `rm=` field rides the DIRECTIONAL-FILING `ai=` descriptor, which SignalSourceDescriptor folds in
+        // ONLY when the AI filing source is registered: with no AI read there is nothing to extract, so
+        // there is nothing to hash. Its reference-projection-v2 and news-judgment-prompt-v6 ride
+        // `news=enabled:…`, which the disabled descriptor never renders. If either value below ever moves
+        // in a slice that touches only the filing read or the judgment read, the finding is SCOPE LEAKAGE,
+        // not a deliverable.
         Assert.Equal("radar-scoring-fp-0ff442a14c1b", DefaultFingerprint(window: TimeSpan.FromDays(60)));
         Assert.Equal("radar-scoring-fp-adf455313d35", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }

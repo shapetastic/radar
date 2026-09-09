@@ -130,6 +130,7 @@ public sealed class NewsJudgmentGeneratorTests
         public Task<Radar.Application.Storage.DurableWriteResult> WriteIfNewAsync(
             Guid companyId,
             string accession,
+            string policy,
             IReadOnlyList<Radar.Application.Filings.ReportedMetricRecord> records,
             CancellationToken ct) => throw new NotSupportedException();
 
@@ -140,6 +141,21 @@ public sealed class NewsJudgmentGeneratorTests
                 : Task.FromResult<IReadOnlyList<Radar.Application.Filings.ReportedMetricRecord>>(
                     [.. records.Where(r => r.CompanyId == companyId)]);
     }
+
+    /// <summary>
+    /// SPEC 216 §1: a LATER accession reporting the SAME metric, which is what makes
+    /// <see cref="BacklogLedgerRecord"/> eligible as a reference at all — the newest accession's figure is
+    /// the CURRENT value and is never one. Filed before the family's observation instant, so the secondary
+    /// guard admits the older row.
+    /// </summary>
+    private static Radar.Application.Filings.ReportedMetricRecord NewerBacklogLedgerRecord() =>
+        BacklogLedgerRecord(Guid.Parse("1e5a0000-0000-4000-8000-00000000000c")) with
+        {
+            Accession = "0000100591-26-000011",
+            FilingDateUtc = new DateTimeOffset(2026, 7, 9, 20, 0, 0, TimeSpan.Zero),
+            Value = "2.518",
+            Period = "as of April 30, 2026",
+        };
 
     private static Radar.Application.Filings.ReportedMetricRecord BacklogLedgerRecord(Guid id) => new(
         Id: id,
@@ -181,7 +197,11 @@ public sealed class NewsJudgmentGeneratorTests
             null));
         var store = new InMemoryJudgmentStore();
 
-        var result = await Generator(analyzer, store, reportedMetrics: new FixedLedger([BacklogLedgerRecord(referenceId)]))
+        var result = await Generator(
+                analyzer,
+                store,
+                reportedMetrics: new FixedLedger(
+                    [BacklogLedgerRecord(referenceId), NewerBacklogLedgerRecord()]))
             .GenerateAsync(RunId, Plan(), typing, CancellationToken.None);
 
         Assert.NotNull(result);
@@ -196,7 +216,21 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal([referenceId], record.ReferenceIds);
         Assert.Equal(0, record.ReferenceValuesOmitted);
         Assert.Equal([referenceId], record.TrajectoryReferenceIds);
-        Assert.Equal("news-judgment-v6", record.SchemaVersion);
+        Assert.Equal("news-judgment-v7", record.SchemaVersion);
+
+        // Spec 216 §1/§5: the newest accession is EXCLUDED and counted, the reference policy and the
+        // KINDS are persisted, and the per-family observation instant travels onto the record.
+        Assert.Equal(1, record.ReferencesExcludedNewest);
+        Assert.Equal(0, record.ReferencesExcludedLaterThanFact);
+        Assert.Equal(0, record.ReferencesSkippedSupersededPolicy);
+        Assert.Equal(Radar.Application.Filings.ReportedMetricsPolicy.Version, record.ReferencePolicy);
+        Assert.Equal(
+            [new NewsJudgmentReferenceRef(referenceId, NewsJudgmentReferenceKind.Prior)],
+            record.ReferenceKinds);
+        Assert.Equal(
+            [new NewsJudgmentReferenceRef(referenceId, NewsJudgmentReferenceKind.Prior)],
+            record.TrajectoryReferenceKinds);
+        Assert.Equal(NewsJudgmentTestData.ObservedAt, Assert.Single(record.Families).ObservedAtUtc);
 
         // The same families with NO ledger hash differently — a different cache entry, never a reuse.
         var withoutLedger = new InMemoryJudgmentStore();
@@ -509,7 +543,7 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal(NewsJudgmentStatus.Judged, reused.Status);
         // … while EVERY completeness dimension is this run's.
         Assert.Equal(NewsTypingCompleteness.RetryableFailure, reused.TypingCompleteness);
-        Assert.Equal("news-judgment-v6", reused.SchemaVersion);
+        Assert.Equal("news-judgment-v7", reused.SchemaVersion);
     }
 
     [Fact]

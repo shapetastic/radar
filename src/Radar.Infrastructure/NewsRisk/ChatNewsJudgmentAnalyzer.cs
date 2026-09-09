@@ -128,7 +128,9 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             + "or Event — a numberless comparison (\"backlog declined\") or a numberless event (\"the FDA "
             + "approved the product\") beside a quantified level still establishes direction; when that "
             + "is the case, say in the Rationale which levels you set aside. "
-            + "(12) Reference values are the company's own prior statements of the same metric. When a "
+            + "(12) Reference values are the company's own EARLIER statements of the same metric, and are "
+            + "never the figure a supplied fact itself quotes. Each is labelled prior (a figure from an "
+            + "earlier filing) or stated-prior (the comparison the newest release itself stated). When a "
             + "supplied fact quotes a metric with a reference value, read the DIRECTION from the "
             + "comparison and cite BOTH the fact and the ReferenceId. Never cite a ReferenceId as a "
             + "trajectory fact on its own — a reference value is a comparison basis, not news. "
@@ -262,7 +264,7 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             sb.AppendLine();
         }
 
-        // Spec 215 §2: the company-reported reference block, AFTER the families and ONLY when the ledger
+        // Spec 215 §2 (kind added by spec 216 §1): the company-reported reference block, AFTER the families and ONLY when the ledger
         // projected any — a company whose releases Radar has not yet read gets a byte-identical message.
         // Values are rendered AS STATED (no arithmetic), each line citable by its ReferenceId.
         if (request.References is { Count: > 0 } references)
@@ -281,10 +283,17 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
     }
 
     /// <summary>
-    /// One reference line, exactly the spec-215 shape:
-    /// <c>ReferenceId: {id} · {Metric} · {value} {unit} · {period} · stated in {form} filed {yyyy-MM-dd} · "{quote}"</c>,
-    /// with the prior pair appended as <c>(prior {priorValue} {unit}, {priorPeriod})</c> only when the
-    /// release stated one. The unit is omitted when blank; the filing date is UTC (AD-3).
+    /// One reference line, the spec-215 shape with spec 216 §1's KIND appended after the metric:
+    /// <c>ReferenceId: {id} · {Metric} · {kind} · {value} {unit} · {period} · stated in {form} filed
+    /// {yyyy-MM-dd} · "{quote}"</c>, with the prior pair appended as
+    /// <c>(prior {priorValue} {unit}, {priorPeriod})</c> only when the release stated one. The unit is
+    /// omitted when blank; the filing date is UTC (AD-3).
+    /// <para>
+    /// The kind is rendered because the two are different comparisons and the judge must not read them as
+    /// one: <c>prior</c> is a figure from an EARLIER filing, <c>stated-prior</c> is the comparison the
+    /// newest release itself stated. Neither can be the figure the supplied fact quotes — the projection
+    /// excludes the newest accession's current value outright (spec 216 §1).
+    /// </para>
     /// </summary>
     internal static string ReferenceValueLine(NewsJudgmentReferenceValue reference)
     {
@@ -294,9 +303,11 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
                 CultureInfo.InvariantCulture,
                 $" (prior {priorValue}{unit}, {reference.PriorPeriod})")
             : string.Empty;
+        var kind = reference.Kind == NewsJudgmentReferenceKind.StatedPrior ? "stated-prior" : "prior";
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"ReferenceId: {reference.ReferenceId:D} · {reference.Metric} · {reference.Value}{unit}{prior} · "
+            $"ReferenceId: {reference.ReferenceId:D} · {reference.Metric} · {kind} · "
+                + $"{reference.Value}{unit}{prior} · "
                 + $"{reference.Period} · stated in {reference.Form} filed {reference.FilingDateUtc:yyyy-MM-dd} · "
                 + $"\"{reference.Quote}\"");
     }

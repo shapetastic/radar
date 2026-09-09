@@ -738,6 +738,14 @@ internal static class RadarWorkerServices
                 // Spec 119: folded into the scoring fingerprint by value — the reading model changes signal
                 // DIRECTION, so two runs on different models must never share a ScoringConfigVersion.
                 ModelIdentity = aiModelIdentity,
+                // Spec 216 §5: the SAME switch that shapes the analyzer prompt above (ExtractReportedMetrics)
+                // decides this token, composed here so the prompt the model sees and the identity the run
+                // stamps can never disagree. It is folded into the fingerprint by value through the
+                // descriptor's trailing rm= field — AI-ON only, because the ai= segment exists only when
+                // this source is registered.
+                ReportedMetricsPolicy = options.Ai.ReportedMetrics.Enabled
+                    ? Radar.Application.Filings.ReportedMetricsPolicy.Version
+                    : Radar.Application.Filings.ReportedMetricsPolicy.DisabledToken,
             });
 
             // Per-accession earnings-analysis-result cache (spec 107, AD-14 analogue): lets the directional

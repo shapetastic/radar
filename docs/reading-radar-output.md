@@ -226,18 +226,28 @@ reading discipline.
     signal**: the daily news report's accounting line counts it as `level-only-trajectory`. When a
     semantic-read marker says `trajectory improving` beside `basis: LevelOnly`, read it as "the judge
     saw a big number", not as evidence of improvement.
-12. **A reference value is the company's own prior statement.** Since spec 215 the AI earnings read
-    keeps the figures a release STATES — revenue, net income, diluted EPS, gross margin, operating
-    income, backlog, cash and investments, total debt, free cash flow — each verified verbatim (the
-    value inside the quoted sentence, the sentence inside the text the model read) and filed
-    append-only in `data/reported-metrics/{companyId}/{accession}.json`. When a news fact the judge
-    sees names one of those metrics, the ledger's values for it are handed to the judge as
-    `ReferenceId:` lines with their period and filing date, and the judge is told a reference value
-    is a comparison basis, not news. A level cited beside a reference value for the same metric
-    ("backlog $2.5B vs $2.929B reported in January") renders `basis: ReferenceSupported` with the
-    cited ids after it (`references: …`), and it mints a scoring signal exactly as `Supported` does.
-    Two things to keep in mind: the ledger is **heal-forward** — nothing accrued is re-read, so a
-    company's first comparison appears at its NEXT release after the rule shipped (for AGX, around
-    December 2026), and until then its judgments carry `basis: LevelOnly` as before; and the ledger is
-    **not a scoring input** — it only reaches the judge and the report's evidence line (`— reported:
-    revenue 384.0 million (Q2 FY27), …`, values as stated, no arithmetic, no direction word).
+12. **A reference value is the company's own EARLIER statement — never the figure the fact itself
+    quotes.** Since spec 215 the AI earnings read keeps the figures a release STATES — revenue, net
+    income, diluted EPS, gross margin, operating income, backlog, cash and investments, total debt, free
+    cash flow — each verified deterministically and filed append-only in
+    `data/reported-metrics/{companyId}/{accession}.{policy}.json`. Since spec 216 the verification is
+    strict about three things it previously trusted: the quoted sentence must NAME the metric the model
+    labelled it with, the period must be the release's own wording, and the value must be a complete
+    number sitting BESIDE that metric in one fragment of the sentence — so a cash figure labelled
+    "backlog", an invented period, and "384" matched inside "384.0" are all now counted drops rather than
+    ledger records. When a news fact the judge sees names one of those metrics, the ledger's ELIGIBLE
+    values for it are handed to the judge as `ReferenceId:` lines with their kind (`prior` or
+    `stated-prior`), period and filing date, and the judge is told a reference value is a comparison
+    basis, not news. A level cited beside a reference value for the same metric ("backlog $2.5B vs
+    $2.929B reported in January") renders `basis: ReferenceSupported` with the cited ids after it
+    (`references: …`), and it mints a scoring signal exactly as `Supported` does.
+    Three things to keep in mind. **The newest filing is never a reference** (spec 216): the figure a
+    company just published is the CURRENT value, not a comparison basis, so a metric a company has
+    reported only ONCE offers no reference at all — that is the honest state of a young ledger, and it is
+    why a company's first comparison appears only after its SECOND post-rule release (unless that release
+    states its own prior figure, which projects as `stated-prior`). **The ledger is heal-forward** —
+    nothing accrued is re-read. And **the ledger is not a scoring input**: it reaches the judge and the
+    report's evidence line (`— reported: revenue 384.0 million (Q2 FY27), …`, values as stated, no
+    arithmetic, no direction word) and nothing else. (The SWITCH that turns the read on IS a scoring
+    identity input, because it changes the prompt the model is given — but no ledger value ever becomes a
+    score.)

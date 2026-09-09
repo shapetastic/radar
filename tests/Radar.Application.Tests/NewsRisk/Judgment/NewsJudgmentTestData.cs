@@ -15,7 +15,8 @@ internal static class NewsJudgmentTestData
         NewsFactAttribution attribution = NewsFactAttribution.Publisher,
         string statement = "The company reported that quarterly revenue rose 12%.",
         int memberCount = 1,
-        int distinctPublisherCount = 1) => new(
+        int distinctPublisherCount = 1,
+        DateTimeOffset? observedAtUtc = null) => new(
         FamilyId: Guid.NewGuid(),
         RepresentativeFactId: factId ?? Guid.NewGuid(),
         EventTypes: [NewsEventType.EarningsOrGuidance],
@@ -29,7 +30,11 @@ internal static class NewsJudgmentTestData
         DistinctPublisherCount: distinctPublisherCount,
         // Spec 214 §1: through the production classifier, exactly as NewsJudgmentInputBuilder computes it,
         // so a fixture family can never carry a basis its own statement would not earn.
-        ComparisonBasis: StatementComparisonClassifier.Classify(statement, [NewsEventType.EarningsOrGuidance]));
+        ComparisonBasis: StatementComparisonClassifier.Classify(statement, [NewsEventType.EarningsOrGuidance]),
+        // Spec 216 §1: the observation instant the reference-eligibility guard reads. Defaults to the
+        // shared ObservedAt so a fixture family always carries one; a test that needs the NOT RECORDED
+        // case uses `Family(...) with { ObservedAtUtc = null }`.
+        ObservedAtUtc: observedAtUtc ?? ObservedAt);
 
     public static NewsJudgmentModelFinding Finding(
         Guid factId,

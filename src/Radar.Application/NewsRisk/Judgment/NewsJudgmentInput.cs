@@ -32,7 +32,14 @@ public sealed record NewsJudgmentInputFamily(
     IReadOnlyList<string> Citations,
     int MemberCount,
     int DistinctPublisherCount,
-    NewsFactComparisonBasis ComparisonBasis);
+    NewsFactComparisonBasis ComparisonBasis,
+    // SPEC 216 §1: the family's EarliestObservedAtUtc — when this claim was first observed in the news.
+    // It is NOT rendered to the judge and is NOT the eligibility test (the structural ledger-order rule
+    // is); it is the secondary guard's input, so a reference filed AFTER every fact naming its metric is
+    // never compared backwards against them, and so the reconciliation "which reference could this fact
+    // have seen" is answerable from the persisted record. TRAILING and NULLABLE: `null` means NOT
+    // RECORDED and can exclude nothing — never a fabricated instant.
+    DateTimeOffset? ObservedAtUtc = null);
 
 /// <summary>
 /// One assembled judgment input: the ordered supplied families, the family-bundle completeness, the
@@ -47,7 +54,14 @@ public sealed record NewsJudgmentInputBundle(
     int FamiliesAvailable,
     string FamilySetHash,
     IReadOnlyList<NewsJudgmentReferenceValue> References,
-    int ReferenceValuesOmitted);
+    int ReferenceValuesOmitted,
+    // SPEC 216 §1/§5: the projection's counted exclusions, carried onto the judgment record so a judgment
+    // handed NO references can say WHY (a young ledger whose only accession is the current one, a filing
+    // later than the news, a superseded-policy file) rather than being indistinguishable from a company
+    // with no ledger at all.
+    int ReferencesExcludedNewest = 0,
+    int ReferencesExcludedLaterThanFact = 0,
+    int ReferencesSkippedSupersededPolicy = 0);
 
 /// <summary>
 /// Deterministic judge-input assembly (spec 185 §1/§5). Pure — no clock, no I/O:
@@ -120,7 +134,9 @@ public static class NewsJudgmentInputBuilder
                 DistinctPublisherCount: family.DistinctPublisherCount,
                 // Spec 214 §1: classified HERE, from exactly the statement and event types the judge sees.
                 ComparisonBasis: StatementComparisonClassifier.Classify(
-                    fact.Fact.Statement, fact.Fact.EventTypes)));
+                    fact.Fact.Statement, fact.Fact.EventTypes),
+                // Spec 216 §1: threaded from the family record, never re-derived.
+                ObservedAtUtc: family.EarliestObservedAtUtc));
         }
 
         var projection = ReferenceValueProjector.Project(supplied, reportedMetrics ?? []);
@@ -133,7 +149,10 @@ public static class NewsJudgmentInputBuilder
             FamiliesAvailable: resolvable,
             FamilySetHash: ComputeFamilySetHash(supplied, projection.References),
             References: projection.References,
-            ReferenceValuesOmitted: projection.ReferenceValuesOmitted);
+            ReferenceValuesOmitted: projection.ReferenceValuesOmitted,
+            ReferencesExcludedNewest: projection.ReferencesExcludedNewest,
+            ReferencesExcludedLaterThanFact: projection.ReferencesExcludedLaterThanFact,
+            ReferencesSkippedSupersededPolicy: projection.ReferencesSkippedSupersededPolicy);
     }
 
     /// <summary>
@@ -147,6 +166,12 @@ public static class NewsJudgmentInputBuilder
     /// change no distinctness and only move every accrued family-set hash. The classifier VERSION forks
     /// the cohort key instead (<see cref="NewsJudgmentContract.CohortKey"/>), which is where a table change
     /// belongs.
+    /// </para>
+    /// <para>
+    /// <b>Spec 216 does NOT fold <see cref="NewsJudgmentInputFamily.ObservedAtUtc"/> in either</b>, and the
+    /// test is the same one: the judge never sees it, and everything it can change — WHICH references
+    /// project — is already hashed through the projected reference ids below. Folding it would move every
+    /// accrued family-set hash for no gain in distinctness.
     /// </para>
     /// <para>
     /// <b>Spec 215 §2 DOES fold the projected reference ids in — and only when there are any.</b> The

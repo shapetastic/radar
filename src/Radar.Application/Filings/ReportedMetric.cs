@@ -37,18 +37,40 @@ public enum ReportedMetricVerification
 }
 
 /// <summary>
-/// The ONE declaration of the reported-metrics policy token (spec 215 §1). It names, together, the closed
-/// <see cref="ReportedMetric"/> enum and the verbatim verification rule (value-in-quote, unit-in-quote,
-/// quote-in-truncated-body). It is stamped on every NEW <see cref="AnalyzedFilingRecord"/> as
-/// <see cref="AnalyzedFilingRecord.ReportedMetricsPolicy"/> and on every <see cref="ReportedMetricRecord"/>
-/// as <see cref="ReportedMetricRecord.Policy"/>; a cache record whose non-null policy differs from this
-/// value is a bounded automatic MISS (the spec-160 <c>cmpscan</c> rule), while a null policy is a HIT
-/// (heal-forward — the accrued cache is never mass-invalidated). Widening the enum or changing the
-/// verification rule is <c>reported-metrics-v2</c>. NOT a scoring or fingerprint input.
+/// The ONE declaration of the reported-metrics policy token. It names, together, the closed
+/// <see cref="ReportedMetric"/> enum and the deterministic verification rule. It is stamped on every
+/// <see cref="ReportedMetricRecord"/> as <see cref="ReportedMetricRecord.Policy"/>, on every outbox
+/// envelope, in the ledger FILE NAME, and — since spec 216 §2, only AFTER the outbox envelope for that
+/// accession is durable — on the <see cref="AnalyzedFilingRecord.ReportedMetricsPolicy"/> cache record.
+/// A cache record whose non-null policy differs from this value is a bounded automatic MISS (the spec-160
+/// <c>cmpscan</c> rule), while a null policy is a HIT (heal-forward — the accrued cache is never
+/// mass-invalidated).
+/// <para>
+/// <b>Spec 216 §3 moves it to <c>reported-metrics-v2</c>.</b> The verification rule is part of the token,
+/// and v2 verifies three things v1 did not: the quote must NAME the labelled metric (the closed
+/// <see cref="ReportedMetricSynonyms"/> table), the period must appear verbatim in the quote, and the
+/// value/unit/prior value must match as WHOLE TOKENS associated with the metric inside ONE bounded
+/// fragment. There are no v1 files on disk (measured 2026-09-08: zero), and the policy now sits in the
+/// ledger path and the record identity, so a later policy writes a NEW file beside the old one rather
+/// than colliding with it (spec 216 §5).
+/// </para>
+/// <para>
+/// <b>It IS a scoring-fingerprint input since spec 216 §5</b> (reversing the spec-215 statement that stood
+/// here): enabling extraction changes the FILING-ANALYSIS prompt itself, and the verification policy
+/// decides which values exist at all, so the directional-filing <c>ai=</c> descriptor carries a trailing
+/// <c>rm=disabled|&lt;policy&gt;</c> field. It remains outside every judgment cohort key and every record
+/// identity other than the ledger's own.
+/// </para>
 /// </summary>
 public static class ReportedMetricsPolicy
 {
-    public const string Version = "reported-metrics-v1";
+    public const string Version = "reported-metrics-v2";
+
+    /// <summary>
+    /// The token the directional-filing scoring descriptor's <c>rm=</c> field carries when metric
+    /// extraction is switched OFF (spec 216 §5). A test/profile state, never a separate regime.
+    /// </summary>
+    public const string DisabledToken = "disabled";
 }
 
 /// <summary>
@@ -136,9 +158,32 @@ public sealed record ReportedMetricRecord(
     /// distinct record. The period is compared as stated (ordinal); a re-worded period is a new record,
     /// which is honest — Radar cannot know two wordings mean one period without arithmetic it refuses.
     /// </summary>
-    public static Guid IdentityFor(string accession, ReportedMetric metric, string period) =>
+    public static Guid IdentityFor(
+        string accession, ReportedMetric metric, string period, string policy) =>
         DeterministicGuid.FromCanonicalString(
-            $"radar:reported-metric:{accession}:{metric}:{period}");
+            $"radar:reported-metric:{policy}:{accession}:{metric}:{period}");
+
+    /// <summary>
+    /// SPEC 216 §1 — the identity of this record's STATED PRIOR pair, when the release itself stated one.
+    /// It is a DIFFERENT reference from the record's current value (a distinct
+    /// <c>NewsJudgmentReferenceValue.ReferenceId</c>) because the judge may cite either, and conflating
+    /// them would make "which figure did the judge compare against" unanswerable. Returns <c>null</c> when
+    /// the pair is not complete — a half-stated pair is never a reference.
+    /// <para>
+    /// It is derived from <see cref="Id"/> — the record's OWN unique (policy, accession, metric, period)
+    /// identity — precisely so it is INJECTIVE over records. Deriving it from (policy, accession, metric,
+    /// prior period) instead would collapse two rows of one release that state the same prior period for
+    /// one metric onto a single <c>ReferenceId</c>, which both loses one row's figure silently and throws
+    /// where the projected references are keyed by id (<c>NewsJudgmentValidator</c>,
+    /// <c>NewsJudgmentGenerator</c>). The prior period is kept in the canonical string after the
+    /// fixed-width <c>D</c>-format guid — unambiguous, and a re-worded prior period stays a new reference,
+    /// matching <see cref="IdentityFor"/>'s stance on the record's own period.
+    /// </para>
+    /// </summary>
+    public Guid? StatedPriorIdentity => PriorValue is { Length: > 0 } && PriorPeriod is { Length: > 0 }
+        ? DeterministicGuid.FromCanonicalString(
+            $"radar:reported-metric-stated-prior:{Id:D}:{PriorPeriod}")
+        : null;
 }
 
 /// <summary>
@@ -176,16 +221,28 @@ public interface IReportedMetricStore
 {
     /// <summary>
     /// Writes <paramref name="records"/> as the ledger file for (<paramref name="companyId"/>,
-    /// <paramref name="accession"/>) if none exists. An empty list still claims the file (a release that
-    /// verified nothing is a recorded fact, not an absence). Never throws for a disk failure.
+    /// <paramref name="accession"/>, <paramref name="policy"/>) if none exists. An empty list still claims
+    /// the file (a release that verified nothing is a recorded fact, not an absence). Never throws for a
+    /// disk failure.
+    /// <para>
+    /// SPEC 216 §5 — <paramref name="policy"/> is an EXPLICIT argument, not inferred from the records: an
+    /// empty verified list has no record to infer it from, yet the empty outcome must still be
+    /// acknowledged under a policy. It is part of the file name, so a re-analysis under a later policy
+    /// writes a NEW file beside the old one instead of colliding with it (append-only; nothing is deleted).
+    /// </para>
     /// </summary>
     Task<DurableWriteResult> WriteIfNewAsync(
-        Guid companyId, string accession, IReadOnlyList<ReportedMetricRecord> records, CancellationToken ct);
+        Guid companyId,
+        string accession,
+        string policy,
+        IReadOnlyList<ReportedMetricRecord> records,
+        CancellationToken ct);
 
     /// <summary>
     /// Every ledger record for one company in deterministic order (<c>FilingDateUtc</c> descending, then
-    /// <c>Metric</c>, <c>Period</c>, <c>Id</c> — AD-3). An unreadable file is logged and skipped; an
-    /// absent company folder is an empty list.
+    /// <c>Metric</c>, <c>Period</c>, <c>Id</c> — AD-3), across EVERY policy's files. An unreadable file is
+    /// logged and skipped; an absent company folder is an empty list. Filtering to the CURRENT policy (and
+    /// counting the superseded files it skips) is the projector's job, not the store's — spec 216 §5.
     /// </summary>
     Task<IReadOnlyList<ReportedMetricRecord>> GetForCompanyAsync(Guid companyId, CancellationToken ct);
 }

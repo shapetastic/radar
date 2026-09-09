@@ -79,4 +79,27 @@ public sealed class DirectionalFilingSignalOptions
     /// </para>
     /// </summary>
     public string ModelIdentity { get; init; } = string.Empty;
+
+    /// <summary>
+    /// SPEC 216 §5 — the reported-metrics policy token this composition reads under: the current
+    /// <c>ReportedMetricsPolicy.Version</c> when metric extraction is ENABLED, or
+    /// <c>ReportedMetricsPolicy.DisabledToken</c> when it is not. It is rendered as the descriptor's
+    /// trailing <c>rm=</c> field and is therefore a <b>scoring-fingerprint input by value</b>.
+    /// <para>
+    /// <b>Why it is hashed at all, and why HERE.</b> Enabling extraction changes the FILING-ANALYSIS PROMPT
+    /// — the model is asked for the release's stated metrics as well as its direction — so the same
+    /// release can come back with a different rationale and, in principle, a different direction; and the
+    /// VERIFICATION policy decides which values survive to be quoted at the judge. That is the spec-119
+    /// argument for the reading model, applied to the read's other prompt-shaping input, which is why it
+    /// sits in the FILING read's descriptor and not in the news= segment. The <c>ai=</c> segment folds only
+    /// when this source is registered, so this field can move the AI-ON pins and can NEVER move the AI-OFF
+    /// ones.
+    /// </para>
+    /// <para>
+    /// Default <c>disabled</c>: a composition that does not wire the ledger hashes as "no extraction" —
+    /// which is what it does — rather than silently claiming the current policy.
+    /// </para>
+    /// </summary>
+    public string ReportedMetricsPolicy { get; init; } =
+        Radar.Application.Filings.ReportedMetricsPolicy.DisabledToken;
 }

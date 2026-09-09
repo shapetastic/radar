@@ -87,12 +87,28 @@ public enum NewsTrajectoryBasis
 /// never re-derived on read (the statement could be re-classified, but the judge never saw the line).
 /// </para>
 /// </summary>
+/// <param name="ObservedAtUtc">
+/// SPEC 216 §1 (trailing + nullable): the family's earliest observation instant AS SUPPLIED to the judge —
+/// the input the reference-eligibility guard reads, persisted so "which reference could this fact have
+/// seen" is answerable from the record alone. <c>null</c> = the record was written before spec 216, or the
+/// family carried no recorded instant. Never defaulted, never re-derived on read.
+/// </param>
 public sealed record NewsJudgmentFamilyRef(
     Guid FamilyId,
     Guid RepresentativeFactId,
     int MemberCount,
     int DistinctPublisherCount,
-    NewsFactComparisonBasis? ComparisonBasis = null);
+    NewsFactComparisonBasis? ComparisonBasis = null,
+    DateTimeOffset? ObservedAtUtc = null);
+
+/// <summary>
+/// SPEC 216 §5 — one projected or cited reference value's identity and KIND, persisted so a reader can tell
+/// a comparison against the company's own EARLIER filing (<see cref="NewsJudgmentReferenceKind.Prior"/>)
+/// from one against the prior pair the newest release itself stated
+/// (<see cref="NewsJudgmentReferenceKind.StatedPrior"/>) without re-projecting a ledger that has since
+/// grown.
+/// </summary>
+public sealed record NewsJudgmentReferenceRef(Guid ReferenceId, NewsJudgmentReferenceKind Kind);
 
 /// <summary>
 /// The cost/safety limits in force for an attempt (recorded on every judgment, hashed into NO scoring
@@ -214,7 +230,20 @@ public sealed record NewsJudgmentRecord(
     // grown ledger a re-judgment rather than a cache reuse.
     IReadOnlyList<Guid>? ReferenceIds = null,
     int? ReferenceValuesOmitted = null,
-    IReadOnlyList<Guid>? TrajectoryReferenceIds = null)
+    IReadOnlyList<Guid>? TrajectoryReferenceIds = null,
+    // Spec 216 §5 — the reference POLICY token the projection read under, and the KIND of every projected
+    // and every cited reference. All TRAILING and NULLABLE: `null` = a pre-216 record (not recorded), or
+    // an attempt that never assembled an input. An EMPTY list on a v7 record is a measured none.
+    // `ReferencePolicy` is the ledger's ReportedMetricsPolicy.Version, so a reader can tell WHICH
+    // verification rule admitted the figures a judgment was compared against.
+    string? ReferencePolicy = null,
+    IReadOnlyList<NewsJudgmentReferenceRef>? ReferenceKinds = null,
+    IReadOnlyList<NewsJudgmentReferenceRef>? TrajectoryReferenceKinds = null,
+    // Spec 216 §1 — the projection's counted EXCLUSIONS, so a judgment handed no reference can say why.
+    // `null` = not recorded (pre-216, or no input assembled); a 0 on a v7 record is a measured zero.
+    int? ReferencesExcludedNewest = null,
+    int? ReferencesExcludedLaterThanFact = null,
+    int? ReferencesSkippedSupersededPolicy = null)
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
@@ -265,8 +294,18 @@ public sealed record NewsJudgmentRecord(
     /// empty set. Every pre-v6 record stays readable, is never rewritten, and hydrates the new fields as
     /// <c>null</c> (AD-8).
     /// </para>
+    /// <para>
+    /// <b>Spec 216 §5 moves it to <c>v7</c></b> for <see cref="ReferencePolicy"/>,
+    /// <see cref="ReferenceKinds"/>, <see cref="TrajectoryReferenceKinds"/>, the three projection exclusion
+    /// counts and the per-family <see cref="NewsJudgmentFamilyRef.ObservedAtUtc"/>. It earns the bump on
+    /// the same "changes what a record MEANS" test: a v6 record's reference set could contain the CURRENT
+    /// value of the very metric the fact quoted (that is the defect spec 216 §1 closes), while a v7
+    /// record's cannot — so "this judgment cited a reference" means something different under the two, and
+    /// a reader must be able to tell them apart. Every pre-v7 record stays readable, is never rewritten,
+    /// and hydrates the new fields as <c>null</c> (AD-8).
+    /// </para>
     /// </summary>
-    public const string CurrentSchemaVersion = "news-judgment-v6";
+    public const string CurrentSchemaVersion = "news-judgment-v7";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named

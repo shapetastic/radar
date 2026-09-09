@@ -96,8 +96,10 @@ public sealed class ChatNewsJudgmentAnalyzerTests
         // NewsJudgmentContract.PromptVersion (which forks the cohort) in the SAME change.
         // Spec 214 §2 moved this pin (rule 11 added) and forked the prompt to news-judgment-prompt-v4;
         // spec 215 §2 moved it again (rule 12 + the TrajectoryReferenceIds/ReferenceIds return clause) and
-        // forked the prompt to news-judgment-prompt-v5.
-        const string Pinned = "d63c9b26227a75c9d5f61884bd88053cecdd96106aec4de69e79619de2156b1d";
+        // forked the prompt to news-judgment-prompt-v5; spec 216 §1 restated rule 12 (a reference is the
+        // company EARLIER statement, never the figure the fact itself quotes; each is labelled prior or
+        // stated-prior) and forked the prompt to news-judgment-prompt-v6.
+        const string Pinned = "626a5c67ffe529efeb4e2dd860713a3da5a3d285a405e6254de185d55987b0b2";
         var actual = CanonicalHash.Sha256Hex(ChatNewsJudgmentAnalyzer.SystemInstruction);
         var matchesPin = string.Equals(Pinned, actual, StringComparison.Ordinal);
 
@@ -250,7 +252,7 @@ public sealed class ChatNewsJudgmentAnalyzerTests
         // The forked contract, so the wording and the cohort it forks cannot drift apart (spec 214 §2
         // carried the v3 rule forward unchanged into v4; spec 215 §2 into v5, and the same rule now applies
         // to the reference citation lists too).
-        Assert.Equal("news-judgment-prompt-v5", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-prompt-v6", NewsJudgmentContract.PromptVersion);
         Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
     }
 

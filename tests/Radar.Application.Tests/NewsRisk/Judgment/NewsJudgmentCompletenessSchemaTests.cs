@@ -26,8 +26,8 @@ public sealed class NewsJudgmentCompletenessSchemaTests
         // a record MEANS — whether it can become a signal) and the prompt forked to v4 (rule 11). Spec 215
         // §2: the tag moved to v6 (the reference fields; ReferenceSupported widens the basis vocabulary),
         // the prompt forked to v5 (rule 12) and the response schema to v4 (the reference citation lists).
-        Assert.Equal("news-judgment-v6", NewsJudgmentRecord.CurrentSchemaVersion);
-        Assert.Equal("news-judgment-prompt-v5", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-v7", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-prompt-v6", NewsJudgmentContract.PromptVersion);
         Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
 
         // The stage-2 cohort key, asserted against the literal composition rather than against itself: the
@@ -37,12 +37,12 @@ public sealed class NewsJudgmentCompletenessSchemaTests
         var cohortKey = NewsJudgmentContract.CohortKey("openai", "judge-model", Stage1);
 
         Assert.Equal(
-            "openai:judge-model|news-judgment-prompt-v5|news-judgment-schema-v4|"
+            "openai:judge-model|news-judgment-prompt-v6|news-judgment-schema-v4|"
                 + $"stage1={Stage1}|families={FactFamilyBuilder.IdentityString}"
                 + $"|comparison={StatementComparisonClassifier.Version}"
                 + $"|references={ReferenceValueProjector.Version}",
             cohortKey);
-        Assert.DoesNotContain("news-judgment-v6", cohortKey, StringComparison.Ordinal);
+        Assert.DoesNotContain("news-judgment-v7", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v5", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v4", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v3", cohortKey, StringComparison.Ordinal);
@@ -62,7 +62,7 @@ public sealed class NewsJudgmentCompletenessSchemaTests
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(7)
+            .TakeLast(13)
             .ToList();
         Assert.Equal(
             [
@@ -73,6 +73,12 @@ public sealed class NewsJudgmentCompletenessSchemaTests
                 nameof(NewsJudgmentRecord.ReferenceIds), // spec 215 §2
                 nameof(NewsJudgmentRecord.ReferenceValuesOmitted), // spec 215 §2
                 nameof(NewsJudgmentRecord.TrajectoryReferenceIds), // spec 215 §2
+                nameof(NewsJudgmentRecord.ReferencePolicy), // spec 216 §5
+                nameof(NewsJudgmentRecord.ReferenceKinds), // spec 216 §5
+                nameof(NewsJudgmentRecord.TrajectoryReferenceKinds), // spec 216 §5
+                nameof(NewsJudgmentRecord.ReferencesExcludedNewest), // spec 216 §1
+                nameof(NewsJudgmentRecord.ReferencesExcludedLaterThanFact), // spec 216 §1
+                nameof(NewsJudgmentRecord.ReferencesSkippedSupersededPolicy), // spec 216 §5
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

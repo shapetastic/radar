@@ -333,8 +333,11 @@ authoritative record:
   structure earns **v12**. An in-place composition change bumps
   `IScoreFormula.CompositionRevision` (spec 153); a strategy that changes formula or weights
   gets a NEW NAME (spec 141, immutable-by-convention).
-- **Fingerprint pins are window-dependent and have moved eight times in three weeks** (191,
-  194 ×2, 196, 197, 198, 214, 215 (both AI-ON only, merged back-to-back — one operator step)). `ScoringConfigFingerprintTests` is the ONLY authority for current
+- **Fingerprint pins are window-dependent and have moved nine times in three weeks** (191,
+  194 ×2, 196, 197, 198, 214, 215, 216 (the last three AI-ON only; 214+215 merged back-to-back and shared
+  ONE operator step, which WAS performed on 2026-09-08 and whose composition stamped a full 102-company
+  live run — 216 is a SECOND move and owes a SECOND, separate operator step)).
+  `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
   value. After a pin move, `StrategyIdentityGuard` halting before collection is CORRECT: the
@@ -342,14 +345,25 @@ authoritative record:
   (git-ignored — NEVER fabricate one), then verifying the first run's stamp.
 - **Do not pool across regime boundaries**: pre/post spec 191 (news direction), 194
   (grounded judgment signals), 196 (attention tiers), 197 (judgment join), 198 (news
-  recency), 214+215 (level-only gate + reference values, prompt v5 — one boundary, merged
-  back-to-back). The spec-191 inherited-direction cohort is known
+  recency), **214–216** (level-only gate + reference values + the correction that stops a reference
+  validating itself — treated as ONE comparability boundary by deliberate CALL, NOT because the three share
+  an operator step: it spans TWO identity discontinuities with a one-run cohort between them (214+215 took
+  their step on 2026-09-08 and stamped 102 companies with the reported-metrics ledger OFF, so zero
+  references were projected; 216 owes a SECOND step). `docs/architecture-history.md` names that cohort and
+  quotes its pin as history. The precommitted **2026-09-29** claim date is UNCHANGED: the boundary describes
+  comparability, not the claim). The spec-191 inherited-direction cohort is known
   DEFECTIVE and is not a control.
-- **News is a two-stage read** (specs 177–215): stage-1 typing (facts, structurally no
+- **News is a two-stage read** (specs 177–216): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact
   carries a deterministic `ComparisonBasis` line and the judge is told a level is not a trend;
   since spec 215 the judge is also handed the company-reported reference values the
-  reported-metrics ledger holds for the metrics those facts name, cited by `ReferenceId`) →
+  reported-metrics ledger holds for the metrics those facts name, cited by `ReferenceId` — and since
+  spec 216 a reference is STRUCTURALLY PRIOR: the newest accession per (company, metric) is the CURRENT
+  value and is never a reference, its own verified prior pair projects separately as `StatedPrior`, a
+  filing later than the fact is excluded, and an unprojected trajectory citation FAILS the judgment
+  (`reference-not-projected`). The ledger reaches disk through a durable outbox that RETRIES a failed
+  write rather than counting a loss, and `Radar:Ai:ReportedMetrics:Enabled` IS a scoring-fingerprint input
+  via the directional-filing descriptor's `rm=` field) →
   ONE judgment-derived `MediaAttention` signal per judgment (`news-judgment-signal-v3`; v1/v2
   accrued signals stay valid), which supersedes the ordinary attention event for its evidence;
   a level-only trajectory mints nothing (spec 214 — the materializer ALLOWLISTS

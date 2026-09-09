@@ -33,7 +33,10 @@ public sealed class ChatNewsJudgmentAnalyzerReferenceTests
             ComparisonBasis: StatementComparisonClassifier.Classify(Statement, [NewsEventType.EarningsOrGuidance]));
     }
 
-    private static NewsJudgmentReferenceValue Reference(string? priorValue = null, string? priorPeriod = null) => new(
+    private static NewsJudgmentReferenceValue Reference(
+        string? priorValue = null,
+        string? priorPeriod = null,
+        NewsJudgmentReferenceKind kind = NewsJudgmentReferenceKind.Prior) => new(
         ReferenceId: ReferenceId,
         Metric: ReportedMetric.Backlog,
         Value: "2.929",
@@ -43,15 +46,20 @@ public sealed class ChatNewsJudgmentAnalyzerReferenceTests
         PriorPeriod: priorPeriod,
         FilingDateUtc: new DateTimeOffset(2026, 4, 9, 20, 0, 0, TimeSpan.Zero),
         Form: "8-K",
-        Quote: "Project backlog of $2.929 billion as of January 31, 2026.");
+        Quote: "Project backlog of $2.929 billion as of January 31, 2026.",
+        Kind: kind);
 
     [Fact]
     public void SystemInstruction_StatesRule12_ReferenceValuesAreAComparisonBasisNotNews()
     {
         var instruction = ChatNewsJudgmentAnalyzer.SystemInstruction;
 
+        // SPEC 216 §1 restated it: a reference is the company's EARLIER statement, never the figure the
+        // supplied fact itself quotes, and each one is labelled prior or stated-prior.
         Assert.Contains(
-            "(12) Reference values are the company's own prior statements of the same metric. When a "
+            "(12) Reference values are the company's own EARLIER statements of the same metric, and are "
+                + "never the figure a supplied fact itself quotes. Each is labelled prior (a figure from an "
+                + "earlier filing) or stated-prior (the comparison the newest release itself stated). When a "
                 + "supplied fact quotes a metric with a reference value, read the DIRECTION from the "
                 + "comparison and cite BOTH the fact and the ReferenceId. Never cite a ReferenceId as a "
                 + "trajectory fact on its own — a reference value is a comparison basis, not news.",
@@ -70,8 +78,10 @@ public sealed class ChatNewsJudgmentAnalyzerReferenceTests
             new NewsJudgmentAnalysisRequest("Argan", "AGX", [Family()], [Reference()]));
 
         const string Header = "Company-reported reference values (from SEC filings Radar read; cite by ReferenceId):";
+        // SPEC 216 §1: the KIND sits after the metric, so the judge can never read a stated-prior as an
+        // independent earlier filing (or either as the current value).
         const string Line =
-            "ReferenceId: 1e5a0000-0000-4000-8000-000000000001 · Backlog · 2.929 billion · as of January 31, 2026 · "
+            "ReferenceId: 1e5a0000-0000-4000-8000-000000000001 · Backlog · prior · 2.929 billion · as of January 31, 2026 · "
             + "stated in 8-K filed 2026-04-09 · \"Project backlog of $2.929 billion as of January 31, 2026.\"";
         Assert.Contains(Header, message, StringComparison.Ordinal);
         Assert.Contains(Line, message, StringComparison.Ordinal);
@@ -84,11 +94,24 @@ public sealed class ChatNewsJudgmentAnalyzerReferenceTests
     public void UserMessage_AppendsThePriorPair_OnlyWhenTheReleaseStatedOne()
     {
         Assert.Equal(
-            "ReferenceId: 1e5a0000-0000-4000-8000-000000000001 · Backlog · 2.929 billion (prior 2.640 billion, as of "
+            "ReferenceId: 1e5a0000-0000-4000-8000-000000000001 · Backlog · prior · 2.929 billion (prior 2.640 billion, as of "
                 + "January 31, 2025) · as of January 31, 2026 · stated in 8-K filed 2026-04-09 · "
                 + "\"Project backlog of $2.929 billion as of January 31, 2026.\"",
             ChatNewsJudgmentAnalyzer.ReferenceValueLine(Reference("2.640", "as of January 31, 2025")));
-        Assert.DoesNotContain("prior", ChatNewsJudgmentAnalyzer.ReferenceValueLine(Reference()), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "(prior ", ChatNewsJudgmentAnalyzer.ReferenceValueLine(Reference()), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UserMessage_LabelsAStatedPriorReference_AsStatedPrior()
+    {
+        // SPEC 216 §1 — the newest filing's own stated comparison is projectable as its own reference, and
+        // the judge is told which kind it is seeing.
+        Assert.Contains(
+            "· Backlog · stated-prior · 2.929 billion ·",
+            ChatNewsJudgmentAnalyzer.ReferenceValueLine(
+                Reference(kind: NewsJudgmentReferenceKind.StatedPrior)),
+            StringComparison.Ordinal);
     }
 
     [Fact]

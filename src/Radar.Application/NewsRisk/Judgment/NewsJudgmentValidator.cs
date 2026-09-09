@@ -478,11 +478,23 @@ public static class NewsJudgmentValidator
     }
 
     /// <summary>
-    /// Spec 215 §2 — resolves one reference-citation list (trajectory or finding) against the PROJECTED
-    /// reference set through the shared resolver: parse/expand, then distinctness AFTER expansion (the
-    /// spec-197 rule 5), each failure appended as <c>{scope}reference-{code}</c> /
+    /// SPEC 216 §1's named reason for a cited ReferenceId that is not in the PROJECTED set — a
+    /// hallucinated or ineligible reference. On the TRAJECTORY it fails the WHOLE judgment (see
+    /// <see cref="TryResolveReferenceCitations"/>); on a FINDING it drops that finding only, exactly as an
+    /// unresolved finding FactId does.
+    /// </summary>
+    public const string ReferenceNotProjectedReason = "reference-not-projected";
+
+    /// <summary>
+    /// Spec 215 §2, extended by spec 216 §1 — resolves one reference-citation list (trajectory or finding)
+    /// against the PROJECTED reference set through the shared resolver: parse/expand, then distinctness
+    /// AFTER expansion (the spec-197 rule 5), each failure appended as <c>{scope}reference-{code}</c> /
     /// <c>{scope}reference-duplicate</c>, with the resolver's fact-oriented wording re-pointed at
-    /// ReferenceIds. Returns <c>false</c> when the caller must fail or drop.
+    /// ReferenceIds. A complete, well-formed id that is simply NOT IN THE PROJECTED SET gets spec 216's own
+    /// named reason, <see cref="ReferenceNotProjectedReason"/>, because that is now a distinct fact about
+    /// the judge: the projection excludes the current value and any filing later than the news, so a
+    /// citation of one is the evidence-gate failure this validator exists to catch. Returns <c>false</c>
+    /// when the caller must fail (trajectory) or drop (finding) — never a silent fallback to a weaker basis.
     /// </summary>
     private static bool TryResolveReferenceCitations(
         IReadOnlyList<string>? rawReferenceIds,
@@ -498,11 +510,19 @@ public static class NewsJudgmentValidator
             var resolution = referenceCitations.Resolve(rawId);
             if (!resolution.Resolved)
             {
-                var code = resolution.ReasonCode.Replace("fact-", string.Empty, StringComparison.Ordinal);
-                var detail = resolution.ReasonDetail
-                    .Replace("supplied representative fact id", "supplied ReferenceId", StringComparison.Ordinal)
-                    .Replace("FactId", "ReferenceId", StringComparison.Ordinal);
-                dropReasons.Add($"{scope}reference-{code}: '{rawId}' {detail}");
+                var code = resolution.Failure == NewsJudgmentCitationFailure.NotSupplied
+                    ? ReferenceNotProjectedReason
+                    : "reference-"
+                        + resolution.ReasonCode.Replace("fact-", string.Empty, StringComparison.Ordinal);
+                var detail = resolution.Failure == NewsJudgmentCitationFailure.NotSupplied
+                    ? "is not a PROJECTED reference value for this judgment; the projection excludes the "
+                        + "newest accession's current value and any filing later than the news it would be "
+                        + "compared with"
+                    : resolution.ReasonDetail
+                        .Replace(
+                            "supplied representative fact id", "supplied ReferenceId", StringComparison.Ordinal)
+                        .Replace("FactId", "ReferenceId", StringComparison.Ordinal);
+                dropReasons.Add($"{scope}{code}: '{rawId}' {detail}");
                 referenceIds = [];
                 return false;
             }

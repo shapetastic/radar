@@ -37,8 +37,16 @@ public static class NewsJudgmentContract
     /// never cite a ReferenceId as a trajectory fact on its own. The user message renders the projected
     /// <c>Company-reported reference values</c> block after the families whenever there is one.
     /// </para>
+    /// <para>
+    /// <b>Spec 216 §1 forked it to <c>v6</c>.</b> Rule 12 now states that a reference value is the
+    /// company's EARLIER statement and is never the figure a supplied fact itself quotes, and that each
+    /// reference is labelled <c>prior</c> or <c>stated-prior</c>; the rendered reference line carries that
+    /// label. Under v5 the projection could — and on a young ledger routinely did — hand the judge the
+    /// SAME figure from the SAME release the fact came from, so a "reference-supported" comparison could
+    /// be a value against itself.
+    /// </para>
     /// </summary>
-    public const string PromptVersion = "news-judgment-prompt-v5";
+    public const string PromptVersion = "news-judgment-prompt-v6";
 
     /// <summary>
     /// Spec 187 §1 forked this to <c>v2</c>: the structured response gained <c>TrajectoryFactIds</c>, so
@@ -75,7 +83,9 @@ public static class NewsJudgmentContract
     /// </para>
     /// <para>
     /// Spec 215 §2 appends <c>references={ReferenceValueProjector.Version}</c> on the same reasoning: the
-    /// metric-phrase table and the caps decide WHICH reference values the model sees.
+    /// metric-phrase table and the caps decide WHICH reference values the model sees. Spec 216 §1 moves
+    /// that token to <c>reference-projection-v2</c> — the ELIGIBILITY rules are part of the same identity,
+    /// for exactly the same reason.
     /// </para>
     /// </summary>
     public static string CohortKey(string provider, string modelId, string stage1CohortKey) =>

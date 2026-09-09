@@ -44,8 +44,17 @@ public interface IDirectionalFilingSignalSource
 /// <see cref="ReportedMetrics"/> is <c>null</c> for a cache replay or an extraction-disabled read ("not
 /// extracted this pass" — never an empty list meaning "none"), so the collection pass writes the ledger
 /// only when there is a genuine extraction to write, with the company id it resolved for the signal.
+/// <para>
+/// SPEC 216 §2 adds the two fields the pass needs to route and to AUDIT that write, both trailing and
+/// nullable: <see cref="Accession"/> (the ledger/outbox key, <c>null</c> only for a hand-built signal in a
+/// test) and <see cref="CachedReportedMetricsPolicy"/> — the policy stamp a CACHE REPLAY's record carried.
+/// A replay with a stamp but no outbox envelope behind it is the 215-era shape (the extraction was lost
+/// before the ledger); it is counted and named rather than acknowledged as an empty ledger.
+/// </para>
 /// </summary>
 public sealed record DirectionalFilingSignal(
     ExtractedSignal Signal,
     EvidenceItem Evidence,
-    ReportedMetricExtraction? ReportedMetrics = null);
+    ReportedMetricExtraction? ReportedMetrics = null,
+    string? Accession = null,
+    string? CachedReportedMetricsPolicy = null);
