@@ -10,6 +10,7 @@ using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.Tests.Ai;
 using Radar.Application.Tests.NewsRisk;
+using Radar.Application.Tests.NewsRisk.Judgment;
 using Radar.Application.Storage;
 
 namespace Radar.Application.Tests.NewsTyping;
@@ -1570,7 +1571,7 @@ public sealed class NewsTypingGeneratorTests
                 $"strategy-{offset}", isPrimary: offset == 0, StrategyPurpose.Research, rows));
         }
 
-        return new NewsJudgmentCandidatePlanner(JudgmentOptions()).Plan(sections);
+        return JudgmentPlanning.Plan(JudgmentOptions(), sections);
     }
 
     private static NewsJudgmentOptions JudgmentOptions() => new(
@@ -1578,6 +1579,7 @@ public sealed class NewsTypingGeneratorTests
         maxCompaniesPerRun: 30,
         maxFamiliesPerJudgment: 50,
         maxJudgmentAttempts: 3,
+        maxFamiliesPerBreadthJudgment: 5,
         presentationJudge: "judge-0",
         presentationExtractor: "reader-0",
         newsSearchCollectorName: "newssearch");

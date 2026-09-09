@@ -48,6 +48,13 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// <see cref="NewsJudgmentLeaderMarker.ReferenceIds"/> (<see cref="ReferenceIdsToken"/>): the cited
 /// trajectory reference ids, comma-joined, on a judged marker that cited any; null otherwise.
 /// </para>
+/// <para>
+/// Spec 219 §2 — a judged marker whose record says the read was a BOUNDED breadth one also carries
+/// <see cref="NewsJudgmentLeaderMarker.ReadDepth"/> (<see cref="ReadDepthToken"/>), rendered in the leaders
+/// cell. A <see cref="NewsJudgmentReadDepth.Full"/> read and every pre-219 record carry NOTHING, so every
+/// cell that existed before that slice renders byte-identically — the token exists to stop a five-family
+/// read looking like a fifty-family one, not to annotate reads that were already complete.
+/// </para>
 /// </summary>
 public static class NewsJudgmentMarkerPolicy
 {
@@ -80,7 +87,8 @@ public static class NewsJudgmentMarkerPolicy
                 Trajectory: TrajectoryToken(record.BusinessTrajectory.Value),
                 JudgmentId: record.JudgmentId,
                 TrajectoryBasis: TrajectoryBasisToken(record),
-                ReferenceIds: ReferenceIdsToken(record)),
+                ReferenceIds: ReferenceIdsToken(record),
+                ReadDepth: ReadDepthToken(record)),
             // Zero findings but a deteriorating factual trajectory: an ABSENCE claim would be rendered
             // beside the same record's contrary PRESENCE evidence. The axis is the challenge.
             NewsJudgmentStatus.Judged
@@ -91,14 +99,16 @@ public static class NewsJudgmentMarkerPolicy
                     Trajectory: TrajectoryToken(NewsJudgmentTrajectory.Deteriorating),
                     JudgmentId: record.JudgmentId,
                     TrajectoryBasis: TrajectoryBasisToken(record),
-                    ReferenceIds: ReferenceIdsToken(record)),
+                    ReferenceIds: ReferenceIdsToken(record),
+                    ReadDepth: ReadDepthToken(record)),
             NewsJudgmentStatus.Judged => new NewsJudgmentLeaderMarker(
                 NewsJudgmentMarkerState.NoChallengeFound,
                 TypingIncomplete: record.TypingCompleteness != NewsTypingCompleteness.Complete,
                 Trajectory: TrajectoryToken(record.BusinessTrajectory.Value),
                 JudgmentId: record.JudgmentId,
                 TrajectoryBasis: TrajectoryBasisToken(record),
-                ReferenceIds: ReferenceIdsToken(record)),
+                ReferenceIds: ReferenceIdsToken(record),
+                ReadDepth: ReadDepthToken(record)),
             NewsJudgmentStatus.InsufficientFacts => new NewsJudgmentLeaderMarker(
                 NewsJudgmentMarkerState.Unassessed,
                 NewsJudgmentMarkerReasons.InsufficientFacts,
@@ -165,6 +175,37 @@ public static class NewsJudgmentMarkerPolicy
         TrajectoryBasisToken(record) is not null && record.TrajectoryReferenceIds is { Count: > 0 } ids
             ? string.Join(",", ids.Select(id => id.ToString("D")))
             : null;
+
+    /// <summary>
+    /// SPEC 219 §2 — the bounded-read disclosure for a JUDGED record, or <c>null</c> when there is nothing
+    /// to disclose:
+    /// <list type="bullet">
+    /// <item><c>null</c> for <see cref="NewsJudgmentReadDepth.Full"/> and for a pre-219 record whose
+    /// <c>ReadDepth</c> is NOT RECORDED — both render exactly as they did before this slice. A pre-219
+    /// record's read WAS in fact the full budget, but the record does not say so, and a bounded read is
+    /// the only claim worth making here;</item>
+    /// <item><c>bounded read (5 of 37 families)</c> when the record measured both counts;</item>
+    /// <item><c>bounded read (5 families supplied, available not recorded)</c> when
+    /// <see cref="NewsJudgmentRecord.FamiliesAvailable"/> is null — the bound is still stated, because the
+    /// missing denominator must not upgrade a bounded read into a silent complete one.</item>
+    /// </list>
+    /// </summary>
+    internal static string? ReadDepthToken(NewsJudgmentRecord record)
+    {
+        if (record.ReadDepth != NewsJudgmentReadDepth.Breadth)
+        {
+            return null;
+        }
+
+        var supplied = record.Families.Count;
+        return record.FamiliesAvailable is { } available
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"bounded read ({supplied} of {available} families)")
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"bounded read ({supplied} families supplied, available not recorded)");
+    }
 
     /// <summary>The top finding's compact summary: severity descending, then confidence descending, then category (AD-3).</summary>
     private static string TopFindingSummary(IReadOnlyList<NewsJudgmentValidatedFinding> findings)

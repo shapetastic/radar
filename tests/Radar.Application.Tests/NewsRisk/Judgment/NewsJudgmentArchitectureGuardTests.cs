@@ -163,7 +163,7 @@ public sealed class NewsJudgmentArchitectureGuardTests
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(15)
+            .TakeLast(18)
             .ToList();
         Assert.Equal(
             [
@@ -184,6 +184,11 @@ public sealed class NewsJudgmentArchitectureGuardTests
                 nameof(NewsJudgmentRecord.ReferencesExcludedNewest),
                 nameof(NewsJudgmentRecord.ReferencesExcludedLaterThanFact),
                 nameof(NewsJudgmentRecord.ReferencesSkippedSupersededPolicy),
+                // Spec 219 §2: the read DEPTH and the family accounting — an enum and two ints, so no
+                // model text, score, rank or price can ride them either.
+                nameof(NewsJudgmentRecord.ReadDepth),
+                nameof(NewsJudgmentRecord.FamiliesAvailable),
+                nameof(NewsJudgmentRecord.FamiliesWithheldByBudget),
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

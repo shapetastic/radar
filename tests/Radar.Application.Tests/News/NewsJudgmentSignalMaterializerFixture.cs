@@ -34,6 +34,7 @@ internal static class MaterializerFixture
         maxCompaniesPerRun: 30,
         maxFamiliesPerJudgment: 50,
         maxJudgmentAttempts: 3,
+        maxFamiliesPerBreadthJudgment: 5,
         presentationJudge: presentationJudge,
         presentationExtractor: presentationExtractor,
         newsSearchCollectorName: "newssearch");

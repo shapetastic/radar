@@ -40,7 +40,14 @@ public sealed record NewsJudgmentLeaderMarker(
     // Spec 215 §4: the cited trajectory reference ids (company-reported reference values), comma-joined,
     // set by the policy ONLY for a judged marker whose record cited any; null otherwise. Rendered on the
     // appendix after the basis as ` · references: …`. A string token, so no judgment type is referenced.
-    string? ReferenceIds = null)
+    string? ReferenceIds = null,
+    // SPEC 219 §2: the READ-DEPTH disclosure, e.g. `bounded read (5 of 37 families)`. Set by the policy
+    // ONLY for a JUDGED marker whose record says the read was a BOUNDED breadth one — a full-depth read and
+    // every pre-219 record leave it null and render byte-identically to before this slice. It exists
+    // because spec 219 puts a five-family read on rows that previously carried a fifty-family read or none
+    // at all, and "no challenge found in supplied facts" must never look the same in both cases. A string
+    // token, like Trajectory, so this display type still references no judgment type.
+    string? ReadDepth = null)
 {
     /// <summary>
     /// The rendered marker cell — a total function over the state, so an absent/blank marker text is
@@ -53,11 +60,11 @@ public sealed record NewsJudgmentLeaderMarker(
         NewsJudgmentMarkerState.Challenged =>
             (ChallengeSummary is { Length: > 0 } summary
                 ? $"⚠ challenged ({summary})"
-                : "⚠ challenged") + TrajectorySuffix,
+                : "⚠ challenged") + TrajectorySuffix + ReadDepthSuffix,
         NewsJudgmentMarkerState.NoChallengeFound =>
             (TypingIncomplete
                 ? "· no challenge found in supplied facts (typing incomplete)"
-                : "· no challenge found in supplied facts") + TrajectorySuffix,
+                : "· no challenge found in supplied facts") + TrajectorySuffix + ReadDepthSuffix,
         _ => $"? unassessed ({UnassessedReason ?? NewsJudgmentMarkerReasons.NoJudgment})",
     };
 
@@ -69,6 +76,15 @@ public sealed record NewsJudgmentLeaderMarker(
     /// </summary>
     private string TrajectorySuffix =>
         Trajectory is { Length: > 0 } token ? " · trajectory " + token : string.Empty;
+
+    /// <summary>
+    /// SPEC 219 §2: the bounded-read disclosure, rendered LAST on both judged states and absent everywhere
+    /// else. A bounded read must never render as a complete one — the policy sets this token only when the
+    /// record says the read was a breadth read, so every marker that existed before this slice is
+    /// byte-identical.
+    /// </summary>
+    private string ReadDepthSuffix =>
+        ReadDepth is { Length: > 0 } token ? " · " + token : string.Empty;
 }
 
 /// <summary>The CLOSED reason-token vocabulary for the unassessed state (spec 185 §4).</summary>

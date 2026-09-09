@@ -47,6 +47,7 @@ public sealed class NewsJudgmentAttemptBoundTests
         maxCompaniesPerRun: 30,
         maxFamiliesPerJudgment: 50,
         maxJudgmentAttempts: maxJudgmentAttempts,
+        maxFamiliesPerBreadthJudgment: 5,
         presentationJudge: judgeName,
         presentationExtractor: "deepinfra-deepseek",
         newsSearchCollectorName: "newssearch");
@@ -70,7 +71,8 @@ public sealed class NewsJudgmentAttemptBoundTests
             NullLogger<NewsJudgmentGenerator>.Instance);
 
     private static NewsJudgmentCandidatePlan Plan(NewsJudgmentOptions? options = null) =>
-        new NewsJudgmentCandidatePlanner(options ?? Options()).Plan(
+        JudgmentPlanning.Plan(
+            options ?? Options(),
         [
             NewsRiskTestData.Section(
                 "disclosure-led-v11",

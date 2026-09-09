@@ -201,9 +201,11 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         }
 
         // Spec 187 §2: the plan is CONSUMED, never recomputed. Selection policy lives in exactly one place
-        // (NewsRiskCandidateSelector, invoked once per run by INewsJudgmentCandidatePlanner), so the typing
-        // pass's candidate lane and this loop cannot disagree about who the leaders are.
-        var candidates = (candidatePlan ?? NewsJudgmentCandidatePlan.Empty).Candidates;
+        // (NewsRiskCandidateSelector for the spec-179 §3 depth cohort, NewsJudgmentCoveragePolicy for the
+        // spec-219 §1 breadth cohort, both invoked once per run by INewsJudgmentCandidatePlanner), so the
+        // typing pass's candidate lane and this loop cannot disagree about who the leaders are.
+        var plan = candidatePlan ?? NewsJudgmentCandidatePlan.Empty;
+        var candidates = plan.PlannedCandidates;
 
         var batch = typing.NewsObservationBatchId is { } batchId
             ? await _batchReader.GetBatchAsync(batchId, ct).ConfigureAwait(false)
@@ -220,6 +222,11 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
 
         var judgments = new List<NewsJudgmentRecord>();
         var unpersisted = new HashSet<(Guid CompanyId, string CohortKey)>();
+        // Spec 219 §1: the breadth candidates this pass SKIPPED for want of typed facts. They persist no
+        // record, so without this set the marker policy would see "no record" and render
+        // `not-a-candidate` — a FALSE claim about selection (the company WAS planned), and exactly the
+        // failure mode spec 187 §1 introduced `not-persisted` to avoid. The row names the real condition.
+        var skippedNoTypedFacts = new HashSet<(Guid CompanyId, string CohortKey)>();
         var exhaustedByCohort = new Dictionary<string, int>(StringComparer.Ordinal);
         var overSoftLimitRationalesByCohort = new Dictionary<string, int>(StringComparer.Ordinal);
         var prefixExpansionsByCohort = new Dictionary<string, (int Expansions, int Judgments)>(
@@ -232,7 +239,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         // Spec 215 §2: each candidate's ledger is read ONCE per pass (not once per judge × cohort) and a
         // read failure degrades to "no references" — counted, and reported once per company, never a
         // silent empty. Without a registered ledger nothing is read and nothing is counted.
-        var ledgerByCompany = await LoadLedgersAsync(candidates, ct).ConfigureAwait(false);
+        var ledgerByCompany = await LoadLedgersAsync(
+            [.. candidates.Select(c => c.Candidate)], ct).ConfigureAwait(false);
 
         foreach (var cohort in typing.Cohorts)
         {
@@ -245,6 +253,9 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 // was fixed before this loop began (AD-3).
                 var judgeCohortKey = judge.Identity.CohortKeyFor(cohort.Reader.CohortKey);
                 var timings = new ProviderCallTimings();
+                // Spec 219 §4: the coverage ledger for THIS (judge × stage-1 cohort) pass. ONE aggregated
+                // line per pass, never one per company (the spec-145 precedent).
+                var coverage = new JudgmentCoverageCounters();
                 var attemptedCalls = 0;
                 var persistedJudged = 0;
                 var providerFailures = 0;
@@ -270,13 +281,29 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     timings.MeanMs.ToString("F1", CultureInfo.InvariantCulture),
                     timings.Max.TotalMilliseconds.ToString("F1", CultureInfo.InvariantCulture));
 
-                foreach (var candidate in candidates)
+                foreach (var planned in candidates)
                 {
                     ct.ThrowIfCancellationRequested();
-                    var outcome = await JudgeOneAsync(
-                        judge, cohort, candidate, runId, batch, history,
+                    var candidate = planned.Candidate;
+                    var judged = await JudgeOneAsync(
+                        judge, cohort, planned, runId, batch, history,
                         ledgerByCompany.GetValueOrDefault(candidate.CompanyId, []), ct).ConfigureAwait(false);
+                    if (judged is not { } outcome)
+                    {
+                        // Spec 219 §1/§4: a BREADTH candidate this stage-1 cohort holds NO families for. It
+                        // is a company with nothing to read — not an error and not a failure — so it is
+                        // SKIPPED AND COUNTED, and NO record is persisted. Writing ~80 InsufficientFacts
+                        // non-attempts per run per cohort would bury the store and the artifact in
+                        // non-events while saying nothing the counter does not say. The DEPTH path still
+                        // persists InsufficientFacts exactly as before, because a leader row that is about
+                        // to be shown to a human must be able to name why it was not assessed.
+                        coverage.SkippedNoTypedFacts++;
+                        skippedNoTypedFacts.Add((candidate.CompanyId, judgeCohortKey));
+                        continue;
+                    }
+
                     var record = outcome.Record;
+                    coverage.Observe(planned.Depth, record, outcome);
                     if (record.Status == NewsJudgmentStatus.AttemptsExhausted)
                     {
                         exhaustedByCohort[record.CohortKey] =
@@ -380,6 +407,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     else
                     {
                         judgments.Add(record);
+                        coverage.Persisted(planned.Depth, record);
 
                         // A REUSED judged verdict still reaches the run result and presentation, but it is
                         // not a judged verdict this pass newly produced (spec 188 §1).
@@ -412,6 +440,47 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     judge.Identity.Name,
                     judgeCohortKey,
                     timings.Summarize().Describe());
+
+                // SPEC 219 §4 — the PER-COHORT coverage line: ONE aggregated line per (judge × stage-1
+                // cohort), never one per company. It carries ONLY facts that are per-cohort. The RUN-LEVEL
+                // facts (universe size, the capacity valve and what it dropped) are emitted ONCE per run,
+                // below the cohort loops — repeating them here made a two-cohort run state them twice and
+                // invited a reader to double-count. Every number is measured over THIS pass, and a zero is
+                // reported AS a zero rather than omitted.
+                _logger.LogInformation(
+                    "News-judgment judge {Judge} ({Cohort}) coverage ({CoveragePolicy}): {Accounted} of "
+                        + "{Planned} planned candidate(s) accounted for — {WithFacts} with typed facts in "
+                        + "window, {NoFactsRecorded} recorded with none, {SkippedNoFacts} skipped with "
+                        + "none, {FamiliesNotRecorded} whose family accounting was not recorded; judged "
+                        + "{JudgedBreadth} breadth + {JudgedFull} full = {JudgedTotal}; families "
+                        + "{FamiliesSupplied} supplied of {FamiliesAvailable} available, "
+                        + "{FamiliesWithheld} withheld by budget (breadth cap {BreadthCap}, full cap "
+                        + "{FullCap}); reused {ReusedBreadth} breadth / {ReusedFull} full; failed "
+                        + "{FailedBreadth} breadth / {FailedFull} full, of which validation-failed "
+                        + "{ValidationBreadth} breadth / {ValidationFull} full.",
+                    judge.Identity.Name,
+                    judgeCohortKey,
+                    NewsJudgmentCoveragePolicy.Version,
+                    coverage.Accounted,
+                    candidates.Count,
+                    coverage.WithTypedFacts,
+                    coverage.RecordedWithNoTypedFacts,
+                    coverage.SkippedNoTypedFacts,
+                    coverage.FamiliesNotRecorded,
+                    coverage.JudgedBreadth,
+                    coverage.JudgedFull,
+                    coverage.JudgedBreadth + coverage.JudgedFull,
+                    coverage.FamiliesSupplied,
+                    coverage.FamiliesAvailable,
+                    coverage.FamiliesWithheldByBudget,
+                    _options.MaxFamiliesPerBreadthJudgment,
+                    _options.MaxFamiliesPerJudgment,
+                    coverage.ReusedBreadth,
+                    coverage.ReusedFull,
+                    coverage.FailedBreadth,
+                    coverage.FailedFull,
+                    coverage.ValidationFailedBreadth,
+                    coverage.ValidationFailedFull);
             }
         }
 
@@ -505,13 +574,40 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 ReferenceValueProjector.Version);
         }
 
-        var markers = BuildPresentationMarkers(judgments, typing, runId, candidates, unpersisted);
+        // SPEC 219 §4 — the RUN-LEVEL coverage line, emitted exactly ONCE by a pass that reaches here,
+        // however many (judge × stage-1 cohort) pairs ran, because every fact on it is a property of the
+        // PLAN and not of a cohort. A pass that returned at the stage-1 precondition above emits it ZERO
+        // times — that branch logs its own Warning naming the reason, so the run is not silent, but this
+        // line is not a per-run guarantee. A universe that was never read renders "not recorded", never a
+        // fabricated 0; a valve that did not bite reports a measured 0 rather than staying silent.
+        _logger.LogInformation(
+            "News-judgment run coverage ({CoveragePolicy}): {InUniverse} company/companies in universe; "
+                + "planned {Planned} candidate(s) = {Full} full + {Breadth} breadth; {DroppedByValve} "
+                + "breadth-eligible company/companies dropped by the capacity valve {ValveName}={Valve}. "
+                + "Per-cohort coverage is reported on its own line for each judge × stage-1 cohort.",
+            NewsJudgmentCoveragePolicy.Version,
+            plan.CompaniesInUniverse is { } inUniverse
+                ? inUniverse.ToString(CultureInfo.InvariantCulture)
+                : "not recorded",
+            candidates.Count,
+            plan.Candidates.Count,
+            plan.BreadthCandidates.Count,
+            plan.BreadthDroppedByCapacityValve,
+            "Radar:NewsResearch:Judgment:MaxCompaniesPerRun",
+            plan.CapacityValve is { } valve
+                ? valve.ToString(CultureInfo.InvariantCulture)
+                : "not recorded");
+
+        var markers = BuildPresentationMarkers(
+            judgments, typing, runId, candidates, unpersisted, skippedNoTypedFacts);
 
         _logger.LogInformation(
-            "News-judgment pass complete: {Candidates} candidate(s) × {Judges} judge(s) × "
-                + "{Stage1Cohorts} stage-1 cohort(s) = {Judgments} judgment record(s); presentation "
-                + "markers {MarkerState}.",
+            "News-judgment pass complete: {Candidates} candidate(s) ({Full} full + {Breadth} breadth) × "
+                + "{Judges} judge(s) × {Stage1Cohorts} stage-1 cohort(s) = {Judgments} judgment record(s); "
+                + "presentation markers {MarkerState}.",
             candidates.Count,
+            plan.Candidates.Count,
+            plan.BreadthCandidates.Count,
             _judges.Readers.Count,
             typing.Cohorts.Count,
             judgments.Count,
@@ -538,10 +634,20 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
     /// </para>
     /// </summary>
     private readonly record struct JudgmentPassOutcome(
-        NewsJudgmentRecord Record, TimeSpan? ProviderCallDurationThisPass)
+        NewsJudgmentRecord Record,
+        TimeSpan? ProviderCallDurationThisPass,
+        // Spec 219 §4: whether this invocation REPLAYED an existing verdict — the completed-judgment cache
+        // or same-run idempotency — rather than deciding one. It is not the same question as
+        // "did this pass make a call": InsufficientFacts and AttemptsExhausted also make no call, and
+        // neither is a reuse. Transient orchestration state, never persisted.
+        bool ReusedExistingVerdict = false)
     {
         /// <summary>A no-call branch: the record stands, this pass spent nothing.</summary>
         public static JudgmentPassOutcome WithoutCall(NewsJudgmentRecord record) => new(record, null);
+
+        /// <summary>A no-call branch that REPLAYED an existing verdict (cache hit or same-run reuse).</summary>
+        public static JudgmentPassOutcome Reused(NewsJudgmentRecord record) =>
+            new(record, null, ReusedExistingVerdict: true);
     }
 
     /// <summary>
@@ -603,21 +709,32 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         return ledgers;
     }
 
-    private async Task<JudgmentPassOutcome> JudgeOneAsync(
+    /// <summary>
+    /// Judges one planned candidate. Returns <c>null</c> for exactly ONE condition — a
+    /// <see cref="NewsJudgmentReadDepth.Breadth"/> candidate this stage-1 cohort holds no families for —
+    /// which the caller counts as <c>CompaniesSkippedNoTypedFacts</c> and persists nothing for (spec 219
+    /// §1/§4). Every other outcome, including a DEPTH candidate with zero families, returns a record.
+    /// </summary>
+    private async Task<JudgmentPassOutcome?> JudgeOneAsync(
         NewsJudgmentReader judge,
         NewsTypingCohortRunResult cohort,
-        NewsRiskCandidate candidate,
+        NewsJudgmentPlannedCandidate planned,
         Guid? runId,
         NewsObservationBatch? batch,
         JudgmentAttemptHistory history,
         IReadOnlyList<ReportedMetricRecord> ledger,
         CancellationToken ct)
     {
+        var candidate = planned.Candidate;
         var cohortKey = judge.Identity.CohortKeyFor(cohort.Reader.CohortKey);
+        // Spec 219 §2: DEPTH is what the budget caps. A breadth candidate is read at the bounded
+        // MaxFamiliesPerBreadthJudgment; a depth candidate keeps the full MaxFamiliesPerJudgment. Same
+        // assembly code, same deterministic family order — only the bound differs.
+        var maxFamilies = _options.MaxFamiliesFor(planned.Depth);
         // Spec 215 §2: the company's ledger is projected against the SUPPLIED statements inside the builder,
         // so the references (and the family-set hash they fold into when non-empty) are decided in one place.
         var bundle = NewsJudgmentInputBuilder.Build(
-            candidate.CompanyId, cohort.Families, cohort.FactsById, _options.MaxFamiliesPerJudgment, ledger);
+            candidate.CompanyId, cohort.Families, cohort.FactsById, maxFamilies, ledger);
         var coverage = NewsRiskCoverageEvaluator.Evaluate(
             batch, candidate.CompanyId, _options.NewsSearchCollectorName);
 
@@ -634,7 +751,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             judge.Identity,
             cohortKey,
             cohort,
-            candidate,
+            planned,
             runId,
             bundle,
             coverage,
@@ -643,8 +760,16 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
 
         if (bundle.Families.Count == 0)
         {
+            if (planned.Depth == NewsJudgmentReadDepth.Breadth)
+            {
+                // Spec 219 §1: a breadth company with nothing to read is SKIPPED AND COUNTED by the caller,
+                // not recorded. See the caller for why ~80 non-attempts a run is noise rather than
+                // provenance — the counter is the honest measure of what the judge could not reach.
+                return null;
+            }
+
             // Zero canonical families ⇒ a recorded InsufficientFacts attempt, never a model call and never
-            // a "no challenge" (spec 185 §5).
+            // a "no challenge" (spec 185 §5). UNCHANGED for the depth cohort by spec 219.
             return JudgmentPassOutcome.WithoutCall(
                 baseRecord with { Status = NewsJudgmentStatus.InsufficientFacts });
         }
@@ -656,8 +781,9 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         {
             // The cache carries ONLY the verdict fields; every completeness dimension comes from BaseRecord
             // and is therefore always the CURRENT run's (the spec-182 rule: a cached verdict replayed under
-            // different coverage circumstances never carries a stale derived state).
-            return JudgmentPassOutcome.WithoutCall(baseRecord with
+            // different coverage circumstances never carries a stale derived state) — including the spec-219
+            // ReadDepth and family accounting, which describe THIS run's assembly, not the original call's.
+            return JudgmentPassOutcome.Reused(baseRecord with
             {
                 Status = cached.Status,
                 BusinessTrajectory = cached.BusinessTrajectory,
@@ -713,7 +839,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             // Spec 188 §1: the reused record keeps its ORIGINAL non-null ProviderDurationMs — it is
             // truthful provenance of the call that created it, and the in-memory copy must not disagree
             // with the insert-only record on disk. This pass simply made no call.
-            return JudgmentPassOutcome.WithoutCall(sameRun);
+            return JudgmentPassOutcome.Reused(sameRun);
         }
 
         if (priorAttempts >= _options.MaxJudgmentAttempts)
@@ -857,12 +983,15 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         NewsJudgmentReaderIdentity identity,
         string cohortKey,
         NewsTypingCohortRunResult cohort,
-        NewsRiskCandidate candidate,
+        NewsJudgmentPlannedCandidate planned,
         Guid? runId,
         NewsJudgmentInputBundle bundle,
         NewsRiskCoverageEvaluation coverage,
         NewsTypingCompleteness typingCompleteness,
-        int attemptNumber) => new(
+        int attemptNumber)
+    {
+        var candidate = planned.Candidate;
+        return new(
         SchemaVersion: NewsJudgmentRecord.CurrentSchemaVersion,
         JudgmentId: NewsJudgmentRecord.IdentityFor(
             cohortKey, candidate.CompanyId, bundle.FamilySetHash, runId, attemptNumber),
@@ -912,7 +1041,10 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         FindingDropReasons: [],
         RawResponseHash: null,
         FailureDetail: null,
-        Limits: _options.ToLimitsRecord(),
+        // Spec 219 §2: the bound that ACTUALLY cut this attempt's input, resolved from the SAME
+        // NewsJudgmentOptions.MaxFamiliesFor the builder above was given — so the record can never state a
+        // bound the assembly did not run under.
+        Limits: _options.ToLimitsRecord(_options.MaxFamiliesFor(planned.Depth)),
         ReusedFromJudgmentId: null,
         CreatedAtUtc: _timeProvider.GetUtcNow(),
         // Spec 215 §2: the PROJECTED reference set (ids only) and the caps' counted remainder, recorded on
@@ -930,7 +1062,15 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             .ToList(),
         ReferencesExcludedNewest: bundle.ReferencesExcludedNewest,
         ReferencesExcludedLaterThanFact: bundle.ReferencesExcludedLaterThanFact,
-        ReferencesSkippedSupersededPolicy: bundle.ReferencesSkippedSupersededPolicy);
+        ReferencesSkippedSupersededPolicy: bundle.ReferencesSkippedSupersededPolicy,
+        // SPEC 219 §2: the coverage facts of THIS assembly — which budget read the company, how many
+        // families were resolvable before the cut, and how many the cut left out. Recorded on every attempt
+        // that assembled an input (a failure included), so "was this a bounded read" is answerable from the
+        // record alone and can never be inferred wrongly from a supplied count that happens to be small.
+        ReadDepth: planned.Depth,
+        FamiliesAvailable: bundle.FamiliesAvailable,
+        FamiliesWithheldByBudget: Math.Max(0, bundle.FamiliesAvailable - bundle.Families.Count));
+    }
 
     /// <summary>
     /// The leaders-marker map, derived from the DESIGNATED presentation cohort only (spec 185 §4): the
@@ -943,8 +1083,9 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         IReadOnlyList<NewsJudgmentRecord> judgments,
         NewsTypingRunResult typing,
         Guid? runId,
-        IReadOnlyList<NewsRiskCandidate> candidates,
-        IReadOnlySet<(Guid CompanyId, string CohortKey)> unpersisted)
+        IReadOnlyList<NewsJudgmentPlannedCandidate> candidates,
+        IReadOnlySet<(Guid CompanyId, string CohortKey)> unpersisted,
+        IReadOnlySet<(Guid CompanyId, string CohortKey)> skippedNoTypedFacts)
     {
         // SPEC 194 §1.2: resolved through the SHARED NewsJudgmentPresentationCohort, which the
         // judgment-signal materializer also calls. One resolution, so the cohort whose direction is SCORED
@@ -961,9 +1102,13 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         }
 
         var presentationCohortKey = presentation.CohortKey;
+        // Spec 219 §1: the COMBINED cohort. Breadth companies now reach report rows too (the seeded
+        // universe is inside Radar:ReportMaxItems), so a row that was `not-a-candidate` before this slice
+        // now carries its own read — and, when that read was bounded, says so.
         var markers = new Dictionary<Guid, NewsJudgmentLeaderMarker>(candidates.Count);
-        foreach (var candidate in candidates)
+        foreach (var planned in candidates)
         {
+            var candidate = planned.Candidate;
             var record = judgments.FirstOrDefault(j =>
                 j.CompanyId == candidate.CompanyId
                 && string.Equals(j.CohortKey, presentationCohortKey, StringComparison.Ordinal));
@@ -977,6 +1122,18 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 continue;
             }
 
+            if (record is null
+                && skippedNoTypedFacts.Contains((candidate.CompanyId, presentationCohortKey)))
+            {
+                // Spec 219 §1: a planned BREADTH company this cohort held no families for. The condition is
+                // exactly the one an InsufficientFacts RECORD names, so it reuses that token rather than
+                // minting a near-duplicate — what it must never say is `not-a-candidate`, which would be a
+                // false claim about selection. No JudgmentId, because no attempt was recorded.
+                markers[candidate.CompanyId] = new NewsJudgmentLeaderMarker(
+                    NewsJudgmentMarkerState.Unassessed, NewsJudgmentMarkerReasons.InsufficientFacts);
+                continue;
+            }
+
             markers[candidate.CompanyId] = NewsJudgmentMarkerPolicy.Derive(record, runId);
         }
 
@@ -986,6 +1143,192 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             JudgmentPending: false,
             Markers: markers,
             JudgmentStoreRoot: NewsJudgmentStoreLayout.RootFor(_options.OutputDirectory));
+    }
+
+    /// <summary>
+    /// SPEC 219 §4 — the per-(judge × stage-1 cohort) coverage ledger behind the ONE aggregated line each
+    /// pass emits. Every field is a MEASURED count over that pass: a zero is reported as a zero, and nothing
+    /// here is ever inferred from a durable record's provenance (the spec-188 §1 rule).
+    /// <para>
+    /// Split by <see cref="NewsJudgmentReadDepth"/> wherever the spec asks for it, because "a breadth read
+    /// fails validation more often than a full read" is a FINDING and must be visible without a re-run.
+    /// </para>
+    /// </summary>
+    private sealed class JudgmentCoverageCounters
+    {
+        /// <summary>Breadth candidates this cohort held zero families for: skipped, counted, no record.</summary>
+        public int SkippedNoTypedFacts { get; set; }
+
+        /// <summary>Candidates whose input assembly found at least one resolvable family.</summary>
+        public int WithTypedFacts { get; private set; }
+
+        /// <summary>
+        /// Candidates whose input assembly found ZERO resolvable families but which still produced a
+        /// RECORD — in practice the DEPTH cohort's <see cref="NewsJudgmentStatus.InsufficientFacts"/> path,
+        /// which spec 219 deliberately leaves unchanged (a leader row about to be shown to a human must be
+        /// able to name why it was not assessed). Its own axis because without it the coverage line did not
+        /// RECONCILE: such a candidate is in neither <see cref="WithTypedFacts"/> nor
+        /// <see cref="SkippedNoTypedFacts"/>, so the line silently accounted for fewer candidates than it
+        /// walked.
+        /// </summary>
+        public int RecordedWithNoTypedFacts { get; private set; }
+
+        /// <summary>
+        /// Candidates whose record did NOT RECORD its family accounting — a hydrated pre-219 record. Its own
+        /// axis, never folded into the totals as a zero: a defaulted zero would under-count
+        /// <see cref="FamiliesAvailable"/> while reading as a measured "no families", which is the
+        /// defaulted-zero-as-measured-zero defect by name. Unreachable while every record this pass writes
+        /// is a v8 one, and counted anyway so it can never become silent.
+        /// </summary>
+        public int FamiliesNotRecorded { get; private set; }
+
+        /// <summary>
+        /// Resolvable families across every assembled input that RECORDED the count, before the budget cut.
+        /// The denominator is <c>WithTypedFacts + RecordedWithNoTypedFacts</c>, never the candidate total —
+        /// <see cref="FamiliesNotRecorded"/> contributes to neither this nor
+        /// <see cref="FamiliesWithheldByBudget"/>.
+        /// </summary>
+        public int FamiliesAvailable { get; private set; }
+
+        /// <summary>Families actually handed to the judge.</summary>
+        public int FamiliesSupplied { get; private set; }
+
+        /// <summary>Families the budget left out — <see cref="FamiliesAvailable"/> minus <see cref="FamiliesSupplied"/>, accumulated per judgment so a per-company bite is never averaged away.</summary>
+        public int FamiliesWithheldByBudget { get; private set; }
+
+        public int ReusedBreadth { get; private set; }
+
+        public int ReusedFull { get; private set; }
+
+        public int FailedBreadth { get; private set; }
+
+        public int FailedFull { get; private set; }
+
+        public int ValidationFailedBreadth { get; private set; }
+
+        public int ValidationFailedFull { get; private set; }
+
+        /// <summary>Companies carrying a durably persisted <see cref="NewsJudgmentStatus.Judged"/> verdict this pass, at breadth depth.</summary>
+        public int JudgedBreadth { get; private set; }
+
+        /// <summary>The same at full depth.</summary>
+        public int JudgedFull { get; private set; }
+
+        /// <summary>
+        /// Every candidate this pass ACCOUNTED FOR, on exactly one of the four mutually exclusive axes:
+        /// <see cref="WithTypedFacts"/> + <see cref="RecordedWithNoTypedFacts"/> +
+        /// <see cref="SkippedNoTypedFacts"/> + <see cref="FamiliesNotRecorded"/>. It must equal the number
+        /// of planned candidates this pass walked, which is what makes the coverage line reconcile.
+        /// </summary>
+        public int Accounted =>
+            WithTypedFacts + RecordedWithNoTypedFacts + SkippedNoTypedFacts + FamiliesNotRecorded;
+
+        /// <summary>
+        /// Records one judged candidate's assembly and outcome. Failures are counted ONLY when THIS pass
+        /// actually called the provider (spec 188 §1): a replayed verdict legitimately carries the original
+        /// call's failure status, and counting it here would report an old failure as a current one on
+        /// exactly the rerun path this telemetry exists to explain.
+        /// </summary>
+        public void Observe(
+            NewsJudgmentReadDepth depth, NewsJudgmentRecord record, JudgmentPassOutcome outcome)
+        {
+            FamiliesSupplied += record.Families.Count;
+            // BaseRecord writes both from ONE bundle, so they are recorded together or not at all — and the
+            // pattern ENFORCES that rather than asserting it: a record carrying one without the other is a
+            // contradiction and lands wholesale on the not-recorded axis below. No `?? 0` anywhere here,
+            // which is what keeps the partition four-way and the withheld total from silently absorbing a
+            // fabricated zero.
+            if (record is { FamiliesAvailable: { } available, FamiliesWithheldByBudget: { } withheld })
+            {
+                FamiliesAvailable += available;
+                FamiliesWithheldByBudget += withheld;
+                if (available > 0)
+                {
+                    WithTypedFacts++;
+                }
+                else
+                {
+                    RecordedWithNoTypedFacts++;
+                }
+            }
+            else
+            {
+                // NOT RECORDED is its own answer. Adding 0 here would make a hydrated record read as a
+                // measured "no families available" and quietly shrink the family totals.
+                FamiliesNotRecorded++;
+            }
+
+            var breadth = depth == NewsJudgmentReadDepth.Breadth;
+            if (outcome.ReusedExistingVerdict)
+            {
+                if (breadth)
+                {
+                    ReusedBreadth++;
+                }
+                else
+                {
+                    ReusedFull++;
+                }
+            }
+
+            if (outcome.ProviderCallDurationThisPass is null)
+            {
+                return;
+            }
+
+            switch (record.Status)
+            {
+                case NewsJudgmentStatus.ValidationFailed:
+                    if (breadth)
+                    {
+                        ValidationFailedBreadth++;
+                        FailedBreadth++;
+                    }
+                    else
+                    {
+                        ValidationFailedFull++;
+                        FailedFull++;
+                    }
+
+                    break;
+                case NewsJudgmentStatus.ProviderFailure:
+                case NewsJudgmentStatus.ParseFailure:
+                    if (breadth)
+                    {
+                        FailedBreadth++;
+                    }
+                    else
+                    {
+                        FailedFull++;
+                    }
+
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Records a DURABLY PERSISTED record. Only a <see cref="NewsJudgmentStatus.Judged"/> verdict counts
+        /// as a company judged — an InsufficientFacts, exhausted or failed attempt is persisted provenance,
+        /// not a read of the company's news.
+        /// </summary>
+        public void Persisted(NewsJudgmentReadDepth depth, NewsJudgmentRecord record)
+        {
+            if (record.Status != NewsJudgmentStatus.Judged)
+            {
+                return;
+            }
+
+            if (depth == NewsJudgmentReadDepth.Breadth)
+            {
+                JudgedBreadth++;
+            }
+            else
+            {
+                JudgedFull++;
+            }
+        }
     }
 
     /// <summary>

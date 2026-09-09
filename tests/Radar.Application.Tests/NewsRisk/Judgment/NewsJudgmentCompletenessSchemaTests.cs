@@ -26,7 +26,11 @@ public sealed class NewsJudgmentCompletenessSchemaTests
         // a record MEANS — whether it can become a signal) and the prompt forked to v4 (rule 11). Spec 215
         // §2: the tag moved to v6 (the reference fields; ReferenceSupported widens the basis vocabulary),
         // the prompt forked to v5 (rule 12) and the response schema to v4 (the reference citation lists).
-        Assert.Equal("news-judgment-v7", NewsJudgmentRecord.CurrentSchemaVersion);
+        // Spec 219 §2: the tag moves to v8 (ReadDepth + the family accounting: a v8 record may be a
+        // BOUNDED five-family read where every v7 record was a full-budget one, so "no challenge found"
+        // means something different). The prompt, the response schema and the cohort key do NOT move — the
+        // judge sees exactly the same contract, just fewer families.
+        Assert.Equal("news-judgment-v8", NewsJudgmentRecord.CurrentSchemaVersion);
         Assert.Equal("news-judgment-prompt-v6", NewsJudgmentContract.PromptVersion);
         Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
 
@@ -42,6 +46,7 @@ public sealed class NewsJudgmentCompletenessSchemaTests
                 + $"|comparison={StatementComparisonClassifier.Version}"
                 + $"|references={ReferenceValueProjector.Version}",
             cohortKey);
+        Assert.DoesNotContain("news-judgment-v8", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v7", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v5", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v4", cohortKey, StringComparison.Ordinal);
@@ -62,7 +67,7 @@ public sealed class NewsJudgmentCompletenessSchemaTests
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(13)
+            .TakeLast(16)
             .ToList();
         Assert.Equal(
             [
@@ -79,6 +84,9 @@ public sealed class NewsJudgmentCompletenessSchemaTests
                 nameof(NewsJudgmentRecord.ReferencesExcludedNewest), // spec 216 §1
                 nameof(NewsJudgmentRecord.ReferencesExcludedLaterThanFact), // spec 216 §1
                 nameof(NewsJudgmentRecord.ReferencesSkippedSupersededPolicy), // spec 216 §5
+                nameof(NewsJudgmentRecord.ReadDepth), // spec 219 §2
+                nameof(NewsJudgmentRecord.FamiliesAvailable), // spec 219 §2
+                nameof(NewsJudgmentRecord.FamiliesWithheldByBudget), // spec 219 §2
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

@@ -353,7 +353,7 @@ authoritative record:
   quotes its pin as history. The precommitted **2026-09-29** claim date is UNCHANGED: the boundary describes
   comparability, not the claim). The spec-191 inherited-direction cohort is known
   DEFECTIVE and is not a control.
-- **News is a two-stage read** (specs 177–216): stage-1 typing (facts, structurally no
+- **News is a two-stage read** (specs 177–219): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact
   carries a deterministic `ComparisonBasis` line and the judge is told a level is not a trend;
   since spec 215 the judge is also handed the company-reported reference values the
@@ -370,9 +370,14 @@ authoritative record:
   `TrajectoryBasis.Supported` and, since spec 215, `ReferenceSupported` (a level beside a cited
   reference value for the same metric), while `LevelOnlyTrajectory` / `TrajectoryBasisNotRecorded` /
   `TrajectoryBasisNotAllowlisted` are counted skips); every leaders row carries the mandatory
-  semantic-read marker. All of it is hashed into `ScoringConfigVersion` via the `news=` and
-  `newsquery=` segments (specs 194 §2 / 198 §3), so a `score`/`replay` pass needs the same
-  news/judgment config validated as a `full` run.
+  semantic-read marker. **Judgment COVERAGE is universal with a capped DEPTH since spec 219**
+  (`news-judgment-coverage-v2`): the judge reads the whole company universe at a bounded family budget,
+  the spec-179 §3 top-five-per-section cohort is retained beside it at the full budget, a bounded read
+  says so on its record and in its rendered cell, and a company with no typed facts is skipped and
+  counted rather than recorded. All of it is hashed into `ScoringConfigVersion` via the `news=` and
+  `newsquery=` segments (specs 194 §2 / 198 §3 / 219 §6 — the coverage POLICY version is hashed, the
+  budgets are not), so a `score`/`replay` pass needs the same news/judgment config validated as a `full`
+  run.
 - **The universe is 102 companies** (spec 207; 59 `small` — spec 199 took it 74 → 94, spec 207
   94 → 102; a universe expansion must raise `Radar:ReportMaxItems` in the same change, because the
   Worker refuses to start when the cap is below the seeded universe — spec 213); `benchmark-universe-v1`

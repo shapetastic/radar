@@ -216,7 +216,7 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal([referenceId], record.ReferenceIds);
         Assert.Equal(0, record.ReferenceValuesOmitted);
         Assert.Equal([referenceId], record.TrajectoryReferenceIds);
-        Assert.Equal("news-judgment-v7", record.SchemaVersion);
+        Assert.Equal("news-judgment-v8", record.SchemaVersion);
 
         // Spec 216 §1/§5: the newest accession is EXCLUDED and counted, the reference policy and the
         // KINDS are persisted, and the per-family observation instant travels onto the record.
@@ -299,6 +299,7 @@ public sealed class NewsJudgmentGeneratorTests
         maxCompaniesPerRun: 30,
         maxFamiliesPerJudgment: 50,
         maxJudgmentAttempts: 3,
+        maxFamiliesPerBreadthJudgment: 5,
         presentationJudge: "deepinfra-deepseek",
         presentationExtractor: "deepinfra-deepseek",
         newsSearchCollectorName: "newssearch");
@@ -354,7 +355,7 @@ public sealed class NewsJudgmentGeneratorTests
     /// they still exercise the production selection path rather than hand-rolling candidates.
     /// </summary>
     private static NewsJudgmentCandidatePlan Plan(IReadOnlyList<StrategyReportSection>? sections = null) =>
-        new NewsJudgmentCandidatePlanner(JudgmentOptions()).Plan(sections ?? Sections());
+        JudgmentPlanning.Plan(JudgmentOptions(), sections ?? Sections());
 
     private static IReadOnlyList<StrategyReportSection> Sections() =>
         [
@@ -543,7 +544,7 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal(NewsJudgmentStatus.Judged, reused.Status);
         // … while EVERY completeness dimension is this run's.
         Assert.Equal(NewsTypingCompleteness.RetryableFailure, reused.TypingCompleteness);
-        Assert.Equal("news-judgment-v7", reused.SchemaVersion);
+        Assert.Equal("news-judgment-v8", reused.SchemaVersion);
     }
 
     [Fact]

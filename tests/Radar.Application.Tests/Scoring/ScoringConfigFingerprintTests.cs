@@ -454,6 +454,13 @@ public sealed class ScoringConfigFingerprintTests
         // news-query segment. The proof this test makes is unchanged and is in fact sharpened: with the
         // news-query segment empty, the composed descriptor is still byte-identical to the current one minus
         // `newsquery=`, acq= and all, so spec 198's segment remains exactly additive.
+        //
+        // SPEC 219 §6 MOVED THE THREE AI-ON HALVES ONLY, to the values below (30d
+        // radar-scoring-fp-cba1bb64447f → radar-scoring-fp-284ba31ce3d2; 60d radar-scoring-fp-588094848be3
+        // → radar-scoring-fp-0beffdd089fd; 120d radar-scoring-fp-15a8e0c1520f →
+        // radar-scoring-fp-f0cadce0add6), for the trailing enabled-only coverage-policy field on the
+        // `news=` segment. The three AI-OFF halves did NOT move — the `news=disabled:…` segment carries no
+        // such field — and that asymmetry is exactly what this test's AI-OFF assertions are for.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
@@ -461,7 +468,7 @@ public sealed class ScoringConfigFingerprintTests
             "radar-scoring-fp-db96e3862fae",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-cba1bb64447f",
+            "radar-scoring-fp-284ba31ce3d2",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
@@ -470,7 +477,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-588094848be3",
+            "radar-scoring-fp-0beffdd089fd",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
@@ -480,7 +487,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-15a8e0c1520f",
+            "radar-scoring-fp-f0cadce0add6",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -803,8 +810,22 @@ public sealed class ScoringConfigFingerprintTests
         // Compute_LiveWindowAiOffStamps_ArePinned, and REQUIRED to be: with no AI read registered there is
         // no `ai=` segment to carry rm= and no `news=enabled:` segment to carry the projection version, so
         // a move there would be scope leakage (the spec-197 proof pattern).
+        // → SPEC 219 §6 MOVES IT (radar-scoring-fp-3c91bc88a2e3 → the value below), AI-ON side ONLY, for
+        // ONE cause and one only: the `news=enabled:…` segment gains a trailing COVERAGE-POLICY field
+        // carrying NewsJudgmentCoveragePolicy.Version (news-judgment-coverage-v2). It is deliberately NOT a
+        // budget: MaxCompaniesPerRun, MaxFamiliesPerJudgment, the new MaxFamiliesPerBreadthJudgment and
+        // MaxJudgmentAttempts all stay excluded BY VALUE (asserted by
+        // NewsJudgmentScoringIdentityModeTests.CostControlsAndBudgets_DoNotMoveTheFingerprint). What moved
+        // is WHICH COMPANIES HAVE A DIRECTIONAL NEWS READ AT ALL — under the implicit v1 policy the
+        // spec-179 §3 rank traversal supplied, ~19 of 102 companies reached scoring with a direction and
+        // the rest reached it as undirected volume; under v2 the universe does. No formula, RuleSetVersion,
+        // media-collapse, supersede, neutralization, attention-tier, weight, news-query, acq= or ai=
+        // change; the prompt, the response schema and the stage-2 cohort key are UNCHANGED (only the record
+        // tag moved, to news-judgment-v8). THE THREE AI-OFF PINS ARE UNCHANGED and REQUIRED to be: the
+        // field is enabled-only, so the `news=disabled:…` segment has no place to carry it and no value of
+        // the coverage policy can reach an AI-OFF fingerprint (the spec-197/214–216 proof pattern).
         Assert.Equal(
-            "radar-scoring-fp-3c91bc88a2e3",
+            "radar-scoring-fp-11b10caf36d8",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -984,11 +1005,33 @@ public sealed class ScoringConfigFingerprintTests
         // basis and the owed operator step. radar-scoring-fp-d7dbbcf89304 is the spec-216 value; whether a
         // live run stamped it depends on whether the 216 operator step was taken before this merge, and
         // this file does not assert that either way.
+        //
+        // SPEC 219 §6 MOVES THEM AGAIN, AI-ON side ONLY (back to the spec-197/214–216 pattern): 60d
+        // radar-scoring-fp-908659c0ba7e → radar-scoring-fp-09c9db128480; 120d radar-scoring-fp-918f19bd6751
+        // → radar-scoring-fp-cc5ac1f84de1, while the AI-OFF live values are UNCHANGED and asserted so by
+        // Compute_LiveWindowAiOffStamps_ArePinned. ONE cause: the trailing enabled-only COVERAGE-POLICY
+        // field on the `news=` segment (NewsJudgmentCoveragePolicy.Version, news-judgment-coverage-v2 —
+        // universal judgment coverage with a capped depth). See
+        // Compute_AiOnDefault_MatchesPinnedFingerprint for why a coverage policy is an identity input where
+        // a budget is not.
+        //
+        // ⚠ THE OPERATOR STEP IS OWED ONCE MORE — a THIRD, SEPARATE step, distinct from the 214/215 step
+        // (performed 2026-09-08) and from the 216 one. Whatever the 60-day assertion below says is the
+        // value the first post-219 baseline must report. Delete or re-record every configured
+        // data/scoring-configs/strategies/{name}.json BEFORE that run (the path is git-ignored, so those
+        // records cannot ride in a PR and MUST NEVER be fabricated); if the step is missed,
+        // StrategyIdentityGuard halts the run before collection — that halt is CORRECT.
+        //
+        // ⚠ SPEC 219 IS ALSO A COMPARABILITY BOUNDARY IN ITS OWN RIGHT, and a bigger one than a pin move
+        // usually implies: it is not a re-weighting, it is a new SENSE ORGAN. Before it, ~83 of 102
+        // companies reached scoring with news as undirected volume; after it they reach it with a judged
+        // direction. A step change in the efficacy series across this date is that, not an improvement in
+        // the scoring — the date is recorded in docs/architecture-history.md for exactly that reason.
         Assert.Equal(
-            "radar-scoring-fp-908659c0ba7e",
+            "radar-scoring-fp-09c9db128480",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-918f19bd6751",
+            "radar-scoring-fp-cc5ac1f84de1",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 

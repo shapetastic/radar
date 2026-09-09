@@ -3632,6 +3632,28 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     pin moved (asserted by `ScoringConfigFingerprintTests`): none of the four touches the observation
     builder, the benchmark, the descriptor or any hashed input.
 
+- **Spec 219 (2026-09-09) — judgment coverage went UNIVERSAL: read this date before reading the efficacy
+  chart.** Until this date Radar's only source of "is this news good or bad" was the stage-2 judge, and the
+  judge's only candidate source was `NewsRiskCandidateSelector` — the spec-179 §3 top-five-rows-per-Research-
+  section traversal, built for a RISK AUDIT of the names about to be shown to a human and never re-derived
+  when spec 194 made the same verdict the source of directional `MediaAttention` for SCORING. ~19 of 102
+  companies were read per run; the rest reached scoring as a count of articles with no direction, which
+  `RadarScoreFormulaV8` then used to DISCOUNT them, which pushed them further out of the top five. From this
+  date `news-judgment-coverage-v2` (`NewsJudgmentCoveragePolicy.Version`) enumerates the company universe —
+  ticker order, no rank, no consensus, no notion of "better" — and the BUDGET moved from coverage to depth
+  (`Radar:NewsResearch:Judgment:MaxFamiliesPerBreadthJudgment`, shipped default owned by
+  `NewsJudgmentOptions.DefaultMaxFamiliesPerBreadthJudgment`), with the spec-179 depth cohort retained
+  unchanged at the full budget. **A step change in the efficacy series across this date is Radar GAINING A
+  SENSE ORGAN, not Radar getting better** — before it, most companies' news was volume; after it, most
+  companies' news has a judged direction. That is why the date is recorded: the two sides are not a
+  before/after of the same measurement. Spec 219 moved the three AI-ON fingerprint pins (and their three
+  no-newsquery halves) through the enabled-only coverage-policy field on the `news=` segment and moved NO
+  AI-OFF pin; the values are owned by `ScoringConfigFingerprintTests` and are not quoted here. The record
+  tag moved to `news-judgment-v8` (`NewsJudgmentRecord.CurrentSchemaVersion`); the prompt, the response
+  schema and the stage-2 cohort key did NOT move, so accrued verdicts stay cacheable. Nothing was
+  backfilled: accrued history heals forward only (AD-8/AD-1), and every pre-219 judgment record hydrates its
+  new coverage fields as `null` = NOT RECORDED rather than as a fabricated full-depth read.
+
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 
 This is HISTORY, not current state. The text below is `scripts/run-profiles/default.json`'s pre-213 top-level

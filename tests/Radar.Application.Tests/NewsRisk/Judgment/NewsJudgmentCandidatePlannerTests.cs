@@ -23,6 +23,7 @@ public sealed class NewsJudgmentCandidatePlannerTests
         maxCompaniesPerRun: maxCompaniesPerRun,
         maxFamiliesPerJudgment: 50,
         maxJudgmentAttempts: 3,
+        maxFamiliesPerBreadthJudgment: 5,
         presentationJudge: "judge",
         presentationExtractor: "extractor",
         newsSearchCollectorName: "newssearch");
@@ -53,7 +54,7 @@ public sealed class NewsJudgmentCandidatePlannerTests
     {
         var sections = Sections();
 
-        var plan = new NewsJudgmentCandidatePlanner(Options()).Plan(sections);
+        var plan = JudgmentPlanning.Plan(Options(), sections);
 
         Assert.Equal(
             NewsRiskCandidateSelector.Select(sections, 30).Select(c => c.CompanyId).ToList(),
@@ -65,7 +66,7 @@ public sealed class NewsJudgmentCandidatePlannerTests
     [Fact]
     public void Plan_HonoursTheResolvedMaxCompaniesPerRun()
     {
-        var plan = new NewsJudgmentCandidatePlanner(Options(maxCompaniesPerRun: 2)).Plan(Sections());
+        var plan = JudgmentPlanning.Plan(Options(maxCompaniesPerRun: 2), Sections());
 
         Assert.Equal([Alpha, Beta], plan.CompanyIds);
     }
@@ -75,8 +76,7 @@ public sealed class NewsJudgmentCandidatePlannerTests
     [InlineData(false)]
     public void NoSections_PlanNothing_RatherThanFabricatingACandidate(bool nullSections)
     {
-        var plan = new NewsJudgmentCandidatePlanner(Options())
-            .Plan(nullSections ? null : []);
+        var plan = JudgmentPlanning.Plan(Options(), nullSections ? null : []);
 
         Assert.Equal(0, plan.Count);
         Assert.Empty(plan.CompanyIds);
@@ -100,7 +100,7 @@ public sealed class NewsJudgmentCandidatePlannerTests
     [Fact]
     public void CompanyIds_MirrorTheCandidateOrderExactly()
     {
-        var plan = new NewsJudgmentCandidatePlanner(Options()).Plan(Sections());
+        var plan = JudgmentPlanning.Plan(Options(), Sections());
 
         Assert.Equal(plan.Candidates.Select(c => c.CompanyId).ToList(), plan.CompanyIds);
     }

@@ -67,5 +67,8 @@ public static class NewsJudgmentScoringIdentityFactory
             NewsTrajectorySignalRules.MaxFindingContribution,
             NewsTrajectorySignalRules.CompleteTypingBonus,
             NewsTrajectorySignalRules.Novelty,
-            NewsTrajectorySignalRules.Confidence);
+            NewsTrajectorySignalRules.Confidence,
+            // Spec 219 §6: READ from the policy that defines it, never restated here — a copied token is a
+            // fact with no owner and goes stale silently.
+            NewsJudgmentCoveragePolicy.Version);
 }

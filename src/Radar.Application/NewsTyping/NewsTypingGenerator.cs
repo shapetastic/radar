@@ -885,12 +885,15 @@ public sealed class NewsTypingGenerator : INewsTypingGenerator
         int capacity)
     {
         var selected = new List<NewsTypingInputObservation>();
-        if (candidatePlan is null || candidatePlan.Count == 0 || capacity <= 0)
+        // Spec 219: the lane walks CompanyIds — the DEPTH cohort — so it is guarded on that list's size,
+        // never on the plan's total count (which since spec 219 also holds the breadth cohort the typing
+        // pass deliberately does not prioritize; see NewsJudgmentCandidatePlan.CompanyIds).
+        if (candidatePlan is null || candidatePlan.CompanyIds.Count == 0 || capacity <= 0)
         {
             return selected;
         }
 
-        var queues = new List<Queue<NewsTypingInputObservation>>(candidatePlan.Count);
+        var queues = new List<Queue<NewsTypingInputObservation>>(candidatePlan.CompanyIds.Count);
         var seenCompanies = new HashSet<Guid>();
         foreach (var companyId in candidatePlan.CompanyIds)
         {
