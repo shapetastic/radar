@@ -40,25 +40,74 @@ public sealed class StrategyLeaderboardRenderer
     /// The CSV schema version (spec 183: the outcome column changed MEANING from raw to excess forward
     /// return, so the schema is bumped and the raw series is preserved under its own file name).
     /// </summary>
-    public const string CsvSchemaVersion = "strategy-leaderboard-v2";
+    /// <remarks>
+    /// SPEC 217 §3 bumps it to v3: a new exclusion COLUMN
+    /// (<c>observationsCorporateActionInWindow</c>) and a changed benchmark RULE
+    /// (<c>excess-vs-universe-v2</c>) both change what the outcome column means, so the schema moves and the
+    /// v1-rule excess series is preserved under its own file name exactly as the raw series was in spec 183.
+    /// </remarks>
+    public const string CsvSchemaVersion = "strategy-leaderboard-v3";
 
     /// <summary>
     /// The incomparability statement (spec 183 §3): the excess series and the preserved raw series measure
     /// different outcomes and must never be read as one series.
     /// </summary>
     public const string RawSeriesNotComparable =
-        "This artifact ranks by EXCESS returns (excess-vs-universe-v1) and is NOT comparable with the "
-            + "raw-return series preserved at strategy-leaderboard-raw-v1.{md,csv} — the two measure "
-            + "different outcomes.";
+        "This artifact ranks by EXCESS returns (excess-vs-universe-v2) and is NOT comparable with the "
+            + "raw-return series preserved at strategy-leaderboard-raw-v1.{md,csv}, nor with the "
+            + "excess-vs-universe-v1 series preserved at strategy-leaderboard-excess-v1.{md,csv} — the "
+            + "three measure different outcomes.";
+
+    /// <summary>
+    /// SPEC 217 §3 — what changed between the two excess rules, stated on the artifact so a reader
+    /// comparing this run with a preserved v1 run cannot mistake the difference for a change in skill.
+    /// </summary>
+    public const string ExcessRuleChange =
+        "excess-vs-universe-v2 (spec 217): the frozen benchmark-universe-v1 MEMBERSHIP is unchanged, but a "
+            + "member under a recognised pending acquisition leaves the equal-weight peer mean AND the "
+            + "coverage denominator from its announcement date onward. A pinned member's take-out return "
+            + "would otherwise bias every other company's excess. Declared PROSPECTIVELY: the precommitted "
+            + "2026-09-29 AD-15 claim boundary is unchanged and no outcome that has entered the claim family "
+            + "is re-scored.";
+
+    /// <summary>
+    /// The v3 rho column names (spec 217 §3). They deliberately carry NO rule version.
+    /// <para>
+    /// The v2 names were <c>inSampleRhoExcessVsUniverseV1</c> / <c>outOfSampleRhoExcessVsUniverseV1</c>, and
+    /// leaving them on a v3 artifact would have shipped <b>excess-vs-universe-v2 values under a column name
+    /// asserting v1</b> — a false claim in the artifact itself, made worse by the adjacent
+    /// <c>excessRuleVersion</c> cell saying <c>v2</c>: two cells in one row disagreeing is worse than one
+    /// that is stale, because a reader acts on whichever they find first (CLAUDE.md). Baking the version
+    /// into a column NAME also duplicates a value that code defines, which is the same rule pins live
+    /// under: the version has exactly ONE owner on this artifact, the per-row
+    /// <c>excessRuleVersion</c> column, sourced from <see cref="UniverseBenchmark.ExcessRuleVersion"/>. A
+    /// version-free name can never go stale.
+    /// </para>
+    /// </summary>
+    public const string InSampleRhoColumn = "inSampleRhoExcess";
+
+    /// <inheritdoc cref="InSampleRhoColumn"/>
+    public const string OutOfSampleRhoColumn = "outOfSampleRhoExcess";
+
+    /// <summary>
+    /// The v2 (spec 183) rho column names, kept ONLY so the evidence-facts reader can still understand a
+    /// pre-217 artifact that a live deployment has on disk. Never written again.
+    /// </summary>
+    public const string LegacyInSampleRhoColumnV2 = "inSampleRhoExcessVsUniverseV1";
+
+    /// <inheritdoc cref="LegacyInSampleRhoColumnV2"/>
+    public const string LegacyOutOfSampleRhoColumnV2 = "outOfSampleRhoExcessVsUniverseV1";
 
     private const string CsvHeader =
         "schemaVersion,status,rank,strategy,strategiesCompared,strategiesConsidered,"
-            + "inSampleRhoExcessVsUniverseV1,inSampleLower95,inSampleUpper95,"
+            + InSampleRhoColumn + ",inSampleLower95,inSampleUpper95,"
             + "inSampleObservations,inSampleCompanies,inSampleDates,"
-            + "outOfSampleRhoExcessVsUniverseV1,outOfSampleLower95,outOfSampleUpper95,outOfSampleObservations,"
+            + OutOfSampleRhoColumn + ",outOfSampleLower95,outOfSampleUpper95,outOfSampleObservations,"
             + "outOfSampleCompanies,outOfSampleDates,observationsWithoutForwardPrice,"
             + "observationsWithPartialWindow,observationsBenchmarkUnavailable,"
-            + "observationsNotInBenchmarkUniverse,benchmarkUniverseVersion,benchmarkUniverseContentHash,"
+            + "observationsNotInBenchmarkUniverse,observationsCorporateActionInWindow,"
+            + "observationEligibilityVersion,excessRuleVersion,"
+            + "benchmarkUniverseVersion,benchmarkUniverseContentHash,"
             + "dropReason,metricReason";
 
     public string RenderCsv(StrategyLeaderboard leaderboard)
@@ -85,6 +134,9 @@ public sealed class StrategyLeaderboardRenderer
             sb.Append(Int(row.ObservationsWithPartialWindow)).Append(',');
             sb.Append(Int(row.ObservationsBenchmarkUnavailable)).Append(',');
             sb.Append(Int(row.ObservationsNotInBenchmarkUniverse)).Append(',');
+            sb.Append(Int(row.ObservationsCorporateActionInWindow)).Append(',');
+            sb.Append(CsvField.Escape(ObservationEligibility.Version)).Append(',');
+            sb.Append(CsvField.Escape(UniverseBenchmark.ExcessRuleVersion)).Append(',');
             sb.Append(CsvField.Escape(universeVersion)).Append(',');
             sb.Append(CsvField.Escape(universeHash)).Append(',');
             sb.Append(',');                                   // dropReason: empty for a ranked strategy
@@ -105,6 +157,9 @@ public sealed class StrategyLeaderboardRenderer
             sb.Append(',');                                   // observationsWithPartialWindow: not ranked
             sb.Append(',');                                   // observationsBenchmarkUnavailable: not ranked
             sb.Append(',');                                   // observationsNotInBenchmarkUniverse: not ranked
+            sb.Append(',');                                   // observationsCorporateActionInWindow: not ranked
+            sb.Append(CsvField.Escape(ObservationEligibility.Version)).Append(',');
+            sb.Append(CsvField.Escape(UniverseBenchmark.ExcessRuleVersion)).Append(',');
             sb.Append(CsvField.Escape(universeVersion)).Append(',');
             sb.Append(CsvField.Escape(universeHash)).Append(',');
             sb.Append(DropReasonToken(drop.Reason)).Append(',');
@@ -133,10 +188,12 @@ public sealed class StrategyLeaderboardRenderer
         sb.Append(CultureInfo.InvariantCulture, $"- Exit tolerance: {o.ExitToleranceDays} calendar day(s). An observation counts only when its LATEST bar inside (D, D+{o.ForwardHorizonDays}] falls on or after D+{o.ForwardHorizonDays - o.ExitToleranceDays}. One that falls further short is a PARTIAL forward window: it is excluded from the correlation rather than reported as a full {o.ForwardHorizonDays}-day return. The tolerance exists because markets close at weekends and holidays, so the last bar is rarely on the bound itself.\n");
         sb.Append("- \"Observations without a forward price\" and \"observations with a partial forward window\" are counted separately and mean different things: no price at all in the window, versus some price that does not reach the horizon.\n");
         sb.Append("- \"Observations excluded: benchmark unavailable\" and \"observations excluded: not in benchmark universe\" are counted separately too (spec 183): the first means the frozen universe's coverage rule failed at that date; the second means the company was added to the seed after the freeze and joins at benchmark-universe-v2, prospectively. Neither is ever silently fed its raw return instead.\n");
+        sb.Append(CultureInfo.InvariantCulture, $"- \"Observations excluded: corporate action in window\" ({ObservationEligibility.Version}, spec 217) is a fourth, distinct exclusion, evaluated BEFORE any price is read: a recognised acquisition of the company was announced inside the observation's forward window (D, D+{o.ForwardHorizonDays}] or on/before D. That outcome is a deal, not a trajectory — no strategy could have earned it, and after the announcement the price is pinned at the bid — so it is removed and counted rather than scored as skill or as a miss.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Hold-out: the chronologically latest {Percent(o.HoldOutFraction)} of as-of dates. Ranking uses the in-sample window only; the headline number is out-of-sample.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Minimum observations per window: {o.MinimumObservations}.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- As-of dates: {w.TotalAsOfDates} total = {w.InSampleAsOfDates} in-sample ({Range(w.InSampleStart, w.InSampleEnd)}) + {w.OutOfSampleAsOfDates} out-of-sample ({Range(w.OutOfSampleStart, w.OutOfSampleEnd)}). The two sets are disjoint by construction.\n");
-        sb.Append("- Metric: Spearman rank correlation between a company's opportunity score at D and its EXCESS forward return over the horizon (excess-vs-universe-v1: the raw return minus the equal-weight mean forward return of the other resolved benchmark-universe members, self-excluded), with a two-sided 95% Fisher-z interval. Observations are pooled across companies and dates and are therefore not independent, so the interval is optimistically narrow — treat it as dispersion, not significance.\n\n");
+        sb.Append(CultureInfo.InvariantCulture, $"- Observation eligibility: {ObservationEligibility.Version}. Benchmark rule: {UniverseBenchmark.ExcessRuleVersion}.\n");
+        sb.Append("- Metric: Spearman rank correlation between a company's opportunity score at D and its EXCESS forward return over the horizon (excess-vs-universe-v2: the raw return minus the equal-weight mean forward return of the other resolved benchmark-universe members, self-excluded), with a two-sided 95% Fisher-z interval. Observations are pooled across companies and dates and are therefore not independent, so the interval is optimistically narrow — treat it as dispersion, not significance.\n\n");
 
         AppendBenchmarkSection(sb, leaderboard);
 
@@ -160,11 +217,11 @@ public sealed class StrategyLeaderboardRenderer
         }
         else
         {
-            sb.Append("| rank | strategy | in-sample rho (excess-vs-universe-v1) | in-sample 95% CI | in-sample obs (companies × dates) | out-of-sample rho (excess-vs-universe-v1) | out-of-sample 95% CI | out-of-sample obs (companies × dates) | observations without a forward price | observations with a partial forward window | observations excluded: benchmark unavailable | observations excluded: not in benchmark universe |\n");
-            sb.Append("| ---: | --- | ---: | --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: |\n");
+            sb.Append("| rank | strategy | in-sample rho (excess-vs-universe-v2) | in-sample 95% CI | in-sample obs (companies × dates) | out-of-sample rho (excess-vs-universe-v2) | out-of-sample 95% CI | out-of-sample obs (companies × dates) | observations without a forward price | observations with a partial forward window | observations excluded: benchmark unavailable | observations excluded: not in benchmark universe | observations excluded: corporate action in window |\n");
+            sb.Append("| ---: | --- | ---: | --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |\n");
             foreach (var row in leaderboard.Rows)
             {
-                sb.Append(CultureInfo.InvariantCulture, $"| {row.Rank} | {Md(row.StrategyName)} | {Rho(row.InSample.Correlation.Rho)} | {Rho(row.InSample.Correlation.LowerBound)} to {Rho(row.InSample.Correlation.UpperBound)} | {Coverage(row.InSample.Coverage)} | {Rho(row.OutOfSample.Correlation.Rho)} | {Rho(row.OutOfSample.Correlation.LowerBound)} to {Rho(row.OutOfSample.Correlation.UpperBound)} | {Coverage(row.OutOfSample.Coverage)} | {row.ObservationsWithoutForwardPrice} | {row.ObservationsWithPartialWindow} | {row.ObservationsBenchmarkUnavailable} | {row.ObservationsNotInBenchmarkUniverse} |\n");
+                sb.Append(CultureInfo.InvariantCulture, $"| {row.Rank} | {Md(row.StrategyName)} | {Rho(row.InSample.Correlation.Rho)} | {Rho(row.InSample.Correlation.LowerBound)} to {Rho(row.InSample.Correlation.UpperBound)} | {Coverage(row.InSample.Coverage)} | {Rho(row.OutOfSample.Correlation.Rho)} | {Rho(row.OutOfSample.Correlation.LowerBound)} to {Rho(row.OutOfSample.Correlation.UpperBound)} | {Coverage(row.OutOfSample.Coverage)} | {row.ObservationsWithoutForwardPrice} | {row.ObservationsWithPartialWindow} | {row.ObservationsBenchmarkUnavailable} | {row.ObservationsNotInBenchmarkUniverse} | {row.ObservationsCorporateActionInWindow} |\n");
             }
 
             sb.Append('\n');
@@ -203,8 +260,9 @@ public sealed class StrategyLeaderboardRenderer
     /// </summary>
     private static void AppendBenchmarkSection(StringBuilder sb, StrategyLeaderboard leaderboard)
     {
-        sb.Append("## Benchmark (excess-vs-universe-v1)\n\n");
+        sb.Append(CultureInfo.InvariantCulture, $"## Benchmark ({UniverseBenchmark.ExcessRuleVersion})\n\n");
         sb.Append(RawSeriesNotComparable).Append("\n\n");
+        sb.Append(ExcessRuleChange).Append("\n\n");
 
         if (leaderboard.Benchmark is not { } b)
         {
@@ -225,6 +283,11 @@ public sealed class StrategyLeaderboardRenderer
 
         var daysWithGaps = b.Days.Where(d => d.UnresolvedMembers.Count > 0).ToList();
         sb.Append(CultureInfo.InvariantCulture, $"- Coverage: {b.Days.Count} as-of date(s) touched; {b.Days.Count - daysWithGaps.Count} with every member resolved.\n");
+        // SPEC 217 §3: the v2 peer-mean exclusion is stated on the coverage line, never left implicit — a
+        // reader must be able to see that the pond had a member removed and on how many dates.
+        var daysWithPendingExclusions = b.Days.Count(d => d.PendingAcquisitionExcludedMembers > 0);
+        var maxPendingExcluded = b.Days.Count == 0 ? 0 : b.Days.Max(d => d.PendingAcquisitionExcludedMembers);
+        sb.Append(CultureInfo.InvariantCulture, $"- Pending-acquisition members removed from the peer mean ({UniverseBenchmark.ExcessRuleVersion}): {daysWithPendingExclusions} of {b.Days.Count} as-of date(s) had at least one, at most {maxPendingExcluded} on any date. They leave the numerator AND the denominator.\n");
         if (daysWithGaps.Count > 0)
         {
             sb.Append("\n| as-of date | resolved / members | unresolved members (reason) |\n");

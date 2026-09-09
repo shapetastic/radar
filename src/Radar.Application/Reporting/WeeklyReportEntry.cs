@@ -1,5 +1,6 @@
 namespace Radar.Application.Reporting;
 
+using Radar.Application.Acquisitions;
 using Radar.Domain.Companies;
 using Radar.Domain.Reports;
 using Radar.Domain.Scoring;
@@ -27,4 +28,9 @@ public sealed record WeeklyReportEntry(
     // Spec 209: the structured Form 4 aggregate behind this snapshot (report-side only, numerically inert).
     // Null means NO Form 4 evidence is linked to the snapshot at all, and the renderer then prints nothing
     // for it — never a fabricated "0 filings".
-    InsiderActivitySummary? InsiderActivity = null);
+    InsiderActivitySummary? InsiderActivity = null,
+    // Spec 217 §2: the recognised, verbatim-verified agreement to acquire THIS company as of the snapshot's
+    // instant, or null when there is none. It is the SAME record the policy applied rule 0 to, carried so
+    // the renderer can print the one-line banner under the label without re-deriving anything. Null means
+    // no recognised acquisition — never "unknown", because the projection is complete by construction.
+    PendingAcquisitionRecord? PendingAcquisition = null);

@@ -134,6 +134,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         AppendThesisSection(sb, model, RadarReportAction.ThesisDeteriorating, "Thesis deteriorating");
         AppendNamedActionSection(sb, model, RadarReportAction.Watch, "Watch");
         AppendNamedActionSection(sb, model, RadarReportAction.Ignore, "Ignore / Low signal");
+        AppendAcquisitionsPending(sb, model);
         AppendSignalsNeedingReview(sb, model);
         AppendCollectionSummary(sb, model);
         AppendCollectionHealth(sb, model);
@@ -683,7 +684,27 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             text += " — no evidence of discrimination yet";
         }
 
+        // Spec 217 §3: the evidence line CITES the rule identities the artifact was produced under, so a
+        // reader can tell which admission rules and which benchmark rule these numbers rest on. The values
+        // come from the ARTIFACT (see RankedEvidence), never from a code constant: the artifact is written
+        // by a previous run, so a constant here would assert today's rule over yesterday's numbers. A
+        // pre-217 artifact states neither, and the line SAYS SO rather than defaulting.
+        text += $" [{RuleIdentities(ranked)}]";
+
         return text;
+    }
+
+    /// <summary>
+    /// SPEC 217 §3 — the rule identities an evidence line cites, exactly as the artifact stated them.
+    /// A missing identity renders as <c>not stated (pre-217 artifact)</c>, never as a defaulted current
+    /// value: "the artifact does not say" and "the artifact says v2" are different facts.
+    /// </summary>
+    private static string RuleIdentities(RankedEvidence ranked)
+    {
+        const string notStated = "not stated (pre-217 artifact)";
+        var eligibility = ranked.ObservationEligibilityVersion is { Length: > 0 } e ? e : notStated;
+        var excess = ranked.ExcessRuleVersion is { Length: > 0 } x ? x : notStated;
+        return $"eligibility {eligibility}; benchmark {excess}";
     }
 
     private static string ActorToken(OperatingCallActor actor) =>
@@ -829,6 +850,15 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append(Lf);
 
         sb.Append("- Label: ").Append(DisplayLabels[entry.Action]).Append(Lf);
+
+        // Spec 217 §2: the ONE-LINE acquisition banner, immediately under the label, so a reader cannot see
+        // the label without seeing why it is what it is. No new label is introduced (AD-9): the label above
+        // is Ignore by policy rule 0, and this line carries the STATE. Every fact is read off the durable
+        // recognition record — nothing is recomputed here.
+        if (entry.PendingAcquisition is { } acquisition)
+        {
+            AppendAcquisitionBanner(sb, acquisition);
+        }
 
         var snap = entry.Snapshot;
         sb.Append("- Opportunity ")
@@ -1103,6 +1133,87 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
 
                 sb.Append(" (").Append(line.Period).Append(')');
             }
+        }
+
+        sb.Append(Lf);
+    }
+
+    /// <summary>
+    /// SPEC 217 §2 — the one-line banner under a pending-acquisition entry's label. Fixed wording, pinned
+    /// by tests. Advice-free by construction: it states the filed agreement and says the thesis is closed;
+    /// it says nothing about what to do with the shares (AD-9).
+    /// </summary>
+    private static void AppendAcquisitionBanner(
+        StringBuilder sb, Radar.Application.Acquisitions.PendingAcquisitionRecord acquisition)
+    {
+        sb.Append("- ⏸ Acquisition pending — ")
+            .Append(acquisition.AcquirerName)
+            .Append(" at ")
+            .Append(acquisition.DescribeConsideration())
+            .Append(", announced ")
+            .Append(acquisition.AnnouncedOnUtc.UtcDateTime.ToString(
+                "yyyy-MM-dd", CultureInfo.InvariantCulture))
+            .Append(" (accession ")
+            .Append(acquisition.Accession)
+            .Append("). Thesis closed: this price tracks the deal, not the business.")
+            .Append(Lf);
+    }
+
+    /// <summary>
+    /// SPEC 217 §2 — the <c>## Acquisitions pending</c> section, placed immediately after
+    /// <c>## Ignore / Low signal</c>. It is the destination the per-strategy exclusion footers point at, so
+    /// a company removed from every ranking is still named exactly once, with the filed facts behind the
+    /// removal. Omitted entirely when the model carries no list (no acquisitions store composed —
+    /// byte-identical to pre-217); an EMPTY list is a MEASURED zero and renders the honest "none" line
+    /// rather than vanishing, because "nothing is pending" and "we did not look" are different facts.
+    /// </summary>
+    private static void AppendAcquisitionsPending(StringBuilder sb, WeeklyReportModel model)
+    {
+        if (model.AcquisitionsPending is not { } pending)
+        {
+            return;
+        }
+
+        sb.Append("## Acquisitions pending").Append(Lf);
+        sb.Append(Lf);
+        sb.Append("A recognised agreement to acquire the company closes its thesis: from the announcement ")
+            .Append("the price tracks the deal, not the business. These companies are labelled Ignore by ")
+            .Append("rule and are excluded from every strategy's ranked table and from the benchmark peer ")
+            .Append("mean. Recognition is deterministic (acqscan-v1) and every figure below is quoted ")
+            .Append("verbatim from the company's own 8-K.")
+            .Append(Lf);
+        sb.Append(Lf);
+
+        if (pending.Count == 0)
+        {
+            sb.Append("_None — no company in the universe is under a recognised pending acquisition._")
+                .Append(Lf);
+            sb.Append(Lf);
+            return;
+        }
+
+        sb.Append("| company | ticker | acquirer | consideration | announced | days pending | accession |")
+            .Append(Lf);
+        sb.Append("| --- | --- | --- | --- | --- | ---: | --- |").Append(Lf);
+        foreach (var row in pending)
+        {
+            sb.Append("| ")
+                .Append(EscapeTableCell(row.CompanyName))
+                .Append(" | ")
+                .Append(string.IsNullOrEmpty(row.Ticker) ? "—" : EscapeTableCell(row.Ticker))
+                .Append(" | ")
+                .Append(EscapeTableCell(row.Record.AcquirerName))
+                .Append(" | ")
+                .Append(EscapeTableCell(row.Record.DescribeConsideration()))
+                .Append(" | ")
+                .Append(row.Record.AnnouncedOnUtc.UtcDateTime.ToString(
+                    "yyyy-MM-dd", CultureInfo.InvariantCulture))
+                .Append(" | ")
+                .Append(row.DaysPending.ToString(CultureInfo.InvariantCulture))
+                .Append(" | ")
+                .Append(EscapeTableCell(row.Record.Accession))
+                .Append(" |")
+                .Append(Lf);
         }
 
         sb.Append(Lf);
@@ -1409,6 +1520,21 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         }
 
         sb.Append(Lf);
+
+        // Spec 217 §2: the removal is NEVER silent. A company under a recognised pending acquisition left
+        // this ranking because its price is pinned at a bid, and the footer says so and names where the
+        // company IS reported. Printed only when the exclusion actually removed something, so a strategy
+        // with nothing excluded renders byte-identically to pre-217.
+        if (section.PendingAcquisitionsExcluded > 0)
+        {
+            sb.Append(section.PendingAcquisitionsExcluded.ToString(CultureInfo.InvariantCulture))
+                .Append(section.PendingAcquisitionsExcluded == 1
+                    ? " company excluded: pending acquisition"
+                    : " companies excluded: pending acquisition")
+                .Append(" — see Acquisitions pending")
+                .Append(Lf);
+            sb.Append(Lf);
+        }
     }
 
     // A markdown table cell is pipe-delimited, so an unescaped '|' in a company name or ticker would split

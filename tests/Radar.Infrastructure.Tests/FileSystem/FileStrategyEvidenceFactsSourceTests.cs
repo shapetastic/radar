@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
+using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Lifecycle;
 using Radar.Infrastructure.FileSystem;
 
@@ -32,8 +33,15 @@ public sealed class FileStrategyEvidenceFactsSourceTests : IDisposable
         new FileStrategyEvidenceFactsSourceOptions(_dir),
         NullLogger<FileStrategyEvidenceFactsSource>.Instance);
 
-    // The REAL spec-183 v2 header (byte-for-byte the renderer's CsvHeader), so a renderer column change
-    // that would break this reader breaks this test.
+    // The spec-183 v2 header, kept VERBATIM as the pre-217 artifact shape a live deployment still has on
+    // disk — this reader must keep understanding it (spec 217 §3).
+    //
+    // ⚠ It is NO LONGER byte-for-byte the renderer's CsvHeader, and the comment that claimed it was is
+    // corrected here rather than left standing: spec 217 bumped the renderer to v3, this literal stayed at
+    // v2, and the promise "a renderer column change breaks this test" silently stopped holding — while the
+    // reader's supported-schema list, which DOES gate production, was the thing that needed to move. The
+    // structural guard is now Leaderboard_SupportedSchemas_IncludeWhatTheRendererActuallyWrites below,
+    // which asserts against the shipped constant instead of a copy of it.
     private const string LeaderboardHeader =
         "schemaVersion,status,rank,strategy,strategiesCompared,strategiesConsidered,"
             + "inSampleRhoExcessVsUniverseV1,inSampleLower95,inSampleUpper95,"
@@ -124,10 +132,15 @@ public sealed class FileStrategyEvidenceFactsSourceTests : IDisposable
     [Fact]
     public async Task Leaderboard_UnknownSchema_DegradesToUnavailable()
     {
+        // ⚠ This row used to name `strategy-leaderboard-v3` as the "unknown" schema. Spec 217 made v3 a
+        // SUPPORTED schema, at which point this test kept passing for the wrong reason (the v2 header's
+        // empty numeric cells failed to parse, so the artifact degraded anyway) while asserting nothing
+        // about schema rejection. The token is now one that cannot ever ship.
         await WriteAsync(
             FileStrategyEvidenceFactsSource.LeaderboardFileName,
             LeaderboardHeader,
-            "strategy-leaderboard-v3,ranked,1,default,1,1,,,,,,,,,,,,,,,,,v1,h,,defined");
+            "strategy-leaderboard-v99,ranked,1,default,1,1,0.1,0.0,0.2,10,5,2,"
+                + "0.1,0.0,0.2,10,5,2,0,0,0,0,benchmark-universe-v1,h,,defined");
 
         var facts = await Source().ReadAsync(default);
 
@@ -263,5 +276,164 @@ public sealed class FileStrategyEvidenceFactsSourceTests : IDisposable
         var facts = await Source().ReadAsync(default);
 
         Assert.False(facts.PairedAvailable);
+    }
+
+    // ---- spec 217 §3: the v3 schema, and the rule identities carried OFF THE ARTIFACT ------------------
+
+    /// <summary>The REAL spec-217 v3 header, byte-for-byte the renderer's <c>CsvHeader</c>.</summary>
+    private const string LeaderboardHeaderV3 =
+        "schemaVersion,status,rank,strategy,strategiesCompared,strategiesConsidered,"
+            + "inSampleRhoExcess,inSampleLower95,inSampleUpper95,"
+            + "inSampleObservations,inSampleCompanies,inSampleDates,"
+            + "outOfSampleRhoExcess,outOfSampleLower95,outOfSampleUpper95,outOfSampleObservations,"
+            + "outOfSampleCompanies,outOfSampleDates,observationsWithoutForwardPrice,"
+            + "observationsWithPartialWindow,observationsBenchmarkUnavailable,"
+            + "observationsNotInBenchmarkUniverse,observationsCorporateActionInWindow,"
+            + "observationEligibilityVersion,excessRuleVersion,"
+            + "benchmarkUniverseVersion,benchmarkUniverseContentHash,"
+            + "dropReason,metricReason";
+
+    [Fact]
+    public void Leaderboard_SupportedSchemas_IncludeWhatTheRendererActuallyWrites()
+    {
+        // THE anti-drift guard, asserted against the SHIPPED constant rather than a copy of it. Without it
+        // a schema bump silently degrades the whole evidence layer to "Accruing (evidence unavailable)" for
+        // every arm on the next live report — which is exactly what spec 217's bump would have done, and
+        // what no test in this file caught, because the header literals here are copies.
+        Assert.Contains(
+            StrategyLeaderboardRenderer.CsvSchemaVersion,
+            FileStrategyEvidenceFactsSource.SupportedLeaderboardSchemas);
+
+        // And the pre-217 shape is still understood: a live deployment has one on disk right now.
+        Assert.Contains(
+            "strategy-leaderboard-v2", FileStrategyEvidenceFactsSource.SupportedLeaderboardSchemas);
+    }
+
+    [Fact]
+    public void Leaderboard_V3Header_IsWhatTheRendererActuallyWrites_AndNamesNoRuleVersion()
+    {
+        // The header is taken from the REAL renderer (an empty leaderboard renders exactly its header line),
+        // not from a copy — the same anti-drift move as the schema assertion above, and the reason the v2
+        // literal in this file silently stopped describing production.
+        var rendered = new StrategyLeaderboardRenderer()
+            .RenderCsv(EmptyLeaderboard())
+            .Split('\n')[0];
+
+        Assert.Equal(LeaderboardHeaderV3, rendered);
+
+        // ⚠ THE SPEC-217 FIX: the rho columns must name NO rule version. The v2 names asserted
+        // `...ExcessVsUniverseV1` while the values are excess-vs-universe-v2, and the adjacent
+        // `excessRuleVersion` cell said v2 — two cells in one row disagreeing, which is worse than one
+        // stale cell because a reader acts on whichever they find first. The version now has exactly one
+        // owner on this artifact.
+        Assert.Contains(StrategyLeaderboardRenderer.InSampleRhoColumn, rendered, StringComparison.Ordinal);
+        Assert.Contains(StrategyLeaderboardRenderer.OutOfSampleRhoColumn, rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExcessVsUniverseV1", rendered, StringComparison.Ordinal);
+
+        // The rule version has exactly ONE owner on this artifact: its own column, named once.
+        Assert.Equal(
+            1,
+            rendered.Split(',').Count(c =>
+                c == FileStrategyEvidenceFactsSource.ExcessRuleVersionColumn));
+
+        // The rendered VALUES carry the current rule identity, so name and value agree.
+        Assert.Contains(
+            UniverseBenchmark.ExcessRuleVersion,
+            new StrategyLeaderboardRenderer().RenderCsv(RankedLeaderboard()),
+            StringComparison.Ordinal);
+    }
+
+    private static StrategyLeaderboard EmptyLeaderboard() => new(
+        StrategiesCompared: 0,
+        StrategiesConsidered: 0,
+        Rows: [],
+        DroppedStrategies: [],
+        Windows: new StrategyComparisonWindows(0, 0, 0, null, null, null, null),
+        Options: StrategyComparisonOptions.Default);
+
+    private static StrategyLeaderboard RankedLeaderboard()
+    {
+        var metric = new StrategyWindowMetric(
+            RankCorrelation.Compute([1, 2, 3, 4], [1, 2, 3, 4], StrategyComparisonOptions.NormalQuantile95),
+            new StrategyWindowCoverage(4, 2, 2));
+
+        return EmptyLeaderboard() with
+        {
+            StrategiesCompared = 1,
+            StrategiesConsidered = 1,
+            Rows = [new StrategyLeaderboardRow(1, "default", metric, metric, 0, 0, 0, 0, 37)],
+        };
+    }
+
+    [Fact]
+    public async Task Leaderboard_V3Row_CarriesTheRuleIdentitiesOffTheArtifact()
+    {
+        await WriteAsync(
+            FileStrategyEvidenceFactsSource.LeaderboardFileName,
+            LeaderboardHeaderV3,
+            "strategy-leaderboard-v3,ranked,1,default,1,10,0.1000,-0.0500,0.2500,120,40,3,"
+                + "-0.0500,-0.3000,0.2000,72,36,2,4,9,0,1,37,"
+                + "observation-eligibility-v2,excess-vs-universe-v2,"
+                + "benchmark-universe-v1,abc123,,defined");
+
+        var facts = await Source().ReadAsync(default);
+
+        Assert.True(facts.LeaderboardAvailable);
+        var ranked = Assert.Single(facts.Leaderboard).Numbers!;
+        Assert.Equal(72, ranked.Observations);
+
+        // The values are the ARTIFACT's, never a code constant: the file was written by a previous run.
+        Assert.Equal("observation-eligibility-v2", ranked.ObservationEligibilityVersion);
+        Assert.Equal("excess-vs-universe-v2", ranked.ExcessRuleVersion);
+    }
+
+    [Fact]
+    public void Leaderboard_LegacyV2RhoColumnName_IsStillDeclared_SoAPre217ArtifactStaysReadable()
+    {
+        // The v2 name is not a literal in the reader either — it is spliced from the renderer's own
+        // constant, so the pair of names has one owner and cannot drift apart.
+        Assert.Equal(
+            "outOfSampleRhoExcessVsUniverseV1",
+            StrategyLeaderboardRenderer.LegacyOutOfSampleRhoColumnV2);
+        Assert.Equal("inSampleRhoExcessVsUniverseV1", StrategyLeaderboardRenderer.LegacyInSampleRhoColumnV2);
+        Assert.NotEqual(
+            StrategyLeaderboardRenderer.OutOfSampleRhoColumn,
+            StrategyLeaderboardRenderer.LegacyOutOfSampleRhoColumnV2);
+    }
+
+    [Fact]
+    public async Task Leaderboard_PreSpec217Artifact_StatesNoRuleIdentity_RatherThanTodaysConstants()
+    {
+        // A v2 artifact predates the rules. Back-filling today's constants would assert that yesterday's
+        // numbers were produced under today's admission and benchmark rules — the exact false claim the
+        // artifact route exists to avoid. Null means "this file does not say".
+        await WriteAsync(
+            FileStrategyEvidenceFactsSource.LeaderboardFileName,
+            LeaderboardHeader,
+            "strategy-leaderboard-v2,ranked,1,default,1,10,0.1000,-0.0500,0.2500,120,40,3,"
+                + "-0.0500,-0.3000,0.2000,72,36,2,4,9,0,1,benchmark-universe-v1,abc123,,defined");
+
+        var facts = await Source().ReadAsync(default);
+
+        var ranked = Assert.Single(facts.Leaderboard).Numbers!;
+        Assert.Null(ranked.ObservationEligibilityVersion);
+        Assert.Null(ranked.ExcessRuleVersion);
+    }
+
+    [Fact]
+    public async Task Leaderboard_BlankRuleIdentityCells_ReadAsNotStated_NeverAsAnIdentity()
+    {
+        await WriteAsync(
+            FileStrategyEvidenceFactsSource.LeaderboardFileName,
+            LeaderboardHeaderV3,
+            "strategy-leaderboard-v3,ranked,1,default,1,10,0.1000,-0.0500,0.2500,120,40,3,"
+                + "-0.0500,-0.3000,0.2000,72,36,2,4,9,0,1,37,,,"
+                + "benchmark-universe-v1,abc123,,defined");
+
+        var facts = await Source().ReadAsync(default);
+
+        var ranked = Assert.Single(facts.Leaderboard).Numbers!;
+        Assert.Null(ranked.ObservationEligibilityVersion);
+        Assert.Null(ranked.ExcessRuleVersion);
     }
 }

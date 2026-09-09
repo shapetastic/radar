@@ -1,6 +1,7 @@
 namespace Radar.Application.Reporting;
 
 using System.Globalization;
+using Radar.Application.Acquisitions;
 using Radar.Application.Scoring;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
@@ -58,6 +59,18 @@ using Radar.Domain.Signals;
 /// components are computed by the shared <c>ScoreSignalMath</c> on the same scale for every formula — only
 /// Opportunity changed scale.
 /// </para>
+/// <para>
+/// <b>A pending acquisition closes the thesis (v6, spec 217).</b> A new RULE 0 runs ahead of every other
+/// rule: when <see cref="ReportActionContext.PendingAcquisition"/> is present — a deterministically
+/// recognised, verbatim-verified agreement to acquire THIS company — the label is
+/// <see cref="RadarReportAction.Ignore"/> and the rationale names the acquirer, the stated consideration
+/// and the announcement date. No new label is introduced (AD-9: the six are unchanged); the STATE lives in
+/// the rationale. Because rule 0 is first, <see cref="RadarReportAction.ThesisImproving"/> and
+/// <see cref="RadarReportAction.ThesisDeteriorating"/> cannot fire for a company being bought, which is the
+/// structural fix for the 2026-08-10 shape (an all-cash sale of the whole company read as a partnership and
+/// reported as <c>Thesis improving</c>). Every company without a pending acquisition is byte-identical to
+/// v5. Still pure: no clock, no I/O.
+/// </para>
 /// </summary>
 public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
 {
@@ -88,7 +101,13 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
     // LabelThresholds.Default is byte-identical to v4. v4 (spec 211) made the Watch-floor rationale print
     // each counted type's PRESENTATION label via the shared SignalTypeDisplay seam. Nothing hashes this
     // token into ScoringConfigVersion (spec 211 verified; spec 212 re-verified).
-    public string Version => "weekly-report-action-v5";
+    // v6 (spec 217): RULE 0 — a company under a recognised pending acquisition is labelled Ignore with the
+    // acquisition as its rationale, ahead of every other rule including thin evidence. The mapping CONTRACT
+    // changed (a new input decides a label), so the version moves; every company WITHOUT a pending
+    // acquisition is byte-identical to v5. Nothing hashes this token into ScoringConfigVersion (spec 211
+    // verified; 212 and 217 re-verified) — the acqscan/supersede RULE is hashed through the signal-source
+    // descriptor's acq= field, but this label policy is report-layer only.
+    public string Version => "weekly-report-action-v6";
 
     public ReportActionResult Decide(ReportActionContext context)
     {
@@ -98,11 +117,35 @@ public sealed class WeeklyReportActionPolicyV1 : IReportActionPolicy
         var current = context.Current;
         var previous = context.Previous;
 
+        // 0. A PENDING ACQUISITION CLOSES THE THESIS (spec 217 §2). It runs FIRST — ahead of the
+        // evidence-confidence floor, ahead of the improving/deteriorating delta, ahead of opportunity —
+        // because from the announcement the price sits at the bid and tracks the deal, not the business, so
+        // every other rule would be describing a number that no longer measures what it claims to. This is
+        // structurally what stops the 2026-08-10 MarineMax shape recurring: a $1.5B all-cash sale of the
+        // whole company was read as a StrategicPartnership, trajectory rose 56 → 62, and rule 3 labelled it
+        // "Thesis improving". With rule 0 first, the improving/deteriorating rules CANNOT fire for a
+        // company being acquired, whatever the signals say.
+        //
+        // NO NEW LABEL IS INTRODUCED (AD-9 / the philosophy file): the label is `Ignore`, one of the six,
+        // and the STATE is carried by the rationale. The wording is advice-free — it states the filed fact
+        // and says the thesis is closed; it does not say what to do about the shares.
+        if (context.PendingAcquisition is { } acquisition)
+        {
+            return new ReportActionResult(
+                RadarReportAction.Ignore,
+                $"Acquisition pending: {acquisition.AcquirerName} at "
+                    + $"{acquisition.DescribeConsideration()} announced "
+                    + $"{RenderDate(DateOnly.FromDateTime(acquisition.AnnouncedOnUtc.UtcDateTime))}; "
+                    + "thesis closed — trajectory and opportunity are not the driver of this price.");
+        }
+
         // Spec 212: the labelled arm's lines; an absent pair is the pre-212 default, never a silent zero.
         var lines = context.Thresholds ?? LabelThresholds.Default;
 
         // Decision precedence (first match wins):
-        //   1. Thin evidence overrides everything.
+        //   0. A recognised PENDING ACQUISITION closes the thesis (spec 217) — handled above, before this
+        //      block, so nothing below can fire for a company being bought.
+        //   1. Thin evidence overrides everything else.
         //   2. Deterioration (surfaced before opportunity, to stay honest).
         //   3. Improvement.
         //   4. Steady-state by opportunity (Investigate / Watch / Ignore).

@@ -40,11 +40,18 @@ public sealed record PairedSupport(int Observations, int DistinctCompanies, int 
 }
 
 /// <summary>One strategy's marginal (own-series) support, with the spec-152 exclusion tallies.</summary>
+/// <param name="ObservationsCorporateActionInWindow">
+/// SPEC 217 §3 (<c>observation-eligibility-v2</c>): company-days excluded because a recognised acquisition
+/// of the company was announced inside the observation's forward window or on/before its as-of date. Its own
+/// column beside the spec-152 tallies, on the same de-duped company-day unit — a distinct fact, never pooled
+/// into "without forward price".
+/// </param>
 public sealed record StrategyMarginalSupport(
     string StrategyName,
     PairedSupport Support,
     int ObservationsWithoutForwardPrice,
-    int ObservationsWithPartialWindow);
+    int ObservationsWithPartialWindow,
+    int ObservationsCorporateActionInWindow = 0);
 
 /// <summary>
 /// The primary-vs-one-baseline pairwise intersection support — DISCLOSED as a diagnostic only. The claim path

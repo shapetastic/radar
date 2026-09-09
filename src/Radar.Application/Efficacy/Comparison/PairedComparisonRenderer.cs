@@ -59,7 +59,10 @@ public sealed class PairedComparisonRenderer
             + "signTestZeroDeltasDropped,baselineClears,satisfiesPriceGate,gateReasons,"
             + "qualifiesUnderAd15,ad16ScreenOutcome,"
             + "eligibleJointObservations,eligibleJointCompanies,eligibleJointDates,"
-            + "observationsWithoutAsOfInstant,mismatchedAsOfInstantKeys,gateVerdictId";
+            + "observationsWithoutAsOfInstant,mismatchedAsOfInstantKeys,gateVerdictId,"
+            // SPEC 217 §3: the rule-set identities this artifact was produced under, stamped so a reader
+            // never has to infer which admission rules and which benchmark rule a number came from.
+            + "observationEligibilityVersion,excessRuleVersion";
 
     private const string BlocksCsvHeader = "baseline,blockDate,companies,primaryRho,baselineRho,pairedDelta";
 
@@ -183,7 +186,13 @@ public sealed class PairedComparisonRenderer
 
         // Spec 186 §3: the RUN-LEVEL semantic verdict identity, repeated on every row like the rest of the
         // gate context. EMPTY when this artifact expresses no verdict — there is then nothing to override.
-        sb.Append(gateVerdictId);
+        sb.Append(gateVerdictId).Append(',');
+
+        // Spec 217 §3: the rule-set identities this row was produced under, appended LAST so the pre-217
+        // column order is byte-stable. They are per-artifact constants repeated per row, exactly as the
+        // benchmark universe version is on the leaderboard CSV — a row must be self-describing.
+        sb.Append(CsvField.Escape(ObservationEligibility.Version)).Append(',');
+        sb.Append(CsvField.Escape(UniverseBenchmark.ExcessRuleVersion));
     }
 
     public string RenderMarkdown(PairedStrategyComparison result, Ad15ClaimVerdict verdict)
@@ -243,12 +252,16 @@ public sealed class PairedComparisonRenderer
         sb.Append("- The marginal leaderboard (strategy-leaderboard.md) remains available and is DESCRIPTIVE: it answers whether a strategy tracked its outcome at all, not whether it beat a comparator. This paired, purged comparison is the only result that can support the amended AD-15 claim.\n\n");
 
         sb.Append("## Support (a materially smaller intersection is a result, not a log message)\n\n");
-        sb.Append("| strategy | marginal observations (companies × dates) | without forward price | partial window |\n");
-        sb.Append("| --- | --- | ---: | ---: |\n");
+        sb.Append("| strategy | marginal observations (companies × dates) | without forward price | partial window | corporate action in window |\n");
+        sb.Append("| --- | --- | ---: | ---: | ---: |\n");
         foreach (var marginal in result.MarginalSupports)
         {
-            sb.Append(CultureInfo.InvariantCulture, $"| {Md(marginal.StrategyName)} | {SupportCell(marginal.Support)} | {marginal.ObservationsWithoutForwardPrice} | {marginal.ObservationsWithPartialWindow} |\n");
+            sb.Append(CultureInfo.InvariantCulture, $"| {Md(marginal.StrategyName)} | {SupportCell(marginal.Support)} | {marginal.ObservationsWithoutForwardPrice} | {marginal.ObservationsWithPartialWindow} | {marginal.ObservationsCorporateActionInWindow} |\n");
         }
+
+        // SPEC 217 §3: the new column's meaning, stated inline with its rule identity, so the number can
+        // never be read as a data-availability gap.
+        sb.Append(CultureInfo.InvariantCulture, $"\nObservation eligibility: {ObservationEligibility.Version}; benchmark rule: {UniverseBenchmark.ExcessRuleVersion}. \"Corporate action in window\" counts company-days excluded because a recognised acquisition of that company was announced inside the observation's forward window or on/before its as-of date — an outcome no strategy could have earned, removed BEFORE any price was read and counted here rather than scored. Declared prospectively: the precommitted 2026-09-29 AD-15 claim boundary is unchanged and no outcome already inside the claim family is re-scored.\n");
 
         sb.Append('\n');
 

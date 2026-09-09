@@ -231,6 +231,28 @@ public sealed class RadarWorkerOptions
     /// </summary>
     public string ReportedMetricsDirectory { get; init; } = "data/reported-metrics";
 
+    /// <summary>
+    /// Root directory of the append-only ACQUISITIONS store (spec 217 §1): one
+    /// <c>{companyId}/{accession}.json</c> per item-1.01 8-K that <c>acqscan-v1</c> recognised as an
+    /// agreement to acquire THAT company. Read by scoring (the CompanyStatusAtScoring stamp and the
+    /// corporate-action supersede), by the weekly report (rule 0, the banner, the Acquisitions pending
+    /// section and the per-strategy footer) and by the efficacy comparison
+    /// (<c>CorporateActionInWindow</c> + <c>excess-vs-universe-v2</c>).
+    /// </summary>
+    public string AcquisitionsDirectory { get; init; } = "data/acquisitions";
+
+    /// <summary>
+    /// Root directory of the heal-forward <c>acqscan-v1</c> answer cache (spec 217 §1): one
+    /// <c>{accession}.json</c> per SCANNED item-1.01 filing, recognised or not. It is what stops the ~177
+    /// item-1.01 filings that are NOT acquisitions being re-fetched from www.sec.gov on every run. An entry
+    /// produced under a different scan version is a MISS, so a version bump retires every answer without
+    /// deleting a byte (AD-8).
+    /// </summary>
+    public string AcquisitionScanCacheDirectory { get; init; } = "data/acquisitions-cache";
+
+    /// <summary>The spec-217 acquisition-recognition knobs.</summary>
+    public AcquisitionsWorkerOptions Acquisitions { get; init; } = new();
+
     /// <summary>Path to the company watch-universe seed JSON file.</summary>
     public string CompanySeedFilePath { get; init; } = "data/companies.json";
 
@@ -294,6 +316,32 @@ public sealed class ScoreWorkerOptions
 /// SEC EDGAR filing collector configuration (bound from "Radar:Sec"). Surfaces the required, compliant
 /// User-Agent and the form filter / per-company cap through to <c>SecCollectorOptions</c>.
 /// </summary>
+/// <summary>
+/// SPEC 217 §1 — the acquisition-recognition knobs (<c>Radar:Acquisitions</c>). OPERATIONAL only: they
+/// bound how many filings are READ per run and whether the pass runs at all, never whether a filing that IS
+/// read is recognised — so none of them is a scoring-fingerprint input (the spec-105 exclusion). The
+/// RECOGNITION rule's identity (<c>acqscan-v1</c> + <c>acq-supersede-v1</c>) IS hashed, through the
+/// signal-source descriptor's <c>acq=</c> field.
+/// </summary>
+public sealed class AcquisitionsWorkerOptions
+{
+    /// <summary>
+    /// Whether the deterministic item-1.01 recognition pass runs. Default TRUE: a pending acquisition
+    /// closes a thesis, and leaving it unrecognised is the defect spec 217 exists to fix. It still requires
+    /// a compliant <c>Radar:Sec:UserAgent</c> — with none configured the pass is not registered and the run
+    /// is byte-identical to pre-217 (the recognition is a bounded www.sec.gov read, and SEC 403s every
+    /// request without a UA).
+    /// </summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// How many NEW item-1.01 body fetches one run may make. A scanned filing is never re-fetched, so in
+    /// steady state this is the number of newly-filed item-1.01 8-Ks per run. Must be positive —
+    /// registration fails fast otherwise, because a zero budget would run the pass and recognise nothing.
+    /// </summary>
+    public int MaxFetchesPerRun { get; init; } = 40;
+}
+
 public sealed class SecWorkerOptions
 {
     /// <summary>

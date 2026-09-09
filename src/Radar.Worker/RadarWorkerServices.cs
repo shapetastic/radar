@@ -1,5 +1,6 @@
 using System.Globalization;
 
+using Radar.Application.Acquisitions;
 using Radar.Application.Collectors;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
@@ -13,6 +14,7 @@ using Radar.Application.Prices;
 using Radar.Application.Replay;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Infrastructure.Acquisitions;
 using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.DependencyInjection;
 using Radar.Infrastructure.Fda;
@@ -165,6 +167,34 @@ internal static class RadarWorkerServices
 
         services.AddInMemoryRadarPersistence();
         services.AddRadarApplicationServices();
+
+        // SPEC 217 §1 — the deterministic acquisition-recognition path, registered AFTER
+        // AddRadarApplicationServices so its concrete IPendingAcquisitionSource wins over that method's
+        // inert TryAdd default (the operating-call precedence rule). It is gated on a compliant SEC
+        // User-Agent as well as on the switch: the recognition is a bounded www.sec.gov read and SEC 403s
+        // every request without one, so registering it UA-less would guarantee a run of fetch failures
+        // rather than a recognition. With it unregistered the whole feature is inert and the run is
+        // byte-identical to pre-217 — which the log line states, so "not enabled" is never mistaken for
+        // "nothing is pending".
+        if (options.Acquisitions.Enabled && !string.IsNullOrWhiteSpace(options.Sec.UserAgent))
+        {
+            services.AddRadarAcquisitionRecognition(
+                new SecCollectorOptions
+                {
+                    UserAgent = options.Sec.UserAgent,
+                    Forms = options.Sec.Forms,
+                    MaxFilingsPerCompany = options.Sec.MaxFilingsPerCompany,
+                },
+                new FileAcquisitionStoreOptions { RootDirectory = options.AcquisitionsDirectory },
+                new FileAcquisitionScanCacheOptions
+                {
+                    RootDirectory = options.AcquisitionScanCacheDirectory,
+                },
+                new AcquisitionRecognitionOptions
+                {
+                    MaxFetchesPerRun = options.Acquisitions.MaxFetchesPerRun,
+                });
+        }
 
         // Global SEC request throttle: bind Radar:Sec:GlobalMinIntervalMs and register the concrete
         // SecRateLimitOptions so it wins over the Infrastructure TryAddSingleton default. One shared

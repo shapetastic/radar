@@ -1,3 +1,4 @@
+using Radar.Application.Acquisitions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -589,6 +590,7 @@ public sealed class RadarPipelineRunnerTests
                 ScoreStores,
                 NullOperatingCallSource.Instance,
                 UnavailableStrategyEvidenceFactsSource.Instance,
+                new NoPendingAcquisitionSource(),
                 new WeeklyReportOptions(),
                 time,
                 NullLogger<WeeklyReportBuilder>.Instance);

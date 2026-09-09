@@ -30,11 +30,11 @@ public sealed partial class WeeklyReportBuilderTests
 
     private const string DefaultsBanner =
         "> Labels in this report follow default at Investigate ≥ 60 / Watch ≥ 40 (defaults (no operating "
-            + "calls declared); weekly-report-action-v5). " + LabelLinesHonestySentence;
+            + "calls declared); weekly-report-action-v6). " + LabelLinesHonestySentence;
 
     private const string LeadBanner =
         "> Labels in this report follow filings-led at Investigate ≥ 20 / Watch ≥ 15 (explicit lines on the "
-            + "Lead arm; weekly-report-action-v5). " + LabelLinesHonestySentence;
+            + "Lead arm; weekly-report-action-v6). " + LabelLinesHonestySentence;
 
     // Captured pre-212: TwoStrategies (both unlabelled at the time), declared globalCall StopAll.
     private static readonly string Pre212DeclaredStopAll = string.Join("\n",
@@ -286,7 +286,7 @@ public sealed partial class WeeklyReportBuilderTests
         Assert.Equal(LabelThresholds.Default, labels.Thresholds);
         Assert.False(labels.Explicit);
         Assert.False(labels.LeadDeclared);
-        Assert.Equal("weekly-report-action-v5", labels.PolicyVersion);
+        Assert.Equal("weekly-report-action-v6", labels.PolicyVersion);
 
         // ONLY diff from the pre-212 pin: the banner, inserted directly under the last legend line.
         var expected = Pre212Undeclared.Replace(

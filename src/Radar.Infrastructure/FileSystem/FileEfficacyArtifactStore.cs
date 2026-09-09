@@ -91,21 +91,53 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
         // marked artifact rather than being silently replaced. Idempotent: once the raw-v1 file exists it is
         // never touched again (the current file is by then the excess series). Best-effort like every other
         // write here (AD-8).
-        await PreserveRawLeaderboardAsync(
+        await PreserveLeaderboardAsync(
                 markdownPath,
+                RawLeaderboardFileStem,
                 RawMarkdownPreservationHeader,
                 ".md",
-                // An artifact that already names the excess basis is NOT the raw series — copying it to the
+                // An artifact that already names ANY excess basis is NOT the raw series - copying it to the
                 // raw-v1 name would mislabel excess numbers as raw, the exact confusion this preservation
                 // exists to prevent.
-                static existing => existing.Contains("excess-vs-universe-v1", StringComparison.Ordinal),
+                static existing => existing.Contains("excess-vs-universe-v", StringComparison.Ordinal),
                 ct)
             .ConfigureAwait(false);
-        await PreserveRawLeaderboardAsync(
+        await PreserveLeaderboardAsync(
                 csvPath,
+                RawLeaderboardFileStem,
                 prependedMarker: null,
                 ".csv",
                 static existing => existing.StartsWith("schemaVersion,", StringComparison.Ordinal),
+                ct)
+            .ConfigureAwait(false);
+
+        // SPEC 217 §3, the SAME mechanism one semantic version later: excess-vs-universe-v1 removed no
+        // member from the peer mean, v2 removes a pinned pending-acquisition member from it (and from the
+        // coverage denominator). Two rules, one file lineage - so the v1-rule series is preserved under its
+        // own name BEFORE the first v2 write can overwrite it, exactly as the raw series was when v1
+        // replaced it. Idempotent and best-effort (AD-8), for the same reasons.
+        await PreserveLeaderboardAsync(
+                markdownPath,
+                ExcessV1LeaderboardFileStem,
+                ExcessV1MarkdownPreservationHeader,
+                ".md",
+                // Skip when the artifact is ALREADY v2 (nothing of v1 left to preserve) or when it names no
+                // excess basis at all (a pre-183 raw artifact - the block above owns that one).
+                static existing =>
+                    existing.Contains("excess-vs-universe-v2", StringComparison.Ordinal)
+                    || !existing.Contains("excess-vs-universe-v1", StringComparison.Ordinal),
+                ct)
+            .ConfigureAwait(false);
+        await PreserveLeaderboardAsync(
+                csvPath,
+                ExcessV1LeaderboardFileStem,
+                prependedMarker: null,
+                ".csv",
+                // The CSV names its own schema on every row; v2 rows are the excess-vs-universe-v1 series,
+                // v3 rows are already v2 and a header-less/absent schema is a pre-183 raw file.
+                static existing =>
+                    existing.Contains("strategy-leaderboard-v3", StringComparison.Ordinal)
+                    || !existing.Contains("strategy-leaderboard-v2", StringComparison.Ordinal),
                 ct)
             .ConfigureAwait(false);
 
@@ -176,31 +208,34 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
     }
 
     /// <summary>
-    /// Copies an existing pre-183 leaderboard artifact to its <c>strategy-leaderboard-raw-v1</c> name, once.
-    /// Nothing happens when there is no existing file (a fresh deployment has no raw series to preserve) or
-    /// when the raw-v1 file already exists (the preservation already ran — by then the live file holds the
-    /// excess series and must NOT be re-copied over the raw one). The markdown copy is prepended with a
-    /// marker naming what it is and why it is not comparable with the excess series; the CSV is preserved
+    /// Copies an existing leaderboard artifact to a PRESERVED semantic-version name, once (spec 183 for the
+    /// raw series; spec 217 §3 for the excess-vs-universe-v1 series — ONE mechanism, parameterised, rather
+    /// than a second copy of it). Nothing happens when there is no existing file (a fresh deployment has
+    /// nothing to preserve), when the preserved file already exists (the preservation already ran — by then
+    /// the live file holds the newer series and must NOT be re-copied over it), or when
+    /// <paramref name="isAlreadyNewerSchema"/> says the live file is already the newer series. The markdown
+    /// copy is prepended with a marker naming what it is and why it is not comparable; the CSV is preserved
     /// byte-for-byte (a prepended comment would corrupt the format — its renamed file IS the marking, and
-    /// its rows still carry the pre-183 header naming raw semantics).
+    /// its rows still carry their own schema version).
     /// </summary>
-    private async Task PreserveRawLeaderboardAsync(
+    private async Task PreserveLeaderboardAsync(
         string currentPath,
+        string preservedStem,
         string? prependedMarker,
         string extension,
-        Func<string, bool> isAlreadyExcessSchema,
+        Func<string, bool> isAlreadyNewerSchema,
         CancellationToken ct)
     {
         try
         {
-            var rawPath = Path.Combine(_options.RootDirectory, RawLeaderboardFileStem + extension);
+            var rawPath = Path.Combine(_options.RootDirectory, preservedStem + extension);
             if (!File.Exists(currentPath) || File.Exists(rawPath))
             {
                 return;
             }
 
             var existing = await File.ReadAllTextAsync(currentPath, ct).ConfigureAwait(false);
-            if (isAlreadyExcessSchema(existing))
+            if (isAlreadyNewerSchema(existing))
             {
                 return;
             }
@@ -210,8 +245,8 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
                 .ConfigureAwait(false))
             {
                 _logger.LogInformation(
-                    "Preserved the pre-excess raw leaderboard artifact as {Path} (spec 183: the raw and "
-                        + "excess series are distinct semantic versions and are not comparable).",
+                    "Preserved a superseded leaderboard series as {Path} (specs 183 / 217: successive "
+                        + "outcome definitions are distinct semantic versions and are not comparable).",
                     rawPath);
             }
         }
@@ -223,7 +258,10 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
         {
             // Best-effort (AD-8): preservation must never block the new artifact's write.
             _logger.LogWarning(
-                ex, "Could not preserve the pre-excess raw leaderboard artifact from {Path}.", currentPath);
+                ex,
+                "Could not preserve the superseded leaderboard series {Stem} from {Path}.",
+                preservedStem,
+                currentPath);
         }
     }
 
@@ -237,8 +275,21 @@ public sealed class FileEfficacyArtifactStore : IEfficacyArtifactStore
     /// <summary>The fixed leaderboard file stem (deliberately not a shape any real ticker takes).</summary>
     private const string LeaderboardFileStem = "strategy-leaderboard";
 
+    /// <summary>The spec-217 marker prepended to the preserved excess-vs-universe-v1 markdown artifact.</summary>
+    internal const string ExcessV1MarkdownPreservationHeader =
+        "> **PRESERVED excess-vs-universe-v1 SERIES (superseded by spec 217).** This artifact ranked by "
+            + "excess returns against a peer mean that INCLUDED members under a pending acquisition. The "
+            + "live strategy-leaderboard.md now ranks under excess-vs-universe-v2, which removes a pinned "
+            + "member from the peer mean and from the coverage denominator from its announcement date "
+            + "onward, and under observation-eligibility-v2, which excludes observations whose forward "
+            + "window contains a recognised acquisition. The two series are NOT comparable — different "
+            + "outcomes, one file lineage. Kept verbatim below, for the record.\n\n";
+
     /// <summary>The preserved pre-183 raw-return leaderboard stem (spec 183 §3).</summary>
     private const string RawLeaderboardFileStem = "strategy-leaderboard-raw-v1";
+
+    /// <summary>The preserved pre-217 excess-vs-universe-v1 leaderboard stem (spec 217 §3).</summary>
+    private const string ExcessV1LeaderboardFileStem = "strategy-leaderboard-excess-v1";
 
     /// <summary>The fixed paired-comparison file stem (same rule as <see cref="LeaderboardFileStem"/>).</summary>
     private const string PairedComparisonFileStem = "strategy-paired-comparison";

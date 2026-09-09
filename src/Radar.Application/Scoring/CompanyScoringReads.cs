@@ -1,3 +1,4 @@
+using Radar.Application.Acquisitions;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 
@@ -42,4 +43,18 @@ public sealed record CompanyScoringReads(
     TimeSpan Window,
     IReadOnlyList<Signal> AllSignals,
     IReadOnlyList<Signal> PreviousWindowSignals,
-    IReadOnlyDictionary<Guid, EvidenceItem> EvidenceById);
+    IReadOnlyDictionary<Guid, EvidenceItem> EvidenceById)
+{
+    /// <summary>
+    /// SPEC 217 §2: the run-time acquisitions projection, read ONCE per as-of instant and carried here for
+    /// the same reason the three store reads above are — so N strategy engines share one answer instead of
+    /// each re-reading it. It is strategy-INDEPENDENT by construction: a recognised acquisition is a fact
+    /// about the company, not about a hypothesis, so the corporate-action supersede and the stamped
+    /// <c>CompanyStatusAtScoring</c> are identical across every arm of one run.
+    /// <para>
+    /// Defaults to <see cref="PendingAcquisitions.None"/> (an inert, MEASURED empty — never null) so every
+    /// pre-217 construction site keeps compiling and keeps today's behaviour exactly.
+    /// </para>
+    /// </summary>
+    public PendingAcquisitions PendingAcquisitions { get; init; } = PendingAcquisitions.None;
+}

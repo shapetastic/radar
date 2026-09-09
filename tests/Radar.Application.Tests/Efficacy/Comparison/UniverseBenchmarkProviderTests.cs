@@ -1,3 +1,4 @@
+using Radar.Application.Acquisitions;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Efficacy.Comparison;
@@ -56,7 +57,7 @@ public sealed class UniverseBenchmarkProviderTests
         prices.With("BBB", [.. TwoBar(100m, 105m)]);
 
         var provider = new UniverseBenchmarkProvider(
-            source, prices, NullLogger<UniverseBenchmarkProvider>.Instance);
+            source, prices, new NoPendingAcquisitionSource(), NullLogger<UniverseBenchmarkProvider>.Instance);
 
         var benchmark = await provider.GetAsync(CancellationToken.None);
         var again = await provider.GetAsync(CancellationToken.None);
@@ -81,7 +82,7 @@ public sealed class UniverseBenchmarkProviderTests
         prices.With("AAA", [.. TwoBar(100m, 110m)]);
 
         var provider = new UniverseBenchmarkProvider(
-            source, prices, NullLogger<UniverseBenchmarkProvider>.Instance);
+            source, prices, new NoPendingAcquisitionSource(), NullLogger<UniverseBenchmarkProvider>.Instance);
 
         var benchmark = await provider.GetAsync(CancellationToken.None);
         var day = benchmark!.DayAt(AsOf, 21, 4);
@@ -98,7 +99,7 @@ public sealed class UniverseBenchmarkProviderTests
     {
         var source = new FixedSource(universe: null);
         var provider = new UniverseBenchmarkProvider(
-            source, new FakePriceHistoryStore(), NullLogger<UniverseBenchmarkProvider>.Instance);
+            source, new FakePriceHistoryStore(), new NoPendingAcquisitionSource(), NullLogger<UniverseBenchmarkProvider>.Instance);
 
         Assert.Null(await provider.GetAsync(CancellationToken.None));
         Assert.Null(await provider.GetAsync(CancellationToken.None));

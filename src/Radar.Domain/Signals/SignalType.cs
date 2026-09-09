@@ -31,5 +31,14 @@ public enum SignalType
     // this type name). Appended before the Other sentinel; SignalType is persisted by name, so placement is
     // readability-only.
     TrademarkActivity,
+    // CorporateAction (spec 217): the assembly-time replacement for the keyword extractor's
+    // StrategicPartnership read of an item-1.01 8-K that `acqscan-v1` recognised as a pending acquisition
+    // OF THE COMPANY. It is minted ONLY by the read/assembly-time supersede (acq-supersede-v1) — no
+    // collector, extractor or AI path ever produces it, and it is never persisted — and it is always
+    // Neutral at strength 0: a $1.5B all-cash sale of the whole company is a corporate action, not a
+    // partnership, and it must contribute nothing positive rather than contributing the wrong thing.
+    // Appended before the Other sentinel; SignalType is persisted by name, so placement is
+    // readability-only.
+    CorporateAction,
     Other
 }

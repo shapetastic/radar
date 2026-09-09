@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
+using Radar.Application.Acquisitions;
 using Radar.Application.SignalExtraction;
 using Radar.Application.Signals;
 using Radar.Domain.Companies;
@@ -112,6 +113,17 @@ public sealed class ScoringEngine : IScoringEngine
     private readonly ICompanyRepository _companyRepository;
     private readonly IScoreFormula _formula;
     private readonly MediaAttentionCollapse _mediaCollapse;
+
+    // SPEC 217 §2: the run-time acquisitions projection. NULL means no acquisitions store is composed, and
+    // is treated as PendingAcquisitions.None - the inert projection, so every pre-217 composition (and every
+    // direct-construction test site) behaves byte-identically. Read ONCE per as-of instant and memoized
+    // below: the projection is strategy-independent and the store is small, so re-reading it per company
+    // would be pure cost.
+    private readonly IPendingAcquisitionSource? _pendingAcquisitions;
+    private readonly Lock _pendingGate = new();
+    private DateTimeOffset? _pendingResolvedForInstant;
+    private PendingAcquisitions _pendingResolved = PendingAcquisitions.None;
+
     private readonly ScoringOptions _options;
     private readonly ILogger<ScoringEngine> _logger;
 
@@ -177,7 +189,12 @@ public sealed class ScoringEngine : IScoringEngine
         ILogger<ScoringEngine> logger,
         string? strategyName = null,
         SignalTypeFilter? signalTypes = null,
-        ScoringChannelSet? channels = null)
+        ScoringChannelSet? channels = null,
+        // Spec 217 §2. Optional-nullable DELIBERATELY, with a MEANING rather than as a wiring accident (the
+        // NullOperatingCallSource posture): null == "no acquisitions store in this composition", which is
+        // exactly PendingAcquisitions.None. The Application library registers NoPendingAcquisitionSource, so
+        // a composed run always resolves a real instance.
+        IPendingAcquisitionSource? pendingAcquisitions = null)
     {
         ArgumentNullException.ThrowIfNull(signalRepository);
         ArgumentNullException.ThrowIfNull(signalFileStore);
@@ -205,6 +222,7 @@ public sealed class ScoringEngine : IScoringEngine
         _strategyName = strategyName;
         _signalTypes = signalTypes ?? SignalTypeFilter.All;
         _channels = channels ?? ScoringChannelSet.Empty;
+        _pendingAcquisitions = pendingAcquisitions;
 
         var attentionDescriptor = sourceWeights.CanonicalDescriptor();
 
@@ -314,13 +332,22 @@ public sealed class ScoringEngine : IScoringEngine
             .ReadApprovedInWindowAsync(companyId, previousWindowStartUtc, windowStartUtc, windowEndUtc, ct)
             .ConfigureAwait(false);
 
+        // Spec 217 §2: the acquisitions projection rides on the READS, exactly like every other store read,
+        // so the shared-reads path (spec 203 §4) hands every strategy engine the SAME projection instead of
+        // each re-reading the store. It is strategy-independent by construction - an acquisition is a fact
+        // about the company, not about a hypothesis.
+        var acquisitions = await ResolvePendingAcquisitionsAsync(windowEndUtc, ct).ConfigureAwait(false);
+
         return new CompanyScoringReads(
             CompanyId: companyId,
             WindowEndUtc: windowEndUtc,
             Window: _options.Window,
             AllSignals: allSignals,
             PreviousWindowSignals: previousSignals,
-            EvidenceById: evidenceById);
+            EvidenceById: evidenceById)
+        {
+            PendingAcquisitions = acquisitions,
+        };
     }
 
     /// <inheritdoc />
@@ -454,6 +481,24 @@ public sealed class ScoringEngine : IScoringEngine
         var newsSupersede = NewsJudgmentSignalSupersede.Apply(superseded);
         var newsSuperseded = newsSupersede.Signals;
 
+        // Corporate-action supersede (spec 217 §2): when acqscan-v1 has recognised a pending acquisition OF
+        // THIS COMPANY, the keyword extractor's Positive StrategicPartnership read of THAT ONE recognised
+        // item-1.01 filing is rewritten in place as a Neutral CorporateAction at strength 0. The 2026-08-10
+        // MarineMax shape - a $1.5B all-cash sale scored as a partnership, trajectory 56 -> 62, labelled
+        // "Thesis improving" - cannot recur.
+        //
+        // PLACEMENT, deliberately: AFTER the two supersedes and BEFORE the media collapse, for the same
+        // reason §1.3 sits there. Relative to the guidance and news supersedes the order is behaviourally
+        // IRRELEVANT and that is a CHECKED fact, not an assumption: those two only ever touch
+        // GuidanceChange and MediaAttention signals respectively, while this one only ever touches
+        // StrategicPartnership signals over one recognised filing evidence id - three disjoint populations.
+        // It runs before the collapse so the collapse buckets the corrected set, and before
+        // PreCollapseSignals is captured so the formula's breadth term cannot credit the superseded read
+        // back in.
+        var acqSupersede = CorporateActionSupersede.Apply(
+            newsSuperseded, reads.PendingAcquisitions, companyId);
+        newsSuperseded = acqSupersede.Signals;
+
         // Same-event media collapse (spec 109): many near-simultaneous outlets covering ONE event each emit a
         // MediaAttention signal, inflating the media contribution and the signal count with duplication (not
         // breadth). Collapse those to one representative per event window BEFORE the formula sees them (a
@@ -508,6 +553,15 @@ public sealed class ScoringEngine : IScoringEngine
         // reported through the aggregated log line rather than through a contribution reason.
         var previousNewsSupersede = NewsJudgmentSignalSupersede.Apply(previousSignals);
         previousSignals = previousNewsSupersede.Signals;
+
+        // Spec 217 §2, previous window too, and in the SAME relative position. The previous window is
+        // activity-only and builds no contributions or evidence links (AD-6), but a strength-4 POSITIVE
+        // partnership counting as prior activity would still move velocity for an event that was never a
+        // partnership. Its rewrites are reported through the aggregated per-company log line rather than
+        // through a contribution reason.
+        var previousAcqSupersede = CorporateActionSupersede.Apply(
+            previousSignals, reads.PendingAcquisitions, companyId);
+        previousSignals = previousAcqSupersede.Signals;
 
         // Spec 138, previous window too: the velocity comparison must be like-for-like. If a strategy does not
         // consume a SignalType in the CURRENT window, prior activity of that type is not this strategy's prior
@@ -585,7 +639,13 @@ public sealed class ScoringEngine : IScoringEngine
             // IS the series key (ScoreSeriesKey), so comparability is decided by this field, not the hash.
             StrategyName: _strategyName,
             // What was collected on this run (spec 141): recorded verbatim, hashed into nothing.
-            CollectionProvenance: _collectionProvenance);
+            CollectionProvenance: _collectionProvenance,
+            // Spec 217 §2: the company's DERIVED status at this scoring instant - PendingAcquisition from
+            // the recognised announcement date onward, otherwise null ("not recorded", never a defaulted
+            // Active). Recorded provenance, hashed into nothing: the acqscan/supersede RULE is hashed
+            // through the acq= descriptor field, but a per-company outcome of that rule is not an identity
+            // input any more than the collector set is.
+            CompanyStatusAtScoring: reads.PendingAcquisitions.StatusAt(companyId, windowEndUtc));
 
         var links = new List<ScoreEvidenceLink>(computation.Contributions.Count);
         foreach (var contribution in computation.Contributions)
@@ -637,6 +697,17 @@ public sealed class ScoringEngine : IScoringEngine
             {
                 reason =
                     $"{reason} ({LegacyNewsInheritanceNeutralization.ProvenanceNoteFor(neutralizedKind)})";
+            }
+
+            // Spec 217 §2: the fourth member of the same accounting block. If this contribution's signal is
+            // the rewritten corporate-action signal, the link SAYS SO and names the acquisition - otherwise
+            // the snapshot would score a Neutral strength-0 signal where the store holds a Positive
+            // strength-4 partnership, with nothing anywhere explaining the difference. It can never collide
+            // with the three notes above: they attach to MediaAttention/GuidanceChange signals, this one to
+            // a StrategicPartnership-turned-CorporateAction signal.
+            if (acqSupersede.SupersededReasons.TryGetValue(contribution.SignalId, out var acqReason))
+            {
+                reason = $"{reason} ({acqReason})";
             }
 
             links.Add(new ScoreEvidenceLink(
@@ -699,6 +770,24 @@ public sealed class ScoringEngine : IScoringEngine
                 newsSupersede.TotalSuperseded, companyId, previousNewsSupersede.TotalSuperseded);
         }
 
+        // Spec 217 §2: ONE aggregated per-company line, beside the two supersede lines above and at the same
+        // Information level, when a recognised acquisition actually rewrote a keyword partnership read.
+        // Information, not Warning: the rewrite is the intended healthy behaviour - it is how a takeover
+        // stops reading as a partnership. Both windows are reported for the reason the lines above give.
+        if (acqSupersede.TotalSuperseded > 0 || previousAcqSupersede.TotalSuperseded > 0)
+        {
+            _logger.LogInformation(
+                "Superseded {AcqSupersededCount} StrategicPartnership signal(s) for company {CompanyId} in "
+                    + "the current window (and {PreviousAcqSupersededCount} in the previous/velocity window) "
+                    + "with a Neutral CorporateAction at strength 0: {SupersedeVersion} recognised this "
+                    + "filing as an agreement to acquire the company. The stored signal is untouched and the "
+                    + "rewrite is named on the contribution reason.",
+                acqSupersede.TotalSuperseded,
+                companyId,
+                previousAcqSupersede.TotalSuperseded,
+                CorporateActionSupersede.Version);
+        }
+
         // Spec 194 §1.4's neutralization counts and spec 145's dropped-signal counts, RETURNED rather than
         // logged as Warnings (spec 197 §3). This engine is ONE STRATEGY: a per-company Warning here is a
         // per-strategy × per-company Warning in a multi-strategy run, and on the live baseline the two
@@ -747,5 +836,40 @@ public sealed class ScoringEngine : IScoringEngine
         }
 
         return new CompanyScoreResult(snapshot, links, diagnostics);
+    }
+
+    /// <summary>
+    /// SPEC 217 §2 - the acquisitions projection for one as-of instant, read ONCE and memoized on it. A new
+    /// run has a new instant and therefore re-reads, so a recognition made by THIS run's recognition pass
+    /// (which runs before scoring) is always visible; within one instant every company and every strategy
+    /// sees the identical projection, which is what makes the stamped status, the supersede and the report
+    /// agree by construction. A null source (no acquisitions store composed) resolves to the inert
+    /// <see cref="PendingAcquisitions.None"/> without any I/O.
+    /// </summary>
+    private async Task<PendingAcquisitions> ResolvePendingAcquisitionsAsync(
+        DateTimeOffset windowEndUtc, CancellationToken ct)
+    {
+        if (_pendingAcquisitions is null)
+        {
+            return PendingAcquisitions.None;
+        }
+
+        lock (_pendingGate)
+        {
+            if (_pendingResolvedForInstant == windowEndUtc)
+            {
+                return _pendingResolved;
+            }
+        }
+
+        var resolved = await _pendingAcquisitions.GetAsync(ct).ConfigureAwait(false);
+
+        lock (_pendingGate)
+        {
+            _pendingResolvedForInstant = windowEndUtc;
+            _pendingResolved = resolved;
+        }
+
+        return resolved;
     }
 }

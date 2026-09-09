@@ -471,7 +471,22 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     discarding **0.000 %** of them (a tolerance of 1 would discard 16.284 %), worst admitted case still covering
     17/21 ≈ 81 % of the horizon. `ObservationsWithPartialWindow` is rendered as its **own** CSV and markdown
     column and `ObservationsWithoutForwardPrice` keeps its **exact** pre-152 definition — "no price at all" and
-    "some price but not the horizon" are different facts. The entry rule `bar.Date > asOf` is untouched and
+    "some price but not the horizon" are different facts. ⚠ **AMENDED AGAIN BY SPEC 217 — the admission rule
+    set is now VERSIONED (`ObservationEligibility.Version`) and has a FOURTH exclusion axis,
+    `CorporateActionInWindow`.** An observation at as-of D is excluded, before any price is read, when a
+    recognised acquisition of that company was announced on or before `D + h` (one predicate covering both
+    halves of the rule: the announcement inside `(D, D+h]`, and D on/after the announcement). It is an
+    outcome NO STRATEGY COULD HAVE EARNED — MarineMax's +46.1 % gap on 2026-08-10 sat inside the 21-day
+    window of every score from 2026-07-20, and since then its price has been pinned at the $53.00 bid — so
+    counting it as skill or as a miss measures the deal, not the scoring. It is evaluated FIRST so the four
+    axes stay DISJOINT (an excluded company-day is never also "no forward price"), and de-duped on the same
+    `(company, as-of)` key. It is rendered as its own column on `strategy-leaderboard.{md,csv}` (both
+    halves) and, on the PAIRED artifact, in the markdown support table beside the two exclusion tallies it
+    joins — the paired CSV carries the two RULE IDENTITIES per row but not the marginal count, because that
+    CSV's row unit is the per-baseline pairing and it has never carried a per-strategy marginal exclusion
+    column: `ObservationsWithoutForwardPrice` and `ObservationsWithPartialWindow` live only in that same
+    markdown table (verified in `PairedComparisonRenderer`). Putting the new count there and nowhere else
+    keeps all three exclusion tallies in one place and at one unit. The entry rule `bar.Date > asOf` is untouched and
     asserted with poison bars, including on the `PartialWindow` branch. **Honest consequence, and it IS the
     deliverable:** with ~1 month of price history almost every observation becomes `PartialWindow`, so the
     leaderboard correctly reports "No strategy could be ranked" at h=21 until roughly 2026-08-17. That is the
@@ -845,9 +860,19 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
   integer ceiling so ×10 counts don't FP-round up; unresolved members stay in the denominator with
   reasons); below the bound the pooled observation is excluded as **`BenchmarkUnavailable`** — named and
   counted, never a silent raw fallback — and a post-freeze company is **`NotInBenchmarkUniverse`**. The
-  leaderboard now ranks by excess (`excess-vs-universe-v1` columns, CSV schema `strategy-leaderboard-v2`;
-  the pre-183 raw artifacts are preserved once as `strategy-leaderboard-raw-v1.{md,csv}` and declared
-  incomparable; pre-freeze dates carry a retrospective label). **The AD-15 paired path has NO benchmark
+  leaderboard now ranks by excess (⚠ **`excess-vs-universe-v2` since spec 217** — the v1 columns and CSV
+  schema `strategy-leaderboard-v2` are HISTORY; the shipped values are `UniverseBenchmark.ExcessRuleVersion`
+  and `StrategyLeaderboardRenderer.CsvSchemaVersion`. **The frozen `benchmark-universe-v1` MEMBERSHIP is
+  UNCHANGED** — v2 is a rule about which members may represent the pond on a given date, not a re-selection
+  of it: a member under a recognised pending acquisition leaves the equal-weight peer mean **and the
+  coverage denominator** from its announcement date onward, because a member pinned at a take-out bid biases
+  every OTHER company's excess downward. The removal is counted per as-of date on the artifact's coverage
+  line, distinct from `UnresolvedMembers` — an excluded member's price resolves perfectly, which is exactly
+  why it had to go. Declared PROSPECTIVELY (the 2026-09-29 AD-15 boundary is untouched);
+  the pre-183 raw artifacts are preserved once as `strategy-leaderboard-raw-v1.{md,csv}` and the pre-217
+  excess-v1 series once as `strategy-leaderboard-excess-v1.{md,csv}`, both declared incomparable, through
+  ONE parameterised preservation step in `FileEfficacyArtifactStore` rather than a second copy of it;
+  pre-freeze dates carry a retrospective label). **The AD-15 paired path has NO benchmark
   gate, structurally**: `StrategyObservation` carries `RawForwardReturn` + nullable `ExcessForwardReturn`;
   the paired harness consumes ONLY raw-return ranks (self-excluded excess is a positive affine per-date
   transform — `excessᵢ = N/(N−1) × (rᵢ − mean(all))` — so every per-date rank/ρ/delta is identical), and
@@ -3434,6 +3459,178 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     `referencesExcludedNewest` / `referencesExcludedLaterThanFact`, pending/acknowledged/replayed), against
     spec 215 §3's kept bound: **a verifier that drops > 50 % of what the model returns is a
     prompt/table defect to investigate, not a finding**.
+
+- **Spec 217 — a pending acquisition is a CLOSED THESIS: recognised deterministically from the 8-K, said
+  plainly on the report, and kept out of the forward efficacy series with every exclusion counted.**
+  - **The reconstruction that motivated it** (from `data/evidence/raw`, `data/reports/weekly`,
+    `data/prices/hzo.json`, read 2026-09-08). On 2026-08-10 Safe Harbor Marinas agreed to buy MarineMax
+    (HZO) for **$53.00 a share in cash** (~$1.5B). Radar collected the 8-K (items 1.01/7.01/9.01, accession
+    `0001193125-26-341302`) and ~50 articles that day; `KeywordSignalExtractor`'s "material definitive
+    agreement" rule minted `StrategicPartnership (Positive)` at strength 4, trajectory rose **56 → 62**, and
+    the 2026-08-10 weekly report labelled MarineMax **Thesis improving** at rank 43 — an all-cash sale of the
+    whole company, read as a partnership. Nothing predictive existed before the announcement and Radar is
+    not meant to front-run a private negotiation; the defect is entirely in how the ANNOUNCEMENT was read.
+  - **`acqscan-v1` — deterministic, pure, fail-closed, no AI.** Two legs, both verbatim in the filing's own
+    text (primary 8-K document + EX-99.1, fetched once per filing through the existing
+    `SecEdgarUrls`/`SecHttpFetch` seam under the shared global SEC pacer): (a) the SUBJECT company is the
+    TARGET — its own name in the target POSITION relative to "acquired by" / "merge with and into" /
+    "acquisition of", with an ACQUIRER-SIDE VETO evaluated first; (b) a stated per-share cash and/or stock
+    consideration. Position matters because an acquirer-side 8-K contains every merger word, so an unordered
+    co-occurrence test would close the wrong company's thesis. **"Definitive agreement" alone is not a merger
+    phrase** — it is the boilerplate title of every item-1.01 8-K, and the store holds **178** of them
+    (measured 2026-09-08) — so it counts only beside an explicit target sentence. Every way a filing falls
+    out is its OWN counted `AcquisitionScanOutcome` (`no-merger-agreement`, `company-not-target`,
+    `company-is-acquirer`, `acquirer-not-named`, `no-stated-consideration`, `empty-body`).
+  - **Both HZO item-1.01 filings are fixture-pinned**, because they are the two shapes that matter:
+    `0001193125-26-290439` (2026-06-30, a CREDIT agreement — item 1.01 plus the company's own name
+    throughout, the exact shape a title-only rule fires on) must NOT be recognised, and
+    `0001193125-26-341302` (2026-08-10) is the ONE expected recognition and the pinned regression for
+    "an 8-K 1.01 merger ⇒ `Ignore`, not `Thesis improving`". The fixtures are REPRESENTATIVE 8-K wording
+    written from the public facts, not verbatim SEC documents, and nothing claims otherwise — the verbatim
+    behaviour over the real filings is the env-gated live harness's job (`AcquisitionRecognitionLiveMeasurementTests`,
+    §1 OWED: the distribution over all 178 accrued item-1.01 filings, expected 1 recognised / 177 not; any
+    second recognition is investigated by hand and named, because a false positive closes a live thesis).
+  - **The state is DERIVED, never curated.** `CompanyStatus.PendingAcquisition` is added to the Domain enum
+    but is unreachable from `data/companies.json` (`LocalFileCompanySeedSource` always writes `Active`): the
+    Worker resolves it per run from the append-only acquisitions store and stamps it on every snapshot from
+    the announcement onward as `CompanyScoreSnapshot.CompanyStatusAtScoring` — **recorded, hashed into
+    nothing**, `null` meaning NOT RECORDED and never `Active`. Retiring a closed deal to `Delisted` stays a
+    conscious, journaled maintainer step.
+  - **Scoring continues; the keyword rule is UNCHANGED; the READ is corrected at assembly.** `acq-supersede-v1`
+    rewrites the extractor's `StrategicPartnership` over the ONE recognised evidence id as a Neutral
+    `SignalType.CorporateAction` at strength 0 — SAME signal id, so the persisted `ScoreEvidenceLink` still
+    walks report → snapshot → signal → evidence and the rewrite is visible as a CHANGE rather than as a
+    disappearance. It runs in both windows (velocity too), touches no other type or evidence, and is counted
+    on one aggregated per-company line plus the contribution reason. `KeywordSignalExtractor.RuleSetVersion`
+    is deliberately NOT bumped (still the value that file owns): the rule is a scoring input, and changing
+    the table is a different slice.
+  - **⚠ BOTH PIN FAMILIES MOVED ONCE — the first time in the 197→216 arc that the AI-OFF side moved, and
+    that is the deliverable.** The cause is a trailing, UNCONDITIONAL `acq=acqscan-v1;supersede=acq-supersede-v1;`
+    segment appended to `SignalSourceDescriptor.CanonicalDescriptor()` after spec 198's `newsquery=`. It is
+    not AI-gated and not judgment-gated because the supersede is pure assembly code that runs in every
+    composition — only the DATA varies — so an unchanged AI-OFF pin would have meant the rule was not
+    actually hashed. `ScoringConfigFingerprintTests` is the only authority for the values; the six it
+    replaced are quoted there as history. **The operator step is OWED and is a THIRD, SEPARATE one** in this
+    arc, not shared with 214/215 (whose step was taken 2026-09-08) or with 216 (which owes its own): delete
+    or re-record every configured `data/scoring-configs/strategies/{name}.json` before the first post-217
+    baseline. Deliberately EXCLUDED from the hash: `Radar:Acquisitions:MaxFetchesPerRun` and `Enabled`,
+    which bound how many filings are READ, never whether a read filing is recognised (the spec-105 rule).
+  - **The report says it in three places, and each removal is counted.** Policy `weekly-report-action-v5 →
+    v6` gains RULE 0, ahead of thin evidence and ahead of the improving/deteriorating delta, so
+    `Thesis improving` structurally cannot fire for a company being bought; the label is `Ignore` (**no new
+    label — the six AD-9 labels are unchanged**) and the STATE is the rationale. The entry carries a
+    one-line `⏸ Acquisition pending — …` banner under the label; a new `## Acquisitions pending` section
+    sits after `## Ignore / Low signal` with company/acquirer/consideration/announced/days-pending/accession;
+    and each strategy's ranked table drops the company with a one-line footer naming the count and pointing
+    at that section. `StrategyReportSection.Truncated` discounts the exclusion, so the MaxItems cap is never
+    blamed for it. **An absent acquisitions store renders NOTHING** (`PendingAcquisitions.RecognitionAvailable`
+    is false): "nothing is pending" and "we did not look" are different facts, so only a real store read may
+    print the empty section's measured zero.
+  - **Efficacy — `observation-eligibility-v2` + `excess-vs-universe-v2`, declared PROSPECTIVELY.** See the
+    spec-183 and spec-140/152 bullets above, amended in place. The **2026-09-29 precommitted AD-15 claim
+    date is UNCHANGED** and the paired claim interval starts after it, so no outcome that has entered the
+    claim family is re-scored. Both artifacts stamp both rule identities.
+  - **§3 measured, not asserted** (`AcquisitionLeaderboardCounterfactualTests`, a read-only offline paired
+    recomputation over the accrued store on 2026-09-09: ONE store, ONE price side, ONE frozen benchmark, and
+    the projection as the ONLY difference). Per arm, out-of-sample observations fell 1036 → 1022 (or
+    1110 → 1095 / 1089 → 1074), with **37–45 company-days excluded as `CorporateActionInWindow`** per arm
+    across 48 as-of dates, and **32 of 48 as-of dates had the pinned member removed from the peer mean**.
+    Every |Δρ| is ≤ 0.025. **THE ORDERING DID CHANGE, and it is stated plainly rather than buried:** the two
+    adjacent pairs `baseline-earnings-only` / `baseline-activity-only` (in-sample ρ 0.0045 / −0.0178 →
+    −0.0051 / 0.0065) and `filings-led-halfnoted` / `filings-led-nonoted` (−0.1324 / −0.1350 → −0.1471 /
+    −0.1455) swapped ranks — ranks 6/7 and 8/9 respectively. Both swaps are between arms already separated by
+    less than the width of their own confidence intervals: the second pair's in-sample ρ differ by 0.0026
+    before and 0.0016 after, the first pair's by 0.0223 before and 0.0116 after, over 33 in-sample and 15
+    out-of-sample as-of dates. The top five (baseline-media-only > disclosure-led-v10-control >
+    disclosure-led-v11 > default > narrative-led-v2) are unchanged, and the same three arms
+    (`default-noattn`, `filings-led`, `narrative-led`) drop for thin data before and after. **This is a
+    finding about how much ONE takeover was worth in a small sample, not a result** — and it is precisely why
+    the exclusion is declared prospectively rather than applied to a claim already made.
+  - **Review round 2 found a LIVE REGRESSION the whole suite had stayed green through, and it is the
+    lesson worth keeping.** `FileStrategyEvidenceFactsSource` gates on the leaderboard CSV's
+    `schemaVersion` and refuses anything it does not know, degrading the WHOLE evidence layer to
+    "unavailable"; spec 217 bumped `StrategyLeaderboardRenderer.CsvSchemaVersion` to
+    `strategy-leaderboard-v3` and did not move that reader's supported list — so the next live report would
+    have printed **"Accruing (evidence unavailable)" for every arm**. Nothing failed, because the reader's
+    tests build their header from a COPY of the renderer's, and one of them even used
+    `strategy-leaderboard-v3` as its example of an *unknown* schema and kept passing for an unrelated reason.
+    Fixed three ways: the reader accepts v2 (the shape live deployments have on disk) and v3; a new test
+    asserts the supported list CONTAINS the shipped `CsvSchemaVersion` constant rather than a copy of it; and
+    the stale "byte-for-byte the renderer's CsvHeader" comment is corrected in place rather than left
+    standing. **A copied schema literal is a fact with no owner** — the same rule CLAUDE.md states for pins,
+    reaching a place nobody had applied it.
+  - **The Lead-call evidence lines cite the rule identities OFF THE ARTIFACT** (§3's second stamping
+    requirement, initially only half met — the artifacts were stamped, the operating-call table was not).
+    `RankedEvidence` carries `ObservationEligibilityVersion` / `ExcessRuleVersion` read from the leaderboard
+    CSV's own per-row columns, and the "Calls and evidence status" table renders
+    `[eligibility …; benchmark …]` on each ranked line. They are read from the FILE, never from a code
+    constant, because the artifact was written by a PREVIOUS run: a constant would assert today's rules over
+    yesterday's numbers. A pre-217 artifact carries neither column and the line prints
+    `not stated (pre-217 artifact)` — a stale artifact declares itself instead of being silently relabelled.
+  - **Two accounting corrections from the same round.** (i) A store root that cannot be enumerated — or that
+    is a FILE rather than a directory — now returns `AcquisitionStoreReadResult.Unavailable`, which forces
+    `PendingAcquisitions.RecognitionAvailable` false, so the report stays SILENT instead of printing
+    "no company is under a recognised pending acquisition" over a store it could not open. `Readable`
+    (there is no answer) and `Unreadable > 0` (some files in a successful read did not parse) are kept as
+    separate facts. (ii) `acqscan-v1`'s final verbatim re-check no longer borrows a leg's bucket: it used to
+    return `NoStatedConsideration` even when the leg-(a) TARGET quote failed, mis-attributing a leg-(a)
+    failure in the very tally whose purpose is that split. The two checks are now separate branches
+    returning a dedicated `VerbatimCheckFailed`, which is its own bucket because a failure there is a DEFECT
+    IN THE SCAN (every quote is a slice of the body being checked), not a fact about the filing — a non-zero
+    count in the live distribution is a finding to investigate.
+  - **Round 3 — the v3 CSV said v1 in its own column NAMES, and that is the same defect class.** The rho
+    columns were still `inSampleRhoExcessVsUniverseV1` / `outOfSampleRhoExcessVsUniverseV1` while carrying
+    `excess-vs-universe-v2` VALUES, with the adjacent `excessRuleVersion` cell correctly saying v2 — two
+    cells in one row disagreeing, which is worse than one stale cell because a reader acts on whichever they
+    find first, and a consumer parsing by column name would have read a v2 number as v1. §3 declares v2 ON
+    the artifacts; shipping v2 values under v1 names does not do that. The v3 names are now
+    **`inSampleRhoExcess` / `outOfSampleRhoExcess`** — deliberately carrying NO version, because baking one
+    into a column name duplicates a value that code defines (the pins rule, reaching a new place): the rule
+    version has exactly ONE owner on the artifact, the per-row `excessRuleVersion` column sourced from
+    `UniverseBenchmark.ExcessRuleVersion`, and a version-free name can never go stale. The v2 names survive
+    as `StrategyLeaderboardRenderer.LegacyInSampleRhoColumnV2` / `LegacyOutOfSampleRhoColumnV2` purely so
+    the evidence-facts reader still understands a pre-217 artifact a live deployment has on disk; that
+    reader tries the v3 name first and falls back, and splices BOTH from the renderer's constants rather
+    than holding literals of its own. A new test asserts the rendered header line against the REAL renderer
+    (an empty leaderboard renders exactly its header), the same anti-drift move as the `CsvSchemaVersion`
+    assertion — the copies are what let both of these go stale silently.
+  - **The rest of the v1 strings were AUDITED and are correct history, not stale claims**:
+    `strategy-leaderboard-raw-v1.{md,csv}` and `strategy-leaderboard-excess-v1.{md,csv}` are preserved FILE
+    names; `benchmark-universe-v1` is the frozen UNIVERSE version, a different thing from the excess rule
+    and genuinely still v1; and the markdown table header, metric line and `## Benchmark (…)` heading all
+    render `excess-vs-universe-v2` (the heading interpolates the constant). `PairedComparisonRenderer`
+    contains no v1 naming at all.
+  - **Round 4 — the benchmark has TWO consumers, and the second one was missed by rounds 1–3.**
+    `NewsRiskEvaluationGenerator` takes the same singleton `IUniverseBenchmarkProvider` the leaderboard does
+    (registered one line apart in the composition root), so **its excess values silently became
+    `excess-vs-universe-v2` the moment spec 217 shipped** while the artifact still said v1 in three places:
+    the per-row `excessForwardReturn21dBasis` token (`excess-vs-benchmark-universe-v1`), the markdown column
+    label (`Excess fwd 21d vs universe-v1`) and the prose, which stated the **v1 rule verbatim** ("the other
+    resolved frozen-universe members, self-excluded") — false the moment any member is pinned, which is the
+    spec's own worked example. All three now name no version or cite
+    `UniverseBenchmark.ExcessRuleVersion`; this artifact carries no schema-version column of its own, so the
+    per-row basis token IS its outcome-definition stamp and it moves with the rule automatically. The
+    pinned-member accounting the leaderboard gained is now on this artifact too (peer-mean removals per
+    as-of date, a MEASURED zero when zero, and an explicit "NOT a measured zero" line when the universe
+    could not be loaded). The pinned test assertion is against the CONSTANT — the literal it replaced is
+    precisely how the defect survived CI, the third instance in this slice of a copied token going stale.
+  - **DECISION, made and stated: the news-risk artifact MARKS a pinned row; it does not EXCLUDE it.** The
+    news-risk path applies the peer-mean exclusion (it shares the benchmark) but NOT
+    `ObservationEligibility`, so a row for a company that is ITSELF pinned still gets an excess computed off
+    its own take-out pop. That asymmetry is deliberate and is now on the artifact rather than silent. The
+    efficacy series EXCLUDES the equivalent observation because it **ranks**: an outcome no strategy could
+    have earned would be scored there as skill or as a miss. The news-risk evaluation **describes** one
+    frozen assessment at a time and declares itself non-claim-bearing, so dropping rows would shrink the
+    coverage of the very records it exists to show and would DISCARD an assessment rather than count one.
+    The forward return is a true fact about the company; what would be false is reading it as an ordinary
+    business outcome — so the row carries a per-row `corporateActionInWindow21d` column, the count and the
+    reasoning are rendered in the markdown ("Read a marked row's return as the deal, not as the business"),
+    and the marker is BLANK rather than `false` when no forward return was computed at all. A silent
+    asymmetry between two artifacts computed off one benchmark is the thing that bites later; this one is
+    written down in the code, on the artifact and here.
+  - **The §3 numbers above were RE-MEASURED after these fixes and are byte-identical**, and no fingerprint
+    pin moved (asserted by `ScoringConfigFingerprintTests`): none of the four touches the observation
+    builder, the benchmark, the descriptor or any hashed input.
 
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 

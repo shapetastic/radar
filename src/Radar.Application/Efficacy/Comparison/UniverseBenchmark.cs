@@ -1,3 +1,4 @@
+using Radar.Application.Acquisitions;
 using Radar.Application.Prices;
 
 namespace Radar.Application.Efficacy.Comparison;
@@ -34,7 +35,17 @@ public sealed record BenchmarkMemberResolution(
     string Ticker,
     bool Resolved,
     double ForwardReturnValue,
-    ForwardReturnUnavailableReason Reason);
+    ForwardReturnUnavailableReason Reason)
+{
+    /// <summary>
+    /// SPEC 217 §3 (<c>excess-vs-universe-v2</c>): this member was REMOVED from the peer mean because a
+    /// recognised acquisition of it was announced inside — or before — this day's forward window. Such a
+    /// member is not "unresolved" (its price resolves perfectly; that is the problem), so it is a separate
+    /// flag, and it leaves the DENOMINATOR as well as the numerator: a pinned +46% return left in the
+    /// equal-weight mean biases every OTHER company's excess downward.
+    /// </summary>
+    public bool ExcludedPendingAcquisition { get; init; }
+}
 
 /// <summary>
 /// The whole universe resolved at one (universeVersion, D, horizon, exitTolerance) — computed ONCE and shared
@@ -51,11 +62,17 @@ public sealed record UniverseBenchmarkDay(
 {
     public int MemberCount => Members.Count;
 
-    public int ResolvedCount { get; } = Members.Count(m => m.Resolved);
+    public int ResolvedCount { get; } = Members.Count(m => m.Resolved && !m.ExcludedPendingAcquisition);
+
+    /// <summary>
+    /// SPEC 217 §3: members removed from the peer mean by <c>excess-vs-universe-v2</c>. Reported on the
+    /// coverage line — never silently absent.
+    /// </summary>
+    public int PendingAcquisitionExcludedCount { get; } = Members.Count(m => m.ExcludedPendingAcquisition);
 
     /// <summary>Every unresolved member with its reason — the per-day coverage provenance.</summary>
     public IReadOnlyList<BenchmarkMemberResolution> Unresolved { get; } =
-        [.. Members.Where(m => !m.Resolved)];
+        [.. Members.Where(m => !m.Resolved && !m.ExcludedPendingAcquisition)];
 }
 
 /// <summary>
@@ -118,8 +135,21 @@ public sealed class UniverseBenchmark
     /// <summary>The coverage proportion: at least 90% of eligible peers must resolve. Code constant.</summary>
     public const double RequiredResolvedPeerProportion = 0.90;
 
+    /// <summary>
+    /// SPEC 217 §3 — the benchmark-rule identity stamped on every artifact. v1 took the equal-weight mean of
+    /// every resolved frozen-universe member; v2 additionally removes a member under a recognised pending
+    /// acquisition from the mean AND from the denominator, from its announcement date onward. The frozen
+    /// <c>benchmark-universe-v1</c> MEMBERSHIP is unchanged — this is a rule about which members can
+    /// legitimately represent "the pond" on a given date, not a re-selection of the pond.
+    /// </summary>
+    public const string ExcessRuleVersion = "excess-vs-universe-v2";
+
+    /// <summary>The preserved pre-217 rule identity, quoted so the preserved artifact stays legible.</summary>
+    public const string PreviousExcessRuleVersion = "excess-vs-universe-v1";
+
     private readonly BenchmarkUniverse _universe;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<PriceBar>> _barsByPriceSeriesKey;
+    private readonly PendingAcquisitions _acquisitions;
     private readonly HashSet<Guid> _memberIds;
     private readonly Dictionary<(DateOnly AsOf, int HorizonDays, int ExitToleranceDays), UniverseBenchmarkDay> _days = [];
     private readonly Lock _gate = new();
@@ -132,12 +162,26 @@ public sealed class UniverseBenchmark
     public UniverseBenchmark(
         BenchmarkUniverse universe,
         IReadOnlyDictionary<string, IReadOnlyList<PriceBar>> barsByPriceSeriesKey)
+        : this(universe, barsByPriceSeriesKey, PendingAcquisitions.None)
+    {
+    }
+
+    /// <param name="acquisitions">
+    /// SPEC 217 §3: the shared run-time projection. <see cref="PendingAcquisitions.None"/> reproduces
+    /// <c>excess-vs-universe-v1</c> byte-for-byte, so a composition with no acquisitions store is unchanged.
+    /// </param>
+    public UniverseBenchmark(
+        BenchmarkUniverse universe,
+        IReadOnlyDictionary<string, IReadOnlyList<PriceBar>> barsByPriceSeriesKey,
+        PendingAcquisitions acquisitions)
     {
         ArgumentNullException.ThrowIfNull(universe);
         ArgumentNullException.ThrowIfNull(barsByPriceSeriesKey);
+        ArgumentNullException.ThrowIfNull(acquisitions);
 
         _universe = universe;
         _barsByPriceSeriesKey = barsByPriceSeriesKey;
+        _acquisitions = acquisitions;
         _memberIds = [.. universe.Members.Select(m => m.CompanyId)];
     }
 
@@ -162,12 +206,23 @@ public sealed class UniverseBenchmark
             {
                 var bars = _barsByPriceSeriesKey.GetValueOrDefault(member.PriceSeriesKey) ?? [];
                 var forward = ForwardReturn.TryCompute(bars, asOf, horizonDays, exitToleranceDays);
+
+                // SPEC 217 §3 (excess-vs-universe-v2): a member under a recognised pending acquisition
+                // leaves the peer mean from its announcement date onward. It uses the SAME predicate the
+                // observation builder uses (ObservationEligibility), so a member excluded from the pond and
+                // an observation excluded from the series can never disagree about the same company-date.
+                var excluded = ObservationEligibility.IsCorporateActionInWindow(
+                    _acquisitions, member.CompanyId, asOf, horizonDays);
+
                 members.Add(new BenchmarkMemberResolution(
                     member.CompanyId,
                     member.Ticker,
                     forward.IsDefined,
                     forward.IsDefined ? forward.Value : 0.0,
-                    forward.Reason));
+                    forward.Reason)
+                {
+                    ExcludedPendingAcquisition = excluded,
+                });
             }
 
             var day = new UniverseBenchmarkDay(
@@ -203,7 +258,11 @@ public sealed class UniverseBenchmark
 
         var day = DayAt(asOf, horizonDays, exitToleranceDays);
 
-        var eligiblePeers = day.MemberCount - 1;
+        // SPEC 217 §3: an excluded member leaves the DENOMINATOR too. Counting it as eligible-but-
+        // unresolved would tighten the coverage rule for a reason that has nothing to do with data
+        // availability, and could fail the whole day's benchmark because one company got taken over.
+        var eligiblePeers = day.MemberCount - 1
+            - day.Members.Count(m => m.ExcludedPendingAcquisition && m.CompanyId != companyId);
         var required = RequiredResolvedPeers(eligiblePeers);
 
         // Accumulate in artifact member order (AD-3: floating-point addition is not associative).
@@ -211,7 +270,7 @@ public sealed class UniverseBenchmark
         var sum = 0.0;
         foreach (var member in day.Members)
         {
-            if (member.CompanyId == companyId || !member.Resolved)
+            if (member.CompanyId == companyId || !member.Resolved || member.ExcludedPendingAcquisition)
             {
                 continue;
             }

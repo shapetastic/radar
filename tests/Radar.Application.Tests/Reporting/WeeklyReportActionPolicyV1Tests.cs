@@ -31,7 +31,9 @@ public sealed class WeeklyReportActionPolicyV1Tests
         // than two constants — the mapping CONTRACT changed, so the version moves even though every result
         // under LabelThresholds.Default is byte-identical to v4 (proven by the sweep below). Nothing
         // hashes this token into ScoringConfigVersion.
-        Assert.Equal("weekly-report-action-v5", CreatePolicy().Version);
+        // Spec 217 §2: rule 0 (a recognised pending acquisition forces Ignore) changed the mapping
+        // CONTRACT, so the version moves. Every company WITHOUT one is byte-identical to v5.
+        Assert.Equal("weekly-report-action-v6", CreatePolicy().Version);
     }
 
     // ---- Spec 212: the lines are inputs; Default is byte-identical to v4 --------------------------------

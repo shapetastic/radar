@@ -55,9 +55,11 @@ Only six labels exist, and none of them is advice: `Investigate`, `Watch`, `Igno
 `Needs more evidence`, `Thesis improving`, `Thesis deteriorating`. Words like "buy", "sell", or
 "upside" are banned from the output by rule.
 
-The mapping (`weekly-report-action-v5`) is deterministic, first match wins:
+The mapping (`weekly-report-action-v6`) is deterministic, first match wins:
 
-1. **Needs more evidence** — Evidence confidence below 35. Overrides everything: with too little
+0. **Acquisition pending** → the label is **`Ignore`**. A recognised, pending agreement to acquire the
+   company outranks every other rule. See "Acquisition pending" below.
+1. **Needs more evidence** — Evidence confidence below 35. Overrides everything ELSE: with too little
    evidence, no other claim is made.
 2. **Thesis deteriorating** — Trajectory fell ≥ 5 points versus the prior *comparable* snapshot
    (checked before improvement, to stay honest).
@@ -117,6 +119,49 @@ story is told — a formula delta must never masquerade as a company development
 
 ---
 
+### Acquisition pending
+
+When a company has agreed to be acquired, its thesis is **closed**: from the announcement the share price
+sits at the offer and tracks the deal, not the business, so trajectory and opportunity stop measuring what
+they claim to measure. Radar says so instead of pretending otherwise.
+
+- **How it is recognised.** Deterministically, from the company's own 8-K — no AI. `acqscan-v1` reads the
+  item-1.01 filing ("Entry into a Material Definitive Agreement") and recognises an acquisition only when
+  BOTH hold verbatim in the text: the company is the **target** (its own name in the target position
+  relative to "acquired by" / "merge with and into" / "acquisition of"), and a **per-share consideration is
+  stated** ("$53.00 per share in cash"). Item 1.01 alone means nothing — most of those filings are credit
+  agreements, leases and supply contracts — and a filing where the company is the **acquirer** is excluded
+  by construction. Every filing that falls short is counted with the reason it fell short, so a missed
+  recognition is visible rather than silent. Recognition deliberately fails closed: a false positive would
+  close a live thesis, which is worse than missing one.
+- **What you see on the report.** The label is `Ignore` (no seventh label exists), the "Why" line names the
+  acquirer, the stated consideration and the announcement date, and a one-line banner sits under the label:
+  `⏸ Acquisition pending — Safe Harbor Marinas, LLC at $53.00 per share in cash, announced 2026-08-10
+  (accession …). Thesis closed: this price tracks the deal, not the business.` Because rule 0 runs first,
+  `Thesis improving` and `Thesis deteriorating` **cannot** fire for a company being bought.
+- **Why it leaves the rankings.** The company is dropped from every strategy's ranked table — its score
+  would sit in a list you compare by eye, where a pinned price is indistinguishable from a trajectory — and
+  each table prints a one-line footer saying how many rows were removed and where they went. The removed
+  companies are listed once, with their filed facts, in **`## Acquisitions pending`** (company, acquirer,
+  consideration, announced, days pending, accession). Nothing disappears without being counted.
+- **Why it leaves the peer mean.** Efficacy is measured as EXCESS return against the equal-weight mean of
+  the other benchmark-universe members. A member pinned at a take-out bid would drag that mean and bias
+  **every other company's** excess, so from the announcement date it is removed from the mean and from the
+  coverage denominator (`excess-vs-universe-v2`), and the count of dates where that happened is stated on
+  the artifact. Its own observations are excluded too, on their own column
+  (`CorporateActionInWindow`, `observation-eligibility-v2`): a +46 % gap on announcement day is an outcome
+  no strategy could have earned, and afterwards there is no variance left to measure.
+- **Scoring does NOT stop, and nothing is rewritten.** The company keeps being scored every run and its
+  accrued history is untouched (append-only). What changes is how the announcement is READ: the keyword
+  extractor's "material definitive agreement" match over that filing is superseded at scoring time by a
+  neutral `CorporateAction` at strength 0, so an all-cash sale of the whole company can never again score as
+  a partnership.
+- **Retiring it is a human step.** When the deal closes and the company delists, a maintainer moves it to
+  `Delisted` in the seed and journals the move. Radar does not do that automatically: "the deal completed"
+  is not something the filings alone tell it.
+
+---
+
 ## Formulas and strategies
 
 Scoring is plural: one collection pass, N **strategies** scored over it, each strategy = a named,
@@ -156,7 +201,13 @@ movement. Mechanics that matter:
   validation-only, downstream, by architecture.
 - **Partial windows are excluded, not mislabelled.** An observation only counts when its last price
   bar reaches at least D+17 (21-day horizon, 4-day market-closure tolerance). "No forward price at
-  all" and "some price but short of the horizon" are reported as separate columns. Early in a
+  all" and "some price but short of the horizon" are reported as separate columns.
+- **Outcomes no strategy could have earned are excluded, on their own column.** When a recognised
+  acquisition of a company was announced inside an observation's forward window — or on/before its as-of
+  date — that observation is removed before any price is read and counted as `CorporateActionInWindow`
+  (`observation-eligibility-v2`). The rule and the benchmark rule (`excess-vs-universe-v2`) are both stamped
+  on the artifact, and the previous excess series is preserved as `strategy-leaderboard-excess-v1.{md,csv}`.
+  The two series measure different outcomes and must never be read as one. Early in a
   company's or strategy's life, most observations are partial — a mostly-empty leaderboard is the
   honest state, not a bug.
 - **The headline is out-of-sample.** Ranking uses the chronologically earlier 70 % of as-of dates;

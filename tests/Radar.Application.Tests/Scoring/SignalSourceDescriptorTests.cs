@@ -73,6 +73,15 @@ public sealed class SignalSourceDescriptorTests
     /// </summary>
     private static readonly string NewsQueryDefault = NewsQueryScoringIdentity.Default.Segment;
 
+    /// <summary>
+    /// The spec-217 §2 ACQUISITION segment every identity descriptor now ends with. Taken from the real type
+    /// for the same reason the two constants above are: these expectations describe the COMPOSITION, and the
+    /// segment's own contents are pinned by <see cref="AcquisitionScoringIdentityTests"/>. It is
+    /// UNCONDITIONAL — the corporate-action supersede is pure assembly code that runs in every composition,
+    /// so there is no "disabled" form of it — and it is appended after the news-query segment.
+    /// </summary>
+    private static readonly string AcquisitionSegment = AcquisitionScoringIdentity.Segment;
+
     [Fact]
     public void CollectorToggle_LeavesIdentityUnchanged_MovesOnlyCollectionProvenance()
     {
@@ -100,7 +109,7 @@ public sealed class SignalSourceDescriptorTests
         // future edit can reintroduce it by accident.
         var identity = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled + NewsQueryDefault, identity);
+        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled + NewsQueryDefault + AcquisitionSegment, identity);
         Assert.DoesNotContain("collectors=", identity, StringComparison.Ordinal);
         Assert.DoesNotContain("usaspending", identity, StringComparison.Ordinal);
     }
@@ -335,7 +344,7 @@ public sealed class SignalSourceDescriptorTests
         // segment.
         var descriptor = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled + NewsQueryDefault, descriptor);
+        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled + NewsQueryDefault + AcquisitionSegment, descriptor);
         Assert.DoesNotContain("ai=", descriptor, StringComparison.Ordinal);
     }
 
@@ -350,7 +359,8 @@ public sealed class SignalSourceDescriptorTests
         Assert.Equal(
             "rules=radar-keyword-rules-v8;ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;"
                 + NewsDisabled
-                + NewsQueryDefault,
+                + NewsQueryDefault
+                + AcquisitionSegment,
             DescriptorWithAi("directional-filing:str=6;nov=6;minconf=0.6", "rss", "sec", "usaspending"));
     }
 
@@ -373,7 +383,10 @@ public sealed class SignalSourceDescriptorTests
         var descriptor = DescriptorWithAi("a=b;c,d%e", "rss");
 
         Assert.Equal(
-            "rules=radar-keyword-rules-v8;ai=a%3Db%3Bc%2Cd%25e;" + NewsDisabled + NewsQueryDefault,
+            "rules=radar-keyword-rules-v8;ai=a%3Db%3Bc%2Cd%25e;"
+                + NewsDisabled
+                + NewsQueryDefault
+                + AcquisitionSegment,
             descriptor);
     }
 
@@ -429,7 +442,8 @@ public sealed class SignalSourceDescriptorTests
             .CanonicalDescriptor();
 
         Assert.Equal(omitted, explicitDefault);
-        Assert.EndsWith("newsquery=7d;", omitted, StringComparison.Ordinal);
+        // Spec 217 §2 appended the acq= segment AFTER newsquery=, so the window is no longer the tail.
+        Assert.Contains("newsquery=7d;", omitted, StringComparison.Ordinal);
         Assert.NotEqual(
             omitted, BuildWithNewsQuery(NewsQueryScoringIdentity.None, "rss").CanonicalDescriptor());
     }
@@ -443,7 +457,8 @@ public sealed class SignalSourceDescriptorTests
         // six no-newsquery halves of the current pins exactly (AI-OFF unchanged since 198; AI-ON moved by 214).
         var disabled = BuildWithNewsQuery(NewsQueryScoringIdentity.None, "rss").CanonicalDescriptor();
 
-        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled, disabled);
+        Assert.Equal(
+            "rules=radar-keyword-rules-v8;" + NewsDisabled + AcquisitionSegment, disabled);
         Assert.DoesNotContain("newsquery=", disabled, StringComparison.Ordinal);
     }
 
@@ -465,10 +480,15 @@ public sealed class SignalSourceDescriptorTests
         var ai = descriptor.IndexOf("ai=", StringComparison.Ordinal);
         var news = descriptor.IndexOf("news=", StringComparison.Ordinal);
         var newsQuery = descriptor.IndexOf("newsquery=", StringComparison.Ordinal);
+        // Spec 217 §2: the acquisition segment is appended LAST, after newsquery=, for exactly the reason
+        // every segment since spec 194 has been appended last — the preceding prefix stays byte-stable, so a
+        // pin move is attributable to one input.
+        var acq = descriptor.IndexOf("acq=", StringComparison.Ordinal);
 
         Assert.Equal(0, rules);
-        Assert.True(rules < ai && ai < news && news < newsQuery, descriptor);
-        Assert.EndsWith("newsquery=7d;", descriptor, StringComparison.Ordinal);
+        Assert.True(rules < ai && ai < news && news < newsQuery && newsQuery < acq, descriptor);
+        Assert.Contains("newsquery=7d;", descriptor, StringComparison.Ordinal);
+        Assert.EndsWith(AcquisitionSegment, descriptor, StringComparison.Ordinal);
     }
 
     [Fact]

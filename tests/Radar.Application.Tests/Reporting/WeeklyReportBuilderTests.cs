@@ -1,3 +1,4 @@
+using Radar.Application.Acquisitions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -327,6 +328,7 @@ public sealed partial class WeeklyReportBuilderTests
                 ScoreFileStores,
                 operatingCalls ?? NullOperatingCallSource.Instance,
                 evidenceFacts ?? UnavailableStrategyEvidenceFactsSource.Instance,
+                new NoPendingAcquisitionSource(),
                 options ?? new WeeklyReportOptions(),
                 new FixedTimeProvider(FixedNow),
                 logger ?? NullLogger<WeeklyReportBuilder>.Instance,

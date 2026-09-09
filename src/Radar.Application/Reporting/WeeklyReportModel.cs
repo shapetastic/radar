@@ -37,4 +37,10 @@ public sealed record WeeklyReportModel(
     // line from this record, never from a constant. NULL means no label was minted (StopAll: no narrative,
     // no labels, no banner), and for direct-model callers that predate it (byte-identical to pre-212).
     // Trailing and defaulted so every existing construction site keeps compiling.
-    ReportLabelLines? Labels = null);
+    ReportLabelLines? Labels = null,
+    // Spec 217 §2: every company under a recognised pending acquisition in this period, ordered by
+    // announcement then company name. NULL means the acquisitions store is not composed (pre-217 and every
+    // direct-model caller — byte-identical output); an EMPTY list means it IS composed and nothing is
+    // pending, which the renderer states rather than hiding. Trailing and defaulted so every existing
+    // construction site keeps compiling.
+    IReadOnlyList<AcquisitionPendingReportRow>? AcquisitionsPending = null);

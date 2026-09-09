@@ -1,3 +1,5 @@
+using Radar.Application.Acquisitions;
+
 namespace Radar.Application.Efficacy.Comparison;
 
 /// <summary>
@@ -47,17 +49,32 @@ public sealed class StrategyComparisonHarness
     public StrategyLeaderboard Compare(
         IReadOnlyList<StrategyScoreSeries> strategies,
         StrategyComparisonOptions options,
-        UniverseBenchmark? benchmark)
+        UniverseBenchmark? benchmark) =>
+        Compare(strategies, options, benchmark, PendingAcquisitions.None);
+
+    /// <summary>
+    /// SPEC 217 §3 — the <c>observation-eligibility-v2</c> overload. <paramref name="acquisitions"/> is the
+    /// shared run-time projection; <see cref="PendingAcquisitions.None"/> reproduces the pre-217 leaderboard
+    /// byte-for-byte. It must be the SAME projection the supplied <paramref name="benchmark"/> was built
+    /// with, or the observation exclusion and the peer-mean exclusion could disagree — the composition root
+    /// resolves both from one read.
+    /// </summary>
+    public StrategyLeaderboard Compare(
+        IReadOnlyList<StrategyScoreSeries> strategies,
+        StrategyComparisonOptions options,
+        UniverseBenchmark? benchmark,
+        PendingAcquisitions acquisitions)
     {
         ArgumentNullException.ThrowIfNull(strategies);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(acquisitions);
 
         var perStrategy = new List<StrategyObservationSet>(strategies.Count);
         foreach (var strategy in strategies)
         {
             ArgumentNullException.ThrowIfNull(strategy);
             perStrategy.Add(StrategyObservationBuilder.Build(
-                strategy, options.ForwardHorizonDays, options.ExitToleranceDays, benchmark));
+                strategy, options.ForwardHorizonDays, options.ExitToleranceDays, benchmark, acquisitions));
         }
 
         // The pooled projection per strategy: the excess-defined observations. The date split, the metrics
@@ -85,7 +102,8 @@ public sealed class StrategyComparisonHarness
             int Unusable,
             int Partial,
             int BenchmarkUnavailable,
-            int NotInUniverse)>();
+            int NotInUniverse,
+            int CorporateAction)>();
 
         for (var s = 0; s < perStrategy.Count; s++)
         {
@@ -173,7 +191,8 @@ public sealed class StrategyComparisonHarness
                 strategy.WithoutForwardPrice,
                 strategy.PartialWindow,
                 benchmarkUnavailable,
-                notInUniverse));
+                notInUniverse,
+                strategy.CorporateActionInWindow));
         }
 
         // Best in-sample first; ties broken by name (Ordinal) so the order is total and deterministic.
@@ -187,7 +206,15 @@ public sealed class StrategyComparisonHarness
         {
             var c = candidates[i];
             rows.Add(new StrategyLeaderboardRow(
-                i + 1, c.Name, c.In, c.Out, c.Unusable, c.Partial, c.BenchmarkUnavailable, c.NotInUniverse));
+                i + 1,
+                c.Name,
+                c.In,
+                c.Out,
+                c.Unusable,
+                c.Partial,
+                c.BenchmarkUnavailable,
+                c.NotInUniverse,
+                c.CorporateAction));
         }
 
         // Dropped strategies in a stable, name-ordered sequence (their input order is not meaningful).
@@ -237,7 +264,10 @@ public sealed class StrategyComparisonHarness
                 date,
                 day.MemberCount,
                 day.ResolvedCount,
-                [.. day.Unresolved.Select(m => new BenchmarkMemberExclusion(m.Ticker, m.Reason))]));
+                [.. day.Unresolved.Select(m => new BenchmarkMemberExclusion(m.Ticker, m.Reason))])
+            {
+                PendingAcquisitionExcludedMembers = day.PendingAcquisitionExcludedCount,
+            });
             if (date < frozenOn)
             {
                 preFreeze++;

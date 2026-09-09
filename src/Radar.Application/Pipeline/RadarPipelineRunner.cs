@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Acquisitions;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
 using Radar.Application.Storage;
@@ -34,6 +35,13 @@ namespace Radar.Application.Pipeline;
 public sealed class RadarPipelineRunner : IRadarPipeline
 {
     private readonly ICollectionPass _collectionPass;
+
+    // Spec 217 §1: OPTIONAL by design, with a MEANING rather than as a wiring accident — null means the
+    // acquisition-recognition path is not composed (no SEC User-Agent, or the feature is not enabled), and
+    // the run then behaves exactly as it did before spec 217. The Worker registers it whenever the SEC
+    // reader is available.
+    private readonly IAcquisitionRecognitionPass? _acquisitionRecognition;
+
     private readonly IScoringPass _scoringPass;
     private readonly IScoringStrategyFactory _scoringStrategies;
     private readonly IScoringConfigStore _scoringConfigStore;
@@ -60,7 +68,10 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         PipelineOptions options,
         IEnumerable<IHydrationTelemetry> hydrationTelemetry,
         TimeProvider timeProvider,
-        ILogger<RadarPipelineRunner> logger)
+        ILogger<RadarPipelineRunner> logger,
+        // Spec 217 §1: trailing and defaulted so every existing construction site keeps compiling and keeps
+        // today's behaviour; see the field for what null means.
+        IAcquisitionRecognitionPass? acquisitionRecognition = null)
     {
         ArgumentNullException.ThrowIfNull(collectionPass);
         ArgumentNullException.ThrowIfNull(scoringPass);
@@ -75,6 +86,7 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         ArgumentNullException.ThrowIfNull(logger);
 
         _collectionPass = collectionPass;
+        _acquisitionRecognition = acquisitionRecognition;
         _scoringPass = scoringPass;
         _scoringStrategies = scoringStrategies;
         _scoringConfigStore = scoringConfigStore;
@@ -104,6 +116,23 @@ public sealed class RadarPipelineRunner : IRadarPipeline
         // Stages 1–5: collect → store evidence → extract → resolve → review → store signals. Runs exactly
         // once (spec 137) and owns the run's asOfUtc capture, which must happen AFTER collection.
         var collection = await _collectionPass.RunAsync(ct).ConfigureAwait(false);
+
+        // Stage 5b (spec 217 §1): ACQUISITION RECOGNITION, between collection and scoring and in that order
+        // for one reason — a recognition made now must be visible to THIS run's scoring, so the score
+        // snapshot carries the right CompanyStatusAtScoring and the corporate-action supersede applies to
+        // the very filing that was just collected. Running it after scoring would leave a one-run window in
+        // which a $1.5B all-cash sale of the company still scored as a partnership.
+        //
+        // It never writes evidence, a signal or a score: its only durable outputs are the append-only
+        // acquisitions store and the heal-forward scan cache, and every skip it makes is counted on the
+        // result and stated in its single aggregated log line. Not composed ⇒ skipped entirely, which is
+        // byte-identical to pre-217.
+        if (_acquisitionRecognition is not null)
+        {
+            await _acquisitionRecognition
+                .RunAsync(collection.Companies, ct)
+                .ConfigureAwait(false);
+        }
 
         // Stage 6: score every company at the run instant, once per configured strategy. Reuses the company
         // list the collection pass already loaded, so the run still makes a single company-repository read.

@@ -3,6 +3,8 @@ using System.Globalization;
 using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Statistics;
 
+using Radar.Application.Acquisitions;
+
 namespace Radar.Application.Efficacy.Comparison;
 
 /// <summary>
@@ -63,12 +65,22 @@ public sealed class PairedComparisonHarness
     /// 2026-08-23), to which self-excluded excess is a positive affine per-date transform, so a benchmark
     /// gate here could only discard otherwise-valid support while changing no rank, ρ or paired delta.
     /// </param>
+    /// <param name="acquisitions">
+    /// SPEC 217 §3 (<c>observation-eligibility-v2</c>): the shared run-time projection. Unlike the benchmark
+    /// above, this one IS consulted: an observation whose outcome is a takeover is excluded from the claim
+    /// path exactly as it is from the leaderboard, because the paired delta compares arms on the SAME
+    /// outcome and a deal is not an outcome any arm could have earned. Declared PROSPECTIVELY — the
+    /// precommitted 2026-09-29 AD-15 boundary is unchanged and the claim interval starts after it, so no
+    /// outcome already inside the claim family is re-scored.
+    /// <see cref="PendingAcquisitions.None"/> reproduces the pre-217 support byte-for-byte.
+    /// </param>
     public PairedStrategyComparison Compare(
         IReadOnlyList<StrategyScoreSeries> strategies,
         string primaryStrategyName,
         bool primaryWasPredeclared,
         PairedComparisonOptions options,
-        UniverseBenchmark? benchmark = null)
+        UniverseBenchmark? benchmark = null,
+        PendingAcquisitions? acquisitions = null)
     {
         ArgumentNullException.ThrowIfNull(strategies);
         ArgumentException.ThrowIfNullOrWhiteSpace(primaryStrategyName);
@@ -81,7 +93,12 @@ public sealed class PairedComparisonHarness
         foreach (var strategy in strategies)
         {
             ArgumentNullException.ThrowIfNull(strategy);
-            sets.Add(StrategyObservationBuilder.Build(strategy, horizonDays, exitToleranceDays, benchmark));
+            sets.Add(StrategyObservationBuilder.Build(
+                strategy,
+                horizonDays,
+                exitToleranceDays,
+                benchmark,
+                acquisitions ?? PendingAcquisitions.None));
         }
 
         // Strategy names are unique case-insensitively (ScoringStrategySet's rule; ScoreSeriesKey's
@@ -118,7 +135,11 @@ public sealed class PairedComparisonHarness
 
         var marginalSupports = sets
             .Select(s => new StrategyMarginalSupport(
-                s.StrategyName, SupportOf(s.Usable), s.WithoutForwardPrice, s.PartialWindow))
+                s.StrategyName,
+                SupportOf(s.Usable),
+                s.WithoutForwardPrice,
+                s.PartialWindow,
+                s.CorporateActionInWindow))
             .ToList();
 
         // The claim path's arms: the primary and every baseline. Only these can pair, so only their

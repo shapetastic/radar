@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Acquisitions;
 using Radar.Application.Efficacy.Claims;
 using Radar.Application.Scoring;
 
@@ -108,7 +109,11 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         // leaderboard records as BenchmarkUnavailable exclusions rather than silently falling back to raw.
         var benchmark = await _benchmarkProvider.GetAsync(ct).ConfigureAwait(false);
 
-        var leaderboard = _harness.Compare(series, _options, benchmark);
+        // Spec 217 §3: the SAME projection the benchmark was built with — one read, so the observation
+        // exclusion and the peer-mean exclusion can never disagree about a company.
+        var acquisitions = _benchmarkProvider.Acquisitions;
+
+        var leaderboard = _harness.Compare(series, _options, benchmark, acquisitions);
 
         var csv = _renderer.RenderCsv(leaderboard);
         var markdown = _renderer.RenderMarkdown(leaderboard);
@@ -153,7 +158,8 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
 
         if (_pairedOptions is not null)
         {
-            await GeneratePairedAsync(series, _pairedOptions, attentionPrerequisite, benchmark, ct)
+            await GeneratePairedAsync(
+                    series, _pairedOptions, attentionPrerequisite, benchmark, acquisitions, ct)
                 .ConfigureAwait(false);
         }
 
@@ -178,6 +184,7 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         PairedComparisonOptions pairedOptions,
         Ad15AttentionPrerequisite? attentionPrerequisite,
         UniverseBenchmark? benchmark,
+        PendingAcquisitions acquisitions,
         CancellationToken ct)
     {
         var hasBaselines = _strategies.Strategies.Any(s =>
@@ -198,7 +205,7 @@ public sealed class StrategyComparisonReportGenerator : IStrategyComparisonRepor
         // The benchmark is attached for AUDIT only (spec 183 §3): the paired outcome is the per-date
         // cross-sectional rank of the RAW forward return, and no benchmark gate applies to this path.
         var paired = _pairedHarness.Compare(
-            series, primaryName, primaryWasPredeclared, pairedOptions, benchmark);
+            series, primaryName, primaryWasPredeclared, pairedOptions, benchmark, acquisitions);
 
         // The COMPOSITE verdict (spec 170): the price half from the harness plus AD-16's attention
         // prerequisite. A null prerequisite fails closed as ad16-screen-not-calculated.

@@ -3,6 +3,7 @@ namespace Radar.Application.Reporting;
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
+using Radar.Application.Acquisitions;
 using Radar.Application.Collectors;
 using Radar.Application.Filings;
 using Radar.Application.Lifecycle;
@@ -60,6 +61,12 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     // enters a score, a label or a fingerprint.
     private readonly IReportedMetricStore? _reportedMetrics;
 
+    // Spec 217 §2: the run-time acquisitions projection. REQUIRED, never optional-nullable — the
+    // Application library registers the inert NoPendingAcquisitionSource, so an unwired seam is a
+    // composition defect that must fail resolution rather than silently rendering no acquisition state
+    // while every test stays green (the spec-150 lesson).
+    private readonly IPendingAcquisitionSource _pendingAcquisitions;
+
     public WeeklyReportBuilder(
         ICompanyRepository companyRepository,
         IScoreRepository scoreRepository,
@@ -86,6 +93,9 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         IScoreSnapshotFileStoreFactory scoreSnapshotFileStores,
         IOperatingCallSource operatingCalls,
         IStrategyEvidenceFactsSource evidenceFacts,
+        // Spec 217 §2: REQUIRED for the reason above. The Application library's inert default resolves in
+        // every composition that has no acquisitions store.
+        IPendingAcquisitionSource pendingAcquisitions,
         WeeklyReportOptions options,
         TimeProvider timeProvider,
         ILogger<WeeklyReportBuilder> logger,
@@ -114,6 +124,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         ArgumentNullException.ThrowIfNull(scoreSnapshotFileStores);
         ArgumentNullException.ThrowIfNull(operatingCalls);
         ArgumentNullException.ThrowIfNull(evidenceFacts);
+        ArgumentNullException.ThrowIfNull(pendingAcquisitions);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -156,6 +167,7 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         _logger = logger;
         _judgmentRerenderer = judgmentRerenderer;
         _reportedMetrics = reportedMetrics;
+        _pendingAcquisitions = pendingAcquisitions;
     }
 
     public async Task<WeeklyReportResult> GenerateAsync(
@@ -184,6 +196,22 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         // the in-period snapshots in one query and avoid per-company round-trips; we deliberately
         // keep the repository surface untouched in this slice.
         var companies = await _companyRepository.GetAllAsync(ct).ConfigureAwait(false);
+
+        // Spec 217 §2: ONE store read per report, projected once and shared by the narrative walk (rule 0
+        // and the banner), the per-strategy tables (the exclusion + footer) and the `## Acquisitions
+        // pending` section — so the label, the banner, the excluded row and the section can never disagree
+        // about the same company.
+        var acquisitions = await _pendingAcquisitions.GetAsync(ct).ConfigureAwait(false);
+        if (acquisitions.Unreadable > 0)
+        {
+            // Nothing is discarded without being counted: an unreadable acquisitions file means a closed
+            // thesis may be rendered as open, which is exactly the failure this slice exists to prevent.
+            _logger.LogWarning(
+                "The acquisitions store had {Unreadable} unreadable file(s) for this report; a recognised "
+                    + "pending acquisition may therefore be missing from the labels, the rankings and the "
+                    + "Acquisitions pending section.",
+                acquisitions.Unreadable);
+        }
 
         // Spec 184: the operating-call layer + evidence statuses. Built ONLY with more than one configured
         // strategy — with a single strategy neither source is even consulted (structural inertness; the
@@ -343,6 +371,11 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             var signals = await BuildSignalRefsAsync(c.Current, links, loadedEvidence, ct)
                 .ConfigureAwait(false);
 
+            // Spec 217 §2: the company's recognised acquisition AS OF this snapshot's instant (never
+            // before the announcement), handed to rule 0 and carried onto the entry so the renderer's
+            // banner reads from the same record the label was decided from.
+            var pendingAcquisition = acquisitions.At(c.Current.CompanyId, c.Current.CreatedAtUtc);
+
             // Spec 212: the narrative arm's lines travel with the context; the narrative is only built when
             // labelLines is non-null (StopAll builds none), so this never defaults silently.
             var action = _policy.Decide(new ReportActionContext(
@@ -351,7 +384,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 PreviousComparable: comparable,
                 ContributingSignals: signals,
                 FollowingTier: c.Company.FollowingTier,
-                Thresholds: labelLines!.Thresholds));
+                Thresholds: labelLines!.Thresholds,
+                PendingAcquisition: pendingAcquisition));
             // Spec 215 §4: the company's ledger is read ONCE per surfaced entry and joined by EvidenceId;
             // a read failure degrades to "no clause" with one Warning per company, never a missing report.
             var reportedByEvidence = await LoadReportedMetricsAsync(c.Current.CompanyId, ct).ConfigureAwait(false);
@@ -372,7 +406,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 PreviousTrajectoryScore: comparable ? previous!.TrajectoryScore : (int?)null,
                 PreviousScoringChanged: previous is not null && !comparable,
                 FollowingTier: c.Company.FollowingTier,
-                InsiderActivity: insiderActivity));
+                InsiderActivity: insiderActivity,
+                PendingAcquisition: pendingAcquisition));
         }
 
         // Signals needing review observed in-period, surfaced for human attention.
@@ -467,7 +502,17 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
         // from the SAME company list the primary walk used, so the two views cannot disagree about which
         // companies exist.
         var strategySections = await BuildStrategySectionsAsync(
-            companies, periodStartUtc, periodEndUtc, ct).ConfigureAwait(false);
+            companies, periodStartUtc, periodEndUtc, acquisitions, ct).ConfigureAwait(false);
+
+        // Spec 217 §2: the `## Acquisitions pending` section's rows, built from the SAME projection, over
+        // the SAME company list, so a company can never be excluded from a ranking without appearing here.
+        // NULL when the recognition path is not composed: an empty section would state "no company is under
+        // a recognised pending acquisition" over a run that never looked, which is exactly the defaulted-zero
+        // -as-measured-zero failure CLAUDE.md forbids. With the store composed, an EMPTY list IS a measured
+        // zero and the renderer says so.
+        var acquisitionsPending = acquisitions.RecognitionAvailable
+            ? BuildAcquisitionsPending(companies, acquisitions, periodEndUtc)
+            : null;
 
         var generatedAt = _timeProvider.GetUtcNow();
         var title = string.Format(
@@ -498,7 +543,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             Strategies: strategySections,
             Lifecycle: lifecycle,
             NewsJudgment: judgmentMarkers,
-            Labels: labelLines);
+            Labels: labelLines,
+            AcquisitionsPending: acquisitionsPending);
 
         var markdown = _renderer.Render(model);
 
@@ -607,10 +653,80 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
     /// noise and invite trusting it.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// SPEC 217 §2 — the rows of the `## Acquisitions pending` section. Pure: it derives days-pending from
+    /// the report's own period end rather than a wall clock, so a re-render of one model is byte-identical
+    /// (AD-3). A recognition whose announcement falls AFTER the period end is not rendered — the report
+    /// describes the period it covers — and a record whose company is not in the universe is skipped and
+    /// counted by the caller's unreadable/consistency logging rather than rendered without a name.
+    /// </summary>
+    private IReadOnlyList<AcquisitionPendingReportRow> BuildAcquisitionsPending(
+        IReadOnlyList<Company> companies,
+        PendingAcquisitions acquisitions,
+        DateTimeOffset periodEndUtc)
+    {
+        var byId = companies.ToDictionary(c => c.Id);
+        var rows = new List<AcquisitionPendingReportRow>();
+
+        // Two DIFFERENT reasons a durable record may not render, counted separately rather than pooled into
+        // one silent `continue` (CLAUDE.md): a record announced AFTER this report's period is simply out of
+        // scope and will render in a later report, whereas a record whose company is no longer in the
+        // universe is a genuine drop — the acquisition is on disk and the report cannot name it, which is
+        // exactly the state an operator needs told.
+        var announcedAfterPeriod = 0;
+        var companyNotInUniverse = 0;
+
+        foreach (var record in acquisitions.Records)
+        {
+            if (record.AnnouncedOnUtc > periodEndUtc)
+            {
+                announcedAfterPeriod++;
+                continue;
+            }
+
+            if (!byId.TryGetValue(record.CompanyId, out var company))
+            {
+                companyNotInUniverse++;
+                continue;
+            }
+
+            rows.Add(new AcquisitionPendingReportRow(
+                company.Name,
+                company.Ticker,
+                record,
+                (int)(periodEndUtc.UtcDateTime.Date - record.AnnouncedOnUtc.UtcDateTime.Date).TotalDays));
+        }
+
+        rows.Sort(static (a, b) =>
+        {
+            var byDate = a.Record.AnnouncedOnUtc.CompareTo(b.Record.AnnouncedOnUtc);
+            return byDate != 0 ? byDate : string.CompareOrdinal(a.CompanyName, b.CompanyName);
+        });
+
+        if (companyNotInUniverse > 0)
+        {
+            _logger.LogWarning(
+                "{Count} recognised acquisition(s) name a company that is no longer in the seeded universe; "
+                    + "they are on disk but cannot be rendered in the Acquisitions pending section.",
+                companyNotInUniverse);
+        }
+
+        if (announcedAfterPeriod > 0)
+        {
+            _logger.LogInformation(
+                "{Count} recognised acquisition(s) were announced after this report's period end and are "
+                    + "out of scope for it; they will render in a later report.",
+                announcedAfterPeriod);
+        }
+
+        return rows;
+    }
+
     private async Task<IReadOnlyList<StrategyReportSection>?> BuildStrategySectionsAsync(
         IReadOnlyList<Company> companies,
         DateTimeOffset periodStartUtc,
         DateTimeOffset periodEndUtc,
+        PendingAcquisitions acquisitions,
         CancellationToken ct)
     {
         var runtimes = _scoringStrategies.Runtimes;
@@ -690,11 +806,24 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             }
 
             var rows = new List<StrategyReportRow>(Math.Min(withLinks.Count, _options.MaxItems));
+            var pendingAcquisitionsExcluded = 0;
             foreach (var c in withLinks)
             {
                 if (rows.Count >= _options.MaxItems)
                 {
                     break;
+                }
+
+                // Spec 217 §2: a company under a recognised pending acquisition leaves every strategy's
+                // ranked table. Its price is pinned at the bid, so its rank is a statement about a deal
+                // rather than about a trajectory, and a reader comparing rows by eye cannot tell the two
+                // apart. It is EXCLUDED here and COUNTED — the renderer prints a one-line footer per
+                // strategy naming the count and pointing at the `## Acquisitions pending` section, so the
+                // company never simply disappears.
+                if (acquisitions.At(c.Current.CompanyId, c.Current.CreatedAtUtc) is not null)
+                {
+                    pendingAcquisitionsExcluded++;
+                    continue;
                 }
 
                 rows.Add(new StrategyReportRow(
@@ -722,6 +851,8 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
                 // Spec 176: the declared reporting purpose, carried onto the section so the renderer can
                 // group the live strategy leaders without inferring purpose from a name/formula/channel.
                 Purpose = runtime.Definition.Purpose,
+                // Spec 217 §2: how many ranked rows a pending acquisition removed from THIS strategy.
+                PendingAcquisitionsExcluded = pendingAcquisitionsExcluded,
             });
         }
 
