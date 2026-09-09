@@ -3326,8 +3326,11 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     every record of the LATEST accession is the CURRENT value and is EXCLUDED
     (`referencesExcludedNewest`). A metric reported ONCE is therefore never a reference — the honest state
     of a young ledger. Separately, a VERIFIED prior pair on the newest record projects as kind
-    `StatedPrior` with its own id (`ReportedMetricRecord.StatedPriorIdentity`), carrying the PRIOR figure as
-    its value; a half-stated pair projects nothing. A secondary guard on top: a reference filed LATER than
+    `StatedPrior` with its own id (`ReportedMetricRecord.StatedPriorIdentity`, derived from the record's
+    own unique `Id` so it is INJECTIVE — two rows of one release stating the same metric for two periods
+    against the SAME prior period are two references, not two figures collapsed onto one id that the
+    id-keyed lookups then throw on), carrying the PRIOR figure as its value; a half-stated pair projects
+    nothing. A secondary guard on top: a reference filed LATER than
     the observation instant of every supplied family naming its metric is excluded and counted
     (`referencesExcludedLaterThanFact`); a family whose instant is NOT RECORDED excludes nothing.
     `FactFamilyRecord.EarliestObservedAtUtc` is threaded into `NewsJudgmentInputFamily.ObservedAtUtc`

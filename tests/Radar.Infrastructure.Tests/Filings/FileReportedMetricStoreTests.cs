@@ -349,6 +349,31 @@ public sealed class FileReportedMetricStoreTests : IDisposable
 
         Assert.Null((complete with { PriorValue = null }).StatedPriorIdentity);
         Assert.Null((complete with { PriorPeriod = null }).StatedPriorIdentity);
+
+        // …and it is INJECTIVE over records. Two rows of ONE release can state the same metric for two
+        // periods against the SAME stated prior period ("first six months" and "second quarter", both
+        // "compared with the prior-year period"). Keying the stated prior on (policy, accession, metric,
+        // PRIOR period) collapsed those two figures onto one ReferenceId, which the id-keyed lookups over
+        // the projected references throw on. Deriving it from the record's own Id cannot collide.
+        var quarter = Record(metric: ReportedMetric.Revenue, period: "second quarter of fiscal 2027");
+        var halfYear = quarter with
+        {
+            Id = ReportedMetricRecord.IdentityFor(
+                quarter.Accession, ReportedMetric.Revenue, "first six months of fiscal 2027", Policy),
+            Period = "first six months of fiscal 2027",
+            Value = "701.0",
+        };
+
+        Assert.NotEqual(quarter.Id, halfYear.Id);
+        Assert.Equal(quarter.PriorPeriod, halfYear.PriorPeriod);
+        Assert.NotEqual(quarter.StatedPriorIdentity, halfYear.StatedPriorIdentity);
+
+        // The stated prior stays content-derived: the SAME record re-read is the same reference, and a
+        // re-worded prior period is a new one (matching IdentityFor's stance on the record's own period).
+        Assert.Equal(quarter.StatedPriorIdentity, Record().StatedPriorIdentity);
+        Assert.NotEqual(
+            quarter.StatedPriorIdentity,
+            (quarter with { PriorPeriod = "second quarter of fiscal 2026" }).StatedPriorIdentity);
     }
 
     [Fact]

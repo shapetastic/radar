@@ -169,10 +169,20 @@ public sealed record ReportedMetricRecord(
     /// <c>NewsJudgmentReferenceValue.ReferenceId</c>) because the judge may cite either, and conflating
     /// them would make "which figure did the judge compare against" unanswerable. Returns <c>null</c> when
     /// the pair is not complete — a half-stated pair is never a reference.
+    /// <para>
+    /// It is derived from <see cref="Id"/> — the record's OWN unique (policy, accession, metric, period)
+    /// identity — precisely so it is INJECTIVE over records. Deriving it from (policy, accession, metric,
+    /// prior period) instead would collapse two rows of one release that state the same prior period for
+    /// one metric onto a single <c>ReferenceId</c>, which both loses one row's figure silently and throws
+    /// where the projected references are keyed by id (<c>NewsJudgmentValidator</c>,
+    /// <c>NewsJudgmentGenerator</c>). The prior period is kept in the canonical string after the
+    /// fixed-width <c>D</c>-format guid — unambiguous, and a re-worded prior period stays a new reference,
+    /// matching <see cref="IdentityFor"/>'s stance on the record's own period.
+    /// </para>
     /// </summary>
     public Guid? StatedPriorIdentity => PriorValue is { Length: > 0 } && PriorPeriod is { Length: > 0 }
         ? DeterministicGuid.FromCanonicalString(
-            $"radar:reported-metric-stated-prior:{Policy}:{Accession}:{Metric}:{PriorPeriod}")
+            $"radar:reported-metric-stated-prior:{Id:D}:{PriorPeriod}")
         : null;
 }
 

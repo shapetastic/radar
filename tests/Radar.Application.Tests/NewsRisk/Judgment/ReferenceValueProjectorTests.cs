@@ -217,6 +217,45 @@ public sealed class ReferenceValueProjectorTests
     }
 
     [Fact]
+    public void Project_TwoRowsOfOneReleaseSharingAPriorPeriod_AreTwoDISTINCTStatedPriorReferences()
+    {
+        // The stated-prior identity must be INJECTIVE over records. One release routinely states a metric
+        // for two periods against the SAME stated prior period ("the quarter" and "the six months", both
+        // "compared with the prior-year period"): both rows belong to the newest accession, so both
+        // project their own StatedPrior reference. Keyed on (policy, accession, metric, PRIOR period) those
+        // two collapse onto ONE ReferenceId — two figures under one id, which the id-keyed lookups in
+        // NewsJudgmentValidator/NewsJudgmentGenerator throw on, and which would leave "which figure was
+        // supplied" unrecoverable from the persisted ReferenceIds. Keyed on the record's own Id they cannot.
+        var quarter = Ledger(
+            ReportedMetric.Revenue,
+            "second quarter of fiscal 2027",
+            priorValue: "227.0",
+            priorPeriod: "prior-year period");
+        var halfYear = Ledger(
+            ReportedMetric.Revenue,
+            "first six months of fiscal 2027",
+            priorValue: "441.0",
+            priorPeriod: "prior-year period");
+
+        Assert.NotEqual(quarter.Id, halfYear.Id);
+        Assert.Equal(quarter.Accession, halfYear.Accession);
+        Assert.Equal(quarter.PriorPeriod, halfYear.PriorPeriod);
+
+        var projection = ReferenceValueProjector.Project(
+            [Family("Revenues of $384.0 million")], [quarter, halfYear]);
+
+        Assert.Equal(2, projection.References.Count);
+        Assert.All(
+            projection.References, r => Assert.Equal(NewsJudgmentReferenceKind.StatedPrior, r.Kind));
+        Assert.Equal(2, projection.References.Select(r => r.ReferenceId).Distinct().Count());
+        Assert.Contains(projection.References, r => r.ReferenceId == quarter.StatedPriorIdentity);
+        Assert.Contains(projection.References, r => r.ReferenceId == halfYear.StatedPriorIdentity);
+
+        // …and the id-keyed lookup the collision would have thrown in now succeeds.
+        Assert.Equal(2, projection.References.ToDictionary(r => r.ReferenceId).Count);
+    }
+
+    [Fact]
     public void Project_AFilingLaterThanTheFact_IsExcluded_AndCounted()
     {
         // SPEC 216 §1, case (e) — the secondary guard: a newer filing may never be compared BACKWARDS
