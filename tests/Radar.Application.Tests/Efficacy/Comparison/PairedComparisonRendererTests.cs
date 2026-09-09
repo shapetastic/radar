@@ -311,8 +311,12 @@ public sealed class PairedComparisonRendererTests
         var header = lines[0].Split(',');
 
         Assert.DoesNotContain("schemaVersion", header);
-        Assert.Equal("gateVerdictId", header[^1]);
-        Assert.Equal(PreSpec186Columns.Length + 1, header.Length);
+        // Spec 217 §3 appended TWO more run-level identity columns after gateVerdictId, by the same
+        // additive rule: readers resolve BY HEADER NAME, and no pre-186 column moved.
+        Assert.Equal("gateVerdictId", header[^3]);
+        Assert.Equal("observationEligibilityVersion", header[^2]);
+        Assert.Equal("excessRuleVersion", header[^1]);
+        Assert.Equal(PreSpec186Columns.Length + 3, header.Length);
         for (var i = 0; i < PreSpec186Columns.Length; i++)
         {
             Assert.Equal(PreSpec186Columns[i], header[i]);   // no by-name reader can shift
@@ -320,7 +324,13 @@ public sealed class PairedComparisonRendererTests
 
         var expected = GateVerdictIdentity.Compute(result, verdict);
         Assert.NotEmpty(expected);
-        Assert.All(lines.Skip(1), l => Assert.Equal(expected, SplitCsvFields(l)[^1]));
+        Assert.All(lines.Skip(1), l => Assert.Equal(expected, SplitCsvFields(l)[^3]));
+        Assert.All(
+            lines.Skip(1),
+            l => Assert.Equal(ObservationEligibility.Version, SplitCsvFields(l)[^2]));
+        Assert.All(
+            lines.Skip(1),
+            l => Assert.Equal(UniverseBenchmark.ExcessRuleVersion, SplitCsvFields(l)[^1]));
     }
 
     [Fact]

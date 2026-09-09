@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Radar.Application.Acquisitions;
+using Radar.Application.Efficacy.Comparison;
 
 using Radar.Application.News;
 using Radar.Application.NewsRisk;
@@ -528,15 +530,27 @@ public sealed class NewsRiskEvaluationGeneratorTests
         // Both return columns exist and are labelled: raw as raw, excess against the named frozen universe,
         // max adverse as raw — and everything descriptive (no claim language anywhere in this artifact).
         Assert.Contains("Fwd 21d (raw, descriptive)", markdown);
-        Assert.Contains("Excess fwd 21d vs universe-v1 (descriptive)", markdown);
+        // Spec 217 §3: the label names no rule version — the version has ONE owner and is stated in the
+        // prose and the CSV basis column, both sourced from the constant.
+        Assert.Contains("Excess fwd 21d vs frozen universe (descriptive)", markdown);
+        Assert.DoesNotContain("vs universe-v1", markdown, StringComparison.Ordinal);
         Assert.Contains("Max adverse 21d (raw)", markdown);
         Assert.Contains("Forward returns are DESCRIPTIVE, in both forms (spec 183)", markdown);
         Assert.Contains("RAW max adverse move", markdown);
 
         var line = CsvLineFor(csv, record);
-        Assert.Contains(",excess-vs-benchmark-universe-v1,", line);
+
+        // ⚠ SPEC 217 §3: asserted against the CONSTANT, never a literal. The literal this replaced
+        // (",excess-vs-benchmark-universe-v1,") is exactly how the defect survived CI — this generator
+        // consumes the SAME benchmark singleton the leaderboard does, so its values silently became
+        // excess-vs-universe-v2 while both the column value and this assertion still said v1. A copied
+        // version token is a fact with no owner.
         Assert.Contains(
-            "rawForwardReturn21d,excessForwardReturn21d,excessForwardReturn21dBasis,maxAdverseMove21dRaw",
+            "," + UniverseBenchmark.ExcessRuleVersion + ",", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("excess-vs-benchmark-universe-v1", csv, StringComparison.Ordinal);
+        Assert.Contains(
+            "rawForwardReturn21d,excessForwardReturn21d,excessForwardReturn21dBasis,"
+                + "corporateActionInWindow21d,maxAdverseMove21dRaw",
             csv.Split('\n')[0]);
 
         // The excess value genuinely differs from the raw one (the +5%-peer moves the mean), so the two
@@ -567,5 +581,121 @@ public sealed class NewsRiskEvaluationGeneratorTests
         Assert.Equal("benchmark-unavailable", cells[Array.IndexOf(header, "excessForwardReturn21dBasis")]);
         Assert.Equal(string.Empty, cells[Array.IndexOf(header, "excessForwardReturn21d")]);
         Assert.NotEqual(string.Empty, cells[Array.IndexOf(header, "rawForwardReturn21d")]);
+    }
+
+    [Fact]
+    public async Task ARowUnderAPendingAcquisition_IsMARKED_AndKept_NotExcluded()
+    {
+        // SPEC 217 §3 — the DECISION, asserted rather than left to a comment. The efficacy series EXCLUDES
+        // an observation whose forward window contains a recognised acquisition, because it RANKS and such
+        // an outcome could not have been earned. This artifact DESCRIBES one frozen assessment at a time and
+        // is non-claim-bearing, so it MARKS the row and keeps it: dropping it would shrink the coverage of
+        // the very records the artifact exists to show, and would discard an assessment rather than count
+        // one. The asymmetry is deliberate and is stated ON the artifact.
+        var companyId = Guid.NewGuid();
+        var record = Assessment("AAA", companyId: companyId);
+        var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
+        var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
+        var asOf = DateOnly.FromDateTime(record.AssessmentCutoffUtc.UtcDateTime);
+
+        var acquisitions = new PendingAcquisitions(new AcquisitionStoreReadResult(
+            [
+                new PendingAcquisitionRecord(
+                    Id: Guid.NewGuid(),
+                    CompanyId: companyId,
+                    Accession: "0001193125-26-341302",
+                    EvidenceId: Guid.NewGuid(),
+                    AnnouncedOnUtc: new DateTimeOffset(
+                        asOf.AddDays(5).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero),
+                    AcquirerName: "Safe Harbor Marinas, LLC",
+                    ConsiderationPerShare: "53.00",
+                    ConsiderationCurrency: "$",
+                    ConsiderationKind: AcquisitionConsiderationKind.Cash,
+                    ConsiderationQuote: "q",
+                    TargetQuote: "t",
+                    ScanVersion: AcquisitionAgreementScan.Version,
+                    Verification: AcquisitionVerification.Verbatim),
+            ],
+            Unreadable: 0));
+
+        var (markdown, csv) = await RunAsync(
+            [record],
+            [],
+            EstablishedBoundary(),
+            new() { ["AAA"] = History("AAA", start, end) },
+            new Efficacy.Comparison.FixedUniverseBenchmarkProvider(
+                BenchmarkFor(companyId), acquisitions));
+
+        // KEPT: the row is still on the artifact, with its outcome.
+        var line = CsvLineFor(csv, record);
+        Assert.False(string.IsNullOrWhiteSpace(line));
+
+        // MARKED: the per-row column says so, beside the basis it qualifies.
+        var header = csv.Split('\n')[0].Split(',');
+        var markerIndex = Array.IndexOf(header, "corporateActionInWindow21d");
+        Assert.True(markerIndex >= 0);
+        Assert.Equal("true", line.Split(',')[markerIndex]);
+
+        // COUNTED, and the decision stated, on the markdown.
+        Assert.Contains(
+            "1 row(s) are THEMSELVES under a recognised pending acquisition",
+            markdown,
+            StringComparison.Ordinal);
+        Assert.Contains("MARKED AND KEPT, deliberately", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "Read a marked row's return as the deal, not as the business.",
+            markdown,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WithNoPendingAcquisition_TheMarkerIsAMeasuredFalse_AndTheSectionSaysZero()
+    {
+        var companyId = Guid.NewGuid();
+        var record = Assessment("AAA", companyId: companyId);
+        var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
+        var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
+
+        var (markdown, csv) = await RunAsync(
+            [record],
+            [],
+            EstablishedBoundary(),
+            new() { ["AAA"] = History("AAA", start, end) },
+            new Efficacy.Comparison.FixedUniverseBenchmarkProvider(BenchmarkFor(companyId)));
+
+        var header = csv.Split('\n')[0].Split(',');
+        var markerIndex = Array.IndexOf(header, "corporateActionInWindow21d");
+        Assert.Equal("false", CsvLineFor(csv, record).Split(',')[markerIndex]);
+
+        // A MEASURED zero: the section renders whenever a benchmark exists, so "none were removed" and
+        // "nobody looked" are distinguishable.
+        Assert.Contains(
+            "0 row(s) are THEMSELVES under a recognised pending acquisition",
+            markdown,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Corporate actions (`" + UniverseBenchmark.ExcessRuleVersion + "`):",
+            markdown,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WithNoBenchmark_TheCorporateActionSection_RefusesToClaimAMeasuredZero()
+    {
+        var companyId = Guid.NewGuid();
+        var record = Assessment("AAA", companyId: companyId);
+        var start = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(-5);
+        var end = DateOnly.FromDateTime(SelectionAsOf.UtcDateTime).AddDays(25);
+
+        var (markdown, _) = await RunAsync(
+            [record],
+            [],
+            EstablishedBoundary(),
+            new() { ["AAA"] = History("AAA", start, end) },
+            new Efficacy.Comparison.FixedUniverseBenchmarkProvider(benchmark: null));
+
+        Assert.Contains("NOT a measured", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "0 row(s) are THEMSELVES under a recognised", markdown, StringComparison.Ordinal);
     }
 }

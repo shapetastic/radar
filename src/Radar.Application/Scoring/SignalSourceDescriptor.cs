@@ -163,6 +163,39 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // reproduces the pre-198 descriptor byte-for-byte.
         descriptor += (newsQuery ?? NewsQueryScoringIdentity.Default).Segment;
 
+        // SPEC 217 §2: the ACQUISITION-RECOGNITION identity — the deterministic item-1.01 scan version and
+        // the scoring-assembly supersede rule it drives.
+        //
+        // WHY IT IS HASHED, and hashed on the IDENTITY side. `acq-supersede-v1` REWRITES a signal the
+        // formula scores: the keyword extractor's Positive StrategicPartnership read (strength 4) of a
+        // recognised item-1.01 8-K becomes a Neutral CorporateAction at strength 0. That changes
+        // TrajectoryScore, OpportunityScore and rank for the affected company — measured: MarineMax's
+        // trajectory rose 56 → 62 on 2026-08-10 on exactly that signal. A scoring-assembly rule that can
+        // move a score and is NOT hashed is the comparability hole spec 194 §2 closed for the judgment read
+        // and spec 198 §3 closed for the feed query. `acqscan-v1` is folded in beside it because the
+        // supersede's rule is meaningless without the recognition rule that decides which evidence it
+        // applies to.
+        //
+        // IT IS UNCONDITIONAL, AND NOT AI-GATED — which is the whole point (spec 217 §2 says so explicitly).
+        // The supersede runs in EVERY composition: it is pure assembly code, not an opt-in seam, and only
+        // the DATA (whether this company has a recognised acquisition) varies. So BOTH the AI-ON and the
+        // AI-OFF pin families move once, exactly as they did for spec 198's newsquery= segment and unlike
+        // spec 197's / 214–216's judgment- and filing-read moves. An unchanged AI-OFF pin here would mean
+        // the rule is not actually hashed.
+        //
+        // PLACEMENT: appended LAST, after the spec-198 newsquery= segment, for the reason every segment
+        // since spec 194 has been appended last — the whole preceding prefix stays byte-stable, so this pin
+        // move is unambiguously attributable to this one input and to nothing else. "Beside the extractor
+        // rule-set identity" (spec 217 §2) is a statement about which SIDE it belongs to — the
+        // deterministic, always-present, non-AI-gated side that `rules=` heads — not about byte position;
+        // inserting it after `rules=` would have re-ordered every existing segment for no gain and made the
+        // move indistinguishable from a re-ordering.
+        //
+        // What is deliberately NOT in it: AcquisitionRecognitionOptions.MaxFetchesPerRun, which bounds how
+        // many filings are READ per run and never whether a filing that IS read is recognised — the same
+        // operational-cap exclusion spec 105 applied to the directional read's caps.
+        descriptor += AcquisitionScoringIdentity.Segment;
+
         _identityDescriptor = descriptor;
     }
 

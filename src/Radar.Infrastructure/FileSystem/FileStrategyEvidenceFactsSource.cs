@@ -3,6 +3,7 @@ using System.Text;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Lifecycle;
 
 namespace Radar.Infrastructure.FileSystem;
@@ -27,8 +28,29 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
     public const string LeaderboardFileName = "strategy-leaderboard.csv";
     public const string PairedComparisonFileName = "strategy-paired-comparison.csv";
 
-    /// <summary>The one leaderboard CSV schema this reader understands (spec 183's excess schema).</summary>
-    public const string SupportedLeaderboardSchema = "strategy-leaderboard-v2";
+    /// <summary>
+    /// The leaderboard CSV schemas this reader understands. <c>strategy-leaderboard-v2</c> is spec 183's
+    /// excess schema; <c>strategy-leaderboard-v3</c> is spec 217's (a new
+    /// <c>observationsCorporateActionInWindow</c> column plus the two rule-identity columns).
+    /// <para>
+    /// ⚠ BOTH are listed on purpose. This reader refuses any schema it does not know and degrades the WHOLE
+    /// evidence layer to "unavailable", so a schema bump that forgot this list would silently print
+    /// "Accruing (evidence unavailable)" for every arm on the next live report — which is precisely what
+    /// spec 217's bump would have done. The columns this reader consumes are resolved BY NAME and are
+    /// present and identical in both schemas, so accepting both is honest rather than lenient.
+    /// </para>
+    /// </summary>
+    public static readonly IReadOnlyList<string> SupportedLeaderboardSchemas =
+        ["strategy-leaderboard-v2", "strategy-leaderboard-v3"];
+
+    /// <summary>
+    /// The spec-217 §3 rule-identity columns (present in <c>strategy-leaderboard-v3</c> only). Resolved by
+    /// name like every other column, so a pre-217 artifact's absence of them is DETECTABLE and rendered as
+    /// "rules not stated" rather than being back-filled with today's constants.
+    /// </summary>
+    public const string ObservationEligibilityVersionColumn = "observationEligibilityVersion";
+
+    public const string ExcessRuleVersionColumn = "excessRuleVersion";
 
     /// <summary>
     /// The spec-186 §3 run-level verdict-identity column in the paired artifact. Resolved BY HEADER NAME
@@ -78,7 +100,7 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
             || !TryColumn(header, "status", out var statusCol)
             || !TryColumn(header, "rank", out var rankCol)
             || !TryColumn(header, "strategy", out var strategyCol)
-            || !TryColumn(header, "outOfSampleRhoExcessVsUniverseV1", out var rhoCol)
+            || !TryRhoColumn(header, out var rhoCol)
             || !TryColumn(header, "outOfSampleLower95", out var lowerCol)
             || !TryColumn(header, "outOfSampleUpper95", out var upperCol)
             || !TryColumn(header, "outOfSampleObservations", out var obsCol)
@@ -88,9 +110,16 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
                 "Leaderboard artifact at {Path} does not carry the expected {Schema} columns; treating the "
                     + "evidence as unavailable rather than guessing at positions.",
                 path,
-                SupportedLeaderboardSchema);
+                string.Join(" / ", SupportedLeaderboardSchemas));
             return (false, []);
         }
+
+        // Spec 217 §3: OPTIONAL by design. Present ⇒ the artifact states which rules produced its numbers;
+        // absent ⇒ it predates spec 217, which the report renders as "rules not stated" rather than
+        // asserting today's constants over yesterday's numbers.
+        var hasEligibilityColumn =
+            TryColumn(header, ObservationEligibilityVersionColumn, out var eligibilityCol);
+        var hasExcessRuleColumn = TryColumn(header, ExcessRuleVersionColumn, out var excessRuleCol);
 
         var rows = new List<LeaderboardStrategyFact>();
         for (var i = 1; i < lines.Count; i++)
@@ -101,15 +130,16 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
             }
 
             var fields = SplitCsvLine(lines[i]);
-            if (!string.Equals(Field(fields, schemaCol), SupportedLeaderboardSchema, StringComparison.Ordinal))
+            var rowSchema = Field(fields, schemaCol);
+            if (!SupportedLeaderboardSchemas.Contains(rowSchema, StringComparer.Ordinal))
             {
                 _logger.LogWarning(
                     "Leaderboard artifact at {Path} carries schema '{Schema}' on row {Row}; this reader "
                         + "understands '{Supported}' only — treating the evidence as unavailable.",
                     path,
-                    Field(fields, schemaCol),
+                    rowSchema,
                     i,
-                    SupportedLeaderboardSchema);
+                    string.Join(" / ", SupportedLeaderboardSchemas));
                 return (false, []);
             }
 
@@ -141,7 +171,16 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
                 rows.Add(new LeaderboardStrategyFact(
                     strategy,
                     Ranked: true,
-                    new RankedEvidence(rank, rho, lower, upper, observations),
+                    new RankedEvidence(rank, rho, lower, upper, observations)
+                    {
+                        // Spec 217 §3: carried off the ARTIFACT, blank ⇒ null ("not stated by this file").
+                        ObservationEligibilityVersion = hasEligibilityColumn
+                            ? NullIfBlank(Field(fields, eligibilityCol))
+                            : null,
+                        ExcessRuleVersion = hasExcessRuleColumn
+                            ? NullIfBlank(Field(fields, excessRuleCol))
+                            : null,
+                    },
                     DropReason: null));
             }
             else if (string.Equals(status, "dropped", StringComparison.Ordinal))
@@ -243,6 +282,26 @@ public sealed class FileStrategyEvidenceFactsSource : IStrategyEvidenceFactsSour
             return null;
         }
     }
+
+    /// <summary>
+    /// SPEC 217 §3 — the out-of-sample rho column, under whichever name the artifact on disk uses. The v3
+    /// name (<see cref="StrategyLeaderboardRenderer.OutOfSampleRhoColumn"/>) is tried FIRST because it is
+    /// what every new artifact carries; the v2 name is the pre-217 shape a live deployment still has on
+    /// disk and is understood for exactly as long as this reader accepts the v2 schema.
+    /// <para>
+    /// Both names are spliced from the RENDERER's constants rather than written as literals here: a copied
+    /// column name is a fact with no owner, and a copy is precisely how this reader's supported-schema list
+    /// went stale under spec 217's bump and would have degraded every arm to
+    /// "Accruing (evidence unavailable)" on a live report.
+    /// </para>
+    /// </summary>
+    private static bool TryRhoColumn(Dictionary<string, int> header, out int index) =>
+        TryColumn(header, StrategyLeaderboardRenderer.OutOfSampleRhoColumn, out index)
+        || TryColumn(header, StrategyLeaderboardRenderer.LegacyOutOfSampleRhoColumnV2, out index);
+
+    /// <summary>Blank ⇒ <c>null</c>: an empty cell states nothing and must not read as a rule identity.</summary>
+    private static string? NullIfBlank(string value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static Dictionary<string, int> IndexHeader(string headerLine)
     {

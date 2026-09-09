@@ -50,10 +50,20 @@ public sealed class ScoringConfigFingerprintTests
     // NewsWorkerOptions default off, so this constant describes what a live run stamps. A window of 0
     // renders an EMPTY segment, which is why Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins below can
     // reproduce every pre-198 value exactly.
+    //
+    // SPEC 217 §2 APPENDS A FOURTH SEGMENT, LAST: the ACQUISITION-RECOGNITION identity
+    // (acq=acqscan-v1;supersede=acq-supersede-v1;). It is UNCONDITIONAL and NOT AI-gated — the
+    // corporate-action supersede is pure assembly code that runs in every composition, so there is no
+    // "disabled" form of it — which is precisely why BOTH the AI-OFF and the AI-ON pin families move once
+    // for it (the spec-198 newsquery pattern, not the spec-197/214–216 AI-ON-only one). Built through the
+    // real AcquisitionScoringIdentity.Segment rather than written as a literal, so a bump to
+    // AcquisitionAgreementScan.Version or CorporateActionSupersede.Version re-stamps every pin on its own
+    // instead of leaving a stale copy here.
     private static readonly string SourceDescriptor =
         "rules=radar-keyword-rules-v8;"
             + NewsJudgmentScoringIdentity.Disabled.Segment
-            + NewsQueryScoringIdentity.Default.Segment;
+            + NewsQueryScoringIdentity.Default.Segment
+            + AcquisitionScoringIdentity.Segment;
 
     /// <summary>
     /// The pre-spec-198 AI-OFF descriptor: identical but for the news-query segment, which
@@ -63,7 +73,8 @@ public sealed class ScoringConfigFingerprintTests
     private static readonly string SourceDescriptorWithoutNewsQuery =
         "rules=radar-keyword-rules-v8;"
             + NewsJudgmentScoringIdentity.Disabled.Segment
-            + NewsQueryScoringIdentity.None.Segment;
+            + NewsQueryScoringIdentity.None.Segment
+            + AcquisitionScoringIdentity.Segment;
 
     // The live baseline's news-read identity: scripts/run-profiles/default.json enables the stage-2 judgment
     // and designates the DeepInfra DeepSeek reader as BOTH the presentation judge and the presentation
@@ -359,7 +370,50 @@ public sealed class ScoringConfigFingerprintTests
         // snapshots as the corrected series. That path is git-ignored, so those records cannot ride in a PR
         // and MUST NEVER be fabricated. If step 2 is missed, StrategyIdentityGuard halts the run before
         // collection - that halt is CORRECT and must not be bypassed.
-        Assert.Equal("radar-scoring-fp-56c8e882beed", DefaultFingerprint());
+        //
+        // ⚠ SPEC 217 §2 MOVES THIS PIN — radar-scoring-fp-56c8e882beed → radar-scoring-fp-66fca8c5f1fc —
+        // AND ALL FIVE OTHERS WITH IT, INCLUDING THE THREE AI-OFF ONES. That BOTH sides move is the
+        // deliverable, and it is the spec-198 pattern rather than the spec-197/214-216 one: the cause is a
+        // trailing `acq=acqscan-v1;supersede=acq-supersede-v1;` segment appended to
+        // SignalSourceDescriptor.CanonicalDescriptor() AFTER the spec-198 `newsquery=` segment, and it is
+        // UNCONDITIONAL — not AI-gated, not judgment-gated.
+        //
+        // WHY IT IS HASHED. `acq-supersede-v1` REWRITES a signal the formula scores: the keyword extractor's
+        // POSITIVE StrategicPartnership read (strength 4) of an item-1.01 8-K that `acqscan-v1` recognised as
+        // an agreement to acquire the company becomes a NEUTRAL CorporateAction at strength 0. That changes
+        // TrajectoryScore, OpportunityScore and rank. Measured, on the live store: MarineMax's 2026-08-10
+        // merger 8-K minted exactly that signal, trajectory rose 56 → 62, and the report labelled the
+        // company "Thesis improving" — a $1.5B all-cash sale of the whole company read as a partnership. A
+        // scoring-assembly rule that can move a score and is hashed into NOTHING is the same comparability
+        // hole spec 194 §2 closed for the judgment read and spec 198 §3 for the feed query.
+        //
+        // WHY IT IS UNCONDITIONAL, and why an unchanged AI-OFF pin would be the DEFECT. The supersede is
+        // pure assembly code inside ScoringEngine — it runs in every composition, and only the DATA (whether
+        // a company has a recognised acquisition) varies. There is therefore no "disabled" form to render,
+        // and if the AI-OFF halves had not moved, the rule would not actually be hashed. Contrast specs
+        // 197 / 214 / 215 / 216, whose inputs ride `news=enabled:…` or the `ai=` descriptor and therefore
+        // CANNOT reach the disabled composition.
+        //
+        // Nothing else moved: no _formula.Version bump, no KeywordSignalExtractor.RuleSetVersion bump (still
+        // radar-keyword-rules-v8 — the "material definitive agreement" rule is deliberately UNCHANGED, spec
+        // 217 §2), no MediaAttentionCollapse.Version bump (still media-collapse-v2), no
+        // supersede/neutralization version bump for the pre-217 transforms, no attention tier edit, no
+        // weight edit, and AcquisitionRecognitionOptions.MaxFetchesPerRun is deliberately EXCLUDED (it
+        // bounds how many filings are read, never whether a read filing is recognised — the spec-105 rule).
+        //
+        // ⚠ OPERATOR ACTION IS OWED — a THIRD, SEPARATE step in this arc, not one shared with 214/215 (whose
+        // step was performed 2026-09-08) or with 216 (which owes its own). Delete or re-record every
+        // configured data/scoring-configs/strategies/{name}.json BEFORE the first post-217 baseline; that
+        // path is git-ignored, so those records cannot ride in a PR and MUST NEVER be fabricated. If the
+        // step is missed, StrategyIdentityGuard halts the run before collection — that halt is CORRECT.
+        //
+        // ⚠ THE COHORT BEFORE THIS BOUNDARY IS NOT COMPARABLE WITH THE ONE AFTER IT for any company whose
+        // item-1.01 filing is recognised, and the benchmark-adjusted efficacy series is not comparable at
+        // all (excess-vs-universe-v1 → v2 removes a pinned member from the peer mean, which moves EVERY
+        // company's excess). History is deliberately NOT regenerated, rewritten or backfilled (AD-8/AD-1).
+        // The precommitted 2026-09-29 AD-15 claim date is UNCHANGED — spec 217 declares its benchmark and
+        // eligibility rules PROSPECTIVELY, before any eligible claim date exists.
+        Assert.Equal("radar-scoring-fp-66fca8c5f1fc", DefaultFingerprint());
     }
 
     [Fact]
@@ -389,33 +443,44 @@ public sealed class ScoringConfigFingerprintTests
         // NOT the AI-OFF halves. The proof this test makes is unchanged: with the news-query segment empty,
         // the values are the post-216 no-newsquery values, so the spec-198 segment is still exactly
         // additive on top of them.
+        //
+        // SPEC 217 §2 MOVED ALL SIX HALVES — both the AI-ON and, for the first time in this arc, the AI-OFF
+        // ones (30d radar-scoring-fp-54e845330f96 → radar-scoring-fp-db96e3862fae; 60d
+        // radar-scoring-fp-8daa662a57a6 → radar-scoring-fp-2237fb804628; 120d
+        // radar-scoring-fp-f610244e23c6 → radar-scoring-fp-28fcca88a36a; AI-ON 30d
+        // radar-scoring-fp-0dfa4463ddd3 → radar-scoring-fp-cba1bb64447f; 60d radar-scoring-fp-0dc1d67de19d
+        // → radar-scoring-fp-588094848be3; 120d radar-scoring-fp-66434c0af13f →
+        // radar-scoring-fp-15a8e0c1520f) — because the acq= segment is UNCONDITIONAL and sits OUTSIDE the
+        // news-query segment. The proof this test makes is unchanged and is in fact sharpened: with the
+        // news-query segment empty, the composed descriptor is still byte-identical to the current one minus
+        // `newsquery=`, acq= and all, so spec 198's segment remains exactly additive.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
         Assert.Equal(
-            "radar-scoring-fp-54e845330f96",
+            "radar-scoring-fp-db96e3862fae",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-0dfa4463ddd3",
+            "radar-scoring-fp-cba1bb64447f",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
         Assert.Equal(
-            "radar-scoring-fp-8daa662a57a6",
+            "radar-scoring-fp-2237fb804628",
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-0dc1d67de19d",
+            "radar-scoring-fp-588094848be3",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
         // 120-day -Profile long-window.
         Assert.Equal(
-            "radar-scoring-fp-f610244e23c6",
+            "radar-scoring-fp-28fcca88a36a",
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-66434c0af13f",
+            "radar-scoring-fp-15a8e0c1520f",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -432,7 +497,8 @@ public sealed class ScoringConfigFingerprintTests
         var offFourteen = DefaultFingerprint(
             sourceDescriptor: "rules=radar-keyword-rules-v8;"
                 + NewsJudgmentScoringIdentity.Disabled.Segment
-                + fourteen.Segment);
+                + fourteen.Segment
+                + AcquisitionScoringIdentity.Segment);
         Assert.NotEqual(offSeven, offFourteen);
 
         var onSeven = DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor);
@@ -478,7 +544,8 @@ public sealed class ScoringConfigFingerprintTests
         // places hash differently, which is a weaker claim.
         var perturbed = "rules=radar-keyword-rules-v9;"
             + NewsJudgmentScoringIdentity.Disabled.Segment
-            + NewsQueryScoringIdentity.Default.Segment;
+            + NewsQueryScoringIdentity.Default.Segment
+            + AcquisitionScoringIdentity.Segment;
 
         // Non-vacuity, guarded against the SHIPPED const rather than against this file's own literal: the day
         // production bumps to v9 this fails here, naming the reason, instead of silently asserting that a
@@ -546,12 +613,15 @@ public sealed class ScoringConfigFingerprintTests
     // SPEC 198 §3: the news-QUERY segment is appended after the news-READ segment, LAST, mirroring
     // SignalSourceDescriptor's own composition order. Same reasoning as the news segment's placement: the
     // whole post-197 prefix stays byte-stable, so a pin move is attributable to exactly one input.
+    // SPEC 217 §2: the acq= segment is appended LAST here too, mirroring SignalSourceDescriptor's own
+    // composition order — same reasoning as every segment since spec 194.
     private static string AiOnSourceDescriptorWith(
         string aiDirectionalDescriptor, NewsQueryScoringIdentity? newsQuery = null) =>
         "rules=radar-keyword-rules-v8;"
             + $"ai={DescriptorEscaping.Escape(aiDirectionalDescriptor)};"
             + LiveNewsJudgmentSegment
-            + (newsQuery ?? NewsQueryScoringIdentity.Default).Segment;
+            + (newsQuery ?? NewsQueryScoringIdentity.Default).Segment
+            + AcquisitionScoringIdentity.Segment;
 
     private static readonly string AiOnSourceDescriptor =
         AiOnSourceDescriptorWith(AiDirectionalDescriptor);
@@ -734,7 +804,7 @@ public sealed class ScoringConfigFingerprintTests
         // no `ai=` segment to carry rm= and no `news=enabled:` segment to carry the projection version, so
         // a move there would be scope leakage (the spec-197 proof pattern).
         Assert.Equal(
-            "radar-scoring-fp-bae6a8c18dc1",
+            "radar-scoring-fp-3c91bc88a2e3",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -906,11 +976,19 @@ public sealed class ScoringConfigFingerprintTests
         // (ledger off ⇒ zero references projected). Pooling 214–216 pools that cohort in knowingly. The
         // precommitted 2026-09-29 claim date is UNCHANGED — the boundary describes comparability, not the
         // claim.
+        // SPEC 217 §2 MOVES THEM AGAIN, AND THIS TIME THE AI-OFF PAIR MOVES WITH THEM (see
+        // Compute_LiveWindowAiOffStamps_ArePinned): 60d radar-scoring-fp-d7dbbcf89304 →
+        // radar-scoring-fp-908659c0ba7e; 120d radar-scoring-fp-cb9a65795fb3 →
+        // radar-scoring-fp-918f19bd6751. The cause is the UNCONDITIONAL trailing acq= segment — see
+        // Compute_DefaultConfig_MatchesPinnedFingerprint for the full reasoning, the measured MarineMax
+        // basis and the owed operator step. radar-scoring-fp-d7dbbcf89304 is the spec-216 value; whether a
+        // live run stamped it depends on whether the 216 operator step was taken before this merge, and
+        // this file does not assert that either way.
         Assert.Equal(
-            "radar-scoring-fp-d7dbbcf89304",
+            "radar-scoring-fp-908659c0ba7e",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-cb9a65795fb3",
+            "radar-scoring-fp-918f19bd6751",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -953,8 +1031,17 @@ public sealed class ScoringConfigFingerprintTests
         // `news=enabled:…`, which the disabled descriptor never renders. If either value below ever moves
         // in a slice that touches only the filing read or the judgment read, the finding is SCOPE LEAKAGE,
         // not a deliverable.
-        Assert.Equal("radar-scoring-fp-0ff442a14c1b", DefaultFingerprint(window: TimeSpan.FromDays(60)));
-        Assert.Equal("radar-scoring-fp-adf455313d35", DefaultFingerprint(window: TimeSpan.FromDays(120)));
+        // ⚠ SPEC 217 §2 MOVES BOTH OF THESE, AND THAT MOVE IS THE DELIVERABLE — the mirror image of the
+        // 197 / 214 / 215 / 216 non-moves, and the same shape as spec 198's. The
+        // `acq=acqscan-v1;supersede=acq-supersede-v1;` segment is appended UNCONDITIONALLY: the
+        // corporate-action supersede is pure assembly code that runs whether or not any AI or judgment seam
+        // is registered, so if either value below had stayed put the rule would not actually be hashed and a
+        // recognition could move every affected score silently. 60d radar-scoring-fp-0ff442a14c1b →
+        // radar-scoring-fp-7b0758e7eede; 120d radar-scoring-fp-adf455313d35 →
+        // radar-scoring-fp-5b36883c1b3a. See the AI-OFF unit pin for the measured basis (MarineMax
+        // 2026-08-10) and the owed operator step.
+        Assert.Equal("radar-scoring-fp-7b0758e7eede", DefaultFingerprint(window: TimeSpan.FromDays(60)));
+        Assert.Equal("radar-scoring-fp-5b36883c1b3a", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }
 
     [Fact]
@@ -1129,4 +1216,5 @@ public sealed class ScoringConfigFingerprintTests
 
         Assert.Equal([(nameof(ScoringOptions.Window), typeof(TimeSpan))], properties);
     }
+
 }

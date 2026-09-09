@@ -378,7 +378,27 @@ authoritative record:
   Worker refuses to start when the cap is below the seeded universe — spec 213); `benchmark-universe-v1`
   stays frozen at 74 members — additions report
   `NotInBenchmarkUniverse` until a prospective v2 is declared. Pooled efficacy is
-  benchmark-adjusted; the paired AD-15 path deliberately is not (spec 183).
+  benchmark-adjusted (**`excess-vs-universe-v2` since spec 217**: a member under a recognised
+  `PendingAcquisition` leaves the equal-weight peer mean AND the coverage denominator from its
+  announcement date onward, because a member pinned at a take-out bid biases every other company's
+  excess — frozen MEMBERSHIP unchanged, declared prospectively, 2026-09-29 untouched); the paired
+  AD-15 path deliberately is not (spec 183). Observation admission is likewise versioned
+  (`ObservationEligibility.Version`, `observation-eligibility-v2`): an outcome no strategy could have
+  earned is excluded on its own counted axis, `CorporateActionInWindow`.
+- **A pending acquisition is a CLOSED THESIS, recognised deterministically and counted everywhere**
+  (spec 217). `acqscan-v1` reads the item-1.01 8-K itself — never the title — and recognises only when
+  BOTH legs hold verbatim: the company is the TARGET (positionally, so an acquirer-side filing fails by
+  construction) and a per-share consideration is stated. It fails CLOSED and names every failed leg,
+  because a false positive closes a live thesis. `CompanyStatus.PendingAcquisition` is DERIVED at run
+  time from the append-only acquisitions store — never settable in `data/companies.json` — and stamped
+  on snapshots as recorded provenance (`CompanyStatusAtScoring`; `null` = not recorded, never `Active`).
+  Scoring continues and nothing is rewritten; what changes is the READ: `acq-supersede-v1` rewrites the
+  extractor's `StrategicPartnership` over that ONE recognised filing as a Neutral `CorporateAction` at
+  strength 0. Report policy rule 0 (`weekly-report-action-v6`) forces `Ignore` — **no seventh label**;
+  the state is the rationale, a banner, a `## Acquisitions pending` section and a counted per-strategy
+  footer. The RULE identity (`acq=acqscan-v1;supersede=acq-supersede-v1`) IS hashed into
+  `ScoringConfigVersion`, unconditionally and NOT AI-gated, so both pin families move together; the
+  per-company OUTCOME is not. Retiring a closed deal to `Delisted` stays a conscious, journaled step.
 - **Label lines are per-strategy config, not constants** (spec 212): `Radar:Strategies[i].Labels`
   (`{ Investigate, Watch }`, nullable — omitted ≠ explicit 60/40) binds onto
   `ScoringStrategyDefinition.Labels`; a declared OR effective (gate-promoted) Lead with null `Labels` is

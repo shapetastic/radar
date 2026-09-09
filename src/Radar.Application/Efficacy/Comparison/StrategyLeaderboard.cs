@@ -57,6 +57,14 @@ public sealed record StrategyWindowMetric(
 /// the defect — a partial window used to be counted as a success, so neither column could reveal it.
 /// </para>
 /// <para>
+/// Spec 217 adds <see cref="ObservationsCorporateActionInWindow"/> on that same company-day unit and again
+/// as a DISTINCT fact (<c>observation-eligibility-v2</c>): the observation was excluded before any price was
+/// looked at, because a recognised acquisition of the company was announced inside its forward window or on
+/// or before its as-of date. It is an outcome NO STRATEGY COULD HAVE EARNED — MarineMax's +46.1% gap on
+/// 2026-08-10 sat inside the 21-day window of every score from 2026-07-20, and since then its price has been
+/// pinned at the bid — so counting it as skill (or as a miss) measures the deal, not the scoring.
+/// </para>
+/// <para>
 /// Spec 183 adds two more counts on the same unit, again distinct facts: raw-usable observations whose EXCESS
 /// return does not exist because the benchmark's coverage rule failed at that date
 /// (<see cref="ObservationsBenchmarkUnavailable"/>) versus because the company is not a member of the frozen
@@ -72,7 +80,8 @@ public sealed record StrategyLeaderboardRow(
     int ObservationsWithoutForwardPrice,
     int ObservationsWithPartialWindow,
     int ObservationsBenchmarkUnavailable,
-    int ObservationsNotInBenchmarkUniverse);
+    int ObservationsNotInBenchmarkUniverse,
+    int ObservationsCorporateActionInWindow = 0);
 
 /// <summary>One unresolved benchmark member on one as-of date, with its spec-152 reason.</summary>
 public sealed record BenchmarkMemberExclusion(string Ticker, ForwardReturnUnavailableReason Reason);
@@ -86,7 +95,16 @@ public sealed record BenchmarkDayCoverage(
     DateOnly AsOf,
     int MemberCount,
     int ResolvedMembers,
-    IReadOnlyList<BenchmarkMemberExclusion> UnresolvedMembers);
+    IReadOnlyList<BenchmarkMemberExclusion> UnresolvedMembers)
+{
+    /// <summary>
+    /// SPEC 217 §3 (<c>excess-vs-universe-v2</c>): members removed from THIS day's peer mean because a
+    /// recognised acquisition of them was announced on or before <c>AsOf + horizon</c>. Distinct from
+    /// <see cref="UnresolvedMembers"/> — an excluded member's price resolves perfectly, which is precisely
+    /// why it had to go. Defaults to 0 (a MEASURED zero) so pre-217 construction sites keep compiling.
+    /// </summary>
+    public int PendingAcquisitionExcludedMembers { get; init; }
+}
 
 /// <summary>
 /// The benchmark provenance the rendered leaderboard carries (spec 183 §2): which frozen universe (version +

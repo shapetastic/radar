@@ -1176,10 +1176,12 @@ public sealed class ScoringEngineTests
         // disabled form; it also never registered a NewsQueryScoringIdentity, which falls back to the
         // SHIPPED DEFAULT window (not "none") because the recency filter applies whenever the newssearch
         // collector runs.
+        // Spec 217 §2 appends the UNCONDITIONAL acquisition segment last (see SignalSourceDescriptorTests).
         Assert.Equal(
             "rules=radar-keyword-rules-v8;"
                 + NewsJudgmentScoringIdentity.Disabled.Segment
-                + NewsQueryScoringIdentity.Default.Segment,
+                + NewsQueryScoringIdentity.Default.Segment
+                + AcquisitionScoringIdentity.Segment,
             resolved.CanonicalDescriptor());
     }
 

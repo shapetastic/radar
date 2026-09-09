@@ -1,11 +1,16 @@
+using Radar.Application.Acquisitions;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Prices;
 
 namespace Radar.Application.Tests.Efficacy.Comparison;
 
 /// <summary>A provider handing out one fixed (possibly null) benchmark — the test seam.</summary>
-internal sealed class FixedUniverseBenchmarkProvider(UniverseBenchmark? benchmark) : IUniverseBenchmarkProvider
+internal sealed class FixedUniverseBenchmarkProvider(
+    UniverseBenchmark? benchmark, PendingAcquisitions? acquisitions = null) : IUniverseBenchmarkProvider
 {
+    /// <summary>Spec 217 §3: the projection the fixed benchmark was built with (None unless supplied).</summary>
+    public PendingAcquisitions Acquisitions { get; } = acquisitions ?? PendingAcquisitions.None;
+
     public Task<UniverseBenchmark?> GetAsync(CancellationToken ct) => Task.FromResult(benchmark);
 }
 
@@ -18,10 +23,16 @@ internal static class BenchmarkTestUniverse
 {
     public const string SchemaVersion = "benchmark-universe-schema-v1";
 
+    /// <param name="acquisitions">
+    /// Spec 217 §3: the projection excess-vs-universe-v2 removes pinned members with. Defaulted to
+    /// <see cref="PendingAcquisitions.None"/>, which reproduces excess-vs-universe-v1 byte-for-byte, so
+    /// every pre-217 call site is unchanged.
+    /// </param>
     public static UniverseBenchmark Of(
         string universeVersion,
         DateTimeOffset frozenAtUtc,
-        IReadOnlyList<(Guid Id, string Ticker, IReadOnlyList<PriceBar> Bars)> members)
+        IReadOnlyList<(Guid Id, string Ticker, IReadOnlyList<PriceBar> Bars)> members,
+        PendingAcquisitions? acquisitions = null)
     {
         var memberRecords = members
             .Select(m => new BenchmarkUniverseMember(m.Id, m.Ticker, "TEST", m.Ticker))
@@ -35,7 +46,7 @@ internal static class BenchmarkTestUniverse
             memberRecords);
         var bars = members.ToDictionary(
             m => m.Ticker, m => m.Bars, StringComparer.Ordinal);
-        return new UniverseBenchmark(universe, bars);
+        return new UniverseBenchmark(universe, bars, acquisitions ?? PendingAcquisitions.None);
     }
 
     /// <summary>A deterministic peer id: <c>99999999-9999-9999-9999-{index:D12}</c>.</summary>

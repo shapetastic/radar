@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Radar.Application.Acquisitions;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Ai;
 using Radar.Application.Collectors;
@@ -29,6 +30,7 @@ using Radar.Application.SignalExtraction;
 using Radar.Application.SignalReview;
 using Radar.Application.Signals;
 using Radar.Domain.Signals;
+using Radar.Infrastructure.Acquisitions;
 using Radar.Infrastructure.Ai;
 using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.Collectors;
@@ -206,12 +208,93 @@ public static class InfrastructureServiceCollectionExtensions
         services.TryAddSingleton<IOperatingCallSource>(NullOperatingCallSource.Instance);
         services.TryAddSingleton<IStrategyEvidenceFactsSource>(UnavailableStrategyEvidenceFactsSource.Instance);
         services.TryAddSingleton<IOperatingCallStartupValidator, OperatingCallStartupValidator>();
+        // Pending acquisitions (spec 217 §2): the library default is the INERT source — no acquisitions
+        // store — so a composition that never wires AddRadarAcquisitionRecognition behaves exactly as it did
+        // before spec 217 (no PendingAcquisition status, no CorporateAction supersede, no rule-0 label, no
+        // report section, no CorporateActionInWindow exclusion). It is registered here rather than left
+        // optional-nullable at each consumer, so an unwired seam can never be mistaken for "nothing is
+        // pending" by one consumer and for a wiring hole by another.
+        services.TryAddSingleton<IPendingAcquisitionSource, NoPendingAcquisitionSource>();
         services.AddSingleton<IWeeklyReportBuilder, WeeklyReportBuilder>();
         // The mapper is a core pipeline service used regardless of which collector is wired, so its
         // IEvidenceNormalizer dependency is registered here. TryAdd keeps a collector-specific
         // registration (e.g. AddLocalFileCollector) from conflicting.
         services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
         services.AddSingleton<CollectedEvidenceMapper>();
+        return services;
+    }
+
+    /// <summary>
+    /// SPEC 217 §1 — registers the deterministic ACQUISITION RECOGNITION path: the append-only acquisitions
+    /// store, the heal-forward <c>acqscan-v1</c> answer cache, the SEC item-1.01 body reader (with its own
+    /// typed <c>HttpClient</c> routed through the shared global SEC pacer) and the recognition pass; and it
+    /// REPLACES the library's inert <see cref="IPendingAcquisitionSource"/> with the store-backed one, so
+    /// scoring, the report and the efficacy comparison all see the recognitions.
+    /// <para>
+    /// Call it AFTER <c>AddRadarApplicationServices</c> — the concrete <c>AddSingleton</c> below wins over
+    /// that method's <c>TryAdd</c> default, which is the same precedence rule the operating-call pair uses.
+    /// </para>
+    /// <para>
+    /// Fails fast when <see cref="SecCollectorOptions.UserAgent"/> is null/blank (SEC 403s every request
+    /// without a compliant declared User-Agent) and when the per-run fetch budget is not positive: a
+    /// zero/negative budget would let the pass run and recognise nothing, which is a configuration error,
+    /// not a quiet no-op.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarAcquisitionRecognition(
+        this IServiceCollection services,
+        SecCollectorOptions options,
+        FileAcquisitionStoreOptions storeOptions,
+        FileAcquisitionScanCacheOptions cacheOptions,
+        AcquisitionRecognitionOptions? recognitionOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(storeOptions);
+        ArgumentNullException.ThrowIfNull(cacheOptions);
+
+        if (string.IsNullOrWhiteSpace(options.UserAgent))
+        {
+            throw new InvalidOperationException(
+                "SEC EDGAR requires a compliant User-Agent (e.g. \"Radar Research <email>\"); configure "
+                    + "Radar:Sec:UserAgent before enabling the item-1.01 acquisition recognition — every "
+                    + "request 403s without it.");
+        }
+
+        recognitionOptions ??= new AcquisitionRecognitionOptions();
+        if (recognitionOptions.MaxFetchesPerRun <= 0)
+        {
+            throw new InvalidOperationException(
+                "Acquisition recognition MaxFetchesPerRun must be greater than zero; configure "
+                    + "Radar:Acquisitions:MaxFetchesPerRun to a positive per-run fetch budget (default 40) — "
+                    + "a non-positive budget would run the pass and recognise nothing.");
+        }
+
+        services.AddHttpClient<IAcquisitionFilingBodyReader, HttpSecAcquisitionFilingReader>(client =>
+            {
+                // TryAddWithoutValidation for the same reason the earnings reader uses it: the
+                // SEC-recommended UA form is not a strict RFC product/comment token.
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", options.UserAgent);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+                // The SecRateLimitingHandler owns the per-fetch timeout and starts it AFTER pacing.
+                client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            })
+            .AddHttpMessageHandler<SecRateLimitingHandler>();
+
+        services.AddSecRequestPacing();
+        services.TryAddSingleton(options);
+        services.TryAddSingleton<IEvidenceNormalizer, EvidenceNormalizer>();
+        services.AddSingleton(storeOptions);
+        services.AddSingleton(cacheOptions);
+        services.AddSingleton(recognitionOptions);
+        services.AddSingleton<IAcquisitionStore, FileAcquisitionStore>();
+        services.AddSingleton<IAcquisitionScanCache, FileAcquisitionScanCache>();
+        services.AddSingleton<IAcquisitionRecognitionPass, AcquisitionRecognitionPass>();
+        // Concrete registration, so it WINS over the library's inert TryAdd default.
+        services.AddSingleton<IPendingAcquisitionSource, AcquisitionStorePendingSource>();
         return services;
     }
 

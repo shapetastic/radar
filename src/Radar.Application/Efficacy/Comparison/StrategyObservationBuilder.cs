@@ -1,3 +1,5 @@
+using Radar.Application.Acquisitions;
+
 namespace Radar.Application.Efficacy.Comparison;
 
 /// <summary>
@@ -88,6 +90,18 @@ public sealed record StrategyObservationSet(
     int PartialWindow)
 {
     /// <summary>
+    /// SPEC 217 §3 (<c>observation-eligibility-v2</c>): company-days excluded because a recognised
+    /// acquisition of that company was announced inside the observation's forward window, or on/before its
+    /// as-of date. De-duped on the SAME <c>(company, as-of)</c> key as every other tally.
+    /// <para>
+    /// It is evaluated FIRST — before the forward-return computation — so the axes stay DISJOINT: an
+    /// excluded company-day is never also counted as "no forward price" or "partial window". Once the
+    /// outcome is a takeover, whether a price bar exists is not a fact about the strategy.
+    /// </para>
+    /// </summary>
+    public int CorporateActionInWindow { get; init; }
+
+    /// <summary>
     /// The exact-instant projection: de-duplicated on <c>(CompanyId, AsOfInstantUtc)</c>, last occurrence
     /// wins (the same rule as <see cref="Usable"/> — nothing throws on a duplicate), deterministic order
     /// (as-of date, company id, instant).
@@ -166,9 +180,23 @@ public static class StrategyObservationBuilder
         StrategyScoreSeries strategy,
         int forwardHorizonDays,
         int exitToleranceDays,
-        UniverseBenchmark? benchmark)
+        UniverseBenchmark? benchmark) =>
+        Build(strategy, forwardHorizonDays, exitToleranceDays, benchmark, PendingAcquisitions.None);
+
+    /// <summary>
+    /// SPEC 217 §3 — the <c>observation-eligibility-v2</c> shape. <paramref name="acquisitions"/> is the
+    /// shared run-time projection; <see cref="PendingAcquisitions.None"/> reproduces the v1 admission set
+    /// byte-for-byte, so a composition with no acquisitions store is unchanged.
+    /// </summary>
+    public static StrategyObservationSet Build(
+        StrategyScoreSeries strategy,
+        int forwardHorizonDays,
+        int exitToleranceDays,
+        UniverseBenchmark? benchmark,
+        PendingAcquisitions acquisitions)
     {
         ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(acquisitions);
 
         var byKey = new Dictionary<(Guid CompanyId, DateOnly AsOf), StrategyObservation>();
         var byInstant = new Dictionary<(Guid CompanyId, DateTimeOffset Instant), StrategyInstantObservation>();
@@ -176,12 +204,23 @@ public static class StrategyObservationBuilder
         var partialWindow = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
         var withoutInstant = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
         var instantCoveredKeys = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
+        var corporateAction = new HashSet<(Guid CompanyId, DateOnly AsOf)>();
 
         foreach (var company in strategy.Companies)
         {
             foreach (var point in company.Points)
             {
                 var asOf = point.AsOfDate ?? point.ScoreDate;
+
+                // SPEC 217 §3, evaluated BEFORE the forward return so the exclusion axes stay disjoint: an
+                // outcome no strategy could have earned is excluded whatever the price data looks like.
+                if (ObservationEligibility.IsCorporateActionInWindow(
+                        acquisitions, company.CompanyId, asOf, forwardHorizonDays))
+                {
+                    corporateAction.Add((company.CompanyId, asOf));
+                    continue;
+                }
+
                 var forward = ForwardReturn.TryCompute(
                     company.PriceBars, asOf, forwardHorizonDays, exitToleranceDays);
                 if (!forward.IsDefined)
@@ -274,6 +313,7 @@ public static class StrategyObservationBuilder
         {
             UsableByInstant = usableByInstant,
             WithoutAsOfInstant = withoutInstant.Count,
+            CorporateActionInWindow = corporateAction.Count,
         };
     }
 }

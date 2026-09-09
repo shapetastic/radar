@@ -76,6 +76,9 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 {
     private const string EarningsItemCode = "2.02";
 
+    /// <summary>The SEC form the earnings read gates on (spec 217: named beside the item code).</summary>
+    private const string EarningsFormCode = "8-K";
+
     /// <summary>
     /// Minimum plausible EX-99.1 body length (chars, after trimming) for a read to count as authoritative
     /// (spec 114). A real earnings release is never a few bytes — a shorter body means the fetch was degenerate
@@ -810,118 +813,42 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
     /// <summary>
     /// Confirms the evidence is an earnings 8-K (form 8-K + item 2.02) and returns its CIK + dashed
-    /// accession parsed from the index <see cref="EvidenceItem.SourceUrl"/> plus the form token the
-    /// evidence metadata declares (spec 215: the ledger records "stated in {form}"), or <c>null</c> when it
-    /// is not an earnings 8-K or the URL cannot be parsed (never guess a CIK/accession — skip instead).
+    /// accession plus the form token the evidence metadata declares (spec 215: the ledger records
+    /// "stated in {form}"), or <c>null</c> when it is not an earnings 8-K or the identifiers are not
+    /// trustworthy (never guess a CIK/accession — skip instead).
+    /// <para>
+    /// SPEC 217: the parsing itself now lives in the SHARED <see cref="FilingEvidenceFacts"/> (reuse over
+    /// copy — the item-1.01 acquisition recognition needs the identical form/items/CIK/accession rules).
+    /// This method keeps the earnings gate's exact per-rejection LOG WORDING, so the two readers share one
+    /// definition without sharing one voice.
+    /// </para>
     /// </summary>
     private (string Cik, string Accession, string Form)? TryResolveFiling(EvidenceItem evidence)
     {
-        if (evidence.SourceType != EvidenceSourceType.Filing)
+        if (FilingEvidenceFacts.TryResolve(
+                evidence, EarningsFormCode, EarningsItemCode, out var identifiers, out var rejection))
         {
-            return null;
+            return (identifiers!.Cik, identifiers.Accession, identifiers.Form);
         }
 
-        EvidenceMetadata.TryRead(evidence.MetadataJson, out var metadata, out _);
-
-        var form = metadata.TryGetValue("form", out var f) ? f : null;
-        if (form is null || !string.Equals(form, "8-K", StringComparison.OrdinalIgnoreCase))
+        switch (rejection)
         {
-            return null;
+            case FilingEvidenceRejection.UnparseableSourceUrl:
+                _logger.LogDebug(
+                    "Could not parse CIK/accession from evidence {EvidenceId} SourceUrl; skipping.",
+                    evidence.Id);
+                break;
+            case FilingEvidenceRejection.AccessionMismatch:
+                _logger.LogDebug(
+                    "Parsed accession disagrees with metadata accessionNumber for evidence {EvidenceId}; skipping.",
+                    evidence.Id);
+                break;
+            default:
+                // NotAFiling / FormMismatch / ItemMismatch: this evidence is simply not an earnings 8-K.
+                // Not a skip worth a line — the eligible-set count already states how many qualified.
+                break;
         }
 
-        // Prefer the discrete items metadata key (written by the collector); fall back to parsing the
-        // "[items: ...]" segment from the Title so older evidence without the key still gates correctly.
-        var items = metadata.TryGetValue("items", out var i) && !string.IsNullOrWhiteSpace(i)
-            ? i
-            : ParseItemsFromTitle(evidence.Title);
-        if (!ContainsEarningsItem(items))
-        {
-            return null;
-        }
-
-        var parsed = ParseCikAndAccession(evidence.SourceUrl);
-        if (parsed is null)
-        {
-            _logger.LogDebug(
-                "Could not parse CIK/accession from evidence {EvidenceId} SourceUrl; skipping.",
-                evidence.Id);
-            return null;
-        }
-
-        // Cross-check the parsed accession against the metadata accessionNumber when present; a mismatch
-        // means the identifiers are not trustworthy, so skip rather than guess.
-        if (metadata.TryGetValue("accessionNumber", out var metaAccession)
-            && !string.IsNullOrWhiteSpace(metaAccession)
-            && !string.Equals(metaAccession, parsed.Value.Accession, StringComparison.Ordinal))
-        {
-            _logger.LogDebug(
-                "Parsed accession {Parsed} disagrees with metadata accessionNumber {Meta} for evidence {EvidenceId}; skipping.",
-                parsed.Value.Accession,
-                metaAccession,
-                evidence.Id);
-            return null;
-        }
-
-        return (parsed.Value.Cik, parsed.Value.Accession, form);
+        return null;
     }
-
-    private static bool ContainsEarningsItem(string? items)
-    {
-        if (string.IsNullOrWhiteSpace(items))
-        {
-            return false;
-        }
-
-        foreach (var code in items.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (string.Equals(code, EarningsItemCode, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static string? ParseItemsFromTitle(string? title)
-    {
-        if (string.IsNullOrEmpty(title))
-        {
-            return null;
-        }
-
-        var match = ItemsInTitleRegex().Match(title);
-        return match.Success ? match.Groups["items"].Value : null;
-    }
-
-    private static (string Cik, string Accession)? ParseCikAndAccession(string? sourceUrl)
-    {
-        if (string.IsNullOrWhiteSpace(sourceUrl))
-        {
-            return null;
-        }
-
-        var match = IndexUrlRegex().Match(sourceUrl);
-        if (!match.Success)
-        {
-            return null;
-        }
-
-        var cik = match.Groups["cik"].Value.TrimStart('0');
-        if (cik.Length == 0)
-        {
-            cik = "0";
-        }
-
-        var accession = match.Groups["accession"].Value;
-        return string.IsNullOrWhiteSpace(accession) ? null : (cik, accession);
-    }
-
-    [GeneratedRegex(@"\[items:\s*(?<items>[^\]]+)\]", RegexOptions.IgnoreCase)]
-    private static partial Regex ItemsInTitleRegex();
-
-    [GeneratedRegex(
-        @"/edgar/data/(?<cik>\d+)/[^/]+/(?<accession>[^/]+?)-index\.html?$",
-        RegexOptions.IgnoreCase)]
-    private static partial Regex IndexUrlRegex();
 }

@@ -106,7 +106,16 @@ public sealed class StrategyLeaderboardRendererTests
             "schemaVersion,status,rank,strategy,strategiesCompared,strategiesConsidered,",
             lines[0],
             StringComparison.Ordinal);
-        Assert.Contains("inSampleRhoExcessVsUniverseV1", lines[0], StringComparison.Ordinal);
+        // Spec 217 §3: the rho columns name NO rule version. They used to be
+        // inSampleRhoExcessVsUniverseV1 / outOfSampleRhoExcessVsUniverseV1, which asserted v1 over
+        // excess-vs-universe-v2 VALUES while the adjacent excessRuleVersion cell said v2 — two cells in one
+        // row disagreeing, which is worse than one stale cell because a reader acts on whichever they find
+        // first. The version now has exactly one owner on the artifact: its own column.
+        Assert.Contains(
+            StrategyLeaderboardRenderer.InSampleRhoColumn, lines[0], StringComparison.Ordinal);
+        Assert.Contains(
+            StrategyLeaderboardRenderer.OutOfSampleRhoColumn, lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("ExcessVsUniverseV1", lines[0], StringComparison.Ordinal);
 
         // 1 header + 2 ranked + 2 dropped.
         Assert.Equal(5, lines.Length);

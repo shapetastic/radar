@@ -3,6 +3,7 @@ using System.Text;
 
 using Microsoft.Extensions.Logging;
 
+using Radar.Application.Acquisitions;
 using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.News;
@@ -46,8 +47,12 @@ public enum NewsRiskEvaluationTable
 
 /// <summary>
 /// One frozen company/run/reader assessment joined (read-only) to its forward outcome. Both forward returns
-/// — RAW and EXCESS-vs-benchmark-universe-v1 (spec 183 §3) — are DESCRIPTIVE fields: spec 179 declares no
-/// threshold or alpha claim, and the RiskScore association keeps its raw max-adverse basis.
+/// — RAW and EXCESS against the frozen benchmark universe (spec 183 §3) — are DESCRIPTIVE fields: spec 179
+/// declares no threshold or alpha claim, and the RiskScore association keeps its raw max-adverse basis. The
+/// excess rule in force is <see cref="UniverseBenchmark.ExcessRuleVersion"/> and is named ON the artifact
+/// (spec 217 §3), never restated here: this comment said <c>EXCESS-vs-benchmark-universe-v1</c> after the
+/// values had become <c>excess-vs-universe-v2</c>, which is the copied-value failure the pins rule exists
+/// for.
 /// </summary>
 public sealed record NewsRiskEvaluationRow(
     NewsRiskAssessmentRecord Assessment,
@@ -63,6 +68,26 @@ public sealed record NewsRiskEvaluationRow(
     /// <summary>Why the excess is null (<c>None</c> when defined) — the named, never-silent exclusion.</summary>
     public BenchmarkExcessUnavailableReason ExcessUnavailableReason { get; init; } =
         BenchmarkExcessUnavailableReason.BenchmarkUnavailable;
+
+    /// <summary>
+    /// SPEC 217 §3 — TRUE when a recognised acquisition of THIS company was announced inside this row's own
+    /// forward window, or on/before its as-of date (the same
+    /// <see cref="ObservationEligibility.IsCorporateActionInWindow(PendingAcquisitions, Guid, DateOnly, int)"/>
+    /// predicate the efficacy series excludes on).
+    /// <para>
+    /// <b>THE DECISION, stated because the two artifacts deliberately differ.</b> The efficacy series
+    /// EXCLUDES such an observation; this artifact MARKS it and keeps the row. They are not inconsistent —
+    /// they are doing different jobs. The efficacy series RANKS: an outcome no strategy could have earned
+    /// would be scored as skill or as a miss, so it must leave the sample. This artifact DESCRIBES one
+    /// frozen assessment at a time and declares itself non-claim-bearing; dropping rows would shrink the
+    /// coverage of the very records it exists to show, for no claim benefit, and it would DISCARD an
+    /// assessment rather than count it. The forward return itself is a true fact about the company — what
+    /// would be false is reading it as an ordinary business outcome, and that is exactly what this marker
+    /// prevents. It is rendered per row in the CSV and counted in the markdown, so the asymmetry is stated
+    /// on the artifact rather than left silent.
+    /// </para>
+    /// </summary>
+    public bool CorporateActionInWindow21d { get; init; }
 }
 
 /// <summary>
@@ -157,15 +182,20 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
             var boundary = await _boundaryReader.ReadBoundaryAsync(ct).ConfigureAwait(false);
             var benchmark = await _benchmarkProvider.GetAsync(ct).ConfigureAwait(false);
 
+            // Spec 217 §3: the SAME acquisitions projection the benchmark above was built with — one read,
+            // so the peer-mean exclusion baked into `benchmark` and the per-row marker below can never
+            // disagree about a company.
+            var acquisitions = _benchmarkProvider.Acquisitions;
+
             var rows = new List<NewsRiskEvaluationRow>(assessments.Count);
             foreach (var assessment in assessments)
             {
                 ct.ThrowIfCancellationRequested();
-                rows.Add(await BuildRowAsync(assessment, examples, boundary, benchmark, ct)
+                rows.Add(await BuildRowAsync(assessment, examples, boundary, benchmark, acquisitions, ct)
                     .ConfigureAwait(false));
             }
 
-            var markdown = RenderMarkdown(rows, examples, boundary);
+            var markdown = RenderMarkdown(rows, examples, boundary, benchmark);
             var csv = RenderCsv(rows);
             await _artifactStore.WriteEvaluationAsync(markdown, csv, ct).ConfigureAwait(false);
 
@@ -197,6 +227,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         IReadOnlyList<NewsRiskDevelopmentExample>? examples,
         NewsObservationBoundary? boundary,
         UniverseBenchmark? benchmark,
+        PendingAcquisitions acquisitions,
         CancellationToken ct)
     {
         // Outcome join first (computed for development rows too — their tables display outcomes; they just
@@ -206,6 +237,7 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         double? maxAdverse = null;
         double? excessReturn = null;
         var excessReason = BenchmarkExcessUnavailableReason.BenchmarkUnavailable;
+        var corporateActionInWindow = false;
         var outcomeReasons = new List<string>();
 
         if (string.IsNullOrWhiteSpace(assessment.Ticker))
@@ -238,6 +270,11 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                     // Spec 183 §3: the DESCRIPTIVE excess against the frozen universe, through the SAME
                     // central computation the leaderboard consumes. Unavailability stays a named reason —
                     // never silently rendered as the raw value.
+                    // Spec 217 §3: MARK, never exclude — see NewsRiskEvaluationRow.CorporateActionInWindow21d
+                    // for why this artifact and the efficacy series deliberately differ here.
+                    corporateActionInWindow = ObservationEligibility.IsCorporateActionInWindow(
+                        acquisitions, assessment.CompanyId, asOf, HorizonDays);
+
                     var excess = benchmark?.TryExcess(
                         assessment.CompanyId, forward.Value, asOf, HorizonDays, ExitToleranceDays);
                     if (excess is { IsDefined: true })
@@ -344,16 +381,101 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
         {
             ExcessForwardReturn21d = excessReturn,
             ExcessUnavailableReason = excessReason,
+            CorporateActionInWindow21d = corporateActionInWindow,
         };
     }
 
-    /// <summary>Stable machine token for the CSV's excess-basis column.</summary>
+    /// <summary>
+    /// Stable machine token for the CSV's excess-basis column.
+    /// <para>
+    /// SPEC 217 §3: the defined case is sourced from <see cref="UniverseBenchmark.ExcessRuleVersion"/>, not
+    /// from a literal. It read <c>excess-vs-benchmark-universe-v1</c> while this generator's values became
+    /// <c>excess-vs-universe-v2</c> — it consumes the SAME benchmark singleton the leaderboard does, so the
+    /// rule changed underneath it — which is a v1 name over v2 values, the same false claim spec 217 §3
+    /// removed from the leaderboard CSV's rho columns. The version now has exactly ONE owner and this token
+    /// cannot go stale again. This artifact carries no schema-version column of its own, so this per-row
+    /// basis token IS its outcome-definition stamp.
+    /// </para>
+    /// </summary>
     private static string ExcessBasisToken(NewsRiskEvaluationRow row) => row.ExcessUnavailableReason switch
     {
-        BenchmarkExcessUnavailableReason.None => "excess-vs-benchmark-universe-v1",
+        BenchmarkExcessUnavailableReason.None => UniverseBenchmark.ExcessRuleVersion,
         BenchmarkExcessUnavailableReason.NotInBenchmarkUniverse => "not-in-benchmark-universe",
         _ => "benchmark-unavailable",
     };
+
+    /// <summary>
+    /// SPEC 217 §3 — the corporate-action accounting this artifact owes, in the shape the leaderboard's
+    /// coverage line already uses: how many members left the PEER MEAN under
+    /// <see cref="UniverseBenchmark.ExcessRuleVersion"/>, and how many ROWS are themselves under a
+    /// recognised pending acquisition inside their own forward window.
+    /// <para>
+    /// Both are MEASURED zeros when zero: the section always renders once a benchmark exists, so "no member
+    /// was removed" and "nobody looked" are distinguishable. It also states the MARK-not-exclude decision
+    /// (see <see cref="NewsRiskEvaluationRow.CorporateActionInWindow21d"/>) so the asymmetry with the
+    /// efficacy series is on the artifact rather than only in the code.
+    /// </para>
+    /// </summary>
+    private static void AppendCorporateActionSection(
+        StringBuilder sb, IReadOnlyList<NewsRiskEvaluationRow> rows, UniverseBenchmark? benchmark)
+    {
+        if (benchmark is null)
+        {
+            sb.AppendLine(
+                "Corporate actions: the frozen benchmark universe could not be loaded, so no excess value "
+                    + "exists on this artifact and no peer-mean removal could be computed. NOT a measured "
+                    + "zero.");
+            sb.AppendLine();
+            return;
+        }
+
+        // The as-of dates this artifact's outcomes actually touched, read through the SAME cached per-day
+        // computation the excess values came from — so the coverage statement and the numbers cannot
+        // disagree.
+        var dates = new SortedSet<DateOnly>();
+        foreach (var row in rows)
+        {
+            if (row.RawForwardReturn21d is not null)
+            {
+                dates.Add(DateOnly.FromDateTime(row.Assessment.AssessmentCutoffUtc.UtcDateTime));
+            }
+        }
+
+        var datesWithRemovals = 0;
+        var maxRemoved = 0;
+        foreach (var date in dates)
+        {
+            var day = benchmark.DayAt(date, HorizonDays, ExitToleranceDays);
+            if (day.PendingAcquisitionExcludedCount > 0)
+            {
+                datesWithRemovals++;
+                maxRemoved = Math.Max(maxRemoved, day.PendingAcquisitionExcludedCount);
+            }
+        }
+
+        var markedRows = rows.Count(r => r.CorporateActionInWindow21d);
+
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Corporate actions (`{UniverseBenchmark.ExcessRuleVersion}`): {datesWithRemovals} of "
+                + $"{dates.Count} as-of date(s) with a computed outcome had at least one frozen-universe "
+                + $"member removed from the equal-weight peer mean and from the coverage denominator (at "
+                + $"most {maxRemoved} on any date), because a member pinned at a take-out bid would bias "
+                + $"every other company's excess."));
+        sb.AppendLine();
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"{markedRows} row(s) are THEMSELVES under a recognised pending acquisition announced inside "
+                + $"their own 21-day forward window, or on/before their as-of date "
+                + $"(`corporateActionInWindow21d`). Those rows are MARKED AND KEPT, deliberately — the "
+                + $"spec-140 efficacy series EXCLUDES the equivalent observation because it RANKS, and an "
+                + $"outcome no strategy could have earned would be scored there as skill or as a miss. This "
+                + $"artifact describes one frozen assessment at a time and is non-claim-bearing, so "
+                + $"dropping rows would shrink the coverage of the very records it exists to show while "
+                + $"discarding an assessment rather than counting it. Read a marked row's return as the "
+                + $"deal, not as the business."));
+        sb.AppendLine();
+    }
 
     /// <summary>The degraded dimensions as machine-readable exclusion tokens — empty at best-state.</summary>
     private static IReadOnlyList<string> DegradedDimensionTokens(NewsRiskAssessmentRecord assessment)
@@ -437,7 +559,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
     private string RenderMarkdown(
         IReadOnlyList<NewsRiskEvaluationRow> rows,
         IReadOnlyList<NewsRiskDevelopmentExample>? examples,
-        NewsObservationBoundary? boundary)
+        NewsObservationBoundary? boundary,
+        UniverseBenchmark? benchmark)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# News-risk frozen-assessment evaluation");
@@ -451,14 +574,19 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 + "segmented by the three completeness dimensions, while absence claims require best-state "
                 + "dimensions on every one.");
         sb.AppendLine();
-        sb.AppendLine(
-            "Forward returns are DESCRIPTIVE, in both forms (spec 183): the raw 21-day return and the "
-                + "excess 21-day return vs benchmark-universe-v1 (raw minus the equal-weight mean forward "
-                + "return of the other resolved frozen-universe members, self-excluded). Excess values on "
-                + "as-of dates before the universe freeze are additionally RETROSPECTIVE — the frozen "
-                + "members were selected after those dates and their prices backfilled. The RiskScore "
-                + "association keeps its RAW max-adverse-move basis. Nothing here is claim-bearing.");
+        sb.AppendLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Forward returns are DESCRIPTIVE, in both forms (spec 183): the raw 21-day return and the "
+                + $"excess 21-day return against the frozen benchmark-universe-v1 membership under rule "
+                + $"`{UniverseBenchmark.ExcessRuleVersion}` (spec 217) — raw minus the equal-weight mean "
+                + $"forward return of the other resolved frozen-universe members, self-excluded, EXCLUDING "
+                + $"any member under a recognised pending acquisition from that mean and from the coverage "
+                + $"denominator from its announcement date onward. Excess values on as-of dates before the "
+                + $"universe freeze are additionally RETROSPECTIVE — the frozen members were selected after "
+                + $"those dates and their prices backfilled. The RiskScore association keeps its RAW "
+                + $"max-adverse-move basis. Nothing here is claim-bearing."));
         sb.AppendLine();
+        AppendCorporateActionSection(sb, rows, benchmark);
         sb.AppendLine(boundary is null
             ? "Prospective boundary: NOT ESTABLISHED — no prospective presence/absence-claim cohort can exist yet."
             : string.Create(
@@ -565,7 +693,11 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
 
         sb.AppendLine(
             "| Company | As-of (cutoff) | Status | RiskScore | Completeness (archive/search/bundle) "
-                + "| Fwd 21d (raw, descriptive) | Excess fwd 21d vs universe-v1 (descriptive) "
+                // Spec 217 §3: the label names NO rule version, for the reason the leaderboard's rho
+                // columns do not — the version has ONE owner (the CSV's basis column and the prose above,
+                // both sourced from UniverseBenchmark.ExcessRuleVersion), so a label copy cannot go stale.
+                // It read "vs universe-v1" while the values became excess-vs-universe-v2.
+                + "| Fwd 21d (raw, descriptive) | Excess fwd 21d vs frozen universe (descriptive) "
                 + "| Max adverse 21d (raw) | Selected by |");
         sb.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
         foreach (var row in rows
@@ -705,7 +837,8 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 + "selectionAsOfUtc,assessmentCutoffUtc,captureModes,archiveCapture,searchEnumeration,"
                 + "assessmentBundle,status,riskScore,"
                 + "categories,table,exclusionReasons,entryDate,rawForwardReturn21d,"
-                + "excessForwardReturn21d,excessForwardReturn21dBasis,maxAdverseMove21dRaw,selectedBy");
+                + "excessForwardReturn21d,excessForwardReturn21dBasis,corporateActionInWindow21d,"
+                + "maxAdverseMove21dRaw,selectedBy");
         foreach (var row in rows
             .OrderBy(r => r.Assessment.AssessmentCutoffUtc)
             .ThenBy(r => r.Assessment.AssessmentId))
@@ -743,6 +876,12 @@ public sealed class NewsRiskEvaluationGenerator : INewsRiskEvaluationGenerator
                 // The basis column names what the excess value IS (or why it is absent), so the two return
                 // columns can never be read as one series (spec 183: both descriptive, different outcomes).
                 CsvField.Escape(row.RawForwardReturn21d is null ? string.Empty : ExcessBasisToken(row)),
+                // Spec 217 §3: the per-row corporate-action MARKER, beside the basis it qualifies. Blank
+                // when no forward return was computed at all — a row with no outcome makes no claim about
+                // one, and printing "false" there would state a measured absence that was never measured.
+                CsvField.Escape(row.RawForwardReturn21d is null
+                    ? string.Empty
+                    : row.CorporateActionInWindow21d ? "true" : "false"),
                 CsvField.Escape(row.MaxAdverseMove21d?.ToString("0.######", CultureInfo.InvariantCulture)),
                 CsvField.Escape(string.Join(
                     "|", a.Selections.Select(s => $"{s.StrategyName}#{s.Rank}")))));

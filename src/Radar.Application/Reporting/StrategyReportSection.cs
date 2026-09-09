@@ -45,11 +45,23 @@ public sealed record StrategyReportSection(
     IReadOnlyList<StrategyReportRow> Rows)
 {
     /// <summary>
+    /// SPEC 217 §2: how many companies this strategy scored in-period were REMOVED from
+    /// <see cref="Rows"/> because a recognised pending acquisition had pinned their price to a bid. A
+    /// takeover's score sits inside a ranking a reader compares by eye, so leaving it in would invite
+    /// comparing a business trajectory against a deal spread. The renderer prints a one-line footer naming
+    /// this count and pointing at the <c>## Acquisitions pending</c> section — counted, never silent.
+    /// Defaults to 0 (a MEASURED zero: the exclusion always runs) so every existing construction site keeps
+    /// compiling.
+    /// </summary>
+    public int PendingAcquisitionsExcluded { get; init; }
+
+    /// <summary>
     /// True when the <c>MaxItems</c> cap actually removed rows that would otherwise have surfaced — i.e.
     /// more companies had linked evidence than there are rows. Derived, so it can never disagree with the
     /// numbers next to it.
     /// </summary>
-    public bool Truncated => CompaniesWithLinkedEvidence > Rows.Count;
+    public bool Truncated =>
+        CompaniesWithLinkedEvidence - PendingAcquisitionsExcluded > Rows.Count;
 
     /// <summary>
     /// The strategy's declared reporting purpose (spec 176), carried from

@@ -1,3 +1,5 @@
+using Radar.Application.Acquisitions;
+
 namespace Radar.Application.Efficacy.Comparison;
 
 /// <summary>
@@ -13,5 +15,13 @@ namespace Radar.Application.Efficacy.Comparison;
 /// </summary>
 public interface IUniverseBenchmarkProvider
 {
+    /// <summary>
+    /// SPEC 217 §3 — the acquisitions projection the returned benchmark was built with. Consumers apply the
+    /// OBSERVATION exclusion (<c>observation-eligibility-v2</c>) over this exact instance, so it cannot
+    /// disagree with the PEER-MEAN exclusion (<c>excess-vs-universe-v2</c>) baked into the benchmark. It is
+    /// <see cref="PendingAcquisitions.None"/> until <c>GetAsync</c> has run.
+    /// </summary>
+    PendingAcquisitions Acquisitions { get; }
+
     Task<UniverseBenchmark?> GetAsync(CancellationToken ct);
 }

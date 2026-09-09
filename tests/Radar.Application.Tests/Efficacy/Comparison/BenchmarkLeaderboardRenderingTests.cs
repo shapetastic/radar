@@ -28,7 +28,9 @@ public sealed class BenchmarkLeaderboardRenderingTests
         var benchmark = ComparisonFixtures.Benchmark();
         var markdown = Renderer.RenderMarkdown(Compare(benchmark));
 
-        Assert.Contains("## Benchmark (excess-vs-universe-v1)", markdown, StringComparison.Ordinal);
+        // Spec 217 §3: the benchmark RULE moved to excess-vs-universe-v2 (a pinned pending-acquisition
+        // member leaves the peer mean and the coverage denominator). The frozen MEMBERSHIP is unchanged.
+        Assert.Contains("## Benchmark (excess-vs-universe-v2)", markdown, StringComparison.Ordinal);
         Assert.Contains("benchmark-universe-v1", markdown, StringComparison.Ordinal);
         Assert.Contains(benchmark.Universe.ContentHash, markdown, StringComparison.Ordinal);
         Assert.Contains("48 member(s)", markdown, StringComparison.Ordinal);
@@ -37,8 +39,8 @@ public sealed class BenchmarkLeaderboardRenderingTests
         Assert.Contains(StrategyLeaderboardRenderer.RawSeriesNotComparable, markdown, StringComparison.Ordinal);
 
         // Excess-vs-universe columns, named in the table.
-        Assert.Contains("in-sample rho (excess-vs-universe-v1)", markdown, StringComparison.Ordinal);
-        Assert.Contains("out-of-sample rho (excess-vs-universe-v1)", markdown, StringComparison.Ordinal);
+        Assert.Contains("in-sample rho (excess-vs-universe-v2)", markdown, StringComparison.Ordinal);
+        Assert.Contains("out-of-sample rho (excess-vs-universe-v2)", markdown, StringComparison.Ordinal);
         Assert.Contains("observations excluded: benchmark unavailable", markdown, StringComparison.Ordinal);
         Assert.Contains("observations excluded: not in benchmark universe", markdown, StringComparison.Ordinal);
     }

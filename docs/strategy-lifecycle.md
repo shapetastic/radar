@@ -19,6 +19,10 @@ The maintainer's guidance, quoted exactly as given (2026-08-23):
 Uncertain evidence changes the confidence and review date of a call; it does not eliminate the obligation
 to make one. Radar records wrong calls rather than avoiding falsifiable decisions.
 
+A recognised pending acquisition is journaled here as a `corporate-action` event naming the company, the
+acquirer, the stated consideration and the SEC accession the recognition was made on (spec 217) — and so is
+the later `Delisted` move when the deal closes, which is a conscious maintainer step and never automatic.
+
 ## Events
 
 Opening entries are a one-time, best-effort backfill from git history (commit hashes cited); everything

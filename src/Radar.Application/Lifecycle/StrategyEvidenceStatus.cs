@@ -33,6 +33,27 @@ public sealed record RankedEvidence(
     int Observations)
 {
     /// <summary>
+    /// SPEC 217 §3 — the OBSERVATION-ELIGIBILITY rule identity the artifact these numbers were read from
+    /// was produced under (<c>observationEligibilityVersion</c>), or <c>null</c> when the artifact predates
+    /// spec 217 and carries no such column.
+    /// <para>
+    /// It is carried off the ARTIFACT rather than read from a code constant, deliberately: the efficacy
+    /// artifacts are written by a previous run, so a constant would assert TODAY's rule over numbers
+    /// produced under YESTERDAY's. A <c>null</c> therefore means "this artifact predates the rule" and the
+    /// report says exactly that — a stale artifact declares itself instead of being silently relabelled.
+    /// </para>
+    /// </summary>
+    public string? ObservationEligibilityVersion { get; init; }
+
+    /// <summary>
+    /// SPEC 217 §3 — the BENCHMARK rule identity the artifact was produced under
+    /// (<c>excessRuleVersion</c>), or <c>null</c> for a pre-217 artifact. Same reasoning as
+    /// <see cref="ObservationEligibilityVersion"/>: it describes the numbers beside it, not the code that
+    /// is rendering them.
+    /// </summary>
+    public string? ExcessRuleVersion { get; init; }
+
+    /// <summary>
     /// True when the interval contains zero — rendered as the SENTENCE "no evidence of discrimination
     /// yet", never converted into a pass/fail verdict ahead of the precommitted gates.
     /// </summary>
