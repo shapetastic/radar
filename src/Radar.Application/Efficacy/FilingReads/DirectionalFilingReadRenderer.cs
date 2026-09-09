@@ -163,9 +163,13 @@ public sealed class DirectionalFilingReadRenderer
             sb.AppendLine("- " + detail);
         }
 
+        // A null segment has TWO causes and they are not the same claim: none is configured, or the seam was
+        // never reached to ask. Only the first is a measurement.
         sb.AppendLine("- Model segment: " + (report.ModelSegment is { } segment
             ? "`" + segment + "`"
-            : "none configured (records live at the cache root)"));
+            : report.CorpusAvailability == FilingReadCorpusAvailability.SeamNotRegistered
+                ? "NOT READ (no corpus seam is registered, so the configured segment was never resolved)"
+                : "none configured (records live at the cache root)"));
         sb.AppendLine(Line("Files scanned inside the current segment", report.FilesScanned));
         sb.AppendLine(Line("Records hydrated (the primary denominator)", report.RecordsHydrated));
         sb.AppendLine(Line("EXCLUDED — unreadable / unparseable files", report.UnreadableOrUnparseableFiles));
@@ -186,10 +190,14 @@ public sealed class DirectionalFilingReadRenderer
         sb.AppendLine(Line(
             "Reads with no filing date recorded (no evidence publication instant, no cache observation instant)",
             report.FilingDateNotRecordedCount));
-        sb.AppendLine(Line(
+        // These two are EVIDENCE-STORE counts, not per-read ones: with the store unloaded they were never
+        // taken, and a rendered 0 would read as "the store is clean".
+        sb.AppendLine(NotComputedLine(
+            report,
             "Filing evidence records carrying no `accessionNumber` metadata (never joinable)",
             report.FilingEvidenceWithoutAccessionMetadata));
-        sb.AppendLine(Line(
+        sb.AppendLine(NotComputedLine(
+            report,
             "Accessions carrying MORE THAN ONE filing evidence record (every candidate is kept; the join is "
                 + "reported as ambiguous rather than collapsed to an arbitrary winner)",
             report.AccessionsWithMultipleEvidenceRecords));
@@ -365,6 +373,16 @@ public sealed class DirectionalFilingReadRenderer
             "Descriptive. This section asserts no defect: it converts a documented design choice into a "
                 + "standing number.");
         sb.AppendLine();
+        if (!report.JoinStoresLoaded)
+        {
+            sb.AppendLine(
+                "**NOT COMPUTED.** No read record hydrated, so the evidence store was not loaded and no "
+                    + "excerpt or figure was looked up. The zeros below are zero READS, not a measured "
+                    + "groundedness rate, and the evidence-metadata key list is absent because it was never "
+                    + "collected — not because the envelope carries no keys.");
+            sb.AppendLine();
+        }
+
         sb.AppendLine(Line("directional reads", g.DirectionalReads));
         sb.AppendLine(Line("measured (a directional read WITH a joined evidence record)", g.MeasuredReads));
         sb.AppendLine(Line("EXCLUDED — not measurable", g.NotApplicableReads));
@@ -504,27 +522,43 @@ public sealed class DirectionalFilingReadRenderer
                 + "agreeing. Typing began in 2026-08, so a pre-August read has no news arm at all and says "
                 + "so per read (`NoTypingCoverageInWindowPreTypingEra`).");
         sb.AppendLine();
-        sb.AppendLine(Line("typing records scanned", d.TypingRecordsScanned));
-        sb.AppendLine(Line("CONTRIBUTING at least one typed fact", d.TypingsContributingFacts));
-        sb.AppendLine(Line(
-            "EXCLUDED — typings that produced NO fact (InsufficientContent, or all facts dropped in "
-                + "validation)",
-            d.TypingsWithNoFacts));
-        sb.AppendLine(Line("EXCLUDED — typings carrying no company id", d.TypingsWithNoCompanyId));
-        sb.AppendLine(Line(
-            "EXCLUDED — typings whose observation is not in the archive", d.TypingsWithNoArchivedObservation));
-        sb.AppendLine(Line(
-            "EXCLUDED — typings whose observation has no publication instant", d.TypingsWithNoPublishedAt));
-        sb.AppendLine(string.Create(
-            CultureInfo.InvariantCulture,
-            $"- reconciliation: {d.TypingsContributingFacts} contributing + {d.TypingsWithNoFacts} no-facts + "
-                + $"{d.TypingsWithNoCompanyId} no-company + {d.TypingsWithNoArchivedObservation} "
-                + $"no-observation + {d.TypingsWithNoPublishedAt} no-publication-instant = "
-                + $"{d.TypingsContributingFacts + d.TypingsWithNoFacts + d.TypingsWithNoCompanyId + d.TypingsWithNoArchivedObservation + d.TypingsWithNoPublishedAt} "
-                + $"of {d.TypingRecordsScanned} scanned"));
-        sb.AppendLine("- first typing record date: " + (d.FirstTypingRecordDateUtc is { } first
-            ? "`" + first.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "`"
-            : "not recorded (the typing store holds no records)"));
+        if (report.JoinStoresLoaded)
+        {
+            sb.AppendLine(Line("typing records scanned", d.TypingRecordsScanned));
+            sb.AppendLine(Line("CONTRIBUTING at least one typed fact", d.TypingsContributingFacts));
+            sb.AppendLine(Line(
+                "EXCLUDED — typings that produced NO fact (InsufficientContent, or all facts dropped in "
+                    + "validation)",
+                d.TypingsWithNoFacts));
+            sb.AppendLine(Line("EXCLUDED — typings carrying no company id", d.TypingsWithNoCompanyId));
+            sb.AppendLine(Line(
+                "EXCLUDED — typings whose observation is not in the archive",
+                d.TypingsWithNoArchivedObservation));
+            sb.AppendLine(Line(
+                "EXCLUDED — typings whose observation has no publication instant", d.TypingsWithNoPublishedAt));
+            sb.AppendLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"- reconciliation: {d.TypingsContributingFacts} contributing + {d.TypingsWithNoFacts} "
+                    + $"no-facts + {d.TypingsWithNoCompanyId} no-company + "
+                    + $"{d.TypingsWithNoArchivedObservation} no-observation + {d.TypingsWithNoPublishedAt} "
+                    + $"no-publication-instant = "
+                    + $"{d.TypingsContributingFacts + d.TypingsWithNoFacts + d.TypingsWithNoCompanyId + d.TypingsWithNoArchivedObservation + d.TypingsWithNoPublishedAt} "
+                    + $"of {d.TypingRecordsScanned} scanned"));
+            sb.AppendLine("- first typing record date: " + (d.FirstTypingRecordDateUtc is { } first
+                ? "`" + first.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "`"
+                : "not recorded (the typing store holds no records)"));
+        }
+        else
+        {
+            // The typing store was never opened. Six zeros, a reconciliation that "balances", and a
+            // first-typing-date line blaming an empty store would all be fabricated measurements — the
+            // store may hold thousands of records this run simply did not look at.
+            sb.AppendLine(
+                "- typing accounting: **NOT COMPUTED** — no read record hydrated, so the news-typing store "
+                    + "and the news-observation archive were not loaded (see the corpus accounting above). "
+                    + "The store may hold any number of records; this run did not look.");
+        }
+
         sb.AppendLine();
 
         if (d.MatchedVocabularyTermCounts.Count > 0)
@@ -695,6 +729,17 @@ public sealed class DirectionalFilingReadRenderer
 
     private static string Line(string label, int count) =>
         "- " + label + ": " + count.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// A line for a count DERIVED from one of the join stores: it prints the number when the stores were
+    /// loaded, and says NOT COMPUTED when they were not. A store-derived <c>0</c> from a build that never
+    /// opened the store is a fabricated measurement, which CLAUDE.md forbids in rendered text as much as on
+    /// a record.
+    /// </summary>
+    private static string NotComputedLine(DirectionalFilingReadReport report, string label, int count) =>
+        report.JoinStoresLoaded
+            ? Line(label, count)
+            : "- " + label + ": NOT COMPUTED (the store was not loaded — no read record hydrated)";
 
     private static string Share(double? share) => share is { } value
         ? value.ToString(ShareFormat, CultureInfo.InvariantCulture)

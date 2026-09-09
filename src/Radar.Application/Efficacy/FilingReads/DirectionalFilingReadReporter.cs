@@ -97,6 +97,20 @@ public sealed class DirectionalFilingReadReporter
     public const int MaxNamedMismatchAccessions = 25;
 
     /// <summary>
+    /// What a build says when nothing hydrated and the four join stores were therefore never opened. It
+    /// names the stores it did not read and — precisely — WHICH counts are consequently NOT COMPUTED, so a
+    /// reader is not told that the per-read exclusion counts (which ARE true zeros over zero reads) are
+    /// unmeasured too.
+    /// </summary>
+    public const string JoinStoresNotLoadedDetail =
+        "No read record hydrated, so there was nothing to join: the evidence, company, news-typing and "
+            + "news-observation stores were NOT LOADED for this run. The counts DERIVED from them — filing "
+            + "evidence carrying no accessionNumber, accessions carrying more than one evidence record, the "
+            + "groundedness section, and the disagreement section's typing accounting — are NOT COMPUTED, "
+            + "not measured zeros. The per-read exclusion counts below ARE measured: they are zero because "
+            + "there are zero reads.";
+
+    /// <summary>
     /// Why the capped-confidence count is NOT RECORDED. <c>AnalyzedFilingRecord</c> stores only the EFFECTIVE
     /// (already comparability-capped) confidence, with no separate <c>cappedConfidence</c> field, so a capped
     /// and an uncapped value are indistinguishable on the record. Reporting 0 here would be a fabricated
@@ -154,11 +168,13 @@ public sealed class DirectionalFilingReadReporter
     {
         if (_corpus is null)
         {
-            return EmptyReport(
+            var unreachable = EmptyReport(
                 FilingReadCorpusAvailability.SeamNotRegistered,
                 "No IAnalyzedFilingReadCorpus is registered: the AI earnings read is disabled for this "
                     + "process. Accrued read records may exist on disk; this run could not reach them. This "
                     + "is NOT a measured zero.");
+            LogSummary(unreachable, FilingReadCorpusAvailability.SeamNotRegistered);
+            return unreachable;
         }
 
         var corpus = await _corpus.ReadAllAsync(ct).ConfigureAwait(false);
@@ -178,6 +194,21 @@ public sealed class DirectionalFilingReadReporter
             _ => null,
         };
 
+        // No record hydrated ⇒ there is NOTHING to join, so none of the four join stores is loaded: reading
+        // four whole stores to join zero rows is pure I/O for a report that can only be empty. The corpus's
+        // OWN measured counts (files scanned, unreadable, mismatched, outside the segment) are carried
+        // through untouched, and JoinStoresLoaded=false marks exactly which counts did NOT get measured, so
+        // no renderer and no reader can mistake an unloaded arm for a measured zero.
+        if (corpus.Entries.Count == 0)
+        {
+            var report = EmptyReport(
+                availability,
+                (unavailableDetail is { } d ? d + " " : string.Empty) + JoinStoresNotLoadedDetail,
+                corpus);
+            LogSummary(report, availability);
+            return report;
+        }
+
         // ---- the joins, each loaded once -----------------------------------------------------------
         var evidenceByAccession = await BuildEvidenceIndexAsync(ct).ConfigureAwait(false);
         var companiesById = (await _companies.GetAllAsync(ct).ConfigureAwait(false))
@@ -194,8 +225,54 @@ public sealed class DirectionalFilingReadReporter
                 .ConfigureAwait(false));
         }
 
-        var report = Compose(
+        var composed = Compose(
             corpus, availability, unavailableDetail, rows, newsIndex, evidenceByAccession);
+        LogSummary(composed, availability);
+        return composed;
+    }
+
+    /// <summary>
+    /// The ONE aggregated log line for a build, emitted on EVERY return path — including the early
+    /// unavailable/empty ones, which would otherwise complete silently and leave their named exclusion
+    /// counts unsurfaced.
+    /// </summary>
+    private void LogSummary(DirectionalFilingReadReport report, FilingReadCorpusAvailability availability)
+    {
+        if (availability == FilingReadCorpusAvailability.SeamNotRegistered)
+        {
+            // No seam ⇒ no enumeration happened either, so even the CORPUS-level file counts are
+            // placeholders on this path. Logging "0 files scanned" beside SeamNotRegistered would invite an
+            // operator to read a zero that was never taken.
+            _logger.LogInformation(
+                "Directional filing-read distribution: NOT MEASURED ({Availability}) — no "
+                    + "IAnalyzedFilingReadCorpus is registered, so no file was enumerated and no store was "
+                    + "loaded. Accrued read records may exist on disk; this run could not reach them.",
+                availability);
+            return;
+        }
+
+        if (!report.JoinStoresLoaded)
+        {
+            // The store-derived clauses are OMITTED rather than logged as zeros: with the stores unloaded
+            // they were never measured, and "typings 0 scanned" in a log line reads exactly like a finding.
+            _logger.LogInformation(
+                "Directional filing-read distribution: {Total} accrued read(s) ({Availability}); "
+                    + "{FilesScanned} file(s) scanned, {Unreadable} unreadable, {NameMismatch} "
+                    + "filename/accession mismatch, {OutcomeMismatch} outcome/signal mismatch, {Outside} "
+                    + "outside the current model segment. No record hydrated, so the evidence, company, "
+                    + "news-typing and news-observation stores were NOT LOADED: the groundedness and "
+                    + "disagreement accountings are NOT COMPUTED, not measured zeros.",
+                report.AllRecords.TotalReads,
+                availability,
+                report.FilesScanned,
+                report.UnreadableOrUnparseableFiles,
+                report.FileNameAccessionMismatchFiles,
+                report.OutcomeSignalMismatchFiles,
+                report.OutsideCurrentModelSegmentFiles is { } notLoadedOutside
+                    ? notLoadedOutside.ToString(CultureInfo.InvariantCulture)
+                    : "(not counted)");
+            return;
+        }
 
         _logger.LogInformation(
             "Directional filing-read distribution: {Total} accrued read(s) ({Availability}); {Positive} "
@@ -242,8 +319,6 @@ public sealed class DirectionalFilingReadReporter
             report.Disagreement.NewsArmEvaluatedReads,
             report.Disagreement.DirectionalReads,
             report.Disagreement.PositiveReadsDisagreeing);
-
-        return report;
     }
 
     // -----------------------------------------------------------------------------------------------
@@ -822,6 +897,7 @@ public sealed class DirectionalFilingReadReporter
             DisagreementVersion: FilingReadDisagreementVocabulary.Version,
             CorpusAvailability: availability,
             CorpusUnavailableDetail: unavailableDetail,
+            JoinStoresLoaded: true,
             ModelSegment: corpus.ModelSegment,
             FilesScanned: corpus.FilesScanned,
             RecordsHydrated: corpus.RecordsHydrated,
@@ -1255,8 +1331,17 @@ public sealed class DirectionalFilingReadReporter
         ? value.ToString("0.0%", CultureInfo.InvariantCulture)
         : "(undefined — no directional reads)";
 
+    /// <summary>
+    /// The report for a build that produced NO rows — either because no corpus seam exists, or because the
+    /// corpus hydrated nothing. When <paramref name="corpus"/> is supplied its own measured file counts are
+    /// carried through; when it is <c>null</c> the seam was never reached, and the zeros below are
+    /// placeholders whose meaning is carried by <paramref name="detail"/> (which every renderer prints
+    /// beside the availability), never measurements.
+    /// </summary>
     private DirectionalFilingReadReport EmptyReport(
-        FilingReadCorpusAvailability availability, string detail)
+        FilingReadCorpusAvailability availability,
+        string detail,
+        AnalyzedFilingCorpus? corpus = null)
     {
         var empty = Array.Empty<DirectionalFilingReadRow>();
         var emptyNews = NewsWindowIndex.NotRegistered();
@@ -1266,13 +1351,15 @@ public sealed class DirectionalFilingReadReporter
             DisagreementVersion: FilingReadDisagreementVocabulary.Version,
             CorpusAvailability: availability,
             CorpusUnavailableDetail: detail,
-            ModelSegment: null,
-            FilesScanned: 0,
-            RecordsHydrated: 0,
-            UnreadableOrUnparseableFiles: 0,
-            OutsideCurrentModelSegmentFiles: null,
-            FileNameAccessionMismatchFiles: 0,
-            OutcomeSignalMismatchFiles: 0,
+            // The one authority a renderer reads: no row exists, so no join store was opened.
+            JoinStoresLoaded: false,
+            ModelSegment: corpus?.ModelSegment,
+            FilesScanned: corpus?.FilesScanned ?? 0,
+            RecordsHydrated: corpus?.RecordsHydrated ?? 0,
+            UnreadableOrUnparseableFiles: corpus?.UnreadableOrUnparseableFiles ?? 0,
+            OutsideCurrentModelSegmentFiles: corpus?.OutsideCurrentModelSegmentFiles,
+            FileNameAccessionMismatchFiles: corpus?.FileNameAccessionMismatchFiles ?? 0,
+            OutcomeSignalMismatchFiles: corpus?.OutcomeSignalMismatchFiles ?? 0,
             NoMatchingEvidenceRecordCount: 0,
             FilingEvidenceWithoutAccessionMetadata: 0,
             AccessionsWithMultipleEvidenceRecords: 0,

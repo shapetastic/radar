@@ -5,7 +5,12 @@ namespace Radar.Application.Efficacy.FilingReads;
 /// <summary>How the corpus enumeration ended. A non-<see cref="Available"/> state is stated on the artifact.</summary>
 public enum FilingReadCorpusAvailability
 {
-    /// <summary>The corpus was enumerated; the counts below are a complete accounting of it.</summary>
+    /// <summary>
+    /// The corpus was enumerated; every CORPUS-LEVEL count is a complete accounting of it. It does not by
+    /// itself mean the join-derived counts were computed: a present-but-empty directory is
+    /// <c>Available</c> with zero hydrated records, and a build with nothing to join skips the join stores
+    /// entirely. <c>JoinStoresLoaded</c> is the authority on that, not this member.
+    /// </summary>
     Available = 0,
 
     /// <summary>
@@ -432,12 +437,22 @@ public sealed record FilingReadWorkedExampleNewsLine(
 /// The complete spec-218 measurement: the three versioned sub-reports over one corpus read, plus the corpus
 /// accounting that makes every denominator checkable. This record IS the JSON artifact.
 /// </summary>
+/// <param name="JoinStoresLoaded">
+/// Whether the four JOIN stores — evidence, companies, news typings and the news-observation archive — were
+/// actually loaded for this build. They are loaded only when at least one read record hydrated, because
+/// joining zero rows would pay four whole-store reads for nothing. When <c>false</c>, every count DERIVED
+/// from those stores (the two store-level evidence-index counts, the whole groundedness section's evidence
+/// lookups, and the disagreement section's typing accounting) is NOT COMPUTED and must never be rendered or
+/// read as a measured zero. Counts derived from the READS themselves (per-read exclusions, direction
+/// classes) are genuine zeros over zero reads and stay <c>0</c>.
+/// </param>
 public sealed record DirectionalFilingReadReport(
     string DistributionVersion,
     string GroundednessVersion,
     string DisagreementVersion,
     FilingReadCorpusAvailability CorpusAvailability,
     string? CorpusUnavailableDetail,
+    bool JoinStoresLoaded,
     string? ModelSegment,
     int FilesScanned,
     int RecordsHydrated,

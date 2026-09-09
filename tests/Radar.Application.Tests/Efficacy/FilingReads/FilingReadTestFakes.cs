@@ -216,7 +216,14 @@ internal sealed class FakeAnalyzedFilingReadCorpus(AnalyzedFilingCorpus corpus) 
 
 internal sealed class FakeFilingReadEvidenceRepository(IReadOnlyList<EvidenceItem> items) : IEvidenceRepository
 {
-    public Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct) => Task.FromResult(items);
+    /// <summary>How many times the WHOLE store was loaded — a test can prove a build never touched it.</summary>
+    public int GetAllCalls { get; private set; }
+
+    public Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct)
+    {
+        GetAllCalls++;
+        return Task.FromResult(items);
+    }
 
     public Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct) =>
         throw new NotSupportedException("The measurement is read-only over evidence.");
@@ -229,7 +236,14 @@ internal sealed class FakeFilingReadEvidenceRepository(IReadOnlyList<EvidenceIte
 
 internal sealed class FakeFilingReadCompanyRepository(IReadOnlyList<Company> companies) : ICompanyRepository
 {
-    public Task<IReadOnlyList<Company>> GetAllAsync(CancellationToken ct) => Task.FromResult(companies);
+    /// <summary>How many times the WHOLE store was loaded — a test can prove a build never touched it.</summary>
+    public int GetAllCalls { get; private set; }
+
+    public Task<IReadOnlyList<Company>> GetAllAsync(CancellationToken ct)
+    {
+        GetAllCalls++;
+        return Task.FromResult(companies);
+    }
 
     public Task<IReadOnlyList<CompanyAlias>> GetAliasesAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<CompanyAlias>>([]);
@@ -249,8 +263,14 @@ internal sealed class FakeFilingReadCompanyRepository(IReadOnlyList<Company> com
 
 internal sealed class FakeNewsTypingStore(IReadOnlyList<NewsTypingRecord> records) : INewsTypingStore
 {
-    public Task<IReadOnlyList<NewsTypingRecord>> GetAllAsync(CancellationToken ct) =>
-        Task.FromResult(records);
+    /// <summary>How many times the WHOLE store was loaded — a test can prove a build never touched it.</summary>
+    public int GetAllCalls { get; private set; }
+
+    public Task<IReadOnlyList<NewsTypingRecord>> GetAllAsync(CancellationToken ct)
+    {
+        GetAllCalls++;
+        return Task.FromResult(records);
+    }
 
     public Task<bool> WriteAsync(NewsTypingRecord record, CancellationToken ct) =>
         throw new NotSupportedException("The measurement is read-only over typings.");

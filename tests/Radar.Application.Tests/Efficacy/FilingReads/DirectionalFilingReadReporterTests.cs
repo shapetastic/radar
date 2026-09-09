@@ -1,4 +1,7 @@
+using Microsoft.Extensions.Logging.Abstractions;
+
 using Radar.Application.Efficacy.FilingReads;
+using Radar.Application.EntityResolution;
 using Radar.Application.Filings;
 using Radar.Application.Prices;
 using Radar.Domain.Evidence;
@@ -131,10 +134,141 @@ public sealed class DirectionalFilingReadReporterTests
         var report = await Reporter(corpus: null).BuildAsync(CancellationToken.None);
 
         Assert.Equal(FilingReadCorpusAvailability.SeamNotRegistered, report.CorpusAvailability);
+        Assert.False(report.JoinStoresLoaded);
         Assert.NotNull(report.CorpusUnavailableDetail);
         Assert.Contains("NOT a measured zero", report.CorpusUnavailableDetail!, StringComparison.Ordinal);
         // The outside-segment count is NOT RECORDED here, never a fabricated 0.
         Assert.Null(report.OutsideCurrentModelSegmentFiles);
+
+        // A null ModelSegment has two causes and only one is a measurement: the markdown must not claim
+        // "none configured" when the seam was never reached to resolve one.
+        var markdown = new DirectionalFilingReadRenderer().RenderMarkdown(report);
+        Assert.Contains("Model segment: NOT READ", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("none configured", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ACorpusThatHydratesNothing_SkipsEveryJoinStore_AndSaysTheCountsAreNotComputed()
+    {
+        // A missing cache directory is a MEASURED absence with zero entries — there is nothing to join, so
+        // paying three whole-store loads to join zero rows would be pure I/O. The corpus's own counts must
+        // still ride out, and the join-derived arms must read as NOT COMPUTED rather than measured zeros.
+        var evidence = new FakeFilingReadEvidenceRepository([FilingEvidence("a", FilingDate)]);
+        var companies = new FakeFilingReadCompanyRepository([Company()]);
+        var typings = new FakeNewsTypingStore(
+            [Typing(Guid.NewGuid(), CompanyId, DateTimeOffset.UnixEpoch, "profit warning")]);
+        var reporter = new DirectionalFilingReadReporter(
+            evidence,
+            companies,
+            new CompanyResolver(companies, NullLogger<CompanyResolver>.Instance),
+            new FakeFilingReadPriceStore(),
+            NullLogger<DirectionalFilingReadReporter>.Instance,
+            new FakeAnalyzedFilingReadCorpus(new AnalyzedFilingCorpus(
+                Entries: [],
+                ModelSegment: "segment",
+                CorpusDirectoryExists: false,
+                EnumerationFailed: false,
+                FilesScanned: 0,
+                UnreadableOrUnparseableFiles: 0,
+                OutsideCurrentModelSegmentFiles: 3,
+                FileNameAccessionMismatchFiles: 0,
+                OutcomeSignalMismatchFiles: 0)),
+            typings,
+            new FakeNewsObservationArchive([]));
+
+        var report = await reporter.BuildAsync(CancellationToken.None);
+
+        Assert.Equal(0, evidence.GetAllCalls);
+        Assert.Equal(0, companies.GetAllCalls);
+        Assert.Equal(0, typings.GetAllCalls);
+
+        Assert.Equal(FilingReadCorpusAvailability.DirectoryMissing, report.CorpusAvailability);
+        Assert.False(report.JoinStoresLoaded);
+        Assert.Contains("NOT COMPUTED", report.CorpusUnavailableDetail!, StringComparison.Ordinal);
+        Assert.Contains(
+            "MEASURED absence", report.CorpusUnavailableDetail!, StringComparison.Ordinal);
+        // The per-read exclusion counts ARE measured (zero reads ⇒ zero exclusions); the detail must not
+        // over-claim by calling them unmeasured too.
+        Assert.Contains(
+            "The per-read exclusion counts below ARE measured",
+            report.CorpusUnavailableDetail!,
+            StringComparison.Ordinal);
+
+        // The corpus's OWN measured counts survive the short circuit — including the outside-segment count,
+        // which is a real accrued-read fact and must not vanish.
+        Assert.Equal("segment", report.ModelSegment);
+        Assert.Equal(3, report.OutsideCurrentModelSegmentFiles);
+        Assert.Equal(0, report.RecordsHydrated);
+        Assert.Equal(0, report.AllRecords.TotalReads);
+        Assert.Null(report.AllRecords.PositiveShareOfDirectional);
+    }
+
+    [Fact]
+    public async Task WhenTheJoinStoresWereNotLoaded_TheMarkdownSaysNotComputed_NeverAMeasuredZero()
+    {
+        // The regression this pins: a model-segment change makes the corpus directory missing while the
+        // typing store is registered and full. Rendering "typing records scanned: 0" and "not recorded (the
+        // typing store holds no records)" would assert a cause that is FALSE.
+        var corpus = new FakeAnalyzedFilingReadCorpus(new AnalyzedFilingCorpus(
+            Entries: [],
+            ModelSegment: "new-model",
+            CorpusDirectoryExists: false,
+            EnumerationFailed: false,
+            FilesScanned: 0,
+            UnreadableOrUnparseableFiles: 0,
+            OutsideCurrentModelSegmentFiles: 0,
+            FileNameAccessionMismatchFiles: 0,
+            OutcomeSignalMismatchFiles: 0));
+
+        var report = await Reporter(corpus).BuildAsync(CancellationToken.None);
+        var markdown = new DirectionalFilingReadRenderer().RenderMarkdown(report);
+
+        Assert.DoesNotContain("typing records scanned", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "the typing store holds no records", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("of 0 scanned", markdown, StringComparison.Ordinal);
+        Assert.Contains("typing accounting: **NOT COMPUTED**", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "Filing evidence records carrying no `accessionNumber` metadata (never joinable): NOT COMPUTED",
+            markdown,
+            StringComparison.Ordinal);
+        Assert.Contains("**NOT COMPUTED.** No read record hydrated", markdown, StringComparison.Ordinal);
+
+        // Sections that describe the READS are still rendered — the short circuit must not silently drop
+        // them — and their zeros are genuine zeros over zero reads.
+        Assert.Contains("Forward return by read direction", markdown, StringComparison.Ordinal);
+        Assert.Contains(
+            "EXCLUDED from the evidence join — reads with no matching evidence record: 0",
+            markdown,
+            StringComparison.Ordinal);
+        Assert.Contains("\"joinStoresLoaded\": false", new DirectionalFilingReadRenderer().RenderJson(report),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnEnumerationFailureWithNoRecords_StillCarriesItsPartialFileCounts()
+    {
+        var corpus = new FakeAnalyzedFilingReadCorpus(new AnalyzedFilingCorpus(
+            Entries: [],
+            ModelSegment: "segment",
+            CorpusDirectoryExists: true,
+            EnumerationFailed: true,
+            FilesScanned: 7,
+            UnreadableOrUnparseableFiles: 7,
+            OutsideCurrentModelSegmentFiles: null,
+            FileNameAccessionMismatchFiles: 0,
+            OutcomeSignalMismatchFiles: 0));
+
+        var report = await Reporter(corpus).BuildAsync(CancellationToken.None);
+
+        Assert.Equal(FilingReadCorpusAvailability.EnumerationFailed, report.CorpusAvailability);
+        Assert.Equal(7, report.FilesScanned);
+        Assert.Equal(7, report.UnreadableOrUnparseableFiles);
+        // NOT COUNTED stays null, never a fabricated 0.
+        Assert.Null(report.OutsideCurrentModelSegmentFiles);
+        Assert.Contains("NOT COMPUTED", report.CorpusUnavailableDetail!, StringComparison.Ordinal);
+        Assert.Contains(
+            "not a complete accounting", report.CorpusUnavailableDetail!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
