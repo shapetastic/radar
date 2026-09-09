@@ -321,10 +321,13 @@ public static class StatementComparisonClassifier
     /// whitespace matches any whitespace run, and both ends are bounded by a character that is neither a
     /// word character nor a hyphen (or the string edge) — a hyphenated compound is one token, so no term
     /// can hit inside another word or inside a compound ("flat-panel", "above-average", "cutting-edge").
-    /// Internal (spec 215) so <see cref="ReferenceValueProjector"/>'s metric-phrase table matches under
-    /// the SAME boundary rule rather than a pasted second copy.
+    /// Shared (spec 215) so <see cref="ReferenceValueProjector"/>'s metric-phrase table matches under
+    /// the SAME boundary rule rather than a pasted second copy. PUBLIC since spec 216 §3 so
+    /// <see cref="Radar.Application.Filings.ReportedMetricSynonyms"/> — read by the Infrastructure
+    /// reported-metrics verifier, which cannot see Application internals — routes through this ONE builder
+    /// too rather than pasting a third copy of the boundary rule.
     /// </summary>
-    internal static Regex WholeWordAlternation(IReadOnlyList<string> terms)
+    public static Regex WholeWordAlternation(IReadOnlyList<string> terms)
     {
         var alternation = string.Join(
             "|",

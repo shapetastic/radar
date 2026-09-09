@@ -182,7 +182,7 @@ public sealed class NewsJudgmentInputBuilderTests
         var stage1 = NewsTypingContract.CohortKey("openai", "deepseek-ai/DeepSeek-V4-Flash");
         var key = NewsJudgmentContract.CohortKey("openai", "judge-model", stage1);
 
-        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v5|news-judgment-schema-v4|", key);
+        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v6|news-judgment-schema-v4|", key);
         Assert.Contains("stage1=" + stage1, key);
         Assert.Contains("families=" + FactFamilyBuilder.IdentityString, key);
         // Spec 214 §1: the comparison-basis classifier is an input the model sees, so its version is cohort
@@ -244,6 +244,6 @@ public sealed class NewsJudgmentInputBuilderTests
         // TrajectoryBasis and spec 215 §2 to v6 for the reference fields — RECORD changes, not cohort
         // changes: the cohort keys above are unaffected by the tag (asserted in
         // NewsJudgmentCompletenessSchemaTests).
-        Assert.Equal("news-judgment-v6", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-v7", NewsJudgmentRecord.CurrentSchemaVersion);
     }
 }

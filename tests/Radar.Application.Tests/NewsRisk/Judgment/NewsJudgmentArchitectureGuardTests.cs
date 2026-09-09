@@ -163,7 +163,7 @@ public sealed class NewsJudgmentArchitectureGuardTests
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(9)
+            .TakeLast(15)
             .ToList();
         Assert.Equal(
             [
@@ -176,6 +176,14 @@ public sealed class NewsJudgmentArchitectureGuardTests
                 nameof(NewsJudgmentRecord.ReferenceIds),
                 nameof(NewsJudgmentRecord.ReferenceValuesOmitted),
                 nameof(NewsJudgmentRecord.TrajectoryReferenceIds),
+                // Spec 216 §1/§5: the reference POLICY, the reference KINDS (ids + an enum, never prose)
+                // and the projection's three counted exclusions.
+                nameof(NewsJudgmentRecord.ReferencePolicy),
+                nameof(NewsJudgmentRecord.ReferenceKinds),
+                nameof(NewsJudgmentRecord.TrajectoryReferenceKinds),
+                nameof(NewsJudgmentRecord.ReferencesExcludedNewest),
+                nameof(NewsJudgmentRecord.ReferencesExcludedLaterThanFact),
+                nameof(NewsJudgmentRecord.ReferencesSkippedSupersededPolicy),
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

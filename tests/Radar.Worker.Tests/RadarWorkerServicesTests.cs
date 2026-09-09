@@ -1029,10 +1029,39 @@ public sealed class RadarWorkerServicesTests
             ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
 
         Assert.Equal(0.7m, provider.GetRequiredService<DirectionalFilingSignalOptions>().ComparabilityConfidenceCap);
-        Assert.EndsWith(
-            ";cmpscan=cmpscan-v1;cmpcap=0.7",
+        Assert.Contains(
+            ";cmpscan=cmpscan-v1;cmpcap=0.7;rm=",
             provider.GetRequiredService<IDirectionalFilingSignalSource>().ScoringDescriptor(),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AiReportedMetricsEnabled_BindsFromRadarAi_AndFoldsIntoTheDirectionalDescriptor()
+    {
+        // SPEC 216 §5: the SAME switch that shapes the analyzer prompt (ExtractReportedMetrics) decides the
+        // descriptor rm= token, composed in ONE place so the prompt the model sees and the identity the run
+        // stamps can never disagree. Extraction changes the filing prompt, so an extraction-on run and an
+        // extraction-off run must never share a ScoringConfigVersion.
+        using var on = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+        using var off = BuildProvider(
+            ("Radar:Ai:Provider", "ollama"),
+            ("Radar:Ai:Model", "llama3.1"),
+            ("Radar:Ai:ReportedMetrics:Enabled", "false"),
+            ("Radar:Sec:UserAgent", "Radar Research test@example.com"));
+
+        var onDescriptor = on.GetRequiredService<IDirectionalFilingSignalSource>().ScoringDescriptor();
+        var offDescriptor = off.GetRequiredService<IDirectionalFilingSignalSource>().ScoringDescriptor();
+
+        Assert.EndsWith(";rm=" + ReportedMetricsPolicy.Version, onDescriptor, StringComparison.Ordinal);
+        Assert.EndsWith(";rm=" + ReportedMetricsPolicy.DisabledToken, offDescriptor, StringComparison.Ordinal);
+        Assert.NotEqual(onDescriptor, offDescriptor);
+
+        // …and the analyzer prompt follows the same switch, which is WHY the token is hashed here.
+        Assert.True(on.GetRequiredService<FilingAnalyzerOptions>().ExtractReportedMetrics);
+        Assert.False(off.GetRequiredService<FilingAnalyzerOptions>().ExtractReportedMetrics);
     }
 
     [Fact]

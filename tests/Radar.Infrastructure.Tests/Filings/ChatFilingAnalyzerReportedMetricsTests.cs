@@ -16,7 +16,8 @@ namespace Radar.Infrastructure.Tests.Filings;
 public sealed class ChatFilingAnalyzerReportedMetricsTests
 {
     private const string Body =
-        "Argan, Inc. Reports Second Quarter Fiscal 2027 Results. Revenues of $384.0 million, up 68% from "
+        "Argan, Inc. Reports Second Quarter Fiscal 2027 Results. Revenues for the second quarter of "
+        + "fiscal 2027 were $384.0 million, up 68% from "
         + "$227.0 million in the prior-year quarter. Project backlog of $2.518 billion as of July 31, 2026.";
 
     private const string Response =
@@ -28,7 +29,7 @@ public sealed class ChatFilingAnalyzerReportedMetricsTests
           "reportedMetrics": [
             { "metric": "Revenue", "value": "384.0", "unit": "million", "period": "second quarter of fiscal 2027",
               "priorValue": "227.0", "priorPeriod": "prior-year quarter",
-              "quote": "Revenues of $384.0 million, up 68% from $227.0 million in the prior-year quarter." },
+              "quote": "Revenues for the second quarter of fiscal 2027 were $384.0 million, up 68% from $227.0 million in the prior-year quarter." },
             { "metric": "Backlog", "value": "2.518", "unit": "billion", "period": "as of July 31, 2026",
               "quote": "Project backlog of $2.518 billion as of July 31, 2026." },
             { "metric": "Guidance", "value": "1.0", "unit": "billion", "period": "fiscal 2027", "quote": "Project backlog of $2.518 billion" },
@@ -72,7 +73,9 @@ public sealed class ChatFilingAnalyzerReportedMetricsTests
         var client = new FakeChatClient(Response);
 
         // The cap cuts the body before the backlog sentence.
-        var read = await Build(client, maxInputLength: 150).AnalyzeAsync(Body, CancellationToken.None);
+        var read = await Build(
+                client, maxInputLength: Body.IndexOf("Project backlog", StringComparison.Ordinal))
+            .AnalyzeAsync(Body, CancellationToken.None);
 
         var metrics = Assert.IsType<VerifiedReportedMetrics>(read.ReportedMetrics);
         Assert.Equal([ReportedMetric.Revenue], metrics.Verified.Select(m => m.Metric).ToList());

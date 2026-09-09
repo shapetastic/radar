@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
@@ -10,26 +9,52 @@ using Radar.Infrastructure.FileSystem;
 namespace Radar.Infrastructure.Filings;
 
 /// <summary>
-/// The on-disk reported-metrics ledger (spec 215 §1): one JSON file per (company, accession) at
-/// <c>{RootDirectory}/{companyId:D}/{sanitizedAccession}.json</c> holding that release's verified
-/// <see cref="ReportedMetricRecord"/> LIST. Append-only by construction — <see cref="FileMode.CreateNew"/>
-/// makes never-overwrite structural rather than a check-then-write (the spec-206 raw-evidence pattern), so
-/// an existing file is <see cref="DurableWriteOutcome.AlreadyAvailable"/> and a re-read of the same
-/// accession is a durable no-op. A disk failure is <see cref="DurableWriteOutcome.Failed"/> and never
-/// throws; only caller cancellation propagates. Reuses <see cref="RadarFileStoreJson.Options"/> (the shared
-/// on-disk JSON shape) and the shared filename-key sanitizer (reuse over copy); all file I/O stays in
-/// Infrastructure (AD-5).
+/// The on-disk reported-metrics ledger (spec 215 §1): one JSON file per (company, accession, policy) at
+/// <c>{RootDirectory}/{companyId:D}/{sanitizedAccession}.{policy}.json</c> holding that release's verified
+/// <see cref="ReportedMetricRecord"/> LIST.
 /// <para>
-/// Read side: <see cref="GetForCompanyAsync"/> enumerates the company folder, deserializes every file, skips
-/// an unreadable one with a Warning (never a throw), and returns the flattened records in the deterministic
-/// order the seam declares. It is consumed by the stage-2 judge (reference values) and the weekly report
-/// (the evidence line's <c>— reported:</c> clause) — never by scoring.
+/// <b>SPEC 216 §4 — the write is atomic and a fragment is never mistaken for a record.</b> It goes through
+/// the shared <see cref="AtomicFileWriter"/>: the content is serialized to a temp file in the SAME
+/// directory, flushed, then committed with a no-overwrite rename. The rename IS the commit point, so an
+/// I/O failure part-way through writing leaves only a temp file (deleted on the way out) and never a
+/// partial record. The v1 shape wrote straight to the final path with <c>FileMode.CreateNew</c> and then
+/// reported any <see cref="IOException"/> over an existing file as
+/// <see cref="DurableWriteOutcome.AlreadyAvailable"/> — so a half-written file it had just created itself
+/// was reported as a concurrent writer's success, and every later run treated the fragment as the record.
 /// </para>
+/// <para>
+/// <b>The two collision cases are now separate.</b> A move that fails because the path already exists is
+/// <see cref="DurableWriteOutcome.AlreadyAvailable"/> ONLY when that file READS BACK as a complete record
+/// list; an unparseable existing file is <see cref="DurableWriteOutcome.Failed"/> with reason
+/// <c>corrupt-existing</c>, logged once per path, and never <c>AlreadyOnDisk</c>. A disk failure is
+/// <see cref="DurableWriteOutcome.Failed"/> and never throws; only caller cancellation propagates.
+/// </para>
+/// <para>
+/// <b>SPEC 216 §5 — the POLICY is an explicit argument and part of the file name.</b> A re-analysis under a
+/// later policy therefore writes a NEW file beside the old one instead of colliding with it; nothing is
+/// ever deleted (append-only), and choosing which policy's files to read — and counting the superseded
+/// ones — belongs to the projector, not here.
+/// </para>
+/// <para>
+/// Read side: <see cref="GetForCompanyAsync"/> enumerates the company folder, deserializes every file,
+/// skips an unreadable one with a Warning (never a throw), and returns the flattened records in the
+/// deterministic order the seam declares. It is consumed by the stage-2 judge (reference values) and the
+/// weekly report (the evidence line's <c>— reported:</c> clause) — never by scoring.
+/// </para>
+/// Reuses <see cref="RadarFileStoreJson.Options"/> (the shared on-disk JSON shape) and the shared
+/// filename-key sanitizer (reuse over copy); all file I/O stays in Infrastructure (AD-5).
 /// </summary>
 public sealed class FileReportedMetricStore : IReportedMetricStore
 {
+    /// <summary>The named <see cref="DurableWriteOutcome.Failed"/> reason for an unparseable file already at the target path.</summary>
+    internal const string CorruptExistingReason = "corrupt-existing";
+
     private readonly FileReportedMetricStoreOptions _options;
     private readonly ILogger<FileReportedMetricStore> _logger;
+
+    // One Warning per path per process for a corrupt existing file: the ledger is re-attempted every run,
+    // and a permanently corrupt file would otherwise reprint its Warning on every pass forever.
+    private readonly HashSet<string> _corruptReported = new(StringComparer.OrdinalIgnoreCase);
 
     public FileReportedMetricStore(
         FileReportedMetricStoreOptions options,
@@ -41,34 +66,54 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
         _logger = logger;
     }
 
+    /// <summary>
+    /// The ledger file name for one (accession, policy) pair — the ONE place the layout is composed, so
+    /// the write path and any future reader cannot drift. Returns null when the accession cannot name a
+    /// file.
+    /// </summary>
+    internal static string? FileNameFor(string accession, string policy)
+    {
+        var sanitizedAccession = FileTickerKey.Sanitize(accession);
+        var sanitizedPolicy = FileTickerKey.Sanitize(policy);
+        return sanitizedAccession is null || sanitizedPolicy is null
+            ? null
+            : $"{sanitizedAccession}.{sanitizedPolicy}.json";
+    }
+
     public async Task<DurableWriteResult> WriteIfNewAsync(
-        Guid companyId, string accession, IReadOnlyList<ReportedMetricRecord> records, CancellationToken ct)
+        Guid companyId,
+        string accession,
+        string policy,
+        IReadOnlyList<ReportedMetricRecord> records,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(policy);
 
         var companyDirectory = Path.Combine(_options.RootDirectory, companyId.ToString("D"));
 
         // The shared filename-key sanitizer (FileTickerKey) — despite the ticker-oriented name it is the
         // one filename-safe key helper, used by FileAnalyzedFilingCache and FileFilingReadDebugStore for
-        // exactly this accession (reuse over copy). A blank/invalid accession cannot name a file: reported
-        // as NotPersisted against the company folder so the failure is diagnosable, never thrown.
-        var sanitized = FileTickerKey.Sanitize(accession);
-        if (sanitized is null)
+        // exactly this accession (reuse over copy). A blank/invalid accession or policy cannot name a file:
+        // reported as NotPersisted against the company folder so the failure is diagnosable, never thrown.
+        var fileName = FileNameFor(accession, policy);
+        if (fileName is null)
         {
             _logger.LogWarning(
-                "Reported-metrics accession '{Accession}' for company {CompanyId} is blank or contains invalid "
-                    + "filename characters; the ledger file cannot be written.",
+                "Reported-metrics accession '{Accession}' / policy '{Policy}' for company {CompanyId} is blank "
+                    + "or contains invalid filename characters; the ledger file cannot be written.",
                 accession,
+                policy,
                 companyId);
             return DurableWriteResult.NotPersisted(companyDirectory);
         }
 
-        var path = Path.Combine(companyDirectory, sanitized + ".json");
+        var path = Path.Combine(companyDirectory, fileName);
         if (File.Exists(path))
         {
-            // Insert-if-new: the ledger for this accession is already durable. Nothing is written THIS call,
-            // and the outcome says so (spec 202 §1's distinction), while Written still reports true.
-            return DurableWriteResult.AlreadyOnDisk(path);
+            // Insert-if-new: the ledger for this (accession, policy) may already be durable. "May" is the
+            // whole spec-216 §4 point — an existing file only counts as the record when it PARSES as one.
+            return ExistingFileOutcome(path);
         }
 
         string json;
@@ -87,48 +132,32 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
             return DurableWriteResult.NotPersisted(path);
         }
 
-        try
+        // The SHARED temp-file + no-overwrite-rename writer (reuse over copy — the outbox commits the same
+        // way). The move is the commit point, so an I/O failure part way through leaves only a temp file
+        // the writer deletes, never a partial ledger record.
+        var written = await AtomicFileWriter.WriteNewAsync(path, json, _logger, ct).ConfigureAwait(false);
+        switch (written)
         {
-            Directory.CreateDirectory(companyDirectory);
+            case AtomicWriteOutcome.Committed:
+                _logger.LogInformation(
+                    "Wrote {Count} reported-metric record(s) for accession {Accession} (company {CompanyId}, "
+                        + "policy {Policy}) to {Path}.",
+                    records.Count,
+                    accession,
+                    companyId,
+                    policy,
+                    path);
+                return DurableWriteResult.Succeeded(path);
 
-            // FileMode.CreateNew throws if the file already exists, so even under a race two writers can
-            // never overwrite the same append-only ledger file.
-            var streamOptions = new FileStreamOptions
-            {
-                Mode = FileMode.CreateNew,
-                Access = FileAccess.Write,
-                Share = FileShare.None,
-                Options = FileOptions.Asynchronous,
-            };
-            await using (var stream = new FileStream(path, streamOptions))
-            {
-                await stream.WriteAsync(Encoding.UTF8.GetBytes(json), ct).ConfigureAwait(false);
-            }
+            case AtomicWriteOutcome.AlreadyExists:
+                // Insert race: a concurrent writer committed the same ledger file first. Whether that is a
+                // durable RECORD depends on whether it parses — never assumed.
+                return ExistingFileOutcome(path);
 
-            _logger.LogInformation(
-                "Wrote {Count} reported-metric record(s) for accession {Accession} (company {CompanyId}) to {Path}.",
-                records.Count,
-                accession,
-                companyId,
-                path);
-            return DurableWriteResult.Succeeded(path);
-        }
-        catch (IOException) when (File.Exists(path))
-        {
-            // Insert race: a concurrent writer created the same ledger file first. It is durable either way.
-            return DurableWriteResult.AlreadyOnDisk(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // A disk hiccup must never crash the run; the caller counts the failure on its own axis and
-            // reports it in ONE aggregated line, so this stays a Warning naming the attempted path.
-            _logger.LogWarning(
-                ex,
-                "Failed to write the reported-metrics ledger for accession {Accession} (company {CompanyId}) at {Path}.",
-                accession,
-                companyId,
-                path);
-            return DurableWriteResult.NotPersisted(path);
+            default:
+                // The writer already logged the attempted path; the caller counts the failure on its own
+                // axis and reports it in ONE aggregated line.
+                return DurableWriteResult.NotPersisted(path);
         }
     }
 
@@ -187,4 +216,52 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
                 .ThenBy(r => r.Id),
         ];
     }
+
+    /// <summary>
+    /// SPEC 216 §4 — an existing file at the target path is <see cref="DurableWriteOutcome.AlreadyAvailable"/>
+    /// ONLY when it reads back as a complete record list. Anything else is a FRAGMENT and is reported
+    /// <see cref="DurableWriteOutcome.Failed"/> (reason <c>corrupt-existing</c>), logged once per path, so
+    /// the caller's outbox retries it and a partial file is never treated as the record.
+    /// </summary>
+    private DurableWriteResult ExistingFileOutcome(string path)
+    {
+        try
+        {
+            var text = File.ReadAllText(path);
+            var parsed = JsonSerializer.Deserialize<List<ReportedMetricRecord>>(text, RadarFileStoreJson.Options);
+            if (parsed is not null)
+            {
+                return DurableWriteResult.AlreadyOnDisk(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            ReportCorrupt(path, ex);
+            return DurableWriteResult.NotPersisted(path);
+        }
+
+        ReportCorrupt(path, null);
+        return DurableWriteResult.NotPersisted(path);
+    }
+
+    private void ReportCorrupt(string path, Exception? ex)
+    {
+        lock (_corruptReported)
+        {
+            if (!_corruptReported.Add(path))
+            {
+                return;
+            }
+        }
+
+        _logger.LogWarning(
+            ex,
+            "Reported-metrics ledger file '{Path}' already exists but does NOT parse as a complete record "
+                + "list ({Reason}); the write is reported as NOT PERSISTED rather than as an existing record, "
+                + "so nothing downstream treats the fragment as the ledger. Nothing was overwritten or "
+                + "deleted (append-only): recovery is a conscious maintainer action.",
+            path,
+            CorruptExistingReason);
+    }
+
 }

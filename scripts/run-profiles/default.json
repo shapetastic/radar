@@ -167,8 +167,8 @@
       "MaxFilingsPerRun": 50,
       "Filings": { "PersistReadDebug": true },
       "ReportedMetrics": {
-        "_comment": "Spec 215: the earnings read keeps the metrics a release states (verified verbatim, append-only ledger) so the judge can compare a quoted level against the company's own prior figure; heal-forward, never a scoring input. DISABLED 2026-09-08 by the post-merge review pending spec 216 (self-referencing prior, unretried ledger writes, weak verbatim checks); the flag is not a fingerprint input and the judge then sees no references, exactly as with an empty ledger.",
-        "Enabled": false
+        "_comment": "The earnings read keeps the metrics a release states, verified deterministically (ReportedMetricVerifier, policy token ReportedMetricsPolicy.Version) into an append-only ledger, so the judge can compare a quoted level against the company's own EARLIER figure; a reference is never the value the fact itself quotes (ReferenceValueProjector). Heal-forward. This flag shapes the filing-analysis prompt, so it IS a scoring-fingerprint input via the directional-filing descriptor's rm= field, owned by ScoringConfigFingerprintTests; a durable outbox (IReportedMetricOutbox) retries a failed ledger write rather than losing it.",
+        "Enabled": true
       },
       "OpenAi": {
         "BaseUrl": "https://api.deepinfra.com/v1/openai",

@@ -3244,6 +3244,17 @@ public static class InfrastructureServiceCollectionExtensions
                     + "(default 6) — a value outside the signal's valid range fails SignalValidation at runtime.");
         }
 
+        if (string.IsNullOrWhiteSpace(options.ReportedMetricsPolicy))
+        {
+            // Spec 216 §5: the rm= descriptor field is a fingerprint input, so a blank token would stamp a
+            // scoring identity that says nothing about whether extraction ran. "disabled" is the explicit
+            // off state; there is no implicit one.
+            throw new InvalidOperationException(
+                "Radar directional filing signals require a non-blank reported-metrics policy token; it is "
+                    + "either ReportedMetricsPolicy.Version (extraction enabled) or "
+                    + "ReportedMetricsPolicy.DisabledToken — a blank token would hash as an unstated state.");
+        }
+
         services.AddSingleton(options);
         services.AddSingleton<IDirectionalFilingSignalSource, DirectionalFilingSignalSource>();
         return services;
@@ -3338,6 +3349,11 @@ public static class InfrastructureServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
         services.AddSingleton(new FileReportedMetricStoreOptions { RootDirectory = rootDirectory });
         services.AddSingleton<IReportedMetricStore, FileReportedMetricStore>();
+
+        // Spec 216 §2: the outbox is registered WITH the ledger, never separately. An enabled ledger with
+        // no outbox would be the exact pre-216 shape the spec exists to close — a ledger write with nothing
+        // durable behind it to retry.
+        services.AddSingleton<IReportedMetricOutbox, FileReportedMetricOutbox>();
         return services;
     }
 

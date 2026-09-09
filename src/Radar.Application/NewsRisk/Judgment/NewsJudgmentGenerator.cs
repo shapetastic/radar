@@ -689,6 +689,11 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 ReferenceIds = cached.ReferenceIds,
                 ReferenceValuesOmitted = cached.ReferenceValuesOmitted,
                 TrajectoryReferenceIds = cached.TrajectoryReferenceIds,
+                // Spec 216 §5: the kinds and the policy travel with the replayed verdict for the same
+                // reason — they describe the projection the ORIGINAL call was made against.
+                ReferencePolicy = cached.ReferencePolicy,
+                ReferenceKinds = cached.ReferenceKinds,
+                TrajectoryReferenceKinds = cached.TrajectoryReferenceKinds,
                 ReusedFromJudgmentId = cached.JudgmentId,
             });
         }
@@ -821,10 +826,31 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         // failure or when none was cited); the projected set and the omitted count are
                         // already on the base record.
                         TrajectoryReferenceIds = validated.TrajectoryReferenceIds,
+                        // Spec 216 §5: and their KINDS, resolved from the very projection the judge was
+                        // handed — never re-derived from a ledger that may since have grown.
+                        TrajectoryReferenceKinds = ReferenceKindsFor(
+                            validated.TrajectoryReferenceIds, bundle.References),
                     },
                     callDuration);
             }
         }
+    }
+
+    /// <summary>
+    /// SPEC 216 §5 — pairs each CITED reference id with its KIND, looked up in the projection the judge was
+    /// actually handed. An id with no match is impossible by construction (the validator resolves every
+    /// citation against that same set) and is omitted rather than given a fabricated kind.
+    /// </summary>
+    private static IReadOnlyList<NewsJudgmentReferenceRef> ReferenceKindsFor(
+        IReadOnlyList<Guid> citedIds, IReadOnlyList<NewsJudgmentReferenceValue> projected)
+    {
+        var kindById = projected.ToDictionary(r => r.ReferenceId, r => r.Kind);
+        return
+        [
+            .. citedIds
+                .Where(kindById.ContainsKey)
+                .Select(id => new NewsJudgmentReferenceRef(id, kindById[id])),
+        ];
     }
 
     private NewsJudgmentRecord BaseRecord(
@@ -862,7 +888,9 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 f.MemberCount,
                 f.DistinctPublisherCount,
                 // Spec 214 §1: the basis exactly as it was rendered to the judge for this family.
-                f.ComparisonBasis))
+                f.ComparisonBasis,
+                // Spec 216 §1: the observation instant the reference-eligibility guard read.
+                f.ObservedAtUtc))
             .ToList(),
         ArchiveCapture: coverage.ArchiveCapture,
         SearchEnumeration: coverage.SearchEnumeration,
@@ -891,7 +919,18 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         // every attempt that assembled an input — including InsufficientFacts and failures — so "which
         // references was this judge handed" is answerable from the record alone.
         ReferenceIds: bundle.References.Select(r => r.ReferenceId).ToList(),
-        ReferenceValuesOmitted: bundle.ReferenceValuesOmitted);
+        ReferenceValuesOmitted: bundle.ReferenceValuesOmitted,
+        // Spec 216 §5: the policy the projection read under, the KIND of every projected reference, and
+        // the projection's counted exclusions — recorded on every attempt that assembled an input, so a
+        // judgment handed NO reference can say WHY rather than being indistinguishable from a company with
+        // no ledger at all.
+        ReferencePolicy: ReportedMetricsPolicy.Version,
+        ReferenceKinds: bundle.References
+            .Select(r => new NewsJudgmentReferenceRef(r.ReferenceId, r.Kind))
+            .ToList(),
+        ReferencesExcludedNewest: bundle.ReferencesExcludedNewest,
+        ReferencesExcludedLaterThanFact: bundle.ReferencesExcludedLaterThanFact,
+        ReferencesSkippedSupersededPolicy: bundle.ReferencesSkippedSupersededPolicy);
 
     /// <summary>
     /// The leaders-marker map, derived from the DESIGNATED presentation cohort only (spec 185 §4): the

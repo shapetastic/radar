@@ -18,7 +18,8 @@ namespace Radar.IntegrationTests;
 
 /// <summary>
 /// Spec 215 §3 — the READ-ONLY LIVE distribution behind the reported-metrics ledger and the reference
-/// projection (<c>reference-projection-v1</c>) over the accrued store (CLAUDE.md's "no measure ships
+/// projection (its version token is <see cref="ReferenceValueProjector.Version"/> — spec 216 §1 moved it,
+/// and this harness renders whatever the code says rather than a literal) over the accrued store (CLAUDE.md's "no measure ships
 /// without its live distribution"). The ledger is heal-forward, so at implementation time it is EMPTY by
 /// construction; what this harness reports is the ground the ledger will fill and how fast:
 /// <list type="bullet">
@@ -262,7 +263,9 @@ public sealed class ReferenceValueLiveMeasurementTests(ITestOutputHelper output)
 
             // ---- render ------------------------------------------------------------------------------
             var report = new StringBuilder();
-            report.AppendLine("## Spec 215 §3 — live ground for the reported-metrics ledger and the reference projection (reference-projection-v1)");
+            report.AppendLine(
+                "## Spec 215 §3 — live ground for the reported-metrics ledger and the reference projection ("
+                    + ReferenceValueProjector.Version + ")");
             report.AppendLine();
             report.AppendLine(string.Create(
                 CultureInfo.InvariantCulture,

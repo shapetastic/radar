@@ -27,7 +27,8 @@ public sealed class NewsJudgmentReferenceValueTests
         PriorPeriod: null,
         FilingDateUtc: new DateTimeOffset(2026, 4, 9, 20, 0, 0, TimeSpan.Zero),
         Form: "8-K",
-        Quote: "Project backlog of $2.929 billion as of January 31, 2026.");
+        Quote: "Project backlog of $2.929 billion as of January 31, 2026.",
+        Kind: NewsJudgmentReferenceKind.Prior);
 
     private static NewsJudgmentInputFamily Level(Guid? factId = null) => NewsJudgmentTestData.Family(
         factId: factId,
@@ -170,8 +171,12 @@ public sealed class NewsJudgmentReferenceValueTests
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
         var reason = Assert.Single(result.FindingDropReasons);
-        Assert.StartsWith("trajectory-reference-not-supplied: '" + invented + "'", reason, StringComparison.Ordinal);
-        Assert.Contains("supplied ReferenceId", reason, StringComparison.Ordinal);
+        Assert.StartsWith("trajectory-reference-not-projected: '" + invented + "'", reason, StringComparison.Ordinal);
+        // Spec 216 §1 names the rule the citation broke, not merely "not supplied": the projection
+        // EXCLUDES the current value and any filing later than the news, so citing one is precisely the
+        // evidence-gate failure this validator exists to catch.
+        Assert.Contains("is not a PROJECTED reference value for this judgment", reason, StringComparison.Ordinal);
+        Assert.Contains("excludes the newest accession's current value", reason, StringComparison.Ordinal);
         Assert.Null(result.TrajectoryBasis);
         Assert.Empty(result.TrajectoryReferenceIds);
     }
@@ -184,7 +189,7 @@ public sealed class NewsJudgmentReferenceValueTests
             Response([level], [level.RepresentativeFactId.ToString("D")]), [level], [Reference()]);
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
-        Assert.StartsWith("trajectory-reference-not-supplied", Assert.Single(result.FindingDropReasons), StringComparison.Ordinal);
+        Assert.StartsWith("trajectory-reference-not-projected", Assert.Single(result.FindingDropReasons), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -240,7 +245,7 @@ public sealed class NewsJudgmentReferenceValueTests
         Assert.Equal([BacklogReferenceId], result.Findings[0].ReferenceIds);
         Assert.Equal([], result.Findings[1].ReferenceIds!); // a v6 finding always records its (empty) set
         var reason = Assert.Single(result.FindingDropReasons);
-        Assert.StartsWith("finding[1] reference-not-supplied", reason, StringComparison.Ordinal);
+        Assert.StartsWith("finding[1] reference-not-projected", reason, StringComparison.Ordinal);
         Assert.Equal(3, result.FindingsTotal);
         Assert.Equal(1, result.FindingsDropped);
     }
@@ -253,7 +258,7 @@ public sealed class NewsJudgmentReferenceValueTests
             Response([level], [BacklogReferenceId.ToString("D")]), [level]);
 
         Assert.Equal(NewsJudgmentStatus.ValidationFailed, result.Status);
-        Assert.StartsWith("trajectory-reference-not-supplied", Assert.Single(result.FindingDropReasons), StringComparison.Ordinal);
+        Assert.StartsWith("trajectory-reference-not-projected", Assert.Single(result.FindingDropReasons), StringComparison.Ordinal);
     }
 
     // ── the family-set hash ────────────────────────────────────────────────────────────────────────────
@@ -296,6 +301,19 @@ public sealed class NewsJudgmentReferenceValueTests
                 Form: "8-K", Metric: ReportedMetric.Backlog, Value: "2.929", Unit: "billion",
                 Period: "as of January 31, 2026", PriorValue: null, PriorPeriod: null,
                 Quote: "Project backlog of $2.929 billion as of January 31, 2026.",
+                ReaderIdentity: "openai:deepseek", Verification: ReportedMetricVerification.Verbatim,
+                Policy: ReportedMetricsPolicy.Version),
+            // Spec 216 §1: a LATER accession reporting the same metric is what makes the record above
+            // eligible at all — the newest accession's figure is the CURRENT value and is never a
+            // reference. It is filed before the family's observation instant, so the secondary guard
+            // admits the older row.
+            new ReportedMetricRecord(
+                Id: Guid.Parse("1e5a0000-0000-4000-8000-00000000000c"), CompanyId: company,
+                Accession: "0001049521-26-000011",
+                EvidenceId: Guid.NewGuid(), FilingDateUtc: new DateTimeOffset(2026, 7, 9, 20, 0, 0, TimeSpan.Zero),
+                Form: "8-K", Metric: ReportedMetric.Backlog, Value: "2.518", Unit: "billion",
+                Period: "as of April 30, 2026", PriorValue: null, PriorPeriod: null,
+                Quote: "Project backlog of $2.518 billion as of April 30, 2026.",
                 ReaderIdentity: "openai:deepseek", Verification: ReportedMetricVerification.Verbatim,
                 Policy: ReportedMetricsPolicy.Version),
             new ReportedMetricRecord(

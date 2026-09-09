@@ -74,6 +74,18 @@ public sealed class CollectionPass : ICollectionPass
     // lives in exactly one place (MapResolveReviewStoreAsync).
     private readonly IReportedMetricStore? _reportedMetricStore;
 
+    // OPT-IN reported-metrics OUTBOX (spec 216 §2), registered with the ledger and never separately. It is
+    // the durable payload that makes a failed ledger write RETRYABLE instead of merely counted, and it is
+    // what the analyzed-filing cache stamp now MEANS ("an envelope exists for this accession under this
+    // policy"). Null when the ledger is not registered.
+    private readonly IReportedMetricOutbox? _reportedMetricOutbox;
+
+    // OPT-IN analyzed-filing cache (spec 216 §2). The pass needs it because the reported-metrics policy
+    // stamp MOVED here: the directional source now writes its cache record unstamped, and this pass stamps
+    // it only once the outbox envelope is durable. Null in a composition that registers no cache, in which
+    // case the stamp is counted as unwritten and the filing simply re-analyzes next run.
+    private readonly IAnalyzedFilingCache? _analyzedFilingCache;
+
     public CollectionPass(
         IEnumerable<IEvidenceCollector> collectors,
         CollectedEvidenceMapper mapper,
@@ -93,7 +105,9 @@ public sealed class CollectionPass : ICollectionPass
         IDirectionalFilingSignalSource? directionalFilingSignals = null,
         INewsObservationArchive? newsObservationArchive = null,
         NewsObservationCaptureOptions? newsObservationCaptureOptions = null,
-        IReportedMetricStore? reportedMetricStore = null)
+        IReportedMetricStore? reportedMetricStore = null,
+        IReportedMetricOutbox? reportedMetricOutbox = null,
+        IAnalyzedFilingCache? analyzedFilingCache = null)
     {
         ArgumentNullException.ThrowIfNull(collectors);
         ArgumentNullException.ThrowIfNull(mapper);
@@ -147,6 +161,8 @@ public sealed class CollectionPass : ICollectionPass
         _newsObservationArchive = newsObservationArchive;
         _newsObservationCaptureOptions = newsObservationCaptureOptions ?? new NewsObservationCaptureOptions();
         _reportedMetricStore = reportedMetricStore;
+        _reportedMetricOutbox = reportedMetricOutbox;
+        _analyzedFilingCache = analyzedFilingCache;
     }
 
     /// <summary>The collector names that will run, in the stable order fixed in the constructor.</summary>
@@ -324,6 +340,13 @@ public sealed class CollectionPass : ICollectionPass
                 .ConfigureAwait(false);
         }
 
+        // SPEC 216 §2 — OUTBOX REPLAY, BEFORE any fresh read. A stuck envelope is retried before new work is
+        // added, so a ledger write that failed last run cannot be starved by this run's fresh extractions.
+        // Replay is a store write and NOTHING else: no www.sec.gov fetch, no model call, no re-derivation —
+        // the envelope IS the complete payload, which is exactly why it exists.
+        var ledger = new ReportedMetricLedgerTally();
+        await ReplayReportedMetricOutboxAsync(ledger, ct).ConfigureAwait(false);
+
         // OPT-IN directional filing enrichment (AI only). Null when AI is disabled -> skipped entirely, so
         // the default pipeline is byte-for-byte unchanged. Produced BEFORE the deterministic extract loop
         // stores signals (spec 78, Option B: suppress-before-store) so the extract loop knows which
@@ -434,7 +457,8 @@ public sealed class CollectionPass : ICollectionPass
         // the loop (the spec-145 precedent) — never a line per filing. Every extraction a fresh read
         // produced ends in exactly one of: a file written, a file already on disk, a file not persisted,
         // no resolved company to file it under, or no ledger registered — so nothing is discarded uncounted.
-        var ledger = new ReportedMetricLedgerTally();
+        // (The tally was opened before the outbox replay above, so replayed and fresh writes share ONE
+        // accounting rather than two that can disagree.)
         foreach (var d in directional)
         {
             ct.ThrowIfCancellationRequested();
@@ -471,12 +495,32 @@ public sealed class CollectionPass : ICollectionPass
 
             if (d.ReportedMetrics is { } extraction)
             {
-                await WriteReportedMetricsAsync(
-                    extraction, d.Evidence, directionalStored.CompanyId, ledger, ct).ConfigureAwait(false);
+                await EnqueueAndWriteReportedMetricsAsync(
+                    extraction,
+                    d.Evidence,
+                    directionalStored.CompanyId,
+                    directionalStored.CompanyMention,
+                    directionalHints,
+                    ledger,
+                    ct).ConfigureAwait(false);
+            }
+            else if (d.CachedReportedMetricsPolicy is { } stampedPolicy && d.Accession is { } stampedAccession)
+            {
+                // SPEC 216 §2 — the 215-era shape, FAILING CLOSED. A cache record carrying a policy stamp
+                // with NO outbox envelope behind it means the extraction was made and lost before it
+                // reached the ledger. It is NOT acknowledged as "extracted, nothing verified": it is
+                // counted, named once per accession, and recoverable only by a conscious maintainer
+                // re-analysis (the stamp is honoured as a HIT, so nothing here spends a model call).
+                await CheckReportedMetricsPolicyStampAsync(stampedPolicy, stampedAccession, ledger, ct)
+                    .ConfigureAwait(false);
             }
         }
 
-        if (ledger.Extractions > 0 || (_reportedMetricStore is not null && directional.Count > 0))
+        if (ledger.Extractions > 0
+            || ledger.OutboxReplayed > 0
+            || ledger.PolicyStampWithoutEnvelope > 0
+            || ledger.PolicyStampNotChecked > 0
+            || (_reportedMetricStore is not null && directional.Count > 0))
         {
             // ONE aggregated Information line per run (the spec-145 precedent). A measured zero renders as
             // a zero; a run whose reads were all cache replays says "0 extraction(s)" rather than nothing.
@@ -485,7 +529,16 @@ public sealed class CollectionPass : ICollectionPass
                     + "ledger files written {Written} / already on disk {AlreadyOnDisk} / not persisted "
                     + "{NotPersisted} / no resolved company {NoCompany} / no ledger registered {NoStore}; "
                     + "records written {Records}; metrics dropped unverified {Unverified} / unrecognised "
-                    + "{Unrecognised} / duplicate {Duplicate}; prior pairs dropped incomplete {IncompletePriorPairs}.",
+                    + "{Unrecognised} / duplicate {Duplicate} / metric-not-in-quote {MetricNotInQuote} / "
+                    + "period-not-in-quote {PeriodNotInQuote} / fragment {Fragment} / not-associated "
+                    + "{NotAssociated}; prior pairs dropped incomplete {IncompletePriorPairs}. "
+                    + "Outbox pending {OutboxPending} (of which not acknowledged "
+                    + "{OutboxNotAcknowledged}) / replayed {OutboxReplayed} / acknowledged "
+                    + "{OutboxAcknowledged} / attempts-exhausted {OutboxAttemptsExhausted} / not enqueued "
+                    + "{OutboxNotEnqueued} / unresolved company {OutboxUnresolved} / attempt updates not "
+                    + "persisted {OutboxAttemptUpdatesNotPersisted} / cache stamps written (verified by "
+                    + "re-read) {CacheStamps} / not written {CacheStampsNotWritten}; policy stamp with no "
+                    + "envelope {PolicyStampWithoutEnvelope} / not checked {PolicyStampNotChecked}.",
                 ReportedMetricsPolicy.Version,
                 ledger.Extractions,
                 ledger.FilesWritten,
@@ -497,7 +550,23 @@ public sealed class CollectionPass : ICollectionPass
                 ledger.DroppedUnverified,
                 ledger.DroppedUnrecognised,
                 ledger.DroppedDuplicate,
-                ledger.PriorPairsDroppedIncomplete);
+                ledger.DroppedMetricNotInQuote,
+                ledger.DroppedPeriodNotInQuote,
+                ledger.DroppedFragment,
+                ledger.DroppedNotAssociated,
+                ledger.PriorPairsDroppedIncomplete,
+                ledger.OutboxPending,
+                ledger.OutboxNotAcknowledged,
+                ledger.OutboxReplayed,
+                ledger.OutboxAcknowledged,
+                ledger.OutboxAttemptsExhausted,
+                ledger.OutboxNotEnqueued,
+                ledger.OutboxUnresolvedCompany,
+                ledger.OutboxAttemptUpdatesNotPersisted,
+                ledger.CacheStampsWritten,
+                ledger.CacheStampsNotWritten,
+                ledger.PolicyStampWithoutEnvelope,
+                ledger.PolicyStampNotChecked);
         }
 
         // Spec 193 §1: ONE aggregated Warning per store per run (the spec-145 aggregation precedent), never
@@ -869,21 +938,199 @@ public sealed class CollectionPass : ICollectionPass
         };
 
         return SignalStoreResult.Of(
-            storeOutcome, durable.Outcome == DurableWriteOutcome.Failed, outcome.ReviewedSignal.CompanyId);
+            storeOutcome,
+            durable.Outcome == DurableWriteOutcome.Failed,
+            outcome.ReviewedSignal.CompanyId,
+            outcome.ReviewedSignal.CompanyMention);
     }
 
     /// <summary>
-    /// Spec 215 §1 — files ONE fresh earnings read's verified metrics in the reported-metrics ledger under
-    /// the company the signal RESOLVED to, and tallies the outcome. Never throws for a store failure (the
-    /// store returns a typed <see cref="DurableWriteResult"/>); only caller cancellation propagates. An
-    /// unresolved company (or a signal the mapper dropped) has nothing to file under and is counted, never
-    /// guessed; an unregistered ledger is counted too, so an extraction that reached this pass and went
-    /// nowhere is visible in the aggregated line.
+    /// SPEC 216 §2 — replays every PENDING outbox envelope into the ledger BEFORE this pass reads anything
+    /// fresh. Each envelope is the COMPLETE ready-to-write payload, so a replay is one
+    /// <see cref="IReportedMetricStore.WriteIfNewAsync"/> call: no SEC fetch, no model call, no direction
+    /// re-derivation (asserted by a test that supplies a throwing analyzer). On a durable write the
+    /// envelope is acknowledged and MOVED to the append-only acknowledged area; otherwise its PERSISTED
+    /// attempt count is advanced so the three-attempt warning survives restarts.
+    /// <para>
+    /// An envelope whose company could not be resolved at enqueue time is re-run through company
+    /// resolution here — resolution may succeed later (a universe addition, a hint fix) — and re-enqueued
+    /// under the company once it does, with the unresolved copy acknowledged.
+    /// </para>
     /// </summary>
-    private async Task WriteReportedMetricsAsync(
+    private async Task ReplayReportedMetricOutboxAsync(ReportedMetricLedgerTally ledger, CancellationToken ct)
+    {
+        if (_reportedMetricOutbox is null)
+        {
+            return;
+        }
+
+        var pending = await _reportedMetricOutbox.EnumeratePendingAsync(ct).ConfigureAwait(false);
+        foreach (var envelope in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var current = envelope;
+            if (current.CompanyId is null)
+            {
+                ledger.OutboxUnresolvedCompany++;
+                var resolution = await _resolver
+                    .ResolveAsync(current.CompanyMention, current.CompanyHints, ct).ConfigureAwait(false);
+                if (resolution.CompanyId is not { } resolvedNow)
+                {
+                    // Still unresolved: count the attempt, warn ONCE per accession at the bound, and leave
+                    // it pending. Never dropped, never retried silently forever.
+                    await AdvanceOutboxAttemptAsync(current, ledger, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                // Resolved at last: re-enqueue under the company, then acknowledge the unresolved copy so
+                // the chain stays walkable and the envelope is never replayed from two places.
+                var reEnqueued = current with { CompanyId = resolvedNow };
+                var enqueue = await _reportedMetricOutbox
+                    .EnqueueAsync(reEnqueued, ct).ConfigureAwait(false);
+                if (!enqueue.Written)
+                {
+                    ledger.OutboxNotEnqueued++;
+                    await AdvanceOutboxAttemptAsync(current, ledger, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (await _reportedMetricOutbox.AcknowledgeAsync(current, ct).ConfigureAwait(false))
+                {
+                    ledger.OutboxAcknowledged++;
+                }
+                else
+                {
+                    // The re-enqueued copy IS durable, but the unresolved one could not be acknowledged, so
+                    // it stays on disk and will be replayed (EnqueueAsync is insert-if-new, so the replay
+                    // is idempotent - never a second ledger row). Counted on the same pending axis as the
+                    // other two acknowledge sites AND on its own cause axis, so an acknowledge that keeps
+                    // failing is visible rather than hidden inside a pending count. The containment is
+                    // DISCLOSED in the rendered line ("pending N (of which not acknowledged M)"), so a log
+                    // reader can never read the two axes as disjoint envelope counts.
+                    ledger.OutboxPending++;
+                    ledger.OutboxNotAcknowledged++;
+                }
+
+                current = reEnqueued;
+            }
+
+            ledger.OutboxReplayed++;
+            if (await WriteEnvelopeToLedgerAsync(current, ledger, ct).ConfigureAwait(false))
+            {
+                if (await _reportedMetricOutbox.AcknowledgeAsync(current, ct).ConfigureAwait(false))
+                {
+                    ledger.OutboxAcknowledged++;
+                }
+                else
+                {
+                    ledger.OutboxPending++;
+                    ledger.OutboxNotAcknowledged++;
+                }
+
+                continue;
+            }
+
+            await AdvanceOutboxAttemptAsync(current, ledger, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Records ONE failed attempt against the PERSISTED envelope and, at the third, emits exactly one
+    /// Warning per accession per run naming it as a durable defect. The count is read from disk, so it
+    /// survives restarts; a store that could not record the attempt is itself counted.
+    /// </summary>
+    private async Task AdvanceOutboxAttemptAsync(
+        ReportedMetricOutboxEnvelope envelope, ReportedMetricLedgerTally ledger, CancellationToken ct)
+    {
+        ledger.OutboxPending++;
+
+        var updated = await _reportedMetricOutbox!
+            .MarkAttemptAsync(envelope, _timeProvider.GetUtcNow(), ct).ConfigureAwait(false);
+        var attempts = updated?.Attempts ?? envelope.Attempts + 1;
+        if (updated is null)
+        {
+            ledger.OutboxAttemptUpdatesNotPersisted++;
+        }
+
+        if (attempts >= OutboxAttemptWarningThreshold)
+        {
+            ledger.OutboxAttemptsExhausted++;
+            _logger.LogWarning(
+                "Reported-metrics outbox envelope for accession {Accession} (policy {Policy}, company "
+                    + "{CompanyId}) has now failed {Attempts} ledger attempt(s). It is STILL PENDING and will "
+                    + "be replayed — nothing is dropped — but a persistent failure here means the company's "
+                    + "reported metrics are not reaching the ledger and the judge sees no reference value "
+                    + "for them.",
+                envelope.Accession,
+                envelope.Policy,
+                envelope.CompanyId,
+                attempts);
+        }
+    }
+
+    /// <summary>
+    /// Writes ONE envelope's records to the ledger and tallies the outcome. Returns true when the records
+    /// are DURABLE (written now or already there) — the only condition under which the envelope may be
+    /// acknowledged.
+    /// </summary>
+    private async Task<bool> WriteEnvelopeToLedgerAsync(
+        ReportedMetricOutboxEnvelope envelope, ReportedMetricLedgerTally ledger, CancellationToken ct)
+    {
+        if (_reportedMetricStore is null)
+        {
+            ledger.NoStoreRegistered++;
+            return false;
+        }
+
+        var records = envelope.ToRecords();
+        if (records is null)
+        {
+            // Defensive: the caller resolves the company before reaching here, so this is unreachable in
+            // the shipped path — but an unresolved envelope must never be acknowledged as filed.
+            ledger.NoResolvedCompany++;
+            return false;
+        }
+
+        var write = await _reportedMetricStore
+            .WriteIfNewAsync(envelope.CompanyId!.Value, envelope.Accession, envelope.Policy, records, ct)
+            .ConfigureAwait(false);
+        switch (write.Outcome)
+        {
+            case DurableWriteOutcome.Written:
+                ledger.FilesWritten++;
+                ledger.RecordsWritten += records.Count;
+                return true;
+            case DurableWriteOutcome.AlreadyAvailable:
+                ledger.FilesAlreadyOnDisk++;
+                return true;
+            default:
+                ledger.FilesNotPersisted++;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// SPEC 216 §2 — the ORDERING that makes a lost extraction impossible, for ONE fresh earnings read:
+    /// company already resolved (by the shared map→resolve→review→store tail) → OUTBOX ENVELOPE WRITTEN
+    /// (durable) → only then the analyzed-filing record stamped <c>reportedMetricsPolicy</c> → ledger write
+    /// from the envelope → acknowledge.
+    /// <para>
+    /// If the process dies before the envelope is durable, the cache record stays UNSTAMPED and the filing
+    /// re-analyzes next run exactly as any uncached read does — nothing was ever persisted to lose, and the
+    /// direction of that re-read is the direction, as for every first read. If it dies after, the envelope
+    /// replays. An unresolved company is not a loss either: the envelope is enqueued with a null company
+    /// and re-run through resolution on every replay.
+    /// </para>
+    /// Never throws for a store failure (every seam returns a typed outcome); only caller cancellation
+    /// propagates.
+    /// </summary>
+    private async Task EnqueueAndWriteReportedMetricsAsync(
         ReportedMetricExtraction extraction,
         EvidenceItem evidence,
         Guid? companyId,
+        string? companyMention,
+        IReadOnlyList<string> companyHints,
         ReportedMetricLedgerTally ledger,
         CancellationToken ct)
     {
@@ -892,59 +1139,188 @@ public sealed class CollectionPass : ICollectionPass
         ledger.DroppedUnrecognised += extraction.Metrics.DroppedUnrecognised;
         ledger.DroppedDuplicate += extraction.Metrics.DroppedDuplicate;
         ledger.PriorPairsDroppedIncomplete += extraction.Metrics.PriorPairsDroppedIncomplete;
+        ledger.DroppedMetricNotInQuote += extraction.Metrics.DroppedMetricNotInQuote;
+        ledger.DroppedPeriodNotInQuote += extraction.Metrics.DroppedPeriodNotInQuote;
+        ledger.DroppedFragment += extraction.Metrics.DroppedFragment;
+        ledger.DroppedNotAssociated += extraction.Metrics.DroppedNotAssociated;
 
-        if (_reportedMetricStore is null)
+        if (_reportedMetricOutbox is null || _reportedMetricStore is null)
         {
             ledger.NoStoreRegistered++;
             return;
         }
 
-        if (companyId is not { } resolvedCompanyId)
+        var policy = ReportedMetricsPolicy.Version;
+        var envelope = new ReportedMetricOutboxEnvelope(
+            OutboxId: ReportedMetricOutboxEnvelope.IdentityFor(policy, extraction.Accession),
+            Policy: policy,
+            CompanyId: companyId,
+            CompanyMention: companyMention ?? string.Empty,
+            CompanyHints: companyHints,
+            EvidenceId: evidence.Id,
+            Accession: extraction.Accession,
+            Form: extraction.Form,
+            FilingDateUtc: evidence.PublishedAtUtc ?? evidence.CollectedAtUtc,
+            ReaderIdentity: extraction.ReaderIdentity,
+            Metrics: extraction.Metrics.Verified,
+            DroppedUnrecognised: extraction.Metrics.DroppedUnrecognised,
+            DroppedUnverified: extraction.Metrics.DroppedUnverified,
+            DroppedDuplicate: extraction.Metrics.DroppedDuplicate,
+            PriorPairsDroppedIncomplete: extraction.Metrics.PriorPairsDroppedIncomplete,
+            DroppedMetricNotInQuote: extraction.Metrics.DroppedMetricNotInQuote,
+            DroppedPeriodNotInQuote: extraction.Metrics.DroppedPeriodNotInQuote,
+            DroppedFragment: extraction.Metrics.DroppedFragment,
+            DroppedNotAssociated: extraction.Metrics.DroppedNotAssociated,
+            State: ReportedMetricOutboxState.Pending,
+            Attempts: 0,
+            CreatedAtUtc: _timeProvider.GetUtcNow(),
+            LastAttemptAtUtc: null);
+
+        var enqueue = await _reportedMetricOutbox.EnqueueAsync(envelope, ct).ConfigureAwait(false);
+        if (!enqueue.Written)
         {
-            ledger.NoResolvedCompany++;
+            // THE ENVELOPE IS THE PRECONDITION. Nothing is stamped and nothing is written: the filing
+            // re-analyzes next run, which is the correct outcome because nothing was persisted to lose.
+            ledger.OutboxNotEnqueued++;
             return;
         }
 
-        var filingDateUtc = evidence.PublishedAtUtc ?? evidence.CollectedAtUtc;
-        var records = extraction.Metrics.Verified
-            .Select(m => new ReportedMetricRecord(
-                Id: ReportedMetricRecord.IdentityFor(extraction.Accession, m.Metric, m.Period),
-                CompanyId: resolvedCompanyId,
-                Accession: extraction.Accession,
-                EvidenceId: evidence.Id,
-                FilingDateUtc: filingDateUtc,
-                Form: extraction.Form,
-                Metric: m.Metric,
-                Value: m.Value,
-                Unit: m.Unit,
-                Period: m.Period,
-                PriorValue: m.PriorValue,
-                PriorPeriod: m.PriorPeriod,
-                Quote: m.Quote,
-                ReaderIdentity: extraction.ReaderIdentity,
-                Verification: ReportedMetricVerification.Verbatim,
-                Policy: ReportedMetricsPolicy.Version))
-            .ToList();
+        // Only NOW may the cache say "extraction done under this policy" — the meaning of that stamp is
+        // exactly "an outbox envelope exists for this accession under this policy".
+        await StampReportedMetricsPolicyAsync(extraction.Accession, policy, ledger, ct).ConfigureAwait(false);
 
-        var write = await _reportedMetricStore
-            .WriteIfNewAsync(resolvedCompanyId, extraction.Accession, records, ct)
-            .ConfigureAwait(false);
-        switch (write.Outcome)
+        if (companyId is null)
         {
-            case DurableWriteOutcome.Written:
-                ledger.FilesWritten++;
-                ledger.RecordsWritten += records.Count;
-                break;
-            case DurableWriteOutcome.AlreadyAvailable:
-                ledger.FilesAlreadyOnDisk++;
-                break;
-            default:
-                ledger.FilesNotPersisted++;
-                break;
+            // Routable, not lost: the envelope sits in the unresolved area and every later pass re-runs it
+            // through company resolution.
+            ledger.NoResolvedCompany++;
+            ledger.OutboxUnresolvedCompany++;
+            ledger.OutboxPending++;
+            return;
+        }
+
+        if (await WriteEnvelopeToLedgerAsync(envelope, ledger, ct).ConfigureAwait(false))
+        {
+            if (await _reportedMetricOutbox.AcknowledgeAsync(envelope, ct).ConfigureAwait(false))
+            {
+                ledger.OutboxAcknowledged++;
+            }
+            else
+            {
+                ledger.OutboxPending++;
+                ledger.OutboxNotAcknowledged++;
+            }
+
+            return;
+        }
+
+        await AdvanceOutboxAttemptAsync(envelope, ledger, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stamps the analyzed-filing cache record for <paramref name="accession"/> with
+    /// <paramref name="policy"/> (spec 216 §2). A missing cache, an absent record or a lookup failure is
+    /// COUNTED, never silent: the consequence is only that the filing re-analyzes on a later run, which is
+    /// the same fail-safe every uncached read already has.
+    /// </summary>
+    private async Task StampReportedMetricsPolicyAsync(
+        string accession, string policy, ReportedMetricLedgerTally ledger, CancellationToken ct)
+    {
+        if (_analyzedFilingCache is null)
+        {
+            ledger.CacheStampsNotWritten++;
+            return;
+        }
+
+        try
+        {
+            var record = await _analyzedFilingCache.TryGetAsync(accession, ct).ConfigureAwait(false);
+            if (record is null)
+            {
+                ledger.CacheStampsNotWritten++;
+                return;
+            }
+
+            await _analyzedFilingCache
+                .PutAsync(record with { ReportedMetricsPolicy = policy }, ct)
+                .ConfigureAwait(false);
+
+            // MEASURE THE STAMP; DO NOT ASSUME IT. PutAsync returns a bare Task and the file cache
+            // discards its writer's bool, so counting a stamp here on the strength of the call returning
+            // would report "cache stamps written 1 / not written 0" while a gracefully-degraded disk wrote
+            // nothing - the discarded-bool / "failed durable write reported as stored" defect specs 192
+            // and 193 closed elsewhere. The cache has no in-memory layer (TryGetAsync reads the file every
+            // time), so re-reading the record and checking the policy is ACTUALLY present is a real
+            // verification, not a tautology. Cost is one extra cache read per fresh extraction, bounded by
+            // MaxFilingsPerRun. A stamp that did not land is counted as NOT written, which is exactly what
+            // it is; the consequence stays the benign one (the filing re-analyzes on a later run).
+            var stamped = await _analyzedFilingCache.TryGetAsync(accession, ct).ConfigureAwait(false);
+            if (stamped is null
+                || !string.Equals(stamped.ReportedMetricsPolicy, policy, StringComparison.Ordinal))
+            {
+                ledger.CacheStampsNotWritten++;
+                return;
+            }
+
+            ledger.CacheStampsWritten++;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A cache failure must never abort a run or lose the ledger write that already happened; the
+            // filing simply re-analyzes later.
+            ledger.CacheStampsNotWritten++;
+            _logger.LogWarning(
+                ex,
+                "Failed to stamp the analyzed-filing cache record for accession {Accession} with "
+                    + "reported-metrics policy {Policy}; the filing will re-analyze on a later run.",
+                accession,
+                policy);
         }
     }
 
-    /// <summary>The per-run reported-metrics ledger tally (spec 215 §1), rendered in ONE aggregated line.</summary>
+    /// <summary>
+    /// SPEC 216 §2 — FAILS CLOSED on a cache record that carries a reported-metrics policy stamp with NO
+    /// outbox envelope behind it. That is the 215-era shape: the extraction happened, the cache said
+    /// "done", and the payload was lost before the ledger. It is counted and named once per accession, and
+    /// it is deliberately NOT auto-re-analyzed — recovery is a conscious maintainer action. Measured
+    /// 2026-09-08 on the live cache: 500 records, ZERO carrying any policy stamp at all.
+    /// </summary>
+    private async Task CheckReportedMetricsPolicyStampAsync(
+        string policy, string accession, ReportedMetricLedgerTally ledger, CancellationToken ct)
+    {
+        if (_reportedMetricOutbox is null)
+        {
+            // Unreachable in the shipped composition (the outbox and the ledger are registered together),
+            // and counted anyway: "nothing may be discarded without being counted" has no unreachable
+            // exception, and an unreachable path that becomes reachable is exactly how a stamp with no
+            // envelope behind it would go back to being invisible.
+            ledger.PolicyStampNotChecked++;
+            return;
+        }
+
+        if (await _reportedMetricOutbox.ExistsAsync(policy, accession, ct).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        ledger.PolicyStampWithoutEnvelope++;
+        _logger.LogWarning(
+            "Analyzed-filing cache record for accession {Accession} claims reported-metrics policy {Policy} "
+                + "but NO outbox envelope exists for it. The extraction was made and lost before it reached "
+                + "the ledger (the pre-spec-216 shape). It is NOT treated as an empty ledger and it is NOT "
+                + "auto-re-analyzed: recovery is a conscious maintainer re-analysis.",
+            accession,
+            policy);
+    }
+
+    /// <summary>How many failed ledger attempts on one envelope earn the per-accession Warning (spec 216 §2).</summary>
+    private const int OutboxAttemptWarningThreshold = 3;
+
+    /// <summary>The per-run reported-metrics ledger tally (spec 215 §1, widened by spec 216), rendered in ONE aggregated line.</summary>
     private sealed class ReportedMetricLedgerTally
     {
         public int Extractions;
@@ -958,6 +1334,26 @@ public sealed class CollectionPass : ICollectionPass
         public int DroppedUnrecognised;
         public int DroppedDuplicate;
         public int PriorPairsDroppedIncomplete;
+
+        // Spec 216 §3 — the new verifier drop classes, each on its own axis.
+        public int DroppedMetricNotInQuote;
+        public int DroppedPeriodNotInQuote;
+        public int DroppedFragment;
+        public int DroppedNotAssociated;
+
+        // Spec 216 §2 — the outbox axes.
+        public int OutboxPending;
+        public int OutboxReplayed;
+        public int OutboxAcknowledged;
+        public int OutboxAttemptsExhausted;
+        public int OutboxNotEnqueued;
+        public int OutboxUnresolvedCompany;
+        public int OutboxAttemptUpdatesNotPersisted;
+        public int OutboxNotAcknowledged;
+        public int CacheStampsWritten;
+        public int CacheStampsNotWritten;
+        public int PolicyStampWithoutEnvelope;
+        public int PolicyStampNotChecked;
     }
 
     /// <summary>
@@ -1003,11 +1399,18 @@ public sealed class CollectionPass : ICollectionPass
         bool NotPersisted,
         // Spec 215 §1: the company the stored signal RESOLVED to (null when unresolved or Dropped), so the
         // reported-metrics ledger files under the same company as the signal — resolution stays in one place.
-        Guid? CompanyId)
+        Guid? CompanyId,
+        // Spec 216 §2: the mention text resolution was attempted FROM, so an outbox envelope whose company
+        // could not be resolved carries everything a LATER pass needs to try again. Null for a Dropped
+        // signal, which never reached the resolver.
+        string? CompanyMention = null)
     {
         public static SignalStoreResult Of(
-            SignalStoreOutcome outcome, bool notPersisted = false, Guid? companyId = null) =>
-            new(outcome, notPersisted, companyId);
+            SignalStoreOutcome outcome,
+            bool notPersisted = false,
+            Guid? companyId = null,
+            string? companyMention = null) =>
+            new(outcome, notPersisted, companyId, companyMention);
     }
 
     /// <summary>

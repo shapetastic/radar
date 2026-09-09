@@ -108,16 +108,19 @@ public sealed class DirectionalFilingSignalSourceTests
     public void ScoringDescriptor_EncodesPerSignalMagnitudes_InCanonicalForm()
     {
         // Fixed field order (AD-3): str, nov, minconf, the spec-119 model identity, then the spec-160
-        // comparability fields LAST (cmpscan = the scan's rule-STRUCTURE identity, cmpcap = the cap magnitude
-        // by value, G29 like minconf) — new fields are always appended so the existing prefix stays
-        // byte-stable. An unsupplied model identity hashes as an empty model= field rather than omitting the
-        // field, so the grammar is constant.
+        // comparability fields (cmpscan = the scan's rule-STRUCTURE identity, cmpcap = the cap magnitude
+        // by value, G29 like minconf), then — spec 216 §5, appended LAST on the same new-fields-last
+        // precedent — rm, the reported-metrics policy token. New fields are always appended so the
+        // existing prefix stays byte-stable. An unsupplied model identity hashes as an empty model= field
+        // rather than omitting the field, so the grammar is constant; an unwired ledger hashes as
+        // rm=disabled rather than silently claiming the current policy.
         Assert.Equal(
-            "directional-filing:str=8;nov=6;minconf=0.6;model=;cmpscan=cmpscan-v1;cmpcap=0.65",
+            "directional-filing:str=8;nov=6;minconf=0.6;model=;cmpscan=cmpscan-v1;cmpcap=0.65;rm=disabled",
             ScoringDescriptorFor(new DirectionalFilingSignalOptions()));
 
         Assert.Equal(
-            "directional-filing:str=9;nov=4;minconf=0.75;model=openai:deepseek-ai/DeepSeek-V4-Flash;cmpscan=cmpscan-v1;cmpcap=0.5",
+            "directional-filing:str=9;nov=4;minconf=0.75;model=openai:deepseek-ai/DeepSeek-V4-Flash;cmpscan=cmpscan-v1;cmpcap=0.5;rm="
+                + ReportedMetricsPolicy.Version,
             ScoringDescriptorFor(new DirectionalFilingSignalOptions
             {
                 Strength = 9,
@@ -125,7 +128,30 @@ public sealed class DirectionalFilingSignalSourceTests
                 MinConfidence = 0.75m,
                 ModelIdentity = "openai:deepseek-ai/DeepSeek-V4-Flash",
                 ComparabilityConfidenceCap = 0.5m,
+                ReportedMetricsPolicy = ReportedMetricsPolicy.Version,
             }));
+    }
+
+    [Fact]
+    public void ScoringDescriptor_ChangesWhenTheReportedMetricsPolicyChanges()
+    {
+        // SPEC 216 §5: enabling metric extraction changes the FILING-ANALYSIS PROMPT (the model is asked
+        // for more), and the verification policy decides which values exist at all — so an extraction-on
+        // run and an extraction-off run must never share a ScoringConfigVersion, and neither must two
+        // different verification policies.
+        var off = ScoringDescriptorFor(new DirectionalFilingSignalOptions());
+        var on = ScoringDescriptorFor(new DirectionalFilingSignalOptions
+        {
+            ReportedMetricsPolicy = ReportedMetricsPolicy.Version,
+        });
+        var later = ScoringDescriptorFor(new DirectionalFilingSignalOptions
+        {
+            ReportedMetricsPolicy = "reported-metrics-v3",
+        });
+
+        Assert.NotEqual(off, on);
+        Assert.NotEqual(on, later);
+        Assert.EndsWith(";rm=disabled", off, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -163,7 +189,7 @@ public sealed class DirectionalFilingSignalSourceTests
         // A reserved delimiter inside the identity is percent-escaped so it cannot forge an extra descriptor
         // field (injectivity, AD-3).
         Assert.Equal(
-            "directional-filing:str=8;nov=6;minconf=0.6;model=a%3Db%3Bc%2Cd%25e;cmpscan=cmpscan-v1;cmpcap=0.65",
+            "directional-filing:str=8;nov=6;minconf=0.6;model=a%3Db%3Bc%2Cd%25e;cmpscan=cmpscan-v1;cmpcap=0.65;rm=disabled",
             ScoringDescriptorFor(new DirectionalFilingSignalOptions { ModelIdentity = "a=b;c,d%e" }));
     }
 
@@ -1758,7 +1784,7 @@ public sealed class DirectionalFilingSignalSourceTests
         PriorPairsDroppedIncomplete: 0);
 
     [Fact]
-    public async Task AFreshRead_CarriesItsExtraction_WithAccessionFormAndReader_AndStampsThePolicy()
+    public async Task AFreshRead_CarriesItsExtraction_WithAccessionFormAndReader_AndLeavesTheCacheUnstamped()
     {
         var evidence = EarningsFiling();
         var cache = new FakeAnalyzedFilingCache();
@@ -1779,7 +1805,13 @@ public sealed class DirectionalFilingSignalSourceTests
         Assert.Single(extraction.Metrics.Verified);
         Assert.Equal(1, extraction.Metrics.DroppedUnrecognised);
         Assert.Equal(2, extraction.Metrics.DroppedUnverified);
-        Assert.Equal(ReportedMetricsPolicy.Version, cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
+        Assert.Equal("0001049521-26-000011", produced.Accession);
+
+        // SPEC 216 §2 — THE STAMP MOVED. It used to be applied HERE, at analysis time, while the ledger
+        // write happened later in CollectionPass; a failed write (or an unresolvable company) then left the
+        // cache saying "extraction done" and the metrics were lost permanently. The record is now written
+        // UNSTAMPED and CollectionPass stamps it only once the outbox envelope is durable.
+        Assert.Null(cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
     }
 
     [Fact]
@@ -1797,7 +1829,8 @@ public sealed class DirectionalFilingSignalSourceTests
         var produced = Assert.Single(result);
         Assert.Equal("Mixed", produced.Signal.Direction);
         Assert.NotNull(produced.ReportedMetrics);
-        Assert.Equal(ReportedMetricsPolicy.Version, cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
+        Assert.Equal("0001049521-26-000011", produced.Accession);
+        Assert.Null(cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
     }
 
     [Fact]
@@ -1840,6 +1873,40 @@ public sealed class DirectionalFilingSignalSourceTests
         Assert.Null(produced.ReportedMetrics);
         Assert.Equal(0, analyzer.AnalyzeCount);
         Assert.Equal(0, reader.ReadCount);
+
+        // Spec 216 §2: a replay carries the accession and the record's policy STAMP (null here), so the
+        // pass can ask the outbox whether an envelope actually stands behind a stamp that IS present.
+        Assert.Equal("0001049521-26-000011", produced.Accession);
+        Assert.Null(produced.CachedReportedMetricsPolicy);
+    }
+
+    [Fact]
+    public async Task ACacheReplayWithAPolicyStamp_CarriesThatStampToThePass()
+    {
+        // SPEC 216 §2: the pass fails closed on a stamp with no outbox envelope behind it, which it can
+        // only do if the replay tells it the stamp exists. The stamp still HITS here (it matches the
+        // current policy), so no model call is spent.
+        var evidence = EarningsFiling();
+        var cache = new FakeAnalyzedFilingCache();
+        cache.Entries["0001049521-26-000011"] = new AnalyzedFilingRecord(
+            "0001049521-26-000011",
+            AnalyzedFilingOutcome.DirectionalSignalProduced,
+            new ExtractedSignal(evidence.SourceName, "GuidanceChange", "Positive", 8, 6, 0.9m, evidence.Title, "cached"),
+            evidence.PublishedAtUtc,
+            AnalyzedFilingRecord.CurrentCacheVersion,
+            EarningsComparabilityScan.Policy(0.65m),
+            new ComparabilityMarkers([], []),
+            ReportedMetricsPolicy: ReportedMetricsPolicy.Version);
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("never read"), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "x"), Verified());
+
+        var produced = Assert.Single(
+            await CreateSource(reader, analyzer, cache: cache).ProduceAsync([evidence], AsOf, CancellationToken.None));
+
+        Assert.Equal(ReportedMetricsPolicy.Version, produced.CachedReportedMetricsPolicy);
+        Assert.Null(produced.ReportedMetrics);
+        Assert.Equal(0, analyzer.AnalyzeCount);
     }
 
     [Fact]
@@ -1866,7 +1933,10 @@ public sealed class DirectionalFilingSignalSourceTests
         Assert.Equal("fresh", produced.Signal.Reason);
         Assert.NotNull(produced.ReportedMetrics);
         Assert.Equal(1, analyzer.AnalyzeCount);
-        Assert.Equal(ReportedMetricsPolicy.Version, cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
+
+        // Spec 216 §2: the re-analysis rewrites the record UNSTAMPED — the stale stamp is cleared, and the
+        // current-policy stamp is applied by CollectionPass only after the outbox envelope is durable.
+        Assert.Null(cache.Entries["0001049521-26-000011"].ReportedMetricsPolicy);
     }
 
     /// <summary>In-memory <see cref="IAnalyzedFilingCache"/> keyed by accession for the cache-behaviour tests.</summary>

@@ -144,9 +144,17 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         // exactly like MinConfidence and the reading model). The model value is escaped with the shared
         // DescriptorEscaping so a model id containing a reserved delimiter cannot collide with a different
         // descriptor (AD-3).
+        //
+        // SPEC 216 §5 APPENDS `rm=` LAST, on the same new-fields-last precedent. It carries
+        // `reported-metrics-v<N>` when metric extraction is ON and the literal `disabled` when it is off,
+        // and it belongs HERE rather than in the news= segment because enabling extraction changes the
+        // FILING-ANALYSIS PROMPT ITSELF — the model is asked for more — even when the news judgment is
+        // disabled, and the VERIFICATION policy decides which values exist at all. Consequence, stated so
+        // the pins reconcile: the ai= segment folds only when the AI filing read is registered, so this
+        // moves the AI-ON pins and CANNOT move the AI-OFF ones.
         _scoringDescriptor = string.Create(
             CultureInfo.InvariantCulture,
-            $"directional-filing:str={_options.Strength};nov={_options.Novelty};minconf={_options.MinConfidence.ToString("G29", CultureInfo.InvariantCulture)};model={DescriptorEscaping.Escape(_options.ModelIdentity?.Trim() ?? string.Empty)};cmpscan={EarningsComparabilityScan.Version};cmpcap={_options.ComparabilityConfidenceCap.ToString("G29", CultureInfo.InvariantCulture)}");
+            $"directional-filing:str={_options.Strength};nov={_options.Novelty};minconf={_options.MinConfidence.ToString("G29", CultureInfo.InvariantCulture)};model={DescriptorEscaping.Escape(_options.ModelIdentity?.Trim() ?? string.Empty)};cmpscan={EarningsComparabilityScan.Version};cmpcap={_options.ComparabilityConfidenceCap.ToString("G29", CultureInfo.InvariantCulture)};rm={DescriptorEscaping.Escape(_options.ReportedMetricsPolicy)}");
 
         // The comparability POLICY every cache record written by this source is stamped with (spec 160):
         // scanner structure version + cap magnitude, composed once so the stamp and the pass-1 lookup
@@ -237,7 +245,15 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
                 if (cached.Outcome == AnalyzedFilingOutcome.DirectionalSignalProduced && cached.Signal is not null)
                 {
-                    produced.Add(new DirectionalFilingSignal(cached.Signal, evidence));
+                    // Spec 216 §2: a REPLAY carries no extraction (nothing was read this pass) but it does
+                    // carry the accession and the record's policy STAMP, so the pass can ask the outbox
+                    // whether an envelope actually stands behind that stamp.
+                    produced.Add(new DirectionalFilingSignal(
+                        cached.Signal,
+                        evidence,
+                        ReportedMetrics: null,
+                        Accession: accession,
+                        CachedReportedMetricsPolicy: cached.ReportedMetricsPolicy));
                 }
                 else if (cached.Outcome == AnalyzedFilingOutcome.NoDirectionalSignal
                     && cached.NoSignalCause is FilingNoSignalCause cause
@@ -259,7 +275,10 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         BuildReadSignal(
                             evidence, cause, cached.ReadDirection, cachedReadConfidence,
                             cached.Rationale ?? string.Empty),
-                        evidence));
+                        evidence,
+                        ReportedMetrics: null,
+                        Accession: accession,
+                        CachedReportedMetricsPolicy: cached.ReportedMetricsPolicy));
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -330,10 +349,18 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         // Directional read (Improving/Deteriorating at-or-above the gate): unchanged pre-204
                         // path — the whole signal rides the record so a replay is field-identical.
                         // Spec 215 §1: a FRESH read carries its reported-metrics extraction to the pass
-                        // (null when the analyzer did not extract), and the record is stamped with the
-                        // policy ONLY when an extraction was made — a null stamp must keep meaning "not
-                        // extracted", never "extracted nothing".
-                        produced.Add(new DirectionalFilingSignal(analysis.Signal, evidence, analysis.ReportedMetrics));
+                        // (null when the analyzer did not extract).
+                        //
+                        // SPEC 216 §2 MOVED THE POLICY STAMP OUT OF THIS WRITE. It used to be applied here,
+                        // at analysis time, while the ledger write happened later in CollectionPass — so a
+                        // ledger write that failed, or a company that could not be resolved, left the cache
+                        // already saying "extraction done" and the metrics were lost permanently. The
+                        // record is now written UNSTAMPED, and CollectionPass stamps it only once the
+                        // outbox envelope carrying the complete payload is durable. If the process dies
+                        // before that, the record stays unstamped and the filing re-analyzes next run
+                        // exactly as any uncached read does — nothing was persisted to lose.
+                        produced.Add(new DirectionalFilingSignal(
+                            analysis.Signal, evidence, analysis.ReportedMetrics, Accession: accession));
                         await _cache.PutAsync(
                             new AnalyzedFilingRecord(
                                 accession,
@@ -342,8 +369,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                                 evidence.PublishedAtUtc ?? evidence.CollectedAtUtc,
                                 AnalyzedFilingRecord.CurrentCacheVersion,
                                 _comparabilityPolicy,
-                                analysis.Markers,
-                                ReportedMetricsPolicy: ReportedMetricsPolicyFor(analysis)),
+                                analysis.Markers),
                             ct).ConfigureAwait(false);
                     }
                     else
@@ -359,9 +385,11 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         // miss when the policy changes.
                         if (analysis.Signal is not null)
                         {
-                            produced.Add(new DirectionalFilingSignal(analysis.Signal, evidence, analysis.ReportedMetrics));
+                            produced.Add(new DirectionalFilingSignal(
+                                analysis.Signal, evidence, analysis.ReportedMetrics, Accession: accession));
                         }
 
+                        // Spec 216 §2: written UNSTAMPED — see the directional branch above.
                         await _cache.PutAsync(
                             new AnalyzedFilingRecord(
                                 accession,
@@ -374,8 +402,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                                 analysis.NoSignalCause,
                                 analysis.ReadDirection,
                                 analysis.ReadConfidence,
-                                analysis.Rationale,
-                                ReportedMetricsPolicy: ReportedMetricsPolicyFor(analysis)),
+                                analysis.Rationale),
                             ct).ConfigureAwait(false);
                     }
                 }
@@ -442,15 +469,6 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         // Spec 215 §1: what the analyzer extracted for the reported-metrics ledger — null when it did not
         // extract (feature off, or no parseable response), never an empty extraction meaning "none".
         ReportedMetricExtraction? ReportedMetrics = null);
-
-    /// <summary>
-    /// The reported-metrics policy stamp for a fresh cache write (spec 215 §1): the current
-    /// <see cref="ReportedMetricsPolicy.Version"/> when the read extracted metrics, <c>null</c> when it did
-    /// not — so a null on disk always means "not extracted" (a HIT that never re-reads) and can never be
-    /// mistaken for "extracted under the current policy".
-    /// </summary>
-    private static string? ReportedMetricsPolicyFor(FilingAnalysis analysis) =>
-        analysis.ReportedMetrics is null ? null : ReportedMetricsPolicy.Version;
 
     /// <summary>
     /// Reads the EX-99.1 body, analyzes it, applies the confidence gate + direction mapping, and returns the

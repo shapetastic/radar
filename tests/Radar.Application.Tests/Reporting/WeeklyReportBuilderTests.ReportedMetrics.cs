@@ -24,7 +24,11 @@ public sealed partial class WeeklyReportBuilderTests
         public bool Throw { get; set; }
 
         public Task<DurableWriteResult> WriteIfNewAsync(
-            Guid companyId, string accession, IReadOnlyList<ReportedMetricRecord> records, CancellationToken ct) =>
+            Guid companyId,
+            string accession,
+            string policy,
+            IReadOnlyList<ReportedMetricRecord> records,
+            CancellationToken ct) =>
             throw new NotSupportedException();
 
         public Task<IReadOnlyList<ReportedMetricRecord>> GetForCompanyAsync(Guid companyId, CancellationToken ct)
@@ -42,7 +46,7 @@ public sealed partial class WeeklyReportBuilderTests
 
     private static ReportedMetricRecord LedgerRecord(
         Guid companyId, Guid evidenceId, ReportedMetric metric, string value, string unit, string period) => new(
-        Id: ReportedMetricRecord.IdentityFor("0000100591-26-000011", metric, period),
+        Id: ReportedMetricRecord.IdentityFor("0000100591-26-000011", metric, period, ReportedMetricsPolicy.Version),
         CompanyId: companyId,
         Accession: "0000100591-26-000011",
         EvidenceId: evidenceId,
