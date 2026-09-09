@@ -313,10 +313,6 @@ public sealed class ScoreWorkerOptions
 }
 
 /// <summary>
-/// SEC EDGAR filing collector configuration (bound from "Radar:Sec"). Surfaces the required, compliant
-/// User-Agent and the form filter / per-company cap through to <c>SecCollectorOptions</c>.
-/// </summary>
-/// <summary>
 /// SPEC 217 §1 — the acquisition-recognition knobs (<c>Radar:Acquisitions</c>). OPERATIONAL only: they
 /// bound how many filings are READ per run and whether the pass runs at all, never whether a filing that IS
 /// read is recognised — so none of them is a scoring-fingerprint input (the spec-105 exclusion). The
@@ -342,6 +338,10 @@ public sealed class AcquisitionsWorkerOptions
     public int MaxFetchesPerRun { get; init; } = 40;
 }
 
+/// <summary>
+/// SEC EDGAR filing collector configuration (bound from "Radar:Sec"). Surfaces the required, compliant
+/// User-Agent and the form filter / per-company cap through to <c>SecCollectorOptions</c>.
+/// </summary>
 public sealed class SecWorkerOptions
 {
     /// <summary>

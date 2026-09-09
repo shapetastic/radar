@@ -9,7 +9,7 @@ namespace Radar.Infrastructure.Sec;
 /// <param name="Type">The resolved EX-99 Type, or null when the row is not an EX-99 exhibit.</param>
 /// <param name="Size">The row's Size cell in bytes, for the largest-exhibit tie-break (0 when absent).</param>
 /// <param name="Order">The row's position in document order — the deterministic tie-break (AD-3).</param>
-public sealed record SecFilingIndexRow(string FileName, string? Type, long Size, int Order);
+internal sealed record SecFilingIndexRow(string FileName, string? Type, long Size, int Order);
 
 /// <summary>
 /// THE parser of an SEC EDGAR filing-index page's document table, extracted from
@@ -106,8 +106,9 @@ internal static partial class SecFilingIndexTable
     /// SPEC 217 — selects the filing's PRIMARY document (the 8-K body, where the item-1.01 narrative lives).
     /// Prefers the file name the evidence metadata declares, when the index actually carries that row: the
     /// collector recorded it from SEC's own submissions feed, so it is the authoritative answer. Otherwise
-    /// falls back to the first NON-EX-99 row in document order, which is where SEC places the primary
-    /// document. Returns null when the index carries no non-exhibit row — never guesses.
+    /// falls back to the first NON-EX-99 row in document order (a row whose <c>Type</c> is null — <c>Type</c>
+    /// is resolved only for EX-99.* exhibits), which is where SEC places the primary document. Returns null
+    /// when the index carries no such row — never guesses.
     /// </summary>
     public static SecFilingIndexRow? SelectPrimaryDocument(
         List<SecFilingIndexRow> rows, string? declaredPrimaryDocument)

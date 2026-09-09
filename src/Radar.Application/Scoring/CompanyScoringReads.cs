@@ -52,8 +52,10 @@ public sealed record CompanyScoringReads(
     /// about the company, not about a hypothesis, so the corporate-action supersede and the stamped
     /// <c>CompanyStatusAtScoring</c> are identical across every arm of one run.
     /// <para>
-    /// Defaults to <see cref="PendingAcquisitions.None"/> (an inert, MEASURED empty — never null) so every
-    /// pre-217 construction site keeps compiling and keeps today's behaviour exactly.
+    /// Defaults to <see cref="PendingAcquisitions.None"/> — the INERT projection (never null): its emptiness
+    /// is "no acquisitions store was read", NOT a measured absence, and its
+    /// <see cref="PendingAcquisitions.RecognitionAvailable"/> is false so no consumer renders it as one. That
+    /// keeps every pre-217 construction site compiling and keeps today's behaviour exactly.
     /// </para>
     /// </summary>
     public PendingAcquisitions PendingAcquisitions { get; init; } = PendingAcquisitions.None;
