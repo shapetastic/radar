@@ -42,7 +42,7 @@ namespace Radar.Infrastructure.Filings;
 /// round-trip test).
 /// </para>
 /// </summary>
-public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
+public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache, IAnalyzedFilingReadCorpus
 {
     private readonly FileAnalyzedFilingCacheOptions _options;
     private readonly ILogger<FileAnalyzedFilingCache> _logger;
@@ -135,6 +135,179 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
     }
 
     /// <summary>
+    /// The spec-218 corpus enumeration: every accrued read record under the CURRENT model segment, plus a
+    /// named count for every file that did not become one. Deliberately does NOT apply the
+    /// <see cref="IsAcceptedVersion"/> stale-version rule — that rule answers "may the pipeline REPLAY this
+    /// entry", which is a different question from "what has the reader produced". A measurement that hid
+    /// every v2 record would report a distribution over a fraction of the corpus while looking complete, so
+    /// the version rides out on each record and the CALLER splits by it, with both denominators stated.
+    /// <para>
+    /// Read-only and best-effort (AD-8): no file is written, no record is repaired, and a bad file is
+    /// COUNTED and skipped rather than thrown. Caller cancellation propagates.
+    /// </para>
+    /// </summary>
+    public async Task<AnalyzedFilingCorpus> ReadAllAsync(CancellationToken ct)
+    {
+        var segment = string.IsNullOrEmpty(_options.ModelSegment) ? null : _options.ModelSegment;
+        var directory = ResolveDirectory();
+
+        // Files at the cache ROOT that the current segment does not reach are real accrued reads (a legacy
+        // layout, or an earlier model). They are never hydrated here — they were not produced under this
+        // segment — but they must not vanish from the accounting either. `null` = the root itself could not
+        // be enumerated, i.e. NOT COUNTED; a structural 0 when no segment is configured.
+        int? outsideSegment = 0;
+        if (!string.Equals(directory, _options.RootDirectory, StringComparison.Ordinal))
+        {
+            outsideSegment = TryCountJsonFiles(_options.RootDirectory);
+        }
+
+        if (!Directory.Exists(directory))
+        {
+            return new AnalyzedFilingCorpus(
+                Entries: [],
+                ModelSegment: segment,
+                CorpusDirectoryExists: false,
+                EnumerationFailed: false,
+                FilesScanned: 0,
+                UnreadableOrUnparseableFiles: 0,
+                OutsideCurrentModelSegmentFiles: outsideSegment,
+                FileNameAccessionMismatchFiles: 0,
+                OutcomeSignalMismatchFiles: 0);
+        }
+
+        string[] files;
+        try
+        {
+            files = Directory.GetFiles(directory, "*.json", SearchOption.TopDirectoryOnly);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not enumerate the analyzed-filing cache directory '{Directory}'; the read corpus is "
+                    + "reported as NOT ENUMERATED (never as an empty corpus).",
+                directory);
+            return new AnalyzedFilingCorpus(
+                Entries: [],
+                ModelSegment: segment,
+                CorpusDirectoryExists: true,
+                EnumerationFailed: true,
+                FilesScanned: 0,
+                UnreadableOrUnparseableFiles: 0,
+                OutsideCurrentModelSegmentFiles: outsideSegment,
+                FileNameAccessionMismatchFiles: 0,
+                OutcomeSignalMismatchFiles: 0);
+        }
+
+        // Deterministic order (AD-3): the file system's enumeration order is not a contract.
+        Array.Sort(files, StringComparer.Ordinal);
+
+        var entries = new List<AnalyzedFilingCorpusEntry>(files.Length);
+        var unreadable = 0;
+        var nameMismatch = 0;
+        var outcomeMismatch = 0;
+
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            AnalyzedFilingRecord? record;
+            try
+            {
+                var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+                record = JsonSerializer.Deserialize<AnalyzedFilingRecord>(text, RadarFileStoreJson.Options);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // Counted, not logged per file: one bad file among hundreds must not produce hundreds of
+                // log lines (CLAUDE.md — one aggregated line per store, never one per item).
+                unreadable++;
+                continue;
+            }
+
+            if (record is null)
+            {
+                unreadable++;
+                continue;
+            }
+
+            var expectedKey = FileTickerKey.Sanitize(record.Accession);
+            if (expectedKey is null
+                || !string.Equals(
+                    expectedKey,
+                    Path.GetFileNameWithoutExtension(file),
+                    StringComparison.Ordinal))
+            {
+                nameMismatch++;
+                continue;
+            }
+
+            if (!OutcomeAndSignalAgree(record))
+            {
+                outcomeMismatch++;
+                continue;
+            }
+
+            entries.Add(new AnalyzedFilingCorpusEntry(record, Path.GetFileName(file)));
+        }
+
+        entries.Sort(static (a, b) => string.CompareOrdinal(a.Record.Accession, b.Record.Accession));
+
+        // ONE aggregated line for the whole store.
+        _logger.LogInformation(
+            "Analyzed-filing read corpus: {Hydrated} record(s) from {Scanned} file(s) under segment "
+                + "'{Segment}'; excluded {Unreadable} unreadable/unparseable, {NameMismatch} "
+                + "filename/accession mismatch, {OutcomeMismatch} outcome/signal mismatch; "
+                + "{OutsideSegment} file(s) at the cache root are outside the current model segment.",
+            entries.Count,
+            files.Length,
+            segment ?? "(none)",
+            unreadable,
+            nameMismatch,
+            outcomeMismatch,
+            outsideSegment is { } outside
+                ? outside.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : "(not counted)");
+
+        return new AnalyzedFilingCorpus(
+            Entries: entries,
+            ModelSegment: segment,
+            CorpusDirectoryExists: true,
+            EnumerationFailed: false,
+            FilesScanned: files.Length,
+            UnreadableOrUnparseableFiles: unreadable,
+            OutsideCurrentModelSegmentFiles: outsideSegment,
+            FileNameAccessionMismatchFiles: nameMismatch,
+            OutcomeSignalMismatchFiles: outcomeMismatch);
+    }
+
+    /// <summary>
+    /// Counts top-level <c>*.json</c> files under <paramref name="directory"/>, or <c>null</c> when the
+    /// directory could not be enumerated — "not counted", never a fabricated zero.
+    /// </summary>
+    private int? TryCountJsonFiles(string directory)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return 0;
+        }
+
+        try
+        {
+            return Directory.GetFiles(directory, "*.json", SearchOption.TopDirectoryOnly).Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not enumerate '{Directory}' to count analyzed-filing cache files outside the current "
+                    + "model segment; that count is reported as NOT RECORDED.",
+                directory);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The pre-spec-204 cache-schema version, kept only for the outcome-scoped acceptance rule below. A v2
     /// record differs from a v3 one ONLY by the four spec-204 no-signal cause fields (NoSignalCause /
     /// ReadDirection / ReadConfidence / Rationale, all trailing + nullable).
@@ -165,20 +338,22 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
     /// carry one; a confirmed no-signal must not). An inconsistent record is treated as a miss so a corrupt file
     /// can never permanently suppress a real signal.
     /// </summary>
-    private static bool IsConsistent(AnalyzedFilingRecord record, string accession)
-    {
-        if (!string.Equals(record.Accession, accession, StringComparison.Ordinal))
-        {
-            return false;
-        }
+    private static bool IsConsistent(AnalyzedFilingRecord record, string accession) =>
+        string.Equals(record.Accession, accession, StringComparison.Ordinal)
+        && OutcomeAndSignalAgree(record);
 
-        return record.Outcome switch
-        {
-            AnalyzedFilingOutcome.DirectionalSignalProduced => record.Signal is not null,
-            AnalyzedFilingOutcome.NoDirectionalSignal => record.Signal is null,
-            _ => false,
-        };
-    }
+    /// <summary>
+    /// Whether a record's outcome and signal agree (a produced signal must carry one; a confirmed no-signal
+    /// must not). Split out of <see cref="IsConsistent"/> so the corpus enumeration can count THIS failure
+    /// separately from an accession/filename mismatch, instead of collapsing two distinct defects into one
+    /// bucket — the same rule, counted twice as finely.
+    /// </summary>
+    private static bool OutcomeAndSignalAgree(AnalyzedFilingRecord record) => record.Outcome switch
+    {
+        AnalyzedFilingOutcome.DirectionalSignalProduced => record.Signal is not null,
+        AnalyzedFilingOutcome.NoDirectionalSignal => record.Signal is null,
+        _ => false,
+    };
 
     private string? ResolvePath(string accession)
     {
@@ -193,6 +368,17 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
             return null;
         }
 
+        return Path.Combine(ResolveDirectory(), sanitized + ".json");
+    }
+
+    /// <summary>
+    /// The ONE definition of which directory this cache's files live in: the root, or the root plus a
+    /// filename-safe model segment (spec 118). The per-accession path builder above and the corpus
+    /// enumeration below both route through it, so there is no second path builder to drift (reuse over
+    /// copy — CLAUDE.md).
+    /// </summary>
+    private string ResolveDirectory()
+    {
         var directory = _options.RootDirectory;
         var segment = _options.ModelSegment;
         if (!string.IsNullOrEmpty(segment))
@@ -215,7 +401,7 @@ public sealed class FileAnalyzedFilingCache : IAnalyzedFilingCache
             }
         }
 
-        return Path.Combine(directory, sanitized + ".json");
+        return directory;
     }
 
     // A ModelSegment is usable only if it is a single, in-root path component: not rooted, carrying no invalid

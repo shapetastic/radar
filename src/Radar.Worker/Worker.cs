@@ -3,6 +3,7 @@ using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Efficacy.DenominatorAudit;
+using Radar.Application.Efficacy.FilingReads;
 using Radar.Application.EntityResolution;
 using Radar.Application.Lifecycle;
 using Radar.Application.News;
@@ -81,6 +82,7 @@ public sealed class Worker : BackgroundService
     private readonly IStrategyComparisonReportGenerator? _strategyComparisonGenerator;
     private readonly IAttentionArrivalScreenGenerator? _attentionArrivalGenerator;
     private readonly IScoreMoveDenominatorAuditGenerator? _denominatorAuditGenerator;
+    private readonly IDirectionalFilingReadReportGenerator? _directionalFilingReadGenerator;
     private readonly CompanyFilter? _companyFilter;
     private readonly INewsObservationMigration? _newsObservationMigration;
     private readonly INewsRiskShadowGenerator? _newsRiskShadowGenerator;
@@ -116,7 +118,8 @@ public sealed class Worker : BackgroundService
         IWeeklyReportJudgmentRerenderer? judgmentRerenderer = null,
         INewsJudgmentCandidatePlanner? candidatePlanner = null,
         INewsJudgmentSignalMaterializer? newsJudgmentSignalMaterializer = null,
-        IDailyNewsReportStep? dailyNewsReportStep = null)
+        IDailyNewsReportStep? dailyNewsReportStep = null,
+        IDirectionalFilingReadReportGenerator? directionalFilingReadGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -137,6 +140,7 @@ public sealed class Worker : BackgroundService
         _strategyComparisonGenerator = strategyComparisonGenerator;
         _attentionArrivalGenerator = attentionArrivalGenerator;
         _denominatorAuditGenerator = denominatorAuditGenerator;
+        _directionalFilingReadGenerator = directionalFilingReadGenerator;
         _companyFilter = companyFilter;
         _newsObservationMigration = newsObservationMigration;
         _newsRiskShadowGenerator = newsRiskShadowGenerator;
@@ -480,7 +484,8 @@ public sealed class Worker : BackgroundService
         if (_efficacyReportGenerator is null
             && _strategyComparisonGenerator is null
             && _attentionArrivalGenerator is null
-            && _denominatorAuditGenerator is null)
+            && _denominatorAuditGenerator is null
+            && _directionalFilingReadGenerator is null)
         {
             return;
         }
@@ -493,11 +498,12 @@ public sealed class Worker : BackgroundService
         if (_companyFilter is not null)
         {
             _logger.LogInformation(
-                "Skipping the price-efficacy render, the strategy leaderboard and the attention-arrival "
-                    + "screen: this run is a company-FILTERED collect pass (Radar:Companies = {Companies}). "
-                    + "All three read the seeded company universe, so recomputing them from {CompanyCount} "
-                    + "companies would overwrite whole-universe artifacts with a partial view. Run an "
-                    + "unfiltered pass to refresh them.",
+                "Skipping the price-efficacy render, the strategy leaderboard, the attention-arrival "
+                    + "screen and the directional filing-read measurement: this run is a company-FILTERED "
+                    + "collect pass (Radar:Companies = {Companies}). All of them read the seeded company "
+                    + "universe, so recomputing them from {CompanyCount} companies would overwrite "
+                    + "whole-universe artifacts with a partial view. Run an unfiltered pass to refresh "
+                    + "them.",
                 _companyFilter.Describe(),
                 _companyFilter.Tickers.Count);
             return;
@@ -547,6 +553,18 @@ public sealed class Worker : BackgroundService
         if (_denominatorAuditGenerator is not null)
         {
             await _denominatorAuditGenerator.GenerateAsync(ct).ConfigureAwait(false);
+        }
+
+        // Spec 218's directional filing-read measurement: LAST, and the same read-only posture, still
+        // OUTSIDE IRadarPipeline. Skipped (dependency null) unless Radar:Efficacy:Enabled AND
+        // Radar:Efficacy:DirectionalFilingReads:Enabled. It reads the accrued analyzed-filing read corpus,
+        // evidence, companies, typed news and price, changes no score and declares no gate or threshold; the
+        // forward return it reports is DESCRIPTIVE (AD-14). A company-filtered pass returned above (absent,
+        // not fatal) and a replay run replaces the pipeline entirely and never reaches this method. The
+        // generator owns its own failure handling: it catches, logs, writes nothing and never aborts the run.
+        if (_directionalFilingReadGenerator is not null)
+        {
+            await _directionalFilingReadGenerator.GenerateAsync(ct).ConfigureAwait(false);
         }
     }
 }

@@ -7,6 +7,7 @@ using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
+using Radar.Application.Efficacy.FilingReads;
 using Radar.Application.EntityResolution;
 using Radar.Application.Pipeline;
 using Radar.Application.Prices;
@@ -500,6 +501,105 @@ public sealed class WorkerTests
         Assert.Equal(["seed", "replay"], callLog);
     }
 
+    // -------------------------------------------------------------------------------------------------
+    // Spec 218: the directional filing-read measurement rides the same read-only Worker step, LAST.
+    // -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task DirectionalFilingReadMeasurement_RunsLast_OutsideThePipeline()
+    {
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            priceHistoryAcquirer: null,
+            efficacyReportGenerator: new RecordingEfficacyGenerator(callLog),
+            replayRunner: null,
+            strategyComparisonGenerator: new RecordingStrategyComparisonGenerator(callLog),
+            companyFilter: null,
+            attentionArrivalGenerator: new RecordingAttentionArrivalGenerator(callLog),
+            directionalFilingReadGenerator: new RecordingDirectionalFilingReadGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(
+            ["seed", "run", "efficacy", "attention-arrival", "comparison", "filing-reads"], callLog);
+    }
+
+    [Fact]
+    public async Task DirectionalFilingReadMeasurement_RunsEvenWhenItIsTheOnlyEnabledReadSideStep()
+    {
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            directionalFilingReadGenerator: new RecordingDirectionalFilingReadGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run", "filing-reads"], callLog);
+    }
+
+    [Fact]
+    public async Task CompanyFilteredRun_SkipsTheDirectionalFilingReadMeasurementToo()
+    {
+        // It reads the seeded company universe for its company join, so a filtered pass would overwrite the
+        // whole-universe artifact with a partial view. Absent, not fatal.
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true, Mode = RadarRunMode.Collect },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            companyFilter: CompanyFilter.FromTickers(["CASS"]),
+            directionalFilingReadGenerator: new RecordingDirectionalFilingReadGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "run"], callLog);
+    }
+
+    [Fact]
+    public async Task ReplayRun_SkipsTheDirectionalFilingReadMeasurementToo()
+    {
+        var callLog = new List<string>();
+        using var lifetime = new RecordingLifetime();
+
+        var worker = new Worker(
+            new RecordingSeeder(callLog),
+            new RecordingPipeline(callLog, EmptyResult),
+            lifetime,
+            new WorkerRunOptions { RunOnce = true },
+            new FakeTimeProvider(),
+            NullLogger<Worker>.Instance,
+            replayRunner: new RecordingReplayRunner(callLog),
+            directionalFilingReadGenerator: new RecordingDirectionalFilingReadGenerator(callLog));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(["seed", "replay"], callLog);
+    }
+
     [Fact]
     public async Task ReplayRunner_Absent_LeavesTheDefaultWorkerUnchanged()
     {
@@ -652,6 +752,20 @@ public sealed class WorkerTests
                 AttentionEvaluationUnavailableReason.CohortConfigurationUnavailable,
                 "test",
                 "newssearch"));
+        }
+    }
+
+    private sealed class RecordingDirectionalFilingReadGenerator(List<string> callLog)
+        : IDirectionalFilingReadReportGenerator
+    {
+        public Task GenerateAsync(CancellationToken ct)
+        {
+            lock (callLog)
+            {
+                callLog.Add("filing-reads");
+            }
+
+            return Task.CompletedTask;
         }
     }
 

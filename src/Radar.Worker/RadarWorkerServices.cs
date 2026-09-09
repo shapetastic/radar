@@ -386,6 +386,19 @@ internal static class RadarWorkerServices
             {
                 services.AddRadarScoreMoveDenominatorAudit(options.AuditsDirectory);
             }
+
+            // Spec 218: the read-only directional filing-read measurement. Same posture and the same
+            // "enabled by default inside the already-opt-in efficacy gate" rule as the attention screen —
+            // with no accrued read corpus it writes an honest artifact naming the reason rather than
+            // failing, so the nightly baseline gets it with no profile edit. It reads the accrued
+            // analyzed-filing read corpus through the OPTIONAL IAnalyzedFilingReadCorpus seam (registered
+            // by the AI block below when the earnings read is on; absent otherwise, which the measurement
+            // reports as SeamNotRegistered rather than as zero reads), changes no score and reads price
+            // only as a DESCRIPTIVE forward return (AD-14).
+            if (options.Efficacy.DirectionalFilingReads.Enabled)
+            {
+                services.AddRadarDirectionalFilingReadReport(options.EfficacyDirectory);
+            }
         }
 
         // Spec 179 §9: the read-only frozen-assessment evaluator rides the shadow registration. It joins

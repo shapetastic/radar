@@ -801,6 +801,37 @@ public sealed class EfficacyWorkerOptions
     /// <see cref="Comparison"/> / <see cref="AttentionArrival"/>, DEFAULT OFF even inside the efficacy gate.
     /// </summary>
     public DenominatorAuditWorkerOptions DenominatorAudit { get; init; } = new();
+
+    /// <summary>
+    /// Directional filing-read measurement configuration (bound from
+    /// "Radar:Efficacy:DirectionalFilingReads"; spec 218). Only consulted when <see cref="Enabled"/>,
+    /// mirroring <see cref="AttentionArrival"/>.
+    /// </summary>
+    public DirectionalFilingReadsWorkerOptions DirectionalFilingReads { get; init; } = new();
+}
+
+/// <summary>
+/// Directional filing-read measurement configuration (bound from "Radar:Efficacy:DirectionalFilingReads";
+/// spec 218). ENABLED by default <b>within</b> the already-opt-in <c>Radar:Efficacy</c> gate, mirroring
+/// <see cref="AttentionArrivalWorkerOptions"/> and <see cref="StrategyComparisonWorkerOptions"/>: with no
+/// accrued read corpus it writes an honest artifact naming the reason rather than failing, and it never
+/// touches an existing artifact. So the nightly baseline writes it with no profile edit.
+/// <para>
+/// The measurement is READ-ONLY over the accrued analyzed-filing read corpus, evidence, companies, typed
+/// news and price. It changes no score, prompt, schema, weight, formula or strategy, declares no gate or
+/// threshold, and moves no scoring fingerprint; the forward return it reports is DESCRIPTIVE (AD-14). It
+/// writes only <c>data/efficacy/directional-filing-reads.{json,csv,md}</c>.
+/// </para>
+/// <para>
+/// Note what is deliberately NOT here: the forward horizon, the exit tolerance, the news window and the
+/// per-read statement cap. They are shared/declared constants on the reporter, not operator knobs — a
+/// measurement whose window an operator can retune between runs is not comparable across runs.
+/// </para>
+/// </summary>
+public sealed class DirectionalFilingReadsWorkerOptions
+{
+    /// <summary>Whether to build and write the directional filing-read measurement when efficacy reporting is enabled. Defaults to true.</summary>
+    public bool Enabled { get; init; } = true;
 }
 
 /// <summary>
