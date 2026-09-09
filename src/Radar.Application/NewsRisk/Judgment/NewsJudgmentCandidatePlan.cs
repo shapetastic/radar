@@ -219,7 +219,7 @@ public sealed class NewsJudgmentCandidatePlanner : INewsJudgmentCandidatePlanner
             _logger.LogWarning(
                 ex,
                 "News-judgment breadth planning could not read the company universe; this run judges the "
-                    + "{Depth} depth candidate(s) ONLY and covers no additional company. Coverage policy "
+                    + "{Depth} depth candidate(s) ONLY and covers no additional companies. Coverage policy "
                     + "{CoveragePolicy}.",
                 depth.Count,
                 NewsJudgmentCoveragePolicy.Version);

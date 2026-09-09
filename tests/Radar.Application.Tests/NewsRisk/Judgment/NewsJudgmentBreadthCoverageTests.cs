@@ -299,7 +299,7 @@ public sealed class NewsJudgmentBreadthCoverageTests
 
         Assert.Equal(
             [depth.Id, withFacts.Id],
-            result!.Judgments.Select(j => j.CompanyId).OrderBy(id => id).ToList().Order().ToList());
+            result!.Judgments.Select(j => j.CompanyId).Order().ToList());
         Assert.DoesNotContain(withoutFacts.Id, harness.Store.Records.Select(r => r.CompanyId));
 
         // Skipped is not silent: ONE aggregated per-cohort coverage line says so, names the coverage
