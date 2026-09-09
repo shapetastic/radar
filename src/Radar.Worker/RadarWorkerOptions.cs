@@ -1014,11 +1014,27 @@ public sealed class NewsJudgmentWorkerOptions
     /// <summary>Whether the judgment step runs after each unfiltered full pipeline run. DISABLED by default — the default live run is byte-unchanged. Requires <c>Radar:NewsResearch:Typing:Enabled</c> (the judge cannot run without stage 1).</summary>
     public bool Enabled { get; init; }
 
-    /// <summary>Cost budget on judged companies per run (the spec-179 §3 candidate traversal reused). Default 30; must be positive.</summary>
-    public int MaxCompaniesPerRun { get; init; } = 30;
+    /// <summary>
+    /// The per-run SAFETY VALVE on judged companies — not a coverage policy (spec 219 §1). Default 120: the
+    /// judgment cohort is the whole seeded universe (102 at the time of writing) plus headroom, matching the
+    /// <c>Radar:ReportMaxItems</c> convention of a cap that sits ABOVE the universe rather than truncating
+    /// it. It was 30 while the spec-179 §3 rank traversal was the only candidate source, where it bound on
+    /// 1 of 13 active days and was never the constraint that mattered. If it ever binds, the run says so on
+    /// a counter AND names how many companies it dropped. Must be positive.
+    /// </summary>
+    public int MaxCompaniesPerRun { get; init; } = 120;
 
-    /// <summary>Cap on families supplied to one judgment (a bite records the Capped family-bundle dimension). Default 50; must be positive.</summary>
+    /// <summary>Cap on families supplied to one DEPTH judgment (a bite records the Capped family-bundle dimension). Default 50; must be positive.</summary>
     public int MaxFamiliesPerJudgment { get; init; } = 50;
+
+    /// <summary>
+    /// Spec 219 §2: the cap on families supplied to one BREADTH judgment — a company the spec-179 §3
+    /// traversal did not select. Default
+    /// <see cref="NewsJudgmentOptions.DefaultMaxFamiliesPerBreadthJudgment"/> (5); must be positive.
+    /// A cost control, recorded on every judgment record and hashed into NO scoring fingerprint.
+    /// </summary>
+    public int MaxFamiliesPerBreadthJudgment { get; init; } =
+        NewsJudgmentOptions.DefaultMaxFamiliesPerBreadthJudgment;
 
     /// <summary>
     /// Spec 187 §1: the cap on HOSTED CALLS for one (stage-2 cohort, company, family set). The strict

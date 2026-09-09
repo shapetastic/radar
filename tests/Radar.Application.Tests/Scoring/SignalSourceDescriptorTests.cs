@@ -561,5 +561,6 @@ public sealed class SignalSourceDescriptorTests
 
     private static NewsJudgmentScoringIdentity EnabledIdentity(string cohortKey) =>
         NewsJudgmentScoringIdentity.ForPresentationCohort(
-            cohortKey, "news-judgment-signal-v1", ["Improving>Positive"], 4, 3, 1, 4, 0.5m);
+            cohortKey, "news-judgment-signal-v1", ["Improving>Positive"], 4, 3, 1, 4, 0.5m,
+            "news-judgment-coverage-vTest");
 }

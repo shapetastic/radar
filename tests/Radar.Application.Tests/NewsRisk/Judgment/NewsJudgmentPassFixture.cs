@@ -39,6 +39,7 @@ internal static class JudgmentPassFixture
         maxCompaniesPerRun: 50,
         maxFamiliesPerJudgment: 50,
         maxJudgmentAttempts: 3,
+        maxFamiliesPerBreadthJudgment: 5,
         presentationJudge: JudgeName,
         presentationExtractor: ExtractorName,
         newsSearchCollectorName: "newssearch");
@@ -66,7 +67,7 @@ internal static class JudgmentPassFixture
                 rows));
         }
 
-        return new NewsJudgmentCandidatePlanner(Options()).Plan(sections);
+        return JudgmentPlanning.Plan(Options(), sections);
     }
 
     /// <summary>A plan of exactly <paramref name="companies"/> candidates using <see cref="CompanyId"/>.</summary>

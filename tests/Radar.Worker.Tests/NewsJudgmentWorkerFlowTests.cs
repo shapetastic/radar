@@ -9,6 +9,7 @@ using Radar.Application.NewsTyping;
 using Radar.Application.Pipeline;
 using Radar.Application.Reporting;
 using Radar.Application.Scoring;
+using Radar.Infrastructure.Persistence.InMemory;
 using Radar.TestSupport;
 
 namespace Radar.Worker.Tests;
@@ -244,9 +245,16 @@ public sealed class NewsJudgmentWorkerFlowTests
             maxCompaniesPerRun: 30,
             maxFamiliesPerJudgment: 50,
             maxJudgmentAttempts: 3,
+            maxFamiliesPerBreadthJudgment: 5,
             presentationJudge: "judge",
             presentationExtractor: "extractor",
-            newsSearchCollectorName: "newssearch"));
+            newsSearchCollectorName: "newssearch"),
+            // Spec 219 §1: planning reads the company universe. This flow test is about the SHARED PLAN
+            // reaching both passes, so the universe is deliberately empty — the plan then carries the depth
+            // cohort only, exactly as it did before that slice, and the assertion below stays a statement
+            // about sharing rather than about coverage.
+            new InMemoryCompanyRepository(),
+            NullLogger<NewsJudgmentCandidatePlanner>.Instance);
 
         var log = new List<string>();
         var typing = new RecordingTyping(log, TypingResult());

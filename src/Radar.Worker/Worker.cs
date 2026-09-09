@@ -280,7 +280,12 @@ public sealed class Worker : BackgroundService
         // prioritized ARE the companies judged, in the same order, by construction. The planner is
         // registered WITH judgment, so a judgment-disabled run passes null and typing selects exactly as it
         // did before spec 187 §2.
-        var candidatePlan = _candidatePlanner?.Plan(result.StrategySections);
+        // Spec 219 §1: planning is now ASYNC because the breadth cohort reads the company universe. A
+        // repository failure degrades inside the planner to "no breadth candidates" with a counted warning
+        // — it never aborts the run.
+        var candidatePlan = _candidatePlanner is null
+            ? null
+            : await _candidatePlanner.PlanAsync(result.StrategySections, ct).ConfigureAwait(false);
         var typing = await RunNewsTypingAsync(result, candidatePlan, ct).ConfigureAwait(false);
         var judgment = await RunNewsJudgmentAsync(result, candidatePlan, typing, ct).ConfigureAwait(false);
         // Spec 194 §1.2: immediately after the judgment pass and BEFORE the shadow (whose live artifact

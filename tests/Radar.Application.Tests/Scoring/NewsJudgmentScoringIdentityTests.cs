@@ -50,7 +50,8 @@ public sealed class NewsJudgmentScoringIdentityTests
         int? maxFindingContribution = null,
         int? completeTypingBonus = null,
         int? novelty = null,
-        decimal? confidence = null) =>
+        decimal? confidence = null,
+        string? coveragePolicyVersion = null) =>
         NewsJudgmentScoringIdentity.ForPresentationCohort(
             cohortKey,
             materializerVersion ?? CurrentMaterializerVersion,
@@ -59,7 +60,8 @@ public sealed class NewsJudgmentScoringIdentityTests
             maxFindingContribution ?? CurrentMaxFindingContribution,
             completeTypingBonus ?? CurrentCompleteTypingBonus,
             novelty ?? CurrentNovelty,
-            confidence ?? CurrentConfidence);
+            confidence ?? CurrentConfidence,
+            coveragePolicyVersion ?? NewsJudgmentCoveragePolicy.Version);
 
     private static string FingerprintFor(NewsJudgmentScoringIdentity news) =>
         ScoringConfigFingerprint.Compute(

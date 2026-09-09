@@ -172,7 +172,10 @@ public sealed class NewsObservationArchitectureGuardTests
             cohort,
             NewsDirectionalSignalMetadata.JudgmentSignalVersionValue,
             NewsJudgmentScoringIdentityFactory.DirectionMappingTokens,
-            4, 3, 1, 4, 0.5m).Segment;
+            4, 3, 1, 4, 0.5m,
+            // Spec 219 §6: the coverage-policy version the factory reads. Named through the policy CONSTANT
+            // rather than a literal, so the equality this test proves cannot be satisfied by a stale copy.
+            Radar.Application.NewsRisk.Judgment.NewsJudgmentCoveragePolicy.Version).Segment;
 
         Assert.Equal(viaSpec194Literals, viaFactory);
     }

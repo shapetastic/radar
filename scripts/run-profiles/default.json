@@ -133,8 +133,9 @@
       },
       "Judgment": {
         "Enabled": true,
-        "MaxCompaniesPerRun": 30,
+        "MaxCompaniesPerRun": 120,
         "MaxFamiliesPerJudgment": 50,
+        "MaxFamiliesPerBreadthJudgment": 5,
         "Judges": [
           {
             "Name": "deepinfra-deepseek",

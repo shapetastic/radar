@@ -3025,6 +3025,9 @@ public static class InfrastructureServiceCollectionExtensions
         // Spec 187 §2: the ONE per-run candidate-selection seam, registered WITH judgment on purpose — the
         // Worker resolves it once, hands the SAME frozen plan to the typing pass and to the judge, and its
         // ABSENCE (judgment disabled) is what keeps typing selection byte-identical to spec 186's.
+        // Spec 219 §1: it now also reads ICompanyRepository (already registered by AddRadarInfrastructure)
+        // for the breadth cohort — the company universe, minus the depth cohort, in NewsJudgmentCoveragePolicy
+        // order. A universe read failure degrades to "no breadth candidates" with a counted warning.
         services.AddSingleton<INewsJudgmentCandidatePlanner, NewsJudgmentCandidatePlanner>();
         services.AddSingleton<INewsJudgmentGenerator, NewsJudgmentGenerator>();
         services.TryAddSingleton<IWeeklyReportJudgmentRerenderer, WeeklyReportJudgmentRerenderer>();

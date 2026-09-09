@@ -147,7 +147,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Equal(1_228, hydrated.RationaleLength);
         Assert.True(hydrated.RationaleOverSoftLimit);
         Assert.Equal(1_228, hydrated.Rationale!.Length); // the full text, never truncated on the way out
-        Assert.Equal("news-judgment-v7", hydrated.SchemaVersion); // spec 197 §2.2 moved the tag to v4, spec 214 §2 to v5, spec 215 §2 to v6
+        Assert.Equal("news-judgment-v8", hydrated.SchemaVersion); // spec 197 §2.2 moved the tag to v4, spec 214 §2 to v5, spec 215 §2 to v6
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -235,7 +235,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(4, hydrated.FactIdPrefixExpansionCount);
-        Assert.Equal("news-judgment-v7", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v8", hydrated.SchemaVersion);
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -289,7 +289,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Contains("\"comparisonBasis\": \"LevelOnly\"", text, StringComparison.Ordinal);
 
         var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
-        Assert.Equal("news-judgment-v7", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v8", hydrated.SchemaVersion);
         Assert.Equal(NewsTrajectoryBasis.LevelOnly, hydrated.TrajectoryBasis);
         Assert.Equal(NewsFactComparisonBasis.LevelOnly, Assert.Single(hydrated.Families).ComparisonBasis);
 
@@ -372,7 +372,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var reloaded = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(completeness, reloaded.TypingCompleteness);
-        Assert.Equal("news-judgment-v7", reloaded.SchemaVersion);
+        Assert.Equal("news-judgment-v8", reloaded.SchemaVersion);
     }
 
     /// <summary>

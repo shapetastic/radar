@@ -78,6 +78,24 @@ public enum NewsTrajectoryBasis
 }
 
 /// <summary>
+/// SPEC 219 §2 — how deeply the judge read one company this run. Values are explicit and start at 1 so a
+/// defaulted zero is UNDEFINED (refused by the strict file-store enum converter) rather than silently
+/// meaningful — the <see cref="NewsTrajectoryBasis"/> precedent.
+/// <para>
+/// This is not a quality grade and not a preference. It says which BUDGET assembled the input, so a reader
+/// never has to infer whether "no challenge found" came from the whole fact set or from five families of it.
+/// </para>
+/// </summary>
+public enum NewsJudgmentReadDepth
+{
+    /// <summary>The spec-179 §3 depth cohort: the full <c>MaxFamiliesPerJudgment</c> budget.</summary>
+    Full = 1,
+
+    /// <summary>The spec-219 §1 breadth cohort: the bounded <c>MaxFamiliesPerBreadthJudgment</c> budget.</summary>
+    Breadth = 2,
+}
+
+/// <summary>
 /// One supplied family's provenance reference — enough to resolve judgment → family → representative fact →
 /// excerpt → observation → archive through the typing store.
 /// <para>
@@ -114,9 +132,30 @@ public sealed record NewsJudgmentReferenceRef(Guid ReferenceId, NewsJudgmentRefe
 /// The cost/safety limits in force for an attempt (recorded on every judgment, hashed into NO scoring
 /// fingerprint). <c>MaxJudgmentAttempts</c> is TRAILING and NULLABLE: a record written before spec 187
 /// hydrates as "not recorded", never as a fabricated bound.
+/// <para>
+/// <b>WHICH FIELD HOLDS THE BOUND THAT ACTUALLY APPLIED: <see cref="AppliedMaxFamilies"/>, not
+/// <see cref="MaxFamiliesPerJudgment"/>.</b> Spec 219 §2 gave the breadth cohort its OWN, much smaller
+/// family bound, so <see cref="MaxFamiliesPerJudgment"/> alone would state <c>50</c> on an attempt whose
+/// input was in fact cut at <c>5</c> — a false claim on a durable record. That field is deliberately NOT
+/// re-meant (every accrued record keeps its meaning: the CONFIGURED depth-cohort bound), and the applied
+/// bound is appended instead as a TRAILING NULLABLE: <c>null</c> = NOT RECORDED on a pre-219 record, never
+/// a fabricated value. On a spec-219 record it is <c>MaxFamiliesPerBreadthJudgment</c> for a
+/// <see cref="NewsJudgmentReadDepth.Breadth"/> attempt and <see cref="MaxFamiliesPerJudgment"/> for a
+/// <see cref="NewsJudgmentReadDepth.Full"/> one.
+/// </para>
 /// </summary>
+/// <param name="MaxCompaniesPerRun">The per-run judged-candidate safety valve (spec 219 §1) in force.</param>
+/// <param name="MaxFamiliesPerJudgment">The CONFIGURED depth-cohort family bound — not necessarily the one this attempt ran under.</param>
+/// <param name="MaxJudgmentAttempts">The spec-187 §1 call bound; <c>null</c> = a pre-187 record.</param>
+/// <param name="AppliedMaxFamilies">
+/// SPEC 219 §2 — the family bound that ACTUALLY cut this attempt's input. <c>null</c> = not recorded (a
+/// pre-219 record), never a fabricated value.
+/// </param>
 public sealed record NewsJudgmentLimitsRecord(
-    int MaxCompaniesPerRun, int MaxFamiliesPerJudgment, int? MaxJudgmentAttempts = null);
+    int MaxCompaniesPerRun,
+    int MaxFamiliesPerJudgment,
+    int? MaxJudgmentAttempts = null,
+    int? AppliedMaxFamilies = null);
 
 /// <summary>
 /// One durably persisted direction-judgment ATTEMPT (spec 185 §5) — one company × one judge reader × one
@@ -243,7 +282,25 @@ public sealed record NewsJudgmentRecord(
     // `null` = not recorded (pre-216, or no input assembled); a 0 on a v7 record is a measured zero.
     int? ReferencesExcludedNewest = null,
     int? ReferencesExcludedLaterThanFact = null,
-    int? ReferencesSkippedSupersededPolicy = null)
+    int? ReferencesSkippedSupersededPolicy = null,
+    // SPEC 219 §2 — the coverage facts: which budget assembled this input, and what the budget left out.
+    // All THREE are TRAILING and NULLABLE, and `null` means NOT RECORDED (a pre-219 record, whose read was
+    // always the full-budget one) — never a fabricated Full and never a fabricated 0.
+    //   ReadDepth               = Full (the spec-179 §3 depth cohort) or Breadth (the spec-219 §1 universe
+    //                             pass). It is recorded provenance, not a grade.
+    //   FamiliesAvailable       = how many of the company's canonical families were RESOLVABLE this pass,
+    //                             before the budget cut. A 0 on a v8 record is a measured none.
+    //   FamiliesWithheldByBudget= FamiliesAvailable minus the supplied count. A measured 0 means the read
+    //                             saw everything there was.
+    // The SUPPLIED count is not a fourth field: it is `Families.Count`, which every record already carries
+    // family-by-family, so a fourth field could only ever disagree with it.
+    // Observational provenance: none of the three enters an id, a cohort key, the family-set hash, a marker
+    // DECISION (the marker POLICY reads ReadDepth only to render the bound honestly), a score or any
+    // fingerprint. What IS hashed is the coverage POLICY VERSION, at configuration time
+    // (NewsJudgmentCoveragePolicy.Version, spec 219 §6) — never these per-record values.
+    NewsJudgmentReadDepth? ReadDepth = null,
+    int? FamiliesAvailable = null,
+    int? FamiliesWithheldByBudget = null)
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
@@ -304,8 +361,20 @@ public sealed record NewsJudgmentRecord(
     /// a reader must be able to tell them apart. Every pre-v7 record stays readable, is never rewritten,
     /// and hydrates the new fields as <c>null</c> (AD-8).
     /// </para>
+    /// <para>
+    /// <b>Spec 219 §2 moves it to <c>v8</c></b> for <see cref="ReadDepth"/>,
+    /// <see cref="FamiliesAvailable"/> and <see cref="FamiliesWithheldByBudget"/>. It earns the bump on the
+    /// same "changes what a record MEANS" test as v2–v7, and here the test is at its sharpest: EVERY v7
+    /// record was a full-budget read of one of ~19 rank-selected companies, while a v8 record may be a
+    /// BOUNDED five-family read of any company in the universe. "No challenge found in supplied facts" is a
+    /// materially weaker statement under a bounded read than under a complete one, so a reader must be able
+    /// to tell the two apart — and under v7 there is no field that could. Every pre-v8 record stays
+    /// readable, is never rewritten, and hydrates the three new fields as <c>null</c> = NOT RECORDED (AD-8);
+    /// a pre-219 record's read was in fact always the full budget, but the record does not SAY so, and
+    /// inferring it would be a fabricated measurement.
+    /// </para>
     /// </summary>
-    public const string CurrentSchemaVersion = "news-judgment-v7";
+    public const string CurrentSchemaVersion = "news-judgment-v8";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named

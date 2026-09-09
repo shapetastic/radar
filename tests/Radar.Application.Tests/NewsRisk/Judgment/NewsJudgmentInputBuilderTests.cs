@@ -244,6 +244,6 @@ public sealed class NewsJudgmentInputBuilderTests
         // TrajectoryBasis and spec 215 §2 to v6 for the reference fields — RECORD changes, not cohort
         // changes: the cohort keys above are unaffected by the tag (asserted in
         // NewsJudgmentCompletenessSchemaTests).
-        Assert.Equal("news-judgment-v7", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-v8", NewsJudgmentRecord.CurrentSchemaVersion);
     }
 }

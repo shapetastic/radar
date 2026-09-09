@@ -67,9 +67,13 @@ public sealed record NewsJudgmentInputBundle(
 /// Deterministic judge-input assembly (spec 185 §1/§5). Pure — no clock, no I/O:
 /// <list type="bullet">
 /// <item>selects one company's families from one stage-1 cohort, ordered deterministically by
-/// <c>MemberCount</c> descending then <c>FamilyId</c> ascending (AD-3), so the cap below is stable;</item>
-/// <item>caps at <c>maxFamiliesPerJudgment</c>; a cap that removed families makes the bundle
-/// <see cref="NewsJudgmentFamilyBundle.Capped"/> — recorded, never silent;</item>
+/// <c>MemberCount</c> descending, then (spec 219 §2) <c>DistinctPublisherCount</c> descending, then
+/// <c>FamilyId</c> ascending (AD-3), so the cap below is stable;</item>
+/// <item>caps at <c>maxFamiliesPerJudgment</c> (spec 219 §2: the BREADTH cohort passes its own, much
+/// smaller, <c>MaxFamiliesPerBreadthJudgment</c> here — the ordering and the cap mechanism are the same
+/// code, only the bound differs); a cap that removed families makes the bundle
+/// <see cref="NewsJudgmentFamilyBundle.Capped"/> — recorded, never silent, and the remainder is counted on
+/// <see cref="NewsJudgmentInputBundle.FamiliesAvailable"/>;</item>
 /// <item>joins each family's <c>RepresentativeFactId</c> to its validated fact; a family whose
 /// representative cannot be resolved is skipped and counted by the caller's logging (defensive — the
 /// representative is definitionally a member fact);</item>
@@ -82,6 +86,16 @@ public sealed record NewsJudgmentInputBundle(
 /// </summary>
 public static class NewsJudgmentInputBuilder
 {
+    /// <remarks>
+    /// <b>SPEC 219 §2 — the DistinctPublisherCount tie-break can move an accrued family-set hash, and that
+    /// is correct.</b> It refines an order that was already total on <c>FamilyId</c>, so nothing becomes
+    /// non-deterministic; but where two families tie on <c>MemberCount</c> AND the cap bites between them,
+    /// the SUPPLIED SET can differ from what the pre-219 order would have supplied. A different supplied set
+    /// is a different judge input, so it hashes differently and earns a fresh judgment — a RE-JUDGMENT, not
+    /// a silent reuse of a verdict made over other facts. The family-set hash already covers this by
+    /// construction: nothing new is folded into it, and a run whose supplied set is unchanged reuses its
+    /// cached verdict exactly as before.
+    /// </remarks>
     /// <param name="reportedMetrics">
     /// The company's reported-metrics ledger (spec 215 §2), or null/empty when none is registered or none
     /// is accrued — both project zero references and leave every family-set hash byte-identical.
@@ -100,6 +114,9 @@ public static class NewsJudgmentInputBuilder
         var ordered = cohortFamilies
             .Where(f => f.CompanyId == companyId)
             .OrderByDescending(f => f.MemberCount)
+            // Spec 219 §2: DistinctPublisherCount is the middle key, so the cap's choice among equally
+            // corroborated families is total and reproducible rather than settled by an id.
+            .ThenByDescending(f => f.DistinctPublisherCount)
             .ThenBy(f => f.FamilyId)
             .ToList();
 

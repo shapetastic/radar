@@ -210,6 +210,9 @@ public sealed class NewsJudgmentScoringIdentityModeTests : IDisposable
     [Theory]
     [InlineData("Radar:NewsResearch:Judgment:MaxCompaniesPerRun", "7")]
     [InlineData("Radar:NewsResearch:Judgment:MaxFamiliesPerJudgment", "11")]
+    // Spec 219 §6: the BREADTH family cap is a budget too — it changes how much of a company's fact set the
+    // judge reads, never which companies are read. Only the COVERAGE POLICY VERSION is hashed.
+    [InlineData("Radar:NewsResearch:Judgment:MaxFamiliesPerBreadthJudgment", "3")]
     [InlineData("Radar:NewsResearch:Judgment:MaxJudgmentAttempts", "2")]
     [InlineData("Radar:NewsResearch:Typing:MaxNewTypingsPerRun", "411")]
     [InlineData("Radar:NewsResearch:Typing:MaxCandidateTypingsPerRun", "37")]

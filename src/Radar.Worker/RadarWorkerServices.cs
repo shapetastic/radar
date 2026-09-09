@@ -1124,6 +1124,7 @@ internal static class RadarWorkerServices
                     maxCompaniesPerRun: judgment.MaxCompaniesPerRun,
                     maxFamiliesPerJudgment: judgment.MaxFamiliesPerJudgment,
                     maxJudgmentAttempts: judgment.MaxJudgmentAttempts,
+                    maxFamiliesPerBreadthJudgment: judgment.MaxFamiliesPerBreadthJudgment,
                     presentationJudge: judgment.PresentationCohort.Judge.Trim(),
                     presentationExtractor: judgment.PresentationCohort.Extractor.Trim(),
                     // From the SAME const the kind→collector table uses, so the judge's coverage
@@ -1146,8 +1147,9 @@ internal static class RadarWorkerServices
         {
             throw new InvalidOperationException(
                 $"Radar:NewsResearch:Judgment:MaxCompaniesPerRun must be positive (was "
-                    + $"{judgment.MaxCompaniesPerRun}); it is the per-run judged-candidate cost budget "
-                    + "(default 30).");
+                    + $"{judgment.MaxCompaniesPerRun}); it is the per-run judged-candidate SAFETY VALVE "
+                    + "over the depth cohort plus the spec-219 breadth cohort (default 120, sized above "
+                    + "the seeded universe).");
         }
 
         if (judgment.MaxFamiliesPerJudgment <= 0)
@@ -1155,7 +1157,16 @@ internal static class RadarWorkerServices
             throw new InvalidOperationException(
                 $"Radar:NewsResearch:Judgment:MaxFamiliesPerJudgment must be positive (was "
                     + $"{judgment.MaxFamiliesPerJudgment}); it caps the fact families supplied to one "
-                    + "judgment (default 50).");
+                    + "DEPTH judgment (default 50).");
+        }
+
+        if (judgment.MaxFamiliesPerBreadthJudgment <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radar:NewsResearch:Judgment:MaxFamiliesPerBreadthJudgment must be positive (was "
+                    + $"{judgment.MaxFamiliesPerBreadthJudgment}); it caps the fact families supplied to "
+                    + "one BREADTH judgment — a company the spec-179 §3 traversal did not select (default "
+                    + $"{NewsJudgmentOptions.DefaultMaxFamiliesPerBreadthJudgment}).");
         }
 
         if (judgment.MaxJudgmentAttempts < 1)
@@ -1586,7 +1597,8 @@ internal static class RadarWorkerServices
             typeof(NewsJudgmentWorkerOptions),
             "Radar:NewsResearch:Judgment",
             "must be an object carrying Enabled / MaxCompaniesPerRun / MaxFamiliesPerJudgment / "
-                + "MaxJudgmentAttempts / Judges / PresentationCohort keys.");
+                + "MaxFamiliesPerBreadthJudgment / MaxJudgmentAttempts / Judges / PresentationCohort "
+                + "keys.");
         if (judgmentSection.Exists())
         {
             ValidateReadersList(judgmentSection.GetSection("Judges"), "Radar:NewsResearch:Judgment:Judges");

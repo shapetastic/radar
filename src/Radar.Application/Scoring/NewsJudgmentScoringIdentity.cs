@@ -52,11 +52,24 @@ namespace Radar.Application.Scoring;
 /// this slice's declared and intended cost.
 /// </para>
 /// <para>
-/// <b>What is deliberately NOT here:</b> reader API keys, call budgets, retry caps and every other cost
-/// control (<c>MaxCompaniesPerRun</c>, <c>MaxFamiliesPerJudgment</c>, <c>MaxJudgmentAttempts</c>, the typing
-/// budgets). They change how much Radar spends discovering a judgment, never what a judgment MEANS, and
-/// folding them in would re-stamp a series for a throttle change — the spec-141 rule that a fingerprint
-/// records identity, not operational posture.
+/// <b>What is deliberately NOT here, and the ONE thing spec 219 adds:</b> reader API keys, call budgets,
+/// retry caps and every other cost control (<c>MaxCompaniesPerRun</c>, <c>MaxFamiliesPerJudgment</c>,
+/// <c>MaxFamiliesPerBreadthJudgment</c>, <c>MaxJudgmentAttempts</c>, the typing budgets) are excluded BY
+/// VALUE and stay excluded. They change how much Radar SPENDS discovering a judgment, never what a judgment
+/// MEANS, and folding them in would re-stamp a series for a throttle change — the spec-141 rule that a
+/// fingerprint records identity, not operational posture.
+/// </para>
+/// <para>
+/// The COVERAGE POLICY VERSION (spec 219 §6, <c>news-judgment-coverage-vN</c>) is on the other side of that
+/// line and IS folded in, as the LAST enabled-only field. The distinction is not "budget vs not-a-budget",
+/// it is what the thing decides: a budget decides how much is spent reading a company, while the coverage
+/// policy decides WHICH COMPANIES HAVE A DIRECTIONAL NEWS READ AT ALL. Under
+/// <c>news-judgment-coverage-v1</c> (the implicit rank-gated policy the spec-179 §3 traversal supplied) ~19
+/// of 102 companies reached scoring with a direction and the other ~83 reached it as undirected volume;
+/// under v2 the universe does. Two runs on either side of that are not comparable scorings of the same
+/// thing, which is exactly what a <c>ScoringConfigVersion</c> exists to say. The per-run OUTCOME — how many
+/// companies were actually judged, which ones, at what depth — is NOT hashed and never could be: it is a
+/// measurement, not a configuration.
 /// </para>
 /// </summary>
 public sealed class NewsJudgmentScoringIdentity
@@ -88,7 +101,8 @@ public sealed class NewsJudgmentScoringIdentity
         int maxFindingContribution,
         int completeTypingBonus,
         int novelty,
-        decimal confidence)
+        decimal confidence,
+        string coveragePolicyVersion)
     {
         // Ordered EXACTLY as listed: cohort, materializer identity, direction mapping, then the strength and
         // magnitude constants. A fixed field order is what makes the encoding injective (AD-3); the mapping
@@ -105,6 +119,9 @@ public sealed class NewsJudgmentScoringIdentity
                 completeTypingBonus.ToString(CultureInfo.InvariantCulture),
                 novelty.ToString(CultureInfo.InvariantCulture),
                 confidence.ToString(CultureInfo.InvariantCulture),
+                // Spec 219 §6: APPENDED AFTER every pre-219 enabled field, so the reason a pin moved is
+                // unambiguous — the prefix is byte-stable and only the new trailing field differs.
+                DescriptorEscaping.EscapeNested(coveragePolicyVersion),
             ]);
     }
 
@@ -128,6 +145,11 @@ public sealed class NewsJudgmentScoringIdentity
     /// <param name="completeTypingBonus">The strength bonus for a COMPLETE stage-1 typing.</param>
     /// <param name="novelty">The declared novelty.</param>
     /// <param name="confidence">The declared confidence.</param>
+    /// <param name="coveragePolicyVersion">
+    /// The spec-219 §6 COVERAGE-POLICY version (<c>news-judgment-coverage-vN</c>): which companies get a
+    /// directional news read at all. ENABLED-ONLY and LAST, so a judgment-disabled composition is
+    /// byte-identical to its pre-219 self and its pins provably cannot move. Must be non-blank.
+    /// </param>
     public static NewsJudgmentScoringIdentity ForPresentationCohort(
         string presentationCohortKey,
         string materializerVersion,
@@ -136,11 +158,13 @@ public sealed class NewsJudgmentScoringIdentity
         int maxFindingContribution,
         int completeTypingBonus,
         int novelty,
-        decimal confidence)
+        decimal confidence,
+        string coveragePolicyVersion)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(presentationCohortKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(materializerVersion);
         ArgumentNullException.ThrowIfNull(directionMapping);
+        ArgumentException.ThrowIfNullOrWhiteSpace(coveragePolicyVersion);
 
         return new NewsJudgmentScoringIdentity(
             presentationCohortKey,
@@ -150,7 +174,8 @@ public sealed class NewsJudgmentScoringIdentity
             maxFindingContribution,
             completeTypingBonus,
             novelty,
-            confidence);
+            confidence,
+            coveragePolicyVersion);
     }
 
     /// <summary>

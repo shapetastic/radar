@@ -262,7 +262,18 @@ public sealed class NewsJudgmentWorkerOptionsTests
         Assert.Equal(3, options.MaxJudgmentAttempts);
         // TRAILING and NULLABLE on the record, so a pre-187 judgment hydrates as "not recorded" — but every
         // NEW attempt states the bound it ran under.
-        Assert.Equal(3, options.ToLimitsRecord().MaxJudgmentAttempts);
+        var limits = options.ToLimitsRecord(
+            options.MaxFamiliesFor(Application.NewsRisk.Judgment.NewsJudgmentReadDepth.Full));
+        Assert.Equal(3, limits.MaxJudgmentAttempts);
+
+        // Spec 219 §2: the bound that ACTUALLY applied travels on its own field, so a breadth attempt can
+        // never persist the depth cohort's 50 as the bound it ran under.
+        Assert.Equal(options.MaxFamiliesPerJudgment, limits.AppliedMaxFamilies);
+        Assert.Equal(
+            options.MaxFamiliesPerBreadthJudgment,
+            options.ToLimitsRecord(
+                options.MaxFamiliesFor(Application.NewsRisk.Judgment.NewsJudgmentReadDepth.Breadth))
+                .AppliedMaxFamilies);
     }
 
     [Fact]
