@@ -25,6 +25,9 @@ public sealed class AnalyzedFilingCacheReadOnlyGuardrailTests
         Path.Combine("src", "Radar.Infrastructure", "Filings", "DirectionalFilingSignalSource.cs"),
         Path.Combine("src", "Radar.Infrastructure", "Filings", "FileAnalyzedFilingCache.cs"),
         Path.Combine("src", "Radar.Application", "Filings", "IAnalyzedFilingCache.cs"),
+        // Spec 218's read-only corpus ENUMERATION seam rides the same posture as the cache it is
+        // implemented on: reference/operational data, never a scoring/fingerprint input.
+        Path.Combine("src", "Radar.Application", "Filings", "IAnalyzedFilingReadCorpus.cs"),
     ];
 
     [Fact]

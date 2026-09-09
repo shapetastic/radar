@@ -10,6 +10,7 @@ using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Efficacy.DenominatorAudit;
+using Radar.Application.Efficacy.FilingReads;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
 using Radar.Application.Filings;
@@ -3284,7 +3285,14 @@ public static class InfrastructureServiceCollectionExtensions
             RootDirectory = rootDirectory,
             ModelSegment = CacheModelSegment(modelIdentity),
         });
-        services.AddSingleton<IAnalyzedFilingCache, FileAnalyzedFilingCache>();
+        // ONE instance behind BOTH seams: the per-accession cache the pipeline replays through, and the
+        // read-only corpus enumeration the spec-218 measurement reads. Registering the concrete type once and
+        // projecting it keeps a single options/segment resolution — two registrations would be two path
+        // builders in disguise.
+        services.AddSingleton<FileAnalyzedFilingCache>();
+        services.AddSingleton<IAnalyzedFilingCache>(sp => sp.GetRequiredService<FileAnalyzedFilingCache>());
+        services.AddSingleton<IAnalyzedFilingReadCorpus>(
+            sp => sp.GetRequiredService<FileAnalyzedFilingCache>());
         return services;
     }
 
@@ -3848,6 +3856,36 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<AttentionArrivalScreenEvaluator>();
         services.AddSingleton<AttentionArrivalRenderer>();
         services.AddSingleton<IAttentionArrivalScreenGenerator, AttentionArrivalScreenGenerator>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the read-only <b>directional filing-read measurement</b> (spec 218): the reporter, the
+    /// renderer, and the file-backed artifact store rooted at <paramref name="efficacyDirectory"/>, which
+    /// writes <c>directional-filing-reads.{json,csv,md}</c> beside the other efficacy artifacts.
+    /// <para>
+    /// READ-ONLY and downstream of scoring. It reads the accrued analyzed-filing read corpus (through the
+    /// separate <c>IAnalyzedFilingReadCorpus</c> enumeration seam, registered by
+    /// <see cref="AddFileAnalyzedFilingCache"/> when the AI earnings read is on — OPTIONAL here, so an
+    /// AI-off graph reports <c>SeamNotRegistered</c> rather than failing to resolve), plus evidence,
+    /// companies, typed news, the news observation archive and the price reference store. It creates, amends
+    /// or deletes no score, signal, evidence or review; no scoring input, formula version, rule-set version
+    /// or fingerprint is touched; price is DESCRIPTIVE only (AD-14) and no gate or threshold is declared.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarDirectionalFilingReadReport(
+        this IServiceCollection services, string efficacyDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(efficacyDirectory);
+
+        services.AddSingleton(new FileDirectionalFilingReadArtifactStoreOptions
+        {
+            RootDirectory = efficacyDirectory,
+        });
+        services.AddSingleton<IDirectionalFilingReadArtifactStore, FileDirectionalFilingReadArtifactStore>();
+        services.AddSingleton<DirectionalFilingReadReporter>();
+        services.AddSingleton<DirectionalFilingReadRenderer>();
+        services.AddSingleton<IDirectionalFilingReadReportGenerator, DirectionalFilingReadReportGenerator>();
         return services;
     }
 

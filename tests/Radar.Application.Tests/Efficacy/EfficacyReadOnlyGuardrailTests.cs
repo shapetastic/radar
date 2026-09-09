@@ -58,6 +58,24 @@ public sealed class EfficacyReadOnlyGuardrailTests
         "IEvidenceRepository",
     ];
 
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 218: the SECOND sanctioned exception, narrowed the same way rather than waived.
+    //
+    // The directional filing-read measurement has to READ evidence: its whole question is "what did the AI
+    // earnings read produce, and did it agree with the evidence and news Radar already held", which is not
+    // expressible over score snapshots. So Efficacy/FilingReads may name the evidence READ seam and the
+    // evidence record it reads fields off. It may still NOT name any collection/extraction/scoring COMPUTE
+    // type, and the mutation test below covers it exactly as it covers the attention screen — the stronger
+    // check the type ban was standing in for.
+    // ---------------------------------------------------------------------------------------------------
+    private const string FilingReadsSubfolder = "FilingReads";
+
+    private static readonly string[] FilingReadsReadSeamExemptions =
+    [
+        "EvidenceItem",
+        "IEvidenceRepository",
+    ];
+
     // Every repository/store MUTATION the efficacy layer must never call. The attention screen's ONLY
     // sanctioned write is IAttentionArrivalArtifactStore.WriteAsync, which is why the artifact store's own
     // method name is deliberately absent from this list and the store type is not scanned here.
@@ -84,10 +102,16 @@ public sealed class EfficacyReadOnlyGuardrailTests
         {
             var text = File.ReadAllText(file);
             var isAttentionScreen = IsAttentionScreenSource(file);
+            var isFilingReads = IsFilingReadsSource(file);
 
             foreach (var forbidden in ForbiddenTypeReferences)
             {
                 if (isAttentionScreen && AttentionReadSeamExemptions.Contains(forbidden, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                if (isFilingReads && FilingReadsReadSeamExemptions.Contains(forbidden, StringComparer.Ordinal))
                 {
                     continue;
                 }
@@ -107,12 +131,12 @@ public sealed class EfficacyReadOnlyGuardrailTests
     /// whether it happened to introduce a new type name.
     /// </summary>
     [Fact]
-    public void AttentionScreenSources_CallNoRepositoryMutation()
+    public void ExemptedReadSideSources_CallNoRepositoryMutation()
     {
         var efficacyDir = LocateEfficacySourceDirectory();
         var files = Directory
             .GetFiles(efficacyDir, "*.cs", SearchOption.AllDirectories)
-            .Where(IsAttentionScreenSource)
+            .Where(f => IsAttentionScreenSource(f) || IsFilingReadsSource(f))
             .ToList();
 
         // The exemption must not be able to pass vacuously: if the folder is ever emptied or renamed, this
@@ -126,9 +150,10 @@ public sealed class EfficacyReadOnlyGuardrailTests
             {
                 Assert.False(
                     text.Contains(mutation, StringComparison.Ordinal),
-                    $"{Path.GetFileName(file)} calls '{mutation}' — the AD-16 attention screen is READ-ONLY "
-                        + "over signals, evidence, scores and reviews; its only sanctioned write is the "
-                        + "attention-arrival artifact store.");
+                    $"{Path.GetFileName(file)} calls '{mutation}' — the exempted read-side modules (the "
+                        + "AD-16 attention screen, the spec-218 filing-read measurement) are READ-ONLY over "
+                        + "signals, evidence, scores and reviews; their only sanctioned write is their own "
+                        + "artifact store.");
             }
         }
     }
@@ -137,6 +162,11 @@ public sealed class EfficacyReadOnlyGuardrailTests
         Path.GetDirectoryName(file) is { } directory
         && string.Equals(
             Path.GetFileName(directory), AttentionSubfolder, StringComparison.Ordinal);
+
+    private static bool IsFilingReadsSource(string file) =>
+        Path.GetDirectoryName(file) is { } directory
+        && string.Equals(
+            Path.GetFileName(directory), FilingReadsSubfolder, StringComparison.Ordinal);
 
     // ---------------------------------------------------------------------------------------------------
     // AD-14, asserted on the TYPE GRAPH rather than on source text (spec 140).
