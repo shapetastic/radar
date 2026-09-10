@@ -30,7 +30,7 @@ public static class NewsJudgmentScoringIdentityFactory
     /// </summary>
     private const string MappingArrow = ">";
 
-    /// <summary>The token a trajectory that maps to NO direction renders (<c>Mixed</c>, <c>Unknown</c>).</summary>
+    /// <summary>The token a trajectory that maps to NO direction renders (<c>Mixed</c>, <c>Unknown</c>, and since spec 221 <c>NoBusinessSignal</c>).</summary>
     private const string NoDirectionToken = "none";
 
     /// <summary>

@@ -232,10 +232,12 @@ public sealed class NewsJudgmentFamilyOrderingTests
     [Fact]
     public void TheOrderingVersion_JoinsTheCohortKey_AndThereforeOnlyTheEnabledNewsSegment()
     {
-        Assert.Equal("family-ordering-v2", NewsJudgmentFamilyOrdering.Version);
+        // Spec 221 §1 moved the token to v3 (non-business families last); the segment and its route into the
+        // enabled news= segment are unchanged.
+        Assert.Equal("family-ordering-v3", NewsJudgmentFamilyOrdering.Version);
 
         var key = NewsJudgmentContract.CohortKey("openai", "judge-model", "stage1");
-        Assert.EndsWith("|ordering=family-ordering-v2", key, StringComparison.Ordinal);
+        Assert.EndsWith("|ordering=family-ordering-v3", key, StringComparison.Ordinal);
 
         // It reaches ScoringConfigVersion ONLY through the enabled news= segment (the presentation cohort
         // key); the disabled segment carries no cohort key, which is what makes the AI-OFF pins immovable.
@@ -289,7 +291,7 @@ public sealed class NewsJudgmentFamilyOrderingTests
         Assert.Equal(NewsJudgmentStatus.Judged, breadthRecord.Status);
         Assert.Equal(1, breadthRecord.FindingsAccepted);
         Assert.Null(breadthRecord.ChallengeStrength);
-        Assert.Equal("news-judgment-v9", breadthRecord.SchemaVersion);
+        Assert.Equal("news-judgment-v10", breadthRecord.SchemaVersion);
         Assert.Equal(new NewsJudgmentBasisCounts(1, 1, 2, 3), breadthRecord.FamiliesAvailableByBasis);
 
         var depthRecord = Assert.Single(result.Judgments, j => j.CompanyId == depth.Id);

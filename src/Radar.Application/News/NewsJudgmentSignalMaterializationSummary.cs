@@ -102,6 +102,14 @@ public enum NewsJudgmentSignalSkipReason
     /// judgment store's existing unreadable axis. A per-record gate reason.
     /// </summary>
     TrajectoryBasisNotAllowlisted,
+
+    /// <summary>
+    /// SPEC 221 §2b — a Judged record whose trajectory is <c>NoBusinessSignal</c>: the judge found no business
+    /// trajectory in what it read. Like <see cref="NonDirectionalTrajectory"/> it mints nothing, but it is
+    /// counted on its OWN axis rather than folded into the Mixed/Unknown bucket, because the whole point of
+    /// the token is that "nothing to read" and "could not tell" stay separable. A per-record gate reason.
+    /// </summary>
+    NoBusinessSignalTrajectory,
 }
 
 /// <summary>
@@ -125,9 +133,10 @@ public enum NewsJudgmentSignalSkipReason
 /// path, because the eligibility gates are evaluated before any of those can occur.
 /// </para>
 /// <para>
-/// The SEVEN PER-RECORD gate reasons (<see cref="NewsJudgmentSignalSkipReason.NotPresentationCohort"/>,
+/// The EIGHT PER-RECORD gate reasons (<see cref="NewsJudgmentSignalSkipReason.NotPresentationCohort"/>,
 /// <see cref="NewsJudgmentSignalSkipReason.NotJudged"/>,
-/// <see cref="NewsJudgmentSignalSkipReason.NonDirectionalTrajectory"/>,
+/// <see cref="NewsJudgmentSignalSkipReason.NonDirectionalTrajectory"/>, since spec 221
+/// <see cref="NewsJudgmentSignalSkipReason.NoBusinessSignalTrajectory"/>,
 /// <see cref="NewsJudgmentSignalSkipReason.NoTrajectoryFactIds"/> and, since spec 214 §2, the three basis
 /// gates <see cref="NewsJudgmentSignalSkipReason.LevelOnlyTrajectory"/>,
 /// <see cref="NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded"/> and

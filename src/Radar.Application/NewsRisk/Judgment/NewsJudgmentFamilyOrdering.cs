@@ -1,11 +1,14 @@
 using System.Globalization;
 
+using Radar.Application.NewsTyping;
+
 namespace Radar.Application.NewsRisk.Judgment;
 
 /// <summary>
-/// SPEC 220 §1 — the ONE definition of the order in which a company's canonical fact families fill the
-/// judge's family budget (<c>family-ordering-v2</c>). Both cohorts read it through
-/// <see cref="NewsJudgmentInputBuilder"/>; there is no second ordering anywhere.
+/// SPEC 220 §1, extended by SPEC 221 §1 — the ONE definition of the order in which a company's canonical fact
+/// families fill the judge's family budget (<c>family-ordering-v3</c> since spec 221; spec 220 shipped
+/// <c>family-ordering-v2</c>). Both cohorts read it through <see cref="NewsJudgmentInputBuilder"/>; there is
+/// no second ordering anywhere.
 /// <para>
 /// <b>Why it exists.</b> Under the implicit <c>family-ordering-v1</c> (every judgment before spec 220) the
 /// primary key was <c>MemberCount</c> — SYNDICATION VOLUME. What gets syndicated is boilerplate ("Q2 results
@@ -35,19 +38,55 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// <para>
 /// <b>The basis is the EXISTING <see cref="StatementComparisonClassifier"/> read</b> — no phrase table is
 /// reimplemented here and no model call is added. Changing the rank table, the key order, or the classifier's
-/// role in it is <c>family-ordering-v3</c>: <see cref="Version"/> joins
-/// <see cref="NewsJudgmentContract.CohortKey"/>, because the order decides WHICH facts a bounded judge sees.
+/// role in it moves <see cref="Version"/>, which joins <see cref="NewsJudgmentContract.CohortKey"/>, because
+/// the order decides WHICH facts a bounded judge sees. (Spec 220's text here named that next move
+/// <c>family-ordering-v3</c>; spec 221 is that move — see below.)
+/// </para>
+/// <para>
+/// <b>SPEC 221 §1 — <c>family-ordering-v3</c>: a stock-price move is not a business trajectory.</b> The
+/// classifier answers a LINGUISTIC question (does the statement carry a comparison marker or an event term)
+/// and "the stock hit an all-time high" does. Under v2 such a family ranked with the revenue comparisons, so
+/// on 2026-09-09 the judge was handed share-price moves, analyst labels and listicles as its "directional"
+/// facts — and rejected them, correctly, in 28 of 47 <c>Unknown</c> rationales (SENEA: "the only supplied
+/// fact with a StatedComparison is the 3.9% price increase"). Radar already knew those facts were unusable
+/// in three places — prompt rule (5), the validator's <c>trajectory-non-business-context-only</c> gate, and
+/// the judge itself — and the selector was the only layer that never asked. v3 asks, through the EXISTING
+/// <see cref="NewsJudgmentContextOnlyEventTypes.IsConfinedTo"/> (REUSED, never re-declared): a family
+/// confined to the context-only event types is NON-BUSINESS and ranks <see cref="NonBusinessRank"/>, after
+/// every business class, WHATEVER its basis. The order is therefore business
+/// <c>StatedComparison</c>/<c>Event</c> → business <c>LevelOnly</c> → business <c>NotQuantified</c> →
+/// non-business, and within every class the v2 order (<c>MemberCount</c> → <c>DistinctPublisherCount</c> →
+/// <c>FamilyId</c>) is byte-identical. Demoted, never dropped: a company whose whole supply is market
+/// reaction still fills its budget, and the judge still sees it.
+/// <list type="bullet">
+/// <item>A family with an EMPTY event-type list is NOT demoted — <see cref="NewsJudgmentContextOnlyEventTypes"/>'s
+/// own carve-out ("we cannot tell" must not read as "we can reject"). It is counted instead
+/// (<see cref="NewsJudgmentInputBundle.FamiliesWithNoEventTypesAvailable"/>).</item>
+/// <item>A mixed family (<c>MarketReaction</c> + <c>EarningsOrGuidance</c>) is BUSINESS: one non-context
+/// type is enough, and that is usually where the real content is.</item>
+/// <item>The <c>ComparisonBasis</c> LINE rendered to the judge is untouched — spec 221 changes which
+/// families are picked, never what the judge is told about them.</item>
+/// </list>
 /// </para>
 /// </summary>
 public static class NewsJudgmentFamilyOrdering
 {
-    /// <summary>The ordering's version token — joins <see cref="NewsJudgmentContract.CohortKey"/> after <c>references=</c>.</summary>
-    public const string Version = "family-ordering-v2";
+    /// <summary>
+    /// The ordering's version token — joins <see cref="NewsJudgmentContract.CohortKey"/> after <c>references=</c>.
+    /// <c>family-ordering-v2</c> (spec 220, basis first) is HISTORY: spec 221 moved it to v3 (non-business last).
+    /// </summary>
+    public const string Version = "family-ordering-v3";
 
     /// <summary>
-    /// The basis rank (lower fills the budget first). A value outside the four defined members THROWS rather
-    /// than falling into a default rank: a silently-ranked undefined basis would be an unrecorded decision
-    /// about what the judge sees.
+    /// SPEC 221 §1 — the rank of a NON-BUSINESS family (confined to
+    /// <see cref="NewsJudgmentContextOnlyEventTypes"/>): after every business basis class, whatever its own basis.
+    /// </summary>
+    public const int NonBusinessRank = 3;
+
+    /// <summary>
+    /// The basis rank (lower fills the budget first) — the v2 table, unchanged, and still the rank of every
+    /// BUSINESS family under v3. A value outside the four defined members THROWS rather than falling into a
+    /// default rank: a silently-ranked undefined basis would be an unrecorded decision about what the judge sees.
     /// </summary>
     public static int BasisRank(NewsFactComparisonBasis basis) => basis switch
     {
@@ -56,8 +95,70 @@ public static class NewsJudgmentFamilyOrdering
         NewsFactComparisonBasis.LevelOnly => 1,
         NewsFactComparisonBasis.NotQuantified => 2,
         _ => throw new ArgumentOutOfRangeException(
-            nameof(basis), basis, "Undefined NewsFactComparisonBasis; family-ordering-v2 ranks only the four defined members."),
+            nameof(basis), basis, "Undefined NewsFactComparisonBasis; the family ordering ranks only the four defined members."),
     };
+
+    /// <summary>
+    /// SPEC 221 §1 — whether a family is NON-BUSINESS: the ONE rule, delegated verbatim to
+    /// <see cref="NewsJudgmentContextOnlyEventTypes.IsConfinedTo"/> (at least one declared type, every declared
+    /// type context-only). An empty list is NOT non-business.
+    /// </summary>
+    public static bool IsNonBusiness(IReadOnlyList<NewsEventType> eventTypes) =>
+        NewsJudgmentContextOnlyEventTypes.IsConfinedTo(eventTypes);
+
+    /// <summary>
+    /// SPEC 221 §1 — the <c>family-ordering-v3</c> class rank (lower fills the budget first):
+    /// <see cref="NonBusinessRank"/> for a non-business family, otherwise <see cref="BasisRank"/>. The basis is
+    /// validated FIRST, so an undefined basis throws even on a non-business family — demotion never launders
+    /// an unrecorded value.
+    /// </summary>
+    public static int ClassRank(NewsFactComparisonBasis basis, IReadOnlyList<NewsEventType> eventTypes)
+    {
+        ArgumentNullException.ThrowIfNull(eventTypes);
+        var basisRank = BasisRank(basis);
+        return IsNonBusiness(eventTypes) ? NonBusinessRank : basisRank;
+    }
+
+    /// <summary>Whether a basis can carry a direction (<c>StatedComparison</c> or <c>Event</c>).</summary>
+    public static bool IsDirectionalBasis(NewsFactComparisonBasis basis) =>
+        basis is NewsFactComparisonBasis.StatedComparison or NewsFactComparisonBasis.Event;
+}
+
+/// <summary>
+/// SPEC 221 §2a — what Radar HANDED the judge, derived from supply only: the supplied families counted by
+/// comparison basis, split business / non-business (<see cref="NewsJudgmentFamilyOrdering.IsNonBusiness"/>),
+/// plus how many supplied families declared no event type at all. It audits RADAR's own behaviour — did we
+/// hand the judge anything to work with — and cannot be gamed by the model. It is NOT the source of any
+/// verdict: <c>NoBusinessSignal</c> is the judge's own answer (spec 221 §2b), and the disagreement between
+/// the two is the diagnostic (<see cref="NewsJudgmentRecord.ClassifierSaidDirectionalJudgeSaidNoBusinessSignal"/>).
+/// <para>
+/// <see cref="WithNoEventTypes"/> is a SUBSET of <see cref="Business"/> (an untyped family is treated as
+/// business, never rejected), broken out so a stage-1 labelling gap is visible rather than silently absorbed.
+/// Deliberately NO computed properties — the <see cref="NewsJudgmentBasisCounts"/> precedent: the file store
+/// serializes public properties, and a derived value on disk could only ever disagree with its inputs.
+/// </para>
+/// </summary>
+public sealed record NewsJudgmentSuppliedBasisProfile(
+    NewsJudgmentBasisCounts Business,
+    NewsJudgmentBasisCounts NonBusiness,
+    int WithNoEventTypes)
+{
+    /// <summary>
+    /// Profiles a supplied family list. Pure; an undefined basis throws (via
+    /// <see cref="NewsJudgmentBasisCounts.Of"/>) rather than being dropped.
+    /// </summary>
+    public static NewsJudgmentSuppliedBasisProfile Of(IReadOnlyList<NewsJudgmentInputFamily> suppliedFamilies)
+    {
+        ArgumentNullException.ThrowIfNull(suppliedFamilies);
+        return new NewsJudgmentSuppliedBasisProfile(
+            Business: NewsJudgmentBasisCounts.Of(suppliedFamilies
+                .Where(f => !NewsJudgmentFamilyOrdering.IsNonBusiness(f.EventTypes))
+                .Select(f => f.ComparisonBasis)),
+            NonBusiness: NewsJudgmentBasisCounts.Of(suppliedFamilies
+                .Where(f => NewsJudgmentFamilyOrdering.IsNonBusiness(f.EventTypes))
+                .Select(f => f.ComparisonBasis)),
+            WithNoEventTypes: suppliedFamilies.Count(f => f.EventTypes.Count == 0));
+    }
 }
 
 /// <summary>

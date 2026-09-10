@@ -199,7 +199,10 @@ Baseline is the 2026-09-09 run; spec 220's post-merge run is the intermediate po
   judgments cites genuinely quantified business facts showing no change.
 - **No change to `StatementComparisonClassifier`, `comparison-basis-v1`, or the `ComparisonBasis` line
   supplied to the judge.** Selection only.
-- **No change to the stage-1 typing taxonomy** (`news-event-taxonomy-v1`) or to any prompt or schema.
+- **No change to the stage-1 typing taxonomy** (`news-event-taxonomy-v1`). ~~or to any prompt or schema~~ —
+  **SUPERSEDED by §2b** (this spec's own later revision, and its acceptance criteria): the judge's prompt and
+  response schema DO change, and only to add the `NoBusinessSignal` verdict (`news-judgment-prompt-v7`,
+  `news-judgment-schema-v5`). The stage-1 prompt/schema and the `ComparisonBasis` line are untouched.
 - **No new model call, no new AI stage.**
 - **No re-judgment or backfill** — heal forward (AD-8/AD-1); the 2026-09-09 and post-220 runs stay as the
   baselines they are.

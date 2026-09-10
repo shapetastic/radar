@@ -7,8 +7,9 @@ namespace Radar.Application.News;
 /// <summary>
 /// The deterministic mapping from a judged business trajectory to a signal direction and strength.
 /// Small, separately testable and visibly constant: <c>Improving → Positive</c>,
-/// <c>Deteriorating → Negative</c>, and <c>Mixed</c>/<c>Unknown</c> → no direction at all (genuine
-/// both-ways evidence is not a direction, and a judge that declined to call has not called).
+/// <c>Deteriorating → Negative</c>, and <c>Mixed</c>/<c>Unknown</c>/<c>NoBusinessSignal</c> → no direction at
+/// all (genuine both-ways evidence is not a direction, a judge that declined to call has not called, and —
+/// spec 221 — a judge that found no business trajectory in what it read has nothing to call).
 /// <para>
 /// <b>SPEC 194 — this is no longer the article-INHERITANCE rule.</b> Spec 191 applied it inside
 /// <c>KeywordSignalExtractor</c>'s news branch, so a newly collected article took the direction of whatever
@@ -54,6 +55,8 @@ internal static class NewsTrajectorySignalRules
         NewsJudgmentTrajectory.Deteriorating => SignalDirection.Negative,
         NewsJudgmentTrajectory.Mixed => null,
         NewsJudgmentTrajectory.Unknown => null,
+        // Spec 221 §2b: an explicit arm, never the default — a new trajectory is a new mapping.
+        NewsJudgmentTrajectory.NoBusinessSignal => null,
         _ => null,
     };
 

@@ -28,7 +28,8 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
 {
     /// <summary>
     /// Fixed, deterministic system instruction carrying the §2 judgment contract, FORKED to
-    /// <c>news-judgment-prompt-v5</c> by spec 215 §2 (to <c>v4</c> by spec 214 §2, to <c>v3</c> by spec 197 §2.1, to <c>v2</c> by spec 187 §1). The FIXED rubric is verbatim ("the company's recent
+    /// <c>news-judgment-prompt-v7</c> by spec 221 §2b (to <c>v6</c> by spec 216 §1, to <c>v5</c> by spec 215 §2,
+    /// to <c>v4</c> by spec 214 §2, to <c>v3</c> by spec 197 §2.1, to <c>v2</c> by spec 187 §1). The FIXED rubric is verbatim ("the company's recent
     /// business trajectory" — Radar's founding question); the attribution weighting rule is a PROMPT rule,
     /// not post-hoc (a plaintiff-firm solicitation is a weaker basis than a confirmed filing; "may face" is
     /// weaker than "was charged"); and the vocabularies are rendered from the same closed sets the
@@ -70,6 +71,24 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
     /// value is a comparison basis, not news.
     /// </para>
     /// <para>
+    /// <b>The v7 rules (2) and (11)</b> (spec 221 §2b) exist because on 2026-09-09 all 47 breadth
+    /// <c>Unknown</c> rationales said the same thing — no supplied fact established BUSINESS trajectory — and
+    /// none read as genuine ambiguity: one token was carrying two states. Rule (2) now separates them:
+    /// <c>NoBusinessSignal</c> when what was read carries no business trajectory at all (context, levels,
+    /// boilerplate — nothing to resolve), <c>Unknown</c> ONLY when a supplied business fact bears on a direction
+    /// the judge cannot resolve, with the unresolved part named in the Rationale. It carries an explicit guard:
+    /// an adverse business fact IS business signal, so <c>NoBusinessSignal</c> is never an exit from calling a
+    /// deterioration. Rule (11) no longer forces abstention to <c>Unknown</c> (v4–v6: "Answer Unknown ONLY when
+    /// no supplied fact is StatedComparison or Event" — withdrawn), its closing sentence restates rule (2)'s
+    /// split in the same words (business levels and unquantified statements alone are NoBusinessSignal, not
+    /// Unknown), and it says the <c>ComparisonBasis</c> label describes WORDING — the SENEA shape, where the
+    /// only "StatedComparison" was a 3.9% share-price rise. Rule (5)'s phrases are unchanged (the context-only
+    /// phrase test pins them). Rule (7) still names only improving and unknown reads as carrying a caveated
+    /// challenge: a challenge finding stands on a business fact that bears on direction, which under rule (2)
+    /// makes the read Unknown (or directional), not NoBusinessSignal. The validator does not reject a
+    /// NoBusinessSignal read with findings — it is recorded as returned — but the prompt does not invite it.
+    /// </para>
+    /// <para>
     /// This text is PINNED by test. Changing it is a prompt-policy change: bump
     /// <see cref="NewsJudgmentContract.PromptVersion"/> in the same change, which forks a new cohort so an
     /// old judgment can never be reused for, or pooled with, a new one.
@@ -86,8 +105,13 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             + "may later prove wrong. Cite, in TrajectoryFactIds, the supplied FactIds that actually "
             + "establish it. "
             + "(2) Use \"Mixed\" when the supplied business facts genuinely pull in opposing directions. "
-            + "Use \"Unknown\" ONLY when the supplied facts do not establish a direction at all; "
-            + "\"Unknown\" is an honest answer, not a last resort, and it must cite NO TrajectoryFactIds. "
+            + "Use \"NoBusinessSignal\" when the supplied facts, read as a whole, carry no business "
+            + "trajectory at all — only context (rule 5), levels (rule 11) or unquantified boilerplate, so "
+            + "there is nothing to resolve. Use \"Unknown\" ONLY when a supplied business fact DOES bear on a "
+            + "direction that you cannot resolve, and say in the Rationale what could not be "
+            + "resolved. \"NoBusinessSignal\" and \"Unknown\" are honest answers, not last resorts, and both "
+            + "must cite NO TrajectoryFactIds. An adverse business fact IS business signal: never answer "
+            + "\"NoBusinessSignal\" to avoid calling a deterioration. "
             + "(3) Absence of adverse evidence is NOT evidence of improvement, and absence of positive "
             + "evidence is NOT evidence of deterioration. Never infer a direction from what the supplied "
             + "facts fail to mention. "
@@ -124,10 +148,15 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             + "award, contract, launch, financing) can be cited in TrajectoryFactIds. Each family carries "
             + "a ComparisonBasis line: StatedComparison and Event facts may be cited as trajectory "
             + "support; a LevelOnly or NotQuantified fact may be cited in a finding's FactIds as context, "
-            + "never as trajectory support. Answer Unknown ONLY when no supplied fact is StatedComparison "
-            + "or Event — a numberless comparison (\"backlog declined\") or a numberless event (\"the FDA "
-            + "approved the product\") beside a quantified level still establishes direction; when that "
-            + "is the case, say in the Rationale which levels you set aside. "
+            + "never as trajectory support. The ComparisonBasis label describes the WORDING of a statement, "
+            + "not its subject: a StatedComparison or Event fact that is a share-price move, an analyst "
+            + "action or other rule-5 context does not establish business trajectory. A numberless "
+            + "comparison (\"backlog declined\") or a numberless event (\"the FDA approved the product\") "
+            + "beside a quantified level still establishes direction; when that is the case, say in the "
+            + "Rationale which levels you set aside. When no supplied BUSINESS fact is StatedComparison or "
+            + "Event, cite no trajectory fact and answer per rule 2: NoBusinessSignal when the supplied "
+            + "business facts are only levels or unquantified statements that bear on no direction; Unknown "
+            + "ONLY when a supplied business fact does bear on a direction you cannot resolve. "
             + "(12) Reference values are the company's own EARLIER statements of the same metric, and are "
             + "never the figure a supplied fact itself quotes. Each is labelled prior (a figure from an "
             + "earlier filing) or stated-prior (the comparison the newest release itself stated). When a "
@@ -135,9 +164,10 @@ internal sealed class ChatNewsJudgmentAnalyzer : INewsJudgmentAnalyzer
             + "comparison and cite BOTH the fact and the ReferenceId. Never cite a ReferenceId as a "
             + "trajectory fact on its own — a reference value is a comparison basis, not news. "
             + "Return: BusinessTrajectory (\"Improving\" | \"Deteriorating\" | \"Mixed\" | "
-            + "\"Unknown\" — a factual read over the families); TrajectoryFactIds (the supplied FactIds "
-            + "that establish that trajectory, each the COMPLETE 36-character value; at least one for "
-            + "Improving, Deteriorating or Mixed; EMPTY for Unknown; no duplicates); TrajectoryReferenceIds "
+            + "\"Unknown\" | \"NoBusinessSignal\" — a factual read over the families); TrajectoryFactIds (the "
+            + "supplied FactIds that establish that trajectory, each the COMPLETE 36-character value; at least "
+            + "one for Improving, Deteriorating or Mixed; EMPTY for Unknown or NoBusinessSignal; no "
+            + "duplicates); TrajectoryReferenceIds "
             + "(the supplied ReferenceIds you read that trajectory's direction against, each the COMPLETE "
             + "36-character value copied character for character; EMPTY when you used none); "
             + "ChallengeStrength (0-100, or null when you record no "

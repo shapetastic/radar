@@ -185,6 +185,28 @@ public sealed class NewsJudgmentSignalMaterializerTests
         Assert.Empty(scenario.FileStore.Writes);
     }
 
+    /// <summary>
+    /// SPEC 221 §2b — NoBusinessSignal mints nothing, exactly like Unknown, but it is counted on its OWN axis:
+    /// folding it into NonDirectionalTrajectory would re-merge "nothing to read" with "could not tell".
+    /// </summary>
+    [Fact]
+    public async Task NoBusinessSignalTrajectory_MaterializesNothing_AndIsCountedOnItsOwnAxis()
+    {
+        var scenario = Scenario.Build(trajectory: NewsJudgmentTrajectory.NoBusinessSignal);
+
+        var summary = await scenario.Materializer().MaterializeAsync(
+            scenario.RunResult, scenario.Typing, CancellationToken.None);
+
+        Assert.Equal(0, summary.Eligible);
+        Assert.Equal(0, summary.Materialized);
+        Assert.Equal(1, summary.SkipCount(NewsJudgmentSignalSkipReason.NoBusinessSignalTrajectory));
+        Assert.Equal(0, summary.SkipCount(NewsJudgmentSignalSkipReason.NonDirectionalTrajectory));
+        Assert.Empty(scenario.FileStore.Writes);
+        // Rendered through the shared kebab vocabulary, on its own line item — never merged into the
+        // non-directional one.
+        Assert.Equal("no-business-signal-trajectory 1", summary.DescribeSkips());
+    }
+
     [Theory]
     [InlineData(NewsJudgmentStatus.ValidationFailed)]
     [InlineData(NewsJudgmentStatus.ProviderFailure)]
@@ -1095,11 +1117,12 @@ public sealed class NewsJudgmentSignalMaterializerTests
         + summary.SkipCount(NewsJudgmentSignalSkipReason.ExcerptNotInEvidence)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.UnexpectedFailure);
 
-    /// <summary>The seven gates evaluated once per RECORD, before eligibility is decided (three of them the spec-214 basis gates).</summary>
+    /// <summary>The eight gates evaluated once per RECORD, before eligibility is decided (three of them the spec-214 basis gates, one the spec-221 NoBusinessSignal gate).</summary>
     private static int PerRecordGates(NewsJudgmentSignalMaterializationSummary summary) =>
         summary.SkipCount(NewsJudgmentSignalSkipReason.NotPresentationCohort)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.NotJudged)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.NonDirectionalTrajectory)
+        + summary.SkipCount(NewsJudgmentSignalSkipReason.NoBusinessSignalTrajectory)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.NoTrajectoryFactIds)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.LevelOnlyTrajectory)
         + summary.SkipCount(NewsJudgmentSignalSkipReason.TrajectoryBasisNotRecorded)

@@ -27,7 +27,9 @@ public static class NewsJudgmentContract
     /// <b>Spec 214 §2 forked it to <c>v4</c>.</b> The instruction gained rule (11): a quantity stated as a
     /// LEVEL (backlog, cash, debt, headcount, capacity) establishes no direction by itself; only a
     /// <c>StatedComparison</c> or <c>Event</c> fact may be cited in <c>TrajectoryFactIds</c>, and the user
-    /// message now renders each family's deterministic <c>ComparisonBasis</c> line. The 2026-09-07 Argan
+    /// message now renders each family's deterministic <c>ComparisonBasis</c> line. (Its v4 clause "Answer
+    /// Unknown ONLY when no supplied fact is StatedComparison or Event" was withdrawn by spec 221's v7 — see
+    /// below.) The 2026-09-07 Argan
     /// judgment read "backlog hits $2.5B" as Improving while the backlog had fallen 14% over the year.
     /// </para>
     /// <para>
@@ -45,8 +47,21 @@ public static class NewsJudgmentContract
     /// SAME figure from the SAME release the fact came from, so a "reference-supported" comparison could
     /// be a value against itself.
     /// </para>
+    /// <para>
+    /// <b>Spec 221 §2b forked it to <c>v7</c>.</b> Rule (2) now defines TWO non-directional answers:
+    /// <c>NoBusinessSignal</c> when the supplied facts, read as a whole, carry no business trajectory at all
+    /// (only rule-5 context, rule-11 levels or unquantified boilerplate), and <c>Unknown</c> ONLY when a
+    /// supplied business fact bears on a direction that cannot be resolved — with an explicit guard that an
+    /// adverse business fact IS business signal and must never be answered NoBusinessSignal to avoid calling a
+    /// deterioration. Rule (11) no longer forces abstention to <c>Unknown</c> (its v4 clause "Answer Unknown
+    /// ONLY when no supplied fact is StatedComparison or Event" is withdrawn; its closing sentence now restates
+    /// rule 2's split), and says a
+    /// <c>StatedComparison</c>/<c>Event</c> label describes WORDING: a share-price move so labelled does not
+    /// establish business trajectory. On 2026-09-09, 47 of 47 breadth <c>Unknown</c> rationales said no
+    /// supplied fact established business trajectory — one token was carrying two different states.
+    /// </para>
     /// </summary>
-    public const string PromptVersion = "news-judgment-prompt-v6";
+    public const string PromptVersion = "news-judgment-prompt-v7";
 
     /// <summary>
     /// Spec 187 §1 forked this to <c>v2</c>: the structured response gained <c>TrajectoryFactIds</c>, so
@@ -66,8 +81,14 @@ public static class NewsJudgmentContract
     /// copy-verbatim rule and the same prefix grammar as FactIds, resolved against the PROJECTED reference
     /// set), so a v3 and a v4 response are not the same shape and must not share a cohort.
     /// </para>
+    /// <para>
+    /// <b>Spec 221 §2b forked it to <c>v5</c>.</b> The JSON property shape is unchanged, but the
+    /// <c>BusinessTrajectory</c> VOCABULARY widened: <c>NoBusinessSignal</c> is a value a v4 response could never
+    /// validly carry, and under v5 <c>Unknown</c> means something narrower ("a supplied business fact bears on
+    /// a direction that cannot be resolved"). A v4 and a v5 response are therefore judged by different rules and must not share a cohort.
+    /// </para>
     /// </summary>
-    public const string SchemaVersion = "news-judgment-schema-v4";
+    public const string SchemaVersion = "news-judgment-schema-v5";
 
     /// <summary>
     /// The ONE stage-2 cohort-identity composition (spec 185 §3): judge provider + exact model id + this
@@ -94,7 +115,13 @@ public static class NewsJudgmentContract
     /// five most-syndicated families; under v2 it sees the directional ones first. A v1 and a v2 verdict over
     /// the same company were made over different facts and must not share a cohort — and, through the
     /// spec-194 §2 <c>news=</c> segment, the AI-ON <c>ScoringConfigVersion</c> moves with it. The prompt and
-    /// the response schema do NOT move.
+    /// the response schema did NOT move in spec 220.
+    /// </para>
+    /// <para>
+    /// Spec 221 §1 moves that same segment to <c>ordering=family-ordering-v3</c> (a non-business family —
+    /// confined to the context-only event types — fills the budget after every business family), and §2b
+    /// forks the prompt (v7) and the response schema (v5) for the <c>NoBusinessSignal</c> verdict. No new
+    /// segment is added: every one of the three rides a token already composed here.
     /// </para>
     /// </summary>
     public static string CohortKey(string provider, string modelId, string stage1CohortKey) =>

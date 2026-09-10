@@ -66,7 +66,17 @@ public sealed record NewsJudgmentInputBundle(
     // FamiliesAvailable). Supplied-by-basis is Families[i].ComparisonBasis and withheld-by-basis is the
     // class-wise difference, so neither is a second field that could disagree. The builder always sets it;
     // `null` exists only because a trailing optional record member cannot default to a non-null instance.
-    NewsJudgmentBasisCounts? FamiliesAvailableByBasis = null);
+    NewsJudgmentBasisCounts? FamiliesAvailableByBasis = null,
+    // SPEC 221 §1/§3: the NON-BUSINESS accounting of the same resolvable families (non-business = confined to
+    // NewsJudgmentContextOnlyEventTypes): how many were available before the cut; how many families declared NO
+    // event type (NOT demoted — "we cannot tell" is not "we can reject" — and counted so a stage-1 labelling gap
+    // is visible); and how many non-business families the retained v2 order would have placed inside the
+    // budget but v3 did not. The builder always sets all three; `null` exists only for the trailing-optional
+    // shape and means NOT RECORDED, never a fabricated 0. Supplied non-business is not a field: it is derived
+    // from Families (NewsJudgmentSuppliedBasisProfile.Of), so it can never disagree with them.
+    int? FamiliesNonBusinessAvailable = null,
+    int? FamiliesWithNoEventTypesAvailable = null,
+    int? FamiliesNonBusinessDemotedBySelection = null);
 
 /// <summary>
 /// Deterministic judge-input assembly (spec 185 §1/§5). Pure — no clock, no I/O:
@@ -76,12 +86,15 @@ public sealed record NewsJudgmentInputBundle(
 /// resolved is skipped and is not counted as resolvable (defensive — the representative is definitionally
 /// a member fact);</item>
 /// <item>(spec 220 §1, <see cref="NewsJudgmentFamilyOrdering"/>) classifies each resolvable representative
-/// ONCE with the existing <see cref="StatementComparisonClassifier"/> and orders by comparison-basis rank
-/// (<c>StatedComparison</c> = <c>Event</c>, then <c>LevelOnly</c>, then <c>NotQuantified</c>), then
-/// <c>MemberCount</c> descending, then (spec 219 §2) <c>DistinctPublisherCount</c> descending, then
-/// <c>FamilyId</c> ascending (AD-3), so the cap below is stable. <b>Superseded:</b> until spec 220 the
-/// primary key was <c>MemberCount</c> (syndication volume), which filled a bounded read with boilerplate;
-/// within one basis class that order is unchanged;</item>
+/// ONCE with the existing <see cref="StatementComparisonClassifier"/> and orders by CLASS rank — since spec
+/// 221 §1 (<c>family-ordering-v3</c>) business <c>StatedComparison</c> = <c>Event</c>, then business
+/// <c>LevelOnly</c>, then business <c>NotQuantified</c>, then every NON-BUSINESS family (confined to
+/// <see cref="NewsJudgmentContextOnlyEventTypes"/>) whatever its basis — then <c>MemberCount</c> descending,
+/// then (spec 219 §2) <c>DistinctPublisherCount</c> descending, then <c>FamilyId</c> ascending (AD-3), so the
+/// cap below is stable. <b>Superseded twice:</b> until spec 220 the primary key was <c>MemberCount</c>
+/// (syndication volume), which filled a bounded read with boilerplate; under spec 220's v2 a share-price move
+/// ranked with the revenue comparisons because its WORDING carries a comparison. Within one class the order
+/// is unchanged;</item>
 /// <item>caps at <c>maxFamiliesPerJudgment</c> (spec 219 §2: the BREADTH cohort passes its own, much
 /// smaller, <c>MaxFamiliesPerBreadthJudgment</c> here — the ordering and the cap mechanism are the same
 /// code, only the bound differs); a cap that removed families makes the bundle
@@ -150,9 +163,10 @@ public static class NewsJudgmentInputBuilder
         }
 
         var ordered = resolved
-            // Spec 220 §1 (family-ordering-v2): the basis class that can carry a direction fills the budget
-            // first. Everything after this key is the pre-220 order, byte-identical within a class.
-            .OrderBy(r => NewsJudgmentFamilyOrdering.BasisRank(r.Basis))
+            // Spec 221 §1 (family-ordering-v3): the business class that can carry a direction fills the budget
+            // first and a NON-BUSINESS family (confined to the context-only event types) goes last, whatever
+            // its basis. Everything after this key is the pre-220 order, byte-identical within a class.
+            .OrderBy(r => NewsJudgmentFamilyOrdering.ClassRank(r.Basis, r.Fact.Fact.EventTypes))
             .ThenByDescending(r => r.Family.MemberCount)
             // Spec 219 §2: DistinctPublisherCount is the next key, so the cap's choice among equally
             // corroborated families is total and reproducible rather than settled by an id.
@@ -161,6 +175,22 @@ public static class NewsJudgmentInputBuilder
             .ToList();
 
         var resolvable = ordered.Count;
+
+        // Spec 221 §3: what the v3 demotion actually did to THIS read — the non-business families the retained
+        // family-ordering-v2 key (basis rank, then the same tie-breaks) would have placed inside the budget and
+        // v3 did not. Counted, never inferred later: it is the only measure of the demotion's bite.
+        var suppliedUnderV3 = ordered
+            .Take(maxFamiliesPerJudgment)
+            .Select(r => r.Family.FamilyId)
+            .ToHashSet();
+        var nonBusinessDemotedBySelection = resolved
+            .OrderBy(r => NewsJudgmentFamilyOrdering.BasisRank(r.Basis))
+            .ThenByDescending(r => r.Family.MemberCount)
+            .ThenByDescending(r => r.Family.DistinctPublisherCount)
+            .ThenBy(r => r.Family.FamilyId)
+            .Take(maxFamiliesPerJudgment)
+            .Count(r => NewsJudgmentFamilyOrdering.IsNonBusiness(r.Fact.Fact.EventTypes)
+                && !suppliedUnderV3.Contains(r.Family.FamilyId));
         var supplied = new List<NewsJudgmentInputFamily>(Math.Min(resolvable, maxFamiliesPerJudgment));
         foreach (var (family, fact, basis) in ordered)
         {
@@ -204,7 +234,11 @@ public static class NewsJudgmentInputBuilder
             ReferencesSkippedSupersededPolicy: projection.ReferencesSkippedSupersededPolicy,
             // Spec 220 §3: EVERY resolvable family, before the cut, per basis class — so what the budget
             // withheld can be stated per class rather than as one undifferentiated number.
-            FamiliesAvailableByBasis: NewsJudgmentBasisCounts.Of(ordered.Select(r => r.Basis)));
+            FamiliesAvailableByBasis: NewsJudgmentBasisCounts.Of(ordered.Select(r => r.Basis)),
+            // Spec 221 §3: the non-business and untyped accounting of the same resolvable families.
+            FamiliesNonBusinessAvailable: ordered.Count(r => NewsJudgmentFamilyOrdering.IsNonBusiness(r.Fact.Fact.EventTypes)),
+            FamiliesWithNoEventTypesAvailable: ordered.Count(r => r.Fact.Fact.EventTypes.Count == 0),
+            FamiliesNonBusinessDemotedBySelection: nonBusinessDemotedBySelection);
     }
 
     /// <summary>

@@ -359,8 +359,9 @@ public sealed class NewsJudgmentCitationRecoveryTests
 
         // Spec 214 §2 forked the prompt on to v4; spec 215 §2 to v5, and the response schema to v4 (the
         // reference citation lists) — the v3 FactId citation grammar itself is carried forward unchanged.
-        Assert.Contains("news-judgment-prompt-v6", current, StringComparison.Ordinal);
-        Assert.Contains("news-judgment-schema-v4", current, StringComparison.Ordinal);
+        // Spec 221 §2b forked them again (prompt v7, schema v5: the NoBusinessSignal verdict).
+        Assert.Contains("news-judgment-prompt-v7", current, StringComparison.Ordinal);
+        Assert.Contains("news-judgment-schema-v5", current, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-prompt-v2", current, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-schema-v2", current, StringComparison.Ordinal);
 

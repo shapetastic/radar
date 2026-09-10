@@ -219,7 +219,7 @@ public sealed record NewsJudgmentRecord(
     // Spec 187 §1: the supplied FactIds the judge said ESTABLISH BusinessTrajectory. TRAILING and NULLABLE
     // for old-file hydration — a v1 record has no such field, and null means "not recorded under v1",
     // NEVER an empty v2 evidence set and never proof of invalidity. A v2 Judged record always writes a
-    // non-null list (empty iff the trajectory is Unknown).
+    // non-null list (empty iff the trajectory is Unknown or, on a v10 record, NoBusinessSignal).
     IReadOnlyList<Guid>? TrajectoryFactIds = null,
     // Spec 187 §7: how long the hosted judgment call took, measured with the injected TimeProvider's
     // MONOTONIC timestamp APIs. TRAILING and NULLABLE, and observational PROVENANCE ONLY — it enters no
@@ -302,13 +302,32 @@ public sealed record NewsJudgmentRecord(
     int? FamiliesAvailable = null,
     int? FamiliesWithheldByBudget = null,
     // SPEC 220 §3 — the RESOLVABLE families per comparison-basis class this pass, BEFORE the budget cut (the
-    // class-wise breakdown of FamiliesAvailable, under family-ordering-v2). TRAILING and NULLABLE: `null`
+    // class-wise breakdown of FamiliesAvailable; introduced under family-ordering-v2, and independent of the
+    // order — spec 221's v3 changes which families are SUPPLIED, not which are available). TRAILING and NULLABLE: `null`
     // means NOT RECORDED (a pre-220 record) — never a fabricated all-zero. The supplied-by-basis breakdown is
     // not a second field: it is the per-family ComparisonBasis on Families. Like the spec-219 coverage
     // fields it describes THIS run's assembly, so a cache reuse takes it from the current bundle.
     // Observational provenance: it enters no id, cohort key, family-set hash, marker decision, score or
     // fingerprint (the ordering VERSION is hashed, via the cohort key — never these per-record values).
-    NewsJudgmentBasisCounts? FamiliesAvailableByBasis = null)
+    NewsJudgmentBasisCounts? FamiliesAvailableByBasis = null,
+    // SPEC 221 §2a/§3 — what Radar HANDED the judge, and what the business-first selection did. All four are
+    // TRAILING and NULLABLE, and `null` means NOT RECORDED (a pre-221 record) — never a fabricated zero.
+    // A pre-221 record CANNOT be profiled after the fact: its NewsJudgmentFamilyRef carries no event types,
+    // so "was this supplied family non-business" is unanswerable from the record, and it is not inferred.
+    //   SuppliedBasisProfile                 = the SUPPLIED families by comparison basis, split business /
+    //                                          non-business, plus how many declared no event type. Derived
+    //                                          from supply only; it is NOT the source of any verdict.
+    //   FamiliesNonBusinessAvailable         = resolvable non-business families this pass, before the cut.
+    //   FamiliesNonBusinessDemotedBySelection= non-business families the retained v2 order would have supplied
+    //                                          and family-ordering-v3 did not.
+    //   FamiliesWithNoEventTypesAvailable    = resolvable families with no event type (NOT demoted; counted).
+    // Like the spec-219/220 fields they describe THIS run's assembly, so a cache reuse takes them from the
+    // current bundle. Observational provenance: none enters an id, cohort key, family-set hash, marker
+    // decision, score or fingerprint (the ordering VERSION is hashed via the cohort key — never these values).
+    NewsJudgmentSuppliedBasisProfile? SuppliedBasisProfile = null,
+    int? FamiliesNonBusinessAvailable = null,
+    int? FamiliesNonBusinessDemotedBySelection = null,
+    int? FamiliesWithNoEventTypesAvailable = null)
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
@@ -392,8 +411,19 @@ public sealed record NewsJudgmentRecord(
     /// validation), so a reader must be able to tell the two apart. Every pre-v9 record stays readable, is
     /// never rewritten, and hydrates the new field as <c>null</c> = NOT RECORDED (AD-8).
     /// </para>
+    /// <para>
+    /// <b>Spec 221 moves it to <c>v10</c></b>, on the same "changes what a record MEANS" test, for two reasons.
+    /// (a) §2b: the <see cref="BusinessTrajectory"/> vocabulary WIDENED — a v10 record may carry
+    /// <see cref="NewsJudgmentTrajectory.NoBusinessSignal"/>, which no v9 record could hold, and on a v10 record
+    /// <see cref="NewsJudgmentTrajectory.Unknown"/> is the NARROWER "a supplied business fact bears on a direction
+    /// the judge could not resolve" where a v9 Unknown also absorbed "nothing to read". A v9 and a v10 Unknown are therefore not
+    /// the same fact and must not be pooled. (b) §1/§2a: a v10 record's families were chosen business-first
+    /// (<c>family-ordering-v3</c>) and it carries <see cref="SuppliedBasisProfile"/> and the non-business
+    /// selection counts. Every pre-v10 record stays readable, is never rewritten, and hydrates the four new
+    /// fields as <c>null</c> = NOT RECORDED (AD-8) — never profiled after the fact.
+    /// </para>
     /// </summary>
-    public const string CurrentSchemaVersion = "news-judgment-v9";
+    public const string CurrentSchemaVersion = "news-judgment-v10";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named
@@ -429,6 +459,33 @@ public sealed record NewsJudgmentRecord(
     public static bool IsChallengeStrengthNotStated(
         NewsJudgmentStatus status, int findingsAccepted, int? challengeStrength) =>
         status == NewsJudgmentStatus.Judged && findingsAccepted > 0 && challengeStrength is null;
+
+    /// <summary>
+    /// SPEC 221 §2a — the ONE definition of "Radar handed the judge nothing directional": no supplied family
+    /// was BUSINESS and <c>StatedComparison</c>/<c>Event</c>. A supply-side audit of Radar's own behaviour,
+    /// derived from the profile only — it is not, and is never used as, the judge's verdict. A STATIC method,
+    /// never a property (the <see cref="IsChallengeStrengthNotStated"/> precedent), so nothing derived is ever
+    /// written to disk beside the values it is derived from.
+    /// </summary>
+    public static bool NoDirectionalBasisSupplied(NewsJudgmentSuppliedBasisProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        return profile.Business.StatedComparison + profile.Business.Event == 0;
+    }
+
+    /// <summary>
+    /// SPEC 221 §2c — the ONE definition of the disagreement that is the primary diagnostic: a
+    /// <see cref="NewsJudgmentStatus.Judged"/> <see cref="NewsJudgmentTrajectory.NoBusinessSignal"/> verdict
+    /// over a supply in which at least one BUSINESS family was <c>StatedComparison</c>/<c>Event</c> by the
+    /// deterministic classifier. Every such case is a candidate classifier defect (the SENEA/UMH/MMSI/GHM
+    /// shapes), localized automatically; a RISING count is the instrument working, not a regression. Static,
+    /// for the same reason as <see cref="NoDirectionalBasisSupplied"/>.
+    /// </summary>
+    public static bool ClassifierSaidDirectionalJudgeSaidNoBusinessSignal(
+        NewsJudgmentStatus status, NewsJudgmentTrajectory? trajectory, NewsJudgmentSuppliedBasisProfile profile) =>
+        status == NewsJudgmentStatus.Judged
+            && trajectory == NewsJudgmentTrajectory.NoBusinessSignal
+            && !NoDirectionalBasisSupplied(profile);
 
     /// <summary>
     /// The deterministic per-attempt identity: stage-2 cohort (judge + prompt/schema + stage-1 cohort +

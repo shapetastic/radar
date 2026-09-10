@@ -148,7 +148,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.True(hydrated.RationaleOverSoftLimit);
         Assert.Equal(1_228, hydrated.Rationale!.Length); // the full text, never truncated on the way out
         // Spec 197 §2.2 moved the tag to v4, 214 §2 to v5, 215 §2 to v6, 216 §5 to v7, 219 §2 to v8, 220 to v9.
-        Assert.Equal("news-judgment-v9", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v10", hydrated.SchemaVersion);
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -236,7 +236,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(4, hydrated.FactIdPrefixExpansionCount);
-        Assert.Equal("news-judgment-v9", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v10", hydrated.SchemaVersion);
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -290,7 +290,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Contains("\"comparisonBasis\": \"LevelOnly\"", text, StringComparison.Ordinal);
 
         var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
-        Assert.Equal("news-judgment-v9", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v10", hydrated.SchemaVersion);
         Assert.Equal(NewsTrajectoryBasis.LevelOnly, hydrated.TrajectoryBasis);
         Assert.Equal(NewsFactComparisonBasis.LevelOnly, Assert.Single(hydrated.Families).ComparisonBasis);
 
@@ -326,7 +326,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.True(await NewStore().WriteAsync(record, CancellationToken.None));
 
         var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
-        Assert.Equal("news-judgment-v9", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v10", hydrated.SchemaVersion);
         Assert.Equal(new NewsJudgmentBasisCounts(1, 2, 3, 4), hydrated.FamiliesAvailableByBasis);
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
@@ -345,6 +345,63 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Null(legacy.FamiliesAvailableByBasis);
         // …and the rest of the record still reads correctly.
         Assert.Equal(NewsJudgmentTrajectory.Mixed, legacy.BusinessTrajectory);
+    }
+
+    /// <summary>
+    /// Spec 221: the NoBusinessSignal token and the four supply-side fields persist and round-trip (the
+    /// profile as exactly its members — no derived value on disk), and a v9 file, which has none of them,
+    /// hydrates all four as <c>null</c> = NOT RECORDED — never a fabricated zero and never profiled after the
+    /// fact.
+    /// </summary>
+    [Fact]
+    public async Task SpecTwoTwentyOneFields_RoundTrip_AndAV9FileHydratesThemAsNotRecorded()
+    {
+        var profile = new NewsJudgmentSuppliedBasisProfile(
+            Business: new NewsJudgmentBasisCounts(1, 0, 1, 2),
+            NonBusiness: new NewsJudgmentBasisCounts(1, 0, 0, 0),
+            WithNoEventTypes: 1);
+        var record = Record() with
+        {
+            BusinessTrajectory = NewsJudgmentTrajectory.NoBusinessSignal,
+            SuppliedBasisProfile = profile,
+            FamiliesNonBusinessAvailable = 3,
+            FamiliesNonBusinessDemotedBySelection = 2,
+            FamiliesWithNoEventTypesAvailable = 1,
+        };
+        Assert.True(await NewStore().WriteAsync(record, CancellationToken.None));
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal("news-judgment-v10", hydrated.SchemaVersion);
+        Assert.Equal(NewsJudgmentTrajectory.NoBusinessSignal, hydrated.BusinessTrajectory);
+        Assert.Equal(profile, hydrated.SuppliedBasisProfile);
+        Assert.Equal(3, hydrated.FamiliesNonBusinessAvailable);
+        Assert.Equal(2, hydrated.FamiliesNonBusinessDemotedBySelection);
+        Assert.Equal(1, hydrated.FamiliesWithNoEventTypesAvailable);
+
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var text = await File.ReadAllTextAsync(file);
+        Assert.Contains("\"businessTrajectory\": \"NoBusinessSignal\"", text, StringComparison.Ordinal);
+        var document = JsonNode.Parse(text)!.AsObject();
+        Assert.Equal(
+            ["business", "nonBusiness", "withNoEventTypes"],
+            document["suppliedBasisProfile"]!.AsObject().Select(p => p.Key).ToList());
+
+        // A v9 file: none of the four fields.
+        Assert.True(document.Remove("suppliedBasisProfile"));
+        Assert.True(document.Remove("familiesNonBusinessAvailable"));
+        Assert.True(document.Remove("familiesNonBusinessDemotedBySelection"));
+        Assert.True(document.Remove("familiesWithNoEventTypesAvailable"));
+        document["schemaVersion"] = "news-judgment-v9";
+        document["businessTrajectory"] = "Unknown";
+        await File.WriteAllTextAsync(file, document.ToJsonString());
+
+        var legacy = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal("news-judgment-v9", legacy.SchemaVersion);
+        Assert.Null(legacy.SuppliedBasisProfile);
+        Assert.Null(legacy.FamiliesNonBusinessAvailable);
+        Assert.Null(legacy.FamiliesNonBusinessDemotedBySelection);
+        Assert.Null(legacy.FamiliesWithNoEventTypesAvailable);
+        Assert.Equal(NewsJudgmentTrajectory.Unknown, legacy.BusinessTrajectory);
     }
 
     /// <summary>
@@ -406,7 +463,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var reloaded = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(completeness, reloaded.TypingCompleteness);
-        Assert.Equal("news-judgment-v9", reloaded.SchemaVersion);
+        Assert.Equal("news-judgment-v10", reloaded.SchemaVersion);
     }
 
     /// <summary>

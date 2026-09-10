@@ -21,6 +21,19 @@ public enum NewsJudgmentTrajectory
     Improving,
     Deteriorating,
     Mixed,
+
+    /// <summary>
+    /// SPEC 221 §2b (<c>news-judgment-schema-v5</c>) — the judge's explicit finding that what it READ carries
+    /// no business trajectory at all: only context (share-price moves, analyst actions, index mechanics,
+    /// promotional coverage), stated levels, or unquantified boilerplate — nothing to resolve. Distinct from
+    /// <see cref="Unknown"/>, which since this schema means "a supplied business fact bears on a direction I
+    /// cannot resolve" — business levels and unquantified statements alone are NoBusinessSignal, not Unknown.
+    /// Both are honest non-directions: both cite NO trajectory facts, neither has a
+    /// trajectory basis, and neither mints a signal. The split exists so a residual <see cref="Unknown"/> is
+    /// a small, investigable worklist rather than an aggregate. Appended LAST so no existing member's meaning
+    /// moves; persistence and the wire are token-only (see <see cref="Unknown"/>).
+    /// </summary>
+    NoBusinessSignal,
 }
 
 /// <summary>
@@ -39,7 +52,8 @@ public sealed record NewsJudgmentModelResponse(
     // fact it read. Strings on the wire (the all-strings rule), so an unparseable or unsupplied id arrives
     // as data the validator NAMES instead of being coerced. Optional/trailing on the WIRE only, so a model
     // that omits the field produces a named validation failure rather than a deserialization exception; a
-    // valid v2 response always carries it, and it is EMPTY iff the trajectory is Unknown.
+    // valid v2 response always carries it, and it is EMPTY iff the trajectory is Unknown or (schema v5,
+    // spec 221) NoBusinessSignal.
     IReadOnlyList<string>? TrajectoryFactIds = null,
     // Spec 215 §2 (schema v4): the supplied ReferenceIds — company-reported reference values — the model
     // says it read the trajectory's direction AGAINST. Strings on the wire (the all-strings rule), resolved

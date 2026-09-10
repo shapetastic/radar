@@ -469,6 +469,13 @@ public sealed class ScoringConfigFingerprintTests
         // see the assertions), for the trailing `ordering=family-ordering-v2` segment on the judgment cohort
         // key, which rides the enabled `news=` segment. The three AI-OFF halves did NOT move — the disabled
         // segment carries no cohort key.
+        //
+        // SPEC 221 MOVED THE THREE AI-ON HALVES ONLY, to the values below (30d radar-scoring-fp-e1d1ea16679a →
+        // radar-scoring-fp-2f70cbbc010b; 60d radar-scoring-fp-4f1ceee0c60c and 120d
+        // radar-scoring-fp-1b516442dff5 likewise — see the assertions), through the enabled `news=` segment
+        // only: `ordering=family-ordering-v3`, news-judgment-prompt-v7 and news-judgment-schema-v5 in the
+        // cohort key, and a fifth trajectory→direction mapping token (`NoBusinessSignal>none`). The three
+        // AI-OFF halves did NOT move — the disabled segment carries neither a cohort key nor a mapping.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
@@ -476,7 +483,7 @@ public sealed class ScoringConfigFingerprintTests
             "radar-scoring-fp-db96e3862fae",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-e1d1ea16679a",
+            "radar-scoring-fp-2f70cbbc010b",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
@@ -485,7 +492,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-4f1ceee0c60c",
+            "radar-scoring-fp-9500928bf9d6",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
@@ -495,7 +502,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-1b516442dff5",
+            "radar-scoring-fp-a678b6c789b3",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -850,8 +857,24 @@ public sealed class ScoringConfigFingerprintTests
         // spec; a later change to that rule ALONE would need its own identity. THE THREE AI-OFF PINS ARE
         // UNCHANGED and REQUIRED to be: the disabled segment
         // carries no cohort key, so no ordering version can reach an AI-OFF fingerprint.
+        // → SPEC 221 MOVES IT (radar-scoring-fp-3001c04030e7 → the value below), AI-ON side ONLY, with FOUR
+        // causes folded into ONE recomputation, all through the `news=enabled:…` segment:
+        //   (a) §1 — the cohort key's `ordering=` token moves to family-ordering-v3: a family confined to the
+        //       context-only event types (share-price moves, analyst actions, index mechanics, promotional
+        //       coverage) now fills a bounded judge's budget after every business family, whatever its basis;
+        //   (b) §2b — news-judgment-prompt-v6 → v7 (rule 2 splits NoBusinessSignal from Unknown, with the
+        //       adverse-fact guard; rule 11 no longer forces abstention to Unknown);
+        //   (c) §2b — news-judgment-schema-v4 → v5 (the BusinessTrajectory vocabulary widened);
+        //   (d) the materializer-identity DIRECTION MAPPING gains a fifth token, `NoBusinessSignal>none`,
+        //       because NewsJudgmentScoringIdentityFactory enumerates the trajectory enum — a new trajectory is
+        //       a new mapping (it maps to no direction, so the materializer version news-judgment-signal-v3
+        //       does NOT move: nothing it mints changed).
+        // No formula, RuleSetVersion, media-collapse, supersede, neutralization, attention-tier, weight,
+        // news-query, acq=, ai= or coverage-policy change; the record tag moved to news-judgment-v10. THE
+        // THREE AI-OFF PINS ARE UNCHANGED and REQUIRED to be: the disabled segment carries no cohort key and no
+        // mapping, so none of the four causes can reach an AI-OFF fingerprint.
         Assert.Equal(
-            "radar-scoring-fp-3001c04030e7",
+            "radar-scoring-fp-9ee56ab1bbb3",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -1068,17 +1091,30 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-09c9db128480 is the spec-219 value and DID stamp a live run
         // (run-20260909T234658242Z-5c6644f6, the spec-220 §4 baseline).
         //
-        // ⚠ THE OPERATOR STEP IS OWED ONCE MORE — a FIFTH, SEPARATE step, distinct from the 214/215 step
-        // (performed 2026-09-08) and from the 216, 217 and 219 ones. Whatever the 60-day assertion below says
-        // is the value the first post-220 baseline must report. Delete or re-record every configured
-        // data/scoring-configs/strategies/{name}.json BEFORE that run (the path is git-ignored, so those
-        // records cannot ride in a PR and MUST NEVER be fabricated); if the step is missed,
-        // StrategyIdentityGuard halts the run before collection — that halt is CORRECT.
+        // ⚠ THE OPERATOR STEP WAS OWED ONCE MORE — a FIFTH, SEPARATE step, distinct from the 214/215 step
+        // (performed 2026-09-08) and from the 216, 217 and 219 ones. This file does not assert whether it has
+        // been taken, nor whether a live run stamped the spec-220 60-day value (radar-scoring-fp-59a1064a7ad6,
+        // quoted here as history).
+        //
+        // SPEC 221 MOVES THEM AGAIN, AI-ON side ONLY (the spec-219/220 pattern): 60d
+        // radar-scoring-fp-59a1064a7ad6 → the 60-day value below; 120d radar-scoring-fp-8c72c2fbdf0a → the
+        // 120-day value below, while the AI-OFF live values are UNCHANGED and asserted so by
+        // Compute_LiveWindowAiOffStamps_ArePinned. Four causes, all through `news=enabled:…`:
+        // family-ordering-v3, news-judgment-prompt-v7, news-judgment-schema-v5 and the NoBusinessSignal
+        // mapping token. See Compute_AiOnDefault_MatchesPinnedFingerprint.
+        //
+        // ⚠ THE OPERATOR STEP IS OWED AGAIN — a SIXTH step. If no baseline ran between the spec-220 and
+        // spec-221 merges, the two collapse into ONE step (both fork only this AI-ON side); otherwise they are
+        // two. Either way: whatever the 60-day assertion below says is the value the first post-221 baseline
+        // must report. Delete or re-record every configured data/scoring-configs/strategies/{name}.json BEFORE
+        // that run (the path is git-ignored, so those records cannot ride in a PR and MUST NEVER be
+        // fabricated); if the step is missed, StrategyIdentityGuard halts the run before collection — that
+        // halt is CORRECT.
         Assert.Equal(
-            "radar-scoring-fp-59a1064a7ad6",
+            "radar-scoring-fp-741269b4384b",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-8c72c2fbdf0a",
+            "radar-scoring-fp-e4aaf21c09a9",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -1131,6 +1167,12 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-5b36883c1b3a. See the AI-OFF unit pin for the measured basis (MarineMax
         // 2026-08-10) and the operator step it required (since satisfied: run-20260909T234658242Z-5c6644f6
         // stamped the spec-219 value).
+        //
+        // SPECS 219, 220 AND 221 MOVED NEITHER OF THESE, AND EACH NON-MOVE IS AN ASSERTED DELIVERABLE: the
+        // coverage policy (219), the `ordering=` token (220, then v3 in 221), prompt v7 / schema v5 and the
+        // `NoBusinessSignal>none` mapping token (221) all travel inside `news=enabled:…`, which the disabled
+        // descriptor never renders. If either value below moves in a slice that touches only the judgment
+        // read, the finding is SCOPE LEAKAGE.
         Assert.Equal("radar-scoring-fp-7b0758e7eede", DefaultFingerprint(window: TimeSpan.FromDays(60)));
         Assert.Equal("radar-scoring-fp-5b36883c1b3a", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }

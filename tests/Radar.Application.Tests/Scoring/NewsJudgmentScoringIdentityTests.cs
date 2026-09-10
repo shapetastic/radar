@@ -33,8 +33,9 @@ public sealed class NewsJudgmentScoringIdentityTests
     private const int CurrentNovelty = 4;
     private const decimal CurrentConfidence = 0.5m;
 
+    // Spec 221 §2b appended NoBusinessSignal — a new trajectory is a new mapping, so the stamp moved.
     private static readonly string[] CurrentMapping =
-        ["Unknown>none", "Improving>Positive", "Deteriorating>Negative", "Mixed>none"];
+        ["Unknown>none", "Improving>Positive", "Deteriorating>Negative", "Mixed>none", "NoBusinessSignal>none"];
 
     private const string CohortA =
         "openai:model-a|news-judgment-prompt-v2|news-judgment-schema-v2|stage1=openai:x|families=fact-family-v2";
@@ -225,6 +226,8 @@ public sealed class NewsJudgmentScoringIdentityTests
         Assert.Contains("Deteriorating>Negative", NewsJudgmentScoringIdentityFactory.DirectionMappingTokens);
         Assert.Contains("Mixed>none", NewsJudgmentScoringIdentityFactory.DirectionMappingTokens);
         Assert.Contains("Unknown>none", NewsJudgmentScoringIdentityFactory.DirectionMappingTokens);
+        // Spec 221 §2b: "the judge found no business trajectory" maps to no direction, like Unknown.
+        Assert.Contains("NoBusinessSignal>none", NewsJudgmentScoringIdentityFactory.DirectionMappingTokens);
     }
 
     [Fact]

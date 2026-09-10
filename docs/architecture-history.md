@@ -3024,7 +3024,11 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     renders one `ComparisonBasis: …` line per family (`LevelOnly — a stated level, not a trend`);
     `NewsJudgmentContract.PromptVersion` → `news-judgment-prompt-v4` (rule 11: a level establishes no
     direction; only a StatedComparison or Event fact may be cited in `TrajectoryFactIds`; a LevelOnly fact
-    is finding context only; Unknown ONLY when no supplied fact is StatedComparison or Event; name the
+    is finding context only; Unknown ONLY when no supplied fact is StatedComparison or Event (**spec 221's
+    prompt v7 withdrew this clause**: when no BUSINESS StatedComparison/Event fact is supplied the judge
+    answers `NoBusinessSignal` — business levels and unquantified statements alone included — or `Unknown`
+    only when a supplied business fact bears on a direction it cannot resolve, per rule 2; and a basis
+    label describes wording, not subject); name the
     set-aside levels in the rationale); `SchemaVersion` stays `news-judgment-schema-v3`; the cohort key
     gains `|comparison=comparison-basis-v1` after `families=` (an input the model sees). The family-set
     hash is deliberately NOT changed (the basis is a pure function of two already-hashed fields).
@@ -3647,7 +3651,8 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
   (`Radar:NewsResearch:Judgment:MaxFamiliesPerBreadthJudgment`, shipped default owned by
   `NewsJudgmentOptions.DefaultMaxFamiliesPerBreadthJudgment`; WHICH families fill that budget was the
   pre-existing `MemberCount`-first order until **spec 220 superseded it** with `family-ordering-v2`,
-  comparison basis first — see the spec-220 bullet), with the spec-179 depth cohort retained
+  comparison basis first, which **spec 221 superseded in turn** with `family-ordering-v3`, business first —
+  see the spec-220 and spec-221 bullets), with the spec-179 depth cohort retained
   unchanged at the full budget. **A step change in the efficacy series across this date is Radar GAINING A
   SENSE ORGAN, not Radar getting better** — before it, most companies' news was volume; after it, most
   companies' news has a judged direction. That is why the date is recorded: the two sides are not a
@@ -3655,14 +3660,15 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
   no-newsquery halves) through the enabled-only coverage-policy field on the `news=` segment and moved NO
   AI-OFF pin; the values are owned by `ScoringConfigFingerprintTests` and are not quoted here. The record
   tag moved to `news-judgment-v8` (spec 220 later moved `NewsJudgmentRecord.CurrentSchemaVersion` on to
-  v9); spec 219 moved neither the prompt, the response schema nor the stage-2 cohort key, so accrued
+  v9, and spec 221 to v10); spec 219 moved neither the prompt, the response schema nor the stage-2 cohort key, so accrued
   verdicts stayed cacheable ACROSS 219 — spec 220's `ordering=` segment then forked the cohort key, so no
   pre-220 verdict is reused after it. Nothing was
   backfilled: accrued history heals forward only (AD-8/AD-1), and every pre-219 judgment record hydrates its
   new coverage fields as `null` = NOT RECORDED rather than as a fabricated full-depth read.
 
 - **Spec 220 (2026-09-10) — the judge's family budget is filled by COMPARISON BASIS, not by syndication
-  volume (`family-ordering-v2`, `NewsJudgmentFamilyOrdering.Version`).** Spec 219 solved coverage and left
+  volume (`family-ordering-v2`; SUPERSEDED by spec 221's `family-ordering-v3`, which ranks non-business
+  families last — `NewsJudgmentFamilyOrdering.Version` holds the current token).** Spec 219 solved coverage and left
   the five-family breadth budget filled by the pre-existing `MemberCount`-first order. Member count is
   syndication volume, and what gets syndicated is boilerplate: on 2026-09-09
   (`run-20260909T234658242Z-5c6644f6`) 46 of 83 breadth judgments were correct `Unknown` abstentions over
@@ -3679,8 +3685,9 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     (the three unit/live values and their three no-newsquery halves) and NO AI-OFF pin — the disabled
     segment carries no cohort key. `ScoringConfigFingerprintTests` owns the values; the spec-219 values
     they replaced are quoted there as history, and the spec-219 60-day value is the one the 2026-09-09
-    baseline stamped. The prompt and the response schema did NOT move.
-  - **Record `news-judgment-v9`** (`NewsJudgmentRecord.CurrentSchemaVersion`): `FamiliesAvailableByBasis`
+    baseline stamped. The prompt and the response schema did NOT move in spec 220 (spec 221 then forked
+    both, and moved the `ordering=` token to v3).
+  - **Record `news-judgment-v9`** (the tag spec 220 set; spec 221 moved `NewsJudgmentRecord.CurrentSchemaVersion` on to v10): `FamiliesAvailableByBasis`
     (resolvable families per basis class before the budget cut; `null` = not recorded on a pre-220 record),
     and a Judged record may now carry accepted findings with a NULL `ChallengeStrength` — a shape no v8
     record could hold.
@@ -3708,7 +3715,63 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     from the first full run after BOTH the merge and that step: breadth/full `Unknown` and
     `ValidationFailed` rates, usable directional verdicts, families supplied by basis, the full-cohort
     stability check, the near-constant check, and measured cost/wall-clock. Nothing is re-judged or
-    backfilled (AD-8/AD-1); the 2026-09-09 judgments stay as the baseline.
+    backfilled (AD-8/AD-1); the 2026-09-09 judgments stay as the baseline. (Spec 221 forks the same AI-ON
+    side, so if no baseline runs between the 220 and 221 merges this step and spec 221's collapse into one.)
+
+- **Spec 221 (2026-09-10) — a stock-price move is not a business trajectory: selection demotes
+  non-business families (`family-ordering-v3`) and the judge gains a `NoBusinessSignal` verdict.** Reading
+  the 47 breadth `Unknown` rationales from `run-20260909T234658242Z-5c6644f6` against the persisted
+  per-family `comparisonBasis` split them into 19 where every supplied family was `NotQuantified`/`LevelOnly`
+  and 28 where a `StatedComparison`/`Event` family WAS supplied and the judge still declined — because that
+  "directional" fact was a share-price move, a financing event or an analyst label (SENEA: "the only
+  supplied fact with a StatedComparison is the 3.9% price increase"). `StatementComparisonClassifier`
+  answers a linguistic question correctly; prompt rule 5, the validator's
+  `trajectory-non-business-context-only` gate and the judge itself already rejected such facts, and the
+  selector was the only layer that never asked. It is an AD-14 matter as well as a quality one: a price
+  move reaching the judge as directional basis is a path by which price becomes a scoring input.
+  - **§1 Selection.** `NewsJudgmentFamilyOrdering.ClassRank` REUSES
+    `NewsJudgmentContextOnlyEventTypes.IsConfinedTo` (no second list of its four tokens exists — a source
+    scan asserts it): a family confined to the context-only types ranks after every business class,
+    whatever its basis; within every class the v2 order is byte-identical; an empty event-type list is not
+    demoted and is counted; demoted, never dropped. `StatementComparisonClassifier`,
+    `comparison-basis-v1`, the rendered `ComparisonBasis` line and the stage-1 taxonomy did not change.
+  - **§2b Verdict.** `NewsJudgmentTrajectory.NoBusinessSignal` (appended; `Unknown` stays the zero value):
+    the judge's finding that what it read carries no business trajectory (business levels and unquantified
+    statements alone included), where `Unknown` now means a supplied business fact bears on a direction the
+    judge cannot resolve. It takes `Unknown`'s validation path (cites no
+    trajectory fact, failing under its own reason `trajectory-evidence-with-no-business-signal`; no basis;
+    the non-blank-rationale and advice-language rules unchanged), maps to no direction and mints no signal;
+    the materializer counts it on its own skip axis, `NoBusinessSignalTrajectory` (`news-judgment-signal-v3`
+    did not move — nothing it mints changed). Prompt `news-judgment-prompt-v7` (rule 2 defines both
+    answers, with the guard that an adverse business fact IS business signal; rule 11 no longer forces
+    abstention to `Unknown`, its closing sentence restates rule 2's split in the same words, and it says a
+    basis label describes wording); response schema
+    `news-judgment-schema-v5` (the trajectory vocabulary widened). **The spec's own Non-goals said "no
+    change to any prompt or schema"; its later §2b revision required a new model token, which cannot ship
+    without both forks, so §2b governed.**
+  - **§2a Record `news-judgment-v10`** (`NewsJudgmentRecord.CurrentSchemaVersion`): `SuppliedBasisProfile`
+    (the supplied families by basis, business / non-business, plus the untyped count) and
+    `FamiliesNonBusinessAvailable` / `FamiliesNonBusinessDemotedBySelection` /
+    `FamiliesWithNoEventTypesAvailable`; `null` = not recorded. A pre-221 record CANNOT be profiled after the
+    fact — its family refs carry no event types — so it stays null, contrary to the spec's §2a remark that
+    the profile is computable over accrued judgments (the per-basis split is; the business split is not).
+    `NoDirectionalBasisSupplied` and `ClassifierSaidDirectionalJudgeSaidNoBusinessSignal` each have ONE
+    static definition on `NewsJudgmentRecord`. The profile is derived from supply only and is never the
+    verdict's source.
+  - **Identity.** `ordering=family-ordering-v3`, prompt v7 and schema v5 ride the stage-2 cohort key, and
+    the trajectory→direction mapping gains `NoBusinessSignal>none` (`NewsJudgmentScoringIdentityFactory`
+    enumerates the enum), all through the spec-194 §2 `news=` segment: the SIX AI-ON pins moved and NO
+    AI-OFF pin did. `ScoringConfigFingerprintTests` owns the values and quotes the spec-220 ones as history.
+  - **Counted.** Beside the unchanged spec-219 coverage and spec-220 basis lines, one aggregated
+    business-signal line per (judge × stage-1 cohort) pass — family counts over every assembled input,
+    verdict counts (`JudgmentsWithNoDirectionalBasisSupplied`, `JudgmentsNoBusinessSignal`, the
+    disagreement, `Deteriorating`, `Unknown`) over the judged verdicts the coverage line counts — and one
+    line NAMING the residual `Unknown` worklist as `TICKER (judgmentId)`, breadth / full, "none" when empty.
+  - **OWED.** A SIXTH operator step (it collapses into spec 220's if no baseline ran between the two
+    merges), and the spec-221 §4 three-column table (2026-09-09 / post-220 / post-221) from the first full
+    run after the merge and the step — including whether `Deteriorating` fell as `NoBusinessSignal` rose
+    (§2d), the near-constant check, and whether the 19 fell (if not, a COLLECTION finding). Breadth
+    `Unknown` counts before and after this date are NOT comparable. Nothing is re-judged or backfilled.
 
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 
