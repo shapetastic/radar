@@ -55,6 +55,20 @@ top five and partly spend the improvement it was written to deliver. 220 remains
 first — its §4 is a clean single-variable test — but its measured gain should be read as a floor, not a
 ceiling.
 
+**WHY THIS MATTERS, and it is not primarily about the classifier: `Unknown` must be small enough to act on.**
+The point of separating the two states is that a residual `Unknown` becomes an INVESTIGABLE WORKLIST — the
+handful of companies where the judge read real business facts and could not resolve them, which is exactly
+what a human should look at. At 55.4% `Unknown` is an aggregate and tells nobody where to look; the same
+"refuse to aggregate" principle that made `audit-score-vs-price-misses.ps1` useful applies here.
+
+**Measured, and the prize is larger than expected.** Classifying all 47 `Unknown` rationales from the
+2026-09-09 run by what they actually say: **34 explicitly state that no supplied fact establishes business
+trajectory; 13 more say the same in wording a regex missed** (NPK "None are business facts about ... own
+operations"; KLIC "None of these establish a direction"; NOVT "None of the StatedComparison or Event facts
+provide a directional comparison"); and **0 — none — read as genuine ambiguity.** So on last night's
+evidence the split would render roughly **47 `NoBusinessSignal` and ~0 `Unknown`**. That is the point: a
+near-empty `Unknown` queue is a high-value one, and every entry in it is worth a human.
+
 ## Assignment
 
 Worktree: any. Dependencies: **spec 220 must be merged first** (this extends `family-ordering-v2`).
@@ -66,19 +80,36 @@ Extend spec 220's ordering. **Do not touch `StatementComparisonClassifier` or `c
 classifier answers its own question correctly, it is spec 214's contract, and the `ComparisonBasis` LINE
 SUPPLIED TO THE JUDGE stays byte-identical. This spec changes only WHICH families are picked.
 
-- A family is **non-business** for ordering purposes when its representative fact's stage-1 `eventTypes`
-  are drawn ONLY from the closed non-business set: `MarketReaction`, `AnalystOrRatingAction`,
-  `PromotionalOrListicle`, `IndexOrTradingMechanics`. The set is a declared constant with a version token,
-  reviewed as a table, not an inline predicate.
-- A fact carrying a non-business type ALONGSIDE a business type (e.g. `MarketReaction` +
-  `EarningsOrGuidance`) is **business** — the exclusion requires the eventTypes to be non-business
-  EXCLUSIVELY. A partial-overlap fact is where the real content usually is.
-- A fact with EMPTY or absent `eventTypes` is **not** demoted and is **counted**
-  (`FamiliesWithNoEventTypes`). Absent is not evidence of noise; treating it as such would silently drop
-  facts stage-1 failed to label.
-- `ManagementOrGovernance` is deliberately **NOT** in the demotion set. It carries insider transactions,
-  which are a real Radar signal type (`InsiderBuying`, spec 93) — demoting it would suppress evidence the
-  pipeline already scores. Named here so a later reader does not "complete" the list.
+**REUSE `NewsJudgmentContextOnlyEventTypes` — do NOT declare a new set.** The set this spec needs already
+exists in `NewsJudgmentSchema.cs`, with the exact members, the exact rule and the exact carve-outs:
+
+- `Members` = `AnalystOrRatingAction`, `MarketReaction`, `IndexOrTradingMechanics`, `PromotionalOrListicle`.
+  `ManagementOrGovernance` is correctly ABSENT (it carries insider transactions, a real Radar signal type —
+  spec 93). Do not "complete" the list.
+- Its documented rule is already the one required: "context-only iff it declares at least one event type and
+  EVERY declared type is a member: one other type is enough to make it a business fact." A `MarketReaction`
+  + `EarningsOrGuidance` fact is therefore business, which is where the real content usually is.
+- Its empty-list carve-out is already correct and load-bearing: "An empty type list is deliberately NOT
+  treated as context-only — 'we cannot tell' must not read as 'we can reject'." Families with no
+  `eventTypes` are NOT demoted, and are counted (`FamiliesWithNoEventTypes`).
+- Copying these four tokens into a new constant would be a fact with no owner (CLAUDE.md: never duplicate a
+  value that code defines). Consume the existing `Contains`/`Members` surface.
+
+**Radar already knows all of this everywhere EXCEPT the selector — that is the whole defect.** Three layers
+already encode the rule:
+
+1. **The prompt** — rule (5) names these classes in plain English (`PromptPhrases` declares the bridge:
+   `MarketReaction` → "share-price moves", `AnalystOrRatingAction` → "analyst targets or ratings"), and a
+   test asserts each phrase is genuinely present in the judge's instruction.
+2. **The validator** — `trajectory-non-business-context-only` FAILS a judgment whose cited trajectory is
+   context-only. It fired 3 times in the 2026-09-09 run. The code comment even names the origin case: "The
+   YORW shape: a share-price move or an analyst action is not a business trajectory."
+3. **The judge itself** — NPK's rationale cites the rule by number: "Per rule 5, share-price moves, analyst
+   actions, and institutional stake changes are [not business facts]."
+
+So today Radar spends its family budget supplying facts it has ALREADY classified as unusable, instructs
+the model not to use them, and then fails the judgment if it does. The selector is the only layer that never
+asks. This spec does not introduce a policy — it makes selection obey the policy already shipped.
 - Ordering becomes: business-and-directional (`StatedComparison`/`Event`) → business `LevelOnly` →
   business `NotQuantified` → **non-business, whatever its basis** → within every class, spec 220's
   existing `MemberCount` then `distinctPublisherCount` then `familyId`. Demoted, never dropped: a company
@@ -128,6 +159,9 @@ Per run, one aggregated line each:
 - `JudgmentsWithNoDirectionalBasisSupplied` (derived, 2a), split breadth/full.
 - `JudgmentsNoBusinessSignal` (model verdict, 2b), split breadth/full.
 - `ClassifierSaidDirectionalJudgeSaidNoBusinessSignal` (2c) — the disagreement count.
+- **The residual `Unknown` companies are NAMED, not just counted** — ticker and judgmentId, so the worklist
+  is actionable the moment the run ends. A count alone reproduces the aggregate this spec exists to break.
+  `scripts/audit-miss-diagnosis.ps1 -Ticker <T> -ScoreDate <D>` already reconstructs what was read.
 - Spec 219's coverage line and spec 220's basis counters are unchanged and still required.
 
 ## 4. Live verification
@@ -172,8 +206,8 @@ Baseline is the 2026-09-09 run; spec 220's post-merge run is the intermediate po
 
 ## Acceptance criteria
 
-- [ ] The non-business eventType set is a declared, versioned constant; `ManagementOrGovernance` is NOT in
-      it; a fact mixing a non-business and a business type is treated as business.
+- [ ] `NewsJudgmentContextOnlyEventTypes` is REUSED, not copied or re-declared; no second list of those
+      four tokens exists in the codebase after this change.
 - [ ] Families with absent/empty `eventTypes` are NOT demoted and ARE counted.
 - [ ] Non-business families are DEMOTED, never dropped: a company supplied only market-reaction families
       still receives its full budget and is still judged.
@@ -185,7 +219,8 @@ Baseline is the 2026-09-09 run; spec 220's post-merge run is the intermediate po
       `NoBusinessSignal` rose (2d).
 - [ ] A regression test pins the SENEA shape: a family whose only directional basis is a stock-price move
       ranks below a business `NotQuantified` family.
-- [ ] Every counter in §3 is emitted as one aggregated line per run.
+- [ ] Every counter in §3 is emitted as one aggregated line per run, and the residual `Unknown` companies
+      are NAMED (ticker + judgmentId), not only counted.
 - [ ] `dotnet build Radar.sln -c Release` and `dotnet test Radar.sln -c Release --no-build` both green.
 - [ ] The §4 three-column table is completed in the PR body from a real full run.
 - [ ] If the ordering change moves the scoring fingerprint, the PR states the operator step as owed and
