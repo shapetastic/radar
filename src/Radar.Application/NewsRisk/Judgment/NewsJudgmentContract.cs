@@ -87,12 +87,22 @@ public static class NewsJudgmentContract
     /// that token to <c>reference-projection-v2</c> — the ELIGIBILITY rules are part of the same identity,
     /// for exactly the same reason.
     /// </para>
+    /// <para>
+    /// Spec 220 §1 appends <c>ordering={NewsJudgmentFamilyOrdering.Version}</c> after <c>references=</c>, on
+    /// the same reasoning again: the family ORDER decides which facts fill a BOUNDED judge's budget, so it is
+    /// an input the model sees. Under the implicit <c>family-ordering-v1</c> a five-family breadth read saw the
+    /// five most-syndicated families; under v2 it sees the directional ones first. A v1 and a v2 verdict over
+    /// the same company were made over different facts and must not share a cohort — and, through the
+    /// spec-194 §2 <c>news=</c> segment, the AI-ON <c>ScoringConfigVersion</c> moves with it. The prompt and
+    /// the response schema do NOT move.
+    /// </para>
     /// </summary>
     public static string CohortKey(string provider, string modelId, string stage1CohortKey) =>
         $"{provider}:{modelId}|{PromptVersion}|{SchemaVersion}|stage1={stage1CohortKey}"
             + $"|families={FactFamilyBuilder.IdentityString}"
             + $"|comparison={StatementComparisonClassifier.Version}"
-            + $"|references={ReferenceValueProjector.Version}";
+            + $"|references={ReferenceValueProjector.Version}"
+            + $"|ordering={NewsJudgmentFamilyOrdering.Version}";
 }
 
 /// <summary>

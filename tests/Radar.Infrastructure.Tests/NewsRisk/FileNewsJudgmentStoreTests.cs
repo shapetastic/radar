@@ -147,7 +147,8 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Equal(1_228, hydrated.RationaleLength);
         Assert.True(hydrated.RationaleOverSoftLimit);
         Assert.Equal(1_228, hydrated.Rationale!.Length); // the full text, never truncated on the way out
-        Assert.Equal("news-judgment-v8", hydrated.SchemaVersion); // spec 197 §2.2 moved the tag to v4, spec 214 §2 to v5, spec 215 §2 to v6
+        // Spec 197 §2.2 moved the tag to v4, 214 §2 to v5, 215 §2 to v6, 216 §5 to v7, 219 §2 to v8, 220 to v9.
+        Assert.Equal("news-judgment-v9", hydrated.SchemaVersion);
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -235,7 +236,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(4, hydrated.FactIdPrefixExpansionCount);
-        Assert.Equal("news-judgment-v8", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v9", hydrated.SchemaVersion);
 
         var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
         var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
@@ -289,7 +290,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         Assert.Contains("\"comparisonBasis\": \"LevelOnly\"", text, StringComparison.Ordinal);
 
         var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
-        Assert.Equal("news-judgment-v8", hydrated.SchemaVersion);
+        Assert.Equal("news-judgment-v9", hydrated.SchemaVersion);
         Assert.Equal(NewsTrajectoryBasis.LevelOnly, hydrated.TrajectoryBasis);
         Assert.Equal(NewsFactComparisonBasis.LevelOnly, Assert.Single(hydrated.Families).ComparisonBasis);
 
@@ -311,6 +312,39 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
         // …and the rest of the record still reads correctly.
         Assert.Equal(NewsJudgmentTrajectory.Improving, legacy.BusinessTrajectory);
         Assert.Equal(TrajectoryFactId, Assert.Single(legacy.TrajectoryFactIds!));
+    }
+
+    /// <summary>
+    /// Spec 220 §3: the per-basis family breakdown persists as exactly its four ints (no derived value on
+    /// disk) and round-trips, and a v8 file — which has no such field — hydrates it as <c>null</c> = NOT
+    /// RECORDED, never a fabricated all-zero.
+    /// </summary>
+    [Fact]
+    public async Task FamiliesAvailableByBasis_RoundTrips_AndAV8FileHydratesItAsNotRecorded()
+    {
+        var record = Record() with { FamiliesAvailableByBasis = new NewsJudgmentBasisCounts(1, 2, 3, 4) };
+        Assert.True(await NewStore().WriteAsync(record, CancellationToken.None));
+
+        var hydrated = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal("news-judgment-v9", hydrated.SchemaVersion);
+        Assert.Equal(new NewsJudgmentBasisCounts(1, 2, 3, 4), hydrated.FamiliesAvailableByBasis);
+
+        var file = Assert.Single(Directory.EnumerateFiles(_root, "*.json", SearchOption.AllDirectories));
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
+        Assert.Equal(
+            ["statedComparison", "event", "levelOnly", "notQuantified"],
+            document["familiesAvailableByBasis"]!.AsObject().Select(p => p.Key).ToList());
+
+        // A v8 file: no familiesAvailableByBasis at all.
+        Assert.True(document.Remove("familiesAvailableByBasis"));
+        document["schemaVersion"] = "news-judgment-v8";
+        await File.WriteAllTextAsync(file, document.ToJsonString());
+
+        var legacy = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
+        Assert.Equal("news-judgment-v8", legacy.SchemaVersion);
+        Assert.Null(legacy.FamiliesAvailableByBasis);
+        // …and the rest of the record still reads correctly.
+        Assert.Equal(NewsJudgmentTrajectory.Mixed, legacy.BusinessTrajectory);
     }
 
     /// <summary>
@@ -372,7 +406,7 @@ public sealed class FileNewsJudgmentStoreTests : IDisposable
 
         var reloaded = Assert.Single(await NewStore().GetAllAsync(CancellationToken.None));
         Assert.Equal(completeness, reloaded.TypingCompleteness);
-        Assert.Equal("news-judgment-v8", reloaded.SchemaVersion);
+        Assert.Equal("news-judgment-v9", reloaded.SchemaVersion);
     }
 
     /// <summary>

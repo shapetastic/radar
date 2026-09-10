@@ -105,6 +105,32 @@ public sealed class NewsRiskLiveJudgmentRenderTests
     }
 
     [Fact]
+    public void AJudgmentWithFindingsButNoStatedStrength_SaysSo_NeverSilenceAndNeverAZero()
+    {
+        // SPEC 220 §2: such a judgment is now ACCEPTED with the strength NOT RECORDED. Rendering nothing would
+        // make it indistinguishable from a zero-finding read; rendering a number would fabricate one.
+        var finding = new NewsJudgmentValidatedFinding(
+            NewsRiskCategory.RegulatoryOrLegalSetback,
+            NewsRiskSeverity.High,
+            0.85,
+            [Guid.NewGuid()],
+            null);
+
+        var notStated = Render(Company(
+            [Judgment(findings: [finding]) with { ChallengeStrength = null }], marker: null));
+        Assert.Contains("· challenge strength not stated", notStated, StringComparison.Ordinal);
+        Assert.DoesNotContain("challenge strength 0", notStated, StringComparison.Ordinal);
+
+        var stated = Render(Company([Judgment(findings: [finding])], marker: null));
+        Assert.Contains("· challenge strength 70", stated, StringComparison.Ordinal);
+        Assert.DoesNotContain("not stated", stated, StringComparison.Ordinal);
+
+        // Zero surviving findings: null is the normalization, not an omission — nothing is claimed.
+        var noFindings = Render(Company([Judgment()], marker: null));
+        Assert.DoesNotContain("challenge strength", noFindings, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void JudgmentSection_RendersAllFiveCompletenessDimensions_AndTheErrorSplit()
     {
         var finding = new NewsJudgmentValidatedFinding(

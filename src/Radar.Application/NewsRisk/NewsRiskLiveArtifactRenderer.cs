@@ -359,6 +359,14 @@ public static class NewsRiskLiveArtifactRenderer
                 sb.Append(string.Create(
                     CultureInfo.InvariantCulture, $" · challenge strength {strength}"));
             }
+            else if (Judgment.NewsJudgmentRecord.IsChallengeStrengthNotStated(
+                judgment.Status, judgment.FindingsAccepted, judgment.ChallengeStrength))
+            {
+                // Spec 220 §2: a judgment with surviving findings whose model stated no strength is ACCEPTED
+                // with the strength NOT RECORDED. Silence here would be indistinguishable from "no findings",
+                // and a defaulted number would render as a measured one — so the absence is stated.
+                sb.Append(" · challenge strength not stated");
+            }
 
             sb.AppendLine();
             sb.AppendLine(string.Create(

@@ -61,22 +61,33 @@ public sealed record NewsJudgmentInputBundle(
     // with no ledger at all.
     int ReferencesExcludedNewest = 0,
     int ReferencesExcludedLaterThanFact = 0,
-    int ReferencesSkippedSupersededPolicy = 0);
+    int ReferencesSkippedSupersededPolicy = 0,
+    // SPEC 220 §3: the RESOLVABLE families per comparison-basis class BEFORE the budget cut (their sum is
+    // FamiliesAvailable). Supplied-by-basis is Families[i].ComparisonBasis and withheld-by-basis is the
+    // class-wise difference, so neither is a second field that could disagree. The builder always sets it;
+    // `null` exists only because a trailing optional record member cannot default to a non-null instance.
+    NewsJudgmentBasisCounts? FamiliesAvailableByBasis = null);
 
 /// <summary>
 /// Deterministic judge-input assembly (spec 185 §1/§5). Pure — no clock, no I/O:
 /// <list type="bullet">
-/// <item>selects one company's families from one stage-1 cohort, ordered deterministically by
+/// <item>selects one company's families from one stage-1 cohort and joins each family's
+/// <c>RepresentativeFactId</c> to its validated fact FIRST; a family whose representative cannot be
+/// resolved is skipped and is not counted as resolvable (defensive — the representative is definitionally
+/// a member fact);</item>
+/// <item>(spec 220 §1, <see cref="NewsJudgmentFamilyOrdering"/>) classifies each resolvable representative
+/// ONCE with the existing <see cref="StatementComparisonClassifier"/> and orders by comparison-basis rank
+/// (<c>StatedComparison</c> = <c>Event</c>, then <c>LevelOnly</c>, then <c>NotQuantified</c>), then
 /// <c>MemberCount</c> descending, then (spec 219 §2) <c>DistinctPublisherCount</c> descending, then
-/// <c>FamilyId</c> ascending (AD-3), so the cap below is stable;</item>
+/// <c>FamilyId</c> ascending (AD-3), so the cap below is stable. <b>Superseded:</b> until spec 220 the
+/// primary key was <c>MemberCount</c> (syndication volume), which filled a bounded read with boilerplate;
+/// within one basis class that order is unchanged;</item>
 /// <item>caps at <c>maxFamiliesPerJudgment</c> (spec 219 §2: the BREADTH cohort passes its own, much
 /// smaller, <c>MaxFamiliesPerBreadthJudgment</c> here — the ordering and the cap mechanism are the same
 /// code, only the bound differs); a cap that removed families makes the bundle
 /// <see cref="NewsJudgmentFamilyBundle.Capped"/> — recorded, never silent, and the remainder is counted on
-/// <see cref="NewsJudgmentInputBundle.FamiliesAvailable"/>;</item>
-/// <item>joins each family's <c>RepresentativeFactId</c> to its validated fact; a family whose
-/// representative cannot be resolved is skipped and counted by the caller's logging (defensive — the
-/// representative is definitionally a member fact);</item>
+/// <see cref="NewsJudgmentInputBundle.FamiliesAvailable"/> and, per basis class, on
+/// <see cref="NewsJudgmentInputBundle.FamiliesAvailableByBasis"/>;</item>
 /// <item>hashes the ORDERED supplied family set (<see cref="ComputeFamilySetHash(IReadOnlyList{NewsJudgmentInputFamily}, IReadOnlyList{NewsJudgmentReferenceValue})"/>) — the per-judgment
 /// cache identity input, modelled on the spec-179 input-bundle hash;</item>
 /// <item>(spec 215 §2) projects the company's reported-metrics ledger through
@@ -87,8 +98,16 @@ public sealed record NewsJudgmentInputBundle(
 public static class NewsJudgmentInputBuilder
 {
     /// <remarks>
-    /// <b>SPEC 219 §2 — the DistinctPublisherCount tie-break can move an accrued family-set hash, and that
-    /// is correct.</b> It refines an order that was already total on <c>FamilyId</c>, so nothing becomes
+    /// <b>SPEC 220 §1 — the basis-first order moves the SUPPLIED SET for any bounded read whose
+    /// most-syndicated families were not its most directional, and that is correct</b>: a different supplied
+    /// set is a different judge input and earns a fresh judgment, never a reused verdict made over other
+    /// facts. The <c>ordering=</c> segment of the cohort key forks every judgment regardless, so no pre-220
+    /// verdict is reused under v2. The classification is computed ONCE per family here and reused for the
+    /// supplied <see cref="NewsJudgmentInputFamily.ComparisonBasis"/> line, so what orders a family and what
+    /// the judge is told about it can never disagree.
+    /// <para>
+    /// <b>SPEC 219 §2 — the DistinctPublisherCount tie-break (now the third key, within a basis class) can
+    /// move an accrued family-set hash, and that is correct.</b> It refines an order that was already total on <c>FamilyId</c>, so nothing becomes
     /// non-deterministic; but where two families tie on <c>MemberCount</c> AND the cap bites between them,
     /// the SUPPLIED SET can differ from what the pre-219 order would have supplied. A different supplied set
     /// is a different judge input, so it hashes differently and earns a fresh judgment — a RE-JUDGMENT, not
@@ -111,30 +130,43 @@ public static class NewsJudgmentInputBuilder
         ArgumentNullException.ThrowIfNull(factsById);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxFamiliesPerJudgment, 1);
 
-        var ordered = cohortFamilies
-            .Where(f => f.CompanyId == companyId)
-            .OrderByDescending(f => f.MemberCount)
-            // Spec 219 §2: DistinctPublisherCount is the middle key, so the cap's choice among equally
-            // corroborated families is total and reproducible rather than settled by an id.
-            .ThenByDescending(f => f.DistinctPublisherCount)
-            .ThenBy(f => f.FamilyId)
-            .ToList();
-
-        var supplied = new List<NewsJudgmentInputFamily>(Math.Min(ordered.Count, maxFamiliesPerJudgment));
-        var resolvable = 0;
-        foreach (var family in ordered)
+        // Spec 220 §1: resolve FIRST, then classify each resolvable representative ONCE — the basis is both the
+        // primary ordering key and the line the judge is shown, so it must be one computation, not two.
+        var resolved = new List<(FactFamilyRecord Family, NewsTypingFactRef Fact, NewsFactComparisonBasis Basis)>();
+        foreach (var family in cohortFamilies.Where(f => f.CompanyId == companyId))
         {
             if (!factsById.TryGetValue(family.RepresentativeFactId, out var fact))
             {
                 // Defensive: the representative is by construction a member fact of this cohort's window.
-                // An unresolvable one is dropped rather than invented; it never reaches the judge.
+                // An unresolvable one is dropped rather than invented; it never reaches the judge and is not
+                // counted as resolvable.
                 continue;
             }
 
-            resolvable++;
+            resolved.Add((
+                family,
+                fact,
+                StatementComparisonClassifier.Classify(fact.Fact.Statement, fact.Fact.EventTypes)));
+        }
+
+        var ordered = resolved
+            // Spec 220 §1 (family-ordering-v2): the basis class that can carry a direction fills the budget
+            // first. Everything after this key is the pre-220 order, byte-identical within a class.
+            .OrderBy(r => NewsJudgmentFamilyOrdering.BasisRank(r.Basis))
+            .ThenByDescending(r => r.Family.MemberCount)
+            // Spec 219 §2: DistinctPublisherCount is the next key, so the cap's choice among equally
+            // corroborated families is total and reproducible rather than settled by an id.
+            .ThenByDescending(r => r.Family.DistinctPublisherCount)
+            .ThenBy(r => r.Family.FamilyId)
+            .ToList();
+
+        var resolvable = ordered.Count;
+        var supplied = new List<NewsJudgmentInputFamily>(Math.Min(resolvable, maxFamiliesPerJudgment));
+        foreach (var (family, fact, basis) in ordered)
+        {
             if (supplied.Count >= maxFamiliesPerJudgment)
             {
-                continue; // keep counting resolvable families so the Capped dimension is honest
+                break; // the remainder is counted: `resolvable` and the per-basis breakdown cover every family
             }
 
             supplied.Add(new NewsJudgmentInputFamily(
@@ -149,9 +181,9 @@ public static class NewsJudgmentInputBuilder
                 Citations: fact.Fact.Citations,
                 MemberCount: family.MemberCount,
                 DistinctPublisherCount: family.DistinctPublisherCount,
-                // Spec 214 §1: classified HERE, from exactly the statement and event types the judge sees.
-                ComparisonBasis: StatementComparisonClassifier.Classify(
-                    fact.Fact.Statement, fact.Fact.EventTypes),
+                // Spec 214 §1: the classifier's read of exactly the statement and event types the judge sees —
+                // since spec 220 §1 computed ONCE above (before ordering) and reused, never re-classified.
+                ComparisonBasis: basis,
                 // Spec 216 §1: threaded from the family record, never re-derived.
                 ObservedAtUtc: family.EarliestObservedAtUtc));
         }
@@ -169,7 +201,10 @@ public static class NewsJudgmentInputBuilder
             ReferenceValuesOmitted: projection.ReferenceValuesOmitted,
             ReferencesExcludedNewest: projection.ReferencesExcludedNewest,
             ReferencesExcludedLaterThanFact: projection.ReferencesExcludedLaterThanFact,
-            ReferencesSkippedSupersededPolicy: projection.ReferencesSkippedSupersededPolicy);
+            ReferencesSkippedSupersededPolicy: projection.ReferencesSkippedSupersededPolicy,
+            // Spec 220 §3: EVERY resolvable family, before the cut, per basis class — so what the budget
+            // withheld can be stated per class rather than as one undifferentiated number.
+            FamiliesAvailableByBasis: NewsJudgmentBasisCounts.Of(ordered.Select(r => r.Basis)));
     }
 
     /// <summary>

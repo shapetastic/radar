@@ -90,7 +90,11 @@ on everyone.
   already collapse same-event coverage to one representative — this is why HZO's twelve links stand for ~75
   articles. `NewsJudgmentInput` already orders families by `MemberCount` descending; the breadth pass takes
   the first N of that EXISTING order, tie-broken by `distinctPublisherCount` then `familyId` so the choice
-  is total and reproducible.
+  is total and reproducible. **SUPERSEDED by spec 220 (`family-ordering-v2`):** member count is syndication
+  volume, and at a five-family budget it handed the judge boilerplate (46 of 83 breadth reads came back
+  `Unknown` on 2026-09-09). Families are now ordered by comparison basis first (`StatedComparison` =
+  `Event`, then `LevelOnly`, then `NotQuantified`), with this `MemberCount` → `distinctPublisherCount` →
+  `familyId` order retained unchanged as the tie-break within a basis class.
 - **Every family not supplied is counted per judgment** (`familiesAvailable`, `familiesSupplied`,
   `familiesWithheldByBudget`). A judgment that saw 5 of 60 families must not read as a judgment that saw
   everything: the record states its own coverage.

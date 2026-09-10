@@ -479,8 +479,10 @@ public sealed class NewsJudgmentBreadthCoverageTests
     public void TheRecordTagMoves_ButThePromptSchemaAndCohortKeyDoNot()
     {
         // Spec 219 changes how many companies are read and how deeply — not what the judge is asked. A
-        // cohort-key move would have invalidated every cached verdict for no reason.
-        Assert.Equal("news-judgment-v8", NewsJudgmentRecord.CurrentSchemaVersion);
+        // cohort-key move would have invalidated every cached verdict for no reason. (Spec 220 later moved the
+        // tag to v9 and forked the cohort key for the family ORDER — its own cause; "coverage" still never
+        // enters the key.)
+        Assert.Equal("news-judgment-v9", NewsJudgmentRecord.CurrentSchemaVersion);
         Assert.Equal("news-judgment-prompt-v6", NewsJudgmentContract.PromptVersion);
         Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
         Assert.DoesNotContain(

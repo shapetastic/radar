@@ -256,6 +256,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 // Spec 219 §4: the coverage ledger for THIS (judge × stage-1 cohort) pass. ONE aggregated
                 // line per pass, never one per company (the spec-145 precedent).
                 var coverage = new JudgmentCoverageCounters();
+                // Spec 220 §3: the comparison-basis ledger for the same pass — one more aggregated line.
+                var basisCounts = new JudgmentBasisCounters();
                 var attemptedCalls = 0;
                 var persistedJudged = 0;
                 var providerFailures = 0;
@@ -304,6 +306,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
 
                     var record = outcome.Record;
                     coverage.Observe(planned.Depth, record, outcome);
+                    basisCounts.Observe(planned.Depth, record, outcome);
                     if (record.Status == NewsJudgmentStatus.AttemptsExhausted)
                     {
                         exhaustedByCohort[record.CohortKey] =
@@ -481,6 +484,35 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     coverage.FailedFull,
                     coverage.ValidationFailedBreadth,
                     coverage.ValidationFailedFull);
+
+                // SPEC 220 §3 — the PER-COHORT comparison-basis line, emitted BESIDE the unchanged spec-219
+                // coverage line (never replacing it), ONE per (judge × stage-1 cohort), never one per
+                // company. It is the number that says whether the basis-first ordering changed what the
+                // judge saw: withholding NotQuantified boilerplate is a different fact from withholding
+                // stated comparisons. Every class is named and a zero is reported AS a zero; a record that
+                // did not record its basis accounting is counted on its own axis, never folded in as 0.
+                _logger.LogInformation(
+                    "News-judgment judge {Judge} ({Cohort}) families by comparison basis ({FamilyOrdering}, "
+                        + "{ClassifierVersion}): FamiliesByBasisAvailable breadth [{AvailableBreadth}] full "
+                        + "[{AvailableFull}]; FamiliesByBasisSupplied breadth [{SuppliedBreadth}] full "
+                        + "[{SuppliedFull}]; FamiliesWithheldByBudget breadth [{WithheldBreadth}] full "
+                        + "[{WithheldFull}]; {BasisNotRecorded} assembled input(s) whose basis accounting was "
+                        + "not recorded; ChallengeStrengthNotStated {NotStatedBreadth} breadth / "
+                        + "{NotStatedFull} full judgment(s) called this pass accepted with surviving findings "
+                        + "and no stated strength (persisted as not recorded, never 0).",
+                    judge.Identity.Name,
+                    judgeCohortKey,
+                    NewsJudgmentFamilyOrdering.Version,
+                    StatementComparisonClassifier.Version,
+                    basisCounts.AvailableBreadth.Describe(),
+                    basisCounts.AvailableFull.Describe(),
+                    basisCounts.SuppliedBreadth.Describe(),
+                    basisCounts.SuppliedFull.Describe(),
+                    basisCounts.WithheldBreadth.Describe(),
+                    basisCounts.WithheldFull.Describe(),
+                    basisCounts.NotRecorded,
+                    basisCounts.ChallengeStrengthNotStatedBreadth,
+                    basisCounts.ChallengeStrengthNotStatedFull);
             }
         }
 
@@ -1069,7 +1101,10 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         // record alone and can never be inferred wrongly from a supplied count that happens to be small.
         ReadDepth: planned.Depth,
         FamiliesAvailable: bundle.FamiliesAvailable,
-        FamiliesWithheldByBudget: Math.Max(0, bundle.FamiliesAvailable - bundle.Families.Count));
+        FamiliesWithheldByBudget: Math.Max(0, bundle.FamiliesAvailable - bundle.Families.Count),
+        // SPEC 220 §3: the per-basis breakdown of FamiliesAvailable, from the SAME bundle — so it describes
+        // this run's assembly (a cache reuse included) and can never disagree with the families beside it.
+        FamiliesAvailableByBasis: bundle.FamiliesAvailableByBasis);
     }
 
     /// <summary>
@@ -1327,6 +1362,91 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             else
             {
                 JudgedFull++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// SPEC 220 §3 — the per-(judge × stage-1 cohort) COMPARISON-BASIS ledger behind the ONE aggregated basis
+    /// line each pass emits BESIDE (never instead of) the spec-219 coverage line. It answers "did the
+    /// basis-first ordering change what the judge saw": families available, supplied and withheld by budget,
+    /// each per basis class and split breadth / full, plus how many judgments this pass accepted with a
+    /// challenge strength the model did not state (§2).
+    /// <para>
+    /// The family counts cover EVERY assembled input whose record RECORDED its per-basis accounting — reused
+    /// verdicts included, because the families describe THIS run's assembly (the spec-219 counters' rule). A
+    /// record that did not record it (a hydrated pre-220 record, or a pre-214 family ref with no basis) lands
+    /// on <see cref="NotRecorded"/> and contributes nothing — never a `?? 0` that would read as a measured
+    /// zero. <see cref="ChallengeStrengthNotStatedBreadth"/> / <see cref="ChallengeStrengthNotStatedFull"/>
+    /// count ONLY judgments this pass actually CALLED the provider for (spec 188 §1: a replayed verdict is not
+    /// current activity).
+    /// </para>
+    /// </summary>
+    private sealed class JudgmentBasisCounters
+    {
+        public NewsJudgmentBasisCounts AvailableBreadth { get; private set; } = NewsJudgmentBasisCounts.Zero;
+
+        public NewsJudgmentBasisCounts AvailableFull { get; private set; } = NewsJudgmentBasisCounts.Zero;
+
+        public NewsJudgmentBasisCounts SuppliedBreadth { get; private set; } = NewsJudgmentBasisCounts.Zero;
+
+        public NewsJudgmentBasisCounts SuppliedFull { get; private set; } = NewsJudgmentBasisCounts.Zero;
+
+        /// <summary>Available minus supplied, per class, accumulated per judgment so a per-company bite is never averaged away.</summary>
+        public NewsJudgmentBasisCounts WithheldBreadth { get; private set; } = NewsJudgmentBasisCounts.Zero;
+
+        public NewsJudgmentBasisCounts WithheldFull { get; private set; } = NewsJudgmentBasisCounts.Zero;
+
+        /// <summary>Assembled inputs whose record did not record a per-basis accounting — its own axis, never a zero.</summary>
+        public int NotRecorded { get; private set; }
+
+        public int ChallengeStrengthNotStatedBreadth { get; private set; }
+
+        public int ChallengeStrengthNotStatedFull { get; private set; }
+
+        public void Observe(
+            NewsJudgmentReadDepth depth, NewsJudgmentRecord record, JudgmentPassOutcome outcome)
+        {
+            var breadth = depth == NewsJudgmentReadDepth.Breadth;
+
+            // Recorded wholesale or not at all: the available breakdown AND every supplied family's basis.
+            if (record.FamiliesAvailableByBasis is { } available
+                && record.Families.All(f => f.ComparisonBasis is not null))
+            {
+                var supplied = NewsJudgmentBasisCounts.Of(record.Families.Select(f => f.ComparisonBasis!.Value));
+                var withheld = available.Minus(supplied);
+                if (breadth)
+                {
+                    AvailableBreadth = AvailableBreadth.Plus(available);
+                    SuppliedBreadth = SuppliedBreadth.Plus(supplied);
+                    WithheldBreadth = WithheldBreadth.Plus(withheld);
+                }
+                else
+                {
+                    AvailableFull = AvailableFull.Plus(available);
+                    SuppliedFull = SuppliedFull.Plus(supplied);
+                    WithheldFull = WithheldFull.Plus(withheld);
+                }
+            }
+            else
+            {
+                NotRecorded++;
+            }
+
+            // The §2 condition has ONE definition (NewsJudgmentRecord.IsChallengeStrengthNotStated), read here
+            // from the record the validator produced for a call made this pass.
+            if (outcome.ProviderCallDurationThisPass is not null
+                && NewsJudgmentRecord.IsChallengeStrengthNotStated(
+                    record.Status, record.FindingsAccepted, record.ChallengeStrength))
+            {
+                if (breadth)
+                {
+                    ChallengeStrengthNotStatedBreadth++;
+                }
+                else
+                {
+                    ChallengeStrengthNotStatedFull++;
+                }
             }
         }
     }

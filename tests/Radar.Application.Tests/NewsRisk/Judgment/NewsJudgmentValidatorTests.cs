@@ -297,9 +297,11 @@ public sealed class NewsJudgmentValidatorTests
     [Theory]
     [InlineData(-1)]
     [InlineData(101)]
-    [InlineData(null)]
-    public void SurvivingFindings_WithInvalidChallengeStrength_AreValidationFailed(int? strength)
+    [InlineData(150)]
+    public void SurvivingFindings_WithOutOfRangeChallengeStrength_AreValidationFailed(int strength)
     {
+        // SPEC 220 §2 relaxes ABSENT, not INVALID: a number outside 0..100 still fails the whole response
+        // with the same named reason. (The `null` case this theory used to carry is now accepted — below.)
         var family = NewsJudgmentTestData.Family(assertionStatus: NewsFactAssertionStatus.ConfirmedFiling);
         var response = NewsJudgmentTestData.Response(
             strength: strength,
@@ -314,6 +316,64 @@ public sealed class NewsJudgmentValidatorTests
         Assert.Empty(result.Findings);
         Assert.Equal(0, result.FindingsAccepted);
         Assert.Equal(result.FindingsTotal, result.FindingsDropped);
+        Assert.False(NewsJudgmentRecord.IsChallengeStrengthNotStated(
+            result.Status, result.FindingsAccepted, result.ChallengeStrength));
+    }
+
+    [Fact]
+    public void SurvivingFindings_WithAnAbsentChallengeStrength_AreJudged_AndTheStrengthIsNotRecorded()
+    {
+        // SPEC 220 §2 — six of sixteen 2026-09-09 validation failures were `challenge-strength-out-of-range:
+        // '' with N surviving finding(s)`: the model OMITTED the number and the whole judgment, findings and
+        // rationale included, was discarded. That is the spec-192 defect in a new field. The judgment is now
+        // accepted, the strength stays null (never 0, never a midpoint) and the omission is flagged.
+        var family = NewsJudgmentTestData.Family(assertionStatus: NewsFactAssertionStatus.ConfirmedFiling);
+        var response = NewsJudgmentTestData.Response(
+            strength: null,
+            findings: [NewsJudgmentTestData.Finding(family.RepresentativeFactId)]);
+
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
+
+        Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
+        Assert.Null(result.ChallengeStrength);
+        Assert.True(NewsJudgmentRecord.IsChallengeStrengthNotStated(
+            result.Status, result.FindingsAccepted, result.ChallengeStrength));
+        Assert.Equal(1, result.FindingsAccepted);
+        Assert.Single(result.Findings);
+        Assert.False(string.IsNullOrEmpty(result.Rationale));
+        Assert.DoesNotContain(result.FindingDropReasons, r => r.Contains("challenge-strength"));
+    }
+
+    [Fact]
+    public void AStatedInRangeStrength_IsKept_AndIsNotFlaggedNotStated()
+    {
+        var family = NewsJudgmentTestData.Family(assertionStatus: NewsFactAssertionStatus.ConfirmedFiling);
+        var response = NewsJudgmentTestData.Response(
+            strength: 0,
+            findings: [NewsJudgmentTestData.Finding(family.RepresentativeFactId)]);
+
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied(family));
+
+        Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
+        // A STATED zero is a measured zero, and is distinct from "not stated".
+        Assert.Equal(0, result.ChallengeStrength);
+        Assert.False(NewsJudgmentRecord.IsChallengeStrengthNotStated(
+            result.Status, result.FindingsAccepted, result.ChallengeStrength));
+    }
+
+    [Fact]
+    public void ZeroSurvivingFindings_NormalizeTheStrengthToNull_WithoutFlaggingItNotStated()
+    {
+        // With no finding there is nothing for a strength to measure: null here is the spec-185 §2
+        // normalization, not an omission, so it is not counted as ChallengeStrengthNotStated.
+        var response = NewsJudgmentTestData.Response(trajectory: "Improving", strength: 40, findings: []);
+
+        var result = NewsJudgmentValidator.Validate(response, NewsJudgmentTestData.Supplied());
+
+        Assert.Equal(NewsJudgmentStatus.Judged, result.Status);
+        Assert.Null(result.ChallengeStrength);
+        Assert.False(NewsJudgmentRecord.IsChallengeStrengthNotStated(
+            result.Status, result.FindingsAccepted, result.ChallengeStrength));
     }
 
     [Theory]

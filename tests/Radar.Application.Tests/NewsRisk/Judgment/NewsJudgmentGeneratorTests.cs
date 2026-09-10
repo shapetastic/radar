@@ -216,7 +216,7 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal([referenceId], record.ReferenceIds);
         Assert.Equal(0, record.ReferenceValuesOmitted);
         Assert.Equal([referenceId], record.TrajectoryReferenceIds);
-        Assert.Equal("news-judgment-v8", record.SchemaVersion);
+        Assert.Equal("news-judgment-v9", record.SchemaVersion);
 
         // Spec 216 §1/§5: the newest accession is EXCLUDED and counted, the reference policy and the
         // KINDS are persisted, and the per-family observation instant travels onto the record.
@@ -544,7 +544,7 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal(NewsJudgmentStatus.Judged, reused.Status);
         // … while EVERY completeness dimension is this run's.
         Assert.Equal(NewsTypingCompleteness.RetryableFailure, reused.TypingCompleteness);
-        Assert.Equal("news-judgment-v8", reused.SchemaVersion);
+        Assert.Equal("news-judgment-v9", reused.SchemaVersion);
     }
 
     [Fact]

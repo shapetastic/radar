@@ -163,7 +163,7 @@ public sealed class NewsJudgmentArchitectureGuardTests
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(18)
+            .TakeLast(19)
             .ToList();
         Assert.Equal(
             [
@@ -189,6 +189,8 @@ public sealed class NewsJudgmentArchitectureGuardTests
                 nameof(NewsJudgmentRecord.ReadDepth),
                 nameof(NewsJudgmentRecord.FamiliesAvailable),
                 nameof(NewsJudgmentRecord.FamiliesWithheldByBudget),
+                // Spec 220 §3: the per-basis family breakdown — four ints, so no prose can ride it either.
+                nameof(NewsJudgmentRecord.FamiliesAvailableByBasis),
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));
