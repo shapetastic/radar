@@ -30,9 +30,14 @@ public sealed class NewsJudgmentCompletenessSchemaTests
         // BOUNDED five-family read where every v7 record was a full-budget one, so "no challenge found"
         // means something different). The prompt, the response schema and the cohort key do NOT move — the
         // judge sees exactly the same contract, just fewer families.
-        Assert.Equal("news-judgment-v8", NewsJudgmentRecord.CurrentSchemaVersion);
+        // Spec 220: the tag moves to v9 (FamiliesAvailableByBasis, and a Judged record may now carry accepted
+        // findings with a NULL ChallengeStrength — a shape no v8 record could hold). The prompt and the
+        // response schema do NOT move; the cohort key DOES, for the family ORDER (ordering=, below) — which
+        // decides which facts a bounded judge sees — never for the record tag.
+        Assert.Equal("news-judgment-v9", NewsJudgmentRecord.CurrentSchemaVersion);
         Assert.Equal("news-judgment-prompt-v6", NewsJudgmentContract.PromptVersion);
         Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
+        Assert.Equal("family-ordering-v2", NewsJudgmentFamilyOrdering.Version);
 
         // The stage-2 cohort key, asserted against the literal composition rather than against itself: the
         // record tag is deliberately NOT one of its inputs, so widening a persisted field can never fork a
@@ -44,8 +49,10 @@ public sealed class NewsJudgmentCompletenessSchemaTests
             "openai:judge-model|news-judgment-prompt-v6|news-judgment-schema-v4|"
                 + $"stage1={Stage1}|families={FactFamilyBuilder.IdentityString}"
                 + $"|comparison={StatementComparisonClassifier.Version}"
-                + $"|references={ReferenceValueProjector.Version}",
+                + $"|references={ReferenceValueProjector.Version}"
+                + "|ordering=family-ordering-v2",
             cohortKey);
+        Assert.DoesNotContain("news-judgment-v9", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v8", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v7", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v5", cohortKey, StringComparison.Ordinal);
@@ -67,7 +74,7 @@ public sealed class NewsJudgmentCompletenessSchemaTests
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(16)
+            .TakeLast(17)
             .ToList();
         Assert.Equal(
             [
@@ -87,6 +94,7 @@ public sealed class NewsJudgmentCompletenessSchemaTests
                 nameof(NewsJudgmentRecord.ReadDepth), // spec 219 §2
                 nameof(NewsJudgmentRecord.FamiliesAvailable), // spec 219 §2
                 nameof(NewsJudgmentRecord.FamiliesWithheldByBudget), // spec 219 §2
+                nameof(NewsJudgmentRecord.FamiliesAvailableByBasis), // spec 220 §3
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

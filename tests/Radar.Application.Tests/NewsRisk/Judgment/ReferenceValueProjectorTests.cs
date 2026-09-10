@@ -355,8 +355,10 @@ public sealed class ReferenceValueProjectorTests
         // v2 judge do not see the same references and must not share a cohort.
         Assert.Equal("reference-projection-v2", ReferenceValueProjector.Version);
         var key = NewsJudgmentContract.CohortKey("openai", "judge-model", "stage1-key");
-        Assert.EndsWith(
-            "|comparison=" + StatementComparisonClassifier.Version + "|references=reference-projection-v2",
+        // Spec 220 §1 appends `ordering=` after it, so `references=` is no longer the final segment.
+        Assert.Contains(
+            "|comparison=" + StatementComparisonClassifier.Version + "|references=reference-projection-v2"
+                + "|ordering=" + NewsJudgmentFamilyOrdering.Version,
             key,
             StringComparison.Ordinal);
     }

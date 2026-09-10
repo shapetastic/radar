@@ -401,8 +401,10 @@ public sealed class ScoringConfigFingerprintTests
         // weight edit, and AcquisitionRecognitionOptions.MaxFetchesPerRun is deliberately EXCLUDED (it
         // bounds how many filings are read, never whether a read filing is recognised — the spec-105 rule).
         //
-        // ⚠ OPERATOR ACTION IS OWED — a THIRD, SEPARATE step in this arc, not one shared with 214/215 (whose
-        // step was performed 2026-09-08) or with 216 (which owes its own). Delete or re-record every
+        // ⚠ OPERATOR ACTION WAS OWED — a THIRD, SEPARATE step in this arc, not one shared with 214/215 (whose
+        // step was performed 2026-09-08) or with 216 (which required its own). SINCE SATISFIED:
+        // run-20260909T234658242Z-5c6644f6 stamped the spec-219 value, so no 216/217/219 step remains
+        // outstanding. The step was: delete or re-record every
         // configured data/scoring-configs/strategies/{name}.json BEFORE the first post-217 baseline; that
         // path is git-ignored, so those records cannot ride in a PR and MUST NEVER be fabricated. If the
         // step is missed, StrategyIdentityGuard halts the run before collection — that halt is CORRECT.
@@ -461,6 +463,12 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-f0cadce0add6), for the trailing enabled-only coverage-policy field on the
         // `news=` segment. The three AI-OFF halves did NOT move — the `news=disabled:…` segment carries no
         // such field — and that asymmetry is exactly what this test's AI-OFF assertions are for.
+        //
+        // SPEC 220 §1 MOVED THE THREE AI-ON HALVES ONLY, to the values below (30d
+        // radar-scoring-fp-284ba31ce3d2 → the 30-day AI-ON value below; the 60d and 120d halves likewise —
+        // see the assertions), for the trailing `ordering=family-ordering-v2` segment on the judgment cohort
+        // key, which rides the enabled `news=` segment. The three AI-OFF halves did NOT move — the disabled
+        // segment carries no cohort key.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
@@ -468,7 +476,7 @@ public sealed class ScoringConfigFingerprintTests
             "radar-scoring-fp-db96e3862fae",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-284ba31ce3d2",
+            "radar-scoring-fp-e1d1ea16679a",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
@@ -477,7 +485,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-0beffdd089fd",
+            "radar-scoring-fp-4f1ceee0c60c",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
@@ -487,7 +495,7 @@ public sealed class ScoringConfigFingerprintTests
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-f0cadce0add6",
+            "radar-scoring-fp-1b516442dff5",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -824,8 +832,26 @@ public sealed class ScoringConfigFingerprintTests
         // tag moved, to news-judgment-v8). THE THREE AI-OFF PINS ARE UNCHANGED and REQUIRED to be: the
         // field is enabled-only, so the `news=disabled:…` segment has no place to carry it and no value of
         // the coverage policy can reach an AI-OFF fingerprint (the spec-197/214–216 proof pattern).
+        // → SPEC 220 §1 MOVES IT (radar-scoring-fp-11b10caf36d8 → the value below), AI-ON side ONLY, for ONE
+        // cause: the stage-2 judgment cohort key gains a trailing `ordering=family-ordering-v2` segment
+        // (NewsJudgmentFamilyOrdering.Version). The family ORDER decides which facts fill a bounded judge's
+        // budget — an input the model sees — so it is cohort identity, and the presentation cohort key rides
+        // the `news=enabled:…` segment. Under the implicit family-ordering-v1 a five-family breadth read saw
+        // the five most-SYNDICATED families; under v2 it sees the directional ones first. No formula,
+        // RuleSetVersion, media-collapse, supersede, neutralization, attention-tier, weight, news-query, acq=,
+        // ai= or coverage-policy change; the prompt and the response schema are UNCHANGED (the record tag
+        // moved to news-judgment-v9). Spec 220 §2 (a blank ChallengeStrength beside surviving findings is
+        // accepted as not recorded instead of failing validation) is NOT separately hashed, and it is NOT
+        // scoring-inert: the judgment-signal materializer gates on Status == Judged, so a formerly-discarded
+        // directional response with a Supported/ReferenceSupported basis now mints a signal. It needs no
+        // identity of its own only because, in THIS slice, it shares its comparability boundary with the
+        // `ordering=` cohort fork, which moves the cohort key and these AI-ON pins together — so no pre- and
+        // post-relaxation judgments are pooled under one stamp. That is why it was not split into its own
+        // spec; a later change to that rule ALONE would need its own identity. THE THREE AI-OFF PINS ARE
+        // UNCHANGED and REQUIRED to be: the disabled segment
+        // carries no cohort key, so no ordering version can reach an AI-OFF fingerprint.
         Assert.Equal(
-            "radar-scoring-fp-11b10caf36d8",
+            "radar-scoring-fp-3001c04030e7",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -982,10 +1008,11 @@ public sealed class ScoringConfigFingerprintTests
         // reference-projection-v2 + news-judgment-prompt-v6 in the cohort key (§1). See
         // Compute_AiOnDefault_MatchesPinnedFingerprint for the full reasoning.
         //
-        // ⚠ THE OPERATOR STEP IS OWED ONCE MORE — a SECOND, SEPARATE step, not one shared with 214/215,
+        // ⚠ THE OPERATOR STEP WAS OWED ONCE MORE — a SECOND, SEPARATE step, not one shared with 214/215,
         // whose step was already performed on 2026-09-08 and whose composition stamped a live run (above).
-        // Whatever the 60-day assertion below says is the value the first post-216 baseline must report.
-        // Delete or
+        // SINCE SATISFIED: run-20260909T234658242Z-5c6644f6 stamped the spec-219 value, so no 216/217/219
+        // step remains outstanding (the 60-day assertion below has since moved on; the spec-216 value is
+        // quoted above as history). The step was: delete or
         // re-record every configured data/scoring-configs/strategies/{name}.json BEFORE that run (the path
         // is git-ignored, so those records cannot ride in a PR and MUST NEVER be fabricated); if the step
         // is missed, StrategyIdentityGuard halts the run before collection — that halt is CORRECT.
@@ -1002,7 +1029,8 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-908659c0ba7e; 120d radar-scoring-fp-cb9a65795fb3 →
         // radar-scoring-fp-918f19bd6751. The cause is the UNCONDITIONAL trailing acq= segment — see
         // Compute_DefaultConfig_MatchesPinnedFingerprint for the full reasoning, the measured MarineMax
-        // basis and the owed operator step. radar-scoring-fp-d7dbbcf89304 is the spec-216 value; whether a
+        // basis and the operator step it required (since satisfied: run-20260909T234658242Z-5c6644f6
+        // stamped the spec-219 value). radar-scoring-fp-d7dbbcf89304 is the spec-216 value; whether a
         // live run stamped it depends on whether the 216 operator step was taken before this merge, and
         // this file does not assert that either way.
         //
@@ -1015,9 +1043,11 @@ public sealed class ScoringConfigFingerprintTests
         // Compute_AiOnDefault_MatchesPinnedFingerprint for why a coverage policy is an identity input where
         // a budget is not.
         //
-        // ⚠ THE OPERATOR STEP IS OWED ONCE MORE — a THIRD, SEPARATE step, distinct from the 214/215 step
-        // (performed 2026-09-08) and from the 216 one. Whatever the 60-day assertion below says is the
-        // value the first post-219 baseline must report. Delete or re-record every configured
+        // ⚠ THE OPERATOR STEP WAS OWED ONCE MORE — a FOURTH, SEPARATE step, distinct from the 214/215 step
+        // (performed 2026-09-08) and from the 216 and 217 ones. SINCE SATISFIED:
+        // run-20260909T234658242Z-5c6644f6 stamped the spec-219 60-day value (radar-scoring-fp-09c9db128480,
+        // quoted above as history), so no 216/217/219 step remains outstanding. The step was: delete or
+        // re-record every configured
         // data/scoring-configs/strategies/{name}.json BEFORE that run (the path is git-ignored, so those
         // records cannot ride in a PR and MUST NEVER be fabricated); if the step is missed,
         // StrategyIdentityGuard halts the run before collection — that halt is CORRECT.
@@ -1027,11 +1057,28 @@ public sealed class ScoringConfigFingerprintTests
         // companies reached scoring with news as undirected volume; after it they reach it with a judged
         // direction. A step change in the efficacy series across this date is that, not an improvement in
         // the scoring — the date is recorded in docs/architecture-history.md for exactly that reason.
+        //
+        // SPEC 220 §1 MOVES THEM AGAIN, AI-ON side ONLY (the spec-219 pattern): 60d
+        // radar-scoring-fp-09c9db128480 → the 60-day value below; the 120-day value likewise (see the
+        // assertion), while the AI-OFF live values are UNCHANGED and asserted so by
+        // Compute_LiveWindowAiOffStamps_ArePinned. ONE cause: the judgment cohort key gains a trailing
+        // `ordering=family-ordering-v2` segment (NewsJudgmentFamilyOrdering.Version — the judge's family
+        // budget is now filled comparison-basis-first rather than by syndication volume), which the
+        // presentation cohort key carries into `news=enabled:…`. See Compute_AiOnDefault_MatchesPinnedFingerprint.
+        // radar-scoring-fp-09c9db128480 is the spec-219 value and DID stamp a live run
+        // (run-20260909T234658242Z-5c6644f6, the spec-220 §4 baseline).
+        //
+        // ⚠ THE OPERATOR STEP IS OWED ONCE MORE — a FIFTH, SEPARATE step, distinct from the 214/215 step
+        // (performed 2026-09-08) and from the 216, 217 and 219 ones. Whatever the 60-day assertion below says
+        // is the value the first post-220 baseline must report. Delete or re-record every configured
+        // data/scoring-configs/strategies/{name}.json BEFORE that run (the path is git-ignored, so those
+        // records cannot ride in a PR and MUST NEVER be fabricated); if the step is missed,
+        // StrategyIdentityGuard halts the run before collection — that halt is CORRECT.
         Assert.Equal(
-            "radar-scoring-fp-09c9db128480",
+            "radar-scoring-fp-59a1064a7ad6",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-cc5ac1f84de1",
+            "radar-scoring-fp-8c72c2fbdf0a",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -1082,7 +1129,8 @@ public sealed class ScoringConfigFingerprintTests
         // recognition could move every affected score silently. 60d radar-scoring-fp-0ff442a14c1b →
         // radar-scoring-fp-7b0758e7eede; 120d radar-scoring-fp-adf455313d35 →
         // radar-scoring-fp-5b36883c1b3a. See the AI-OFF unit pin for the measured basis (MarineMax
-        // 2026-08-10) and the owed operator step.
+        // 2026-08-10) and the operator step it required (since satisfied: run-20260909T234658242Z-5c6644f6
+        // stamped the spec-219 value).
         Assert.Equal("radar-scoring-fp-7b0758e7eede", DefaultFingerprint(window: TimeSpan.FromDays(60)));
         Assert.Equal("radar-scoring-fp-5b36883c1b3a", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }

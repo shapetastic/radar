@@ -191,6 +191,9 @@ public sealed class NewsJudgmentInputBuilderTests
         // Spec 215 §2: the reference projection (metric-phrase table + caps) decides which reference values
         // the model sees, so its version is cohort identity too.
         Assert.Contains("|references=" + ReferenceValueProjector.Version, key);
+        // Spec 220 §1: the family ORDER decides which facts a bounded judge sees, so it is cohort identity
+        // too — appended LAST, after references=.
+        Assert.EndsWith("|ordering=" + NewsJudgmentFamilyOrdering.Version, key, StringComparison.Ordinal);
         // The stage-1 cohort key carries the extractor model, prompt/schema AND taxonomy version — so a
         // stage-1 change of any of them forks a NEW stage-2 cohort by construction.
         Assert.Contains(NewsTypingContract.TaxonomyVersion, key);
@@ -244,6 +247,6 @@ public sealed class NewsJudgmentInputBuilderTests
         // TrajectoryBasis and spec 215 §2 to v6 for the reference fields — RECORD changes, not cohort
         // changes: the cohort keys above are unaffected by the tag (asserted in
         // NewsJudgmentCompletenessSchemaTests).
-        Assert.Equal("news-judgment-v8", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-v9", NewsJudgmentRecord.CurrentSchemaVersion);
     }
 }

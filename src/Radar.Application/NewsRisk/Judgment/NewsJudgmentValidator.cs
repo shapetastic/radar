@@ -76,8 +76,12 @@ public sealed record NewsJudgmentValidationResult(
 /// <item>the advice-language guard runs on the RATIONALE and on every caveat (Radar-surfaced free text);
 /// a violating rationale/caveat is blanked and counted — a blanked caveat that the rule above requires
 /// then drops its finding;</item>
-/// <item><c>ChallengeStrength</c> must be 0..100 while any finding survives; with zero surviving findings
-/// it is normalized to <c>null</c>;</item>
+/// <item><c>ChallengeStrength</c> must be 0..100 while any finding survives — an out-of-range number fails
+/// the response; with zero surviving findings it is normalized to <c>null</c>. <b>Spec 220 §2 supersedes the
+/// old "absent fails too" reading</b>: an ABSENT strength beside surviving findings is accepted, persisted as
+/// <c>null</c> (NOT RECORDED — never 0, never a midpoint), a shape counted through the one definition
+/// <see cref="NewsJudgmentRecord.IsChallengeStrengthNotStated"/>, because discarding grounded
+/// findings over an omitted number is the spec-192 defect in a new field;</item>
 /// <item><b>a response whose findings are ALL invalid is <see cref="NewsJudgmentStatus.ValidationFailed"/></b>
 /// — never a no-challenge result (fail closed: an unverifiable warning is not evidence of support); and</item>
 /// <item>a validated response with ZERO emitted findings and a parsed trajectory IS the supportive read
@@ -392,7 +396,17 @@ public static class NewsJudgmentValidator
         int? strength;
         if (accepted.Count > 0)
         {
-            if (response.ChallengeStrength is not { } s || s is < 0 or > 100)
+            if (response.ChallengeStrength is not { } s)
+            {
+                // SPEC 220 §2 — an ABSENT strength is not an INVALID one. The model returned no value (six of
+                // sixteen 2026-09-09 validation failures were exactly this, logged as `''`), and failing the
+                // response discarded its grounded findings and its rationale: the spec-192 defect in a new
+                // field. The strength stays NOT RECORDED — never 0, never a midpoint — and the resulting shape
+                // is what NewsJudgmentRecord.IsChallengeStrengthNotStated (the ONE definition) counts. An
+                // out-of-range number below still fails, unchanged.
+                strength = null;
+            }
+            else if (s is < 0 or > 100)
             {
                 dropReasons.Add(
                     $"challenge-strength-out-of-range: '{response.ChallengeStrength}' with "
@@ -401,8 +415,10 @@ public static class NewsJudgmentValidator
                 // FindingsAccepted must equal Findings.Count (0), never a pre-failure count.
                 return Failed(total, rationale, dropReasons, rationaleLength, citations.ExpansionCount);
             }
-
-            strength = s;
+            else
+            {
+                strength = s;
+            }
         }
         else
         {

@@ -300,7 +300,15 @@ public sealed record NewsJudgmentRecord(
     // (NewsJudgmentCoveragePolicy.Version, spec 219 §6) — never these per-record values.
     NewsJudgmentReadDepth? ReadDepth = null,
     int? FamiliesAvailable = null,
-    int? FamiliesWithheldByBudget = null)
+    int? FamiliesWithheldByBudget = null,
+    // SPEC 220 §3 — the RESOLVABLE families per comparison-basis class this pass, BEFORE the budget cut (the
+    // class-wise breakdown of FamiliesAvailable, under family-ordering-v2). TRAILING and NULLABLE: `null`
+    // means NOT RECORDED (a pre-220 record) — never a fabricated all-zero. The supplied-by-basis breakdown is
+    // not a second field: it is the per-family ComparisonBasis on Families. Like the spec-219 coverage
+    // fields it describes THIS run's assembly, so a cache reuse takes it from the current bundle.
+    // Observational provenance: it enters no id, cohort key, family-set hash, marker decision, score or
+    // fingerprint (the ordering VERSION is hashed, via the cohort key — never these per-record values).
+    NewsJudgmentBasisCounts? FamiliesAvailableByBasis = null)
 {
     /// <summary>
     /// The judgment store schema version stamped on every NEWLY written record. Forked to <c>v2</c> by
@@ -373,8 +381,19 @@ public sealed record NewsJudgmentRecord(
     /// a pre-219 record's read was in fact always the full budget, but the record does not SAY so, and
     /// inferring it would be a fabricated measurement.
     /// </para>
+    /// <para>
+    /// <b>Spec 220 moves it to <c>v9</c></b>, on the same "changes what a record MEANS" test, for two reasons.
+    /// (a) §3: <see cref="FamiliesAvailableByBasis"/> — which comparison-basis classes the company's resolvable
+    /// families fell into before the budget cut — and the families a v9 record carries were chosen
+    /// basis-first (<c>family-ordering-v2</c>), where a v8 record's were the most-syndicated. (b) §2: a v9
+    /// <see cref="NewsJudgmentStatus.Judged"/> record may carry accepted findings with a NULL
+    /// <see cref="ChallengeStrength"/> — the model stated none, and the strength is NOT RECORDED rather than
+    /// the whole judgment discarded. A v8 record could never hold that shape (a missing strength failed
+    /// validation), so a reader must be able to tell the two apart. Every pre-v9 record stays readable, is
+    /// never rewritten, and hydrates the new field as <c>null</c> = NOT RECORDED (AD-8).
+    /// </para>
     /// </summary>
-    public const string CurrentSchemaVersion = "news-judgment-v8";
+    public const string CurrentSchemaVersion = "news-judgment-v9";
 
     /// <summary>
     /// Whether this attempt is a COMPLETED judgment (reusable through the cache) rather than a named
@@ -398,6 +417,18 @@ public sealed record NewsJudgmentRecord(
         or NewsJudgmentStatus.ValidationFailed
         or NewsJudgmentStatus.ProviderFailure
         or NewsJudgmentStatus.ParseFailure;
+
+    /// <summary>
+    /// SPEC 220 §2 — the ONE definition of "accepted with a challenge strength the model did not state":
+    /// <see cref="NewsJudgmentStatus.Judged"/>, at least one accepted finding, and a null strength. With zero
+    /// accepted findings a null strength is the spec-185 §2 normalization, not an omission, so it does not
+    /// qualify. A STATIC method on purpose — never a property, so it is never written to disk beside the
+    /// three values it is derived from. The generator's pass counter and the live-artifact renderer both read
+    /// it; a pre-220 (v8) record cannot satisfy it, because a missing strength then failed validation.
+    /// </summary>
+    public static bool IsChallengeStrengthNotStated(
+        NewsJudgmentStatus status, int findingsAccepted, int? challengeStrength) =>
+        status == NewsJudgmentStatus.Judged && findingsAccepted > 0 && challengeStrength is null;
 
     /// <summary>
     /// The deterministic per-attempt identity: stage-2 cohort (judge + prompt/schema + stage-1 cohort +
