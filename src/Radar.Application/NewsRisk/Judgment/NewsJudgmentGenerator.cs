@@ -258,6 +258,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 var coverage = new JudgmentCoverageCounters();
                 // Spec 220 §3: the comparison-basis ledger for the same pass — one more aggregated line.
                 var basisCounts = new JudgmentBasisCounters();
+                // Spec 221 §3: the business-signal ledger for the same pass — two more aggregated lines.
+                var businessSignal = new JudgmentBusinessSignalCounters();
                 var attemptedCalls = 0;
                 var persistedJudged = 0;
                 var providerFailures = 0;
@@ -307,6 +309,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     var record = outcome.Record;
                     coverage.Observe(planned.Depth, record, outcome);
                     basisCounts.Observe(planned.Depth, record, outcome);
+                    businessSignal.Observe(planned.Depth, record);
                     if (record.Status == NewsJudgmentStatus.AttemptsExhausted)
                     {
                         exhaustedByCohort[record.CohortKey] =
@@ -411,6 +414,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     {
                         judgments.Add(record);
                         coverage.Persisted(planned.Depth, record);
+                        businessSignal.Persisted(planned.Depth, record);
 
                         // A REUSED judged verdict still reaches the run result and presentation, but it is
                         // not a judged verdict this pass newly produced (spec 188 §1).
@@ -513,6 +517,70 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                     basisCounts.NotRecorded,
                     basisCounts.ChallengeStrengthNotStatedBreadth,
                     basisCounts.ChallengeStrengthNotStatedFull);
+
+                // SPEC 221 §3 — the PER-COHORT business-signal line, BESIDE (never replacing) the unchanged
+                // spec-219 coverage and spec-220 basis lines, ONE per (judge × stage-1 cohort). Two populations,
+                // each named in the text: the FAMILY counts cover every assembled input (reuse included — the
+                // families describe THIS run's assembly, the spec-220 rule); the VERDICT counts cover exactly the
+                // judged verdicts the coverage line counts (durably persisted, called or reused), so the two lines
+                // reconcile. A record that did not record its accounting lands on its own axis, never a zero.
+                _logger.LogInformation(
+                    "News-judgment judge {Judge} ({Cohort}) business signal ({FamilyOrdering}): over every "
+                        + "assembled input — FamiliesNonBusinessAvailable {NonBusinessAvailableBreadth} breadth / "
+                        + "{NonBusinessAvailableFull} full; FamiliesNonBusinessSupplied {NonBusinessSuppliedBreadth} "
+                        + "breadth / {NonBusinessSuppliedFull} full; FamiliesNonBusinessDemotedBySelection "
+                        + "{DemotedBreadth} breadth / {DemotedFull} full; FamiliesWithNoEventTypes {NoTypesBreadth} "
+                        + "breadth / {NoTypesFull} full available (not demoted — counted as business); "
+                        + "{FamilyAccountingNotRecorded} assembled input(s) whose business-signal accounting was not "
+                        + "recorded. Over the {VerdictsBreadth} breadth / {VerdictsFull} full judged verdict(s) on "
+                        + "the coverage line (persisted, called or reused) — JudgmentsWithNoDirectionalBasisSupplied "
+                        + "{NoBasisBreadth} breadth / {NoBasisFull} full; JudgmentsNoBusinessSignal "
+                        + "{NoBusinessSignalBreadth} breadth / {NoBusinessSignalFull} full; "
+                        + "ClassifierSaidDirectionalJudgeSaidNoBusinessSignal {DisagreeBreadth} breadth / "
+                        + "{DisagreeFull} full; Deteriorating {DeterioratingBreadth} breadth / {DeterioratingFull} "
+                        + "full; Unknown {UnknownBreadth} breadth / {UnknownFull} full; {ProfileNotRecorded} judged "
+                        + "verdict(s) whose supplied-basis profile was not recorded (excluded from the two "
+                        + "profile-derived counts, never counted as 0).",
+                    judge.Identity.Name,
+                    judgeCohortKey,
+                    NewsJudgmentFamilyOrdering.Version,
+                    businessSignal.NonBusinessAvailableBreadth,
+                    businessSignal.NonBusinessAvailableFull,
+                    businessSignal.NonBusinessSuppliedBreadth,
+                    businessSignal.NonBusinessSuppliedFull,
+                    businessSignal.DemotedBreadth,
+                    businessSignal.DemotedFull,
+                    businessSignal.NoEventTypesBreadth,
+                    businessSignal.NoEventTypesFull,
+                    businessSignal.FamilyAccountingNotRecorded,
+                    businessSignal.VerdictsBreadth,
+                    businessSignal.VerdictsFull,
+                    businessSignal.NoDirectionalBasisBreadth,
+                    businessSignal.NoDirectionalBasisFull,
+                    businessSignal.NoBusinessSignalBreadth,
+                    businessSignal.NoBusinessSignalFull,
+                    businessSignal.DisagreementBreadth,
+                    businessSignal.DisagreementFull,
+                    businessSignal.DeterioratingBreadth,
+                    businessSignal.DeterioratingFull,
+                    businessSignal.UnknownBreadth,
+                    businessSignal.UnknownFull,
+                    businessSignal.ProfileNotRecorded);
+
+                // SPEC 221 §3 — the residual Unknown WORKLIST, NAMED: every judged Unknown verdict this pass
+                // (persisted, called or reused) as `TICKER (judgmentId)`, ordinal-sorted, split breadth / full.
+                // A count alone reproduces the aggregate spec 221 exists to break; "none" is stated, never omitted.
+                _logger.LogInformation(
+                    "News-judgment judge {Judge} ({Cohort}) residual Unknown worklist: {UnknownBreadth} breadth / "
+                        + "{UnknownFull} full judged Unknown verdict(s) — a supplied business fact bore on a "
+                        + "direction the judge could not resolve. Breadth: {WorklistBreadth}. Full: {WorklistFull}. "
+                        + "`scripts/audit-miss-diagnosis.ps1 -Ticker <T> -ScoreDate <D>` reconstructs what was read.",
+                    judge.Identity.Name,
+                    judgeCohortKey,
+                    businessSignal.UnknownBreadth,
+                    businessSignal.UnknownFull,
+                    JudgmentBusinessSignalCounters.Describe(businessSignal.UnknownWorklistBreadth),
+                    JudgmentBusinessSignalCounters.Describe(businessSignal.UnknownWorklistFull));
             }
         }
 
@@ -1104,7 +1172,14 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         FamiliesWithheldByBudget: Math.Max(0, bundle.FamiliesAvailable - bundle.Families.Count),
         // SPEC 220 §3: the per-basis breakdown of FamiliesAvailable, from the SAME bundle — so it describes
         // this run's assembly (a cache reuse included) and can never disagree with the families beside it.
-        FamiliesAvailableByBasis: bundle.FamiliesAvailableByBasis);
+        FamiliesAvailableByBasis: bundle.FamiliesAvailableByBasis,
+        // SPEC 221 §2a/§3: what was HANDED to the judge (derived from the supplied families only — never the
+        // verdict's source) and what the business-first selection did, from the SAME bundle, so a cache reuse
+        // describes this run's assembly exactly as the spec-219/220 fields do.
+        SuppliedBasisProfile: NewsJudgmentSuppliedBasisProfile.Of(bundle.Families),
+        FamiliesNonBusinessAvailable: bundle.FamiliesNonBusinessAvailable,
+        FamiliesNonBusinessDemotedBySelection: bundle.FamiliesNonBusinessDemotedBySelection,
+        FamiliesWithNoEventTypesAvailable: bundle.FamiliesWithNoEventTypesAvailable);
     }
 
     /// <summary>
@@ -1449,6 +1524,196 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// SPEC 221 §3 — the per-(judge × stage-1 cohort) BUSINESS-SIGNAL ledger behind the two aggregated lines
+    /// each pass emits beside the spec-219 coverage and spec-220 basis lines.
+    /// <list type="bullet">
+    /// <item><b>Family counts</b> (<see cref="Observe"/>) cover EVERY assembled input whose record recorded its
+    /// non-business accounting — reused verdicts included, because the families describe THIS run's assembly.
+    /// Recorded wholesale or not at all; otherwise <see cref="FamilyAccountingNotRecorded"/>.</item>
+    /// <item><b>Verdict counts and the worklist</b> (<see cref="Persisted"/>) cover exactly the judged verdicts
+    /// the coverage line counts — durably persisted, called or reused — so the lines reconcile and every named
+    /// judgmentId dereferences into the store. The two profile-derived counts use the ONE definitions on
+    /// <see cref="NewsJudgmentRecord"/>; a verdict without a profile lands on <see cref="ProfileNotRecorded"/>.</item>
+    /// </list>
+    /// </summary>
+    private sealed class JudgmentBusinessSignalCounters
+    {
+        public int NonBusinessAvailableBreadth { get; private set; }
+
+        public int NonBusinessAvailableFull { get; private set; }
+
+        public int NonBusinessSuppliedBreadth { get; private set; }
+
+        public int NonBusinessSuppliedFull { get; private set; }
+
+        public int DemotedBreadth { get; private set; }
+
+        public int DemotedFull { get; private set; }
+
+        public int NoEventTypesBreadth { get; private set; }
+
+        public int NoEventTypesFull { get; private set; }
+
+        public int FamilyAccountingNotRecorded { get; private set; }
+
+        public int VerdictsBreadth { get; private set; }
+
+        public int VerdictsFull { get; private set; }
+
+        public int NoDirectionalBasisBreadth { get; private set; }
+
+        public int NoDirectionalBasisFull { get; private set; }
+
+        public int NoBusinessSignalBreadth { get; private set; }
+
+        public int NoBusinessSignalFull { get; private set; }
+
+        public int DisagreementBreadth { get; private set; }
+
+        public int DisagreementFull { get; private set; }
+
+        public int DeterioratingBreadth { get; private set; }
+
+        public int DeterioratingFull { get; private set; }
+
+        public int UnknownBreadth => UnknownWorklistBreadth.Count;
+
+        public int UnknownFull => UnknownWorklistFull.Count;
+
+        /// <summary>Judged verdicts whose supplied-basis profile was not recorded — its own axis, never a zero.</summary>
+        public int ProfileNotRecorded { get; private set; }
+
+        public List<(string Label, Guid JudgmentId)> UnknownWorklistBreadth { get; } = [];
+
+        public List<(string Label, Guid JudgmentId)> UnknownWorklistFull { get; } = [];
+
+        public void Observe(NewsJudgmentReadDepth depth, NewsJudgmentRecord record)
+        {
+            if (record is not
+                {
+                    SuppliedBasisProfile: { } profile,
+                    FamiliesNonBusinessAvailable: { } available,
+                    FamiliesNonBusinessDemotedBySelection: { } demoted,
+                    FamiliesWithNoEventTypesAvailable: { } noTypes,
+                })
+            {
+                FamilyAccountingNotRecorded++;
+                return;
+            }
+
+            if (depth == NewsJudgmentReadDepth.Breadth)
+            {
+                NonBusinessAvailableBreadth += available;
+                NonBusinessSuppliedBreadth += profile.NonBusiness.Sum();
+                DemotedBreadth += demoted;
+                NoEventTypesBreadth += noTypes;
+            }
+            else
+            {
+                NonBusinessAvailableFull += available;
+                NonBusinessSuppliedFull += profile.NonBusiness.Sum();
+                DemotedFull += demoted;
+                NoEventTypesFull += noTypes;
+            }
+        }
+
+        public void Persisted(NewsJudgmentReadDepth depth, NewsJudgmentRecord record)
+        {
+            if (record.Status != NewsJudgmentStatus.Judged)
+            {
+                return;
+            }
+
+            var breadth = depth == NewsJudgmentReadDepth.Breadth;
+            if (breadth)
+            {
+                VerdictsBreadth++;
+            }
+            else
+            {
+                VerdictsFull++;
+            }
+
+            switch (record.BusinessTrajectory)
+            {
+                case NewsJudgmentTrajectory.NoBusinessSignal:
+                    if (breadth)
+                    {
+                        NoBusinessSignalBreadth++;
+                    }
+                    else
+                    {
+                        NoBusinessSignalFull++;
+                    }
+
+                    break;
+                case NewsJudgmentTrajectory.Deteriorating:
+                    if (breadth)
+                    {
+                        DeterioratingBreadth++;
+                    }
+                    else
+                    {
+                        DeterioratingFull++;
+                    }
+
+                    break;
+                case NewsJudgmentTrajectory.Unknown:
+                    (breadth ? UnknownWorklistBreadth : UnknownWorklistFull)
+                        .Add((record.Ticker ?? record.CompanyName, record.JudgmentId));
+                    break;
+                default:
+                    break;
+            }
+
+            if (record.SuppliedBasisProfile is not { } profile)
+            {
+                ProfileNotRecorded++;
+                return;
+            }
+
+            if (NewsJudgmentRecord.NoDirectionalBasisSupplied(profile))
+            {
+                if (breadth)
+                {
+                    NoDirectionalBasisBreadth++;
+                }
+                else
+                {
+                    NoDirectionalBasisFull++;
+                }
+            }
+
+            if (NewsJudgmentRecord.ClassifierSaidDirectionalJudgeSaidNoBusinessSignal(
+                record.Status, record.BusinessTrajectory, profile))
+            {
+                if (breadth)
+                {
+                    DisagreementBreadth++;
+                }
+                else
+                {
+                    DisagreementFull++;
+                }
+            }
+        }
+
+        /// <summary>
+        /// The worklist rendering: <c>TICKER (judgmentId)</c> entries, ordinal by label then id (AD-3), comma
+        /// joined — or the explicit word <c>none</c>, so an empty worklist is a stated fact, not a blank.
+        /// </summary>
+        public static string Describe(IReadOnlyList<(string Label, Guid JudgmentId)> worklist) =>
+            worklist.Count == 0
+                ? "none"
+                : string.Join(
+                    ", ",
+                    worklist
+                        .OrderBy(e => e.Label, StringComparer.Ordinal)
+                        .ThenBy(e => e.JudgmentId)
+                        .Select(e => string.Create(CultureInfo.InvariantCulture, $"{e.Label} ({e.JudgmentId:D})")));
     }
 
     /// <summary>

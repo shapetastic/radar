@@ -89,7 +89,11 @@ stage-1 cohort key is untouched, so NO re-typing of the ~2,000 in-window observa
   supplied fact is StatedComparison or Event — a numberless comparison ("backlog declined") or a
   numberless event ("the FDA approved the product") beside a quantified level still establishes
   direction; when that is the case, say in the Rationale which levels you set aside." The response
-  schema (`news-judgment-schema-v3`) is unchanged by this spec.
+  schema (`news-judgment-schema-v3`) is unchanged by this spec. **(Spec 221's prompt v7 withdrew the
+  "Answer Unknown ONLY when no supplied fact is StatedComparison or Event" clause: when no BUSINESS
+  StatedComparison/Event fact is supplied the judge answers `NoBusinessSignal` or — only when a supplied
+  business fact bears on a direction it cannot resolve — `Unknown`, per rule 2; and a basis label describes
+  wording, not subject. See the spec-221 bullet in `docs/architecture-history.md`.)**
 - **Validator** (`NewsJudgmentValidator`): after fact-id resolution, compute `trajectoryBasis` ONLY for a
   current, `Judged`, DIRECTIONAL record (BusinessTrajectory Improving or Deteriorating), over the cited
   `TrajectoryFactIds`: `Supported` when ≥ 1 cited fact is `StatedComparison` or `Event`; `LevelOnly` when

@@ -236,6 +236,16 @@ public sealed class NewsJudgmentSignalMaterializer : INewsJudgmentSignalMaterial
                 continue;
             }
 
+            // Spec 221 §2b: NoBusinessSignal is a non-direction too (DirectionFor maps it to none), but it is
+            // counted on its OWN axis — folding it into NonDirectionalTrajectory would re-merge "nothing to read"
+            // with "could not tell", the very aggregate the token exists to split. It mints nothing either way,
+            // so the materializer identity (news-judgment-signal-v3) does not move.
+            if (record.BusinessTrajectory == NewsJudgmentTrajectory.NoBusinessSignal)
+            {
+                Count(skips, NewsJudgmentSignalSkipReason.NoBusinessSignalTrajectory);
+                continue;
+            }
+
             // Mixed and Unknown are honest non-directions, not defects: genuine both-ways evidence is not a
             // direction, and a judge that declined to call has not called. DirectionFor already encodes
             // that, so this gate has exactly one definition of "directional".

@@ -34,10 +34,14 @@ public sealed class NewsJudgmentCompletenessSchemaTests
         // findings with a NULL ChallengeStrength — a shape no v8 record could hold). The prompt and the
         // response schema do NOT move; the cohort key DOES, for the family ORDER (ordering=, below) — which
         // decides which facts a bounded judge sees — never for the record tag.
-        Assert.Equal("news-judgment-v9", NewsJudgmentRecord.CurrentSchemaVersion);
-        Assert.Equal("news-judgment-prompt-v6", NewsJudgmentContract.PromptVersion);
-        Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
-        Assert.Equal("family-ordering-v2", NewsJudgmentFamilyOrdering.Version);
+        // Spec 221: the tag moves to v10 (the trajectory vocabulary widened — NoBusinessSignal — and the
+        // families were selected business-first); the prompt forks to v7 and the response schema to v5 (the
+        // new token); the cohort key moves through those two AND ordering=family-ordering-v3. The tag is
+        // still never a cohort-key input.
+        Assert.Equal("news-judgment-v10", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-prompt-v7", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-schema-v5", NewsJudgmentContract.SchemaVersion);
+        Assert.Equal("family-ordering-v3", NewsJudgmentFamilyOrdering.Version);
 
         // The stage-2 cohort key, asserted against the literal composition rather than against itself: the
         // record tag is deliberately NOT one of its inputs, so widening a persisted field can never fork a
@@ -46,12 +50,13 @@ public sealed class NewsJudgmentCompletenessSchemaTests
         var cohortKey = NewsJudgmentContract.CohortKey("openai", "judge-model", Stage1);
 
         Assert.Equal(
-            "openai:judge-model|news-judgment-prompt-v6|news-judgment-schema-v4|"
+            "openai:judge-model|news-judgment-prompt-v7|news-judgment-schema-v5|"
                 + $"stage1={Stage1}|families={FactFamilyBuilder.IdentityString}"
                 + $"|comparison={StatementComparisonClassifier.Version}"
                 + $"|references={ReferenceValueProjector.Version}"
-                + "|ordering=family-ordering-v2",
+                + "|ordering=family-ordering-v3",
             cohortKey);
+        Assert.DoesNotContain("news-judgment-v10", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v9", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v8", cohortKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-v7", cohortKey, StringComparison.Ordinal);
@@ -74,7 +79,7 @@ public sealed class NewsJudgmentCompletenessSchemaTests
             .GetConstructors()
             .Single()
             .GetParameters()
-            .TakeLast(17)
+            .TakeLast(21)
             .ToList();
         Assert.Equal(
             [
@@ -95,6 +100,10 @@ public sealed class NewsJudgmentCompletenessSchemaTests
                 nameof(NewsJudgmentRecord.FamiliesAvailable), // spec 219 §2
                 nameof(NewsJudgmentRecord.FamiliesWithheldByBudget), // spec 219 §2
                 nameof(NewsJudgmentRecord.FamiliesAvailableByBasis), // spec 220 §3
+                nameof(NewsJudgmentRecord.SuppliedBasisProfile), // spec 221 §2a
+                nameof(NewsJudgmentRecord.FamiliesNonBusinessAvailable), // spec 221 §3
+                nameof(NewsJudgmentRecord.FamiliesNonBusinessDemotedBySelection), // spec 221 §3
+                nameof(NewsJudgmentRecord.FamiliesWithNoEventTypesAvailable), // spec 221 §3
             ],
             trailing.Select(p => p.Name).ToList());
         Assert.All(trailing, p => Assert.True(p.IsOptional));

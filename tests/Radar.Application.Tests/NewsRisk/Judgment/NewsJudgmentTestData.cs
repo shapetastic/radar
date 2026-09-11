@@ -87,14 +87,15 @@ internal static class NewsJudgmentTestData
         string statement,
         int memberCount = 1,
         int distinctPublisherCount = 1,
-        IReadOnlyList<Guid>? memberFactIds = null) => new(
+        IReadOnlyList<Guid>? memberFactIds = null,
+        IReadOnlyList<NewsEventType>? eventTypes = null) => new(
         FamilyId: Guid.NewGuid(),
         CompanyId: companyId,
         CaptureMode: NewsObservationCaptureMode.ProspectiveRss,
         RepresentativeFactId: representativeFactId,
         RepresentativeStatement: statement,
         CanonicalClaimKey: FactFamilyBuilder.NormalizeStatement(statement),
-        EventTypes: [NewsEventType.RegulatoryOrLegal],
+        EventTypes: eventTypes ?? [NewsEventType.RegulatoryOrLegal],
         MemberFactIds: memberFactIds ?? [representativeFactId],
         MemberCount: memberCount,
         DistinctPublisherCount: distinctPublisherCount,
@@ -105,10 +106,11 @@ internal static class NewsJudgmentTestData
         Guid factId,
         string statement,
         NewsFactAssertionStatus assertionStatus = NewsFactAssertionStatus.Alleged,
-        NewsFactAttribution attribution = NewsFactAttribution.PlaintiffFirm) => new(
+        NewsFactAttribution attribution = NewsFactAttribution.PlaintiffFirm,
+        IReadOnlyList<NewsEventType>? eventTypes = null) => new(
         Fact: new NewsTypingValidatedFact(
             FactId: factId,
-            EventTypes: [NewsEventType.RegulatoryOrLegal],
+            EventTypes: eventTypes ?? [NewsEventType.RegulatoryOrLegal],
             Statement: statement,
             TemporalScope: null,
             Attribution: attribution,

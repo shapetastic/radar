@@ -34,7 +34,8 @@ namespace Radar.Application.NewsRisk.Judgment;
 /// <item><b>a null persisted trajectory under <c>Judged</c> is INVALID, not unknown</b> — the validator
 /// requires the token to parse, so it can only be a corrupted/hand-edited record: it renders
 /// <c>? unassessed (invalid-record)</c>. The genuine <c>Unknown</c> ENUM value stays a valid completed read
-/// and keeps the dot plus its <c>unknown</c> token;</item>
+/// and keeps the dot plus its <c>unknown</c> token — and so does spec 221's <c>NoBusinessSignal</c>, with its
+/// own distinct <c>no-business-signal</c> token, never rendered as <c>unknown</c>;</item>
 /// <item>every same-run record-derived marker carries its <c>JudgmentId</c>, so the report's judgment
 /// provenance appendix can make the traceability claim TRUE rather than assert it.</item>
 /// </list>
@@ -141,7 +142,7 @@ public static class NewsJudgmentMarkerPolicy
     internal static readonly string DeterioratingTrajectorySummary =
         "business-trajectory-" + KebabToken(nameof(NewsJudgmentTrajectory.Deteriorating));
 
-    /// <summary>The factual trajectory display token: <c>improving</c> / <c>deteriorating</c> / <c>mixed</c> / <c>unknown</c>.</summary>
+    /// <summary>The factual trajectory display token: <c>improving</c> / <c>deteriorating</c> / <c>mixed</c> / <c>unknown</c> / <c>no-business-signal</c> (spec 221).</summary>
     internal static string TrajectoryToken(NewsJudgmentTrajectory trajectory) =>
         KebabToken(trajectory.ToString());
 
@@ -151,8 +152,8 @@ public static class NewsJudgmentMarkerPolicy
     /// <summary>
     /// Spec 214 §4 — the trajectory-basis display token for a JUDGED record: the enum name
     /// (<c>Supported</c> / <c>LevelOnly</c>) when recorded, <see cref="PreSpec214BasisToken"/> when a
-    /// directional record carries none, and <c>null</c> (no token at all) for a Mixed/Unknown/absent
-    /// trajectory, where a basis is not applicable and must not be invented.
+    /// directional record carries none, and <c>null</c> (no token at all) for a Mixed/Unknown/NoBusinessSignal/
+    /// absent trajectory, where a basis is not applicable and must not be invented.
     /// </summary>
     internal static string? TrajectoryBasisToken(NewsJudgmentRecord record)
     {

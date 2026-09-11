@@ -182,7 +182,7 @@ public sealed class NewsJudgmentInputBuilderTests
         var stage1 = NewsTypingContract.CohortKey("openai", "deepseek-ai/DeepSeek-V4-Flash");
         var key = NewsJudgmentContract.CohortKey("openai", "judge-model", stage1);
 
-        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v6|news-judgment-schema-v4|", key);
+        Assert.StartsWith("openai:judge-model|news-judgment-prompt-v7|news-judgment-schema-v5|", key);
         Assert.Contains("stage1=" + stage1, key);
         Assert.Contains("families=" + FactFamilyBuilder.IdentityString, key);
         // Spec 214 §1: the comparison-basis classifier is an input the model sees, so its version is cohort
@@ -241,12 +241,16 @@ public sealed class NewsJudgmentInputBuilderTests
         Assert.DoesNotContain("news-judgment-prompt-v3", currentKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-prompt-v4", currentKey, StringComparison.Ordinal);
         Assert.DoesNotContain("news-judgment-schema-v3", currentKey, StringComparison.Ordinal);
+        // Spec 221 §2b retires prompt v6 and schema v4 the same way: a v4 Unknown absorbed "nothing to read",
+        // a v5 Unknown does not, so the two can never share a cohort.
+        Assert.DoesNotContain("news-judgment-prompt-v6", currentKey, StringComparison.Ordinal);
+        Assert.DoesNotContain("news-judgment-schema-v4", currentKey, StringComparison.Ordinal);
 
         // …and newly written records stamp the CURRENT store schema while older files keep theirs. Spec 197
         // §2.2 moved that tag to v4 for FactIdPrefixExpansionCount, spec 214 §2 to v5 for
         // TrajectoryBasis and spec 215 §2 to v6 for the reference fields — RECORD changes, not cohort
         // changes: the cohort keys above are unaffected by the tag (asserted in
         // NewsJudgmentCompletenessSchemaTests).
-        Assert.Equal("news-judgment-v9", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-v10", NewsJudgmentRecord.CurrentSchemaVersion);
     }
 }

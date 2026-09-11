@@ -15,7 +15,8 @@ public sealed record NewsJudgmentValidationResult(
     int FindingsDropped,
     IReadOnlyList<string> FindingDropReasons,
     // Spec 187 §1: the validated supplied FactIds that ESTABLISH the trajectory. Always non-null on a
-    // Judged result (empty iff Unknown); empty on a failure, where no claim survived to be evidenced.
+    // Judged result (empty iff Unknown or, since spec 221, NoBusinessSignal); empty on a failure, where no
+    // claim survived to be evidenced.
     IReadOnlyList<Guid> TrajectoryFactIds,
     // Spec 192 §2: the rationale-length facts, ALWAYS measured (this type is only ever produced by
     // Validate, so "not recorded" is unrepresentable here — that state exists only on a pre-192 record on
@@ -50,8 +51,10 @@ public sealed record NewsJudgmentValidationResult(
 /// parse), or the whole response is <see cref="NewsJudgmentStatus.ValidationFailed"/>;</item>
 /// <item><b>spec 187 §1 — the trajectory must CITE what establishes it</b>: every
 /// <c>TrajectoryFactIds</c> entry must parse, be distinct and be a SUPPLIED representative fact;
-/// <c>Improving</c>/<c>Deteriorating</c>/<c>Mixed</c> require at least one; <c>Unknown</c> requires NONE
-/// (it means no supplied fact established a directional balance, not that provenance was omitted); at
+/// <c>Improving</c>/<c>Deteriorating</c>/<c>Mixed</c> require at least one; <c>Unknown</c> and (spec 221 §2b)
+/// <c>NoBusinessSignal</c> require NONE — each is a non-claim, so evidence cited FOR it is a contradiction,
+/// failed under its OWN named reason (<see cref="TrajectoryEvidenceWithUnknownReason"/> /
+/// <see cref="TrajectoryEvidenceWithNoBusinessSignalReason"/>), not omitted provenance; at
 /// least one cited fact must be at-or-above <c>reported</c> assertion status
 /// (<see cref="IsBelowReported"/>, the SAME boundary the caveat rule uses); and the cited set may not be
 /// made ENTIRELY of families confined to <see cref="NewsJudgmentContextOnlyEventTypes"/>;</item>
@@ -160,6 +163,18 @@ public static class NewsJudgmentValidator
     /// finding; it cannot alone establish the company's overall business direction.
     /// </summary>
     public const string TrajectoryAssertionTooWeakReason = "trajectory-assertion-too-weak";
+
+    /// <summary>The named failure reason for an <c>Unknown</c> trajectory that cites trajectory facts (spec 187 §1).</summary>
+    public const string TrajectoryEvidenceWithUnknownReason = "trajectory-evidence-with-unknown";
+
+    /// <summary>
+    /// SPEC 221 §2b — the named failure reason for a <c>NoBusinessSignal</c> trajectory that cites trajectory
+    /// facts: a finding that the supplied facts carry no business trajectory cannot be ESTABLISHED by one of
+    /// them. Its own reason, never folded into <see cref="TrajectoryEvidenceWithUnknownReason"/>, so the two
+    /// non-directional answers stay separable in the drop accounting too.
+    /// </summary>
+    public const string TrajectoryEvidenceWithNoBusinessSignalReason =
+        "trajectory-evidence-with-no-business-signal";
 
     /// <summary>The context-only member list, rendered once for the drop-reason text (AD-3: declaration order).</summary>
     private static readonly string ContextOnlyTypeList =
@@ -454,7 +469,7 @@ public static class NewsJudgmentValidator
     /// <see cref="NewsFactComparisonBasis.LevelOnly"/> AND at least one cited reference value's metric is NAMED
     /// in that family's statement under the projector's ONE metric-phrase table
     /// (<see cref="ReferenceValueProjector.NamesMetric"/>); else <see cref="NewsTrajectoryBasis.LevelOnly"/>.
-    /// <c>null</c> for Mixed and Unknown — a non-direction has no basis to grade. Deliberately NOT a
+    /// <c>null</c> for Mixed, Unknown and (spec 221) NoBusinessSignal — a non-direction has no basis to grade. Deliberately NOT a
     /// validation failure: a wrong call recorded beats a call rewritten, and the fail-closed step is the
     /// materializer's allowlist, not this validator.
     /// </summary>
@@ -608,15 +623,19 @@ public static class NewsJudgmentValidator
             ids.Add(resolution.FactId);
         }
 
-        if (trajectory == NewsJudgmentTrajectory.Unknown)
+        if (trajectory is NewsJudgmentTrajectory.Unknown or NewsJudgmentTrajectory.NoBusinessSignal)
         {
             if (ids.Count > 0)
             {
-                // Unknown means "the supplied facts did not establish a directional balance". Citing
-                // evidence FOR that non-claim is a contradiction, not extra provenance.
-                dropReasons.Add(
-                    $"trajectory-evidence-with-unknown: {ids.Count} fact(s) were cited as establishing an "
-                        + "Unknown trajectory, which by definition establishes no direction");
+                // Unknown means "the supplied facts did not establish a directional balance"; NoBusinessSignal
+                // (spec 221 §2b) means "what I read carries no business trajectory at all". Citing evidence FOR
+                // either non-claim is a contradiction, not extra provenance — and each fails under its OWN name.
+                dropReasons.Add(trajectory == NewsJudgmentTrajectory.Unknown
+                    ? $"{TrajectoryEvidenceWithUnknownReason}: {ids.Count} fact(s) were cited as establishing an "
+                        + "Unknown trajectory, which by definition establishes no direction"
+                    : $"{TrajectoryEvidenceWithNoBusinessSignalReason}: {ids.Count} fact(s) were cited as "
+                        + "establishing a NoBusinessSignal trajectory, which by definition finds no business "
+                        + "trajectory in the supplied facts");
                 return false;
             }
 
@@ -627,10 +646,10 @@ public static class NewsJudgmentValidator
         if (ids.Count == 0)
         {
             // The MNRO shape: a directional label with no identified evidence behind it. Under v2 the
-            // honest answer when nothing establishes direction is Unknown, not a manufactured call.
+            // honest answer when nothing establishes direction is a non-direction, not a manufactured call.
             dropReasons.Add(
                 $"trajectory-evidence-missing: a {trajectory} trajectory must cite the supplied fact(s) "
-                    + "that establish it (cite none only for an Unknown trajectory)");
+                    + "that establish it (cite none only for an Unknown or NoBusinessSignal trajectory)");
             return false;
         }
 

@@ -10,7 +10,9 @@ using Radar.Application.Tests.NewsRisk;
 namespace Radar.Application.Tests.NewsRisk.Judgment;
 
 /// <summary>One supplied fact, and the company it owns, for <see cref="JudgmentPassFixture.Typing"/>.</summary>
-internal readonly record struct JudgmentPassFact(Guid CompanyId, Guid FactId, string Statement);
+/// <remarks>Spec 221: <see cref="EventTypes"/> is optional; <c>null</c> keeps the fixture's default typing.</remarks>
+internal readonly record struct JudgmentPassFact(
+    Guid CompanyId, Guid FactId, string Statement, IReadOnlyList<NewsEventType>? EventTypes = null);
 
 /// <summary>
 /// The shared builders for an end-to-end <see cref="NewsJudgmentGenerator"/> pass: options, the candidate
@@ -86,7 +88,8 @@ internal static class JudgmentPassFixture
                 fact.FactId,
                 fact.Statement,
                 assertionStatus: NewsFactAssertionStatus.ConfirmedFiling,
-                attribution: NewsFactAttribution.Regulator);
+                attribution: NewsFactAttribution.Regulator,
+                eventTypes: fact.EventTypes);
             factsById[factRef.Fact.FactId] = factRef;
             inputs.Add(new FactFamilyInputFact(
                 FactId: factRef.Fact.FactId,

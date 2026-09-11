@@ -98,8 +98,13 @@ public sealed class ChatNewsJudgmentAnalyzerTests
         // spec 215 §2 moved it again (rule 12 + the TrajectoryReferenceIds/ReferenceIds return clause) and
         // forked the prompt to news-judgment-prompt-v5; spec 216 §1 restated rule 12 (a reference is the
         // company EARLIER statement, never the figure the fact itself quotes; each is labelled prior or
-        // stated-prior) and forked the prompt to news-judgment-prompt-v6.
-        const string Pinned = "626a5c67ffe529efeb4e2dd860713a3da5a3d285a405e6254de185d55987b0b2";
+        // stated-prior) and forked the prompt to news-judgment-prompt-v6; spec 221 §2b rewrote rule 2
+        // (NoBusinessSignal vs Unknown, with the adverse-fact guard), rule 11's last sentence and the Return
+        // clause, and forked the prompt to news-judgment-prompt-v7 (the v6 pin was
+        // 626a5c67ffe529efeb4e2dd860713a3da5a3d285a405e6254de185d55987b0b2 — quoted as history).
+        // (v7 was re-worded once more before it shipped — rule 11's tail now agrees with rule 2 — so there is
+        // exactly one v7 text and this is its hash.)
+        const string Pinned = "d1d9e3c30a18c591196b608dea519e4e12526ca3715fda430cf8d54db066b6f2";
         var actual = CanonicalHash.Sha256Hex(ChatNewsJudgmentAnalyzer.SystemInstruction);
         var matchesPin = string.Equals(Pinned, actual, StringComparison.Ordinal);
 
@@ -163,10 +168,15 @@ public sealed class ChatNewsJudgmentAnalyzerTests
             StringComparison.Ordinal);
         Assert.Contains("even when that call may later prove wrong", instruction, StringComparison.Ordinal);
 
-        // Mixed vs Unknown, stated as a rule — Unknown is honest, not a last resort.
+        // Mixed vs Unknown, stated as a rule — Unknown is honest, not a last resort. Spec 221 §2b narrowed
+        // Unknown to "a supplied business fact bears on a direction you cannot resolve" (see the
+        // NoBusinessSignal test below).
         Assert.Contains("genuinely pull in opposing directions", instruction, StringComparison.Ordinal);
         Assert.Contains(
-            "do not establish a direction at all", instruction, StringComparison.Ordinal);
+            "Use \"Unknown\" ONLY when a supplied business fact DOES bear on a direction that you cannot "
+                + "resolve",
+            instruction,
+            StringComparison.Ordinal);
 
         // The CASS/WDFC shapes: absence is never evidence, in either direction.
         Assert.Contains(
@@ -252,16 +262,54 @@ public sealed class ChatNewsJudgmentAnalyzerTests
         // The forked contract, so the wording and the cohort it forks cannot drift apart (spec 214 §2
         // carried the v3 rule forward unchanged into v4; spec 215 §2 into v5, and the same rule now applies
         // to the reference citation lists too).
-        Assert.Equal("news-judgment-prompt-v6", NewsJudgmentContract.PromptVersion);
-        Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
+        Assert.Equal("news-judgment-prompt-v7", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-schema-v5", NewsJudgmentContract.SchemaVersion);
+    }
+
+    [Fact]
+    public void SystemInstruction_SplitsNoBusinessSignalFromUnknown_AndGuardsAgainstDodgingADeterioration()
+    {
+        // Spec 221 §2b — the v7 contract. On 2026-09-09 every one of 47 breadth Unknown rationales said no
+        // supplied fact established BUSINESS trajectory: one token was carrying two states. The model now
+        // owns the split, and §2d's hazard (the new token absorbing bad news) is answered as a RULE.
+        var instruction = ChatNewsJudgmentAnalyzer.SystemInstruction;
+
+        Assert.Contains(
+            "Use \"NoBusinessSignal\" when the supplied facts, read as a whole, carry no business trajectory "
+                + "at all",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains("say in the Rationale what could not be resolved", instruction, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"NoBusinessSignal\" and \"Unknown\" are honest answers, not last resorts, and both must cite NO "
+                + "TrajectoryFactIds",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An adverse business fact IS business signal: never answer \"NoBusinessSignal\" to avoid calling a "
+                + "deterioration",
+            instruction,
+            StringComparison.Ordinal);
+
+        // The Return clause lists the token and states the empty-citation rule for both non-directions.
+        Assert.Contains(
+            "\"Mixed\" | \"Unknown\" | \"NoBusinessSignal\"", instruction, StringComparison.Ordinal);
+        Assert.Contains("EMPTY for Unknown or NoBusinessSignal", instruction, StringComparison.Ordinal);
+
+        // The instruction's vocabulary is the validator's: every defined trajectory token is named.
+        foreach (var token in Enum.GetNames<NewsJudgmentTrajectory>())
+        {
+            Assert.Contains($"\"{token}\"", instruction, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
     public void SystemInstruction_StatesRule11_ALevelIsNotATrend()
     {
         // Spec 214 §2 — the v4 rule, stated as a RULE: a level establishes no direction; only a
-        // StatedComparison or Event fact may be cited as trajectory support; Unknown only when NO supplied
-        // fact is either; the set-aside levels are named in the rationale.
+        // StatedComparison or Event fact may be cited as trajectory support; the set-aside levels are named in
+        // the rationale. (v4's "Unknown only when NO supplied fact is either" was withdrawn by spec 221 —
+        // asserted absent below.)
         var instruction = ChatNewsJudgmentAnalyzer.SystemInstruction;
 
         Assert.Contains("(11) A quantity stated as a LEVEL", instruction, StringComparison.Ordinal);
@@ -279,11 +327,44 @@ public sealed class ChatNewsJudgmentAnalyzerTests
             instruction,
             StringComparison.Ordinal);
         Assert.Contains(
+            "say in the Rationale which levels you set aside", instruction, StringComparison.Ordinal);
+
+        // Spec 221 §2b: rule 11 no longer forces abstention to Unknown (v4–v6 said "Answer Unknown ONLY when
+        // no supplied fact is StatedComparison or Event"), and it says the label describes WORDING — the
+        // SENEA shape, where the only StatedComparison was a 3.9% share-price rise.
+        Assert.DoesNotContain(
             "Answer Unknown ONLY when no supplied fact is StatedComparison or Event",
             instruction,
             StringComparison.Ordinal);
         Assert.Contains(
-            "say in the Rationale which levels you set aside", instruction, StringComparison.Ordinal);
+            "The ComparisonBasis label describes the WORDING of a statement, not its subject",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a StatedComparison or Event fact that is a share-price move, an analyst action or other rule-5 "
+                + "context does not establish business trajectory",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "When no supplied BUSINESS fact is StatedComparison or Event, cite no trajectory fact and answer per "
+                + "rule 2",
+            instruction,
+            StringComparison.Ordinal);
+
+        // Review iteration 2: rule 11's tail must AGREE with rule 2 — a supply of business levels and
+        // unquantified statements only (the spec's 19-judgment no-directional-basis group) is NoBusinessSignal,
+        // never Unknown. The v7 draft's "Unknown when business facts are present but their direction cannot be
+        // resolved" contradicted rule 2 on exactly that supply, and is asserted absent.
+        Assert.Contains(
+            "NoBusinessSignal when the supplied business facts are only levels or unquantified statements that "
+                + "bear on no direction; Unknown ONLY when a supplied business fact does bear on a direction you "
+                + "cannot resolve",
+            instruction,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Unknown when business facts are present but their direction cannot be resolved",
+            instruction,
+            StringComparison.Ordinal);
     }
 
     [Theory]

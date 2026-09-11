@@ -481,10 +481,11 @@ public sealed class NewsJudgmentBreadthCoverageTests
         // Spec 219 changes how many companies are read and how deeply — not what the judge is asked. A
         // cohort-key move would have invalidated every cached verdict for no reason. (Spec 220 later moved the
         // tag to v9 and forked the cohort key for the family ORDER — its own cause; "coverage" still never
-        // enters the key.)
-        Assert.Equal("news-judgment-v9", NewsJudgmentRecord.CurrentSchemaVersion);
-        Assert.Equal("news-judgment-prompt-v6", NewsJudgmentContract.PromptVersion);
-        Assert.Equal("news-judgment-schema-v4", NewsJudgmentContract.SchemaVersion);
+        // enters the key. Spec 221 then moved the tag to v10 and forked the prompt/schema for the
+        // NoBusinessSignal verdict — its own cause, again not coverage.)
+        Assert.Equal("news-judgment-v10", NewsJudgmentRecord.CurrentSchemaVersion);
+        Assert.Equal("news-judgment-prompt-v7", NewsJudgmentContract.PromptVersion);
+        Assert.Equal("news-judgment-schema-v5", NewsJudgmentContract.SchemaVersion);
         Assert.DoesNotContain(
             "coverage",
             NewsJudgmentContract.CohortKey("openai", "judge-model", "stage1"),

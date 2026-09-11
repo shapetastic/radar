@@ -333,13 +333,14 @@ authoritative record:
   structure earns **v12**. An in-place composition change bumps
   `IScoreFormula.CompositionRevision` (spec 153); a strategy that changes formula or weights
   gets a NEW NAME (spec 141, immutable-by-convention).
-- **Fingerprint pins are window-dependent and have moved twelve times since spec 191** (191,
-  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220 (214–216, 219 and 220 AI-ON only; 217 moved both
-  sides). 214+215 merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
+- **Fingerprint pins are window-dependent and have moved thirteen times since spec 191** (191,
+  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221 (214–216, 219, 220 and 221 AI-ON only; 217
+  moved both sides). 214+215 merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
   composition stamped a full 102-company live run; each later move (216, 217, 219) invalidated the
   identity records again, and the 2026-09-09 run (`run-20260909T234658242Z-5c6644f6`) stamped the
-  spec-219 value (spec 220 Overview), so no 216/217/219 step remains outstanding. Spec 220's step is the
-  only one owed, after its merge.
+  spec-219 value (spec 220 Overview), so no 216/217/219 step remains outstanding. Spec 220's step (after
+  its merge) and spec 221's step (after its merge) are owed. Both fork only the AI-ON side, so IF no
+  baseline runs between the two merges they collapse into ONE operator step; otherwise they are two.
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
@@ -355,9 +356,11 @@ authoritative record:
   references were projected; 216 required a SECOND step, since satisfied — the 2026-09-09 run stamped the
   spec-219 value). `docs/architecture-history.md` names that cohort and
   quotes its pin as history. The precommitted **2026-09-29** claim date is UNCHANGED: the boundary describes
-  comparability, not the claim). The spec-191 inherited-direction cohort is known
-  DEFECTIVE and is not a control.
-- **News is a two-stage read** (specs 177–220): stage-1 typing (facts, structurally no
+  comparability, not the claim), and **221** (market-reaction families demoted in selection + the
+  `NoBusinessSignal` verdict: a pre-221 breadth `Unknown` also absorbed "nothing business to read" and a
+  post-221 one does not, so `Unknown` counts and rates before and after it are NOT comparable). The
+  spec-191 inherited-direction cohort is known DEFECTIVE and is not a control.
+- **News is a two-stage read** (specs 177–221): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact
   carries a deterministic `ComparisonBasis` line and the judge is told a level is not a trend;
   since spec 215 the judge is also handed the company-reported reference values the
@@ -378,11 +381,22 @@ authoritative record:
   (`news-judgment-coverage-v2`): the judge reads the whole company universe at a bounded family budget,
   the spec-179 §3 top-five-per-section cohort is retained beside it at the full budget, a bounded read
   says so on its record and in its rendered cell, and a company with no typed facts is skipped and
-  counted rather than recorded. **Since spec 220 that bounded budget is filled comparison-basis-first**
-  (`family-ordering-v2`, which joins the judgment cohort key: `StatedComparison`/`Event`, then `LevelOnly`,
-  then `NotQuantified`, with member count only the tie-break). The news read's identity is hashed into
-  `ScoringConfigVersion` via the `news=` and `newsquery=` segments (specs 194 §2 / 198 §3 / 219 §6 / 220
-  — the coverage POLICY and family-ordering versions are hashed, the budgets are not), so a
+  counted rather than recorded. **That bounded budget is filled BUSINESS-first since spec 221**
+  (`family-ordering-v3`, which joins the judgment cohort key — spec 220's `family-ordering-v2` was
+  comparison-basis-first and ranked a share-price move with the revenue comparisons): business
+  `StatedComparison`/`Event`, then business `LevelOnly`, then business `NotQuantified`, then every family
+  confined to `NewsJudgmentContextOnlyEventTypes` (REUSED, never re-declared) whatever its basis — demoted,
+  never dropped; an untyped family is not demoted and is counted; member count is only the tie-break.
+  **Since spec 221 the judge has two non-directional answers**: `NoBusinessSignal` (what it read carries
+  no business trajectory — business levels and unquantified statements alone included) and `Unknown` (a
+  supplied business fact bears on a direction the judge cannot resolve). Both cite nothing
+  and mint nothing (the materializer counts `NoBusinessSignalTrajectory` on its own axis); the record
+  (`news-judgment-v10`) carries a supply-side `SuppliedBasisProfile`, and each pass logs the
+  classifier-said-directional/judge-said-`NoBusinessSignal` disagreement and NAMES the residual `Unknown`
+  worklist. The news read's identity is hashed into
+  `ScoringConfigVersion` via the `news=` and `newsquery=` segments (specs 194 §2 / 198 §3 / 219 §6 / 220 /
+  221 — the coverage POLICY, family-ordering, prompt and schema versions and the trajectory→direction
+  mapping are hashed, the budgets are not), so a
   `score`/`replay` pass needs the same news/judgment config validated as a `full` run. Also since spec
   220, a blank `challengeStrength` beside surviving findings is accepted and persisted as NOT RECORDED
   (counted `ChallengeStrengthNotStated`) instead of discarding the judgment. That rule is NOT separately

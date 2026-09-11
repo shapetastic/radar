@@ -388,7 +388,11 @@ public static class NewsRiskLiveArtifactRenderer
                     ? trajectoryFactIds.Count > 0
                         ? "Trajectory evidence: "
                             + string.Join(", ", trajectoryFactIds.Select(id => $"`{id:D}`"))
-                        : "Trajectory evidence: none cited (an Unknown trajectory establishes no direction)"
+                        : judgment.BusinessTrajectory == Judgment.NewsJudgmentTrajectory.NoBusinessSignal
+                            // Spec 221 §2b: its own sentence — "nothing to read" must never render as "could not tell".
+                            ? "Trajectory evidence: none cited (NoBusinessSignal — the judge found no business "
+                                + "trajectory in the supplied facts)"
+                            : "Trajectory evidence: none cited (an Unknown trajectory establishes no direction)"
                     : "Trajectory evidence: not recorded under news-judgment-v1");
             }
 
