@@ -170,6 +170,12 @@ secrets.json
 /data/news-observations/
 /data/news-risk/
 /data/news-typing/
+# Spec 216 (reported-metrics ledger) and spec 217 (acquisition scan) added these live store
+# subdirectories and neither was listed here - 79 store files were one `git add -A` from a
+# public commit, the same hazard the data/replays note above records.
+/data/acquisitions/
+/data/acquisitions-cache/
+/data/reported-metrics/
 
 # Scheduled-run wrapper logs (spec 171): host-local operational output produced by
 # scripts/run-baseline-scheduled.ps1, pruned by its -LogRetentionDays. Never repo content.
