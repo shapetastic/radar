@@ -1,4 +1,104 @@
-# Task: Read forward, never back — judge a fact ONCE when it arrives, accrue the signal, and stop re-reading a fortnight of history every night
+# Spec 222 — Withdrawn: read forward, never back
+
+**Status: WITHDRAWN, 2026-09-11. Not implemented.** Removed from `docs/next/` so it is no longer a
+pending assignment. The original proposal is preserved below as historical text; its implementation,
+archive, strategy-reset and claim-boundary instructions are withdrawn in full.
+
+## Decision and evidence boundary
+
+Do not implement 222. Its proposed mechanism is not supported by the reported family re-supply counts,
+and its proposed per-family judgments require scoring and context semantics that the design did not
+provide. **No first-read latency verdict is established.** Neither "latency is fixed" nor "the backlog
+will correct organically" is a finding of this record.
+
+The measurements below were reported by the maintainer during the 2026-09-11 review. They are recorded
+with their limitations, not presented as independently reproduced by this documentation change.
+
+| Reported observation | What it establishes |
+|---|---|
+| Original supplied-fact median age: 12–13 days | Age at supply, not time to first judgment. |
+| Per-family supply frequency: median 2, maximum 3 in the reported sample | The original DGII count of 18 company judgments in 13 days is not 18 reads per family; it overstates the evidence for repeated family reading as the main problem. |
+| Last run: 1,300 families supplied of 5,311 available; 4,011 withheld by budget (about 75.5%) | A per-run selection gap under the breadth cap of 5 and full cap of 50. It does not establish that those 4,011 families have never been supplied in an earlier run. |
+| Supplied-family counts grew from 45 to 1,300 across the period as 219 and 220 landed | Coverage grew. This alone establishes neither first-read latency nor the causal contribution of each change. |
+| Consecutive-run family-ID overlap of 84–98%, with IDs persisting from August | Family identity continuity was reported; this does not by itself prove an earlier successful judgment. |
+
+Company coverage is not family coverage. A family that continually loses the selection ranking can
+remain unread until it leaves the available window. The withheld count reopens the latency question
+through selection coverage; it does not answer that question or prove that indefinite waiting occurred.
+
+## Retracted latency analysis
+
+The maintainer explicitly withdrew the reported median first-read latency of 12 days, the 5% within one
+day figure, and the apparent weekly improvement from 19 days to 1 day (including the recent 83% within
+two days figure). They must not be used as findings or as evidence that spec 219 fixed latency.
+
+The second script labelled all 1,692 families as first judged on 2026-09-10, and its latency distribution
+reproduced the overall age distribution. Together with the earlier history/overlap result, this raised an
+unresolved measurement inconsistency. Persistent family IDs alone do not logically establish prior
+judgment, but the available analysis is insufficient to support either script's latency conclusion.
+The script defect or reconciliation has not been established here.
+
+The original inference of a hidden 19-day window ceiling is also unestablished: the maximum age in a
+sample does not prove a configured ceiling. Likewise, score dispersion does not establish that attention
+correctly measures whether the market has already noticed a business development.
+
+## Constraints retained for any future incremental-judgment design
+
+1. **Define company-level meaning and cross-family context.** Independent family directions are not
+   equivalent to a company judgment that can resolve conflicting evidence as `Mixed` (reported as 47.6%
+   of the full cohort in the review). A future design must state how it preserves or deliberately changes
+   that meaning, with the appropriate scoring identity; it cannot call this only a cache change.
+2. **Define aggregation and revision replacement explicitly.**
+   `NewsJudgmentSignalSupersede` chooses `winners[signal.EvidenceId]`. Two family verdicts anchored to
+   the same article can lose one signal, while revisions anchored to different articles need not replace
+   one another. The existing materializer and supersede rule do not provide the family aggregation
+   promised by original section 2. See
+   [NewsJudgmentSignalSupersede](../src/Radar.Application/Scoring/NewsJudgmentSignalSupersede.cs).
+3. **Distinguish new information from projection changes.** `FactFamilyBuilder` projects
+   `windowMembers`; expiry can change membership and the representative without any new news.
+   "Members changed" is therefore not a sufficient invalidation rule. Reference inputs can also change
+   without new members, and late earlier facts can move the identity anchor. Specify input revision,
+   identity continuity and original observation time rather than treating all membership changes as
+   new corroboration. See [FactFamilyBuilder](../src/Radar.Application/NewsTyping/FactFamilyBuilder.cs)
+   and [NewsJudgmentInputBuilder](../src/Radar.Application/NewsRisk/Judgment/NewsJudgmentInput.cs).
+4. **Preserve the state needed for reuse.** Original section 1 required reuse while section 4 archived
+   `news-risk/` and `news-typing/`, removing the active history needed to support that reuse. These
+   instructions contradict each other. A strategy rename alone does not isolate shared signal inputs.
+   No store reset, archive move, new strategy or retirement of the prospective claim follows from this
+   withdrawal.
+
+## What a separate latency measurement must establish
+
+Build the family denominator from typed facts using the production `FactFamilyBuilder` logic and the
+appropriate extractor cohorts, rather than deriving the universe only from judgments. Reconstruct
+historical availability with point-in-time typing knowledge; do not let facts typed later silently enter
+an earlier run's universe. Preserve full-history identity semantics and account for anchor changes.
+
+For each family, distinguish first observation, first availability as typed judge input, first actual
+model supply, first successful judgment, and signal materialization. Reused records are not fresh model
+calls. Join the complete applicable judgment history without pooling incompatible cohorts. Report both
+observed first-read delays and the ages/counts of still-unsupplied families, including budget exclusions
+and families that aged out without supply. Recent unjudged families must remain visible in the
+denominator; a distribution over successful judgments alone cannot establish prompt coverage.
+
+This is a separate measurement task, not an implementation assignment under 222. Its results may
+justify a future selection or scheduling change; no such outcome is preselected here.
+
+## Predictive value remains a separate question
+
+The review reports no measurement of the effects of 219/220/221 against subsequent price outcomes.
+Neither coverage growth nor a future latency result establishes predictive value. Evaluating accrued
+scores remains a priority, respecting existing series identities, prospective claim boundaries and
+outcome maturity. Price remains validation-only (AD-14).
+
+---
+
+## Original proposal — withdrawn in full, retained as history
+
+**Everything below records the superseded proposal, including unsupported diagnoses and inactive
+acceptance criteria. It is not an instruction to run or implement spec 222.**
+
+### Original title: Read forward, never back — judge a fact ONCE when it arrives, accrue the signal, and stop re-reading a fortnight of history every night
 
 ## Overview
 
