@@ -275,8 +275,9 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
     /// <see cref="ReportedMetricLedgerInventory.NotRecorded"/> with the reason — never <c>0</c>; a company
     /// folder that cannot be enumerated likewise makes the whole inventory not-recorded, because a partial
     /// count would render as a smaller measured total. An unparseable file is counted in
-    /// <c>UnreadableFiles</c>, contributes zero records, and is named once at Warning (the read path
-    /// already warns for the same file when a judge or report reads it). Never throws for a disk failure;
+    /// <c>UnreadableFiles</c>, contributes zero records, and is named in ONE aggregated Warning for the
+    /// whole inventory (never one line per file, which would re-fire for the same corrupt file on every
+    /// pass); the names are capped with the remainder counted. Never throws for a disk failure;
     /// only caller cancellation propagates.
     /// </summary>
     public async Task<ReportedMetricLedgerInventory> InventoryAsync(CancellationToken ct)
@@ -310,6 +311,8 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
         var files = 0;
         var records = 0;
         var unreadable = 0;
+        var unreadableFiles = new List<string>();
+        Exception? lastUnreadableError = null;
         foreach (var companyDirectory in companyDirectories)
         {
             ct.ThrowIfCancellationRequested();
@@ -338,14 +341,23 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
                 files++;
                 try
                 {
-                    var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
-                    var parsed = JsonSerializer.Deserialize<List<ReportedMetricRecord>>(text, RadarFileStoreJson.Options);
+                    // Stream-deserialized, not ReadAllTextAsync: the INVENTORY walks every ledger file on
+                    // every pass, so the intermediate string is an allocation per file for no benefit. This
+                    // is the convention the newer stores already use (FileAcquisitionStore,
+                    // FileBenchmarkUniverseSource) with the same shared RadarFileStoreJson.Options. The
+                    // single-record read paths elsewhere in this file are deliberately left alone.
+                    List<ReportedMetricRecord>? parsed;
+                    await using (var stream = File.OpenRead(file))
+                    {
+                        parsed = await JsonSerializer
+                            .DeserializeAsync<List<ReportedMetricRecord>>(stream, RadarFileStoreJson.Options, ct)
+                            .ConfigureAwait(false);
+                    }
+
                     if (parsed is null)
                     {
                         unreadable++;
-                        _logger.LogWarning(
-                            "Reported-metrics ledger file '{File}' deserialized to null; counted as unreadable in the inventory.",
-                            file);
+                        unreadableFiles.Add(file);
                         continue;
                     }
 
@@ -358,10 +370,29 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
                 {
                     unreadable++;
-                    _logger.LogWarning(
-                        ex, "Failed to read reported-metrics ledger file '{File}'; counted as unreadable in the inventory.", file);
+                    unreadableFiles.Add(file);
+                    lastUnreadableError ??= ex;
                 }
             }
+        }
+
+        // ONE aggregated line for the whole inventory, never one per file: CLAUDE.md requires an aggregated
+        // log line (one per store, never one per item), and a per-file warning would re-fire for the same
+        // corrupt file on every pass forever. The files are NAMED so the count is actionable, capped with
+        // the remainder counted so a pathological directory cannot flood the log.
+        if (unreadableFiles.Count > 0)
+        {
+            const int NamedLimit = 10;
+            var named = string.Join(", ", unreadableFiles.Take(NamedLimit).Select(Path.GetFileName));
+            var withheld = unreadableFiles.Count - Math.Min(NamedLimit, unreadableFiles.Count);
+            _logger.LogWarning(
+                lastUnreadableError,
+                "Reported-metrics ledger inventory: {Unreadable} of {Files} ledger file(s) could not be read "
+                    + "and contributed no records; named: {NamedFiles}{Withheld}.",
+                unreadableFiles.Count,
+                files,
+                named,
+                withheld > 0 ? $" (+{withheld} further not named)" : string.Empty);
         }
 
         return new ReportedMetricLedgerInventory(
