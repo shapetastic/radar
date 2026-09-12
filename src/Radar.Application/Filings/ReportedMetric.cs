@@ -245,4 +245,89 @@ public interface IReportedMetricStore
     /// counting the superseded files it skips) is the projector's job, not the store's — spec 216 §5.
     /// </summary>
     Task<IReadOnlyList<ReportedMetricRecord>> GetForCompanyAsync(Guid companyId, CancellationToken ct);
+
+    /// <summary>
+    /// SPEC 223 §2 — the ACCRUED state of the whole ledger, so "never written anything" is reportable from
+    /// a log line without a filesystem check. Counts ledger files only
+    /// (<c>{companyId}/{accession}.{policy}.json</c>), NEVER the <c>outbox/</c> subtree. Never throws for a
+    /// disk failure: an absent root is a MEASURED zero (the directory does not exist, and the result says
+    /// so), while an enumeration failure is <c>null</c> with a stated reason — never <c>0</c>. Only caller
+    /// cancellation propagates.
+    /// </summary>
+    Task<ReportedMetricLedgerInventory> InventoryAsync(CancellationToken ct);
+}
+
+/// <summary>
+/// SPEC 223 §2 — what the reported-metrics ledger holds ON DISK, measured once per pass. Every count is
+/// nullable because <c>null</c> means NOT RECORDED (the store could not establish it —
+/// <see cref="NotRecordedReason"/> says why), never <c>0</c>. An absent root directory is the MEASURED
+/// zero: <see cref="RootDirectoryExists"/> false, zero files, zero records — the honest state of a ledger
+/// that has never written anything. A file that cannot be parsed is counted in
+/// <see cref="UnreadableFiles"/> and contributes no records, so it is never silent and never inflates the
+/// record count.
+/// </summary>
+public sealed record ReportedMetricLedgerInventory(
+    bool? RootDirectoryExists,
+    int? LedgerFiles,
+    int? LedgerRecords,
+    int? UnreadableFiles,
+    string? NotRecordedReason)
+{
+    /// <summary>The measured zero of a ledger whose root directory does not exist.</summary>
+    public static ReportedMetricLedgerInventory AbsentRoot { get; } = new(false, 0, 0, 0, null);
+
+    /// <summary>The not-recorded shape: nothing could be established, and <paramref name="reason"/> says why.</summary>
+    public static ReportedMetricLedgerInventory NotRecorded(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        return new(null, null, null, null, reason);
+    }
+
+    /// <summary>
+    /// True when BOTH accrued counts were established (<see cref="LedgerRecords"/> and
+    /// <see cref="LedgerFiles"/> non-null). A partially recorded inventory is treated as NOT recorded, so a
+    /// renderer never prints one measured number beside a defaulted one.
+    /// </summary>
+    public bool IsRecorded => LedgerRecords is not null && LedgerFiles is not null;
+
+    /// <summary>
+    /// The established counts. Throws when <see cref="IsRecorded"/> is false — callers gate on
+    /// <see cref="DescribeNotRecorded"/> first, so a caller that reaches this on an unrecorded inventory has
+    /// a bug, and a bug must not render a defaulted zero.
+    /// </summary>
+    public (int Records, int Files) RecordedCounts =>
+        LedgerRecords is { } records && LedgerFiles is { } files
+            ? (records, files)
+            : throw new InvalidOperationException(
+                "The reported-metrics ledger inventory carries no recorded counts; render DescribeNotRecorded instead.");
+
+    /// <summary>
+    /// SPEC 223 — the ONE not-recorded rendering of <c>LedgerEntriesOnDisk</c>, shared by the collection
+    /// pass line (§2) and the judge's per-cohort line (§3) so the two never drift. Returns <c>null</c> when
+    /// the inventory is measured (the caller renders its own measured form); otherwise the honest text, in
+    /// precedence order: an unregistered ledger is <c>not recorded (ledger not registered)</c> whatever
+    /// inventory was handed in; a missing inventory (the read threw and the caller kept nothing) is
+    /// <c>not recorded (inventory unavailable)</c>; and an inventory the store could not establish is
+    /// <c>not recorded (&lt;reason&gt;)</c>, falling back to <c>reason not stated</c> when the store gave
+    /// none. Never <c>0</c>.
+    /// </summary>
+    public static string? DescribeNotRecorded(ReportedMetricLedgerInventory? inventory, bool ledgerRegistered)
+    {
+        if (!ledgerRegistered)
+        {
+            return "not recorded (ledger not registered)";
+        }
+
+        if (inventory is null)
+        {
+            return "not recorded (inventory unavailable)";
+        }
+
+        if (inventory.IsRecorded)
+        {
+            return null;
+        }
+
+        return $"not recorded ({inventory.NotRecordedReason ?? "reason not stated"})";
+    }
 }

@@ -3772,6 +3772,56 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     run after the merge and the step — including whether `Deteriorating` fell as `NoBusinessSignal` rose
     (§2d), the near-constant check, and whether the 19 fell (if not, a COLLECTION finding). Breadth
     `Unknown` counts before and after this date are NOT comparable. Nothing is re-judged or backfilled.
+- **Spec 223 (2026-09-12) — an enabled component that has never done anything must SAY SO: the AI filing
+  read reports its SUPPLY, the reported-metrics ledger reports its YIELD, the judge reports why it had no
+  references.** The spec-215/216 ledger had been enabled since 2026-09-09 and `data/reported-metrics/` did
+  not exist; deciding whether that was a defect or an absence of work took an hour of code reading because
+  nothing in the run log said either. It was an absence of work: metrics are extracted only on a FRESH
+  analyzer call, the analyzer reads item-2.02 8-Ks only, and `data/evidence/raw/filing/2026/09` held exactly
+  TWO item-2.02 filings for the month, both published before the ledger was enabled. Three of the five
+  `Unknown` judgments in run `9ce33d31` (2026-09-11) named the missing references directly (MRCY, OFG, CMCO).
+  - **What moved: log lines and counters only.** (§1) `DirectionalFilingSignalSource.ProduceAsync` emits
+    ONE Information line per call, an empty candidate list included — `Directional filing read supply (N
+    item-2.02 filing(s) of M Filing evidence item(s) handed to the reader this pass): …` — carrying
+    `FilingsServedFromCache` (a replay extracts no metrics), cache hits not replayable, policy-mismatch
+    re-analyses queued, cache lookups failed, `FilingsAnalysedFresh` (of which failed / non-authoritative
+    body), `FilingsSkippedByBudget` (naming `Radar:Ai:MaxFilingsPerRun` and its value ONLY when it bound),
+    the 429-breaker remainder and the signals produced; an eligible count of 0 says in words "no earnings
+    8-K was available to read this run". When the source is not registered, `CollectionPass` emits
+    `Directional filing read supply: the AI directional filing read is NOT registered this pass …` instead —
+    non-registration is stated, never inferred from a missing line. (§2) The `Reported-metrics ledger`
+    line lost its activity gate and is emitted on EVERY pass, now prefixed `(ENABLED; rm=<ReportedMetricsPolicy.Version>)`
+    or `(DISABLED; rm=<ReportedMetricsPolicy.DisabledToken>)` so an enabled-but-idle ledger and a disabled one
+    never render the same, and gained `ReportedMetricsExtracted / OutboxPayloadsEnqueued /
+    OutboxWritesSucceeded / OutboxWritesRetried / LedgerEntriesWritten` plus the ACCRUED `LedgerEntriesOnDisk`
+    from a new `IReportedMetricStore.InventoryAsync` (`ReportedMetricLedgerInventory`: an absent root is the
+    MEASURED zero and says the directory is absent; an enumeration failure is `null` + reason, rendered
+    "not recorded (<reason>)", never 0; the `outbox/` subtree is excluded by the ONE shared name; an
+    unparseable file is counted `UnreadableFiles` and contributes no records). (§3)
+    `ReferenceValueProjection.AbsenceReason` (`CompanyLedgerEmpty` / `NoRecordForNamedMetrics` /
+    `AllExcludedByEligibility`, set only on an empty projection) is threaded in-process through the input
+    bundle and `JudgmentPassOutcome` — NOT onto `NewsJudgmentRecord` — and `NewsJudgmentGenerator` emits one
+    line per cohort that made a call: `JudgmentsWithNoReferencesAvailable N of M called — LedgerEmpty /
+    NoMatchingReference / ExcludedByEligibility / NotRecorded` plus `LedgerEntriesOnDisk`. "Ledger empty"
+    is claimed ONLY from a measured global zero; "no matching reference" means the ledger holds values and
+    none match this company's facts; not-registered / unreadable company ledger / no inventory is
+    `NotRecorded`, never a measured empty.
+  - **What did NOT move.** No fingerprint pin — two real proofs, neither a literal in a test file: every
+    pinned test in `ScoringConfigFingerprintTests` is untouched by this slice and green, and
+    `SupplyVocabulary_NeverEntersTheScoringDescriptor` (`DirectionalFilingSignalSourceTests`,
+    Infrastructure, where the descriptor is composed) asserts the supply/yield vocabulary is absent from
+    the PRODUCTION `ScoringDescriptor()` output; no operator step; `reference-projection-v2`, `reported-metrics-v2`, `news-judgment-v10`, the prompt
+    and schema versions, `ScoringDescriptor()`, the cache, the cap, the breaker, what the analyzer reads
+    (2.02 only), and the ledger/outbox/projector/verifier behaviour are all unchanged. The §4 standing rule
+    ("an idle component must say it is idle") is recorded in CLAUDE.md and applied to these TWO components
+    only — not retrofitted elsewhere.
+  - **Expected inert window (precommitted).** On measured supply — 2 item-2.02 filings in September, both
+    pre-enablement — the ledger is EXPECTED to stay empty (`LedgerEntriesOnDisk 0 … ledger root directory
+    absent`, every judge line `LedgerEmpty N / NoMatchingReference 0`) until the late-October earnings
+    wave; the first `NoMatchingReference` and `ExcludedByEligibility` counts should appear then. A ledger
+    that is STILL empty in November, with `FilingsAnalysedFresh > 0` on the supply line, is a DEFECT, not a
+    shrug. **OWED:** the §5 lines verbatim from the first post-merge run in the PR body, and the §3 split
+    against the 2026-09-11 baseline (3 of 5 `Unknown`s citing missing references).
 
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 

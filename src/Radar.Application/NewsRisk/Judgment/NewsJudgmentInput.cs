@@ -76,7 +76,12 @@ public sealed record NewsJudgmentInputBundle(
     // from Families (NewsJudgmentSuppliedBasisProfile.Of), so it can never disagree with them.
     int? FamiliesNonBusinessAvailable = null,
     int? FamiliesWithNoEventTypesAvailable = null,
-    int? FamiliesNonBusinessDemotedBySelection = null);
+    int? FamiliesNonBusinessDemotedBySelection = null,
+    // SPEC 223 §3: WHY the projection handed this judgment zero references (null whenever References is
+    // non-empty). Threaded IN-PROCESS from the projection to the generator's per-pass counters; it is NOT
+    // carried onto NewsJudgmentRecord and does not touch the record version — the record already carries
+    // the counted exclusions, and the per-pass split is a log-line aggregate, not provenance.
+    ReferenceAbsenceReason? ReferenceAbsenceReason = null);
 
 /// <summary>
 /// Deterministic judge-input assembly (spec 185 §1/§5). Pure — no clock, no I/O:
@@ -238,7 +243,9 @@ public static class NewsJudgmentInputBuilder
             // Spec 221 §3: the non-business and untyped accounting of the same resolvable families.
             FamiliesNonBusinessAvailable: ordered.Count(r => NewsJudgmentFamilyOrdering.IsNonBusiness(r.Fact.Fact.EventTypes)),
             FamiliesWithNoEventTypesAvailable: ordered.Count(r => r.Fact.Fact.EventTypes.Count == 0),
-            FamiliesNonBusinessDemotedBySelection: nonBusinessDemotedBySelection);
+            FamiliesNonBusinessDemotedBySelection: nonBusinessDemotedBySelection,
+            // Spec 223 §3: the projection's own reason for an empty reference set, threaded verbatim.
+            ReferenceAbsenceReason: projection.AbsenceReason);
     }
 
     /// <summary>

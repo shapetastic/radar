@@ -385,6 +385,21 @@ public sealed class CollectionPass : ICollectionPass
                 .Select(d => d.Evidence.Id)
                 .ToHashSet();
         }
+        else
+        {
+            // SPEC 223 §1/§4 — registration is not evidence of operation, and NON-registration must be
+            // stated too. Without the source, no earnings 8-K is read this pass, so nothing can be
+            // extracted and the reported-metrics ledger cannot receive anything from this pass. ONE line
+            // per pass; a reader must never have to infer "the AI read is off" from the absence of the
+            // supply line the source would have emitted.
+            _logger.LogInformation(
+                "Directional filing read supply: the AI directional filing read is NOT registered this pass "
+                    + "(Radar:Ai:Enabled off or no analyzer composed); no earnings 8-K was read, no "
+                    + "reported metrics could be extracted, and the reported-metrics ledger cannot receive "
+                    + "anything from this pass. {FilingEvidence} Filing evidence item(s) were collected and "
+                    + "went to the deterministic extractor only.",
+                newEvidence.Count(e => e.Evidence.SourceType == EvidenceSourceType.Filing));
+        }
 
         // Spec 194: there is deliberately NO news-read preparation here. Spec 191 prepared an
         // INewsDirectionalReadSource at this exact point so the extractor could take a news article's
@@ -516,31 +531,39 @@ public sealed class CollectionPass : ICollectionPass
             }
         }
 
-        if (ledger.Extractions > 0
-            || ledger.OutboxReplayed > 0
-            || ledger.PolicyStampWithoutEnvelope > 0
-            || ledger.PolicyStampNotChecked > 0
-            || (_reportedMetricStore is not null && directional.Count > 0))
-        {
-            // ONE aggregated Information line per run (the spec-145 precedent). A measured zero renders as
-            // a zero; a run whose reads were all cache replays says "0 extraction(s)" rather than nothing.
-            _logger.LogInformation(
-                "Reported-metrics ledger ({Policy}): {Extractions} fresh earnings read(s) extracted metrics; "
-                    + "ledger files written {Written} / already on disk {AlreadyOnDisk} / not persisted "
-                    + "{NotPersisted} / no resolved company {NoCompany} / no ledger registered {NoStore}; "
-                    + "records written {Records}; metrics dropped unverified {Unverified} / unrecognised "
-                    + "{Unrecognised} / duplicate {Duplicate} / metric-not-in-quote {MetricNotInQuote} / "
-                    + "period-not-in-quote {PeriodNotInQuote} / fragment {Fragment} / not-associated "
-                    + "{NotAssociated}; prior pairs dropped incomplete {IncompletePriorPairs}. "
-                    + "Outbox pending {OutboxPending} (of which not acknowledged "
-                    + "{OutboxNotAcknowledged}) / replayed {OutboxReplayed} / acknowledged "
-                    + "{OutboxAcknowledged} / attempts-exhausted {OutboxAttemptsExhausted} / not enqueued "
-                    + "{OutboxNotEnqueued} / unresolved company {OutboxUnresolved} / attempt updates not "
-                    + "persisted {OutboxAttemptUpdatesNotPersisted} / cache stamps written (verified by "
-                    + "re-read) {CacheStamps} / not written {CacheStampsNotWritten}; policy stamp with no "
-                    + "envelope {PolicyStampWithoutEnvelope} / not checked {PolicyStampNotChecked}.",
-                ReportedMetricsPolicy.Version,
-                ledger.Extractions,
+        // SPEC 223 §2 — ONE aggregated Information line per pass, on EVERY pass, all-zero included (the
+        // spec-145 aggregation precedent). The pre-223 activity gate made an ENABLED ledger that had never
+        // written anything indistinguishable from a broken one, a disabled one, and one whose output was
+        // dropped; a silence is not a measured zero. The line therefore states the POLICY in force
+        // (ENABLED = store + outbox registered, DISABLED = not registered, and the `rm=` token the
+        // directional-filing descriptor carries for that state), the spec's named YIELD counters, and the
+        // ACCRUED inventory on disk — so "never written anything" is visible without a filesystem check.
+        // A count the store could not establish renders as "not recorded (<reason>)", never as 0.
+        var ledgerRegistered = _reportedMetricStore is not null;
+        var ledgerInventory = await InventoryReportedMetricLedgerAsync(ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Reported-metrics ledger ({State}; rm={PolicyToken}): {Extractions} fresh earnings read(s) extracted metrics; "
+                + "ledger files written {Written} / already on disk {AlreadyOnDisk} / not persisted "
+                + "{NotPersisted} / no resolved company {NoCompany} / no ledger registered {NoStore}; "
+                + "records written {Records}; metrics dropped unverified {Unverified} / unrecognised "
+                + "{Unrecognised} / duplicate {Duplicate} / metric-not-in-quote {MetricNotInQuote} / "
+                + "period-not-in-quote {PeriodNotInQuote} / fragment {Fragment} / not-associated "
+                + "{NotAssociated}; prior pairs dropped incomplete {IncompletePriorPairs}. "
+                + "Outbox pending {OutboxPending} (of which not acknowledged "
+                + "{OutboxNotAcknowledged}) / replayed {OutboxReplayed} / acknowledged "
+                + "{OutboxAcknowledged} / attempts-exhausted {OutboxAttemptsExhausted} / not enqueued "
+                + "{OutboxNotEnqueued} / unresolved company {OutboxUnresolved} / attempt updates not "
+                + "persisted {OutboxAttemptUpdatesNotPersisted} / cache stamps written (verified by "
+                + "re-read) {CacheStamps} / not written {CacheStampsNotWritten}; policy stamp with no "
+                + "envelope {PolicyStampWithoutEnvelope} / not checked {PolicyStampNotChecked}. "
+                + "Yield this pass: ReportedMetricsExtracted {ReportedMetricsExtracted} / "
+                + "OutboxPayloadsEnqueued {OutboxPayloadsEnqueued} / OutboxWritesSucceeded "
+                + "{OutboxWritesSucceeded} (ledger files written + already on disk) / OutboxWritesRetried "
+                + "{OutboxWritesRetried} (outbox replays) / LedgerEntriesWritten {LedgerEntriesWritten} "
+                + "(records written). Accrued: LedgerEntriesOnDisk {LedgerEntriesOnDisk}.",
+            ledgerRegistered ? "ENABLED" : "DISABLED",
+            ledgerRegistered ? ReportedMetricsPolicy.Version : ReportedMetricsPolicy.DisabledToken,
+            ledger.Extractions,
                 ledger.FilesWritten,
                 ledger.FilesAlreadyOnDisk,
                 ledger.FilesNotPersisted,
@@ -566,8 +589,20 @@ public sealed class CollectionPass : ICollectionPass
                 ledger.CacheStampsWritten,
                 ledger.CacheStampsNotWritten,
                 ledger.PolicyStampWithoutEnvelope,
-                ledger.PolicyStampNotChecked);
-        }
+                ledger.PolicyStampNotChecked,
+                // SPEC 223 §2 — the spec-223 yield names are MAPPED onto the spec-216 counters the pass
+                // already keeps, NOT measured separately: ReportedMetricsExtracted = Extractions,
+                // OutboxPayloadsEnqueued = OutboxEnqueued, OutboxWritesSucceeded = FilesWritten +
+                // FilesAlreadyOnDisk (a ledger file reached disk from an envelope, whether this pass wrote
+                // it or found it), OutboxWritesRetried = OutboxReplayed (an envelope re-driven from the
+                // outbox on a later pass), LedgerEntriesWritten = RecordsWritten. There is no distinct
+                // counter behind any of the five; the line names the mapping in its own text too.
+                ledger.Extractions,
+                ledger.OutboxEnqueued,
+                ledger.FilesWritten + ledger.FilesAlreadyOnDisk,
+                ledger.OutboxReplayed,
+                ledger.RecordsWritten,
+                RenderLedgerInventory(ledgerInventory, ledgerRegistered));
 
         // Spec 193 §1: ONE aggregated Warning per store per run (the spec-145 aggregation precedent), never
         // one line per failure — a bad disk would otherwise bury the run log in thousands of identical lines.
@@ -995,6 +1030,9 @@ public sealed class CollectionPass : ICollectionPass
                     continue;
                 }
 
+                // Spec 223 §2: a durable enqueue is counted on its own axis (OutboxPayloadsEnqueued).
+                ledger.OutboxEnqueued++;
+
                 if (await _reportedMetricOutbox.AcknowledgeAsync(current, ct).ConfigureAwait(false))
                 {
                     ledger.OutboxAcknowledged++;
@@ -1185,6 +1223,9 @@ public sealed class CollectionPass : ICollectionPass
             return;
         }
 
+        // Spec 223 §2: a durable enqueue is counted on its own axis (OutboxPayloadsEnqueued).
+        ledger.OutboxEnqueued++;
+
         // Only NOW may the cache say "extraction done under this policy" — the meaning of that stamp is
         // exactly "an outbox envelope exists for this accession under this policy".
         await StampReportedMetricsPolicyAsync(extraction.Accession, policy, ledger, ct).ConfigureAwait(false);
@@ -1354,6 +1395,74 @@ public sealed class CollectionPass : ICollectionPass
         public int CacheStampsNotWritten;
         public int PolicyStampWithoutEnvelope;
         public int PolicyStampNotChecked;
+
+        // Spec 223 §2 — durable enqueues (OutboxPayloadsEnqueued): the successful EnqueueAsync outcomes,
+        // fresh and re-enqueued-after-resolution alike.
+        public int OutboxEnqueued;
+    }
+
+    /// <summary>
+    /// SPEC 223 §2 — reads the ledger's ACCRUED inventory once per pass, AFTER this pass's fresh reads and
+    /// outbox work so the number includes what this pass wrote. <c>null</c> when no ledger is registered
+    /// (there is nothing to inventory); a store that throws is caught and rendered as not-recorded with
+    /// the failure named — never as 0 and never a failure of the pass. Only cancellation propagates.
+    /// </summary>
+    private async Task<ReportedMetricLedgerInventory?> InventoryReportedMetricLedgerAsync(CancellationToken ct)
+    {
+        if (_reportedMetricStore is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _reportedMetricStore.InventoryAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Reported-metrics ledger inventory could not be read this pass; LedgerEntriesOnDisk renders as not recorded.");
+            return ReportedMetricLedgerInventory.NotRecorded($"inventory read failed: {ex.GetType().Name}");
+        }
+    }
+
+    /// <summary>
+    /// SPEC 223 §2 — renders <c>LedgerEntriesOnDisk</c>. A registered ledger with an established count
+    /// renders the measured total (an absent root directory is the measured zero and SAYS the directory
+    /// is absent); anything the store could not establish renders as <c>not recorded (&lt;reason&gt;)</c>,
+    /// never as <c>0</c>; an unregistered ledger renders <c>not recorded (ledger not registered)</c>.
+    /// </summary>
+    internal static string RenderLedgerInventory(ReportedMetricLedgerInventory? inventory, bool ledgerRegistered)
+    {
+        // The not-recorded branches are the record's own (shared with NewsJudgmentGenerator's per-cohort
+        // line, so the two renderings cannot drift); only the richer MEASURED form is this line's. A null
+        // inventory is unreachable when registered (the reader above always returns a record) and is
+        // rendered honestly by the helper anyway rather than as a zero.
+        if (ReportedMetricLedgerInventory.DescribeNotRecorded(inventory, ledgerRegistered) is { } notRecorded)
+        {
+            return notRecorded;
+        }
+
+        // DescribeNotRecorded returned null, so the ledger is registered, the inventory is present and both
+        // counts are recorded.
+        var (records, files) = inventory!.RecordedCounts;
+        var unreadable = inventory.UnreadableFiles is { } u
+            ? string.Create(CultureInfo.InvariantCulture, $"{u} unreadable")
+            : "unreadable not recorded";
+        var root = inventory.RootDirectoryExists switch
+        {
+            false => "ledger root directory absent",
+            true => "ledger root directory present",
+            null => "ledger root directory existence not recorded",
+        };
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{records} record(s) in {files} ledger file(s) ({unreadable}; {root})");
     }
 
     /// <summary>

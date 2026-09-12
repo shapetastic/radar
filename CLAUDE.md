@@ -238,6 +238,18 @@ Do not hand back broken code.
   know what did not make it in. Found the hard way — specs 191/192/193/194 each closed one instance
   (findings binned unread over a rationale's length; a failed durable write reported as stored; signals
   superseded with no trace; syndication collapsed uncounted).
+- **An idle component must say it is idle.** *An optional or gated subsystem that is ENABLED must, once
+  per run, report whether it did any work and — when it did none — why. Registration is not evidence of
+  operation.* An enabled component that produces nothing is otherwise indistinguishable from a broken one,
+  a disabled one, and one whose output was dropped — a silence is not a measured zero (spec 223: the
+  reported-metrics ledger had been enabled for two days and written nothing, and establishing that this was
+  an absence of supply rather than a defect took an hour of code reading against 25,278 log lines that said
+  neither). Spec 223 applied it to exactly TWO components — the AI directional filing read reports its
+  SUPPLY every pass (`Directional filing read supply (…)`, or the `Directional filing read supply: … NOT
+  registered` line from `CollectionPass` when the source is absent) and the reported-metrics ledger reports
+  its YIELD and accrued `LedgerEntriesOnDisk` every pass (`Reported-metrics ledger (ENABLED|DISABLED;
+  rm=…)`), with the judge's per-cohort `JudgmentsWithNoReferencesAvailable` split beside them — and it is
+  NOT retrofitted elsewhere; a later slice may extend it. Reviewers hold NEW gated subsystems to it.
 - **No measure ships without its live distribution.** A spec that introduces or materially changes a score
   component, classifier, weight table or threshold must report what that thing actually produces **across
   the live universe** — the distribution, not a unit-test fixture — and the reviewer must check it. **A

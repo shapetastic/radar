@@ -264,4 +264,142 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
             CorruptExistingReason);
     }
 
+    /// <summary>The subtree under the root that holds outbox envelopes, never ledger files (spec 216 §2).</summary>
+    internal const string OutboxSubdirectoryName = "outbox";
+
+    /// <summary>
+    /// SPEC 223 §2 — the accrued ledger inventory. Walks every TOP-LEVEL subdirectory of the root EXCEPT
+    /// <c>outbox/</c> (envelopes are not ledger entries) and counts the <c>*.json</c> files directly inside
+    /// each company folder, parsing each as a record list. An absent root is the MEASURED zero
+    /// (<see cref="ReportedMetricLedgerInventory.AbsentRoot"/>); a root that cannot be enumerated is
+    /// <see cref="ReportedMetricLedgerInventory.NotRecorded"/> with the reason — never <c>0</c>; a company
+    /// folder that cannot be enumerated likewise makes the whole inventory not-recorded, because a partial
+    /// count would render as a smaller measured total. An unparseable file is counted in
+    /// <c>UnreadableFiles</c>, contributes zero records, and is named in ONE aggregated Warning for the
+    /// whole inventory (never one line per file, which would re-fire for the same corrupt file on every
+    /// pass); the names are capped with the remainder counted. Never throws for a disk failure;
+    /// only caller cancellation propagates.
+    /// </summary>
+    public async Task<ReportedMetricLedgerInventory> InventoryAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var root = _options.RootDirectory;
+        if (!Directory.Exists(root))
+        {
+            return ReportedMetricLedgerInventory.AbsentRoot;
+        }
+
+        List<string> companyDirectories;
+        try
+        {
+            companyDirectories = Directory
+                .EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly)
+                .Where(d => !string.Equals(
+                    Path.GetFileName(d), OutboxSubdirectoryName, StringComparison.OrdinalIgnoreCase))
+                .Order(StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex, "Failed to enumerate the reported-metrics ledger root '{Directory}' for its inventory.", root);
+            return ReportedMetricLedgerInventory.NotRecorded(
+                $"ledger root could not be enumerated: {ex.GetType().Name}");
+        }
+
+        var files = 0;
+        var records = 0;
+        var unreadable = 0;
+        var unreadableFiles = new List<string>();
+        Exception? lastUnreadableError = null;
+        foreach (var companyDirectory in companyDirectories)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            List<string> ledgerFiles;
+            try
+            {
+                ledgerFiles = Directory
+                    .EnumerateFiles(companyDirectory, "*.json", SearchOption.TopDirectoryOnly)
+                    .Order(StringComparer.Ordinal)
+                    .ToList();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to enumerate the reported-metrics ledger folder '{Directory}' for its inventory.",
+                    companyDirectory);
+                return ReportedMetricLedgerInventory.NotRecorded(
+                    $"ledger folder '{Path.GetFileName(companyDirectory)}' could not be enumerated: {ex.GetType().Name}");
+            }
+
+            foreach (var file in ledgerFiles)
+            {
+                ct.ThrowIfCancellationRequested();
+                files++;
+                try
+                {
+                    // Stream-deserialized, not ReadAllTextAsync: the INVENTORY walks every ledger file on
+                    // every pass, so the intermediate string is an allocation per file for no benefit. This
+                    // is the convention the newer stores already use (FileAcquisitionStore,
+                    // FileBenchmarkUniverseSource) with the same shared RadarFileStoreJson.Options. The
+                    // single-record read paths elsewhere in this file are deliberately left alone.
+                    List<ReportedMetricRecord>? parsed;
+                    await using (var stream = File.OpenRead(file))
+                    {
+                        parsed = await JsonSerializer
+                            .DeserializeAsync<List<ReportedMetricRecord>>(stream, RadarFileStoreJson.Options, ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    if (parsed is null)
+                    {
+                        unreadable++;
+                        unreadableFiles.Add(file);
+                        continue;
+                    }
+
+                    records += parsed.Count;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+                {
+                    unreadable++;
+                    unreadableFiles.Add(file);
+                    lastUnreadableError ??= ex;
+                }
+            }
+        }
+
+        // ONE aggregated line for the whole inventory, never one per file: CLAUDE.md requires an aggregated
+        // log line (one per store, never one per item), and a per-file warning would re-fire for the same
+        // corrupt file on every pass forever. The files are NAMED so the count is actionable, capped with
+        // the remainder counted so a pathological directory cannot flood the log.
+        if (unreadableFiles.Count > 0)
+        {
+            const int NamedLimit = 10;
+            var named = string.Join(", ", unreadableFiles.Take(NamedLimit).Select(Path.GetFileName));
+            var withheld = unreadableFiles.Count - Math.Min(NamedLimit, unreadableFiles.Count);
+            _logger.LogWarning(
+                lastUnreadableError,
+                "Reported-metrics ledger inventory: {Unreadable} of {Files} ledger file(s) could not be read "
+                    + "and contributed no records; named: {NamedFiles}{Withheld}.",
+                unreadableFiles.Count,
+                files,
+                named,
+                withheld > 0 ? $" (+{withheld} further not named)" : string.Empty);
+        }
+
+        return new ReportedMetricLedgerInventory(
+            RootDirectoryExists: true,
+            LedgerFiles: files,
+            LedgerRecords: records,
+            UnreadableFiles: unreadable,
+            NotRecordedReason: null);
+    }
 }

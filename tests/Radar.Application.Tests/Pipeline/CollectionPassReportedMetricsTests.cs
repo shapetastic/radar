@@ -450,6 +450,140 @@ public sealed class CollectionPassReportedMetricsTests
         Assert.Null(h.Cache.Entries[Accession].ReportedMetricsPolicy);
     }
 
+    // ---------------------------------------------------------------- spec 223 §1/§2: idle says idle
+
+    private const string NotRegisteredLinePrefix = "Directional filing read supply:";
+
+    [Fact]
+    public async Task LedgerLine_IsEmittedOnAPassWithNoDirectionalReads_AsAMeasuredZero_WithTheAccruedInventory()
+    {
+        // No directional source at all: nothing is read and nothing is extracted — and the line STILL
+        // says so, with the policy state, the rm= token, every yield counter at 0 and the accrued total.
+        var h = await BuildAsync(directional: null);
+
+        await h.Pass.RunAsync(default);
+
+        var line = h.LedgerLine;
+        Assert.Equal(LogLevel.Information, line.Level);
+        Assert.StartsWith(
+            $"Reported-metrics ledger (ENABLED; rm={ReportedMetricsPolicy.Version}): 0 fresh earnings read(s) extracted metrics;",
+            line.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Yield this pass: ReportedMetricsExtracted 0 / OutboxPayloadsEnqueued 0 / OutboxWritesSucceeded 0 "
+                + "(ledger files written + already on disk) / OutboxWritesRetried 0 (outbox replays) / "
+                + "LedgerEntriesWritten 0 (records written). Accrued: LedgerEntriesOnDisk 0 record(s) in 0 "
+                + "ledger file(s) (0 unreadable; ledger root directory absent).",
+            line.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(1, h.Ledger.Inventories);
+
+        // §1: the AI directional filing read is NOT registered — stated, never inferred from a missing line.
+        var notRegistered = Assert.Single(
+            h.Log.Entries, e => e.Message.StartsWith(NotRegisteredLinePrefix, StringComparison.Ordinal));
+        Assert.Equal(LogLevel.Information, notRegistered.Level);
+        Assert.Contains("NOT registered this pass", notRegistered.Message, StringComparison.Ordinal);
+        Assert.Contains("no earnings 8-K was read", notRegistered.Message, StringComparison.Ordinal);
+        Assert.Contains("the reported-metrics ledger cannot receive anything from this pass", notRegistered.Message, StringComparison.Ordinal);
+        Assert.Contains("1 Filing evidence item(s) were collected", notRegistered.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NotRegisteredLine_IsAbsent_WhenTheDirectionalSourceIsRegistered()
+    {
+        var h = await BuildAsync(ev => Fresh(ev));
+
+        await h.Pass.RunAsync(default);
+
+        Assert.DoesNotContain(
+            h.Log.Entries, e => e.Message.StartsWith(NotRegisteredLinePrefix, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task LedgerLine_RendersTheFreshPassYield_AndAPopulatedAccruedInventory()
+    {
+        var h = await BuildAsync(ev => Fresh(ev));
+        h.Ledger.Inventory = new ReportedMetricLedgerInventory(
+            RootDirectoryExists: true, LedgerFiles: 3, LedgerRecords: 7, UnreadableFiles: 1, NotRecordedReason: null);
+
+        await h.Pass.RunAsync(default);
+
+        var line = h.LedgerLine.Message;
+        Assert.Contains(
+            "Yield this pass: ReportedMetricsExtracted 1 / OutboxPayloadsEnqueued 1 / OutboxWritesSucceeded 1 "
+                + "(ledger files written + already on disk) / OutboxWritesRetried 0 (outbox replays) / "
+                + "LedgerEntriesWritten 2 (records written).",
+            line,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Accrued: LedgerEntriesOnDisk 7 record(s) in 3 ledger file(s) (1 unreadable; ledger root directory present).",
+            line,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LedgerLine_WhenDisabled_RendersDisabledAndRmDisabled_AndTheInventoryAsNotRecorded()
+    {
+        var h = await BuildAsync(directional: null, registerLedger: false);
+
+        await h.Pass.RunAsync(default);
+
+        var line = h.LedgerLine.Message;
+        Assert.StartsWith(
+            $"Reported-metrics ledger (DISABLED; rm={ReportedMetricsPolicy.DisabledToken}):",
+            line,
+            StringComparison.Ordinal);
+        Assert.Contains("LedgerEntriesOnDisk not recorded (ledger not registered).", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("LedgerEntriesOnDisk 0", line, StringComparison.Ordinal);
+        Assert.Equal(0, h.Ledger.Inventories);
+    }
+
+    [Fact]
+    public async Task EnabledButIdle_AndDisabled_NeverRenderTheSame()
+    {
+        var enabled = await BuildAsync(directional: null);
+        var disabled = await BuildAsync(directional: null, registerLedger: false);
+
+        await enabled.Pass.RunAsync(default);
+        await disabled.Pass.RunAsync(default);
+
+        Assert.NotEqual(enabled.LedgerLine.Message, disabled.LedgerLine.Message);
+        Assert.Contains("(ENABLED; rm=", enabled.LedgerLine.Message, StringComparison.Ordinal);
+        Assert.Contains("(DISABLED; rm=", disabled.LedgerLine.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LedgerLine_WhenTheInventoryReadThrows_RendersNotRecorded_NeverZero_AndWarnsOnce()
+    {
+        var h = await BuildAsync(directional: null);
+        h.Ledger.Inventory = null; // the fake throws
+
+        await h.Pass.RunAsync(default);
+
+        var line = h.LedgerLine.Message;
+        Assert.Contains("LedgerEntriesOnDisk not recorded (inventory read failed: IOException).", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("LedgerEntriesOnDisk 0", line, StringComparison.Ordinal);
+        Assert.Single(
+            h.Log.Entries,
+            e => e.Level == LogLevel.Warning
+                && e.Message.Contains("inventory could not be read", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task LedgerLine_WhenTheStoreReportsNotRecorded_RendersTheStoresReason()
+    {
+        var h = await BuildAsync(directional: null);
+        h.Ledger.Inventory = ReportedMetricLedgerInventory.NotRecorded(
+            "ledger root could not be enumerated: UnauthorizedAccessException");
+
+        await h.Pass.RunAsync(default);
+
+        Assert.Contains(
+            "LedgerEntriesOnDisk not recorded (ledger root could not be enumerated: UnauthorizedAccessException).",
+            h.LedgerLine.Message,
+            StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- doubles
 
     private static AnalyzedFilingRecord Record(string? policy) => new(
@@ -563,6 +697,24 @@ public sealed class CollectionPassReportedMetricsTests
 
         public Task<IReadOnlyList<ReportedMetricRecord>> GetForCompanyAsync(Guid companyId, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<ReportedMetricRecord>>([]);
+
+        /// <summary>
+        /// Spec 223 §2: the inventory the pass renders. Defaults to the MEASURED absent-root zero; a test
+        /// sets <c>null</c> to make the call THROW (the pass must catch, count and render not-recorded), or
+        /// a populated value to exercise the accrued-count rendering. <see cref="Inventories"/> counts how
+        /// many times the pass asked.
+        /// </summary>
+        public ReportedMetricLedgerInventory? Inventory { get; set; } = ReportedMetricLedgerInventory.AbsentRoot;
+
+        public int Inventories { get; private set; }
+
+        public Task<ReportedMetricLedgerInventory> InventoryAsync(CancellationToken ct)
+        {
+            Inventories++;
+            return Inventory is { } inventory
+                ? Task.FromResult(inventory)
+                : throw new IOException("test: inventory unavailable");
+        }
     }
 
     /// <summary>

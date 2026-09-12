@@ -42,6 +42,10 @@ public sealed partial class WeeklyReportBuilderTests
             return Task.FromResult<IReadOnlyList<ReportedMetricRecord>>(
                 [.. Records.Where(r => r.CompanyId == companyId)]);
         }
+
+        // Spec 223 §2: the report never asks for the inventory (it is a CollectionPass / judge concern).
+        public Task<ReportedMetricLedgerInventory> InventoryAsync(CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private static ReportedMetricRecord LedgerRecord(

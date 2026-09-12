@@ -189,6 +189,18 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
 
         var produced = new List<DirectionalFilingSignal>();
 
+        // SPEC 223 §1 — the SUPPLY tally, rendered in ONE Information line at the end of EVERY call (an
+        // empty candidate list included). Measured ints only; nothing here is a fingerprint input and
+        // nothing here changes what is read, cached, capped or broken.
+        var cacheReplays = 0;
+        var cacheHitsNotReplayable = 0;
+        var policyMismatchReanalyses = 0;
+        var cacheLookupFailures = 0;
+        var freshReadsFailed = 0;
+        var freshReadsNonAuthoritative = 0;
+        var skippedByBudget = 0;
+        var skippedByBreaker = 0;
+
         // Pass 1 — replay (unbounded, SEC-independent, breaker-independent): consult the cache for every eligible
         // filing. A hit replays its result with NO www.sec.gov fetch or AI call (a DirectionalSignalProduced hit
         // re-emits its signal; a confirmed no-signal hit contributes nothing). Cache MISSES are collected in the
@@ -224,6 +236,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         accession,
                         cached.ComparabilityPolicy,
                         _comparabilityPolicy);
+                    policyMismatchReanalyses++;
                     misses.Add((evidence, read.Value.Cik, accession, read.Value.Form));
                     continue;
                 }
@@ -242,6 +255,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         accession,
                         cached.ReportedMetricsPolicy,
                         ReportedMetricsPolicy.Version);
+                    policyMismatchReanalyses++;
                     misses.Add((evidence, read.Value.Cik, accession, read.Value.Form));
                     continue;
                 }
@@ -251,6 +265,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                     // Spec 216 §2: a REPLAY carries no extraction (nothing was read this pass) but it does
                     // carry the accession and the record's policy STAMP, so the pass can ask the outbox
                     // whether an envelope actually stands behind that stamp.
+                    cacheReplays++;
                     produced.Add(new DirectionalFilingSignal(
                         cached.Signal,
                         evidence,
@@ -274,6 +289,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                     // but an in-memory cache implementation may still hand one back) replays nothing, exactly
                     // as pre-204; EmptyBody is in the cause vocabulary but is never cached, so a record
                     // claiming it is untrustworthy and likewise replays nothing.
+                    cacheReplays++;
                     produced.Add(new DirectionalFilingSignal(
                         BuildReadSignal(
                             evidence, cause, cached.ReadDirection, cachedReadConfidence,
@@ -282,6 +298,12 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         ReportedMetrics: null,
                         Accession: accession,
                         CachedReportedMetricsPolicy: cached.ReportedMetricsPolicy));
+                }
+                else
+                {
+                    // Spec 223 §1: a HIT that replays nothing (the defensive null-cause / EmptyBody shapes
+                    // above). It is neither a miss nor a replay, and it was previously discarded uncounted.
+                    cacheHitsNotReplayable++;
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -293,6 +315,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 // A cache-lookup failure degrades to "no replay for this filing" and never aborts the batch
                 // (mirrors the analyze discipline). It is NOT queued as a miss — a broken cache read must not
                 // trigger a fresh www.sec.gov fetch this run; a later run re-consults the cache.
+                cacheLookupFailures++;
                 _logger.LogWarning(
                     ex,
                     "Directional filing cache lookup failed for evidence {EvidenceId}; skipping (no directional signal).",
@@ -320,7 +343,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
             if (newAnalyses >= cap)
             {
                 // Cap reached: leave the remaining misses uncached for a later run (same discipline as a
-                // failed/unattempted read — never cached).
+                // failed/unattempted read — never cached). Spec 223 §1: the remainder is COUNTED.
+                skippedByBudget = misses.Count - i;
                 break;
             }
 
@@ -346,6 +370,8 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                         // Non-authoritative read (empty/implausibly-short body, spec 114): NOT cached — leave the
                         // filing for a later healthy run to re-attempt. Caching it would freeze a degenerate
                         // fetch in as a false no-signal forever (the 2026-07-18 block-era poison).
+                        // Spec 223 §1: counted — it consumed a budget slot and extracted nothing.
+                        freshReadsNonAuthoritative++;
                     }
                     else if (analysis.Signal is not null && analysis.NoSignalCause is null)
                     {
@@ -412,14 +438,16 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 else if (outcome == SecEarningsReleaseReadOutcome.RateLimited)
                 {
                     // A failed read is NEVER cached (leave it for a later run). Only 429s feed the breaker.
+                    freshReadsFailed++;
                     consecutiveRateLimited++;
                     if (breaker > 0 && consecutiveRateLimited >= breaker)
                     {
+                        skippedByBreaker = misses.Count - (i + 1);
                         _logger.LogWarning(
                             "SEC www.sec.gov returned {N} consecutive HTTP 429s; skipping remaining {M} earnings "
                                 + "reads this run (host appears blocked).",
                             consecutiveRateLimited,
-                            misses.Count - (i + 1));
+                            skippedByBreaker);
                         break;
                     }
                 }
@@ -428,6 +456,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                     // A non-429 read failure is not cached and BREAKS the consecutive-429 run (it is a per-filing
                     // problem, not a host block): reset the counter so two 429s separated by a different failure
                     // (e.g. a timeout) are not counted as consecutive and cannot trip the breaker.
+                    freshReadsFailed++;
                     consecutiveRateLimited = 0;
                 }
             }
@@ -441,6 +470,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                 // analyzer discipline). No directional signal for this filing; the run continues. A thrown
                 // failure (e.g. an HttpClient timeout) is also a non-429 outcome that breaks the consecutive-429
                 // run — reset the counter so it cannot make separated 429s trip the breaker.
+                freshReadsFailed++;
                 consecutiveRateLimited = 0;
                 _logger.LogWarning(
                     ex,
@@ -448,6 +478,45 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
                     evidence.Id);
             }
         }
+
+        // SPEC 223 §1 — the SUPPLY line, emitted on EVERY call, all-zero included. "Nothing to do" and "did
+        // nothing" must read differently: an eligible count of 0 says in plain words that no earnings 8-K
+        // was available, rather than omitting the line. Every number is measured by this call; the budget
+        // is NAMED with its config path and value when it bound. This line is telemetry only — nothing in
+        // it enters ScoringDescriptor().
+        var supplySummary = eligible.Count == 0
+            ? "no earnings 8-K was available to read this run"
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"{eligible.Count} earnings 8-K candidate(s) were available to read this run");
+        var budgetSummary = skippedByBudget > 0
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"{skippedByBudget} (the Radar:Ai:MaxFilingsPerRun budget of {cap} bound)")
+            : "0";
+        _logger.LogInformation(
+            "Directional filing read supply ({Item202CandidatesInWindow} item-2.02 filing(s) of "
+                + "{CandidatesHandedIn} Filing evidence item(s) handed to the reader this pass): "
+                + "{SupplySummary}. FilingsServedFromCache {FilingsServedFromCache} (replayed; a replay "
+                + "extracts no metrics) / cache hits not replayable {CacheHitsNotReplayable} / "
+                + "policy-mismatch re-analyses queued {PolicyMismatchReanalyses} / cache lookups failed "
+                + "{CacheLookupFailures}; FilingsAnalysedFresh {FilingsAnalysedFresh} (of which failed "
+                + "{FreshReadsFailed}, non-authoritative body {FreshReadsNonAuthoritative}); "
+                + "FilingsSkippedByBudget {FilingsSkippedByBudget}; left unread by the 429 breaker "
+                + "{SkippedByBreaker}; directional/read signals produced {Produced}.",
+            eligible.Count,
+            candidateEvidence.Count,
+            supplySummary,
+            cacheReplays,
+            cacheHitsNotReplayable,
+            policyMismatchReanalyses,
+            cacheLookupFailures,
+            newAnalyses,
+            freshReadsFailed,
+            freshReadsNonAuthoritative,
+            budgetSummary,
+            skippedByBreaker,
+            produced.Count);
 
         return produced;
     }

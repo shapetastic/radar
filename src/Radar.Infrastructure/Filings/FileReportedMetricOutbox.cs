@@ -43,7 +43,9 @@ public sealed class FileReportedMetricOutbox : IReportedMetricOutbox
         _logger = logger;
     }
 
-    private string OutboxRoot => Path.Combine(_options.RootDirectory, "outbox");
+    // The ONE name for the outbox subtree (reuse over copy): the ledger inventory (spec 223 §2) excludes
+    // exactly this directory, so the two cannot drift.
+    private string OutboxRoot => Path.Combine(_options.RootDirectory, FileReportedMetricStore.OutboxSubdirectoryName);
 
     public async Task<DurableWriteResult> EnqueueAsync(
         ReportedMetricOutboxEnvelope envelope, CancellationToken ct)
