@@ -396,4 +396,112 @@ public sealed class FileReportedMetricStoreTests : IDisposable
             }
         }
     }
+
+    // ------------------------------------------------------------------ spec 223 §2: the inventory
+
+    [Fact]
+    public async Task Inventory_OnAnAbsentRoot_IsTheMeasuredZero_AndSaysTheDirectoryIsAbsent()
+    {
+        Assert.False(Directory.Exists(_root));
+
+        var inventory = await NewStore().InventoryAsync(CancellationToken.None);
+
+        Assert.False(inventory.RootDirectoryExists);
+        Assert.Equal(0, inventory.LedgerFiles);
+        Assert.Equal(0, inventory.LedgerRecords);
+        Assert.Equal(0, inventory.UnreadableFiles);
+        Assert.Null(inventory.NotRecordedReason);
+    }
+
+    [Fact]
+    public async Task Inventory_AfterOneWrite_CountsTheFileAndItsRecords()
+    {
+        var store = NewStore();
+        var records = new[]
+        {
+            Record(),
+            Record(metric: ReportedMetric.Backlog, period: "as of July 31, 2026"),
+        };
+        Assert.Equal(
+            DurableWriteOutcome.Written,
+            (await store.WriteIfNewAsync(Company, "0001049521-26-000011", Policy, records, CancellationToken.None)).Outcome);
+
+        var inventory = await store.InventoryAsync(CancellationToken.None);
+
+        Assert.True(inventory.RootDirectoryExists);
+        Assert.Equal(1, inventory.LedgerFiles);
+        Assert.Equal(2, inventory.LedgerRecords);
+        Assert.Equal(0, inventory.UnreadableFiles);
+        Assert.Null(inventory.NotRecordedReason);
+    }
+
+    [Fact]
+    public async Task Inventory_DoesNotCountTheOutboxSubtree()
+    {
+        // A pending outbox envelope under {root}/outbox/... is NOT a ledger entry, however JSON-shaped.
+        var outboxPending = Path.Combine(_root, FileReportedMetricStore.OutboxSubdirectoryName, "pending");
+        Directory.CreateDirectory(outboxPending);
+        await File.WriteAllTextAsync(Path.Combine(outboxPending, "0001049521-26-000011.reported-metrics-v2.json"), "[]");
+
+        var inventory = await NewStore().InventoryAsync(CancellationToken.None);
+
+        Assert.True(inventory.RootDirectoryExists);
+        Assert.Equal(0, inventory.LedgerFiles);
+        Assert.Equal(0, inventory.LedgerRecords);
+        Assert.Equal(0, inventory.UnreadableFiles);
+    }
+
+    [Fact]
+    public async Task Inventory_CountsAnUnparseableFileAsUnreadable_AndContributesNoRecords()
+    {
+        var store = NewStore();
+        Assert.Equal(
+            DurableWriteOutcome.Written,
+            (await store.WriteIfNewAsync(Company, "0001049521-26-000011", Policy, [Record()], CancellationToken.None)).Outcome);
+        var companyDirectory = Path.Combine(_root, Company.ToString("D"));
+        await File.WriteAllTextAsync(
+            Path.Combine(companyDirectory, FileReportedMetricStore.FileNameFor("0001049521-26-000012", Policy)!),
+            "[{ \"metric\": \"Reven");
+
+        var inventory = await store.InventoryAsync(CancellationToken.None);
+
+        Assert.True(inventory.RootDirectoryExists);
+        Assert.Equal(2, inventory.LedgerFiles);
+        Assert.Equal(1, inventory.LedgerRecords);
+        Assert.Equal(1, inventory.UnreadableFiles);
+        Assert.Null(inventory.NotRecordedReason);
+    }
+
+    [Fact]
+    public async Task Inventory_OnAPresentButEmptyRoot_IsAMeasuredZero_AndALooseFileIsNotACompanyFolder()
+    {
+        // The root exists (the outbox may have created it) but no company folder has ever been written:
+        // that is a measured zero that says the directory is PRESENT, distinct from the absent-root zero.
+        Directory.CreateDirectory(_root);
+        await File.WriteAllTextAsync(Path.Combine(_root, "stray.json"), "[]");
+
+        var inventory = await NewStore().InventoryAsync(CancellationToken.None);
+
+        Assert.True(inventory.RootDirectoryExists);
+        Assert.Equal(0, inventory.LedgerFiles);
+        Assert.Equal(0, inventory.LedgerRecords);
+        Assert.Equal(0, inventory.UnreadableFiles);
+        Assert.Null(inventory.NotRecordedReason);
+    }
+
+    [Fact]
+    public void Inventory_NotRecordedShape_CarriesNullsAndAReason_NeverZero()
+    {
+        // The contract the pass renders as "not recorded (<reason>)": every count is null, never 0.
+        var notRecorded = ReportedMetricLedgerInventory.NotRecorded("ledger root could not be enumerated: IOException");
+
+        Assert.Null(notRecorded.RootDirectoryExists);
+        Assert.Null(notRecorded.LedgerFiles);
+        Assert.Null(notRecorded.LedgerRecords);
+        Assert.Null(notRecorded.UnreadableFiles);
+        Assert.Equal("ledger root could not be enumerated: IOException", notRecorded.NotRecordedReason);
+        Assert.Throws<ArgumentException>(() => ReportedMetricLedgerInventory.NotRecorded(" "));
+
+        Assert.Equal(new ReportedMetricLedgerInventory(false, 0, 0, 0, null), ReportedMetricLedgerInventory.AbsentRoot);
+    }
 }

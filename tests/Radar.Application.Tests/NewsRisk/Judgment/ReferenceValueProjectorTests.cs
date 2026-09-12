@@ -338,14 +338,124 @@ public sealed class ReferenceValueProjectorTests
     [Fact]
     public void Project_IsEmpty_ForAnEmptyLedger_OrStatementsNamingNoLedgerMetric()
     {
-        Assert.Same(
-            ReferenceValueProjection.Empty,
-            ReferenceValueProjector.Project([Family("backlog hits $2.5B")], []));
+        // Spec 223 §3: the empty projection is no longer the shared Empty INSTANCE (it carries a reason),
+        // but it is field-for-field the pre-223 Empty on every pre-223 field.
+        var emptyLedger = ReferenceValueProjector.Project([Family("backlog hits $2.5B")], []);
+        Assert.Equal(ReferenceValueProjection.Empty, emptyLedger with { AbsenceReason = null });
+        Assert.Equal(ReferenceAbsenceReason.CompanyLedgerEmpty, emptyLedger.AbsenceReason);
 
         var projection = ReferenceValueProjector.Project(
             [Family("The company will present at a conference")], [Ledger(ReportedMetric.Backlog, "as of July 31, 2026")]);
         Assert.Empty(projection.References);
         Assert.Equal(0, projection.ReferenceValuesOmitted);
+        Assert.Equal(ReferenceAbsenceReason.NoRecordForNamedMetrics, projection.AbsenceReason);
+    }
+
+    // ------------------------------------------------------------------ spec 223 §3: the absence reason
+
+    [Fact]
+    public void AbsenceReason_IsCompanyLedgerEmpty_WhenTheLedgerHoldsNothing()
+    {
+        var projection = ReferenceValueProjector.Project([Family("Q2 Revenue $384.0M")], []);
+
+        Assert.Empty(projection.References);
+        Assert.Equal(ReferenceAbsenceReason.CompanyLedgerEmpty, projection.AbsenceReason);
+    }
+
+    [Fact]
+    public void AbsenceReason_IsNoRecordForNamedMetrics_WhenNoFamilyIsSupplied()
+    {
+        // A non-empty ledger and NO families: the facts name no metric, so nothing can match.
+        var projection = ReferenceValueProjector.Project([], [Ledger(ReportedMetric.Backlog, "as of July 31, 2026")]);
+
+        Assert.Empty(projection.References);
+        Assert.Equal(ReferenceAbsenceReason.NoRecordForNamedMetrics, projection.AbsenceReason);
+    }
+
+    [Fact]
+    public void AbsenceReason_IsNoRecordForNamedMetrics_WhenTheLedgerHasValuesForOtherMetricsOnly()
+    {
+        // The ledger holds two ELIGIBLE backlog rows (two accessions), but the facts name revenue: the
+        // ledger has values and none match this company's facts.
+        var ledger = new[]
+        {
+            Ledger(ReportedMetric.Backlog, "as of April 30, 2026", Filed.AddMonths(-3), "0001049521-26-000005"),
+            Ledger(ReportedMetric.Backlog, "as of July 31, 2026"),
+        };
+
+        var projection = ReferenceValueProjector.Project([Family("Q2 Revenue $384.0M")], ledger);
+
+        Assert.Empty(projection.References);
+        Assert.Equal(ReferenceAbsenceReason.NoRecordForNamedMetrics, projection.AbsenceReason);
+    }
+
+    [Fact]
+    public void AbsenceReason_IsAllExcludedByEligibility_WhenTheOnlyRecordIsTheNewestAccession()
+    {
+        // ONE backlog row = the current value, excluded as newest with no stated prior pair.
+        var projection = ReferenceValueProjector.Project(
+            [Family("backlog hits $2.5B")], [Ledger(ReportedMetric.Backlog, "as of July 31, 2026")]);
+
+        Assert.Empty(projection.References);
+        Assert.Equal(1, projection.ReferencesExcludedNewest);
+        Assert.Equal(ReferenceAbsenceReason.AllExcludedByEligibility, projection.AbsenceReason);
+    }
+
+    [Fact]
+    public void AbsenceReason_IsAllExcludedByEligibility_WhenEveryEligibleRecordIsLaterThanTheFact()
+    {
+        // The older accession IS structurally eligible, but the family was observed before it was filed.
+        var ledger = new[]
+        {
+            Ledger(ReportedMetric.Backlog, "as of April 30, 2026", Filed.AddMonths(-3), "0001049521-26-000005"),
+            Ledger(ReportedMetric.Backlog, "as of July 31, 2026"),
+        };
+
+        var projection = ReferenceValueProjector.Project(
+            [Family("backlog hits $2.5B", observedAtUtc: Filed.AddMonths(-6))], ledger);
+
+        Assert.Empty(projection.References);
+        Assert.Equal(1, projection.ReferencesExcludedLaterThanFact);
+        Assert.Equal(ReferenceAbsenceReason.AllExcludedByEligibility, projection.AbsenceReason);
+    }
+
+    [Fact]
+    public void AbsenceReason_IsAllExcludedByEligibility_WhenEveryRecordIsUnderASupersededPolicy()
+    {
+        var ledger = new[]
+        {
+            Ledger(ReportedMetric.Backlog, "as of April 30, 2026", Filed.AddMonths(-3), "0001049521-26-000005", policy: "reported-metrics-v1"),
+            Ledger(ReportedMetric.Backlog, "as of July 31, 2026", policy: "reported-metrics-v1"),
+        };
+
+        var projection = ReferenceValueProjector.Project([Family("backlog hits $2.5B")], ledger);
+
+        Assert.Empty(projection.References);
+        Assert.Equal(2, projection.ReferencesSkippedSupersededPolicy);
+        Assert.Equal(ReferenceAbsenceReason.AllExcludedByEligibility, projection.AbsenceReason);
+    }
+
+    [Fact]
+    public void AbsenceReason_IsNull_WhenAtLeastOneReferenceIsProjected_AndTheVersionIsUnchanged()
+    {
+        var ledger = new[]
+        {
+            Ledger(ReportedMetric.Backlog, "as of April 30, 2026", Filed.AddMonths(-3), "0001049521-26-000005"),
+            Ledger(ReportedMetric.Backlog, "as of July 31, 2026"),
+        };
+
+        var projection = ReferenceValueProjector.Project([Family("backlog hits $2.5B")], ledger);
+
+        Assert.Single(projection.References);
+        Assert.Null(projection.AbsenceReason);
+        // Spec 223 is an output annotation only: the projection's identity token does not move.
+        Assert.Equal("reference-projection-v2", ReferenceValueProjector.Version);
+    }
+
+    [Fact]
+    public void AbsenceReason_ValuesStartAtOne_SoADefaultedZeroIsUndefined()
+    {
+        Assert.DoesNotContain(0, Enum.GetValues<ReferenceAbsenceReason>().Cast<int>());
     }
 
     [Fact]

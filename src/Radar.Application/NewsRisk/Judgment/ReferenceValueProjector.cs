@@ -52,16 +52,47 @@ public sealed record NewsJudgmentReferenceValue(
     NewsJudgmentReferenceKind Kind);
 
 /// <summary>
+/// SPEC 223 §3 — WHY a projection handed the judge ZERO references. Values start at 1 so a defaulted zero
+/// is UNDEFINED. "The ledger holds nothing for this company" and "the ledger holds values but none match
+/// this company's facts" are different facts that must never share a counter: the first is the state of
+/// a young ledger, the second is what appears once earnings season starts.
+/// </summary>
+public enum ReferenceAbsenceReason
+{
+    /// <summary>The company's ledger is empty (no record under any policy).</summary>
+    CompanyLedgerEmpty = 1,
+
+    /// <summary>
+    /// The ledger holds records, but none is for a metric the supplied facts name — either the facts name
+    /// no metric at all, or no record (under any policy) exists for the metrics they name. The same fact
+    /// either way: the ledger has values and none match this company's facts.
+    /// </summary>
+    NoRecordForNamedMetrics = 2,
+
+    /// <summary>
+    /// Records for a named metric existed, but every one was excluded by the spec-216 rules — the newest
+    /// accession (with no stated prior pair), a filing later than the fact, or a superseded-policy file.
+    /// </summary>
+    AllExcludedByEligibility = 3,
+}
+
+/// <summary>
 /// The projector's output: the ordered supplied references, the COUNTED remainder the caps left out, and
 /// (spec 216 §1/§5) the three counted exclusions — the newest accession per metric, a filing later than the
 /// fact it would be compared with, and a ledger file written under a SUPERSEDED policy.
+/// <para>
+/// SPEC 223 §3 adds <see cref="AbsenceReason"/>: set ONLY when <see cref="References"/> is empty, naming why;
+/// <c>null</c> whenever at least one reference was projected. A pure output annotation — the selection
+/// logic, the phrase table, the caps and <see cref="ReferenceValueProjector.Version"/> are unchanged.
+/// </para>
 /// </summary>
 public sealed record ReferenceValueProjection(
     IReadOnlyList<NewsJudgmentReferenceValue> References,
     int ReferenceValuesOmitted,
     int ReferencesExcludedNewest = 0,
     int ReferencesExcludedLaterThanFact = 0,
-    int ReferencesSkippedSupersededPolicy = 0)
+    int ReferencesSkippedSupersededPolicy = 0,
+    ReferenceAbsenceReason? AbsenceReason = null)
 {
     public static ReferenceValueProjection Empty { get; } = new([], 0);
 }
@@ -192,9 +223,22 @@ public static class ReferenceValueProjector
         ArgumentNullException.ThrowIfNull(families);
         ArgumentNullException.ThrowIfNull(ledger);
 
-        if (ledger.Count == 0 || families.Count == 0)
+        // Spec 223 §3: the two empty inputs are DIFFERENT absences and are annotated as such; the returned
+        // projection is otherwise exactly the pre-223 Empty (no selection logic runs).
+        if (ledger.Count == 0)
         {
-            return ReferenceValueProjection.Empty;
+            return ReferenceValueProjection.Empty with
+            {
+                AbsenceReason = ReferenceAbsenceReason.CompanyLedgerEmpty,
+            };
+        }
+
+        if (families.Count == 0)
+        {
+            return ReferenceValueProjection.Empty with
+            {
+                AbsenceReason = ReferenceAbsenceReason.NoRecordForNamedMetrics,
+            };
         }
 
         // Spec 216 §5 — the CURRENT policy only. A superseded-policy file was admitted by a verification
@@ -219,6 +263,7 @@ public static class ReferenceValueProjector
             return ReferenceValueProjection.Empty with
             {
                 ReferencesSkippedSupersededPolicy = supersededPolicy,
+                AbsenceReason = ReferenceAbsenceReason.NoRecordForNamedMetrics,
             };
         }
 
@@ -343,7 +388,18 @@ public static class ReferenceValueProjector
             selected.Add(reference);
         }
 
+        // Spec 223 §3: annotate an EMPTY result only. Records for a named metric that existed under ANY
+        // policy and were all excluded (newest, later-than-fact, superseded policy) are an eligibility
+        // absence; a ledger with no record at all for the named metrics is a no-match absence. A cap can
+        // never empty a non-empty candidate set (the first candidate is always selected), so an omitted
+        // count with zero selected is impossible and no reason exists for it.
+        ReferenceAbsenceReason? absenceReason = selected.Count > 0
+            ? null
+            : ledger.Any(r => named.Contains(r.Metric))
+                ? ReferenceAbsenceReason.AllExcludedByEligibility
+                : ReferenceAbsenceReason.NoRecordForNamedMetrics;
+
         return new ReferenceValueProjection(
-            selected, omitted, excludedNewest, excludedLaterThanFact, supersededPolicy);
+            selected, omitted, excludedNewest, excludedLaterThanFact, supersededPolicy, absenceReason);
     }
 }

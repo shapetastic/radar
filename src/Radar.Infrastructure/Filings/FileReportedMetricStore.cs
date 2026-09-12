@@ -264,4 +264,111 @@ public sealed class FileReportedMetricStore : IReportedMetricStore
             CorruptExistingReason);
     }
 
+    /// <summary>The subtree under the root that holds outbox envelopes, never ledger files (spec 216 §2).</summary>
+    internal const string OutboxSubdirectoryName = "outbox";
+
+    /// <summary>
+    /// SPEC 223 §2 — the accrued ledger inventory. Walks every TOP-LEVEL subdirectory of the root EXCEPT
+    /// <c>outbox/</c> (envelopes are not ledger entries) and counts the <c>*.json</c> files directly inside
+    /// each company folder, parsing each as a record list. An absent root is the MEASURED zero
+    /// (<see cref="ReportedMetricLedgerInventory.AbsentRoot"/>); a root that cannot be enumerated is
+    /// <see cref="ReportedMetricLedgerInventory.NotRecorded"/> with the reason — never <c>0</c>; a company
+    /// folder that cannot be enumerated likewise makes the whole inventory not-recorded, because a partial
+    /// count would render as a smaller measured total. An unparseable file is counted in
+    /// <c>UnreadableFiles</c>, contributes zero records, and is named once at Warning (the read path
+    /// already warns for the same file when a judge or report reads it). Never throws for a disk failure;
+    /// only caller cancellation propagates.
+    /// </summary>
+    public async Task<ReportedMetricLedgerInventory> InventoryAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var root = _options.RootDirectory;
+        if (!Directory.Exists(root))
+        {
+            return ReportedMetricLedgerInventory.AbsentRoot;
+        }
+
+        List<string> companyDirectories;
+        try
+        {
+            companyDirectories = Directory
+                .EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly)
+                .Where(d => !string.Equals(
+                    Path.GetFileName(d), OutboxSubdirectoryName, StringComparison.OrdinalIgnoreCase))
+                .Order(StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex, "Failed to enumerate the reported-metrics ledger root '{Directory}' for its inventory.", root);
+            return ReportedMetricLedgerInventory.NotRecorded(
+                $"ledger root could not be enumerated: {ex.GetType().Name}");
+        }
+
+        var files = 0;
+        var records = 0;
+        var unreadable = 0;
+        foreach (var companyDirectory in companyDirectories)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            List<string> ledgerFiles;
+            try
+            {
+                ledgerFiles = Directory
+                    .EnumerateFiles(companyDirectory, "*.json", SearchOption.TopDirectoryOnly)
+                    .Order(StringComparer.Ordinal)
+                    .ToList();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to enumerate the reported-metrics ledger folder '{Directory}' for its inventory.",
+                    companyDirectory);
+                return ReportedMetricLedgerInventory.NotRecorded(
+                    $"ledger folder '{Path.GetFileName(companyDirectory)}' could not be enumerated: {ex.GetType().Name}");
+            }
+
+            foreach (var file in ledgerFiles)
+            {
+                ct.ThrowIfCancellationRequested();
+                files++;
+                try
+                {
+                    var text = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+                    var parsed = JsonSerializer.Deserialize<List<ReportedMetricRecord>>(text, RadarFileStoreJson.Options);
+                    if (parsed is null)
+                    {
+                        unreadable++;
+                        _logger.LogWarning(
+                            "Reported-metrics ledger file '{File}' deserialized to null; counted as unreadable in the inventory.",
+                            file);
+                        continue;
+                    }
+
+                    records += parsed.Count;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+                {
+                    unreadable++;
+                    _logger.LogWarning(
+                        ex, "Failed to read reported-metrics ledger file '{File}'; counted as unreadable in the inventory.", file);
+                }
+            }
+        }
+
+        return new ReportedMetricLedgerInventory(
+            RootDirectoryExists: true,
+            LedgerFiles: files,
+            LedgerRecords: records,
+            UnreadableFiles: unreadable,
+            NotRecordedReason: null);
+    }
 }

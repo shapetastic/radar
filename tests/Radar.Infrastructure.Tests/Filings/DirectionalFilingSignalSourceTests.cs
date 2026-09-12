@@ -1,5 +1,6 @@
 using System.Text.Json;
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Radar.Application.Collectors;
@@ -21,13 +22,14 @@ public sealed class DirectionalFilingSignalSourceTests
         IFilingAnalyzer analyzer,
         DirectionalFilingSignalOptions? options = null,
         IAnalyzedFilingCache? cache = null,
-        IFilingReadDebugSink? debugSink = null) =>
+        IFilingReadDebugSink? debugSink = null,
+        ILogger<DirectionalFilingSignalSource>? logger = null) =>
         new(
             reader,
             analyzer,
             cache ?? new FakeAnalyzedFilingCache(),
             options ?? new DirectionalFilingSignalOptions(),
-            NullLogger<DirectionalFilingSignalSource>.Instance,
+            logger ?? NullLogger<DirectionalFilingSignalSource>.Instance,
             debugSink);
 
     /// <summary>
@@ -1969,5 +1971,161 @@ public sealed class DirectionalFilingSignalSourceTests
             AnalyzeCount++;
             return Task.FromResult(new FilingRead(sentiment, reportedMetrics));
         }
+    }
+
+    // ------------------------------------------------------------------ spec 223 §1: the supply line
+
+    private const string SupplyLinePrefix = "Directional filing read supply (";
+
+    private static string SupplyLine(CapturingLogger<DirectionalFilingSignalSource> logger) =>
+        Assert.Single(logger.Entries, e => e.Message.StartsWith(SupplyLinePrefix, StringComparison.Ordinal)).Message;
+
+    [Fact]
+    public async Task SupplyLine_IsEmittedWithZeroCandidates_AndSaysNoEarnings8KWasAvailable()
+    {
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var logger = new CapturingLogger<DirectionalFilingSignalSource>();
+
+        var result = await CreateSource(reader, analyzer, logger: logger)
+            .ProduceAsync([], AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        var line = SupplyLine(logger);
+        Assert.Contains("0 item-2.02 filing(s) of 0 Filing evidence item(s) handed to the reader this pass", line, StringComparison.Ordinal);
+        Assert.Contains("no earnings 8-K was available to read this run", line, StringComparison.Ordinal);
+        Assert.Contains("FilingsServedFromCache 0", line, StringComparison.Ordinal);
+        Assert.Contains("FilingsAnalysedFresh 0", line, StringComparison.Ordinal);
+        Assert.Contains("FilingsSkippedByBudget 0", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("Radar:Ai:MaxFilingsPerRun", line, StringComparison.Ordinal); // the budget did not bind
+        Assert.Equal(LogLevel.Information, Assert.Single(logger.Entries, e => e.Message.StartsWith(SupplyLinePrefix, StringComparison.Ordinal)).Level);
+    }
+
+    [Fact]
+    public async Task SupplyLine_IsEmittedWhenNoCandidateIsAnEarnings8K_AndCountsTheHandedInItems()
+    {
+        // Two Filing items handed in, neither an item-2.02: eligible is 0 and the line says so in words.
+        var candidates = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000001", items: "1.01,9.01", titleItems: "1.01,9.01"),
+            EarningsFiling(accession: "0001049521-26-000002", items: "5.02", titleItems: "5.02"),
+        };
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var logger = new CapturingLogger<DirectionalFilingSignalSource>();
+
+        await CreateSource(reader, analyzer, logger: logger).ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        var line = SupplyLine(logger);
+        Assert.Contains("0 item-2.02 filing(s) of 2 Filing evidence item(s)", line, StringComparison.Ordinal);
+        Assert.Contains("no earnings 8-K was available to read this run", line, StringComparison.Ordinal);
+        Assert.Equal(0, reader.ReadCount);
+    }
+
+    [Fact]
+    public async Task SupplyLine_CountsCacheReplays_FreshReads_AndABindingBudget_Exactly_AndNamesTheBudget()
+    {
+        // Two cached (replayed, no fetch), three uncached, cap 1: one fresh read, two left unread by the
+        // budget — and the line names the config path and the bound value.
+        var cached = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000101", publishedAt: new DateTimeOffset(2026, 6, 20, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000102", publishedAt: new DateTimeOffset(2026, 6, 19, 0, 0, 0, TimeSpan.Zero)),
+        };
+        var uncached = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000001", publishedAt: new DateTimeOffset(2026, 6, 5, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000002", publishedAt: new DateTimeOffset(2026, 6, 4, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000003", publishedAt: new DateTimeOffset(2026, 6, 3, 0, 0, 0, TimeSpan.Zero)),
+        };
+        var cache = new FakeAnalyzedFilingCache();
+        foreach (var ev in cached)
+        {
+            var accession = ev.SourceUrl!.Split('/')[^1].Replace("-index.htm", string.Empty, StringComparison.Ordinal);
+            cache.Entries[accession] = CachedSignalRecord(accession);
+        }
+
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Success(PlausibleBody("Revenue up, guidance raised."), "EX-99.1", "ex991.htm"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxFilingsPerRun = 1 };
+        var logger = new CapturingLogger<DirectionalFilingSignalSource>();
+
+        var result = await CreateSource(reader, analyzer, options, cache, logger: logger)
+            .ProduceAsync([.. cached, .. uncached], AsOf, CancellationToken.None);
+
+        Assert.Equal(3, result.Count);
+        Assert.Equal(1, reader.ReadCount);
+        var line = SupplyLine(logger);
+        Assert.Contains("5 item-2.02 filing(s) of 5 Filing evidence item(s)", line, StringComparison.Ordinal);
+        Assert.Contains("5 earnings 8-K candidate(s) were available to read this run", line, StringComparison.Ordinal);
+        Assert.Contains("FilingsServedFromCache 2 (replayed; a replay extracts no metrics)", line, StringComparison.Ordinal);
+        Assert.Contains("cache hits not replayable 0 / policy-mismatch re-analyses queued 0 / cache lookups failed 0", line, StringComparison.Ordinal);
+        Assert.Contains("FilingsAnalysedFresh 1 (of which failed 0, non-authoritative body 0)", line, StringComparison.Ordinal);
+        Assert.Contains("FilingsSkippedByBudget 2 (the Radar:Ai:MaxFilingsPerRun budget of 1 bound)", line, StringComparison.Ordinal);
+        Assert.Contains("left unread by the 429 breaker 0", line, StringComparison.Ordinal);
+        Assert.Contains("directional/read signals produced 3", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SupplyLine_CountsAFailedFreshRead_AndTheBreakerRemainder()
+    {
+        // Breaker of 1: the first fresh read is a 429, the breaker trips, and the second miss is left
+        // unread by the breaker — not by the budget (cap 50 never binds).
+        var candidates = new[]
+        {
+            EarningsFiling(accession: "0001049521-26-000001", publishedAt: new DateTimeOffset(2026, 6, 5, 0, 0, 0, TimeSpan.Zero)),
+            EarningsFiling(accession: "0001049521-26-000002", publishedAt: new DateTimeOffset(2026, 6, 4, 0, 0, 0, TimeSpan.Zero)),
+        };
+        var reader = new FakeSecEarningsReleaseReader(
+            SecEarningsReleaseReadResult.Failure(SecEarningsReleaseReadOutcome.RateLimited, "429"));
+        var analyzer = new FakeFilingAnalyzer(new FilingSentiment(FilingDirection.Improving, 0.9m, "Improving."));
+        var options = new DirectionalFilingSignalOptions { MaxConsecutiveRateLimited = 1, MaxFilingsPerRun = 50 };
+        var logger = new CapturingLogger<DirectionalFilingSignalSource>();
+
+        var result = await CreateSource(reader, analyzer, options, logger: logger)
+            .ProduceAsync(candidates, AsOf, CancellationToken.None);
+
+        Assert.Empty(result);
+        var line = SupplyLine(logger);
+        Assert.Contains("FilingsAnalysedFresh 1 (of which failed 1, non-authoritative body 0)", line, StringComparison.Ordinal);
+        Assert.Contains("FilingsSkippedByBudget 0;", line, StringComparison.Ordinal);
+        Assert.Contains("left unread by the 429 breaker 1", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SupplyVocabulary_NeverEntersTheScoringDescriptor()
+    {
+        // Spec 223 is telemetry only: none of the supply/yield vocabulary is a fingerprint input, so the
+        // live descriptor carries none of it (the pinned fingerprints in ScoringConfigFingerprintTests are
+        // untouched by this slice).
+        var descriptor = ScoringDescriptorFor(new DirectionalFilingSignalOptions { MaxFilingsPerRun = 1 });
+        foreach (var token in new[]
+        {
+            "supply", "Item202", "FilingsServedFromCache", "FilingsAnalysedFresh", "FilingsSkippedByBudget",
+            "LedgerEntriesOnDisk", "yield", "MaxFilingsPerRun",
+        })
+        {
+            Assert.DoesNotContain(token, descriptor, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 }

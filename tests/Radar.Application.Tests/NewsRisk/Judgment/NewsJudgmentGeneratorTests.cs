@@ -140,6 +140,34 @@ public sealed class NewsJudgmentGeneratorTests
                 ? throw new IOException("ledger unreadable")
                 : Task.FromResult<IReadOnlyList<Radar.Application.Filings.ReportedMetricRecord>>(
                     [.. records.Where(r => r.CompanyId == companyId)]);
+
+        /// <summary>
+        /// Spec 223 §3: the GLOBAL inventory the generator classifies "ledger empty" against — derived from
+        /// the SAME records the per-company read serves, so the two cannot disagree. Set
+        /// <see cref="InventoryThrows"/> to make the call fail (the generator must count it and classify
+        /// every no-reference judgment as NotRecorded).
+        /// </summary>
+        public bool InventoryThrows { get; set; }
+
+        public int Inventories { get; private set; }
+
+        public Task<Radar.Application.Filings.ReportedMetricLedgerInventory> InventoryAsync(CancellationToken ct)
+        {
+            Inventories++;
+            if (InventoryThrows)
+            {
+                throw new IOException("inventory unavailable");
+            }
+
+            return Task.FromResult(records.Count == 0
+                ? Radar.Application.Filings.ReportedMetricLedgerInventory.AbsentRoot
+                : new Radar.Application.Filings.ReportedMetricLedgerInventory(
+                    RootDirectoryExists: true,
+                    LedgerFiles: records.Select(r => (r.CompanyId, r.Accession, r.Policy)).Distinct().Count(),
+                    LedgerRecords: records.Count,
+                    UnreadableFiles: 0,
+                    NotRecordedReason: null));
+        }
     }
 
     /// <summary>
@@ -292,6 +320,169 @@ public sealed class NewsJudgmentGeneratorTests
         Assert.Equal([], record.ReferenceIds!);
         Assert.Equal(0, record.ReferenceValuesOmitted);
         Assert.Equal([], record.TrajectoryReferenceIds!);
+    }
+
+    // ------------------------------------------------------------------ spec 223 §3: no references, and why
+
+    private const string NoReferencesMarker = "JudgmentsWithNoReferencesAvailable";
+
+    private static string NoReferencesLine(CapturingLogger<NewsJudgmentGenerator> logger) =>
+        Assert.Single(logger.Entries, e => e.Message.Contains(NoReferencesMarker, StringComparison.Ordinal)).Message;
+
+    private static StubAnalyzer UnknownAnalyzer() => new(_ => new NewsJudgmentAnalysisOutcome(
+        NewsJudgmentAnalysisFailure.None,
+        new NewsJudgmentModelResponse("Unknown", null, [], "No comparison available.", TrajectoryFactIds: []),
+        "raw-hash",
+        null));
+
+    private static void AssertAxes(string line, int ledgerEmpty, int noMatching, int excluded, int notRecorded)
+    {
+        Assert.Contains($"LedgerEmpty {ledgerEmpty} (", line, StringComparison.Ordinal);
+        Assert.Contains($"NoMatchingReference {noMatching} (", line, StringComparison.Ordinal);
+        Assert.Contains($"ExcludedByEligibility {excluded} (", line, StringComparison.Ordinal);
+        Assert.Contains($"NotRecorded {notRecorded} (", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NoReferences_WhenTheLedgerHoldsNothingAtAll_CountsLedgerEmpty_AndRendersTheAccruedZero()
+    {
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+        var ledger = new FixedLedger([]);
+
+        await Generator(UnknownAnalyzer(), new InMemoryJudgmentStore(), logger: logger, reportedMetrics: ledger)
+            .GenerateAsync(RunId, Plan(), BacklogTypingResult(), CancellationToken.None);
+
+        var line = NoReferencesLine(logger);
+        Assert.Contains("JudgmentsWithNoReferencesAvailable 1 of 1 called", line, StringComparison.Ordinal);
+        AssertAxes(line, ledgerEmpty: 1, noMatching: 0, excluded: 0, notRecorded: 0);
+        Assert.Contains("LedgerEntriesOnDisk 0 (ledger root directory absent)", line, StringComparison.Ordinal);
+        Assert.Equal(1, ledger.Inventories); // read ONCE per pass
+    }
+
+    [Fact]
+    public async Task NoReferences_WhenTheLedgerHoldsValuesForAnotherCompanyOnly_CountsNoMatchingReference_NeverLedgerEmpty()
+    {
+        // The ledger is NOT empty — it holds a value for some other company — so "nothing matches this
+        // company's facts" is the honest class, and it must not share a counter with "ledger empty".
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+        var ledger = new FixedLedger(
+            [BacklogLedgerRecord(Guid.NewGuid()) with { CompanyId = Guid.Parse("9e5a0000-0000-4000-8000-000000000099") }]);
+
+        await Generator(UnknownAnalyzer(), new InMemoryJudgmentStore(), logger: logger, reportedMetrics: ledger)
+            .GenerateAsync(RunId, Plan(), BacklogTypingResult(), CancellationToken.None);
+
+        var line = NoReferencesLine(logger);
+        Assert.Contains("JudgmentsWithNoReferencesAvailable 1 of 1 called", line, StringComparison.Ordinal);
+        AssertAxes(line, ledgerEmpty: 0, noMatching: 1, excluded: 0, notRecorded: 0);
+        Assert.Contains("LedgerEntriesOnDisk 1 (", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NoReferences_WhenTheCompanysOnlyRecordIsTheNewestAccession_CountsExcludedByEligibility()
+    {
+        // ONE backlog row for this company = the current value, excluded as newest with no stated prior.
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+        var ledger = new FixedLedger([BacklogLedgerRecord(Guid.NewGuid())]);
+
+        await Generator(UnknownAnalyzer(), new InMemoryJudgmentStore(), logger: logger, reportedMetrics: ledger)
+            .GenerateAsync(RunId, Plan(), BacklogTypingResult(), CancellationToken.None);
+
+        var line = NoReferencesLine(logger);
+        AssertAxes(line, ledgerEmpty: 0, noMatching: 0, excluded: 1, notRecorded: 0);
+    }
+
+    [Fact]
+    public async Task NoReferences_WhenNoLedgerIsRegistered_CountsNotRecorded_AndSaysTheLedgerIsNotRegistered()
+    {
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+
+        await Generator(UnknownAnalyzer(), new InMemoryJudgmentStore(), logger: logger)
+            .GenerateAsync(RunId, Plan(), BacklogTypingResult(), CancellationToken.None);
+
+        var line = NoReferencesLine(logger);
+        AssertAxes(line, ledgerEmpty: 0, noMatching: 0, excluded: 0, notRecorded: 1);
+        Assert.Contains("LedgerEntriesOnDisk not recorded (ledger not registered)", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NoReferences_WhenTheCompanyLedgerIsUnreadable_CountsNotRecorded_NeverLedgerEmpty()
+    {
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+
+        await Generator(UnknownAnalyzer(), new InMemoryJudgmentStore(), logger: logger, reportedMetrics: new FixedLedger([], fail: true))
+            .GenerateAsync(RunId, Plan(), BacklogTypingResult(), CancellationToken.None);
+
+        var line = NoReferencesLine(logger);
+        AssertAxes(line, ledgerEmpty: 0, noMatching: 0, excluded: 0, notRecorded: 1);
+    }
+
+    [Fact]
+    public async Task NoReferences_WhenTheInventoryCannotBeRead_CountsNotRecorded_AndSaysSo()
+    {
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+        var ledger = new FixedLedger([]) { InventoryThrows = true };
+
+        await Generator(UnknownAnalyzer(), new InMemoryJudgmentStore(), logger: logger, reportedMetrics: ledger)
+            .GenerateAsync(RunId, Plan(), BacklogTypingResult(), CancellationToken.None);
+
+        var line = NoReferencesLine(logger);
+        AssertAxes(line, ledgerEmpty: 0, noMatching: 0, excluded: 0, notRecorded: 1);
+        Assert.Contains("LedgerEntriesOnDisk not recorded (inventory unavailable)", line, StringComparison.Ordinal);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("inventory could not be read", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task NoReferences_WhenAReferenceWasHanded_IsAMeasuredZeroOnEveryAxis()
+    {
+        var logger = new CapturingLogger<NewsJudgmentGenerator>();
+        var ledger = new FixedLedger([BacklogLedgerRecord(Guid.NewGuid()), NewerBacklogLedgerRecord()]);
+
+        await Generator(UnknownAnalyzer(), new InMemoryJudgmentStore(), logger: logger, reportedMetrics: ledger)
+            .GenerateAsync(RunId, Plan(), BacklogTypingResult(), CancellationToken.None);
+
+        var line = NoReferencesLine(logger);
+        Assert.Contains("JudgmentsWithNoReferencesAvailable 0 of 1 called", line, StringComparison.Ordinal);
+        AssertAxes(line, ledgerEmpty: 0, noMatching: 0, excluded: 0, notRecorded: 0);
+    }
+
+    [Fact]
+    public void ClassifyReferenceAbsence_NotRecordedWins_AndLedgerEmptyIsClaimedOnlyFromAMeasuredZero()
+    {
+        var empty = Radar.Application.Filings.ReportedMetricLedgerInventory.AbsentRoot;
+        var populated = new Radar.Application.Filings.ReportedMetricLedgerInventory(true, 1, 3, 0, null);
+        var notRecorded = Radar.Application.Filings.ReportedMetricLedgerInventory.NotRecorded("enumeration failed");
+
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.NotRecorded,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(ReferenceAbsenceReason.CompanyLedgerEmpty, empty, ledgerRegistered: false, companyLedgerUnreadable: false));
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.NotRecorded,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(ReferenceAbsenceReason.CompanyLedgerEmpty, empty, ledgerRegistered: true, companyLedgerUnreadable: true));
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.NotRecorded,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(ReferenceAbsenceReason.CompanyLedgerEmpty, null, ledgerRegistered: true, companyLedgerUnreadable: false));
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.NotRecorded,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(ReferenceAbsenceReason.CompanyLedgerEmpty, notRecorded, ledgerRegistered: true, companyLedgerUnreadable: false));
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.LedgerEmpty,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(ReferenceAbsenceReason.CompanyLedgerEmpty, empty, ledgerRegistered: true, companyLedgerUnreadable: false));
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.NoMatchingReference,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(ReferenceAbsenceReason.CompanyLedgerEmpty, populated, ledgerRegistered: true, companyLedgerUnreadable: false));
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.NoMatchingReference,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(ReferenceAbsenceReason.NoRecordForNamedMetrics, populated, ledgerRegistered: true, companyLedgerUnreadable: false));
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.ExcludedByEligibility,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(ReferenceAbsenceReason.AllExcludedByEligibility, populated, ledgerRegistered: true, companyLedgerUnreadable: false));
+        // A zero-reference projection with no stated reason is impossible by construction; it is reported
+        // as not recorded rather than given a fabricated class.
+        Assert.Equal(
+            NewsJudgmentGenerator.ReferenceAbsenceClass.NotRecorded,
+            NewsJudgmentGenerator.ClassifyReferenceAbsence(null, populated, ledgerRegistered: true, companyLedgerUnreadable: false));
     }
 
     private static NewsJudgmentOptions JudgmentOptions() => new(

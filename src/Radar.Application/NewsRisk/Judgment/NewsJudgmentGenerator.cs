@@ -235,12 +235,24 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             StringComparer.Ordinal);
         var referencesSuppliedByCohort = new Dictionary<string, (int WithReferences, int Judgments)>(
             StringComparer.Ordinal);
+        // Spec 223 §3: per cohort, the called judgments handed ZERO references, split by WHY on separate
+        // axes. "Ledger empty" (the ledger holds nothing at all) and "no matching reference" (the ledger
+        // holds values but none match this company's facts) must never share a counter.
+        var noReferencesByCohort = new Dictionary<string, ReferenceAbsenceCounters>(StringComparer.Ordinal);
 
         // Spec 215 §2: each candidate's ledger is read ONCE per pass (not once per judge × cohort) and a
         // read failure degrades to "no references" — counted, and reported once per company, never a
         // silent empty. Without a registered ledger nothing is read and nothing is counted.
+        // Spec 223 §3: the companies whose ledger could NOT be read are kept so their zero-reference
+        // judgments classify as NotRecorded rather than as a measured "ledger empty".
+        var unreadableLedgers = new HashSet<Guid>();
         var ledgerByCompany = await LoadLedgersAsync(
-            [.. candidates.Select(c => c.Candidate)], ct).ConfigureAwait(false);
+            [.. candidates.Select(c => c.Candidate)], unreadableLedgers, ct).ConfigureAwait(false);
+
+        // Spec 223 §3: the GLOBAL ledger inventory, read ONCE per pass, is what distinguishes "the ledger
+        // holds nothing at all" from "nothing matches this company". Not registered, or a failed read, is
+        // null — and null classifies every zero-reference judgment as NotRecorded, never as empty.
+        var ledgerInventory = await InventoryLedgerAsync(ct).ConfigureAwait(false);
 
         foreach (var cohort in typing.Cohorts)
         {
@@ -394,6 +406,25 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         referencesSuppliedByCohort[record.CohortKey] = (
                             running.WithReferences + (projected.Count > 0 ? 1 : 0),
                             running.Judgments + 1);
+
+                        // Spec 223 §3: a called judgment handed ZERO references is classified by WHY, on
+                        // separate axes, from the projection's own reason (threaded in-process from the
+                        // bundle — never re-derived from a ledger that may since have grown) and the
+                        // pass-level inventory.
+                        if (projected.Count == 0)
+                        {
+                            if (!noReferencesByCohort.TryGetValue(record.CohortKey, out var absence))
+                            {
+                                absence = new ReferenceAbsenceCounters();
+                                noReferencesByCohort[record.CohortKey] = absence;
+                            }
+
+                            absence.Observe(ClassifyReferenceAbsence(
+                                outcome.ReferenceAbsenceReason,
+                                ledgerInventory,
+                                ledgerRegistered: _reportedMetrics is not null,
+                                companyLedgerUnreadable: unreadableLedgers.Contains(candidate.CompanyId)));
+                        }
                     }
 
                     // Spec 187 §1: the durable write's OUTCOME is checked. An unpersisted result is not a
@@ -674,6 +705,34 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                 ReferenceValueProjector.Version);
         }
 
+        // SPEC 223 §3: beside the spec-215 line, one Information line per cohort that made at least one
+        // call — the called judgments handed NO reference, split by WHY on separate axes, plus the accrued
+        // LedgerEntriesOnDisk (rendered "not recorded (<reason>)" when it could not be established, never
+        // 0). A cohort that made no call says nothing (the same convention as the line above); a cohort
+        // whose every call was handed a reference says "0" on every axis, which is a measured zero.
+        foreach (var (cohortKey, measured) in referencesSuppliedByCohort.OrderBy(
+            e => e.Key, StringComparer.Ordinal))
+        {
+            var absence = noReferencesByCohort.GetValueOrDefault(cohortKey) ?? new ReferenceAbsenceCounters();
+            _logger.LogInformation(
+                "News-judgment cohort {Cohort}: JudgmentsWithNoReferencesAvailable {NoReferences} of "
+                    + "{Judgments} called — LedgerEmpty {LedgerEmpty} (the ledger holds nothing at all) / "
+                    + "NoMatchingReference {NoMatchingReference} (the ledger holds values, none for the "
+                    + "metrics these facts name) / ExcludedByEligibility {ExcludedByEligibility} (records "
+                    + "existed, all excluded as newest, later than the fact, or superseded policy) / "
+                    + "NotRecorded {NotRecorded} (ledger not registered, unreadable, or inventory "
+                    + "unavailable). LedgerEntriesOnDisk {LedgerEntriesOnDisk} ({ProjectionVersion}).",
+                cohortKey,
+                absence.Total,
+                measured.Judgments,
+                absence.LedgerEmpty,
+                absence.NoMatchingReference,
+                absence.ExcludedByEligibility,
+                absence.NotRecorded,
+                RenderLedgerEntriesOnDisk(ledgerInventory, _reportedMetrics is not null),
+                ReferenceValueProjector.Version);
+        }
+
         // SPEC 219 §4 — the RUN-LEVEL coverage line, emitted exactly ONCE by a pass that reaches here,
         // however many (judge × stage-1 cohort) pairs ran, because every fact on it is a property of the
         // PLAN and not of a cohort. A pass that returned at the stage-1 precondition above emits it ZERO
@@ -740,7 +799,11 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
         // or same-run idempotency — rather than deciding one. It is not the same question as
         // "did this pass make a call": InsufficientFacts and AttemptsExhausted also make no call, and
         // neither is a reuse. Transient orchestration state, never persisted.
-        bool ReusedExistingVerdict = false)
+        bool ReusedExistingVerdict = false,
+        // Spec 223 §3: WHY the projection this call was made against handed zero references (null when it
+        // handed at least one, and null on every no-call branch — a reused verdict's absence is the
+        // ORIGINAL call's, not this pass's activity). Transient orchestration state, never persisted.
+        ReferenceAbsenceReason? ReferenceAbsenceReason = null)
     {
         /// <summary>A no-call branch: the record stands, this pass spent nothing.</summary>
         public static JudgmentPassOutcome WithoutCall(NewsJudgmentRecord record) => new(record, null);
@@ -751,13 +814,147 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
     }
 
     /// <summary>
+    /// SPEC 223 §3 — the per-cohort split of called judgments handed NO reference. Four axes, never
+    /// merged: <see cref="LedgerEmpty"/> (the inventory says the ledger holds nothing at all),
+    /// <see cref="NoMatchingReference"/> (the ledger holds values, none for this company's named metrics),
+    /// <see cref="ExcludedByEligibility"/> (records existed, all excluded by the spec-216 rules) and
+    /// <see cref="NotRecorded"/> (the store is not registered, this company's ledger was unreadable, or the
+    /// inventory could not be read — a not-recorded is never a measured zero).
+    /// </summary>
+    private sealed class ReferenceAbsenceCounters
+    {
+        public int LedgerEmpty { get; private set; }
+        public int NoMatchingReference { get; private set; }
+        public int ExcludedByEligibility { get; private set; }
+        public int NotRecorded { get; private set; }
+
+        public int Total => LedgerEmpty + NoMatchingReference + ExcludedByEligibility + NotRecorded;
+
+        public void Observe(ReferenceAbsenceClass cls)
+        {
+            switch (cls)
+            {
+                case ReferenceAbsenceClass.LedgerEmpty:
+                    LedgerEmpty++;
+                    break;
+                case ReferenceAbsenceClass.NoMatchingReference:
+                    NoMatchingReference++;
+                    break;
+                case ReferenceAbsenceClass.ExcludedByEligibility:
+                    ExcludedByEligibility++;
+                    break;
+                default:
+                    NotRecorded++;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>The spec-223 §3 classification of one zero-reference called judgment.</summary>
+    internal enum ReferenceAbsenceClass
+    {
+        NotRecorded = 0,
+        LedgerEmpty = 1,
+        NoMatchingReference = 2,
+        ExcludedByEligibility = 3,
+    }
+
+    /// <summary>
+    /// SPEC 223 §3 — classifies one zero-reference called judgment. NotRecorded wins whenever the answer
+    /// cannot be established (no store, an unreadable company ledger, no inventory, or an inventory whose
+    /// record count is itself not recorded); "ledger empty" is claimed ONLY from a MEASURED zero on the
+    /// global inventory; otherwise the projection's own reason decides between "no matching reference"
+    /// (the company's ledger is empty or names none of these metrics — the ledger has values elsewhere)
+    /// and "excluded by eligibility". A projection with zero references and no stated reason is
+    /// impossible by construction and is reported as not recorded rather than as a fabricated class.
+    /// </summary>
+    internal static ReferenceAbsenceClass ClassifyReferenceAbsence(
+        ReferenceAbsenceReason? projectionReason,
+        ReportedMetricLedgerInventory? inventory,
+        bool ledgerRegistered,
+        bool companyLedgerUnreadable)
+    {
+        if (!ledgerRegistered || companyLedgerUnreadable || inventory?.LedgerRecords is not { } recordsOnDisk)
+        {
+            return ReferenceAbsenceClass.NotRecorded;
+        }
+
+        if (recordsOnDisk == 0)
+        {
+            return ReferenceAbsenceClass.LedgerEmpty;
+        }
+
+        return projectionReason switch
+        {
+            ReferenceAbsenceReason.CompanyLedgerEmpty => ReferenceAbsenceClass.NoMatchingReference,
+            ReferenceAbsenceReason.NoRecordForNamedMetrics => ReferenceAbsenceClass.NoMatchingReference,
+            ReferenceAbsenceReason.AllExcludedByEligibility => ReferenceAbsenceClass.ExcludedByEligibility,
+            _ => ReferenceAbsenceClass.NotRecorded,
+        };
+    }
+
+    /// <summary>
+    /// SPEC 223 §3 — renders <c>LedgerEntriesOnDisk</c> for the per-cohort line: the measured record count
+    /// (an absent root directory is the measured zero and says so), or <c>not recorded (&lt;reason&gt;)</c>
+    /// — never a defaulted 0.
+    /// </summary>
+    internal static string RenderLedgerEntriesOnDisk(ReportedMetricLedgerInventory? inventory, bool ledgerRegistered)
+    {
+        // The not-recorded branches are the record's own (shared with CollectionPass's ledger line, so the
+        // two renderings cannot drift); only the measured record count is this line's.
+        if (ReportedMetricLedgerInventory.DescribeNotRecorded(inventory, ledgerRegistered) is { } notRecorded)
+        {
+            return notRecorded;
+        }
+
+        // DescribeNotRecorded returned null, so the ledger is registered, the inventory is present and the
+        // counts are recorded.
+        var records = inventory!.RecordedCounts.Records;
+        return inventory.RootDirectoryExists == false
+            ? string.Create(CultureInfo.InvariantCulture, $"{records} (ledger root directory absent)")
+            : records.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// SPEC 223 §3 — reads the global ledger inventory ONCE per pass. Null when no ledger is registered or
+    /// the read fails (the failure is logged and every zero-reference judgment then classifies as
+    /// NotRecorded); only cancellation propagates.
+    /// </summary>
+    private async Task<ReportedMetricLedgerInventory?> InventoryLedgerAsync(CancellationToken ct)
+    {
+        if (_reportedMetrics is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _reportedMetrics.InventoryAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Reported-metrics ledger inventory could not be read this pass; every judgment handed no "
+                    + "reference value is classified as NotRecorded rather than as a ledger that is empty.");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Spec 215 §2 — reads each candidate's reported-metrics ledger ONCE per pass. A read failure for one
     /// company degrades to an empty ledger for that company (its judgments are assembled with zero
     /// references, byte-identical to the pre-215 input) and is reported in ONE Warning per company —
     /// never silently, and never a failure of the pass. No registered ledger => an empty map, no read.
+    /// Spec 223 §3: each unreadable company is added to <paramref name="unreadableLedgers"/> so its
+    /// zero-reference judgments classify as NotRecorded, never as a measured empty.
     /// </summary>
     private async Task<IReadOnlyDictionary<Guid, IReadOnlyList<ReportedMetricRecord>>> LoadLedgersAsync(
-        IReadOnlyList<NewsRiskCandidate> candidates, CancellationToken ct)
+        IReadOnlyList<NewsRiskCandidate> candidates, ISet<Guid> unreadableLedgers, CancellationToken ct)
     {
         var ledgers = new Dictionary<Guid, IReadOnlyList<ReportedMetricRecord>>();
         if (_reportedMetrics is null)
@@ -787,6 +984,7 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
             catch (Exception ex)
             {
                 unreadable++;
+                unreadableLedgers.Add(candidate.CompanyId);
                 ledgers[candidate.CompanyId] = [];
                 _logger.LogWarning(
                     ex,
@@ -1007,7 +1205,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         Status = NewsJudgmentStatus.ProviderFailure,
                         FailureDetail = outcome.FailureDetail,
                     },
-                    callDuration);
+                    callDuration,
+                    ReferenceAbsenceReason: bundle.ReferenceAbsenceReason);
             case NewsJudgmentAnalysisFailure.ParseError:
                 return new JudgmentPassOutcome(
                     record with
@@ -1015,7 +1214,8 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         Status = NewsJudgmentStatus.ParseFailure,
                         FailureDetail = outcome.FailureDetail,
                     },
-                    callDuration);
+                    callDuration,
+                    ReferenceAbsenceReason: bundle.ReferenceAbsenceReason);
             default:
             {
                 var validated = NewsJudgmentValidator.Validate(
@@ -1057,7 +1257,10 @@ public sealed class NewsJudgmentGenerator : INewsJudgmentGenerator
                         TrajectoryReferenceKinds = ReferenceKindsFor(
                             validated.TrajectoryReferenceIds, bundle.References),
                     },
-                    callDuration);
+                    callDuration,
+                    // Spec 223 §3: the projection's reason for an empty reference set, threaded in-process
+                    // to the pass counters; null when at least one reference was handed.
+                    ReferenceAbsenceReason: bundle.ReferenceAbsenceReason);
             }
         }
     }
