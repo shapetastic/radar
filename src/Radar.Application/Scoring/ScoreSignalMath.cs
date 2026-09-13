@@ -315,6 +315,20 @@ public static class ScoreSignalMath
     /// </para>
     /// </summary>
     public static int EvidenceConfidenceScore(
+        IReadOnlyList<ScoringSignal> signals, ScoringWeights weights) =>
+        EvidenceConfidenceDecomposition(signals, weights).Score;
+
+    /// <summary>
+    /// <see cref="EvidenceConfidenceScore"/>'s ONE body, returning the three terms it multiplies beside the
+    /// clamped score (spec 225). The score method above is a projection of this — one body, not two — so
+    /// the terms a measurement reports are BY CONSTRUCTION the terms the formula used; a reporter that
+    /// re-derived them from its own arithmetic would be measuring its own copy, and the two would drift on
+    /// the next quality/diversity change. Expression shape and accumulation order are the spec-153 extraction's,
+    /// verbatim (see the type remarks on floating-point exactness): the score returned here is bit-identical
+    /// to what the method returned before it was split, which <c>ScoringOutputStabilityTests</c> and the
+    /// pinned <c>ScoringConfigVersion</c> fingerprints guard.
+    /// </summary>
+    public static EvidenceConfidenceTerms EvidenceConfidenceDecomposition(
         IReadOnlyList<ScoringSignal> signals, ScoringWeights weights)
     {
         ArgumentNullException.ThrowIfNull(signals);
@@ -324,11 +338,72 @@ public static class ScoreSignalMath
         var bestQualWeight = signals.Max(s => QualityWeight(weights, s.Evidence.Quality));
         var distinctTypes = signals.Select(s => s.Evidence.SourceType).Distinct().Count();
         var divFactor = Math.Min(1, distinctTypes / weights.DiversityTarget);
-        return Clamp0To100(
-            100 * bestConf
-                * (weights.EcQualityBase + weights.EcQualitySpan * bestQualWeight)
-                * (weights.EcDiversityBase + weights.EcDiversitySpan * divFactor));
+        var score = EvidenceConfidenceComposition(bestConf, bestQualWeight, divFactor, weights);
+        return new EvidenceConfidenceTerms(bestConf, bestQualWeight, distinctTypes, divFactor, score);
     }
+
+    /// <summary>
+    /// The clamped <c>EvidenceConfidenceScore</c> from its three TERMS — the multiplication
+    /// <see cref="EvidenceConfidenceDecomposition"/> performs, exposed so a measurement can hold ONE term
+    /// constant and recompose the score through the production expression rather than a copy (spec 225
+    /// follow-up: "which term dominates" is answered by holding each at its median). The expression is
+    /// <c>Clamp0To100(<see cref="EvidenceConfidenceProduct"/>)</c>, and the product's association is the
+    /// spec-153 extraction's verbatim, so the decomposition routed through here is bit-identical.
+    /// </summary>
+    public static int EvidenceConfidenceComposition(
+        double bestConfidence, double bestQualityWeight, double diversityFactor, ScoringWeights weights) =>
+        Clamp0To100(EvidenceConfidenceProduct(bestConfidence, bestQualityWeight, diversityFactor, weights));
+
+    /// <summary>
+    /// The UNCLAMPED, unrounded EvidenceConfidence product
+    /// <c>100 · bestConfidence · <see cref="EvidenceConfidenceQualityMultiplier"/> ·
+    /// <see cref="EvidenceConfidenceDiversityMultiplier"/></c>, associated left to right exactly as the
+    /// original inline expression (<c>((100·bestConf)·(base+span·q))·(base+span·d)</c>): each parenthesised
+    /// sub-expression was already evaluated to a double before the multiply, so naming it as a method changes
+    /// no bit. Exposed so a measurement can attribute the spread of the score across its three factors.
+    /// </summary>
+    public static double EvidenceConfidenceProduct(
+        double bestConfidence, double bestQualityWeight, double diversityFactor, ScoringWeights weights)
+    {
+        ArgumentNullException.ThrowIfNull(weights);
+
+        return 100 * bestConfidence
+            * EvidenceConfidenceQualityMultiplier(bestQualityWeight, weights)
+            * EvidenceConfidenceDiversityMultiplier(diversityFactor, weights);
+    }
+
+    /// <summary>The quality factor the EvidenceConfidence product multiplies: <c>EcQualityBase + EcQualitySpan · bestQualityWeight</c>.</summary>
+    public static double EvidenceConfidenceQualityMultiplier(double bestQualityWeight, ScoringWeights weights)
+    {
+        ArgumentNullException.ThrowIfNull(weights);
+
+        return weights.EcQualityBase + weights.EcQualitySpan * bestQualityWeight;
+    }
+
+    /// <summary>The diversity factor the EvidenceConfidence product multiplies: <c>EcDiversityBase + EcDiversitySpan · diversityFactor</c>.</summary>
+    public static double EvidenceConfidenceDiversityMultiplier(double diversityFactor, ScoringWeights weights)
+    {
+        ArgumentNullException.ThrowIfNull(weights);
+
+        return weights.EcDiversityBase + weights.EcDiversitySpan * diversityFactor;
+    }
+
+    /// <summary>
+    /// <c>radar-formula-v8</c>'s Opportunity composition, EXACTLY as the formula multiplies it:
+    /// <c>Clamp0To100(trajectory · (evidenceConfidence / 100) · followingDiscount)</c> over the CLAMPED INT
+    /// components and the <see cref="NotednessDiscount"/>. Extracted by spec 225 so a measurement can
+    /// recompose a persisted snapshot's Opportunity from its persisted components — and compute what it
+    /// WOULD be with one component held constant — through the production expression rather than a copy.
+    /// The multiplication tree is v8's verbatim (left-to-right, the division parenthesised), so v8 routed
+    /// through this is bit-identical; v9/v10/v11 and the baseline control do NOT compose Opportunity this way
+    /// and do not call it.
+    /// </summary>
+    public static int OpportunityComposition(
+        int trajectoryScore, int evidenceConfidenceScore, double followingDiscount) =>
+        Clamp0To100(
+            trajectoryScore
+            * (evidenceConfidenceScore / 100.0)
+            * followingDiscount);
 
     /// <summary>
     /// The (v8-meaning) <c>SignalVelocityScore</c> component: the smoothed current-versus-previous activity

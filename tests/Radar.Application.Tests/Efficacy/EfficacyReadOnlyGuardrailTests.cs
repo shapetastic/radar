@@ -76,6 +76,24 @@ public sealed class EfficacyReadOnlyGuardrailTests
         "IEvidenceRepository",
     ];
 
+    // ---------------------------------------------------------------------------------------------------
+    // Spec 225: the THIRD sanctioned exception, narrowed the same way.
+    //
+    // The EvidenceConfidence measurement has to REBUILD each company's scored signal set from the stored
+    // links — signal by id, evidence by id — to decompose the component through the production formula body;
+    // that is not expressible over score snapshots alone. So Efficacy/EvidenceConfidence may name the two READ
+    // seams. It may still NOT name any collection/extraction/scoring COMPUTE type (it never names the engine,
+    // the fingerprint or the evidence record), and the mutation test below covers it exactly as it covers the
+    // other two.
+    // ---------------------------------------------------------------------------------------------------
+    private const string EvidenceConfidenceSubfolder = "EvidenceConfidence";
+
+    private static readonly string[] EvidenceConfidenceReadSeamExemptions =
+    [
+        "ISignalRepository",
+        "IEvidenceRepository",
+    ];
+
     // Every repository/store MUTATION the efficacy layer must never call. The attention screen's ONLY
     // sanctioned write is IAttentionArrivalArtifactStore.WriteAsync, which is why the artifact store's own
     // method name is deliberately absent from this list and the store type is not scanned here.
@@ -103,6 +121,7 @@ public sealed class EfficacyReadOnlyGuardrailTests
             var text = File.ReadAllText(file);
             var isAttentionScreen = IsAttentionScreenSource(file);
             var isFilingReads = IsFilingReadsSource(file);
+            var isEvidenceConfidence = IsEvidenceConfidenceSource(file);
 
             foreach (var forbidden in ForbiddenTypeReferences)
             {
@@ -112,6 +131,12 @@ public sealed class EfficacyReadOnlyGuardrailTests
                 }
 
                 if (isFilingReads && FilingReadsReadSeamExemptions.Contains(forbidden, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                if (isEvidenceConfidence
+                    && EvidenceConfidenceReadSeamExemptions.Contains(forbidden, StringComparer.Ordinal))
                 {
                     continue;
                 }
@@ -136,7 +161,7 @@ public sealed class EfficacyReadOnlyGuardrailTests
         var efficacyDir = LocateEfficacySourceDirectory();
         var files = Directory
             .GetFiles(efficacyDir, "*.cs", SearchOption.AllDirectories)
-            .Where(f => IsAttentionScreenSource(f) || IsFilingReadsSource(f))
+            .Where(f => IsAttentionScreenSource(f) || IsFilingReadsSource(f) || IsEvidenceConfidenceSource(f))
             .ToList();
 
         // The exemption must not be able to pass vacuously: if the folder is ever emptied or renamed, this
@@ -151,7 +176,8 @@ public sealed class EfficacyReadOnlyGuardrailTests
                 Assert.False(
                     text.Contains(mutation, StringComparison.Ordinal),
                     $"{Path.GetFileName(file)} calls '{mutation}' — the exempted read-side modules (the "
-                        + "AD-16 attention screen, the spec-218 filing-read measurement) are READ-ONLY over "
+                        + "AD-16 attention screen, the spec-218 filing-read measurement, the spec-225 "
+                        + "EvidenceConfidence measurement) are READ-ONLY over "
                         + "signals, evidence, scores and reviews; their only sanctioned write is their own "
                         + "artifact store.");
             }
@@ -167,6 +193,11 @@ public sealed class EfficacyReadOnlyGuardrailTests
         Path.GetDirectoryName(file) is { } directory
         && string.Equals(
             Path.GetFileName(directory), FilingReadsSubfolder, StringComparison.Ordinal);
+
+    private static bool IsEvidenceConfidenceSource(string file) =>
+        Path.GetDirectoryName(file) is { } directory
+        && string.Equals(
+            Path.GetFileName(directory), EvidenceConfidenceSubfolder, StringComparison.Ordinal);
 
     // ---------------------------------------------------------------------------------------------------
     // AD-14, asserted on the TYPE GRAPH rather than on source text (spec 140).

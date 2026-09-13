@@ -15,36 +15,6 @@ namespace Radar.Application.Tests.Efficacy.DenominatorAudit;
 /// </summary>
 public sealed class ScoreMoveDenominatorAuditGeneratorTests
 {
-    /// <summary>A link-bearing fake store: the happy-path double for the file store's dual-interface shape.</summary>
-    private sealed class FakeLinkedSnapshotStore : IScoreSnapshotFileStore, IScoreSnapshotLinkReader
-    {
-        private readonly Dictionary<Guid, IReadOnlyList<ScoreSnapshotWithLinks>> _byCompany = [];
-
-        public FakeLinkedSnapshotStore With(Guid companyId, params ScoreSnapshotWithLinks[] series)
-        {
-            _byCompany[companyId] = series;
-            return this;
-        }
-
-        public Task<IReadOnlyList<ScoreSnapshotWithLinks>> ReadAllWithLinksForCompanyAsync(
-            Guid companyId, CancellationToken ct) =>
-            Task.FromResult(_byCompany.TryGetValue(companyId, out var series)
-                ? series
-                : []);
-
-        public Task<IReadOnlyList<CompanyScoreSnapshot>> ReadAllForCompanyAsync(
-            Guid companyId, CancellationToken ct) =>
-            throw new NotSupportedException("The audit reads through the link-bearing projection only.");
-
-        public Task<DurableWriteResult> WriteAsync(
-            CompanyScoreSnapshot snapshot, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct) =>
-            throw new NotSupportedException("The audit must be read-only over score history.");
-
-        public Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
-            Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct) =>
-            throw new NotSupportedException();
-    }
-
     private sealed class RecordingAuditArtifactStore : IDenominatorAuditArtifactStore
     {
         public List<(string Csv, string Markdown)> Written { get; } = [];

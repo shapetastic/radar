@@ -1,6 +1,7 @@
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Comparison;
+using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.Prices;
 using Radar.Application.Scoring;
 using Radar.Application.Storage;
@@ -151,4 +152,37 @@ internal sealed class FakeStrategyScoreSnapshotStoreSelector : IStrategyScoreSna
         _byStrategy.TryGetValue(strategy.Name, out var store)
             ? store
             : new FakeScoreSnapshotFileStore();
+}
+
+/// <summary>
+/// A link-bearing fake store: the double for the file store's dual-interface shape (spec 172). Shared by the
+/// denominator-audit and the spec-225 EvidenceConfidence tests (reuse over copy).
+/// </summary>
+internal sealed class FakeLinkedSnapshotStore : IScoreSnapshotFileStore, IScoreSnapshotLinkReader
+{
+    private readonly Dictionary<Guid, IReadOnlyList<ScoreSnapshotWithLinks>> _byCompany = [];
+
+    public FakeLinkedSnapshotStore With(Guid companyId, params ScoreSnapshotWithLinks[] series)
+    {
+        _byCompany[companyId] = series;
+        return this;
+    }
+
+    public Task<IReadOnlyList<ScoreSnapshotWithLinks>> ReadAllWithLinksForCompanyAsync(
+        Guid companyId, CancellationToken ct) =>
+        Task.FromResult(_byCompany.TryGetValue(companyId, out var series)
+            ? series
+            : []);
+
+    public Task<IReadOnlyList<CompanyScoreSnapshot>> ReadAllForCompanyAsync(
+        Guid companyId, CancellationToken ct) =>
+        throw new NotSupportedException("The audit reads through the link-bearing projection only.");
+
+    public Task<DurableWriteResult> WriteAsync(
+        CompanyScoreSnapshot snapshot, IReadOnlyList<ScoreEvidenceLink> links, CancellationToken ct) =>
+        throw new NotSupportedException("The audit must be read-only over score history.");
+
+    public Task<CompanyScoreSnapshot?> ReadLatestBeforeAsync(
+        Guid companyId, DateTimeOffset beforeUtc, CancellationToken ct) =>
+        throw new NotSupportedException();
 }

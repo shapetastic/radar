@@ -122,8 +122,9 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
 
             // The two arms differ ONLY in the evidence repository: the BEFORE arm withholds the owner (keys
             // stripped, title replaced, in memory); the AFTER arm is the raw store through the production
-            // read path. The instant, universe, strategy, weights, window and every other signal are
-            // identical. The decorator is a pure, read-only map over the same store.
+            // read path (the shared ReadOnlyEvidenceRepository, whose only job is to make a write impossible).
+            // The instant, universe, strategy, weights, window and every other signal are identical. The
+            // decorator is a pure, read-only map over the same store.
             var beforeEvidence = new OwnerWithholdingEvidenceRepository(evidence);
             IEvidenceRepository afterEvidence = new ReadOnlyEvidenceRepository(evidence);
             var collapse = new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights());
@@ -328,7 +329,7 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
     /// (so the projection describes the same window the last live run scored), else the newest approved
     /// signal's <c>ObservedAtUtc</c>. Which source was used is rendered.
     /// </summary>
-    private static async Task<(DateTimeOffset Instant, string Source)> ResolveAsOfAsync(
+    internal static async Task<(DateTimeOffset Instant, string Source)> ResolveAsOfAsync(
         string root, ISignalRepository signals, IReadOnlyList<Company> companies, CancellationToken ct)
     {
         DateTimeOffset? latest = null;
@@ -377,22 +378,27 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
             "no `scores/` snapshot found — newest signal's `ObservedAtUtc`");
     }
 
-    /// <summary>One arm's REAL engine over the arm's evidence decorator; nothing else differs.</summary>
-    private static async Task<IReadOnlyList<CompanyScoreSnapshot>> ScoreAllAsync(
+    /// <summary>
+    /// One arm's REAL engine over the arm's evidence decorator; nothing else differs. <c>internal</c> since
+    /// spec 225 so its read-only harness scores through the SAME composition (reuse over copy); it hands in
+    /// its own in-memory score repository because it needs the persisted LINKS as well as the snapshots.
+    /// </summary>
+    internal static async Task<IReadOnlyList<CompanyScoreSnapshot>> ScoreAllAsync(
         ServiceProvider provider,
         IReadOnlyList<Company> companies,
         ISignalRepository signals,
         IEvidenceRepository armEvidence,
         ISignalFileStore windowReads,
         DateTimeOffset asOf,
-        CancellationToken ct)
+        CancellationToken ct,
+        IScoreRepository? scoreRepository = null)
     {
         var sourceWeights = new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default);
         var engine = new ScoringEngine(
             signals,
             windowReads,
             armEvidence,
-            new InMemoryScoreRepository(),
+            scoreRepository ?? new InMemoryScoreRepository(),
             provider.GetRequiredService<ICompanyRepository>(),
             new RadarScoreFormulaFactory(sourceWeights).Create(
                 new ScoringStrategyDefinition("default", "default", new ScoringWeights(), IsPrimary: true)),
@@ -464,23 +470,6 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
 
         public async Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct) =>
             [.. (await inner.GetAllAsync(ct)).Select(WithholdOwner)];
-    }
-
-    /// <summary>
-    /// The AFTER arm: the raw store, unmodified — the production read path. A pass-through whose only job is to
-    /// make a write impossible from this harness.
-    /// </summary>
-    private sealed class ReadOnlyEvidenceRepository(IEvidenceRepository inner) : IEvidenceRepository
-    {
-        public Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct) =>
-            throw new InvalidOperationException("The spec-224 §4 counterfactual is read-only and must never write evidence.");
-
-        public Task<EvidenceItem?> GetByIdAsync(Guid id, CancellationToken ct) => inner.GetByIdAsync(id, ct);
-
-        public Task<EvidenceItem?> GetByContentHashAsync(string contentHash, CancellationToken ct) =>
-            inner.GetByContentHashAsync(contentHash, ct);
-
-        public Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct) => inner.GetAllAsync(ct);
     }
 
     private sealed record CompanyRow(

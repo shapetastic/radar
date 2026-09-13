@@ -405,6 +405,20 @@ internal static class RadarWorkerServices
             {
                 services.AddRadarDirectionalFilingReadReport(options.EfficacyDirectory);
             }
+
+            // Spec 225: the read-only EvidenceConfidence distribution measurement. Same posture and the same
+            // "enabled by default inside the already-opt-in efficacy gate" rule as the spec-218 measurement.
+            // It reads the default strategy's persisted snapshots + stored links (through the same
+            // strategy-store seam as the comparison/screen/audit), signals, evidence and companies; changes
+            // no score, reads no price (AD-14), and its held-median counterfactual is computed, never
+            // applied. NOT registered for a collect pass: a collect pass scores nothing, so there is no
+            // snapshot at this run's instant to measure and the artifact is absent-but-not-fatal there;
+            // `full` and `score` both score, and a replay replaces the pipeline and never reaches the
+            // efficacy step at all.
+            if (options.Efficacy.EvidenceConfidence.Enabled && runMode != RadarRunMode.Collect)
+            {
+                services.AddRadarEvidenceConfidenceDistribution(options.EfficacyDirectory);
+            }
         }
 
         // Spec 179 §9: the read-only frozen-assessment evaluator rides the shadow registration. It joins

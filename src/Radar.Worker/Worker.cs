@@ -3,6 +3,7 @@ using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Claims;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Efficacy.DenominatorAudit;
+using Radar.Application.Efficacy.EvidenceConfidence;
 using Radar.Application.Efficacy.FilingReads;
 using Radar.Application.EntityResolution;
 using Radar.Application.Lifecycle;
@@ -83,6 +84,7 @@ public sealed class Worker : BackgroundService
     private readonly IAttentionArrivalScreenGenerator? _attentionArrivalGenerator;
     private readonly IScoreMoveDenominatorAuditGenerator? _denominatorAuditGenerator;
     private readonly IDirectionalFilingReadReportGenerator? _directionalFilingReadGenerator;
+    private readonly IEvidenceConfidenceDistributionGenerator? _evidenceConfidenceGenerator;
     private readonly CompanyFilter? _companyFilter;
     private readonly INewsObservationMigration? _newsObservationMigration;
     private readonly INewsRiskShadowGenerator? _newsRiskShadowGenerator;
@@ -119,7 +121,8 @@ public sealed class Worker : BackgroundService
         INewsJudgmentCandidatePlanner? candidatePlanner = null,
         INewsJudgmentSignalMaterializer? newsJudgmentSignalMaterializer = null,
         IDailyNewsReportStep? dailyNewsReportStep = null,
-        IDirectionalFilingReadReportGenerator? directionalFilingReadGenerator = null)
+        IDirectionalFilingReadReportGenerator? directionalFilingReadGenerator = null,
+        IEvidenceConfidenceDistributionGenerator? evidenceConfidenceGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(seeder);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -141,6 +144,7 @@ public sealed class Worker : BackgroundService
         _attentionArrivalGenerator = attentionArrivalGenerator;
         _denominatorAuditGenerator = denominatorAuditGenerator;
         _directionalFilingReadGenerator = directionalFilingReadGenerator;
+        _evidenceConfidenceGenerator = evidenceConfidenceGenerator;
         _companyFilter = companyFilter;
         _newsObservationMigration = newsObservationMigration;
         _newsRiskShadowGenerator = newsRiskShadowGenerator;
@@ -490,7 +494,8 @@ public sealed class Worker : BackgroundService
             && _strategyComparisonGenerator is null
             && _attentionArrivalGenerator is null
             && _denominatorAuditGenerator is null
-            && _directionalFilingReadGenerator is null)
+            && _directionalFilingReadGenerator is null
+            && _evidenceConfidenceGenerator is null)
         {
             return;
         }
@@ -499,16 +504,21 @@ public sealed class Worker : BackgroundService
         // through ICompanyRepository, which under a filter holds only the named companies, so running them
         // here would overwrite data/efficacy/*.svg|csv and strategy-leaderboard.{csv,md} with a partial view —
         // exactly the clobbering the collect-only guard exists to prevent. Skipped LOUDLY (one line), and only
-        // when a filter is active: unfiltered behaviour in every mode is unchanged.
+        // when a filter is active: unfiltered behaviour in every mode is unchanged. This check keys on the
+        // FILTER alone, not on the run mode — ResolveCompanyFilter currently admits a filter only in collect
+        // mode, but this guard does not rely on that — so the log line names the ACTUAL run mode rather than
+        // asserting "collect".
         if (_companyFilter is not null)
         {
             _logger.LogInformation(
                 "Skipping the price-efficacy render, the strategy leaderboard, the attention-arrival "
-                    + "screen and the directional filing-read measurement: this run is a company-FILTERED "
-                    + "collect pass (Radar:Companies = {Companies}). All of them read the seeded company "
+                    + "screen, the directional filing-read measurement and the EvidenceConfidence "
+                    + "distribution measurement: this run is a company-FILTERED pass (Radar:RunMode = "
+                    + "{RunMode}, Radar:Companies = {Companies}). All of them read the seeded company "
                     + "universe, so recomputing them from {CompanyCount} companies would overwrite "
                     + "whole-universe artifacts with a partial view. Run an unfiltered pass to refresh "
                     + "them.",
+                RadarRunModes.Token(_options.Mode),
                 _companyFilter.Describe(),
                 _companyFilter.Tickers.Count);
             return;
@@ -570,6 +580,18 @@ public sealed class Worker : BackgroundService
         if (_directionalFilingReadGenerator is not null)
         {
             await _directionalFilingReadGenerator.GenerateAsync(ct).ConfigureAwait(false);
+        }
+
+        // Spec 225's EvidenceConfidence distribution measurement: AFTER the spec-218 measurement, the same
+        // read-only posture, still OUTSIDE IRadarPipeline. Skipped (dependency null) unless
+        // Radar:Efficacy:Enabled AND Radar:Efficacy:EvidenceConfidence:Enabled AND the run scores (never a
+        // collect pass). It reads persisted snapshots + stored links, signals, evidence and companies, changes
+        // no score, reads no price, and its counterfactual is computed and never applied. A company-filtered
+        // pass returned above and a replay never reaches this method. The generator owns its own failure
+        // handling: it catches, logs, writes nothing and never aborts the run.
+        if (_evidenceConfidenceGenerator is not null)
+        {
+            await _evidenceConfidenceGenerator.GenerateAsync(ct).ConfigureAwait(false);
         }
     }
 }
