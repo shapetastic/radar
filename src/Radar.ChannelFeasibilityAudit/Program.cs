@@ -7,6 +7,7 @@ using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Collectors;
 using Radar.Application.EntityResolution;
 using Radar.Application.Scoring;
+using Radar.Application.SignalExtraction;
 using Radar.ChannelFeasibilityAudit;
 using Radar.Infrastructure.Attention;
 using Radar.Infrastructure.DependencyInjection;
@@ -107,6 +108,11 @@ services.AddRadarCollectorAttribution(attributionConfig);
 services.AddSingleton(new ScoringWeights());
 services.AddSingleton(new MediaCollapseOptions());
 services.AddSingleton<MediaAttentionCollapse>();
+// Spec 224: the same-insider collapse the production engine applies right after the media collapse, at the
+// code default the live baseline runs with, so the audit's assembled set mirrors the scored set.
+services.AddSingleton(new InsiderMaterialityWeights());
+services.AddSingleton(new InsiderCollapseOptions());
+services.AddSingleton<InsiderActivityCollapse>();
 services.AddSingleton(AttentionSourceTierOptions.Default);
 services.AddSingleton<IAttentionSourceWeights, ConfiguredAttentionSourceWeights>();
 

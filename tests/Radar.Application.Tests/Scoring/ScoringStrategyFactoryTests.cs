@@ -67,6 +67,7 @@ public sealed class ScoringStrategyFactoryTests
             provider.GetRequiredService<ISignalSourceDescriptor>(),
             provider.GetRequiredService<InsiderMaterialityWeights>(),
             provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<InsiderActivityCollapse>(),
             provider.GetRequiredService<ScoringOptions>(),
             NullLogger<ScoringEngine>.Instance);
 
@@ -124,6 +125,7 @@ public sealed class ScoringStrategyFactoryTests
             provider.GetRequiredService<ISignalSourceDescriptor>(),
             provider.GetRequiredService<InsiderMaterialityWeights>(),
             provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<InsiderActivityCollapse>(),
             provider.GetRequiredService<ScoringOptions>(),
             provider.GetRequiredService<ILogger<ScoringEngine>>());
 
@@ -161,6 +163,7 @@ public sealed class ScoringStrategyFactoryTests
             provider.GetRequiredService<ISignalSourceDescriptor>(),
             provider.GetRequiredService<InsiderMaterialityWeights>(),
             provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<InsiderActivityCollapse>(),
             provider.GetRequiredService<ScoringOptions>(),
             provider.GetRequiredService<ILogger<ScoringEngine>>());
 
@@ -203,6 +206,7 @@ public sealed class ScoringStrategyFactoryTests
             provider.GetRequiredService<ISignalSourceDescriptor>(),
             provider.GetRequiredService<InsiderMaterialityWeights>(),
             provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<InsiderActivityCollapse>(),
             provider.GetRequiredService<ScoringOptions>(),
             provider.GetRequiredService<ILogger<ScoringEngine>>());
 
@@ -254,6 +258,7 @@ public sealed class ScoringStrategyFactoryTests
             provider.GetRequiredService<ISignalSourceDescriptor>(),
             provider.GetRequiredService<InsiderMaterialityWeights>(),
             provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<InsiderActivityCollapse>(),
             provider.GetRequiredService<ScoringOptions>(),
             provider.GetRequiredService<ILogger<ScoringEngine>>());
 

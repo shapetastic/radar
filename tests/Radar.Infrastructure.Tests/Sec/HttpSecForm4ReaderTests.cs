@@ -55,7 +55,7 @@ public sealed class HttpSecForm4ReaderTests
         <ownershipDocument>
           <documentType>4</documentType>
           <issuer><issuerTradingSymbol>{ticker}</issuerTradingSymbol></issuer>
-          <reportingOwner><reportingOwnerId><rptOwnerName>JANE DOE</rptOwnerName></reportingOwnerId></reportingOwner>
+          <reportingOwner><reportingOwnerId><rptOwnerCik> 0001234567 </rptOwnerCik><rptOwnerName>JANE DOE</rptOwnerName></reportingOwnerId></reportingOwner>
           <aff10b5One>false</aff10b5One>
           <nonDerivativeTable>
             <nonDerivativeTransaction>
@@ -261,6 +261,8 @@ public sealed class HttpSecForm4ReaderTests
         Assert.Equal(SignalDirection.Positive, filing.Direction);
         Assert.Equal(50_000m, filing.NetValue); // 1000 * 50
         Assert.Equal("JANE DOE", filing.PrimaryOwnerName);
+        // Spec 224: the SAME owner's CIK, trimmed.
+        Assert.Equal("0001234567", filing.PrimaryOwnerCik);
         Assert.Equal("MRCY", filing.IssuerTicker);
         Assert.False(filing.Is10b5Plan);
         Assert.False(filing.HasCluster);
@@ -275,6 +277,9 @@ public sealed class HttpSecForm4ReaderTests
         Assert.Equal(SignalDirection.Negative, filing.Direction);
         Assert.Equal(915_750m, filing.NetValue); // (8000 + 1250) * 99
         Assert.False(filing.Is10b5Plan);
+        // Spec 224: this fixture carries no rptOwnerCik ⇒ not captured, never "0" or "".
+        Assert.Equal("JOHN ROE", filing.PrimaryOwnerName);
+        Assert.Null(filing.PrimaryOwnerCik);
         Assert.Equal(InsiderActivityMetadata.DiscretionarySale, filing.ClassificationReason);
     }
 

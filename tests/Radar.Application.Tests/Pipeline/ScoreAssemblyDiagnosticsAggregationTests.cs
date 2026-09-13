@@ -132,6 +132,78 @@ public sealed class ScoreAssemblyDiagnosticsAggregationTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Spec 224 (+ its accrued-evidence amendment): insider owner resolution is a THIRD category rendered
+    /// ONCE per operation at Information, carrying TWO separately stated axes — filings that could not be
+    /// bucketed for want of an owner, and filings bucketed on a title-derived owner (accrued pre-224 evidence
+    /// is expected, not a fault) — labelled as incidences, and never pooled into either Warning.
+    /// </summary>
+    [Fact]
+    public void Aggregator_InsiderOwnerResolution_IsOneInformationLine_WithTheUnresolvedAndTitleAxesSeparate()
+    {
+        var aggregator = new ScoreAssemblyDiagnosticsAggregator("Scoring pass");
+        var companyA = Guid.NewGuid();
+        var companyB = Guid.NewGuid();
+        var companyC = Guid.NewGuid();
+        var unresolved = ScoreAssemblyDiagnostics.None with { CurrentWindowInsiderOwnerUnresolved = 3 };
+
+        aggregator.Record("default", companyA, AsOf, unresolved);
+        aggregator.Record("alt", companyA, AsOf, unresolved);
+        aggregator.Record("default", companyB, AsOf, ScoreAssemblyDiagnostics.None with { CurrentWindowInsiderOwnerUnresolved = 1 });
+        // Title-derived only: affects the line's evaluation/company axes, never the unresolved total.
+        aggregator.Record("default", companyC, AsOf, ScoreAssemblyDiagnostics.None with { CurrentWindowInsiderOwnerFromTitle = 5 });
+        aggregator.Record("default", Guid.NewGuid(), AsOf, ScoreAssemblyDiagnostics.None);
+
+        Assert.True(aggregator.HasInsiderOwnerUnresolved);
+        Assert.True(aggregator.HasInsiderOwnerFromTitle);
+        Assert.False(aggregator.HasUnresolvedEvidence);
+        Assert.False(aggregator.HasNeutralization);
+
+        var log = new CapturingLogger();
+        aggregator.LogAggregates(log);
+
+        var line = Assert.Single(log.Entries);
+        Assert.Equal(LogLevel.Information, line.Level);
+        Assert.Contains(
+            "Scoring pass: 7 directional insider filing-evaluation incidence(s) could not be bucketed by "
+                + "insider-collapse-v1",
+            line.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "and 5 WERE bucketed on an owner name recovered from the evidence title",
+            line.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "across 4 affected strategy-company evaluation(s), 3 distinct company/companies and 2 distinct strateg(ies).",
+            line.Message, StringComparison.Ordinal);
+        Assert.Contains("nothing dropped", line.Message, StringComparison.Ordinal);
+        Assert.Contains("unresolved count is EXPECTED to be near zero", line.Message, StringComparison.Ordinal);
+        Assert.Contains("title-derived count is EXPECTED to be non-zero", line.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Spec 224 amendment: a pass whose only insider fact is title-derived resolutions still states it (the
+    /// unresolved axis renders as a measured 0 beside it), and a pass with neither axis emits no line.
+    /// </summary>
+    [Fact]
+    public void Aggregator_TitleDerivedOnly_StillEmitsTheLine_AndNeitherAxisEmitsNothing()
+    {
+        var titleOnly = new ScoreAssemblyDiagnosticsAggregator("Scoring pass");
+        titleOnly.Record("default", Guid.NewGuid(), AsOf, ScoreAssemblyDiagnostics.None with { CurrentWindowInsiderOwnerFromTitle = 2 });
+        Assert.False(titleOnly.HasInsiderOwnerUnresolved);
+        Assert.True(titleOnly.HasInsiderOwnerFromTitle);
+
+        var log = new CapturingLogger();
+        titleOnly.LogAggregates(log);
+        var line = Assert.Single(log.Entries);
+        Assert.Contains("Scoring pass: 0 directional insider filing-evaluation incidence(s)", line.Message, StringComparison.Ordinal);
+        Assert.Contains("and 2 WERE bucketed", line.Message, StringComparison.Ordinal);
+
+        var neither = new ScoreAssemblyDiagnosticsAggregator("Scoring pass");
+        neither.Record("default", Guid.NewGuid(), AsOf, ScoreAssemblyDiagnostics.None);
+        var silent = new CapturingLogger();
+        neither.LogAggregates(silent);
+        Assert.Empty(silent.Entries);
+    }
+
     /// <summary>§5.2 item 12's negative half: an unaffected pass emits NEITHER line.</summary>
     [Fact]
     public async Task Pass_WithNothingToReport_EmitsNeitherWarning()
@@ -344,6 +416,7 @@ public sealed class ScoreAssemblyDiagnosticsAggregationTests
                     new StubSourceDescriptor(),
                     new InsiderMaterialityWeights(),
                     new MediaAttentionCollapse(new MediaCollapseOptions()),
+                    new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
                     new ScoringOptions(),
                     engineLog,
                     strategyName: name))).ToList();

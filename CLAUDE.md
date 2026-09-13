@@ -345,14 +345,17 @@ authoritative record:
   structure earns **v12**. An in-place composition change bumps
   `IScoreFormula.CompositionRevision` (spec 153); a strategy that changes formula or weights
   gets a NEW NAME (spec 141, immutable-by-convention).
-- **Fingerprint pins are window-dependent and have moved thirteen times since spec 191** (191,
-  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221 (214–216, 219, 220 and 221 AI-ON only; 217
-  moved both sides). 214+215 merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
+- **Fingerprint pins are window-dependent and have moved fourteen times since spec 191** (191,
+  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224 (214–216, 219, 220 and 221 AI-ON only; 217
+  and 224 moved both sides — 224 unconditionally, via the new `insiderCollapse=` fingerprint field). 214+215
+  merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
   composition stamped a full 102-company live run; each later move (216, 217, 219) invalidated the
   identity records again, and the 2026-09-09 run (`run-20260909T234658242Z-5c6644f6`) stamped the
   spec-219 value (spec 220 Overview), so no 216/217/219 step remains outstanding. Spec 220's step (after
-  its merge) and spec 221's step (after its merge) are owed. Both fork only the AI-ON side, so IF no
-  baseline runs between the two merges they collapse into ONE operator step; otherwise they are two.
+  its merge), spec 221's step (after its merge) and spec 224's step (after its merge) are owed. IF no
+  baseline runs between those merges they collapse into ONE operator step (224 forks both sides, 220/221
+  only the AI-ON side, and the step — delete/re-record the identity records — is the same); otherwise they
+  are separate.
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
@@ -370,7 +373,12 @@ authoritative record:
   quotes its pin as history. The precommitted **2026-09-29** claim date is UNCHANGED: the boundary describes
   comparability, not the claim), and **221** (market-reaction families demoted in selection + the
   `NoBusinessSignal` verdict: a pre-221 breadth `Unknown` also absorbed "nothing business to read" and a
-  post-221 one does not, so `Unknown` counts and rates before and after it are NOT comparable). The
+  post-221 one does not, so `Unknown` counts and rates before and after it are NOT comparable), and
+  **224** (same-insider Form 4 collapse: a post-224 negative insider mass counts one DECISION where a
+  pre-224 one counted one FILING — a STEP boundary at the first post-merge scoring pass, because accrued
+  Form 4 evidence resolves its owner from the collector's title shape at read time
+  (`InsiderActivityMetadata.TryRead`), so the collapse applies to the whole window at once;
+  `docs/architecture-history.md` names it). The
   spec-191 inherited-direction cohort is known DEFECTIVE and is not a control.
 - **News is a two-stage read** (specs 177–221): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact

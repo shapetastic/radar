@@ -7,12 +7,13 @@ namespace Radar.Application.Scoring;
 /// rule-set identity + the optional AI directional-filing magnitudes + the strategy's declared signal types;
 /// spec 95, narrowed by spec 141), the insider-materiality descriptor (the
 /// config-tunable buy/sell tiers + cluster boost, spec 96), the media-collapse descriptor (the
-/// same-event media-attention collapse structure + window, spec 109), and the recent-signal WINDOW length
+/// same-event media-attention collapse structure + window, spec 109), the insider-collapse descriptor (the
+/// same-insider Form 4 collapse structure + window, spec 224), and the recent-signal WINDOW length
 /// (spec 148). Persisted content-addressed by the
 /// fingerprint so a historical snapshot's stamp dereferences back to the weights that produced it
 /// (provenance completion — AD-10-as-amended). Immutable and Domain-free (an Application projection,
 /// not an aggregate). Recomputing the fingerprint from
-/// Engine/FormulaVersion/Weights/AttentionDescriptor/SignalSourceDescriptor/InsiderMaterialityDescriptor/MediaCollapseDescriptor/Window
+/// Engine/FormulaVersion/Weights/AttentionDescriptor/SignalSourceDescriptor/InsiderMaterialityDescriptor/MediaCollapseDescriptor/InsiderCollapseDescriptor/Window
 /// via <see cref="ScoringConfigFingerprint"/> MUST equal <paramref name="Fingerprint"/> — the store's
 /// self-verification invariant (the persisted config carries every field verbatim).
 /// <para>
@@ -22,6 +23,13 @@ namespace Radar.Application.Scoring;
 /// "written pre-148; the window was not recorded", which is honest and un-recomputable, exactly as it
 /// should be. Every NEW write populates it, so the self-verification invariant above holds for everything
 /// this codebase writes from now on.
+/// </para>
+/// <para>
+/// <b><paramref name="InsiderCollapseDescriptor"/> (spec 224) is non-nullable, and that is fine for pre-224
+/// files.</b> Every NEW write populates it, and the store never READS a config back into this record on the
+/// production path — it is insert-if-new, content-addressed by the fingerprint, so a pre-224 file lacking
+/// the field is simply a file under a fingerprint no post-224 engine can produce (the field is hashed). Only
+/// the store's own self-verification tests deserialize, and they write what they read.
 /// </para>
 /// <para>
 /// THE ENABLED-COLLECTOR SET IS DELIBERATELY ABSENT (spec 141). This store is content-addressed by the
@@ -49,6 +57,8 @@ namespace Radar.Application.Scoring;
 /// buy/sell tiers + cluster boost, spec 96), stored verbatim.</param>
 /// <param name="MediaCollapseDescriptor">The media-collapse <c>CanonicalDescriptor()</c> (the same-event
 /// media-attention collapse structure + window, spec 109), stored verbatim.</param>
+/// <param name="InsiderCollapseDescriptor">The insider-collapse <c>CanonicalDescriptor()</c> (the same-insider
+/// Form 4 collapse structure + window, spec 224), stored verbatim.</param>
 /// <param name="Window">The recent-signal window length (<see cref="ScoringOptions.Window"/>, spec 148),
 /// carried verbatim so the fingerprint stays recomputable from the stored record. <c>null</c> ⇒ the file was
 /// written before spec 148 and the window was never recorded — see the note on the type.</param>
@@ -61,4 +71,5 @@ public sealed record EffectiveScoringConfig(
     string SignalSourceDescriptor,
     string InsiderMaterialityDescriptor,
     string MediaCollapseDescriptor,
+    string InsiderCollapseDescriptor,
     TimeSpan? Window);

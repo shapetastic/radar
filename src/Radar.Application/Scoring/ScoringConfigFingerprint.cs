@@ -12,6 +12,7 @@ namespace Radar.Application.Scoring;
 /// optional AI directional-filing magnitudes and the strategy's declared signal types) plus the
 /// insider-materiality descriptor (the config-tunable buy/sell tiers + cluster boost, spec 96) plus the
 /// media-collapse descriptor (the same-event media-attention collapse structure + window, spec 109) plus the
+/// insider-collapse descriptor (the same-insider Form 4 collapse structure + window, spec 224) plus the
 /// recent-signal WINDOW LENGTH (<see cref="ScoringOptions.Window"/>, spec 148) — so a
 /// snapshot's <c>ScoringConfigVersion</c> uniquely identifies the STRATEGY that produced it (AD-10 as
 /// amended). The canonical string uses a FIXED, explicit field ordering (never reflection order, which is
@@ -64,6 +65,13 @@ public static class ScoringConfigFingerprint
     /// different scorings would share one stamp. That is precisely the failure this field exists to prevent,
     /// so the encoding must not be lossy.
     /// </param>
+    /// <param name="insiderCollapseDescriptor">
+    /// The same-insider Form 4 collapse identity (<c>InsiderActivityCollapse.CanonicalDescriptor()</c>,
+    /// spec 224): structure version + window magnitude. Appended IMMEDIATELY AFTER <c>mediaCollapse</c> and
+    /// before <c>window</c>, following the fixed-position pattern specs 96/109/148 used. UNCONDITIONAL —
+    /// the collapse is pure assembly code that runs in every composition, so introducing the field moved
+    /// both the AI-OFF and the AI-ON pin families once (the spec-198/217 shape, not the AI-ON-only one).
+    /// </param>
     public static string Compute(
         string engineVersion,
         string formulaVersion,
@@ -72,6 +80,7 @@ public static class ScoringConfigFingerprint
         string signalSourceDescriptor,
         string insiderMaterialityDescriptor,
         string mediaCollapseDescriptor,
+        string insiderCollapseDescriptor,
         TimeSpan window)
     {
         ArgumentNullException.ThrowIfNull(engineVersion);
@@ -81,6 +90,7 @@ public static class ScoringConfigFingerprint
         ArgumentNullException.ThrowIfNull(signalSourceDescriptor);
         ArgumentNullException.ThrowIfNull(insiderMaterialityDescriptor);
         ArgumentNullException.ThrowIfNull(mediaCollapseDescriptor);
+        ArgumentNullException.ThrowIfNull(insiderCollapseDescriptor);
 
         var builder = new StringBuilder();
         Append(builder, "engine", engineVersion);
@@ -127,6 +137,9 @@ public static class ScoringConfigFingerprint
         Append(builder, "srcDesc", signalSourceDescriptor);
         Append(builder, "insiderDesc", insiderMaterialityDescriptor);
         Append(builder, "mediaCollapse", mediaCollapseDescriptor);
+        // Spec 224: the same-insider Form 4 collapse (structure + window), immediately after the media
+        // collapse it mirrors and before the window, which stays LAST.
+        Append(builder, "insiderCollapse", insiderCollapseDescriptor);
         // Spec 148: the recent-signal window, LAST, as ticks (see the <param> note for why ticks and not
         // days). The window decides which signals a snapshot is computed over — both the current window and
         // the previous/velocity window — so two runs at different window lengths are different scorings.

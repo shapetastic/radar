@@ -114,23 +114,14 @@ public sealed class MediaAttentionCollapse
         var representatives = new List<ScoringSignal>();
         var collapsedCounts = new Dictionary<Guid, int>();
 
-        var i = 0;
-        while (i < media.Count)
+        // Spec 224: the greedy same-window loop is the SHARED SameWindowBucketing primitive (extracted from
+        // here, verbatim in behaviour, so the insider collapse could reuse it rather than copy it). The
+        // window is measured from the bucket's FIRST/earliest signal, never from the representative chosen
+        // below, so the representative rule cannot move a bucket boundary. UNCHANGED from v1.
+        foreach (var (i, j) in SameWindowBucketing.GreedyWindows(media, _options.EventWindow))
         {
             var bucketFirst = media[i];
-            var count = 1;
-
-            // Greedy: each subsequent media signal within EventWindow of the bucket's FIRST/earliest signal
-            // joins this bucket; the first one outside opens the next bucket. UNCHANGED from v1 — and the
-            // window is measured from bucketFirst, never from the representative chosen below, so the
-            // representative rule cannot move a bucket boundary.
-            var j = i + 1;
-            while (j < media.Count
-                && media[j].Signal.ObservedAtUtc - bucketFirst.Signal.ObservedAtUtc <= _options.EventWindow)
-            {
-                count++;
-                j++;
-            }
+            var count = j - i;
 
             // Spec 194 §1.5: choose the representative from the COMPLETED bucket [i, j). The scan starts at
             // bucketFirst and only ever replaces it on a strict Beats, so with no materialized signal present
@@ -155,8 +146,6 @@ public sealed class MediaAttentionCollapse
                 // member ended up representing it.
                 collapsedCounts[representative.Signal.Id] = count - 1;
             }
-
-            i = j;
         }
 
         var result = new List<ScoringSignal>(representatives.Count + nonMedia.Count);
@@ -193,11 +182,10 @@ public sealed class MediaAttentionCollapse
         return byCreated != 0 ? byCreated > 0 : candidate.Signal.Id.CompareTo(incumbent.Signal.Id) < 0;
     }
 
-    private static int CompareSignals(ScoringSignal a, ScoringSignal b)
-    {
-        var byObserved = a.Signal.ObservedAtUtc.CompareTo(b.Signal.ObservedAtUtc);
-        return byObserved != 0 ? byObserved : a.Signal.Id.CompareTo(b.Signal.Id);
-    }
+    // Spec 224: the ordering is the shared one both collapses use (SameWindowBucketing), kept as a local
+    // alias so the call sites above read as before.
+    private static int CompareSignals(ScoringSignal a, ScoringSignal b) =>
+        SameWindowBucketing.CompareObservedThenId(a, b);
 }
 
 /// <summary>

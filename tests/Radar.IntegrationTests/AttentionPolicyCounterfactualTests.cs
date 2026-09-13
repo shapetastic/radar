@@ -231,6 +231,7 @@ public sealed class AttentionPolicyCounterfactualTests(ITestOutputHelper output)
             ReadOnlyHarnessSourceDescriptor.Instance,
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             new ScoringOptions { Window = ScoringWindow },
             NullLogger<ScoringEngine>.Instance,
             strategyName: "default");

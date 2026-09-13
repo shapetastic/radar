@@ -204,6 +204,7 @@ public sealed class ScoringEngineTests
                 sourceDescriptor ?? SourceDesc,
                 new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
+                new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
                 new ScoringOptions { Window = window ?? Window },
                 logger ?? NullLogger<ScoringEngine>.Instance,
                 channels: channels);
@@ -544,6 +545,153 @@ public sealed class ScoringEngineTests
     }
 
     /// <summary>Seeds an Approved signal (with evidence) of a given type + observation time into the repo.</summary>
+    /// <summary>
+    /// Spec 224: three discretionary sales by ONE reporting owner (the exact Form 4 envelope the collector
+    /// writes, owner key included) inside the 30-day insider-collapse window produce ONE InsiderBuying
+    /// contribution/evidence link whose reason carries the collapse note with the aggregate value and the
+    /// Strength re-derivation, the other two filings carry no link, and the stamp equals the fingerprint
+    /// recomputed WITH the new insider-collapse descriptor.
+    /// </summary>
+    [Fact]
+    public async Task InsiderCollapse_ThreeSameOwnerSales_CollapseToOneLink_WithAggregateNote_AndStampIncludesDescriptor()
+    {
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+
+        var sales = new List<Guid>();
+        for (var i = 0; i < 3; i++)
+        {
+            var (signal, _) = await SeedInsiderSaleAsync(
+                harness, companyId, WindowEnd.AddDays(-15).AddDays(i * 4), netValue: 500_000m, owner: "STANG ERIC B");
+            sales.Add(signal.Id);
+        }
+
+        // A second person's sale in the same week stays its own signal.
+        var (other, _) = await SeedInsiderSaleAsync(
+            harness, companyId, WindowEnd.AddDays(-14), netValue: 500_000m, owner: "Yeh Jenny C");
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        // One representative for the three + one for the other person = 2 links.
+        Assert.Equal(2, result.Links.Count);
+        var representativeLink = Assert.Single(result.Links, l => sales.Contains(l.SignalId));
+        Assert.Equal(sales[0], representativeLink.SignalId);
+        Assert.Contains(
+            "(collapsed 2 same-insider filing(s): 3 filings by one insider totalling ~$1,500,000; strength 3 → 4)",
+            representativeLink.ContributionReason,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("InsiderBuying", representativeLink.ContributionReason, StringComparison.Ordinal);
+
+        var otherLink = Assert.Single(result.Links, l => l.SignalId == other.Id);
+        Assert.DoesNotContain("collapsed", otherLink.ContributionReason, StringComparison.Ordinal);
+
+        // Nothing unresolved: every filing carried the owner key.
+        Assert.Equal(0, result.Diagnostics.CurrentWindowInsiderOwnerUnresolved);
+
+        // The stamp is the fingerprint recomputed WITH the insider-collapse descriptor (spec 224).
+        var expected = ScoringConfigFingerprint.Compute(
+            "mvp-engine-v1", "stub-formula-vX", new ScoringWeights(), Weights.CanonicalDescriptor(),
+            SourceDescriptor, new InsiderMaterialityWeights().CanonicalDescriptor(),
+            new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor(),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()).CanonicalDescriptor(),
+            Window);
+        Assert.Equal(expected, result.Snapshot.ScoringConfigVersion);
+        Assert.Equal(expected, harness.Engine.EffectiveConfig.Fingerprint);
+        Assert.Equal("insider-collapse-v1;window=30;", harness.Engine.EffectiveConfig.InsiderCollapseDescriptor);
+    }
+
+    /// <summary>
+    /// Spec 224 amendment: a directional insider filing with NO owner key (every accrued pre-224 evidence
+    /// item) has its owner recovered from the collector's title shape at read time, so repeat legacy filings by
+    /// one person DO collapse — and each title-derived resolution is counted on the diagnostics' own axis.
+    /// </summary>
+    [Fact]
+    public async Task InsiderCollapse_LegacyFilingsWithoutOwnerKey_CollapseOnTheTitleDerivedOwner_AndAreCounted()
+    {
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+
+        var (first, _) = await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-10), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false);
+        await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-8), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var link = Assert.Single(result.Links);
+        Assert.Equal(first.Id, link.SignalId);
+        Assert.Contains(
+            "(collapsed 1 same-insider filing(s): 2 filings by one insider totalling ~$1,000,000;",
+            link.ContributionReason,
+            StringComparison.Ordinal);
+        Assert.Equal(0, result.Diagnostics.CurrentWindowInsiderOwnerUnresolved);
+        Assert.Equal(2, result.Diagnostics.CurrentWindowInsiderOwnerFromTitle);
+        Assert.True(result.Diagnostics.HasInsiderOwnerFromTitle);
+        Assert.True(result.Diagnostics.HasAny);
+    }
+
+    /// <summary>
+    /// Spec 224: a directional insider filing with no owner key AND a title in no collector shape resolves no
+    /// owner: it is scored as its own signal exactly as before and counted on the unresolved axis.
+    /// </summary>
+    [Fact]
+    public async Task InsiderCollapse_FilingsWithNoResolvableOwner_PassThrough_AndAreCounted()
+    {
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+
+        await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-10), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false, title: "Form 4 insider filing");
+        await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-8), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false, title: "Form 4 insider filing");
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        Assert.Equal(2, result.Links.Count);
+        Assert.All(result.Links, l => Assert.DoesNotContain("collapsed", l.ContributionReason, StringComparison.Ordinal));
+        Assert.Equal(2, result.Diagnostics.CurrentWindowInsiderOwnerUnresolved);
+        Assert.Equal(0, result.Diagnostics.CurrentWindowInsiderOwnerFromTitle);
+        Assert.True(result.Diagnostics.HasInsiderOwnerUnresolved);
+        Assert.True(result.Diagnostics.HasAny);
+    }
+
+    /// <summary>Seeds one Form 4 discretionary-sale pair in the exact envelope shape SecForm4Collector writes.</summary>
+    private static async Task<(Signal signal, EvidenceItem evidence)> SeedInsiderSaleAsync(
+        Harness harness,
+        Guid companyId,
+        DateTimeOffset observedAt,
+        decimal netValue,
+        string owner,
+        bool writeOwnerKey = true,
+        string? title = null)
+    {
+        var ownerKey = writeOwnerKey ? $",\"{InsiderActivityMetadata.OwnerNameKey}\":\"{owner}\"" : string.Empty;
+        var metadataJson =
+            "{\"metadata\":{\"quality\":\"High\",\"form\":\"4\",\"filingDate\":\"2026-01-20\","
+            + "\"insiderDirection\":\"Negative\",\"insiderClassificationReason\":\"discretionary-sale\","
+            + $"\"insiderNetValue\":\"{netValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}\"{ownerKey}}},"
+            + "\"companyHints\":[]}";
+
+        var evidence = new EvidenceBuilder()
+            .WithId(Guid.NewGuid())
+            .WithContentHash(Guid.NewGuid().ToString("N"))
+            .WithSourceType(EvidenceSourceType.Filing)
+            .WithTitle(title ?? $"Form 4 — insider open-market sale: {owner} sold 5,000 shares (~$500,000) (2026-01-20)")
+            .WithMetadataJson(metadataJson)
+            .Build();
+
+        var signal = new SignalBuilder()
+            .WithId(Guid.NewGuid())
+            .WithEvidenceId(evidence.Id)
+            .WithCompanyId(companyId)
+            .WithType(SignalType.InsiderBuying)
+            .WithDirection(SignalDirection.Negative)
+            .WithStrength(InsiderMaterialityWeights.StrengthForAmount(netValue, new InsiderMaterialityWeights().SellTiers))
+            .WithReviewStatus(SignalReviewStatus.Approved)
+            .WithObservedAtUtc(observedAt)
+            .Build();
+
+        await harness.Evidence.AddIfNewAsync(evidence, CancellationToken.None);
+        await harness.Signals.AddAsync(signal, CancellationToken.None);
+        return (signal, evidence);
+    }
+
     private static async Task<(Signal signal, EvidenceItem evidence)> SeedTypedPairAsync(
         Harness harness, Guid companyId, DateTimeOffset observedAt, SignalType type)
     {
@@ -618,6 +766,7 @@ public sealed class ScoringEngineTests
             "mvp-engine-v1", formula.Version, new ScoringWeights(), Weights.CanonicalDescriptor(),
             SourceDescriptor, new InsiderMaterialityWeights().CanonicalDescriptor(),
             new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor(),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()).CanonicalDescriptor(),
             // Spec 148: the recent-signal window is a hashed field now. This is the HARNESS's window, which is
             // deliberately NOT the ScoringOptions default (see the constant's note) — so this assertion fails
             // if the engine ever stops reading _options.Window and hashes a hard-coded default instead.
@@ -910,6 +1059,11 @@ public sealed class ScoringEngineTests
         Assert.Equal(
             new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor(),
             defaultConfig.MediaCollapseDescriptor);
+        // Spec 224: the insider-collapse descriptor is carried verbatim too.
+        Assert.Equal(
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights())
+                .CanonicalDescriptor(),
+            defaultConfig.InsiderCollapseDescriptor);
 
         // Under a changed weight a second engine's EffectiveConfig differs and still matches its own stamp.
         var changedWeights = new ScoringWeights { AttentionHalfSaturation = 12.0 };
@@ -1397,6 +1551,7 @@ public sealed class ScoringEngineTests
                 new RadarScoreFormulaV8(new ScoringWeights(), Weights),
                 new ScoringWeights(), Weights, SourceDesc, new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
+                new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
                 new ScoringOptions { Window = Window }, NullLogger<ScoringEngine>.Instance);
 
             var companyId = Guid.NewGuid();

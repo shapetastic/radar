@@ -462,6 +462,7 @@ public sealed class DurableWriteClaimTests : IDisposable
         SignalSourceDescriptor: "rules=test;",
         InsiderMaterialityDescriptor: "insider",
         MediaCollapseDescriptor: "media-collapse-v2",
+        InsiderCollapseDescriptor: "insider-collapse-v1",
         Window: TimeSpan.FromDays(30));
 
     private static PriceHistory History(string ticker) => new(

@@ -117,6 +117,176 @@ public sealed class InsiderActivityMetadataTests
         Assert.Equal(new DateOnly(2026, 6, 12), read.FilingDate);
     }
 
+    // --- TryRead: the spec-224 owner identity and the cluster flag ---
+
+    [Fact]
+    public void OwnerKeys_ArePinnedByteExact()
+    {
+        Assert.Equal("insiderOwnerName", InsiderActivityMetadata.OwnerNameKey);
+        Assert.Equal("insiderOwnerCik", InsiderActivityMetadata.OwnerCikKey);
+    }
+
+    [Fact]
+    public void TryRead_OwnerNameAndCik_AreTrimmed()
+    {
+        var read = InsiderActivityMetadata.TryRead(Evidence(Form4Envelope(
+            ("insiderOwnerName", "  STANG ERIC B "), ("insiderOwnerCik", " 0001234567 "))));
+
+        Assert.NotNull(read);
+        Assert.Equal("STANG ERIC B", read.OwnerName);
+        Assert.Equal("0001234567", read.OwnerCik);
+    }
+
+    [Theory]
+    [InlineData(false, "")]
+    [InlineData(true, "")]
+    [InlineData(true, "   ")]
+    public void TryRead_NoOwnerKeys_AndATitleInNoCollectorShape_OwnerIsNotRecorded(bool keyPresent, string value)
+    {
+        var json = keyPresent
+            ? Form4Envelope(("insiderOwnerName", value), ("insiderOwnerCik", value))
+            : Form4Envelope();
+
+        // The builder's default title ("Untitled") is no Form 4 shape, so the fallback recovers nothing.
+        var read = InsiderActivityMetadata.TryRead(Evidence(json));
+
+        Assert.NotNull(read);
+        Assert.Null(read.OwnerName);
+        Assert.Null(read.OwnerCik);
+        Assert.Equal(InsiderOwnerSource.NotRecorded, read.OwnerSource);
+    }
+
+    [Fact]
+    public void TryRead_OwnerNameKey_IsSourcedFromMetadata()
+    {
+        var read = InsiderActivityMetadata.TryRead(Evidence(Form4Envelope(("insiderOwnerName", "STANG ERIC B"))));
+
+        Assert.NotNull(read);
+        Assert.Equal(InsiderOwnerSource.Metadata, read.OwnerSource);
+    }
+
+    // --- TryRead: the spec-224 amendment's title fallback for accrued pre-224 evidence ---
+
+    [Theory]
+    [InlineData("Form 4 — insider open-market sale: STANG ERIC B sold 27,666 shares (~$1,500,000) (2026-06-26)", "STANG ERIC B")]
+    [InlineData("Form 4 — insider open-market purchase: Yeh Jenny C bought 12,840 shares (~$250,000) (2026-07-07)", "Yeh Jenny C")]
+    [InlineData("Form 4 — insider stock transaction (routine): WEINER LEIGH R (2012-12-20)", "WEINER LEIGH R")]
+    public void TryRead_LegacyForm4WithoutOwnerKeys_RecoversTheOwnerFromTheTitle(string title, string owner)
+    {
+        // The exact envelope an accrued pre-224 Form 4 carries: no owner keys at all.
+        var evidence = new EvidenceBuilder()
+            .WithTitle(title)
+            .WithMetadataJson(Form4Envelope(("insiderClassificationReason", "discretionary-sale")))
+            .Build();
+
+        var read = InsiderActivityMetadata.TryRead(evidence);
+
+        Assert.NotNull(read);
+        Assert.Equal(owner, read.OwnerName);
+        Assert.Null(read.OwnerCik); // a title carries no CIK
+        Assert.Equal(InsiderOwnerSource.Title, read.OwnerSource);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void TryRead_BlankOrAbsentOwnerKey_FallsBackToTheTitle(string? keyValue)
+    {
+        var json = keyValue is null ? Form4Envelope() : Form4Envelope(("insiderOwnerName", keyValue));
+        var evidence = new EvidenceBuilder()
+            .WithTitle("Form 4 — insider open-market sale: STANG ERIC B sold 5 shares (~$9) (2026-06-26)")
+            .WithMetadataJson(json)
+            .Build();
+
+        var read = InsiderActivityMetadata.TryRead(evidence);
+
+        Assert.NotNull(read);
+        Assert.Equal("STANG ERIC B", read.OwnerName);
+        Assert.Equal(InsiderOwnerSource.Title, read.OwnerSource);
+    }
+
+    [Fact]
+    public void TryRead_StructuredMetadata_AlwaysWinsOverTheTitle()
+    {
+        var evidence = new EvidenceBuilder()
+            .WithTitle("Form 4 — insider open-market sale: SOMEONE ELSE sold 5 shares (~$9) (2026-06-26)")
+            .WithMetadataJson(Form4Envelope(("insiderOwnerName", "STANG ERIC B"), ("insiderOwnerCik", "0001234567")))
+            .Build();
+
+        var read = InsiderActivityMetadata.TryRead(evidence);
+
+        Assert.NotNull(read);
+        Assert.Equal("STANG ERIC B", read.OwnerName);
+        Assert.Equal("0001234567", read.OwnerCik);
+        Assert.Equal(InsiderOwnerSource.Metadata, read.OwnerSource);
+    }
+
+    [Fact]
+    public void TryRead_CikKeyWithoutNameKey_TakesTheNameFromTheTitle_AndTheCikFromMetadata()
+    {
+        var evidence = new EvidenceBuilder()
+            .WithTitle("Form 4 — insider open-market sale: STANG ERIC B sold 5 shares (~$9) (2026-06-26)")
+            .WithMetadataJson(Form4Envelope(("insiderOwnerCik", "0001234567")))
+            .Build();
+
+        var read = InsiderActivityMetadata.TryRead(evidence);
+
+        Assert.NotNull(read);
+        Assert.Equal("STANG ERIC B", read.OwnerName);
+        Assert.Equal("0001234567", read.OwnerCik);
+        Assert.Equal(InsiderOwnerSource.Title, read.OwnerSource);
+    }
+
+    [Theory]
+    [InlineData("Form 4 — insider open-market sale: An insider sold 5 shares (~$9) (2026-06-26)")]
+    [InlineData("Form 4 — insider stock transaction (routine): An insider (2026-06-26)")]
+    public void TryRead_TitleNamingOnlyTheAnonymousPlaceholder_IsNotRecorded(string title)
+    {
+        var evidence = new EvidenceBuilder().WithTitle(title).WithMetadataJson(Form4Envelope()).Build();
+
+        var read = InsiderActivityMetadata.TryRead(evidence);
+
+        Assert.NotNull(read);
+        Assert.Null(read.OwnerName);
+        Assert.Equal(InsiderOwnerSource.NotRecorded, read.OwnerSource);
+    }
+
+    [Fact]
+    public void TryRead_ATitleInTheCollectorShape_OnANonForm4Envelope_IsStillNotAForm4()
+    {
+        var evidence = new EvidenceBuilder()
+            .WithTitle("Form 4 — insider open-market sale: STANG ERIC B sold 5 shares (~$9) (2026-06-26)")
+            .WithMetadataJson("{\"metadata\":{\"form\":\"8-K\"},\"companyHints\":[]}")
+            .Build();
+
+        Assert.Null(InsiderActivityMetadata.TryRead(evidence));
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
+    [InlineData(" 1 ", true)]
+    [InlineData("false", false)]
+    [InlineData("0", false)]
+    [InlineData("", false)]
+    public void TryRead_ClusterFlag_FollowsTheExtractorsRule(string value, bool expected)
+    {
+        var read = InsiderActivityMetadata.TryRead(Evidence(Form4Envelope(("insiderCluster", value))));
+
+        Assert.NotNull(read);
+        Assert.Equal(expected, read.HasCluster);
+    }
+
+    [Fact]
+    public void TryRead_ClusterKeyAbsent_IsFalse()
+    {
+        var read = InsiderActivityMetadata.TryRead(Evidence(Form4Envelope()));
+
+        Assert.NotNull(read);
+        Assert.False(read.HasCluster);
+    }
+
     // --- TryRead: the captured value ---
 
     [Fact]

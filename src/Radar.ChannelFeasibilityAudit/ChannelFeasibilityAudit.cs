@@ -95,6 +95,7 @@ public sealed class ChannelFeasibilityAudit
     private readonly IEvidenceRepository _evidence;
     private readonly ICompanyRepository _companies;
     private readonly MediaAttentionCollapse _mediaCollapse;
+    private readonly InsiderActivityCollapse _insiderCollapse;
     private readonly ScoringWeights _weights;
     private readonly IAttentionSourceWeights _sourceWeights;
     private readonly ICollectorAttributionResolver _attribution;
@@ -104,6 +105,7 @@ public sealed class ChannelFeasibilityAudit
         IEvidenceRepository evidence,
         ICompanyRepository companies,
         MediaAttentionCollapse mediaCollapse,
+        InsiderActivityCollapse insiderCollapse,
         ScoringWeights weights,
         IAttentionSourceWeights sourceWeights,
         ICollectorAttributionResolver attribution)
@@ -112,6 +114,7 @@ public sealed class ChannelFeasibilityAudit
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(companies);
         ArgumentNullException.ThrowIfNull(mediaCollapse);
+        ArgumentNullException.ThrowIfNull(insiderCollapse);
         ArgumentNullException.ThrowIfNull(weights);
         ArgumentNullException.ThrowIfNull(sourceWeights);
         ArgumentNullException.ThrowIfNull(attribution);
@@ -121,6 +124,7 @@ public sealed class ChannelFeasibilityAudit
         _evidence = evidence;
         _companies = companies;
         _mediaCollapse = mediaCollapse;
+        _insiderCollapse = insiderCollapse;
         _weights = weights;
         _sourceWeights = sourceWeights;
         _attribution = attribution;
@@ -204,7 +208,10 @@ public sealed class ChannelFeasibilityAudit
         // read-only diagnostic and consumes only the survivors, exactly as before.
         var superseded = GuidanceChangeSupersede.Apply(pairs).Signals;
         var collapse = _mediaCollapse.Collapse(superseded);
-        var scored = collapse.Signals.ToList();
+        // Spec 224: the same-insider collapse, in the engine's position (immediately after the media
+        // collapse; disjoint signal types, so the order is behaviourally irrelevant). This audit consumes
+        // only the survivors, as it does for the media collapse.
+        var scored = _insiderCollapse.Collapse(collapse.Signals).Signals.ToList();
 
         // Collector attribution over the RESOLVED scoring inputs (the post-collapse set the channels
         // consume), through the one spec-151 seam.

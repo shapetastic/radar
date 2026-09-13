@@ -123,6 +123,7 @@ public sealed class ScoringEngineSignalTypeFilterTests
                 new StubSourceDescriptor(),
                 new InsiderMaterialityWeights(),
                 new MediaAttentionCollapse(new MediaCollapseOptions()),
+                new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
                 new ScoringOptions { Window = Window },
                 NullLogger<ScoringEngine>.Instance,
                 name,

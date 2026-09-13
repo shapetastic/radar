@@ -43,16 +43,35 @@ namespace Radar.Application.Scoring;
 /// <param name="PreviousWindowMalformedEnvelopeNeutralized">
 /// The same malformed-envelope axis over the previous/velocity window.
 /// </param>
+/// <param name="CurrentWindowInsiderOwnerUnresolved">
+/// Current-window directional insider filings whose reporting owner could not be resolved through
+/// <c>InsiderActivityMetadata.TryRead</c> (spec 224) and so were passed through UNBUCKETED by
+/// <c>InsiderActivityCollapse</c>: not a readable Form 4 envelope, no owner metadata AND a title in no known
+/// collector shape (or naming only the anonymous placeholder), or a name-only filing whose name the window
+/// shows beside two or more CIKs. Its own axis: nothing is dropped, but a filing that could not be collapsed
+/// is a filing that may still be counted N times. Accrued pre-224 evidence resolves through the title
+/// fallback, so this is EXPECTED to be near zero. There is no previous-window counterpart: the collapse is not
+/// applied to the activity-only velocity window (no evidence is loaded there — AD-6 — so no owner could be
+/// resolved by construction).
+/// </param>
+/// <param name="CurrentWindowInsiderOwnerFromTitle">
+/// Current-window directional insider filings that WERE bucketed on an owner identity resting on a name
+/// recovered from the evidence title (accrued pre-224 evidence, no owner metadata; spec 224 amendment). Not a
+/// defect — its own axis so the share of the collapse that rests on the fallback is stated; it should fall to
+/// zero as pre-224 evidence ages out of the window.
+/// </param>
 public sealed record ScoreAssemblyDiagnostics(
     int UnresolvedEvidenceSignalCount,
     int UnresolvedEvidenceDistinctEvidenceCount,
     int CurrentWindowLegacyInheritanceNeutralized,
     int CurrentWindowMalformedEnvelopeNeutralized,
     int PreviousWindowLegacyInheritanceNeutralized,
-    int PreviousWindowMalformedEnvelopeNeutralized)
+    int PreviousWindowMalformedEnvelopeNeutralized,
+    int CurrentWindowInsiderOwnerUnresolved,
+    int CurrentWindowInsiderOwnerFromTitle)
 {
-    /// <summary>The healthy evaluation: nothing dropped, nothing neutralized.</summary>
-    public static ScoreAssemblyDiagnostics None { get; } = new(0, 0, 0, 0, 0, 0);
+    /// <summary>The healthy evaluation: nothing dropped, nothing neutralized, every insider owner resolved from metadata.</summary>
+    public static ScoreAssemblyDiagnostics None { get; } = new(0, 0, 0, 0, 0, 0, 0, 0);
 
     /// <summary>True when this evaluation dropped at least one signal for unresolvable evidence.</summary>
     public bool HasUnresolvedEvidence => UnresolvedEvidenceSignalCount > 0;
@@ -64,6 +83,13 @@ public sealed record ScoreAssemblyDiagnostics(
         || PreviousWindowLegacyInheritanceNeutralized > 0
         || PreviousWindowMalformedEnvelopeNeutralized > 0;
 
+    /// <summary>True when this evaluation passed through at least one insider filing it could not bucket (spec 224).</summary>
+    public bool HasInsiderOwnerUnresolved => CurrentWindowInsiderOwnerUnresolved > 0;
+
+    /// <summary>True when this evaluation bucketed at least one insider filing on a title-derived owner (spec 224 amendment).</summary>
+    public bool HasInsiderOwnerFromTitle => CurrentWindowInsiderOwnerFromTitle > 0;
+
     /// <summary>True when this evaluation has anything at all to report.</summary>
-    public bool HasAny => HasUnresolvedEvidence || HasNeutralization;
+    public bool HasAny =>
+        HasUnresolvedEvidence || HasNeutralization || HasInsiderOwnerUnresolved || HasInsiderOwnerFromTitle;
 }

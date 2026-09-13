@@ -100,6 +100,15 @@ public sealed class ScoringConfigFingerprintTests
     private static readonly string MediaCollapseDescriptor =
         new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor();
 
+    // The insider-collapse descriptor of the default config (spec 224): the same-insider Form 4 collapse
+    // structure (insider-collapse-v1) + the tunable window (default 30 days), folded in immediately after the
+    // media-collapse descriptor and before the window. Computed from the defaults so it can't drift from the
+    // code default. UNCONDITIONAL (pure assembly code, no AI gate), which is why introducing it moved BOTH
+    // pin families — see Compute_DefaultConfig_MatchesPinnedFingerprint.
+    private static readonly string InsiderCollapseDescriptor =
+        new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights())
+            .CanonicalDescriptor();
+
     // The recent-signal window of the default config (spec 148), the LAST hashed field. Taken from
     // ScoringOptions rather than written as a literal 30 days so the pins below cannot silently disagree with
     // the code default: if someone changes the default window, the pinned values fail here rather than in a
@@ -117,6 +126,7 @@ public sealed class ScoringConfigFingerprintTests
         string? sourceDescriptor = null,
         string? insiderDescriptor = null,
         string? mediaCollapseDescriptor = null,
+        string? insiderCollapseDescriptor = null,
         TimeSpan? window = null) =>
         ScoringConfigFingerprint.Compute(
             "mvp-engine-v1",
@@ -126,6 +136,7 @@ public sealed class ScoringConfigFingerprintTests
             sourceDescriptor ?? SourceDescriptor,
             insiderDescriptor ?? InsiderDescriptor,
             mediaCollapseDescriptor ?? MediaCollapseDescriptor,
+            insiderCollapseDescriptor ?? InsiderCollapseDescriptor,
             window ?? DefaultWindow);
 
     [Fact]
@@ -415,7 +426,23 @@ public sealed class ScoringConfigFingerprintTests
         // company's excess). History is deliberately NOT regenerated, rewritten or backfilled (AD-8/AD-1).
         // The precommitted 2026-09-29 AD-15 claim date is UNCHANGED — spec 217 declares its benchmark and
         // eligibility rules PROSPECTIVELY, before any eligible claim date exists.
-        Assert.Equal("radar-scoring-fp-66fca8c5f1fc", DefaultFingerprint());
+        //
+        // ⚠ SPEC 224 MOVES THIS PIN — radar-scoring-fp-66fca8c5f1fc → radar-scoring-fp-4244521af873 — for
+        // the new `insiderCollapse=` fingerprint field (insider-collapse-v1;window=30;), appended immediately
+        // after `mediaCollapse` and before `window`. It is UNCONDITIONAL and NOT AI-gated — the same-insider
+        // Form 4 collapse is pure assembly code that runs in every composition — so BOTH the AI-OFF and the
+        // AI-ON families move, on all three windows (the spec-198/217 shape): twelve asserted values in this
+        // file, seven of them in this method and Compute_NewsQueryWindowDisabled_ReproducesNoNewsQueryPins.
+        // The MEASURED basis (2026-09-12, live store): 244 discretionary-sale filings concentrated by REPEAT
+        // filer, not headcount — ATNI's 13 negative insider signals from THREE people, OOMA's five sale
+        // signals from three decisions across five weeks — each filing adding its full weight to Mneg
+        // independently. Scoring math is byte-identical: no _formula.Version bump, no RuleSetVersion bump,
+        // no weight, tier or window edited; only the insider INPUT SET changes (the media-collapse precedent).
+        // ONE operator step is owed after merge (delete/re-record every configured
+        // data/scoring-configs/strategies/{name}.json BEFORE the first post-merge run — git-ignored, never
+        // fabricated; a StrategyIdentityGuard halt before that is CORRECT). If no baseline runs between the
+        // spec-220/221 merges and this one, it collapses with their still-outstanding step into ONE.
+        Assert.Equal("radar-scoring-fp-4244521af873", DefaultFingerprint());
     }
 
     [Fact]
@@ -476,33 +503,46 @@ public sealed class ScoringConfigFingerprintTests
         // only: `ordering=family-ordering-v3`, news-judgment-prompt-v7 and news-judgment-schema-v5 in the
         // cohort key, and a fifth trajectory→direction mapping token (`NoBusinessSignal>none`). The three
         // AI-OFF halves did NOT move — the disabled segment carries neither a cohort key nor a mapping.
+        //
+        // ⚠ SPEC 224 MOVES ALL SIX HALVES — old → new — for the new `insiderCollapse=` fingerprint field
+        // (insider-collapse-v1;window=30;), unconditionally, so both the AI-OFF and the AI-ON families move
+        // (the spec-217 shape): AI-OFF 30d radar-scoring-fp-db96e3862fae → radar-scoring-fp-c658889c7b2f;
+        // 60d radar-scoring-fp-2237fb804628 → radar-scoring-fp-c769b5237ca3; 120d
+        // radar-scoring-fp-28fcca88a36a → radar-scoring-fp-075046305fbc; AI-ON 30d
+        // radar-scoring-fp-2f70cbbc010b → radar-scoring-fp-e7473d744633; 60d radar-scoring-fp-9500928bf9d6
+        // → radar-scoring-fp-553b5d5cc2d9; 120d radar-scoring-fp-a678b6c789b3 →
+        // radar-scoring-fp-b4cebdfe9560. The field sits OUTSIDE the source descriptor altogether (it is its
+        // own fixed-position fingerprint field, like mediaCollapse), so the proof this test makes is
+        // unchanged: with the news-query segment empty the composed descriptor is still byte-identical to
+        // the current one minus `newsquery=`, and spec 198's segment remains exactly additive. ONE operator
+        // step is owed after merge (see Compute_DefaultConfig_MatchesPinnedFingerprint).
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
         Assert.Equal(
-            "radar-scoring-fp-db96e3862fae",
+            "radar-scoring-fp-c658889c7b2f",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-2f70cbbc010b",
+            "radar-scoring-fp-e7473d744633",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
         Assert.Equal(
-            "radar-scoring-fp-2237fb804628",
+            "radar-scoring-fp-c769b5237ca3",
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-9500928bf9d6",
+            "radar-scoring-fp-553b5d5cc2d9",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
         // 120-day -Profile long-window.
         Assert.Equal(
-            "radar-scoring-fp-28fcca88a36a",
+            "radar-scoring-fp-075046305fbc",
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-a678b6c789b3",
+            "radar-scoring-fp-b4cebdfe9560",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -873,8 +913,15 @@ public sealed class ScoringConfigFingerprintTests
         // news-query, acq=, ai= or coverage-policy change; the record tag moved to news-judgment-v10. THE
         // THREE AI-OFF PINS ARE UNCHANGED and REQUIRED to be: the disabled segment carries no cohort key and no
         // mapping, so none of the four causes can reach an AI-OFF fingerprint.
+        //
+        // → SPEC 224 MOVES IT (radar-scoring-fp-9ee56ab1bbb3 → the value below), and this time the AI-OFF
+        // side moves WITH it (the spec-217 shape, not the 219–221 one): the cause is the new unconditional
+        // `insiderCollapse=` fingerprint field (insider-collapse-v1;window=30;), which sits outside the
+        // source descriptor and therefore outside every AI gate. No news=, ai=, rules=, acq=, weight, tier,
+        // media-collapse or window change. See Compute_DefaultConfig_MatchesPinnedFingerprint for the
+        // measured basis and the single operator step owed.
         Assert.Equal(
-            "radar-scoring-fp-9ee56ab1bbb3",
+            "radar-scoring-fp-a448254b38cc",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -1110,11 +1157,25 @@ public sealed class ScoringConfigFingerprintTests
         // that run (the path is git-ignored, so those records cannot ride in a PR and MUST NEVER be
         // fabricated); if the step is missed, StrategyIdentityGuard halts the run before collection — that
         // halt is CORRECT.
+        //
+        // SPEC 224 MOVES THEM AGAIN, AND THE AI-OFF PAIR MOVES WITH THEM (see
+        // Compute_LiveWindowAiOffStamps_ArePinned — the spec-217 shape): 60d radar-scoring-fp-741269b4384b
+        // → radar-scoring-fp-692055768db8; 120d radar-scoring-fp-e4aaf21c09a9 → radar-scoring-fp-60f898fd0d1f.
+        // ONE cause: the new unconditional `insiderCollapse=` field (insider-collapse-v1;window=30;), its
+        // own fixed-position fingerprint field after mediaCollapse. radar-scoring-fp-741269b4384b is the
+        // spec-221 value; whether a live run stamped it depends on whether the 220/221 operator step was
+        // taken before this merge, and this file does not assert that either way.
+        //
+        // ⚠ THE OPERATOR STEP IS OWED — and if no baseline ran between the spec-220/221 merges and this one,
+        // the three collapse into ONE step (224 forks both sides; 220/221 fork only this AI-ON side, so the
+        // union is still "delete or re-record every configured data/scoring-configs/strategies/{name}.json
+        // BEFORE the first post-merge run"). Whatever the 60-day assertion below says is the value the first
+        // post-224 baseline must report; a StrategyIdentityGuard halt before that step is CORRECT.
         Assert.Equal(
-            "radar-scoring-fp-741269b4384b",
+            "radar-scoring-fp-692055768db8",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-e4aaf21c09a9",
+            "radar-scoring-fp-60f898fd0d1f",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -1173,8 +1234,16 @@ public sealed class ScoringConfigFingerprintTests
         // `NoBusinessSignal>none` mapping token (221) all travel inside `news=enabled:…`, which the disabled
         // descriptor never renders. If either value below moves in a slice that touches only the judgment
         // read, the finding is SCOPE LEAKAGE.
-        Assert.Equal("radar-scoring-fp-7b0758e7eede", DefaultFingerprint(window: TimeSpan.FromDays(60)));
-        Assert.Equal("radar-scoring-fp-5b36883c1b3a", DefaultFingerprint(window: TimeSpan.FromDays(120)));
+        //
+        // ⚠ SPEC 224 MOVES BOTH OF THESE, AND THAT MOVE IS THE DELIVERABLE — the same shape as specs 198 and
+        // 217. The `insiderCollapse=` field is appended UNCONDITIONALLY (the same-insider collapse is pure
+        // assembly code that runs whether or not any AI or judgment seam is registered), so if either value
+        // below had stayed put the collapse window would not actually be hashed and a window change could
+        // move every insider-heavy score silently. 60d radar-scoring-fp-7b0758e7eede →
+        // radar-scoring-fp-0e09edc016da; 120d radar-scoring-fp-5b36883c1b3a → radar-scoring-fp-9cb00807c3cf.
+        // See the AI-OFF unit pin for the measured basis and the operator step.
+        Assert.Equal("radar-scoring-fp-0e09edc016da", DefaultFingerprint(window: TimeSpan.FromDays(60)));
+        Assert.Equal("radar-scoring-fp-9cb00807c3cf", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }
 
     [Fact]
@@ -1231,6 +1300,34 @@ public sealed class ScoringConfigFingerprintTests
             new MediaAttentionCollapse(new MediaCollapseOptions { EventWindowDays = 7.0 }).CanonicalDescriptor();
 
         Assert.NotEqual(DefaultFingerprint(), DefaultFingerprint(mediaCollapseDescriptor: changedWindow));
+    }
+
+    [Fact]
+    public void Compute_ChangedInsiderCollapseWindow_ChangesFingerprint()
+    {
+        // Spec 224: changing the same-insider collapse window changes how many InsiderBuying signals feed the
+        // formula (and at what aggregate Strength), so the fingerprint must re-stamp automatically by value —
+        // no _formula.Version / RuleSetVersion bump; the window magnitude is hashed via the insider-collapse
+        // descriptor exactly as the media window is via the media one.
+        var changedWindow = new InsiderActivityCollapse(
+                new InsiderCollapseOptions { EventWindowDays = 7.0 }, new InsiderMaterialityWeights())
+            .CanonicalDescriptor();
+
+        Assert.NotEqual(DefaultFingerprint(), DefaultFingerprint(insiderCollapseDescriptor: changedWindow));
+
+        // ...on BOTH pin families, because the field is unconditional (the spec-198/217 shape).
+        Assert.NotEqual(
+            DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor),
+            DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, insiderCollapseDescriptor: changedWindow));
+    }
+
+    [Fact]
+    public void InsiderCollapseDescriptor_IsTheExactHashedString()
+    {
+        // The literal a live run hashes for the code default: structure version + window, trailing ';'.
+        // Pinned as a string so a silent change to the descriptor's shape (not just its value) fails here.
+        Assert.Equal("insider-collapse-v1;window=30;", InsiderCollapseDescriptor);
+        Assert.Equal("insider-collapse-v1", InsiderActivityCollapse.Version);
     }
 
     [Fact]
@@ -1349,5 +1446,4 @@ public sealed class ScoringConfigFingerprintTests
 
         Assert.Equal([(nameof(ScoringOptions.Window), typeof(TimeSpan))], properties);
     }
-
 }

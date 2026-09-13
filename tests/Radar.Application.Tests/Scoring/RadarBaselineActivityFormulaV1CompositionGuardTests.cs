@@ -102,6 +102,7 @@ public sealed class RadarBaselineActivityFormulaV1CompositionGuardTests
             new StubSourceDescriptor(),
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             // The CODE DEFAULT window (30 days) — the same one ScoringConfigFingerprintTests' pins use.
             new ScoringOptions(),
             NullLogger<ScoringEngine>.Instance,
@@ -247,8 +248,19 @@ public sealed class RadarBaselineActivityFormulaV1CompositionGuardTests
     /// composition, the weights, the budget, the revision and the pinned COMPONENT values below are all
     /// unmoved — only the stamp is.
     /// </para>
+    /// <para>
+    /// SPEC 224 MOVES IT AGAIN (radar-scoring-fp-7af921a7ae84 → the value below), for a hashed field outside this
+    /// file once more — the new <c>insiderCollapse=</c> fingerprint field
+    /// (<c>InsiderActivityCollapse.CanonicalDescriptor()</c>, <c>insider-collapse-v1;window=30;</c>), which
+    /// like <c>mediaCollapse</c> is its OWN fixed-position field and not part of the frozen
+    /// <c>StubSourceDescriptor</c>, so every strategy re-stamps at once. (Specs 197–221 moved nothing here,
+    /// for the reason the §2 paragraph records: they all rode the source descriptor this file freezes.)
+    /// The composition, the weights, the budget, the revision and the pinned COMPONENT values below are
+    /// all unmoved — only the stamp is; the fixtures seed no insider signals, so the collapse itself has
+    /// nothing to act on here.
+    /// </para>
     /// </summary>
-    private const string PinnedScoringConfigVersion = "radar-scoring-fp-7af921a7ae84";
+    private const string PinnedScoringConfigVersion = "radar-scoring-fp-2218e1396e61";
 
     private static (Guid SignalId, Guid EvidenceId, string Reason, int Weight)[] PinnedLinks =>
     [

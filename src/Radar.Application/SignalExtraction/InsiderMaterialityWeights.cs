@@ -157,6 +157,40 @@ public sealed record InsiderMaterialityWeights
     }
 
     /// <summary>
+    /// THE one materiality tier walk (spec 224 extracted it from <see cref="KeywordSignalExtractor"/>'s
+    /// private copy so the scoring-time <c>InsiderActivityCollapse</c> re-derives an aggregate's Strength
+    /// through the SAME rule the extractor applied to each filing — never a second copy). Walks the given
+    /// DESCENDING tier table and returns the Strength of the first tier whose lower bound is at or below the
+    /// amount. The floor tier's bound is <see cref="decimal.MinValue"/>, so any amount maps. One signature
+    /// serves the const GovernmentContract tiers, the config-injected InsiderBuying buy/sell tiers, and the
+    /// collapse's aggregate re-derivation.
+    /// </summary>
+    public static int StrengthForAmount(decimal amount, IReadOnlyList<InsiderMaterialityTier> tiers)
+    {
+        ArgumentNullException.ThrowIfNull(tiers);
+        if (tiers.Count == 0)
+        {
+            throw new ArgumentException(
+                "The materiality tier table is empty; at least the floor tier (decimal.MinValue) is required so "
+                + "every amount maps to a Strength.",
+                nameof(tiers));
+        }
+
+        foreach (var tier in tiers)
+        {
+            if (tier.MinInclusive <= amount)
+            {
+                return tier.Strength;
+            }
+        }
+
+        // Unreachable for a validated table: the floor tier (decimal.MinValue) always matches. Kept as a
+        // defensive fallback — return the last (floor) tier's Strength rather than a constant, so it stays
+        // correct if the tier table evolves (both config tables are validated non-empty).
+        return tiers[^1].Strength;
+    }
+
+    /// <summary>
     /// Deterministic, culture-invariant (AD-3) serialization hashed by the scoring-config fingerprint:
     /// <c>buy={min}:{strength},...;sell={min}:{strength},...;cluster={ClusterBoost};</c> in list order with a
     /// fixed field ordering. Numeric-only (no user strings to escape); invariant-culture formatting so a

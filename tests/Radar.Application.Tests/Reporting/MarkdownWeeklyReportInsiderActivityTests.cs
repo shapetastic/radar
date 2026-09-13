@@ -148,6 +148,39 @@ public sealed class MarkdownWeeklyReportInsiderActivityTests
         AssertNoForbiddenWords(output);
     }
 
+    /// <summary>
+    /// Spec 224: the same-insider collapse note ScoringEngine appends to a representative's contribution
+    /// reason reaches the rendered evidence line verbatim (through the spec-209 token rewrite, which touches
+    /// only the stored InsiderBuying token), with no forbidden word.
+    /// </summary>
+    [Fact]
+    public void CollapsedInsiderReason_RendersTheCollapseNoteOnTheEvidenceLine()
+    {
+        const string storedReason =
+            "InsiderBuying (Negative), strength 4, novelty 5 (collapsed 3 same-insider filing(s): 4 filings by "
+            + "one insider totalling ~$2,000,000; strength 3 → 4)";
+        var signalId = Guid.NewGuid();
+        var evidence = new List<ReportEvidenceRef>
+        {
+            new(
+                EvidenceId: Guid.NewGuid(),
+                SignalId: signalId,
+                SourceName: "SEC EDGAR Form 4",
+                SourceUrl: "https://sec.example/form4",
+                Title: "Form 4 insider filing",
+                ContributionReason: storedReason),
+        };
+
+        var output = new MarkdownWeeklyReportRenderer().Render(Model(NwpxSummary, evidence));
+
+        Assert.Contains(
+            "  - [Form 4 insider filing](https://sec.example/form4) — SEC EDGAR Form 4: InsiderActivity "
+                + "(Negative), strength 4, novelty 5 (collapsed 3 same-insider filing(s): 4 filings by one "
+                + "insider totalling ~$2,000,000; strength 3 → 4)\n",
+            output, StringComparison.Ordinal);
+        AssertNoForbiddenWords(output);
+    }
+
     [Fact]
     public void InsiderLine_RendersAfterNotednessAndBeforeWhy()
     {

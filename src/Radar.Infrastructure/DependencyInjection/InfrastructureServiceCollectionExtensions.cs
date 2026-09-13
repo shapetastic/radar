@@ -124,6 +124,14 @@ public static class InfrastructureServiceCollectionExtensions
         // ScoringConfigVersion fingerprint (via ScoringEngine) so the window is re-stamped by value.
         services.TryAddSingleton(new MediaCollapseOptions());
         services.TryAddSingleton<MediaAttentionCollapse>();
+        // Same-insider Form 4 collapse (spec 224): the default window (30 days) collapses repeat directional
+        // filings by ONE reporting owner into one representative InsiderBuying signal carrying the aggregate
+        // value before scoring. TryAdd keeps a composition-root-registered concrete InsiderCollapseOptions
+        // (bound via AddRadarInsiderCollapse) winning over this default (mirrors MediaCollapseOptions). The
+        // collapse re-derives Strength through the InsiderMaterialityWeights registered above. Folded into
+        // the ScoringConfigVersion fingerprint (via ScoringEngine) so the window is re-stamped by value.
+        services.TryAddSingleton(new InsiderCollapseOptions());
+        services.TryAddSingleton<InsiderActivityCollapse>();
         // Enabled-collector VOCABULARY (spec 147): the collector NAMES, with no capacity to collect. The
         // library-only default derives them from whatever collectors this composition registered — resolved
         // lazily INSIDE the factory, so it still sees collectors registered after this call. The Worker
@@ -1478,6 +1486,88 @@ public static class InfrastructureServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 "Radar:Scoring:MediaCollapse has an entry that could not be bound; every field must be a "
+                    + "NUMBER. " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the effective same-insider Form 4 collapse window (spec 224) and registers the concrete
+    /// <see cref="InsiderCollapseOptions"/> as a singleton so it wins over the library's <c>TryAddSingleton</c>
+    /// default (call this BEFORE <see cref="AddRadarApplicationServices"/>, mirroring
+    /// <see cref="AddRadarMediaCollapse"/>, whose shape and spec-174 guards it copies exactly). A straight bind
+    /// of the <c>Radar:Scoring:InsiderCollapse</c> section: when it exists its present fields bind ONTO a
+    /// fresh <see cref="InsiderCollapseOptions"/> (unspecified fields keep the code default == 30-day
+    /// window); when absent, all code defaults (⇒ the pinned default fingerprint). The resolved options are
+    /// validated (<see cref="InsiderCollapseOptions.Validate"/>) so a non-positive window fails fast at
+    /// registration, never silently disabling the collapse.
+    /// </summary>
+    public static IServiceCollection AddRadarInsiderCollapse(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var section = configuration.GetSection("Radar:Scoring:InsiderCollapse");
+        var options = section.Exists()
+            ? BindInsiderCollapseSection(section)
+            : new InsiderCollapseOptions();
+
+        // Fail fast at registration on a non-positive window (also enforced in the collapse ctor).
+        options.Validate();
+
+        services.AddSingleton(options);
+        return services;
+    }
+
+    /// <summary>
+    /// The public, settable <see cref="InsiderCollapseOptions"/> property names (spec 174 guards, applied by
+    /// spec 224) — currently just <c>EventWindowDays</c>: the derived <c>EventWindow</c> is get-only, so
+    /// <see cref="ConfigSectionGuards.BindablePropertyNames"/> excludes it exactly as the binder does.
+    /// </summary>
+    private static readonly HashSet<string> InsiderCollapseNames =
+        ConfigSectionGuards.BindablePropertyNames(typeof(InsiderCollapseOptions));
+
+    /// <summary>
+    /// Binds an existing <c>Radar:Scoring:InsiderCollapse</c> section with the spec-174 guards (scalar body,
+    /// unknown key, non-numeric child), byte-for-byte the rule <see cref="BindMediaCollapseSection"/>
+    /// applies. A present-and-EMPTY section still binds the code defaults, unchanged — only a mis-shape or
+    /// an unknown key fails.
+    /// </summary>
+    private static InsiderCollapseOptions BindInsiderCollapseSection(IConfigurationSection section)
+    {
+        ConfigSectionGuards.FailIfScalarSection(
+            section,
+            "Radar:Scoring:InsiderCollapse must be a JSON OBJECT (e.g. { \"EventWindowDays\": 30 }); a scalar "
+                + "body would otherwise silently keep the code default while the run reads as tuned. Omit "
+                + "the section entirely to keep the default.");
+
+        ConfigSectionGuards.FailOnUnknownKeys(
+            section,
+            InsiderCollapseNames,
+            "InsiderCollapseOptions",
+            "so the run would keep the code-default collapse window while appearing tuned. Every key must "
+                + "name an insider-collapse field");
+
+        foreach (var child in section.GetChildren())
+        {
+            if (child.GetChildren().Any() || child.Value is null)
+            {
+                throw new InvalidOperationException(
+                    $"{child.Path} carries no numeric value; every InsiderCollapseOptions field is a plain "
+                        + "NUMBER (e.g. { \"EventWindowDays\": 30 }), not a nested object, an array or null. "
+                        + "Omit the key entirely to keep the code default.");
+            }
+        }
+
+        try
+        {
+            // A present-and-empty section binds nothing → code defaults, unchanged (the one quiet case).
+            return section.Get<InsiderCollapseOptions>() ?? new InsiderCollapseOptions();
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException(
+                "Radar:Scoring:InsiderCollapse has an entry that could not be bound; every field must be a "
                     + "NUMBER. " + ex.Message,
                 ex);
         }
@@ -4099,6 +4189,7 @@ public static class InfrastructureServiceCollectionExtensions
                 sp.GetRequiredService<ISignalSourceDescriptor>(),
                 sp.GetRequiredService<InsiderMaterialityWeights>(),
                 sp.GetRequiredService<MediaAttentionCollapse>(),
+                sp.GetRequiredService<InsiderActivityCollapse>(),
                 sp.GetRequiredService<ScoringOptions>(),
                 sp.GetRequiredService<ILogger<ScoringEngine>>())));
 

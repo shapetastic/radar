@@ -139,6 +139,12 @@ internal static class RadarWorkerServices
         // A blank/absent section binds the code default (3-day window). Fails fast on a non-positive window.
         services.AddRadarMediaCollapse(configuration);
 
+        // Same-insider Form 4 collapse window (spec 224): resolve Radar:Scoring:InsiderCollapse and register
+        // the concrete InsiderCollapseOptions BEFORE AddRadarApplicationServices so configuration wins over
+        // the library default (its TryAddSingleton is a no-op once this concrete instance is registered).
+        // A blank/absent section binds the code default (30-day window). Fails fast on a non-positive window.
+        services.AddRadarInsiderCollapse(configuration);
+
         // Collector attribution (spec 151): resolve Radar:Scoring:InferLegacyCollectorAttribution and register
         // the concrete CollectorAttributionOptions + ICollectorAttributionResolver BEFORE
         // AddRadarApplicationServices so configuration wins over the library defaults (their TryAddSingletons

@@ -353,6 +353,92 @@ public sealed class ConfigBinderFailOpenGuardTests
     }
 
     // ---------------------------------------------------------------------------------------------------
+    // Site 3b — AddRadarInsiderCollapse (Radar:Scoring:InsiderCollapse), spec 224: the media-collapse guards,
+    // applied to the sibling binder byte-for-byte.
+    // ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void InsiderCollapse_ScalarSection_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddRadarInsiderCollapse(Config(
+                ("Radar:Scoring:InsiderCollapse", "30"))));
+
+        Assert.Contains("Radar:Scoring:InsiderCollapse is the scalar '30'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InsiderCollapse_TypodKey_FailsFast_NamingSortedValidNames()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddRadarInsiderCollapse(Config(
+                ("Radar:Scoring:InsiderCollapse:EventWindowDay", "5"))));
+
+        Assert.Contains("'EventWindowDay'", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("valid names: EventWindowDays)", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InsiderCollapse_NonNumericValue_Rethrown_NamingTheSection_WithInnerException()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddRadarInsiderCollapse(Config(
+                ("Radar:Scoring:InsiderCollapse:EventWindowDays", "not-a-number"))));
+
+        Assert.Contains("Radar:Scoring:InsiderCollapse", ex.Message, StringComparison.Ordinal);
+        Assert.NotNull(ex.InnerException);
+    }
+
+    [Fact]
+    public void InsiderCollapse_NestedObjectValue_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddRadarInsiderCollapse(Config(
+                ("Radar:Scoring:InsiderCollapse:EventWindowDays:Value", "5"))));
+
+        Assert.Contains("carries no numeric value", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InsiderCollapse_NonPositiveWindow_FailsFast()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new ServiceCollection().AddRadarInsiderCollapse(Config(
+                ("Radar:Scoring:InsiderCollapse:EventWindowDays", "0"))));
+
+        Assert.Contains("Radar:Scoring:InsiderCollapse:EventWindowDays must be greater than zero", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InsiderCollapse_AbsentAndWellFormed_ResolveByteIdentically()
+    {
+        var absent = Resolve<InsiderCollapseOptions>(s => s.AddRadarInsiderCollapse(Config()));
+        Assert.Equal(new InsiderCollapseOptions(), absent);
+        Assert.Equal(30.0, absent.EventWindowDays);
+
+        var tuned = Resolve<InsiderCollapseOptions>(s => s.AddRadarInsiderCollapse(Config(
+            ("Radar:Scoring:InsiderCollapse:EventWindowDays", "45"))));
+        Assert.Equal(45.0, tuned.EventWindowDays);
+    }
+
+    [Fact]
+    public void InsiderCollapse_CompositionRootBinding_WinsOverTheLibraryDefault()
+    {
+        // The Worker registers the bound options BEFORE AddRadarApplicationServices; the library's
+        // TryAddSingleton must then be a no-op and the collapse must be built over the bound window.
+        var services = new ServiceCollection();
+        services.AddRadarInsiderCollapse(Config(("Radar:Scoring:InsiderCollapse:EventWindowDays", "45")));
+        services.AddInMemoryRadarPersistence();
+        services.AddRadarApplicationServices();
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Equal(45.0, provider.GetRequiredService<InsiderCollapseOptions>().EventWindowDays);
+        Assert.Equal(
+            "insider-collapse-v1;window=45;",
+            provider.GetRequiredService<InsiderActivityCollapse>().CanonicalDescriptor());
+    }
+
+    // ---------------------------------------------------------------------------------------------------
     // Site 4 — AddRadarAttentionTiers (Radar:Attention)
     // ---------------------------------------------------------------------------------------------------
 

@@ -55,6 +55,7 @@ public sealed class ScoringStrategyFormulaChannelTests
             descriptor,
             provider.GetRequiredService<InsiderMaterialityWeights>(),
             provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<InsiderActivityCollapse>(),
             provider.GetRequiredService<ScoringOptions>(),
             provider.GetRequiredService<ILogger<ScoringEngine>>());
 

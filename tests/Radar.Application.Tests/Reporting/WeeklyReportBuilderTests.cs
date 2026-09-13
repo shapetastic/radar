@@ -218,6 +218,7 @@ public sealed partial class WeeklyReportBuilderTests
                         SignalSourceDescriptor: "rules=v1;",
                         InsiderMaterialityDescriptor: "insider",
                         MediaCollapseDescriptor: "media",
+                        InsiderCollapseDescriptor: "insider-collapse",
                         Window: TimeSpan.FromDays(30))))),
             ];
         }

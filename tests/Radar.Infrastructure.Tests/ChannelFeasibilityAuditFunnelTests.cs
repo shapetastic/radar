@@ -1,5 +1,6 @@
 using Radar.Application.Collectors;
 using Radar.Application.Scoring;
+using Radar.Application.SignalExtraction;
 using Radar.Domain.Evidence;
 using Radar.Domain.Signals;
 using Radar.Infrastructure.DependencyInjection;
@@ -55,6 +56,7 @@ public sealed class ChannelFeasibilityAuditFunnelTests
             evidence,
             companies,
             new MediaAttentionCollapse(new MediaCollapseOptions()),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             new ScoringWeights(),
             new AllGenuineWeights(),
             resolver);

@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging;
 using Radar.Application.Collectors;
 using Radar.Domain.Companies;
 using Radar.Domain.Evidence;
-using Radar.Domain.Signals;
 using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Sec;
@@ -140,35 +139,20 @@ internal sealed class SecForm4Collector : IEvidenceCollector
     private CollectedEvidence MapToEvidence(
         CompanySourceFeed feed, SecForm4Filing filing, IReadOnlyList<string> hints)
     {
-        var owner = string.IsNullOrWhiteSpace(filing.PrimaryOwnerName) ? "An insider" : filing.PrimaryOwnerName;
-        var netValueText = filing.NetValue.ToString("N0", CultureInfo.InvariantCulture);
-        var sharesText = filing.Shares.ToString("N0", CultureInfo.InvariantCulture);
-
         // Fixed direction phrase the KeywordSignalExtractor matches. Title/RawText are synthesized from REAL
         // metadata only (owner, shares, $ value, date, accession); the accession + filing date are included so
         // distinct filings hash distinctly under the mapper's Title+RawText ContentHash. Factual, advice-free.
-        string title;
-        string rawText;
-        switch (filing.Direction)
-        {
-            case SignalDirection.Positive:
-                title = $"Form 4 — insider open-market purchase: {owner} bought {sharesText} shares "
-                    + $"(~${netValueText}) ({filing.FilingDate})";
-                rawText = $"Form 4 accession {filing.Accession} filed {filing.FilingDate}: insider open-market "
-                    + $"purchase — {owner} bought {sharesText} shares (~${netValueText}).";
-                break;
-            case SignalDirection.Negative:
-                title = $"Form 4 — insider open-market sale: {owner} sold {sharesText} shares "
-                    + $"(~${netValueText}) ({filing.FilingDate})";
-                rawText = $"Form 4 accession {filing.Accession} filed {filing.FilingDate}: insider open-market "
-                    + $"sale — {owner} sold {sharesText} shares (~${netValueText}).";
-                break;
-            default:
-                title = $"Form 4 — insider stock transaction (routine): {owner} ({filing.FilingDate})";
-                rawText = $"Form 4 accession {filing.Accession} filed {filing.FilingDate}: insider stock "
-                    + $"transaction (routine) — {owner}.";
-                break;
-        }
+        // The shapes (and the anonymous-owner placeholder) are defined ONCE in the shared Application contract
+        // InsiderActivityTitle, whose inverse parse recovers the owner of accrued pre-224 evidence at read
+        // time — so the text written here and the text parsed there cannot drift. Byte-identical to the
+        // pre-extraction inline text (evidence identity is the title+body hash, spec 145).
+        var (title, rawText) = InsiderActivityTitle.Compose(
+            filing.Direction,
+            filing.PrimaryOwnerName,
+            filing.Shares,
+            filing.NetValue,
+            filing.FilingDate,
+            filing.Accession);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -208,6 +192,24 @@ internal sealed class SecForm4Collector : IEvidenceCollector
         if (!string.IsNullOrWhiteSpace(filing.IssuerTicker))
         {
             metadata["issuerTicker"] = filing.IssuerTicker;
+        }
+
+        // Spec 224: the primary reporting owner's structured identity — name and, when the filing carried
+        // one, CIK — so the scoring-time InsiderActivityCollapse can bucket repeat filings by ONE insider on a
+        // structured field (the CIK, which a title cannot carry, keeps two spellings of one person together).
+        // The title-derived name InsiderActivityMetadata.TryRead falls back to is for accrued evidence that
+        // lacks these keys; structured metadata always wins. Written only when non-blank (absent = not captured).
+        // ADDITIVE metadata only, never Title/RawText: evidence identity is the normalized title+body hash
+        // alone (spec 145), so ContentHash, the evidence id and AddIfNewAsync decisions are unmoved and the
+        // phrase the extractor matches is byte-identical to the pre-224 one.
+        if (!string.IsNullOrWhiteSpace(filing.PrimaryOwnerName))
+        {
+            metadata[InsiderActivityMetadata.OwnerNameKey] = filing.PrimaryOwnerName.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(filing.PrimaryOwnerCik))
+        {
+            metadata[InsiderActivityMetadata.OwnerCikKey] = filing.PrimaryOwnerCik.Trim();
         }
 
         return new CollectedEvidence(

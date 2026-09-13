@@ -46,6 +46,7 @@ public sealed class ScoringStrategyFactory : IScoringStrategyFactory
         ISignalSourceDescriptor sourceDescriptor,
         InsiderMaterialityWeights insiderMaterialityWeights,
         MediaAttentionCollapse mediaCollapse,
+        InsiderActivityCollapse insiderCollapse,
         ScoringOptions options,
         ILogger<ScoringEngine> engineLogger)
     {
@@ -60,6 +61,7 @@ public sealed class ScoringStrategyFactory : IScoringStrategyFactory
         ArgumentNullException.ThrowIfNull(sourceDescriptor);
         ArgumentNullException.ThrowIfNull(insiderMaterialityWeights);
         ArgumentNullException.ThrowIfNull(mediaCollapse);
+        ArgumentNullException.ThrowIfNull(insiderCollapse);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(engineLogger);
 
@@ -90,6 +92,7 @@ public sealed class ScoringStrategyFactory : IScoringStrategyFactory
                             sourceDescriptor,
                             insiderMaterialityWeights,
                             mediaCollapse,
+                            insiderCollapse,
                             options,
                             engineLogger,
                             definition.Name,
