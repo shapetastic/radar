@@ -103,10 +103,6 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
     /// <inheritdoc />
     public string Version => ScoreFormulaVersions.V8;
 
-    // Clamp+round any double component to an int in [0,100], deterministic midpoint handling. The rule
-    // itself lives in ScoreSignalMath so every formula clamps identically (spec 146).
-    private static int Score(double v) => ScoreSignalMath.Clamp0To100(v);
-
     /// <inheritdoc />
     public ScoreComputation Compute(ScoringInput input)
     {
@@ -187,12 +183,15 @@ public sealed class RadarScoreFormulaV8 : IScoreFormula
         // the same notedness, and a second copy would drift). The clamp was already a separate sub-expression
         // here, so returning it from the helper leaves this multiplication tree — and therefore v8's last bit —
         // exactly as it was.
+        //
+        // Spec 225 EXTRACTED the multiplication itself into ScoreSignalMath.OpportunityComposition, on the
+        // same terms: the expression shape (trajectory · (ec/100) · discount, clamped) moved verbatim so the
+        // EvidenceConfidence measurement can recompose a persisted Opportunity through the production
+        // expression instead of a copy. v8's output is bit-identical.
         var followingDiscount =
             ScoreSignalMath.NotednessDiscount(_weights, attentionScore, input.FollowingTier);
-        var opportunityScore = Score(
-            trajectoryScore
-            * (evidenceConfidenceScore / 100.0)
-            * followingDiscount);
+        var opportunityScore = ScoreSignalMath.OpportunityComposition(
+            trajectoryScore, evidenceConfidenceScore, followingDiscount);
 
         var components = new ScoreComponents(
             TrajectoryScore: trajectoryScore,

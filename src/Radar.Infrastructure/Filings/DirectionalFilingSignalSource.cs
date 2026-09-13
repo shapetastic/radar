@@ -733,7 +733,7 @@ internal sealed partial class DirectionalFilingSignalSource : IDirectionalFiling
         var reason = cappedConfidence is null
             ? sentiment.Rationale
             : sentiment.Rationale
-                + " (comparability cap: matched "
+                + FilingReadSignalMetadata.ComparabilityCapReasonMarker
                 + string.Join(", ", markers.CapTriggering.Select(m => "'" + m + "'"))
                 + ")";
 

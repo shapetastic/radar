@@ -89,6 +89,15 @@ public static class FilingReadSignalMetadata
     /// </summary>
     public const int Strength = 3;
 
+    /// <summary>
+    /// The annotation a DIRECTIONAL AI earnings read appends to its <c>Reason</c> when the spec-160
+    /// comparability cap actually lowered its confidence: <c>{rationale} (comparability cap: matched 'm1', …)</c>.
+    /// Declared here (moved verbatim from <c>DirectionalFilingSignalSource</c> by the spec-225 follow-up; the
+    /// emitted Reason is byte-identical) so a persisted-signal reader can tell a capped read from an uncapped one
+    /// through the producer's own constant. Display/provenance text only — never a scoring input.
+    /// </summary>
+    public const string ComparabilityCapReasonMarker = " (comparability cap: matched ";
+
     /// <summary>The emitted signal's Novelty — the keyword fallback's value (pinned by test, as above).</summary>
     public const int Novelty = 4;
 

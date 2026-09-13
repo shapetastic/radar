@@ -356,7 +356,7 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
                 Novelty: 4,
                 Confidence: 0.5m,
                 SupportingExcerpt: excerpt,
-                Reason: "Third-party news coverage (media attention)");
+                Reason: KeywordSignalReasons.MediaAttention);
             return Task.FromResult(new ExtractSignalsOutput(
                 new List<ExtractedSignal> { signal },
                 "1 media-attention signal extracted from news coverage."));
@@ -450,7 +450,7 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
                 Novelty: rule.Novelty,
                 Confidence: rule.Confidence,
                 SupportingExcerpt: BuildExcerpt(searchableText, index, rule.Phrase.Length),
-                Reason: $"Matched phrase '{rule.Phrase}'"));
+                Reason: KeywordSignalReasons.MatchedPhrase(rule.Phrase)));
         }
 
         _logger.LogDebug(

@@ -11,6 +11,7 @@ using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
 using Radar.Application.Efficacy.DenominatorAudit;
+using Radar.Application.Efficacy.EvidenceConfidence;
 using Radar.Application.Efficacy.FilingReads;
 using Radar.Application.EntityResolution;
 using Radar.Application.Evidence;
@@ -4062,6 +4063,40 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<DirectionalFilingReadReporter>();
         services.AddSingleton<DirectionalFilingReadRenderer>();
         services.AddSingleton<IDirectionalFilingReadReportGenerator, DirectionalFilingReadReportGenerator>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the read-only <b>EvidenceConfidence distribution measurement</b> (spec 225): the reporter,
+    /// the renderer, the generator, and the file-backed artifact store rooted at
+    /// <paramref name="efficacyDirectory"/>, which writes <c>evidence-confidence.{json,csv,md}</c> beside the
+    /// other efficacy artifacts.
+    /// <para>
+    /// READ-ONLY and downstream of scoring. It reads the <c>default</c> strategy's persisted snapshots WITH
+    /// their stored evidence links through the SAME <see cref="IStrategyScoreSnapshotStoreSelector"/> seam
+    /// specs 140/169/172 use (registered with <c>TryAdd</c> exactly as they register it, so a graph that has
+    /// several keeps one consistent choice of series), plus signals, evidence and companies to rebuild each
+    /// scored set and decompose it through the production <c>ScoreSignalMath</c> body. It creates, amends or
+    /// deletes no score, signal, evidence or review; no scoring input, weight, formula version, rule-set
+    /// version or fingerprint is touched; price is never read (AD-14 — it measures score mechanics, not
+    /// efficacy); its counterfactual is computed and never applied.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRadarEvidenceConfidenceDistribution(
+        this IServiceCollection services, string efficacyDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(efficacyDirectory);
+
+        services.AddSingleton(new FileEvidenceConfidenceArtifactStoreOptions
+        {
+            RootDirectory = efficacyDirectory,
+        });
+        services.AddSingleton<IEvidenceConfidenceArtifactStore, FileEvidenceConfidenceArtifactStore>();
+
+        services.TryAddSingleton<IStrategyScoreSnapshotStoreSelector, LiveStrategyScoreSnapshotStoreSelector>();
+        services.AddSingleton<EvidenceConfidenceDistributionReporter>();
+        services.AddSingleton<EvidenceConfidenceDistributionRenderer>();
+        services.AddSingleton<IEvidenceConfidenceDistributionGenerator, EvidenceConfidenceDistributionGenerator>();
         return services;
     }
 

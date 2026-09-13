@@ -3909,6 +3909,164 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     identities are NAME-only (a title carries no CIK). Deferred with its entry condition, per spec 224 §5: whether Strength 8 is right for a
     discretionary sale and whether `plan-10b5-1` should carry a direction — re-run
     `scripts/audit-insider-forward-returns.ps1` after this collapse lands and after bootstrap intervals exist.
+- **Spec 225 (2026-09-13) — `EvidenceConfidence` is measured, not changed: does the component that removes ~45%
+  of every Opportunity discriminate anything, or is it a flat tax?** The Overview's diagnosis (2026-09-12, pre-224,
+  re-derived rather than quoted): `Opportunity = Trajectory · (EvidenceConfidence/100) · notednessDiscount`, and the
+  middle term took 12 distinct values over 102 companies because its three terms are max-anchored or
+  small-integer-derived (`bestConf` saturates on one SEC filing at 0.95, evidence `Quality` is a short enum,
+  `distinctSourceTypes` is a handful of collectors — ⚠ the `bestConf` part of that diagnosis was REFUTED by the
+  measurement below: `bestConfidence` is the ONE term that does not saturate (0.95 for 10 of 102 companies) and
+  carries 0.923 of the spread; it is `bestQualityWeight` (0.85 for 100 of 102) and `distinctSourceTypes` (2 for 87)
+  that saturate). A multiplier that is the same for everyone changes no ranking;
+  it only compresses the scale the Lead arm's fixed label lines then cut. This is the third instance of the
+  CLAUDE.md "no measure ships without its live distribution" class (`MediaAttention` 98.4% Neutral; `AttentionScore`
+  ≈ 73.4 for everyone).
+  - **THIS SLICE MOVES NOTHING.** No score, weight, formula version, `RuleSetVersion`, `SignalSourceDescriptor` field
+    or fingerprint input changed; every pin in `ScoringConfigFingerprintTests` and both output-stability suites are
+    byte-identical and unedited; **no operator step is owed**. Two production PRIMITIVES were split out on the
+    spec-146/153 terms (expression shape and accumulation order verbatim, so v8's last bit is unmoved):
+    `ScoreSignalMath.EvidenceConfidenceDecomposition` is now the ONE body of `EvidenceConfidenceScore` (which
+    returns its `.Score`) and returns the three terms beside the score as `EvidenceConfidenceTerms`; and
+    `ScoreSignalMath.OpportunityComposition` is v8's `Clamp0To100(trajectory · (ec/100.0) · discount)`, which v8
+    now calls. v9/v10/v11 and the baseline control do not compose Opportunity that way and are untouched. The
+    Spearman core was likewise EXTRACTED (not copied) from `Comparison.RankCorrelation` into the outcome-agnostic
+    `Statistics.SpearmanRankCorrelation`; `ComputeRho`/`AverageRanks` delegate to it, so the paired comparison, the
+    attention screen and the denominator audit compute the identical bits through one path. The same slice's
+    follow-up (the evidence-type axis, below) split out, on the same terms: `ScoreSignalMath.EvidenceConfidenceComposition`
+    / `EvidenceConfidenceProduct` / `EvidenceConfidenceQualityMultiplier` / `EvidenceConfidenceDiversityMultiplier`
+    (the decomposition's multiplication, now called by it; a bit-for-bit test over a grid of every live term value
+    compares `DoubleToInt64Bits` against the original inline expression), and moved two producer strings verbatim to
+    constants so a reader can recognise them without a copy — `KeywordSignalReasons` (the keyword extractor's
+    `Matched phrase '…'` and news MediaAttention Reasons) and `FilingReadSignalMetadata.ComparabilityCapReasonMarker`
+    (the spec-160 cap annotation `DirectionalFilingSignalSource` appends). Emitted Reasons are byte-identical; Reason
+    text is not a `RuleSetVersion` or fingerprint input.
+  - **The artifact — `evidence-confidence-distribution-v1`, `data/efficacy/evidence-confidence.{json,csv,md}`**,
+    written by `EvidenceConfidenceDistributionGenerator` (`Radar.Application.Efficacy.EvidenceConfidence`) after the
+    spec-218 measurement in the Worker's efficacy step; gated by `Radar:Efficacy:EvidenceConfidence:Enabled`
+    (default ON inside the opt-in `Radar:Efficacy` gate), registered for `full` and `score` runs and NOT for
+    `collect` (nothing scores there — absent-but-not-fatal); replay never reaches the efficacy step. It reads ONE
+    strategy (`ScoringStrategySet.DefaultStrategyName`; absent ⇒ an idle artifact plus ONE Information line saying
+    so and why — the spec-223 "idle component says it is idle" rule) through the shared
+    `IStrategyScoreSnapshotStoreSelector` and fails CLOSED like the denominator audit when the store is not an
+    `IScoreSnapshotLinkReader`. Per company: the LATEST persisted snapshot (greatest `WindowEndUtc`, then
+    `CreatedAtUtc`, then Id); the measurement INSTANT is the greatest such `WindowEndUtc` across companies; the
+    scored set is REBUILT from the stored links (signal by id from one per-company read, evidence by id) and
+    decomposed through the production body; Opportunity is recomposed from the persisted components through
+    `OpportunityComposition` + `NotednessDiscount`. It reports every distinct persisted value with count and share
+    of INCLUDED companies, the modal value and share, the median (`ExactMedianInterval.MedianOf`, mean of the two
+    central values on even n), the four term distributions, Spearman ρ (average ranks; `null` rendered as a
+    parenthesised named reason, e.g. `(undefined: constant series (EvidenceConfidence))`) for EC vs Trajectory /
+    Opportunity / DistinctSourceTypes with n per pair, and
+    the COUNTERFACTUAL — computed, NEVER applied — with EvidenceConfidence held at the median rounded away from
+    zero: rank changed (count + share), max |Δrank| with the company named, enter/leave the top 10 (the rule's
+    choice), median actual vs counterfactual Opportunity; ranking rule = descending Opportunity, then descending
+    Trajectory, then ticker (ordinal, null last), then Id. Only a `radar-formula-v8` strategy has a counterfactual.
+    The follow-up added, to the same `-v1` artifact (no v1 artifact had been persisted to any store, so the name was
+    not re-meant): **per company, the signal that sets `bestConfidence`** — signal id, `SignalType`, direction,
+    strength, evidence source type, recorded collector (`CollectionProvenanceMetadata`; `null` = not recorded),
+    evidence title, observed-at, the comparability-cap annotation, and the tie count with the distinct tied types
+    and producers (tie-break: earliest `ObservedAtUtc`, then lowest signal id); a **best-confidence table**
+    (value × type × producer → companies, share, cap-noted count) and producer × direction counts; the
+    **producer** via `SignalProducerRule` (`signal-producer-v1`) — every member read from the producer's own
+    constant or envelope EXCEPT `AiEarningsReadDirectional`, which the directional read does not stamp and is
+    INFERRED by elimination (GuidanceChange over Filing evidence, no keyword Reason, no read-outcome envelope, no
+    news-judgment envelope); a **term attribution** — ρ(EC, term), each term's exact share of Var(ln P) over the
+    unclamped product P (`Cov(ln f_i, ln P)/Var(ln P)`, summing to 1), and the Opportunity rank changes with ONE term
+    held at its (unrounded) median and the other two as measured, recomposed through the production composition;
+    an **above-median profile** (companies with persisted EC strictly above the median: counts by type, producer and
+    direction, modal type and producer); and a generic top-10-each-way **movers** table.
+  - **The verdict rule — `evidence-confidence-verdict-v2`** (`EvidenceConfidenceVerdictRule`), deterministic, its
+    inputs and thresholds printed beside it AS THE RULE'S, not as measured facts: `NotDetermined` when there is no
+    counterfactual (non-v8, or fewer than 2 ranked); else (b) FLAT TAX when rank-change share ≤ 0.25 OR modal
+    share ≥ 0.50; else (c) DISCRIMINATES THE WRONG THING when EITHER axis fires — **CollectorCount**:
+    |ρ(EC, DistinctSourceTypes)| ≥ 0.5; **EvidenceType**: the dominant term is `bestConfidence` at a log-variance
+    share ≥ 0.75 AND one `SignalType` sets the best confidence of ≥ 0.75 of the above-median companies — else (a)
+    DISCRIMINATES. Rendered as ONE sentence naming (a)/(b)/(c) and every (c) axis that fired (`WrongThingAxes`).
+    ⚠ **REVERSAL, recorded in place:** this slice first shipped (pre-merge) as `evidence-confidence-verdict-v1`, whose
+    (c) branch tested ONLY the collector-count axis — the spec's own example taken literally — and read the live
+    store as **"(a) it DISCRIMINATES"**. That reading is WITHDRAWN: the term decomposition beside it already showed
+    quality and diversity near-constant, so the spread had to come from `bestConfidence`, an axis v1 never looked at.
+    v2 keeps v1's branches and adds that axis; do not cite the v1 "(a)".
+  - **Counted axes** (always present, `0` when nothing hit; seeded = included + `NoSnapshot` +
+    `SnapshotNotAtInstant` + `NoSignalsInWindow` + `CompanyWithUnresolvableLink`, asserted in a test):
+    `NoSnapshot`, `SnapshotNotAtInstant` (latest window ends before the instant), `NoSignalsInWindow` (a zero-link
+    snapshot is v8's all-zero empty-window components — a DEFAULTED zero, so every component is NOT RECORDED,
+    rendered `(not recorded)` / empty CSV cell / JSON `null`, never 0, and excluded from every distribution,
+    correlation and counterfactual), `LinkSignalUnresolvable` + `LinkEvidenceUnresolvable` (links) and
+    `CompanyWithUnresolvableLink`, `TermsDisagreeWithSnapshot` (a recomputed score that differs from the persisted
+    one is a FINDING: the row stays, both values shown and flagged, the PERSISTED value feeds the distribution and
+    correlations, the row leaves the term tables only), `OpportunityRecompositionMismatch` (excluded from the
+    ranking only), `FormulaDoesNotComposeOpportunityFromEvidenceConfidence`, `MixedScoringConfigVersion`, plus
+    `CompaniesSeeded/Included/Ranked`. One Information line per build summarises all of it and the verdict.
+  - **The §2a live figures come from a read-only harness, never a persisted run**:
+    `EvidenceConfidenceDistributionTests` (`Radar.IntegrationTests`, env-gated on
+    `RADAR_EVIDENCE_CONFIDENCE_DATA_ROOT`, skipped with a named reason otherwise, no network) re-scores every
+    company through the REAL engine via the spec-224 harness's own `ScoreAllAsync` (60-day window, `default`,
+    default weights, v8 — reused, not copied; `ResolveAsOfAsync` and the `ReadOnlyEvidenceRepository` decorator
+    were likewise made shared) into an in-memory score repository, then runs the SAME reporter over an in-memory
+    adapter presenting those snapshots + links through the file store's two read seams. Evidence writes throw,
+    scores never leave the process, and the three artifacts go to `%TEMP%/radar-spec-225-evidence-confidence.*`.
+    The harness also appends a harness-only "Worked cases" section for the tickers named below (read from the
+    report rows, nothing typed in). A marker file was touched before the run and `find data -newer marker` returned
+    0 files afterwards.
+  - **§2a live figures — a READ-ONLY RE-SCORE AT ONE INSTANT, not a persisted run** (2026-09-13; main store;
+    `default`, v8, instant `2026-09-12T21:48:24.2615102Z`, stamp `radar-scoring-fp-ddc9b000d76b`, 102 seeded / 102
+    included / 102 ranked; 0 terms-disagree, 0 recomposition mismatches). A MEASUREMENT FINDING — **no change was
+    made**; any fix (e.g. decoupling EvidenceConfidence from the read that also supplies direction) is a separate
+    future spec with its own boundary.
+    - Distribution: 12 distinct values; modal 55 at 0.304; median 55. Terms: `bestQualityWeight` 0.85 for 100/102;
+      `distinctSourceTypes` 2 for 87/102; `bestConfidence` 0.5 ×29, 0.6 ×19, 0.65 ×32, 0.85 ×5, 0.9 ×5, 0.92 ×2,
+      0.95 ×10.
+    - Attribution (measured): log-variance share **`bestConfidence` 0.923**, `diversityFactor` 0.056,
+      `bestQualityWeight` 0.021. ρ(EC, term) 0.943 / 0.346 / 0.246. Holding ONE term at its median changes the
+      Opportunity rank of 93/102 (0.912; max |Δ| 51) for `bestConfidence`, 66/102 (0.647; max 13) for
+      `diversityFactor`, 17/102 (0.167; max 9) for `bestQualityWeight`. Whole-EC held at 55: 95/102 (0.931), max 52
+      (AAPL), 5 enter / 5 leave the top 10.
+    - Which signal sets `bestConfidence` (production path; producer per `signal-producer-v1`): every value ≥ 0.65 is a
+      `GuidanceChange` classified `AiEarningsReadDirectional` (54 companies, all strength 8 — the directional read's
+      configured strength; 48 Positive / 6 Negative). **At 0.65, 31 of the 32 carry the comparability-cap
+      annotation** — so that value is `ComparabilityConfidenceCap`, not a self-report — and the 31 companies at the
+      modal EC 55 are exactly the 0.65 reads with two source types (30 cap-noted; AXGN's is not annotated). 0.6: `InsiderBuying` 16, `StrategicPartnership`
+      2, `ProductLaunch` 1 (keyword rules). 0.5: keyword news MediaAttention 28, news judgment 1. No keyword
+      `GuidanceChange` is anyone's best signal in this window. Ties at the maximum: 38 companies; 18 span more than one
+      type and 22 more than one producer — ALL of the cross-producer ties are at 0.5 (the bottom); the 4 tied
+      above-median companies are all keyword rules at 0.6. This measurement CONFIRMS the orchestrator's 2026-09-12
+      weekly-report reading on the axis that matters (every company at ≥ 0.65 takes it from the AI read) and differs
+      from it in the low buckets (16 not 14 insider, no CustomerWin, 28 not 21 MediaAttention). Those differences were
+      not reconciled item by item; ties at 0.5/0.6 (where the tie-break picks one signal of several) and the report's
+      display names (`InsiderBuying` renders as InsiderActivity) are plausible causes, not measured ones. The
+      production-path numbers are the ones to trust.
+    - Above the median (28 companies): best-confidence type `GuidanceChange` 23 (0.821), all 23 the AI read (20
+      Positive, 3 Negative); keyword rules 5. The actual top 10 all take their best confidence from the AI read.
+    - ρ(EC, Trajectory) 0.392, ρ(EC, Opportunity) 0.649, ρ(EC, DistinctSourceTypes) 0.346. Why EC and Trajectory
+      correlate: a directional signal's Trajectory mass is strength · Confidence · recency
+      (`ScoreSignalMath.DirectionalMasses`) and the largest Confidence IS `bestConfidence`, so a confident Positive
+      read raises both multiplied terms of Opportunity at once (a Negative one raises EC while lowering Trajectory).
+    - **Verdict (`evidence-confidence-verdict-v2`), verbatim:** "Verdict: (c) it DISCRIMINATES THE WRONG THING, on the
+      evidence-TYPE axis — the data supports (c), not (a) or (b): it is not a flat tax (rank-change share 0.931, modal
+      share 0.304), but bestConfidence carries 0.923 of the variance of ln EvidenceConfidence and 23 of 28 above-median
+      companies take it from a GuidanceChange signal (23 of the 28 from the AI earnings read (directional; producer
+      inferred)), so it ranks companies chiefly on whether a company's strongest in-window signal is the AI earnings
+      read and how confident that read reported itself to be (or the comparability cap, where the release declared a
+      break); a directional signal's Confidence also weights its own direction mass in Trajectory, so the two
+      multiplied terms share an input and ρ(EvidenceConfidence, Trajectory) = 0.392 cannot be read as independent
+      corroboration — …" (the rule's inputs follow in the artifact).
+    - What is measured vs inferred vs not established: the distributions, attribution, ρ, rank changes and each
+      company's best-confidence signal type/direction/strength/title are MEASURED; the producer of a directional
+      `GuidanceChange` is INFERRED by elimination (the 54 all carry the read's strength 8, consistent with it but not
+      proof); whether a higher self-reported confidence marks a more ACCURATE read — or whether ranking on it helps or
+      hurts any outcome — is NOT ESTABLISHED and would need reads graded against filing bodies (not persisted, spec
+      218) plus a forward-outcome comparison.
+    - Worked cases (Δrank = counterfactual − actual; positive = falls when EC is held at the median). FALLING, each
+      best confidence from a Positive AI earnings read, EC 80 at 0.95: STRL 7 → 27, CVLT 8 → 38, POWL 14 → 46, PLMR
+      15 → 49, AGYS 31 → 71, UFPT 45 → 87 (also AAPL 36 → 88 at EC 89, the largest mover). RISING, each best
+      confidence the keyword news MediaAttention event at 0.5 (EC 42, tie counts 7–16): GHM 47 → 22, PLUS 53 → 24,
+      THRM 57 → 29, BKE 59 → 30, EPM 60 → 31. **POWL:** its 0.95 is set by the 8-K dated 2026-08-03 (items
+      2.02/8.01/9.01) — the date and items of spec 218's worked example, which records that filing read Positive
+      while fourteen Neutral news signals beside it included a headline reporting an earnings miss (matched by date
+      and items, not verified by accession; spec 218 quoted the title without 9.01). POWL's EC 80 comes from that
+      read's 0.95, and holding EC at the median moves POWL 32 places; whether the read was right is not measured by
+      this slice.
 
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 

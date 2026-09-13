@@ -1,3 +1,5 @@
+using Radar.Application.Efficacy.Statistics;
+
 namespace Radar.Application.Efficacy.Comparison;
 
 /// <summary>Why a rank correlation (or its interval) does not exist for a window.</summary>
@@ -149,44 +151,23 @@ public static class RankCorrelation
     {
         var n = RequireAligned(first, second, nameof(second));
 
-        // Two points is the floor for any rank variance to exist at all; below it there is nothing to
-        // correlate, and reporting 0 would be a fabricated answer rather than a missing one.
-        if (n < 2)
+        // Spec 225 moved the ranking + coefficient into the outcome-agnostic
+        // Statistics.SpearmanRankCorrelation (extracted verbatim, not copied) so the EvidenceConfidence
+        // measurement can use it without reaching this price-facing namespace. Only the degeneracy NAMES are
+        // mapped back here; the bits are the same code path.
+        var core = SpearmanRankCorrelation.Compute(first, second);
+        return core.Degeneracy switch
         {
-            return SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.TooFewObservations);
-        }
-
-        var rx = AverageRanks(first);
-        var ry = AverageRanks(second);
-
-        var mx = Mean(rx);
-        var my = Mean(ry);
-
-        double sxy = 0.0, sxx = 0.0, syy = 0.0;
-        for (var i = 0; i < n; i++)
-        {
-            var dx = rx[i] - mx;
-            var dy = ry[i] - my;
-            sxy += dx * dy;
-            sxx += dx * dx;
-            syy += dy * dy;
-        }
-
-        if (sxx <= 0.0)
-        {
-            return SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.ConstantScores);
-        }
-
-        if (syy <= 0.0)
-        {
-            return SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.ConstantReturns);
-        }
-
-        // Clamped only against floating-point overshoot at the ±1 boundary.
-        var rho = Math.Clamp(sxy / Math.Sqrt(sxx * syy), -1.0, 1.0);
-
-        return new SpearmanRhoResult(
-            IsDefined: true, Rho: rho, ObservationCount: n, Reason: RankCorrelationUndefinedReason.None);
+            SpearmanDegeneracy.TooFewObservations =>
+                SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.TooFewObservations),
+            SpearmanDegeneracy.ConstantFirst =>
+                SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.ConstantScores),
+            SpearmanDegeneracy.ConstantSecond =>
+                SpearmanRhoResult.Undefined(n, RankCorrelationUndefinedReason.ConstantReturns),
+            _ => new SpearmanRhoResult(
+                IsDefined: true, Rho: core.Rho!.Value, ObservationCount: n,
+                Reason: RankCorrelationUndefinedReason.None),
+        };
     }
 
     /// <summary>
@@ -212,57 +193,9 @@ public static class RankCorrelation
     }
 
     /// <summary>
-    /// 1-based ranks with AVERAGE ranks over tied runs (the deterministic convention: a run of k equal values
-    /// occupying positions p..p+k-1 all receive their mean rank, so the rank total is invariant).
+    /// 1-based average ranks — the shared <see cref="SpearmanRankCorrelation.AverageRanks"/>, kept here as a
+    /// delegating name so the existing pinned tests keep exercising this module's entry point.
     /// </summary>
-    internal static double[] AverageRanks(IReadOnlyList<double> values)
-    {
-        var n = values.Count;
-        var order = new int[n];
-        for (var i = 0; i < n; i++)
-        {
-            order[i] = i;
-        }
-
-        // Value ascending, index ascending as the tie-break — so the permutation is total and deterministic
-        // regardless of the sort's stability.
-        Array.Sort(order, (a, b) =>
-        {
-            var byValue = values[a].CompareTo(values[b]);
-            return byValue != 0 ? byValue : a.CompareTo(b);
-        });
-
-        var ranks = new double[n];
-        var i2 = 0;
-        while (i2 < n)
-        {
-            var j = i2;
-            while (j + 1 < n && values[order[j + 1]].Equals(values[order[i2]]))
-            {
-                j++;
-            }
-
-            // Positions i2..j (0-based) → 1-based ranks i2+1..j+1 → mean = (i2 + j) / 2 + 1.
-            var averageRank = (((double)i2 + j) / 2.0) + 1.0;
-            for (var k = i2; k <= j; k++)
-            {
-                ranks[order[k]] = averageRank;
-            }
-
-            i2 = j + 1;
-        }
-
-        return ranks;
-    }
-
-    private static double Mean(double[] values)
-    {
-        var sum = 0.0;
-        foreach (var v in values)
-        {
-            sum += v;
-        }
-
-        return sum / values.Length;
-    }
+    internal static double[] AverageRanks(IReadOnlyList<double> values) =>
+        SpearmanRankCorrelation.AverageRanks(values);
 }

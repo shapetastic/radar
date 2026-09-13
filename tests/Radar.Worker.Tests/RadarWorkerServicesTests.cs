@@ -10,6 +10,7 @@ using Radar.Application.Signals;
 using Radar.Application.Efficacy;
 using Radar.Application.Efficacy.Attention;
 using Radar.Application.Efficacy.Comparison;
+using Radar.Application.Efficacy.EvidenceConfidence;
 using Radar.Application.Efficacy.DenominatorAudit;
 using Radar.Application.Filings;
 using Radar.Application.EntityResolution;
@@ -807,7 +808,26 @@ public sealed class RadarWorkerServicesTests
     }
 
     [Fact]
-    public void EfficacyComparisonAndAttentionArrivalBothDisabled_RegisterNoSharedSelector()
+    public void EfficacyComparisonAttentionArrivalAndEvidenceConfidenceAllDisabled_RegisterNoSharedSelector()
+    {
+        using var provider = BuildProvider(
+            ("Radar:Collectors:0", "rss"),
+            ("Radar:Efficacy:Enabled", "true"),
+            ("Radar:Efficacy:Comparison:Enabled", "false"),
+            ("Radar:Efficacy:AttentionArrival:Enabled", "false"),
+            // Spec 225: a THIRD default-on consumer of the shared selector (the denominator audit is the
+            // fourth, default OFF). With every consumer off nothing registers it — the off-switch is still
+            // absence.
+            ("Radar:Efficacy:EvidenceConfidence:Enabled", "false"));
+
+        Assert.Null(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
+        Assert.Null(provider.GetService<IAttentionArrivalScreenGenerator>());
+        Assert.Null(provider.GetService<IExcludedCohortStore>());
+        Assert.Null(provider.GetService<IAttentionArrivalArtifactStore>());
+    }
+
+    [Fact]
+    public void EvidenceConfidenceAlone_RegistersTheSharedSelector_TheSameWayTheOtherConsumersDo()
     {
         using var provider = BuildProvider(
             ("Radar:Collectors:0", "rss"),
@@ -815,11 +835,11 @@ public sealed class RadarWorkerServicesTests
             ("Radar:Efficacy:Comparison:Enabled", "false"),
             ("Radar:Efficacy:AttentionArrival:Enabled", "false"));
 
-        // With BOTH consumers off nothing registers the shared selector — the off-switch is still absence.
-        Assert.Null(provider.GetService<IStrategyScoreSnapshotStoreSelector>());
-        Assert.Null(provider.GetService<IAttentionArrivalScreenGenerator>());
-        Assert.Null(provider.GetService<IExcludedCohortStore>());
-        Assert.Null(provider.GetService<IAttentionArrivalArtifactStore>());
+        // Spec 225's measurement reads the default strategy's series through the SAME seam (TryAdd, so a
+        // graph with several consumers keeps ONE consistent choice of series).
+        Assert.IsType<LiveStrategyScoreSnapshotStoreSelector>(
+            provider.GetRequiredService<IStrategyScoreSnapshotStoreSelector>());
+        Assert.NotNull(provider.GetService<IEvidenceConfidenceDistributionGenerator>());
     }
 
     [Fact]

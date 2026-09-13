@@ -47,6 +47,13 @@ distinct outputs: a company holding any SEC filing anchors `bestConf` at 0.95, e
 three-valued enum, and `distinctSourceTypes` is a small integer over a handful of collectors. Nearly every
 company in a 102-company universe saturates the same way.
 
+> ⚠ AMENDED 2026-09-13 by this slice's own measurement (details in `docs/architecture-history.md`, spec 225): the
+> `bestConf` half of the paragraph above is REFUTED. Holding an SEC filing does not anchor `bestConf` at 0.95 —
+> only 10 of 102 companies are at 0.95, and `bestConfidence` is the one term that does NOT saturate (it carries
+> 0.923 of the variance of ln EvidenceConfidence). The saturated terms are `Quality` (0.85 for 100 of 102) and
+> `distinctSourceTypes` (2 for 87 of 102). What sets `bestConfidence` high is an AI earnings read (every company at
+> ≥ 0.65 takes it from one), not the mere presence of a filing.
+
 The suspicion this spec exists to test: **EvidenceConfidence is not measuring confidence, it is applying a
 near-flat ~45% tax.** A multiplier that is the same for everyone changes no ranking — it only compresses the
 scale, which then interacts with the Lead arm's fixed label lines. On 2026-09-11 the top name on
@@ -87,6 +94,8 @@ Written each `full` run to `data/efficacy/evidence-confidence.{csv,md,json}`:
 - **Term decomposition per company**: `bestConf`, `bestQualWeight`, `distinctSourceTypes`, `divFactor`, and
   the resulting score. This is what shows WHICH term is saturated. The hypothesis is that `bestConf` is
   0.95 for nearly every company because one SEC filing is enough; the artifact must confirm or refute it.
+  (⚠ AMENDED 2026-09-13: REFUTED — see the Overview amendment. The artifact now also records, per company, the
+  signal that sets `bestConf` and attributes the spread across the three terms.)
 - **Discrimination**: the Spearman rank correlation between `EvidenceConfidence` and `Trajectory` across the
   universe, and between `EvidenceConfidence` and `Opportunity`. A component that ranks nobody differently
   from the thing it multiplies is doing no work.
@@ -126,14 +135,32 @@ must then say exactly why. Never invent a number.
 The markdown states, in one sentence, which of these the data supports:
 
 - **(a) It discriminates.** Values spread meaningfully and rank changes when held constant — leave it alone.
+  (⚠ AMENDED 2026-09-13: spread and rank change are necessary for (a), not sufficient. They were both present on
+  the live store, and the first rule still read "(a)" only because it never checked which term and which signal the
+  spread came from — see (c) and the answer below. Do not read "(a)" off spread and rank change alone.)
 - **(b) It is a flat tax.** Near-constant, few rank changes — it is removing ~45% of every score for nothing,
   and the fix (rescale, or drop it to a gate) is a separate spec with its own boundary.
 - **(c) It discriminates the WRONG thing.** It varies, but tracks something irrelevant — e.g. how many
-  collectors happened to fire for that company rather than how well-evidenced its thesis is.
+  collectors happened to fire for that company rather than how well-evidenced its thesis is, or (⚠ AMENDED
+  2026-09-13) which TYPE of signal happens to be a company's strongest and how confident its producer said it was.
 
 (c) is the outcome worth dwelling on, because it would look like success under (a). A company covered by four
 collectors is not better-evidenced than one covered by two; it is more *collected*. The artifact must report
 `distinctSourceTypes` per company alongside the score so this is visible rather than inferred.
+
+**The answer, as measured (2026-09-13, read-only re-score of the live store; full figures in
+`docs/architecture-history.md`, spec 225).** The data supports **(c), on the evidence-TYPE axis** — not (a), and
+not (b). It is not flat (holding it at the median changes 95 of 102 ranks; modal share 0.304), and it does not
+track collector count (ρ with `distinctSourceTypes` 0.346). But `bestConfidence` carries 0.923 of its spread, and
+23 of the 28 above-median companies take their best confidence from the AI directional earnings read
+(`GuidanceChange`; producer inferred), so EvidenceConfidence ranks companies chiefly on whether their strongest
+in-window signal is that read and how confident the read reported itself to be — or the comparability cap, which
+sets 31 of the 32 reads at 0.65. The same read's Confidence also weights its direction in Trajectory, and
+Opportunity multiplies the two, so ρ(EvidenceConfidence, Trajectory) 0.392 is not independent corroboration. The
+first version of the rule (`evidence-confidence-verdict-v1`) tested (c) only on the collector-count axis and read
+"(a)"; that reading was withdrawn before merge. **This is a measurement finding; no change was made.** Whether a
+more confident read is a more accurate one is not established here, and any fix — for example decoupling
+EvidenceConfidence from the read that also supplies direction — is a separate future spec.
 
 ## 4. Non-goals, recorded with reasons
 

@@ -383,4 +383,195 @@ public sealed class ScoreSignalMathTests
 
         public string CanonicalDescriptor() => "test-tiered";
     }
+
+    // ---- Spec 225: the EvidenceConfidence decomposition and the v8 Opportunity composition ----
+
+    private static ScoringSignal Signal(
+        decimal confidence, EvidenceQuality quality, EvidenceSourceType sourceType) =>
+        new(
+            new SignalBuilder().WithConfidence(confidence).Build(),
+            new EvidenceBuilder().WithQuality(quality).WithSourceType(sourceType).Build());
+
+    // Three distinct source types: diversity saturates at DiversityTarget (3) → divFactor exactly 1.
+    private static ScoringSignal[] ThreeSourceTypes() =>
+    [
+        Signal(0.8m, EvidenceQuality.High, EvidenceSourceType.PressRelease),
+        Signal(0.7m, EvidenceQuality.Medium, EvidenceSourceType.Filing),
+        Signal(0.5m, EvidenceQuality.Low, EvidenceSourceType.NewsArticle),
+    ];
+
+    // Four source types: past the target, still exactly 1 (min(1, 4/3)).
+    private static ScoringSignal[] FourSourceTypes() =>
+    [
+        Signal(0.95m, EvidenceQuality.PrimarySource, EvidenceSourceType.Filing),
+        Signal(0.6m, EvidenceQuality.Medium, EvidenceSourceType.PressRelease),
+        Signal(0.6m, EvidenceQuality.Medium, EvidenceSourceType.NewsArticle),
+        Signal(0.6m, EvidenceQuality.Medium, EvidenceSourceType.InsiderTransaction),
+    ];
+
+    public static TheoryData<ScoringSignal[]> DecompositionFixtures => new()
+    {
+        // One signal, one source type: diversity far from saturated.
+        new[] { Signal(0.6m, EvidenceQuality.Medium, EvidenceSourceType.PressRelease) },
+        ThreeSourceTypes(),
+        FourSourceTypes(),
+        // Unknown quality: maps to QualityUnknown, the anchor when it is the only evidence.
+        new[] { Signal(0.9m, EvidenceQuality.Unknown, EvidenceSourceType.Manual) },
+        // Unknown beside a High: the max anchors on High, so Unknown never lowers the base.
+        new[]
+        {
+            Signal(0.9m, EvidenceQuality.Unknown, EvidenceSourceType.Manual),
+            Signal(0.4m, EvidenceQuality.High, EvidenceSourceType.Filing),
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(DecompositionFixtures))]
+    public void EvidenceConfidenceDecomposition_ScoreIsTheScoreMethod_AndTermsAreTheFormulasOwn(
+        ScoringSignal[] signals)
+    {
+        var weights = new ScoringWeights();
+
+        var terms = ScoreSignalMath.EvidenceConfidenceDecomposition(signals, weights);
+
+        // ONE body: the score method is a projection of the decomposition, so they cannot disagree.
+        Assert.Equal(ScoreSignalMath.EvidenceConfidenceScore(signals, weights), terms.Score);
+
+        // The terms are the ORIGINAL expression's, restated literally.
+        var bestConf = signals.Max(s => (double)s.Signal.Confidence);
+        var bestQual = signals.Max(s => ScoreSignalMath.QualityWeight(weights, s.Evidence.Quality));
+        var distinct = signals.Select(s => s.Evidence.SourceType).Distinct().Count();
+        var div = Math.Min(1, distinct / weights.DiversityTarget);
+        Assert.Equal(bestConf, terms.BestConfidence);
+        Assert.Equal(bestQual, terms.BestQualityWeight);
+        Assert.Equal(distinct, terms.DistinctSourceTypes);
+        Assert.Equal(div, terms.DiversityFactor);
+        Assert.Equal(
+            ScoreSignalMath.Clamp0To100(
+                100 * bestConf
+                    * (weights.EcQualityBase + weights.EcQualitySpan * bestQual)
+                    * (weights.EcDiversityBase + weights.EcDiversitySpan * div)),
+            terms.Score);
+    }
+
+    [Fact]
+    public void EvidenceConfidenceDecomposition_DiversitySaturatesExactlyAtTheTarget()
+    {
+        var weights = new ScoringWeights();
+
+        Assert.Equal(1.0, ScoreSignalMath.EvidenceConfidenceDecomposition(ThreeSourceTypes(), weights).DiversityFactor);
+        Assert.Equal(1.0, ScoreSignalMath.EvidenceConfidenceDecomposition(FourSourceTypes(), weights).DiversityFactor);
+        Assert.Equal(
+            1 / weights.DiversityTarget,
+            ScoreSignalMath.EvidenceConfidenceDecomposition(
+                [Signal(0.6m, EvidenceQuality.Medium, EvidenceSourceType.PressRelease)], weights).DiversityFactor);
+    }
+
+    [Fact]
+    public void EvidenceConfidenceDecomposition_UnknownQuality_AnchorsOnQualityUnknown_NeverAbove()
+    {
+        var weights = new ScoringWeights();
+        var terms = ScoreSignalMath.EvidenceConfidenceDecomposition(
+            [Signal(0.9m, EvidenceQuality.Unknown, EvidenceSourceType.Manual)], weights);
+
+        Assert.Equal(weights.QualityUnknown, terms.BestQualityWeight);
+    }
+
+    [Theory]
+    [InlineData(80, 40, 1.0)]
+    [InlineData(58, 55, 0.63)]
+    [InlineData(21, 34, 0.9)]
+    [InlineData(85, 89, 0.05)]
+    [InlineData(50, 50, 1.0)]
+    [InlineData(50, 53, 1.0)]
+    [InlineData(45, 45, 1.0)]
+    [InlineData(100, 100, 1.0)]
+    [InlineData(0, 100, 1.0)]
+    public void OpportunityComposition_ReproducesV8sInlineExpression_Exactly(
+        int trajectory, int evidenceConfidence, double discount)
+    {
+        // v8's ORIGINAL expression, restated literally: the clamp over trajectory · (ec / 100.0) · discount.
+        var expected = ScoreSignalMath.Clamp0To100(
+            trajectory
+            * (evidenceConfidence / 100.0)
+            * discount);
+
+        Assert.Equal(expected, ScoreSignalMath.OpportunityComposition(trajectory, evidenceConfidence, discount));
+    }
+
+    public static TheoryData<double, double, double> CompositionGrid()
+    {
+        var data = new TheoryData<double, double, double>();
+        // Every live bestConfidence value (spec-225 follow-up read), every quality weight and the three live
+        // diversity factors, plus awkward binary fractions and the clamp edges.
+        double[] confidences = [0.0, 0.3, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.85, 0.9, 0.92, 0.95, 1.0];
+        double[] qualities = [0.35, 0.4, 0.6, 0.85, 1.0];
+        double[] diversities = [1.0 / 3.0, 2.0 / 3.0, 1.0, 0.1];
+        foreach (var c in confidences)
+        {
+            foreach (var q in qualities)
+            {
+                foreach (var d in diversities)
+                {
+                    data.Add(c, q, d);
+                }
+            }
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(CompositionGrid))]
+    public void EvidenceConfidenceComposition_IsTheOriginalInlineExpression_BitForBit(
+        double bestConf, double bestQual, double div)
+    {
+        var weights = new ScoringWeights();
+
+        // The pre-follow-up body, restated literally. Compared as raw BITS, not with a tolerance: the split into
+        // named multipliers must not move a single bit of the product the clamp rounds.
+        var inline = 100 * bestConf
+            * (weights.EcQualityBase + weights.EcQualitySpan * bestQual)
+            * (weights.EcDiversityBase + weights.EcDiversitySpan * div);
+
+        Assert.Equal(
+            BitConverter.DoubleToInt64Bits(inline),
+            BitConverter.DoubleToInt64Bits(ScoreSignalMath.EvidenceConfidenceProduct(bestConf, bestQual, div, weights)));
+        Assert.Equal(
+            ScoreSignalMath.Clamp0To100(inline),
+            ScoreSignalMath.EvidenceConfidenceComposition(bestConf, bestQual, div, weights));
+    }
+
+    [Fact]
+    public void EvidenceConfidenceMultipliers_AreTheConfiguredLines()
+    {
+        var weights = new ScoringWeights();
+
+        Assert.Equal(
+            weights.EcQualityBase + weights.EcQualitySpan * 0.85,
+            ScoreSignalMath.EvidenceConfidenceQualityMultiplier(0.85, weights));
+        Assert.Equal(
+            weights.EcDiversityBase + weights.EcDiversitySpan * (2.0 / 3.0),
+            ScoreSignalMath.EvidenceConfidenceDiversityMultiplier(2.0 / 3.0, weights));
+    }
+
+    [Theory]
+    [MemberData(nameof(DecompositionFixtures))]
+    public void EvidenceConfidenceDecomposition_IsTheCompositionOfItsOwnTerms(ScoringSignal[] signals)
+    {
+        var weights = new ScoringWeights();
+        var terms = ScoreSignalMath.EvidenceConfidenceDecomposition(signals, weights);
+
+        Assert.Equal(
+            terms.Score,
+            ScoreSignalMath.EvidenceConfidenceComposition(
+                terms.BestConfidence, terms.BestQualityWeight, terms.DiversityFactor, weights));
+    }
+
+    [Fact]
+    public void OpportunityComposition_MidpointRoundsAwayFromZero_LikeEveryComponent()
+    {
+        // 25 · (0.5) · 1.0 = 12.5 exactly (0.5 is exact in binary) → 13, never a banker's 12.
+        Assert.Equal(13, ScoreSignalMath.OpportunityComposition(25, 50, 1.0));
+    }
 }

@@ -808,6 +808,43 @@ public sealed class EfficacyWorkerOptions
     /// mirroring <see cref="AttentionArrival"/>.
     /// </summary>
     public DirectionalFilingReadsWorkerOptions DirectionalFilingReads { get; init; } = new();
+
+    /// <summary>
+    /// EvidenceConfidence distribution measurement configuration (bound from
+    /// "Radar:Efficacy:EvidenceConfidence"; spec 225). Only consulted when <see cref="Enabled"/>, mirroring
+    /// <see cref="DirectionalFilingReads"/>.
+    /// </summary>
+    public EvidenceConfidenceWorkerOptions EvidenceConfidence { get; init; } = new();
+}
+
+/// <summary>
+/// EvidenceConfidence distribution measurement configuration (bound from "Radar:Efficacy:EvidenceConfidence";
+/// spec 225). ENABLED by default <b>within</b> the already-opt-in <c>Radar:Efficacy</c> gate, mirroring
+/// <see cref="DirectionalFilingReadsWorkerOptions"/>: with no persisted snapshot it writes an honest artifact
+/// counting every company on <c>NoSnapshot</c> rather than failing, and it never touches an existing
+/// artifact. So the nightly baseline writes it with no profile edit.
+/// <para>
+/// The measurement is READ-ONLY over the <c>default</c> strategy's persisted snapshots + stored links, signals,
+/// evidence and companies: it reports the live distribution of <c>EvidenceConfidenceScore</c>, decomposes it
+/// through the production formula body, correlates it with Trajectory / Opportunity / distinct source types,
+/// attributes its spread across the three terms, names the signal (type, direction, producer) that sets each
+/// company's best confidence, and computes (NEVER applies) the ranking with the component — and each term — held
+/// at the universe median. It changes no
+/// score, weight, formula, strategy or fingerprint input, declares no operator step, reads no price, and
+/// writes only <c>data/efficacy/evidence-confidence.{json,csv,md}</c>. Registered for <c>full</c> and
+/// <c>score</c> runs (both score); a <c>collect</c> pass scores nothing, so the artifact is absent there
+/// (absent-but-not-fatal), and a replay replaces the pipeline and never reaches the efficacy step.
+/// </para>
+/// <para>
+/// Note what is deliberately NOT here: the verdict thresholds and the top-N of the counterfactual. They are
+/// declared constants on the rule (<c>EvidenceConfidenceVerdictRule.Version</c>) and the reporter, not operator
+/// knobs — a verdict whose thresholds an operator can retune between runs is not a verdict.
+/// </para>
+/// </summary>
+public sealed class EvidenceConfidenceWorkerOptions
+{
+    /// <summary>Whether to build and write the EvidenceConfidence distribution measurement when efficacy reporting is enabled. Defaults to true.</summary>
+    public bool Enabled { get; init; } = true;
 }
 
 /// <summary>
