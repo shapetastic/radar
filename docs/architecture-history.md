@@ -4005,7 +4005,9 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     default weights, v8 — reused, not copied; `ResolveAsOfAsync` and the `ReadOnlyEvidenceRepository` decorator
     were likewise made shared) into an in-memory score repository, then runs the SAME reporter over an in-memory
     adapter presenting those snapshots + links through the file store's two read seams. Evidence writes throw,
-    scores never leave the process, and the three artifacts go to `%TEMP%/radar-spec-225-evidence-confidence.*`.
+    scores never leave the process, and the three artifacts go to
+    `%TEMP%/radar-spec-225-evidence-confidence-{processId}.{md,json,csv}` — per-process so concurrent runs cannot
+    overwrite each other (PR #233 review); the resolved paths are written to the test output.
     The harness also appends a harness-only "Worked cases" section for the tickers named below (read from the
     report rows, nothing typed in). A marker file was touched before the run and `find data -newer marker` returned
     0 files afterwards.

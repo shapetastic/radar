@@ -53,8 +53,15 @@ public sealed class EvidenceConfidenceDistributionTests(ITestOutputHelper output
         return !string.IsNullOrWhiteSpace(root) && Directory.Exists(root) ? root : null;
     }
 
+    /// <summary>
+    /// The artifact stem, suffixed with the PROCESS ID so two concurrent runs on one machine cannot overwrite each
+    /// other's outputs. Only the file NAME varies; the report CONTENT stays deterministic. Because the path is not
+    /// fixed, the resolved paths are written to the test output (before and after the report).
+    /// </summary>
     private static readonly string OutputStem =
-        Path.Combine(Path.GetTempPath(), "radar-spec-225-evidence-confidence");
+        Path.Combine(
+            Path.GetTempPath(),
+            "radar-spec-225-evidence-confidence-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
 
     [EvidenceConfidenceDistributionFact]
     public async Task ReadOnlyMeasurement_OverTheLiveUniverse_ThroughTheProductionPath()
@@ -99,6 +106,7 @@ public sealed class EvidenceConfidenceDistributionTests(ITestOutputHelper output
 
             output.WriteLine(
                 $"Seeder reported {seeded}; {companies.Count} companies; {snapshots.Count} re-scored at {asOf.Instant:O} ({asOf.Source}).");
+            output.WriteLine($"Artifacts: {OutputStem}.md, {OutputStem}.json, {OutputStem}.csv");
             output.WriteLine(markdown);
             output.WriteLine($"(written to {OutputStem}.md / .json / .csv)");
 

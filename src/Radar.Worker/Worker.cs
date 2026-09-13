@@ -504,17 +504,21 @@ public sealed class Worker : BackgroundService
         // through ICompanyRepository, which under a filter holds only the named companies, so running them
         // here would overwrite data/efficacy/*.svg|csv and strategy-leaderboard.{csv,md} with a partial view —
         // exactly the clobbering the collect-only guard exists to prevent. Skipped LOUDLY (one line), and only
-        // when a filter is active: unfiltered behaviour in every mode is unchanged.
+        // when a filter is active: unfiltered behaviour in every mode is unchanged. This check keys on the
+        // FILTER alone, not on the run mode — ResolveCompanyFilter currently admits a filter only in collect
+        // mode, but this guard does not rely on that — so the log line names the ACTUAL run mode rather than
+        // asserting "collect".
         if (_companyFilter is not null)
         {
             _logger.LogInformation(
                 "Skipping the price-efficacy render, the strategy leaderboard, the attention-arrival "
                     + "screen, the directional filing-read measurement and the EvidenceConfidence "
-                    + "distribution measurement: this run is a company-FILTERED "
-                    + "collect pass (Radar:Companies = {Companies}). All of them read the seeded company "
+                    + "distribution measurement: this run is a company-FILTERED pass (Radar:RunMode = "
+                    + "{RunMode}, Radar:Companies = {Companies}). All of them read the seeded company "
                     + "universe, so recomputing them from {CompanyCount} companies would overwrite "
                     + "whole-universe artifacts with a partial view. Run an unfiltered pass to refresh "
                     + "them.",
+                RadarRunModes.Token(_options.Mode),
                 _companyFilter.Describe(),
                 _companyFilter.Tickers.Count);
             return;
