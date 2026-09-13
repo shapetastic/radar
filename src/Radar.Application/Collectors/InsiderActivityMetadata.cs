@@ -153,10 +153,9 @@ public static class InsiderActivityMetadata
                 ? rawOwnerCik.Trim()
                 : null;
 
-        var hasCluster = metadata.TryGetValue(ClusterKey, out var rawCluster)
-            && !string.IsNullOrWhiteSpace(rawCluster)
-            && (string.Equals(rawCluster.Trim(), "true", StringComparison.OrdinalIgnoreCase)
-                || rawCluster.Trim() == "1");
+        var cluster = metadata.TryGetValue(ClusterKey, out var rawCluster) ? rawCluster?.Trim() : null;
+        var hasCluster = !string.IsNullOrEmpty(cluster)
+            && (string.Equals(cluster, "true", StringComparison.OrdinalIgnoreCase) || cluster == "1");
 
         return new InsiderActivityRead(reason, netValue, filingDate, ownerName, ownerCik, hasCluster);
     }

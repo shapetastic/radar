@@ -7,6 +7,25 @@ namespace Radar.Application.Tests.SignalExtraction;
 public sealed class InsiderMaterialityWeightsTests
 {
     [Fact]
+    public void StrengthForAmount_EmptyTierTable_ThrowsArgumentExceptionNamingTiers()
+    {
+        // The tier walk is public since spec 224 (the scoring-time collapse re-derives Strength through it).
+        // An empty table must fail with a diagnosable ArgumentException, not an IndexOutOfRangeException
+        // from the floor-tier fallback.
+        var ex = Assert.Throws<ArgumentException>(
+            () => InsiderMaterialityWeights.StrengthForAmount(1_000m, Array.Empty<InsiderMaterialityTier>()));
+
+        Assert.Equal("tiers", ex.ParamName);
+        Assert.Contains("floor tier", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StrengthForAmount_NullTierTable_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => InsiderMaterialityWeights.StrengthForAmount(1_000m, null!));
+    }
+
+    [Fact]
     public void Defaults_BuyReproducesSpec93Table_SellIsSpec110AsymmetricCurve()
     {
         var weights = new InsiderMaterialityWeights();

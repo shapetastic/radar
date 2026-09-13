@@ -190,9 +190,11 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
         {
             logger.LogInformation(
                 "{Operation}: {InsiderOwnerUnresolvedIncidences} directional insider filing-evaluation "
-                    + "incidence(s) could not be bucketed by {CollapseVersion} because the evidence carries "
-                    + "no reporting-owner metadata, across {AffectedEvaluations} affected strategy-company "
-                    + "evaluation(s), {DistinctCompanies} distinct company/companies and {DistinctStrategies} "
+                    + "incidence(s) could not be bucketed by {CollapseVersion} because the reporting-owner "
+                    + "identity could not be resolved from the evidence envelope/metadata (no owner keys, or "
+                    + "an envelope that is not a readable Form 4), across {AffectedEvaluations} affected "
+                    + "strategy-company evaluation(s), {DistinctCompanies} distinct company/companies and "
+                    + "{DistinctStrategies} "
                     + "distinct strateg(ies){AsOfAxis}. These are signal-evaluation INCIDENCES, not globally "
                     + "distinct filings: every strategy re-evaluates the same signal. Each such filing was "
                     + "scored as its own signal exactly as before spec 224 (nothing dropped) — it simply "

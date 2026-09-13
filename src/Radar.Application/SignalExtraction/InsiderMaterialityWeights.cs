@@ -168,6 +168,13 @@ public sealed record InsiderMaterialityWeights
     public static int StrengthForAmount(decimal amount, IReadOnlyList<InsiderMaterialityTier> tiers)
     {
         ArgumentNullException.ThrowIfNull(tiers);
+        if (tiers.Count == 0)
+        {
+            throw new ArgumentException(
+                "The materiality tier table is empty; at least the floor tier (decimal.MinValue) is required so "
+                + "every amount maps to a Strength.",
+                nameof(tiers));
+        }
 
         foreach (var tier in tiers)
         {
