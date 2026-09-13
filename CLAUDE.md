@@ -351,11 +351,14 @@ authoritative record:
   merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
   composition stamped a full 102-company live run; each later move (216, 217, 219) invalidated the
   identity records again, and the 2026-09-09 run (`run-20260909T234658242Z-5c6644f6`) stamped the
-  spec-219 value (spec 220 Overview), so no 216/217/219 step remains outstanding. Spec 220's step (after
-  its merge), spec 221's step (after its merge) and spec 224's step (after its merge) are owed. IF no
-  baseline runs between those merges they collapse into ONE operator step (224 forks both sides, 220/221
-  only the AI-ON side, and the step — delete/re-record the identity records — is the same); otherwise they
-  are separate.
+  spec-219 value (spec 220 Overview), so no 216/217/219 step remains outstanding. Specs 220, 221 and 224
+  each owed a step after merging. (⚠ AMENDED 2026-09-13: this sentence previously said all three were still
+  owed and might collapse into one. Baselines ran between the merges, so they were three separate steps,
+  and ALL THREE WERE TAKEN. Spec 220's re-recorded identity was stamped by
+  `run-20260910T142811301Z-b640146f`, spec 221's by `run-20260912T013411933Z-9ce33d31`, and spec 224's
+  step was taken on 2026-09-13 after its merge, so its identity is stamped by the first post-224 run.
+  **No operator step is outstanding for any spec through 224.** Do NOT clear the identity records on the
+  strength of the earlier wording.)
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
