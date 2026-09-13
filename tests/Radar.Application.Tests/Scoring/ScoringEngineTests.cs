@@ -601,24 +601,52 @@ public sealed class ScoringEngineTests
     }
 
     /// <summary>
-    /// Spec 224: a directional insider filing with NO owner key (every pre-224 evidence item) is scored as
-    /// its own signal exactly as before and counted on the diagnostics' own axis — never bucketed on the
-    /// title, which names the same person.
+    /// Spec 224 amendment: a directional insider filing with NO owner key (every accrued pre-224 evidence
+    /// item) has its owner recovered from the collector's title shape at read time, so repeat legacy filings by
+    /// one person DO collapse — and each title-derived resolution is counted on the diagnostics' own axis.
     /// </summary>
     [Fact]
-    public async Task InsiderCollapse_LegacyFilingsWithoutOwnerKey_PassThrough_AndAreCounted()
+    public async Task InsiderCollapse_LegacyFilingsWithoutOwnerKey_CollapseOnTheTitleDerivedOwner_AndAreCounted()
     {
         var harness = new Harness();
         var companyId = Guid.NewGuid();
 
-        await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-10), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false);
+        var (first, _) = await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-10), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false);
         await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-8), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false);
+
+        var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
+
+        var link = Assert.Single(result.Links);
+        Assert.Equal(first.Id, link.SignalId);
+        Assert.Contains(
+            "(collapsed 1 same-insider filing(s): 2 filings by one insider totalling ~$1,000,000;",
+            link.ContributionReason,
+            StringComparison.Ordinal);
+        Assert.Equal(0, result.Diagnostics.CurrentWindowInsiderOwnerUnresolved);
+        Assert.Equal(2, result.Diagnostics.CurrentWindowInsiderOwnerFromTitle);
+        Assert.True(result.Diagnostics.HasInsiderOwnerFromTitle);
+        Assert.True(result.Diagnostics.HasAny);
+    }
+
+    /// <summary>
+    /// Spec 224: a directional insider filing with no owner key AND a title in no collector shape resolves no
+    /// owner: it is scored as its own signal exactly as before and counted on the unresolved axis.
+    /// </summary>
+    [Fact]
+    public async Task InsiderCollapse_FilingsWithNoResolvableOwner_PassThrough_AndAreCounted()
+    {
+        var harness = new Harness();
+        var companyId = Guid.NewGuid();
+
+        await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-10), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false, title: "Form 4 insider filing");
+        await SeedInsiderSaleAsync(harness, companyId, WindowEnd.AddDays(-8), 500_000m, owner: "STANG ERIC B", writeOwnerKey: false, title: "Form 4 insider filing");
 
         var result = await harness.Engine.ScoreCompanyAsync(companyId, WindowEnd, CancellationToken.None);
 
         Assert.Equal(2, result.Links.Count);
         Assert.All(result.Links, l => Assert.DoesNotContain("collapsed", l.ContributionReason, StringComparison.Ordinal));
         Assert.Equal(2, result.Diagnostics.CurrentWindowInsiderOwnerUnresolved);
+        Assert.Equal(0, result.Diagnostics.CurrentWindowInsiderOwnerFromTitle);
         Assert.True(result.Diagnostics.HasInsiderOwnerUnresolved);
         Assert.True(result.Diagnostics.HasAny);
     }
@@ -630,7 +658,8 @@ public sealed class ScoringEngineTests
         DateTimeOffset observedAt,
         decimal netValue,
         string owner,
-        bool writeOwnerKey = true)
+        bool writeOwnerKey = true,
+        string? title = null)
     {
         var ownerKey = writeOwnerKey ? $",\"{InsiderActivityMetadata.OwnerNameKey}\":\"{owner}\"" : string.Empty;
         var metadataJson =
@@ -643,7 +672,7 @@ public sealed class ScoringEngineTests
             .WithId(Guid.NewGuid())
             .WithContentHash(Guid.NewGuid().ToString("N"))
             .WithSourceType(EvidenceSourceType.Filing)
-            .WithTitle($"Form 4 — insider open-market sale: {owner} sold 5,000 shares (~$500,000) (2026-01-20)")
+            .WithTitle(title ?? $"Form 4 — insider open-market sale: {owner} sold 5,000 shares (~$500,000) (2026-01-20)")
             .WithMetadataJson(metadataJson)
             .Build();
 

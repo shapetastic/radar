@@ -186,6 +186,85 @@ public sealed class SecForm4CollectorTests
         Assert.Contains("An insider", blankOwner.Title, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Spec 224 amendment: the Form 4 text shapes moved into the shared <see cref="InsiderActivityTitle"/> so the
+    /// collector's writer and the read-time owner parse cannot drift. Evidence identity is the normalized
+    /// title+body hash (spec 145), so the collector's Title and RawText must stay BYTE-IDENTICAL to the text it
+    /// wrote before the extraction — pinned here as literals for all three shapes (purchase, sale, routine) and
+    /// the blank-owner placeholder, with invariant-culture <c>N0</c> number formatting proven under a
+    /// comma-decimal culture. Each title also round-trips through the parse to its owner (placeholder ⇒ null).
+    /// </summary>
+    [Fact]
+    public async Task CollectAsync_TitleAndRawText_AreByteIdentical_ForAllThreeShapes_InvariantN0()
+    {
+        const string url = "https://data.sec.gov/submissions/CIK.json";
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000e"), MrcyId, "Mercury — Form 4", url);
+        var reader = new FakeSecForm4Reader
+        {
+            [url] =
+            [
+                Filing("0000000001-26-000001", SignalDirection.Positive, 98_765_432.9m, shares: 1_234_567.4m,
+                    owner: "Yeh Jenny C", filingDate: "2026-07-07"),
+                Filing("0000000001-26-000002", SignalDirection.Negative, 1_500_000m, shares: 27_666m,
+                    owner: "STANG ERIC B", filingDate: "2026-06-26"),
+                Filing("0000000001-26-000003", SignalDirection.Neutral, 0m, owner: "WEINER LEIGH R",
+                    filingDate: "2012-12-20"),
+                Filing("0000000001-26-000004", SignalDirection.Negative, 999m, shares: 5m, owner: "   ",
+                    filingDate: "2026-06-03"),
+            ],
+        };
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var original = System.Globalization.CultureInfo.CurrentCulture;
+        List<CollectedEvidence> items;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+            var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+            items = result.Evidence.ToList();
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = original;
+        }
+
+        Assert.Equal(4, items.Count);
+
+        Assert.Equal(
+            "Form 4 — insider open-market purchase: Yeh Jenny C bought 1,234,567 shares (~$98,765,433) (2026-07-07)",
+            items[0].Title);
+        Assert.Equal(
+            "Form 4 accession 0000000001-26-000001 filed 2026-07-07: insider open-market purchase — Yeh Jenny C "
+                + "bought 1,234,567 shares (~$98,765,433).",
+            items[0].RawText);
+
+        Assert.Equal(
+            "Form 4 — insider open-market sale: STANG ERIC B sold 27,666 shares (~$1,500,000) (2026-06-26)",
+            items[1].Title);
+        Assert.Equal(
+            "Form 4 accession 0000000001-26-000002 filed 2026-06-26: insider open-market sale — STANG ERIC B "
+                + "sold 27,666 shares (~$1,500,000).",
+            items[1].RawText);
+
+        Assert.Equal("Form 4 — insider stock transaction (routine): WEINER LEIGH R (2012-12-20)", items[2].Title);
+        Assert.Equal(
+            "Form 4 accession 0000000001-26-000003 filed 2012-12-20: insider stock transaction (routine) — "
+                + "WEINER LEIGH R.",
+            items[2].RawText);
+
+        Assert.Equal("Form 4 — insider open-market sale: An insider sold 5 shares (~$999) (2026-06-03)", items[3].Title);
+        Assert.Equal(
+            "Form 4 accession 0000000001-26-000004 filed 2026-06-03: insider open-market sale — An insider sold "
+                + "5 shares (~$999).",
+            items[3].RawText);
+
+        // The shared parse is the exact inverse of the shared writer; the placeholder is never an identity.
+        Assert.Equal("Yeh Jenny C", InsiderActivityTitle.TryParseOwner(items[0].Title));
+        Assert.Equal("STANG ERIC B", InsiderActivityTitle.TryParseOwner(items[1].Title));
+        Assert.Equal("WEINER LEIGH R", InsiderActivityTitle.TryParseOwner(items[2].Title));
+        Assert.Null(InsiderActivityTitle.TryParseOwner(items[3].Title));
+    }
+
     [Fact]
     public async Task CollectAsync_NeutralRoutine_OmitsInsiderNetValueMetadata()
     {

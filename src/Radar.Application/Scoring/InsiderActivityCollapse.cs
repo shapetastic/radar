@@ -26,12 +26,22 @@ namespace Radar.Application.Scoring;
 /// <b>The rule (<c>insider-collapse-v1</c>).</b> Only <c>InsiderBuying</c> signals whose direction is
 /// Positive or Negative are candidates; a Neutral insider signal (a 10b5-1 plan, a no-discretionary filing,
 /// a mixed buy+sell) and every other signal type pass through untouched. A candidate's insider IDENTITY is
-/// read from the evidence metadata through the shared <see cref="InsiderActivityMetadata.TryRead"/>
-/// contract: the reporting owner's CIK when the collector captured one, else the owner's name normalised
-/// (trimmed, upper-cased invariant, internal whitespace collapsed). <b>The evidence TITLE is never parsed</b>
-/// (spec 224 §1) — a filing whose owner cannot be resolved (every pre-224 evidence item, which carries the
-/// name only inside its title) is UNRESOLVED: it passes through as its own signal, never bucketed, and is
-/// counted on <see cref="InsiderCollapseResult.OwnerUnresolvedCount"/>. Candidates are keyed by
+/// read ONLY through the shared <see cref="InsiderActivityRead"/> projection
+/// (<see cref="InsiderActivityMetadata.TryRead"/>): the reporting owner's CIK when the collector captured one,
+/// else the owner's name normalised (trimmed, upper-cased invariant, internal whitespace collapsed). That name
+/// comes from the structured metadata key when present and otherwise — for every accrued pre-224 evidence
+/// item, which carries the owner only inside its title — from the collector's fixed title shape, recovered at
+/// read time inside <c>TryRead</c> (the ONE title parse; this type never touches a title). Every bucketed
+/// candidate whose identity rests on that fallback is counted on
+/// <see cref="InsiderCollapseResult.OwnerFromTitleCount"/>. So that a legacy filing (title name, no CIK) and a
+/// post-224 filing by the same person (CIK + name) share ONE bucket across the boundary, a name-only candidate
+/// whose normalised name the same company's input shows beside EXACTLY ONE CIK takes that CIK's identity; a
+/// name shown beside two or more CIKs is ambiguous and the name-only candidate is not attributed to either.
+/// Names match on exact normalised equality only, never on a surname or similarity. A filing whose owner
+/// cannot be resolved (no readable Form 4 envelope; no CIK and no name — an unparseable title or the
+/// collector's anonymous placeholder; or an ambiguous name) is UNRESOLVED: it passes through as its own
+/// signal, never bucketed, and is counted on <see cref="InsiderCollapseResult.OwnerUnresolvedCount"/>.
+/// Candidates are keyed by
 /// <c>(CompanyId, identity, Direction)</c> — two different people selling in the same week are two decisions
 /// and stay two signals; the same person buying and selling are two buckets — sorted by
 /// <c>(ObservedAtUtc, Id)</c>, and bucketed greedily against the EARLIEST member of each bucket through the
@@ -63,7 +73,8 @@ namespace Radar.Application.Scoring;
 /// <b>What this does NOT change.</b> NO formula version bump: the math in every <c>IScoreFormula</c> is
 /// untouched — only the insider INPUT SET changes, exactly the precedent the media collapse set. No signal
 /// is written, superseded or rewritten on disk (AD-8): the collapse applies at scoring time to the window's
-/// signals, so history heals forward only. The collapse STRUCTURE is versioned here
+/// signals — accrued ones included, since their owner is recovered from the title at read time — so nothing
+/// is backfilled and the stored history is untouched. The collapse STRUCTURE is versioned here
 /// (<see cref="Version"/>) and folded into the scoring-config fingerprint via
 /// <see cref="CanonicalDescriptor"/> together with the tunable window MAGNITUDE
 /// (<see cref="InsiderCollapseOptions"/>); introducing it moved every pin, deliberately, and any structural
@@ -119,11 +130,14 @@ public sealed class InsiderActivityCollapse
 
         var untouched = new List<ScoringSignal>();
         var ownerUnresolved = 0;
+        var ownerAmbiguous = 0;
+        var ownerFromTitle = 0;
 
-        // Candidates grouped by the bucket key. The dictionary's enumeration order never reaches the
-        // output: representatives are re-sorted with everything else below, and the accounting map is keyed
-        // by signal id — so group order cannot affect any result (AD-3).
-        var groups = new Dictionary<(Guid? CompanyId, string Identity, SignalDirection Direction), List<Candidate>>();
+        // Pass 1: every directional insider candidate with SOME owner (a CIK, or a name from metadata or the
+        // title), plus — per company — which CIKs each normalised name was seen with. The association is a
+        // property of the whole input set, never of its order (AD-3).
+        var resolvable = new List<Candidate>();
+        var ciksByName = new Dictionary<(Guid? CompanyId, string Name), SortedSet<string>>();
 
         foreach (var s in signals)
         {
@@ -137,15 +151,55 @@ public sealed class InsiderActivityCollapse
                 continue;
             }
 
-            // Identity through the ONE shared read contract; never the title (spec 224 §1).
+            // Identity through the ONE shared read contract (which alone may fall back to the title).
             var read = InsiderActivityMetadata.TryRead(s.Evidence);
-            var identity = ResolveIdentity(read);
-            if (identity is null)
+            if (read is null || (read.OwnerCik is null && read.OwnerName is null))
             {
                 // UNRESOLVED: its own signal, never bucketed, counted on a named axis.
                 ownerUnresolved++;
                 untouched.Add(s);
                 continue;
+            }
+
+            resolvable.Add(new Candidate(s, read));
+            if (read.OwnerCik is { } cik && read.OwnerName is { } name)
+            {
+                var nameKey = (signal.CompanyId, NormaliseName(name));
+                if (!ciksByName.TryGetValue(nameKey, out var ciks))
+                {
+                    ciks = new SortedSet<string>(StringComparer.Ordinal);
+                    ciksByName[nameKey] = ciks;
+                }
+
+                ciks.Add(cik);
+            }
+        }
+
+        // Pass 2: the bucket key. Candidates grouped by it; the dictionary's enumeration order never reaches
+        // the output: representatives are re-sorted with everything else below, and the accounting map is
+        // keyed by signal id — so group order cannot affect any result (AD-3).
+        var groups = new Dictionary<(Guid? CompanyId, string Identity, SignalDirection Direction), List<Candidate>>();
+
+        foreach (var candidate in resolvable)
+        {
+            var signal = candidate.Signal.Signal;
+            var identity = ResolveIdentity(signal.CompanyId, candidate.Read, ciksByName);
+            if (identity is null)
+            {
+                // A name-only filing whose name this company's window associates with TWO OR MORE CIKs: two
+                // different people share it, so it cannot be attributed to either. Unresolved, counted on the
+                // same axis (with its own sub-count) — never guessed into one of them.
+                ownerUnresolved++;
+                ownerAmbiguous++;
+                untouched.Add(candidate.Signal);
+                continue;
+            }
+
+            if (candidate.Read.OwnerCik is null && candidate.Read.OwnerSource == InsiderOwnerSource.Title)
+            {
+                // The identity rests on the title fallback (accrued pre-224 evidence) — counted so it is visible
+                // how much of the collapse depends on it.
+                ownerFromTitle++;
             }
 
             var key = (signal.CompanyId, identity, signal.Direction);
@@ -155,7 +209,7 @@ public sealed class InsiderActivityCollapse
                 groups[key] = group;
             }
 
-            group.Add(new Candidate(s, read!));
+            group.Add(candidate);
         }
 
         var representatives = new List<ScoringSignal>();
@@ -191,7 +245,9 @@ public sealed class InsiderActivityCollapse
         return new InsiderCollapseResult(
             result,
             collapsed.Count == 0 ? InsiderCollapseResult.NoBuckets : collapsed,
-            ownerUnresolved);
+            ownerUnresolved,
+            ownerFromTitle,
+            ownerAmbiguous);
     }
 
     /// <summary>
@@ -261,29 +317,42 @@ public sealed class InsiderActivityCollapse
     }
 
     /// <summary>
-    /// The insider identity of one candidate: the CIK when captured, else the normalised name, else
-    /// <c>null</c> (unresolved). <c>null</c> read ⇒ the evidence is not a Form 4 envelope at all ⇒ unresolved.
+    /// The insider identity of one candidate that carries a CIK or a name:
+    /// <list type="bullet">
+    /// <item>the CIK when captured;</item>
+    /// <item>else, when the candidate's normalised name was seen beside EXACTLY ONE CIK for the same company in
+    /// this input, that CIK — so a legacy filing (name recovered from the title, no CIK) and a post-224 filing
+    /// (CIK + name from metadata) by the same person share ONE bucket across the boundary;</item>
+    /// <item>else, when the name was seen beside NO CIK, the normalised name;</item>
+    /// <item>else (the name was seen beside two or more CIKs — two people share it) <c>null</c>: ambiguous.</item>
+    /// </list>
+    /// Names match only on EXACT normalised equality (trimmed, internal whitespace collapsed, upper-cased
+    /// invariant) — never on a surname, prefix or similarity.
     /// </summary>
-    private static string? ResolveIdentity(InsiderActivityRead? read)
+    private static string? ResolveIdentity(
+        Guid? companyId,
+        InsiderActivityRead read,
+        Dictionary<(Guid? CompanyId, string Name), SortedSet<string>> ciksByName)
     {
-        if (read is null)
-        {
-            return null;
-        }
-
         if (read.OwnerCik is { } cik)
         {
             // Prefixed so a CIK can never collide with a name that happens to be digits.
-            return "cik:" + cik;
+            return CikIdentity(cik);
         }
 
-        if (read.OwnerName is { } name)
+        var name = NormaliseName(read.OwnerName!);
+        if (!ciksByName.TryGetValue((companyId, name), out var ciks))
         {
-            return "name:" + InternalWhitespace.Replace(name.Trim(), " ").ToUpperInvariant();
+            return "name:" + name;
         }
 
-        return null;
+        return ciks.Count == 1 ? CikIdentity(ciks.Min!) : null;
     }
+
+    private static string CikIdentity(string cik) => "cik:" + cik;
+
+    private static string NormaliseName(string name) =>
+        InternalWhitespace.Replace(name.Trim(), " ").ToUpperInvariant();
 
     private readonly record struct Candidate(ScoringSignal Signal, InsiderActivityRead Read);
 }
@@ -294,10 +363,24 @@ public sealed class InsiderActivityCollapse
 /// bucket it stands for (only buckets that absorbed at least one other filing are present), and the number
 /// of directional insider candidates whose owner could not be resolved and so were passed through unbucketed.
 /// </summary>
+/// <param name="Signals">The de-noised signal list.</param>
+/// <param name="Collapsed">Per representative id, the accounting of a bucket that absorbed at least one other filing.</param>
+/// <param name="OwnerUnresolvedCount">Directional insider candidates passed through UNBUCKETED for want of a
+/// resolvable owner: not a readable Form 4 envelope, no CIK and no name (no metadata key, and a title in no
+/// known collector shape or naming only the anonymous placeholder), or a name-only filing whose name is
+/// ambiguous (see <paramref name="OwnerNameAmbiguousCount"/>).</param>
+/// <param name="OwnerFromTitleCount">Directional insider candidates that WERE bucketed on an identity resting
+/// on an owner name recovered from the evidence title (<see cref="InsiderOwnerSource.Title"/>, no CIK) —
+/// accrued pre-224 evidence. Its own axis, so how much of the collapse rests on the title fallback is visible.
+/// Includes a title-named filing joined to a CIK bucket through its name.</param>
+/// <param name="OwnerNameAmbiguousCount">The subset of <paramref name="OwnerUnresolvedCount"/> that carried a
+/// name but no CIK, where that name was seen beside two or more different CIKs for the same company.</param>
 public sealed record InsiderCollapseResult(
     IReadOnlyList<ScoringSignal> Signals,
     IReadOnlyDictionary<Guid, InsiderCollapsedBucket> Collapsed,
-    int OwnerUnresolvedCount)
+    int OwnerUnresolvedCount,
+    int OwnerFromTitleCount,
+    int OwnerNameAmbiguousCount)
 {
     /// <summary>The shared empty map, frozen so the healthy path allocates nothing per company.</summary>
     internal static readonly IReadOnlyDictionary<Guid, InsiderCollapsedBucket> NoBuckets =

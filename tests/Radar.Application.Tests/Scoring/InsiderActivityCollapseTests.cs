@@ -76,7 +76,9 @@ public sealed class InsiderActivityCollapseTests
         Guid? companyId = null,
         Guid? id = null,
         SignalType type = SignalType.InsiderBuying,
-        bool form4 = true)
+        bool form4 = true,
+        bool writeOwnerKey = true,
+        string? title = null)
     {
         var reason = direction switch
         {
@@ -84,11 +86,15 @@ public sealed class InsiderActivityCollapseTests
             SignalDirection.Negative => InsiderActivityMetadata.DiscretionarySale,
             _ => InsiderActivityMetadata.Plan10b51,
         };
+
+        // The title the collector writes, through the SAME shared shape (a null owner ⇒ the anonymous
+        // placeholder). writeOwnerKey: false is the accrued pre-224 shape — the owner ONLY in the title.
+        title ??= InsiderActivityTitle.Compose(direction, ownerName, 1_000m, netValue ?? 0m, "2026-06-01", "acc").Title;
         var evidence = new EvidenceBuilder()
             .WithId(Guid.NewGuid())
             .WithContentHash(Guid.NewGuid().ToString("N"))
-            .WithTitle($"Form 4 — insider open-market sale: {ownerName ?? "An insider"} sold 1,000 shares")
-            .WithMetadataJson(Form4Envelope(reason, netValue, ownerName, ownerCik, cluster, form4))
+            .WithTitle(title)
+            .WithMetadataJson(Form4Envelope(reason, netValue, writeOwnerKey ? ownerName : null, ownerCik, cluster, form4))
             .Build();
 
         // The stored Strength is what the extractor minted per filing: the per-filing tier walk.
@@ -202,25 +208,144 @@ public sealed class InsiderActivityCollapseTests
         Assert.False(result.Collapsed.ContainsKey(day50.Signal.Id));
     }
 
-    // (e) An unresolvable owner is never bucketed — even beside a resolved filing whose TITLE names the same
-    // person: the title is never parsed.
+    // (e) Spec 224 amendment: accrued pre-224 evidence carries the owner ONLY in its title. TryRead recovers it
+    // at read time, so a legacy filing buckets with the same person's metadata-named filing, and every
+    // bucketed title-derived identity is counted on its own axis.
     [Fact]
-    public void UnresolvedOwner_PassesThroughUntouched_AndIsCounted_NeverBucketedOnTitle()
+    public void LegacyTitleOwner_BucketsWithTheSameOwner_AndIsCountedOnItsOwnAxis()
     {
         var resolved = Filing(Base, ownerName: "STANG ERIC B");
-        // Legacy pre-224 shape: the name is only in the title (the Filing helper puts it there), no key.
-        var legacy = Filing(Base.AddDays(1), ownerName: null);
-        var legacyTitleNamesSameOwner = Filing(Base.AddDays(2), ownerName: null);
+        var legacy = Filing(Base.AddDays(1), ownerName: "STANG ERIC B", writeOwnerKey: false);
+        var legacy2 = Filing(Base.AddDays(2), ownerName: "Stang  Eric B", writeOwnerKey: false);
 
-        var result = Collapse().Collapse([resolved, legacy, legacyTitleNamesSameOwner]);
+        var result = Collapse().Collapse([resolved, legacy, legacy2]);
+
+        var representative = Assert.Single(result.Signals);
+        Assert.Equal(resolved.Signal.Id, representative.Signal.Id);
+        Assert.Equal(2, result.Collapsed[resolved.Signal.Id].CollapsedCount);
+        Assert.Equal(1_500_000m, result.Collapsed[resolved.Signal.Id].AggregateValue);
+        Assert.Equal(2, result.OwnerFromTitleCount);
+        Assert.Equal(0, result.OwnerUnresolvedCount);
+        Assert.Equal(0, result.OwnerNameAmbiguousCount);
+    }
+
+    // (e2) The anonymous placeholder is NEVER an identity: every anonymous filing stays its own signal.
+    [Fact]
+    public void AnonymousPlaceholderTitle_IsUnresolved_NeverCollapsedIntoOnePerson()
+    {
+        var anon1 = Filing(Base, ownerName: null);
+        var anon2 = Filing(Base.AddDays(1), ownerName: null);
+        var anon3 = Filing(Base.AddDays(2), ownerName: null);
+        Assert.Contains(InsiderActivityTitle.AnonymousOwner, anon1.Evidence.Title, StringComparison.Ordinal);
+
+        var result = Collapse().Collapse([anon1, anon2, anon3]);
 
         Assert.Equal(3, result.Signals.Count);
-        Assert.Same(legacy, result.Signals.Single(s => s.Signal.Id == legacy.Signal.Id));
-        Assert.Same(
-            legacyTitleNamesSameOwner,
-            result.Signals.Single(s => s.Signal.Id == legacyTitleNamesSameOwner.Signal.Id));
+        Assert.Same(anon1, result.Signals[0]);
+        Assert.Same(anon2, result.Signals[1]);
+        Assert.Same(anon3, result.Signals[2]);
+        Assert.Empty(result.Collapsed);
+        Assert.Equal(3, result.OwnerUnresolvedCount);
+        Assert.Equal(0, result.OwnerFromTitleCount);
+    }
+
+    // (e3) A title in no collector shape, with no owner key, resolves to NOT RECORDED: unbucketed, counted,
+    // never throws.
+    [Fact]
+    public void UnparseableTitle_WithoutOwnerKey_IsUnresolved_AndCounted()
+    {
+        var odd = Filing(Base, ownerName: "STANG ERIC B", writeOwnerKey: false, title: "Form 4 insider filing");
+        var odd2 = Filing(Base.AddDays(1), ownerName: "STANG ERIC B", writeOwnerKey: false,
+            title: "Form 4 — insider open-market sale: STANG ERIC B sold 1,000 shares");
+        var resolved = Filing(Base.AddDays(2), ownerName: "STANG ERIC B");
+
+        var result = Collapse().Collapse([odd, odd2, resolved]);
+
+        Assert.Equal(3, result.Signals.Count);
         Assert.Empty(result.Collapsed);
         Assert.Equal(2, result.OwnerUnresolvedCount);
+        Assert.Equal(0, result.OwnerFromTitleCount);
+    }
+
+    // (e4) A legacy filing (title name, NO CIK) and a post-224 filing (CIK + metadata name) by the same person
+    // land in the SAME bucket, in either input order — the name seen beside exactly one CIK takes that CIK.
+    [Fact]
+    public void MixedLegacyAndNewFilings_BySamePerson_ShareOneBucket_InEitherOrder()
+    {
+        var legacy = Filing(Base, netValue: 1_000_000m, ownerName: "STANG ERIC B", writeOwnerKey: false);
+        var legacyLater = Filing(Base.AddDays(9), netValue: 1_000_000m, ownerName: "STANG ERIC B", writeOwnerKey: false);
+        var post224 = Filing(Base.AddDays(4), netValue: 1_000_000m, ownerName: "Stang Eric B", ownerCik: "0001234567");
+
+        foreach (var input in new List<ScoringSignal>[] { [legacy, post224, legacyLater], [legacyLater, post224, legacy] })
+        {
+            var result = Collapse().Collapse(input);
+
+            var representative = Assert.Single(result.Signals);
+            Assert.Equal(legacy.Signal.Id, representative.Signal.Id);
+            var bucket = result.Collapsed[legacy.Signal.Id];
+            Assert.Equal(2, bucket.CollapsedCount);
+            Assert.Equal(3_000_000m, bucket.AggregateValue);
+            Assert.Equal(
+                InsiderMaterialityWeights.StrengthForAmount(3_000_000m, Materiality.SellTiers),
+                representative.Signal.Strength);
+            Assert.Equal(2, result.OwnerFromTitleCount); // the two legacy members rest on the title name
+            Assert.Equal(0, result.OwnerUnresolvedCount);
+        }
+    }
+
+    // (e5) Different people never merge: a shared surname, a name that is a prefix of another, and a legacy
+    // name that differs from a CIK-bearing one by a middle initial each stay their own identity.
+    [Fact]
+    public void SharedSurnamesAndSimilarNames_NeverMerge_AcrossTheLegacyBoundary()
+    {
+        var result = Collapse().Collapse(
+        [
+            Filing(Base, ownerName: "STANG ERIC B", ownerCik: "0001234567"),
+            Filing(Base.AddDays(1), ownerName: "STANG ERIC", writeOwnerKey: false),
+            Filing(Base.AddDays(2), ownerName: "STANG JOHN", writeOwnerKey: false),
+            Filing(Base.AddDays(3), ownerName: "STANG", writeOwnerKey: false),
+            Filing(Base.AddDays(4), ownerName: "ERIC B STANG", writeOwnerKey: false),
+        ]);
+
+        Assert.Equal(5, result.Signals.Count);
+        Assert.Empty(result.Collapsed);
+        Assert.Equal(4, result.OwnerFromTitleCount);
+        Assert.Equal(0, result.OwnerUnresolvedCount);
+    }
+
+    // (e6) A legacy name the window shows beside TWO different CIKs belongs to two different people; the
+    // name-only filing is attributed to neither — unresolved, counted, with its own ambiguity sub-count.
+    [Fact]
+    public void LegacyNameSharedByTwoCiks_IsAmbiguous_UnresolvedAndCounted()
+    {
+        var cikA = Filing(Base, ownerName: "SMITH JOHN", ownerCik: "0000000001");
+        var cikB = Filing(Base.AddDays(1), ownerName: "SMITH JOHN", ownerCik: "0000000002");
+        var legacy = Filing(Base.AddDays(2), ownerName: "SMITH JOHN", writeOwnerKey: false);
+
+        var result = Collapse().Collapse([cikA, cikB, legacy]);
+
+        Assert.Equal(3, result.Signals.Count);
+        Assert.Empty(result.Collapsed);
+        Assert.Same(legacy, result.Signals.Single(s => s.Signal.Id == legacy.Signal.Id));
+        Assert.Equal(1, result.OwnerUnresolvedCount);
+        Assert.Equal(1, result.OwnerNameAmbiguousCount);
+        Assert.Equal(0, result.OwnerFromTitleCount);
+    }
+
+    // (e7) The name→CIK association is per COMPANY: the same name with a CIK at another company does not pull
+    // a legacy filing out of its own name bucket.
+    [Fact]
+    public void NameToCikAssociation_IsScopedToTheCompany()
+    {
+        var elsewhere = Filing(Base, ownerName: "STANG ERIC B", ownerCik: "0001234567", companyId: CompanyB);
+        var legacy1 = Filing(Base.AddDays(1), ownerName: "STANG ERIC B", writeOwnerKey: false);
+        var legacy2 = Filing(Base.AddDays(2), ownerName: "STANG ERIC B", writeOwnerKey: false);
+
+        var result = Collapse().Collapse([elsewhere, legacy1, legacy2]);
+
+        Assert.Equal(2, result.Signals.Count);
+        Assert.Equal(1, result.Collapsed[legacy1.Signal.Id].CollapsedCount);
+        Assert.Equal(2, result.OwnerFromTitleCount);
     }
 
     [Fact]

@@ -29,13 +29,17 @@ namespace Radar.Application.Scoring;
 /// so the healthy path's log is byte-identical to a run in which these transforms never fired.
 /// </para>
 /// <para>
-/// <b>Spec 224 adds a THIRD category on its own axis, at Information</b>: directional insider filings whose
-/// reporting owner could not be resolved and so were passed through unbucketed by
-/// <c>InsiderActivityCollapse</c>. Information rather than Warning because, for the first scoring window
-/// after the merge, EVERY accrued Form 4 evidence item lacks the owner field (it heals forward only), so a
-/// non-zero count is the expected state, not a fault — what matters is that the count is stated and falls
-/// to zero as that cohort ages out; a count that persists past one window means the collector stopped
-/// writing the key and IS a defect, which the line's wording says.
+/// <b>Spec 224 adds a THIRD category, insider owner resolution, at Information</b>, carrying two axes that
+/// are stated separately and never pooled: directional insider filings whose reporting owner could not be
+/// resolved and so were passed through unbucketed by <c>InsiderActivityCollapse</c>, and filings that WERE
+/// bucketed on an owner name recovered from the evidence title (accrued pre-224 evidence lacks the owner
+/// metadata; <c>InsiderActivityMetadata.TryRead</c> falls back to the collector's fixed title shape). The line
+/// is emitted when EITHER axis is non-zero. Information rather than Warning because, until pre-224 evidence
+/// ages out of the window, a non-zero title-derived count is the expected state, not a fault; it should then
+/// fall to zero, and a title-derived count that persists past one full window means the collector stopped
+/// writing the owner keys. The fallback resolves every accrued shape, so a non-zero UNRESOLVED count is the
+/// unexpected axis (an unknown title shape, the anonymous placeholder, an ambiguous name, or a non-Form 4
+/// envelope) and the line's wording says so.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -50,10 +54,11 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
 
     private readonly CategoryTally _unresolvedEvidence = new();
     private readonly CategoryTally _neutralization = new();
-    private readonly CategoryTally _insiderOwnerUnresolved = new();
+    private readonly CategoryTally _insiderOwnerResolution = new();
 
     private long _unresolvedSignalIncidences;
     private long _insiderOwnerUnresolvedIncidences;
+    private long _insiderOwnerFromTitleIncidences;
     private long _unresolvedDistinctEvidencePerEvaluationSum;
     private long _currentLegacy;
     private long _currentMalformed;
@@ -85,7 +90,10 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
     public bool HasNeutralization => _neutralization.Evaluations > 0;
 
     /// <summary>True when at least one recorded evaluation passed through an insider filing it could not bucket (spec 224).</summary>
-    public bool HasInsiderOwnerUnresolved => _insiderOwnerUnresolved.Evaluations > 0;
+    public bool HasInsiderOwnerUnresolved => _insiderOwnerUnresolvedIncidences > 0;
+
+    /// <summary>True when at least one recorded evaluation bucketed an insider filing on a title-derived owner (spec 224 amendment).</summary>
+    public bool HasInsiderOwnerFromTitle => _insiderOwnerFromTitleIncidences > 0;
 
     /// <summary>
     /// Records ONE strategy-company evaluation. A healthy evaluation contributes to no axis, so an operation
@@ -119,10 +127,11 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
             _previousMalformed += diagnostics.PreviousWindowMalformedEnvelopeNeutralized;
         }
 
-        if (diagnostics.HasInsiderOwnerUnresolved)
+        if (diagnostics.HasInsiderOwnerUnresolved || diagnostics.HasInsiderOwnerFromTitle)
         {
-            _insiderOwnerUnresolved.Add(strategy, companyId, asOfUtc);
+            _insiderOwnerResolution.Add(strategy, companyId, asOfUtc);
             _insiderOwnerUnresolvedIncidences += diagnostics.CurrentWindowInsiderOwnerUnresolved;
+            _insiderOwnerFromTitleIncidences += diagnostics.CurrentWindowInsiderOwnerFromTitle;
         }
     }
 
@@ -186,30 +195,35 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
                 AsOfAxis(_neutralization));
         }
 
-        if (HasInsiderOwnerUnresolved)
+        if (HasInsiderOwnerUnresolved || HasInsiderOwnerFromTitle)
         {
             logger.LogInformation(
                 "{Operation}: {InsiderOwnerUnresolvedIncidences} directional insider filing-evaluation "
-                    + "incidence(s) could not be bucketed by {CollapseVersion} because the reporting-owner "
-                    + "identity could not be resolved from the evidence envelope/metadata (no owner keys, or "
-                    + "an envelope that is not a readable Form 4), across {AffectedEvaluations} affected "
-                    + "strategy-company evaluation(s), {DistinctCompanies} distinct company/companies and "
-                    + "{DistinctStrategies} "
+                    + "incidence(s) could not be bucketed by {CollapseVersion} because no reporting-owner "
+                    + "identity could be resolved (an envelope that is not a readable Form 4; no owner "
+                    + "metadata and a title in no known collector shape or naming only the anonymous "
+                    + "placeholder; or a name-only filing whose name appears beside two or more CIKs), and "
+                    + "{InsiderOwnerFromTitleIncidences} WERE bucketed on an owner name recovered from the "
+                    + "evidence title because the evidence predates the owner metadata (structured metadata "
+                    + "wins wherever present), across {AffectedEvaluations} affected strategy-company "
+                    + "evaluation(s), {DistinctCompanies} distinct company/companies and {DistinctStrategies} "
                     + "distinct strateg(ies){AsOfAxis}. These are signal-evaluation INCIDENCES, not globally "
-                    + "distinct filings: every strategy re-evaluates the same signal. Each such filing was "
-                    + "scored as its own signal exactly as before spec 224 (nothing dropped) — it simply "
-                    + "could not be collapsed with other filings by the same insider. Evidence collected "
-                    + "before spec 224 carries the owner only in its title, which the scorer never parses, "
-                    + "so this count is EXPECTED to be non-zero until that cohort ages out of the window and "
-                    + "should then fall to zero; a count that persists past one full window means the Form 4 "
-                    + "collector has stopped writing the owner keys and is a defect.",
+                    + "distinct filings: every strategy re-evaluates the same signal. Each unresolved filing "
+                    + "was scored as its own signal exactly as before spec 224 (nothing dropped) — it simply "
+                    + "could not be collapsed with other filings by the same insider. The title fallback "
+                    + "resolves every shape the Form 4 collector has written, so the unresolved count is "
+                    + "EXPECTED to be near zero; the title-derived count is EXPECTED to be non-zero until "
+                    + "pre-224 evidence ages out of the window and should then fall to zero — one that "
+                    + "persists past one full window means the collector has stopped writing the owner keys "
+                    + "and is a defect.",
                 _operation,
                 _insiderOwnerUnresolvedIncidences,
                 InsiderActivityCollapse.Version,
-                _insiderOwnerUnresolved.Evaluations,
-                _insiderOwnerUnresolved.Companies.Count,
-                _insiderOwnerUnresolved.Strategies.Count,
-                AsOfAxis(_insiderOwnerUnresolved));
+                _insiderOwnerFromTitleIncidences,
+                _insiderOwnerResolution.Evaluations,
+                _insiderOwnerResolution.Companies.Count,
+                _insiderOwnerResolution.Strategies.Count,
+                AsOfAxis(_insiderOwnerResolution));
         }
     }
 

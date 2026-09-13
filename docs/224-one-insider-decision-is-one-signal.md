@@ -74,8 +74,16 @@ shape:
 
 **Insider identity** comes from the Form 4's reporting-owner field. The store currently carries the name only
 inside the evidence `title`; if the collector does not persist a structured owner field, add one — do NOT
-parse the title in the scorer. A filing whose owner cannot be resolved is **never bucketed** (it stays its own
-signal) and is counted on a named axis.
+parse the title in the scorer. **Amended 2026-09-13 (maintainer decision on PR #232 — supplement, don't
+rewrite): the structured field alone left the collapse bucketing NOTHING on the accrued store (all 1,253
+`sec-form4` records predate it) while moving every pin, so the title IS now parsed — never in the scorer, but
+exactly once, at the shared read seam `InsiderActivityMetadata.TryRead`,** which falls back to the collector's
+own fixed title shapes (defined once in `InsiderActivityTitle`, which the collector also writes through) when
+the structured name is absent. Structured metadata always wins; the owner source is recorded on the read and
+title-derived resolutions are counted on their own axis; a legacy (title-name) filing and a post-224 (CIK)
+filing by the same person share one bucket; no evidence file is written or modified. A filing whose owner
+cannot be resolved (an unknown title shape, the anonymous placeholder `An insider`, a name shared by two CIKs)
+is **never bucketed** (it stays its own signal) and is counted on a named axis.
 
 ## 2. What this does NOT change
 
@@ -85,8 +93,10 @@ signal) and is counted on a named axis.
   question (§5), and answering it before the counting is fixed would answer it on contaminated data.
 - **`plan-10b5-1` and `no-discretionary-transactions` classifications are untouched.** They carry no
   direction today and still won't.
-- **No backfill.** Accrued signals stay exactly as written (AD-8). The collapse applies at scoring time to
-  the signals in the window, so history heals forward only.
+- **No backfill.** Accrued signals and evidence stay exactly as written (AD-8). The collapse applies at
+  scoring time to the signals in the window — *(amended 2026-09-13)* accrued ones included, because their
+  owner is recovered from the stored title at read time (§1 amendment), so the effect is immediate for every
+  window rather than healing forward; nothing on disk is rewritten.
 
 ## 3. Fingerprint and identity
 

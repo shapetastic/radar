@@ -15,7 +15,9 @@ namespace Radar.Infrastructure.Sec;
 /// <see cref="PrimaryOwnerCik"/> (spec 224) is the SAME first reporting owner's SEC CIK
 /// (<c>reportingOwner/reportingOwnerId/rptOwnerCik</c>), trimmed, <c>null</c> when absent/blank — persisted
 /// beside the name as additive metadata so the scoring-time same-insider collapse has a structured identity to
-/// bucket on and never parses the title.
+/// bucket on. (Accrued evidence lacking these keys has its owner NAME recovered from the title at read time by
+/// <see cref="InsiderActivityTitle.TryParseOwner"/> — the one title parse, behind
+/// <see cref="InsiderActivityMetadata.TryRead"/>; a title carries no CIK.)
 /// </summary>
 internal sealed record SecForm4Filing(
     string Accession,

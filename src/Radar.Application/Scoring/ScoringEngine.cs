@@ -530,7 +530,8 @@ public sealed class ScoringEngine : IScoringEngine
         // publishers, which an insider filing never is, so the insider collapse has nothing to add to it.
         // Provenance is preserved: the representative is a real signal keeping its evidence link, the
         // collapsed count, aggregate and Strength re-derivation are surfaced on its contribution reason
-        // below, and an owner the metadata cannot resolve is passed through unbucketed and counted.
+        // below, an owner recovered from the evidence title (accrued pre-224 evidence) is counted on its own
+        // axis, and an owner that cannot be resolved at all is passed through unbucketed and counted.
         //
         // NOT applied to the previous/velocity window, by construction rather than by choice: that window
         // is read activity-only with no evidence loaded (AD-6), so the reporting-owner identity the bucket
@@ -836,21 +837,26 @@ public sealed class ScoringEngine : IScoringEngine
         // Information level, when the same-insider collapse actually removed something. Information, not
         // Warning: collapsing repeat filings by one insider into one decision is the intended healthy
         // behaviour. Current window only — the collapse is not applied to the activity-only velocity window
-        // (see the assembly comment). The owner-unresolved count is ALSO returned on the diagnostics record
-        // so the pass boundary can state it once for the whole grid.
+        // (see the assembly comment). The owner-unresolved and title-derived counts are ALSO returned on the
+        // diagnostics record so the pass boundary can state them once for the whole grid.
         if (insiderCollapse.TotalCollapsed > 0)
         {
             _logger.LogInformation(
                 "Collapsed {InsiderCollapsedCount} same-insider filing(s) for company {CompanyId} in the "
                     + "current window into {InsiderBucketCount} representative(s) ({CollapseVersion}); "
-                    + "{OwnerUnresolvedCount} directional insider filing(s) carried no resolvable owner and "
-                    + "were scored as their own signals. Collapsed filings stay on disk for provenance and "
-                    + "are named, with the aggregate value, on the surviving signal's contribution reason.",
+                    + "{OwnerFromTitleCount} directional insider filing(s) were bucketed on an owner name "
+                    + "recovered from the evidence title (evidence predating the owner metadata); "
+                    + "{OwnerUnresolvedCount} directional insider filing(s) carried no resolvable owner "
+                    + "({OwnerNameAmbiguousCount} of them a name shared by two or more CIKs) and were scored "
+                    + "as their own signals. Collapsed filings stay on disk for provenance and are named, "
+                    + "with the aggregate value, on the surviving signal's contribution reason.",
                 insiderCollapse.TotalCollapsed,
                 companyId,
                 insiderCollapse.BucketCount,
                 InsiderActivityCollapse.Version,
-                insiderCollapse.OwnerUnresolvedCount);
+                insiderCollapse.OwnerFromTitleCount,
+                insiderCollapse.OwnerUnresolvedCount,
+                insiderCollapse.OwnerNameAmbiguousCount);
         }
 
         // Spec 194 §1.4's neutralization counts and spec 145's dropped-signal counts, RETURNED rather than
@@ -874,7 +880,9 @@ public sealed class ScoringEngine : IScoringEngine
             PreviousWindowLegacyInheritanceNeutralized: previousLegacyNews.LegacyInheritanceCount,
             PreviousWindowMalformedEnvelopeNeutralized: previousLegacyNews.MalformedEnvelopeCount,
             // Spec 224: insider filings the collapse could not bucket (its own axis; current window only).
-            CurrentWindowInsiderOwnerUnresolved: insiderCollapse.OwnerUnresolvedCount);
+            CurrentWindowInsiderOwnerUnresolved: insiderCollapse.OwnerUnresolvedCount,
+            // Spec 224 amendment: insider filings bucketed on a title-derived owner (its own axis).
+            CurrentWindowInsiderOwnerFromTitle: insiderCollapse.OwnerFromTitleCount);
 
         // ONE bounded Debug line per AFFECTED strategy-company evaluation, so the per-cell detail the
         // aggregate necessarily pools is still recoverable by raising this category to Debug. Debug, not
@@ -891,8 +899,8 @@ public sealed class ScoringEngine : IScoringEngine
                     + "judgment-signal envelope(s) in the current window (and {PreviousLegacyCount} / "
                     + "{PreviousMalformedCount} in the previous/velocity window); {InsiderOwnerUnresolved} "
                     + "directional insider filing(s) passed through unbucketed for want of a resolvable "
-                    + "owner. Reported to the operator as one aggregated line per category at the pass "
-                    + "boundary.",
+                    + "owner and {InsiderOwnerFromTitle} bucketed on a title-derived owner. Reported to the "
+                    + "operator as one aggregated line per category at the pass boundary.",
                 companyId,
                 _strategyName ?? "(none)",
                 windowEndUtc,
@@ -902,7 +910,8 @@ public sealed class ScoringEngine : IScoringEngine
                 diagnostics.CurrentWindowMalformedEnvelopeNeutralized,
                 diagnostics.PreviousWindowLegacyInheritanceNeutralized,
                 diagnostics.PreviousWindowMalformedEnvelopeNeutralized,
-                diagnostics.CurrentWindowInsiderOwnerUnresolved);
+                diagnostics.CurrentWindowInsiderOwnerUnresolved,
+                diagnostics.CurrentWindowInsiderOwnerFromTitle);
         }
 
         return new CompanyScoreResult(snapshot, links, diagnostics);

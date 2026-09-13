@@ -3833,24 +3833,39 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
   - **What moved.** (§1) The Form 4 collector now persists the primary reporting owner as ADDITIVE metadata
     (`InsiderActivityMetadata.OwnerNameKey` / `OwnerCikKey`, written only when non-blank; the reader reads
     `rptOwnerCik` for the SAME first owner whose name it already used) — Title/RawText are byte-identical, so
-    evidence identity (spec 145) is unmoved; `InsiderActivityRead` gained `OwnerName`, `OwnerCik` and
-    `HasCluster`. (§2) `InsiderActivityCollapse` (`Radar.Application.Scoring`, options
+    evidence identity (spec 145) is unmoved; `InsiderActivityRead` gained `OwnerName`, `OwnerCik`,
+    `HasCluster` and (2026-09-13 amendment, below) `OwnerSource`. **Amended 2026-09-13 on PR #232 before
+    merge (maintainer: supplement, don't rewrite):** the structured keys alone would have bucketed NOTHING on
+    the accrued store — all 1,253 `sec-form4` records predate them — so `InsiderActivityMetadata.TryRead`
+    now falls back, when `OwnerNameKey` is absent or blank, to the owner in the evidence title, which Radar's
+    own collector wrote in three fixed shapes. The shapes and the `An insider` placeholder moved into ONE
+    Application home, `InsiderActivityTitle` (`Compose` for the collector, `TryParseOwner` for the read), with
+    the collector's Title/RawText pinned byte-identical; the placeholder and any unknown shape resolve to NOT
+    RECORDED; `OwnerSource` (`Metadata`/`Title`/`NotRecorded`) records where the name came from. Read-time
+    only: no evidence file is written or modified. (§2) `InsiderActivityCollapse` (`Radar.Application.Scoring`, options
     `InsiderCollapseOptions` bound from `Radar:Scoring:InsiderCollapse`, default window owned by
     `InsiderCollapseOptions.EventWindowDays`) buckets Positive/Negative `InsiderBuying` signals by
-    `(CompanyId, identity, Direction)` — identity is the CIK when captured, else the normalised name, NEVER
-    the title — greedily against the EARLIEST member through the SHARED `SameWindowBucketing` primitive
+    `(CompanyId, identity, Direction)` — identity is the CIK when captured, else the normalised name (from
+    metadata or, via `TryRead` only, the title — the collapse never touches a title), and a name-only filing
+    whose name the same company's input shows beside EXACTLY ONE CIK takes that CIK, so a legacy and a
+    post-224 filing by one person share a bucket (a name beside two or more CIKs is ambiguous and unresolved;
+    names match on exact normalised equality only) — greedily against the EARLIEST member through the SHARED `SameWindowBucketing` primitive
     (extracted from the media collapse, which now routes through it with its pinned tests unmodified);
     the representative is the earliest member, kept as the SAME persisted signal, its scoring-time Strength
     re-derived from the SUMMED `insiderNetValue` through `InsiderMaterialityWeights.StrengthForAmount`
     (extracted from the extractor's private copy; `BuyTiers`/`SellTiers` + the cluster boost if ANY member
     was flagged, capped at 10); a bucket of one returns the same instance; no member with a value ⇒ Strength
     kept, still collapsed and counted. Neutral insider signals and every other type pass through untouched.
-    A filing whose owner cannot be resolved (every pre-224 evidence item) is NEVER bucketed and is counted on
-    its own axis — `InsiderCollapseResult.OwnerUnresolvedCount`, `ScoreAssemblyDiagnostics.
-    CurrentWindowInsiderOwnerUnresolved`, and ONE Information line per pass from
-    `ScoreAssemblyDiagnosticsAggregator` (Information, not Warning: the accrued cohort is EXPECTED to be
-    unresolved for one full window and must then fall to zero; a count that persists is a collector defect
-    and the line says so). (§3) `ScoringEngine` applies it immediately AFTER the media collapse (disjoint
+    A filing whose owner cannot be resolved (as amended 2026-09-13: not a readable Form 4, no owner key AND a
+    title in no known shape or naming only the placeholder, or an ambiguous name — originally "every pre-224
+    evidence item") is NEVER bucketed and is counted on its own axis — `InsiderCollapseResult.
+    OwnerUnresolvedCount` (ambiguity sub-count `OwnerNameAmbiguousCount`), `ScoreAssemblyDiagnostics.
+    CurrentWindowInsiderOwnerUnresolved`; bucketed title-derived identities are counted separately on
+    `OwnerFromTitleCount` / `CurrentWindowInsiderOwnerFromTitle`; and ONE Information line per pass from
+    `ScoreAssemblyDiagnosticsAggregator` states both axes separately (Information, not Warning: the
+    title-derived count is EXPECTED non-zero until pre-224 evidence ages out of the window and must then fall
+    to zero — one that persists is a collector defect — while the unresolved count is expected near zero;
+    the line says so). (§3) `ScoringEngine` applies it immediately AFTER the media collapse (disjoint
     signal types — order is a CHECKED irrelevance), NOT on the activity-only velocity window (no evidence is
     loaded there, AD-6, so no owner is resolvable by construction), appends
     `(collapsed N same-insider filing(s): N+1 filings by one insider totalling ~$X; strength a → b)` to the
@@ -3872,18 +3887,26 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     between the spec-220/221 merges and this one, it collapses with their outstanding step into ONE.
   - **Comparability.** Pre/post 224 insider mass is NOT comparable for any company with repeat same-owner
     filings in its window: before, `Mneg` counted one decision N times; after, once at the aggregate tier.
-    The effect heals FORWARD only — the first post-merge window still scores every accrued (pre-224) filing
-    unbucketed, so the boundary is gradual over one scoring window, not a step.
-  - **OWED: the §4 live distribution.** `InsiderCollapseCounterfactualTests` (`Radar.IntegrationTests`,
-    env-gated on `RADAR_INSIDER_COLLAPSE_DATA_ROOT`, read-only, no network, writes only to the temp
-    directory) emits filings collapsed / buckets formed / bucket-size distribution / owner-unresolved per
-    arm, before→after insider `Mneg`, Trajectory and Opportunity for ATNI, MRCY, FLXS, IDT, DGII, OOMA, and
-    whole-universe medians + the count of Opportunity moves > 2 with the max mover named. ⚠ It is a
-    PROJECTION: accrued evidence predates the owner field, so its AFTER arm adds `insiderOwnerName` IN
-    MEMORY from the title's fixed collector phrase — a parse that lives ONLY in that harness (the scorer
-    never parses a title) and yields a NAME-only identity (can under-bucket vs the live CIK, never
-    over-bucket). The MEASURED numbers are owed from the first post-merge run once the owner field fills a
-    full window. Deferred with its entry condition, per spec 224 §5: whether Strength 8 is right for a
+    The boundary is a STEP at the first post-merge scoring pass (amended 2026-09-13 — it previously read
+    "heals FORWARD only … gradual over one scoring window", which the title fallback made false): accrued
+    pre-224 filings resolve their owner from the title at read time, so the whole window collapses at once.
+  - **The §4 live distribution — MEASURED 2026-09-13 as a read-only re-score of the live store through the
+    production path** (amended in place: this bullet was "OWED … ⚠ It is a PROJECTION", because before the
+    title fallback the harness had to add `insiderOwnerName` in memory from a harness-only title parse).
+    `InsiderCollapseCounterfactualTests` (`Radar.IntegrationTests`, env-gated on
+    `RADAR_INSIDER_COLLAPSE_DATA_ROOT`, read-only, no network, writes only to the temp directory) now reads
+    the raw store with NO decorator in its AFTER arm — owners resolve through `TryRead` itself — while its
+    BEFORE arm withholds the owner (keys stripped, title replaced, in memory). It emits filings collapsed /
+    buckets formed / bucket-size distribution / owner-unresolved / title-vs-metadata owner sources per arm,
+    before→after insider `Mneg`, Trajectory and Opportunity for ATNI, MRCY, FLXS, IDT, DGII, OOMA, and
+    whole-universe medians + the count of Opportunity moves > 2 with the max mover named. At as-of
+    2026-09-12T21:48:24Z (60-day window, `default`, 102 companies): 97 directional insider filings → 80
+    scored, 17 collapsed; buckets 66×1 / 12×2 / 1×3 / 1×4+; owner sources 97 `Title`, 0 `Metadata`, 0
+    `NotRecorded`, 0 unresolved, 0 ambiguous; ATNI Mneg 3.007→1.464, MRCY 20.506→8.162, FLXS 8.196→6.454,
+    IDT 0.944→0.944, DGII and OOMA 0→0 (no directional insider filing in the window); median Trajectory
+    58→58, median Opportunity 20→20.5; 2 companies moved Opportunity by more than 2 points, max mover MRCY
+    7→11. It is a re-score at one instant held in memory, NOT a persisted run's snapshots; title-derived
+    identities are NAME-only (a title carries no CIK). Deferred with its entry condition, per spec 224 §5: whether Strength 8 is right for a
     discretionary sale and whether `plan-10b5-1` should carry a direction — re-run
     `scripts/audit-insider-forward-returns.ps1` after this collapse lands and after bootstrap intervals exist.
 

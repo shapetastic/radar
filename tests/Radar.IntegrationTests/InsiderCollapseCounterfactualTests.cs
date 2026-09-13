@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -31,26 +30,24 @@ namespace Radar.IntegrationTests;
 /// negative mass, Trajectory and Opportunity over the live universe, at ONE as-of instant, through the REAL
 /// <see cref="ScoringEngine"/> and the REAL <see cref="InsiderActivityCollapse"/>, persisting nothing.
 /// <para>
-/// ⚠ <b>THIS IS A PROJECTION, NOT THE LIVE MEASUREMENT, AND THE DIFFERENCE IS STATED IN THE OUTPUT.</b>
-/// Every Form 4 evidence item collected before spec 224 carries the reporting owner ONLY inside its title;
-/// the collector now persists a structured <c>insiderOwnerName</c>/<c>insiderOwnerCik</c>, but accrued
-/// evidence heals forward only (AD-8) and the scorer NEVER parses a title (spec 224 §1). So over the accrued
-/// store the production collapse resolves no owner at all. To measure what the collapse WILL do once the
-/// field exists, the AFTER arm here wraps the evidence repository with a decorator that, IN MEMORY ONLY,
-/// adds <c>insiderOwnerName</c> parsed from the stored title's fixed collector phrase
-/// (<c>Form 4 — insider open-market purchase: {owner} bought …</c> / <c>… sale: {owner} sold …</c>). That
-/// title parse lives ONLY in this harness. It is a NAME-based identity (no CIK is recoverable from a
-/// title), so where the live field will carry a CIK the projection can only under-bucket (two spellings of
-/// one person stay two buckets), never over-bucket. The BEFORE arm wraps the same repository with a
-/// decorator that strips both owner keys, so it is exactly "no owner resolvable" — every directional
-/// filing passes through unbucketed — even against a store that already carries post-224 evidence.
+/// <b>The AFTER arm is the PRODUCTION path over the live store, unmodified.</b> Every Form 4 evidence item
+/// collected before spec 224 carries the reporting owner ONLY inside its title; the spec-224 amendment made
+/// <see cref="InsiderActivityMetadata.TryRead"/> recover that owner from the collector's fixed title shape
+/// (<see cref="InsiderActivityTitle"/>) at read time, so the production collapse now resolves accrued owners
+/// itself. The AFTER arm therefore reads the raw store with NO decorator — the numbers are what the shipped
+/// <see cref="InsiderActivityCollapse"/> does to the store as it is, including the title-vs-metadata split of
+/// owner sources. Title-derived identities are NAME-only (a title carries no CIK), so two spellings of one
+/// person with no CIK in the window stay two buckets. The BEFORE arm wraps the same repository with a
+/// decorator that, IN MEMORY ONLY, strips both owner keys AND replaces each Form 4 title with a marker in no
+/// collector shape, so no owner resolves — every directional filing passes through unbucketed, which is
+/// exactly how the scorer counted insider filings before spec 224. The engine reads no evidence title for
+/// scoring, so the marker changes nothing else.
 /// </para>
 /// <para>
-/// <b>The measured live numbers are OWED from the first post-merge run</b>, once the collector has written
-/// the owner field into a full scoring window; until then the figures this harness emits are the
-/// projection described above. Nothing is written under the data root: the durable stores are hydrated
-/// READ-ONLY (spec 142), scores go to an in-memory repository, and the markdown is written to the system
-/// temp directory only.
+/// <b>What this is and is not.</b> It is a read-only RE-SCORE of the live store at one as-of instant through
+/// the real engine — measured over the live store, not a persisted run's snapshots. Nothing is written under
+/// the data root: the durable stores are hydrated READ-ONLY (spec 142), scores go to an in-memory
+/// repository, and the markdown is written to the system temp directory only.
 /// </para>
 /// <para>
 /// <b>Mneg here is the INSIDER share of the trajectory's negative mass</b> — Σ confidence · recency ·
@@ -94,15 +91,13 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
         Path.Combine(Path.GetTempPath(), "radar-spec-224-insider-collapse.md");
 
     /// <summary>
-    /// The collector's fixed directional phrase (SecForm4Collector.MapToEvidence), matched HERE ONLY. The
-    /// owner is everything between the colon after purchase/sale and the " bought "/" sold " that follows.
+    /// The BEFORE arm's in-memory title: in no <see cref="InsiderActivityTitle"/> shape, so the read-time owner
+    /// fallback recovers nothing (asserted at use, so a future shape can never make it resolve silently).
     /// </summary>
-    private static readonly Regex TitleOwner = new(
-        @"^Form 4 — insider open-market (?:purchase|sale): (?<owner>.+?) (?:bought|sold) ",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const string BeforeArmTitle = "[spec 224 counterfactual BEFORE arm: owner withheld]";
 
     [InsiderCollapseCounterfactualFact]
-    public async Task PairedCounterfactual_UnresolvedVersusTitleProjectedOwners_OverTheLiveUniverse()
+    public async Task PairedCounterfactual_NoOwnerVersusProductionOwnerResolution_OverTheLiveUniverse()
     {
         var root = DataRoot()!;
         var ct = CancellationToken.None;
@@ -125,11 +120,12 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
 
             var asOf = await ResolveAsOfAsync(root, signals, companies, ct);
 
-            // The two arms differ ONLY in the evidence repository decorator (owner keys stripped vs owner
-            // name projected from the title); the instant, universe, strategy, weights, window and every
-            // other signal are identical. Both decorators are pure, read-only maps over the same store.
-            var beforeEvidence = new OwnerKeyStrippingEvidenceRepository(evidence);
-            var afterEvidence = new TitleProjectedOwnerEvidenceRepository(evidence);
+            // The two arms differ ONLY in the evidence repository: the BEFORE arm withholds the owner (keys
+            // stripped, title replaced, in memory); the AFTER arm is the raw store through the production
+            // read path. The instant, universe, strategy, weights, window and every other signal are
+            // identical. The decorator is a pure, read-only map over the same store.
+            var beforeEvidence = new OwnerWithholdingEvidenceRepository(evidence);
+            IEvidenceRepository afterEvidence = new ReadOnlyEvidenceRepository(evidence);
             var collapse = new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights());
 
             var projection = await InsiderProjection.BuildAsync(
@@ -138,7 +134,7 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
             var before = await ScoreAllAsync(provider, companies, signals, beforeEvidence, windowReads, asOf.Instant, ct);
             var after = await ScoreAllAsync(provider, companies, signals, afterEvidence, windowReads, asOf.Instant, ct);
 
-            report.AppendLine("## Spec 224 §4 — paired insider-collapse counterfactual (read-only PROJECTION)");
+            report.AppendLine("## Spec 224 §4 — paired insider-collapse counterfactual (read-only re-score of the live store)");
             report.AppendLine();
             report.AppendLine(
                 $"As-of `{asOf.Instant:O}` ({asOf.Source}) · scoring window {ScoringWindow.TotalDays:0} days "
@@ -172,20 +168,19 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
         report.AppendLine("> **⚠ Read these before reading the numbers.**");
         report.AppendLine("> ");
         report.AppendLine(
-            "> 1. **This is a PROJECTION, not the live measurement.** Accrued Form 4 evidence predates the "
-                + "owner field spec 224 added to the collector; the AFTER arm adds `insiderOwnerName` IN MEMORY "
-                + "ONLY, parsed from the stored title's fixed collector phrase. That title parse lives ONLY in "
-                + "this harness — the scorer never parses a title (spec 224 §1).");
+            "> 1. **MEASURED over the live store, through the production path — but a re-score, not a persisted "
+                + "run.** The AFTER arm reads the raw store with no decorator: owners resolve through "
+                + "`InsiderActivityMetadata.TryRead` (structured metadata, else the collector's title shape). "
+                + "The scores are the real engine's at one as-of instant, held in memory; no live run's snapshot "
+                + "is quoted.");
         report.AppendLine(
-            "> 2. **The projected identity is NAME-only.** No CIK is recoverable from a title, so two spellings "
-                + "of one person stay two buckets: the projection can under-bucket relative to the live field, "
-                + "never over-bucket.");
+            "> 2. **Title-derived identities are NAME-only.** A title carries no CIK, so two spellings of one "
+                + "person with no CIK-bearing filing in the window stay two buckets (under-bucketing, never "
+                + "over-bucketing on spelling).");
         report.AppendLine(
-            "> 3. **The BEFORE arm strips both owner keys**, so it is exactly \"no owner resolvable\" even if the "
-                + "store already holds post-224 evidence — every directional filing passes through unbucketed.");
-        report.AppendLine(
-            "> 4. **The measured live numbers are OWED from the first post-merge run** once the collector has "
-                + "written the owner field into a full scoring window.");
+            "> 3. **The BEFORE arm withholds the owner** (keys stripped and each Form 4 title replaced, in memory), "
+                + "so no owner resolves and every directional filing passes through unbucketed — how the scorer "
+                + "counted insider filings before spec 224.");
         report.AppendLine();
     }
 
@@ -193,7 +188,7 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
     {
         report.AppendLine("### 1. What the collapse does to the directional insider filings in the window");
         report.AppendLine();
-        report.AppendLine("| quantity | BEFORE (no owner) | AFTER (title-projected owner) |");
+        report.AppendLine("| quantity | BEFORE (no owner) | AFTER (production owner resolution) |");
         report.AppendLine("| --- | ---: | ---: |");
         report.AppendLine($"| directional insider signals scored | {p.DirectionalBefore} | {p.DirectionalAfter} |");
         report.AppendLine($"| filings collapsed (removed from the scored set) | {p.CollapsedBefore} | {p.CollapsedAfter} |");
@@ -203,6 +198,8 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
         report.AppendLine($"| buckets holding 3 filings | {p.Size3Before} | {p.Size3After} |");
         report.AppendLine($"| buckets holding 4+ filings | {p.Size4PlusBefore} | {p.Size4PlusAfter} |");
         report.AppendLine($"| owner unresolved (passed through unbucketed) | {p.UnresolvedBefore} | {p.UnresolvedAfter} |");
+        report.AppendLine($"| of which: name shared by two or more CIKs (ambiguous) | {p.AmbiguousBefore} | {p.AmbiguousAfter} |");
+        report.AppendLine($"| bucketed on a title-derived owner (`OwnerFromTitleCount`) | {p.FromTitleBefore} | {p.FromTitleAfter} |");
         report.AppendLine();
         report.AppendLine("Counted axes over the same reads (identical in both arms):");
         report.AppendLine();
@@ -213,8 +210,11 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
         report.AppendLine($"| approved in-window signals of any type | {p.WindowedSignals} |");
         report.AppendLine($"| signals dropped — evidence id unresolvable (the engine's own drop rule) | {p.EvidenceUnresolvable} |");
         report.AppendLine($"| insider signals that are Neutral (plan / no-discretionary / mixed; never candidates) | {p.NeutralInsider} |");
-        report.AppendLine($"| directional insider signals whose evidence already carried an owner key (post-224 evidence) | {p.StoredOwnerKeys} |");
-        report.AppendLine($"| directional insider signals whose title the harness could NOT parse an owner from | {p.TitleParseFailed} |");
+        report.AppendLine($"| directional insider signals — owner name source `Metadata` (post-224 evidence) | {p.SourceMetadata} |");
+        report.AppendLine($"| directional insider signals — owner name source `Title` (accrued pre-224 evidence) | {p.SourceTitle} |");
+        report.AppendLine($"| directional insider signals — owner name source `NotRecorded` | {p.SourceNotRecorded} |");
+        report.AppendLine($"| directional insider signals — evidence carries an owner CIK | {p.WithCik} |");
+        report.AppendLine($"| directional insider signals — not a readable Form 4 envelope | {p.NotForm4} |");
         report.AppendLine();
         if (p.CollapsedAfter == 0)
         {
@@ -417,20 +417,11 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The title-owner parse, HARNESS-ONLY (see the class summary). Returns null when the title is not the
-    /// collector's directional phrase — counted, never guessed.
+    /// The BEFORE arm's in-memory map: a readable Form 4 envelope loses both owner keys and its title is
+    /// replaced with <see cref="BeforeArmTitle"/>, so <see cref="InsiderActivityMetadata.TryRead"/> resolves no
+    /// owner. Any item that is not a readable Form 4 envelope is returned as-is.
     /// </summary>
-    internal static string? OwnerFromTitle(string title)
-    {
-        var m = TitleOwner.Match(title);
-        return m.Success ? m.Groups["owner"].Value.Trim() : null;
-    }
-
-    /// <summary>
-    /// Rewrites ONLY the <c>metadata</c> object of a Form 4 evidence item's envelope, in memory. Any item
-    /// that is not a readable Form 4 envelope is returned as-is.
-    /// </summary>
-    private static EvidenceItem WithMetadata(EvidenceItem item, Action<JsonObject> mutate)
+    private static EvidenceItem WithholdOwner(EvidenceItem item)
     {
         if (InsiderActivityMetadata.TryRead(item) is null || string.IsNullOrWhiteSpace(item.MetadataJson))
         {
@@ -442,67 +433,54 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
             return item;
         }
 
-        if (root["metadata"] is not JsonObject metadata)
+        if (root["metadata"] is JsonObject metadata)
         {
-            metadata = new JsonObject();
-            root["metadata"] = metadata;
+            metadata.Remove(InsiderActivityMetadata.OwnerNameKey);
+            metadata.Remove(InsiderActivityMetadata.OwnerCikKey);
         }
 
-        mutate(metadata);
-        return item with { MetadataJson = root.ToJsonString() };
+        var withheld = item with { MetadataJson = root.ToJsonString(), Title = BeforeArmTitle };
+        var read = InsiderActivityMetadata.TryRead(withheld);
+        if (read is null || read.OwnerName is not null || read.OwnerCik is not null)
+        {
+            throw new InvalidOperationException(
+                "The spec-224 §4 BEFORE arm must withhold every owner, but the read still resolved one.");
+        }
+
+        return withheld;
     }
 
-    private static EvidenceItem StripOwnerKeys(EvidenceItem item) =>
-        WithMetadata(item, m =>
-        {
-            m.Remove(InsiderActivityMetadata.OwnerNameKey);
-            m.Remove(InsiderActivityMetadata.OwnerCikKey);
-        });
-
-    private static EvidenceItem ProjectOwnerFromTitle(EvidenceItem item) =>
-        WithMetadata(item, m =>
-        {
-            if (m.ContainsKey(InsiderActivityMetadata.OwnerNameKey) || m.ContainsKey(InsiderActivityMetadata.OwnerCikKey))
-            {
-                return; // a stored (post-224) identity is kept as-is
-            }
-
-            if (OwnerFromTitle(item.Title) is { } owner)
-            {
-                m[InsiderActivityMetadata.OwnerNameKey] = owner;
-            }
-        });
-
-    /// <summary>The BEFORE arm: no owner key on any Form 4 evidence ⇒ every directional filing unresolved.</summary>
-    private sealed class OwnerKeyStrippingEvidenceRepository(IEvidenceRepository inner) : IEvidenceRepository
+    /// <summary>The BEFORE arm: no owner resolvable on any Form 4 evidence ⇒ every directional filing unresolved.</summary>
+    private sealed class OwnerWithholdingEvidenceRepository(IEvidenceRepository inner) : IEvidenceRepository
     {
         public Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct) =>
             throw new InvalidOperationException("The spec-224 §4 counterfactual is read-only and must never write evidence.");
 
         public async Task<EvidenceItem?> GetByIdAsync(Guid id, CancellationToken ct) =>
-            await inner.GetByIdAsync(id, ct) is { } item ? StripOwnerKeys(item) : null;
+            await inner.GetByIdAsync(id, ct) is { } item ? WithholdOwner(item) : null;
 
         public async Task<EvidenceItem?> GetByContentHashAsync(string contentHash, CancellationToken ct) =>
-            await inner.GetByContentHashAsync(contentHash, ct) is { } item ? StripOwnerKeys(item) : null;
+            await inner.GetByContentHashAsync(contentHash, ct) is { } item ? WithholdOwner(item) : null;
 
         public async Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct) =>
-            [.. (await inner.GetAllAsync(ct)).Select(StripOwnerKeys)];
+            [.. (await inner.GetAllAsync(ct)).Select(WithholdOwner)];
     }
 
-    /// <summary>The AFTER arm: the owner NAME projected from the title where no stored key exists (harness-only).</summary>
-    private sealed class TitleProjectedOwnerEvidenceRepository(IEvidenceRepository inner) : IEvidenceRepository
+    /// <summary>
+    /// The AFTER arm: the raw store, unmodified — the production read path. A pass-through whose only job is to
+    /// make a write impossible from this harness.
+    /// </summary>
+    private sealed class ReadOnlyEvidenceRepository(IEvidenceRepository inner) : IEvidenceRepository
     {
         public Task<bool> AddIfNewAsync(EvidenceItem item, CancellationToken ct) =>
             throw new InvalidOperationException("The spec-224 §4 counterfactual is read-only and must never write evidence.");
 
-        public async Task<EvidenceItem?> GetByIdAsync(Guid id, CancellationToken ct) =>
-            await inner.GetByIdAsync(id, ct) is { } item ? ProjectOwnerFromTitle(item) : null;
+        public Task<EvidenceItem?> GetByIdAsync(Guid id, CancellationToken ct) => inner.GetByIdAsync(id, ct);
 
-        public async Task<EvidenceItem?> GetByContentHashAsync(string contentHash, CancellationToken ct) =>
-            await inner.GetByContentHashAsync(contentHash, ct) is { } item ? ProjectOwnerFromTitle(item) : null;
+        public Task<EvidenceItem?> GetByContentHashAsync(string contentHash, CancellationToken ct) =>
+            inner.GetByContentHashAsync(contentHash, ct);
 
-        public async Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct) =>
-            [.. (await inner.GetAllAsync(ct)).Select(ProjectOwnerFromTitle)];
+        public Task<IReadOnlyList<EvidenceItem>> GetAllAsync(CancellationToken ct) => inner.GetAllAsync(ct);
     }
 
     private sealed record CompanyRow(
@@ -522,8 +500,11 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
         int WindowedSignals,
         int EvidenceUnresolvable,
         int NeutralInsider,
-        int StoredOwnerKeys,
-        int TitleParseFailed,
+        int SourceMetadata,
+        int SourceTitle,
+        int SourceNotRecorded,
+        int WithCik,
+        int NotForm4,
         int DirectionalBefore,
         int DirectionalAfter,
         int CollapsedBefore,
@@ -540,6 +521,10 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
         int Size4PlusAfter,
         int UnresolvedBefore,
         int UnresolvedAfter,
+        int AmbiguousBefore,
+        int AmbiguousAfter,
+        int FromTitleBefore,
+        int FromTitleAfter,
         IReadOnlyDictionary<Guid, CompanyRow> PerCompany)
     {
         public static async Task<InsiderProjection> BuildAsync(
@@ -559,8 +544,15 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
             var windowed = 0;
             var evidenceUnresolvable = 0;
             var neutralInsider = 0;
-            var storedOwnerKeys = 0;
-            var titleParseFailed = 0;
+            var sourceMetadata = 0;
+            var sourceTitle = 0;
+            var sourceNotRecorded = 0;
+            var withCik = 0;
+            var notForm4 = 0;
+            var ambiguousBefore = 0;
+            var ambiguousAfter = 0;
+            var fromTitleBefore = 0;
+            var fromTitleAfter = 0;
             var directionalBefore = 0;
             var directionalAfter = 0;
             var unresolvedBefore = 0;
@@ -599,17 +591,32 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
                         continue;
                     }
 
-                    // Counted against the RAW store: a stored (post-224) owner key is what the live collapse
-                    // will use; a title the harness cannot parse stays unresolved in the AFTER arm too.
+                    // Counted against the RAW store through the production read: where each directional
+                    // filing's owner name comes from (structured metadata vs the title fallback).
                     var rawRead = InsiderActivityMetadata.TryRead(raw);
-                    var hasStoredKey = rawRead is { OwnerName: not null } or { OwnerCik: not null };
-                    if (hasStoredKey)
+                    if (rawRead is null)
                     {
-                        storedOwnerKeys++;
+                        notForm4++;
                     }
-                    else if (OwnerFromTitle(raw.Title) is null)
+                    else
                     {
-                        titleParseFailed++;
+                        switch (rawRead.OwnerSource)
+                        {
+                            case InsiderOwnerSource.Metadata:
+                                sourceMetadata++;
+                                break;
+                            case InsiderOwnerSource.Title:
+                                sourceTitle++;
+                                break;
+                            default:
+                                sourceNotRecorded++;
+                                break;
+                        }
+
+                        if (rawRead.OwnerCik is not null)
+                        {
+                            withCik++;
+                        }
                     }
 
                     beforePairs.Add(new ScoringSignal(signal, b));
@@ -628,6 +635,10 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
                 directionalAfter += afterResult.Signals.Count;
                 unresolvedBefore += beforeResult.OwnerUnresolvedCount;
                 unresolvedAfter += afterResult.OwnerUnresolvedCount;
+                ambiguousBefore += beforeResult.OwnerNameAmbiguousCount;
+                ambiguousAfter += afterResult.OwnerNameAmbiguousCount;
+                fromTitleBefore += beforeResult.OwnerFromTitleCount;
+                fromTitleAfter += afterResult.OwnerFromTitleCount;
                 Tally(beforePairs.Count, beforeResult, sizesBefore);
                 Tally(afterPairs.Count, afterResult, sizesAfter);
 
@@ -646,8 +657,11 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
                 WindowedSignals: windowed,
                 EvidenceUnresolvable: evidenceUnresolvable,
                 NeutralInsider: neutralInsider,
-                StoredOwnerKeys: storedOwnerKeys,
-                TitleParseFailed: titleParseFailed,
+                SourceMetadata: sourceMetadata,
+                SourceTitle: sourceTitle,
+                SourceNotRecorded: sourceNotRecorded,
+                WithCik: withCik,
+                NotForm4: notForm4,
                 DirectionalBefore: directionalBefore,
                 DirectionalAfter: directionalAfter,
                 CollapsedBefore: sizesBefore.Sum(s => s - 1),
@@ -664,6 +678,10 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
                 Size4PlusAfter: sizesAfter.Count(s => s >= 4),
                 UnresolvedBefore: unresolvedBefore,
                 UnresolvedAfter: unresolvedAfter,
+                AmbiguousBefore: ambiguousBefore,
+                AmbiguousAfter: ambiguousAfter,
+                FromTitleBefore: fromTitleBefore,
+                FromTitleAfter: fromTitleAfter,
                 PerCompany: perCompany);
         }
 

@@ -375,9 +375,10 @@ authoritative record:
   `NoBusinessSignal` verdict: a pre-221 breadth `Unknown` also absorbed "nothing business to read" and a
   post-221 one does not, so `Unknown` counts and rates before and after it are NOT comparable), and
   **224** (same-insider Form 4 collapse: a post-224 negative insider mass counts one DECISION where a
-  pre-224 one counted one FILING — a GRADUAL boundary, not a step, because the collapse can only bucket
-  filings whose evidence carries the owner field the collector began writing at 224, so it phases in over
-  one scoring window after the merge; `docs/architecture-history.md` names it). The
+  pre-224 one counted one FILING — a STEP boundary at the first post-merge scoring pass, because accrued
+  Form 4 evidence resolves its owner from the collector's title shape at read time
+  (`InsiderActivityMetadata.TryRead`), so the collapse applies to the whole window at once;
+  `docs/architecture-history.md` names it). The
   spec-191 inherited-direction cohort is known DEFECTIVE and is not a control.
 - **News is a two-stage read** (specs 177–221): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact
