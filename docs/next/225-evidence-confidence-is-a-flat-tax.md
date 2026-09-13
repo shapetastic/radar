@@ -58,8 +58,11 @@ Both shipped green and were found only by looking at the live distribution.
 
 ## Assignment
 
-Worktree: any. Dependencies: main at `37af962` or later. **Independent of spec 224** — that one changes the
-insider input set, this one measures a multiplier; they touch different code and either order works.
+Worktree: any. Dependencies: main at `486aacc` or later. (⚠ AMENDED 2026-09-13: this line originally read
+`37af962`. Spec 224 has since merged (`06eb740`) and its operator step is taken, so this slice now measures a
+post-224 store. That barely matters here: 224 changed the insider input set, not this multiplier, and moved
+median Opportunity only 20 → 20.5. The Overview's figures were measured on 2026-09-12, before 224, so re-derive
+them rather than quoting them as current.)
 
 Use `run-next.ps1 -Spec 225`.
 
@@ -94,6 +97,30 @@ Written each `full` run to `data/efficacy/evidence-confidence.{csv,md,json}`:
 - Every company excluded for missing components is counted on its own named axis; a company with no signals
   reports `(not recorded)`, never 0.
 
+## 2a. How to produce the live numbers from a worktree (required — do not report them as "owed")
+
+A worktree has no `data/` store and no API keys, and a real `full` run would stamp the baseline store from an
+unmerged branch. Specs 218 and 224 both first reported their live figures as owed or projected for exactly this
+reason. That is not acceptable here, because this slice's only deliverable IS the measurement.
+
+Produce the §2 numbers the way spec 224's amendment did, with an **env-gated, read-only integration harness**
+modelled on `tests/Radar.IntegrationTests/InsiderCollapseCounterfactualTests.cs`, run against the MAIN
+repository's live store at `C:\Users\scm9d\source\repos\radar\data`:
+
+- Compute through the **production** code path (`ScoreSignalMath.EvidenceConfidenceScore` and the real
+  scoring engine over real accrued signals), never a re-implementation of the formula inside the harness. A
+  second copy of the formula would measure itself.
+- **Strictly read-only.** Any evidence or score write must throw; scores are held in memory; the report goes to
+  the temp directory only. Confirm afterwards that no file under that `data/` directory was modified during the
+  run, and say so in the PR body.
+- Use the latest `windowEndUtc` present in the store and the `default` strategy, and name both in the report.
+- Skip cleanly when the gating environment variable is absent, so the normal test gate stays green without a
+  store.
+
+Put the harness's figures in the PR body, labelled as a read-only re-score at one instant, not a persisted run.
+Only if the harness genuinely cannot run against that path read-only may you report a figure as owed, and you
+must then say exactly why. Never invent a number.
+
 ## 3. The question it must answer explicitly
 
 The markdown states, in one sentence, which of these the data supports:
@@ -124,5 +151,6 @@ collectors is not better-evidenced than one covered by two; it is more *collecte
 2. The artifact is written on a `full` run; absent-but-not-fatal on `collect`.
 3. **No fingerprint pin moves** — verified against `ScoringConfigFingerprintTests` and stated in the PR body.
 4. The PR body carries the live distribution, the term decomposition, the rank-change count, and an explicit
-   (a)/(b)/(c) verdict in one sentence.
+   (a)/(b)/(c) verdict in one sentence — **measured through the §2a read-only harness against the live store**,
+   with confirmation that no file under `data/` was modified.
 5. Every excluded company is counted; no defaulted value renders as a measured one.
