@@ -60,6 +60,7 @@ public sealed class ScoringStrategyV11WiringTests
             descriptor,
             provider.GetRequiredService<InsiderMaterialityWeights>(),
             provider.GetRequiredService<MediaAttentionCollapse>(),
+            provider.GetRequiredService<InsiderActivityCollapse>(),
             provider.GetRequiredService<ScoringOptions>(),
             provider.GetRequiredService<ILogger<ScoringEngine>>());
 

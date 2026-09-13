@@ -23,6 +23,9 @@ public sealed class FileScoringConfigStoreTests : IDisposable
     // nothing extra and would have to be re-edited on every structure bump.
     private const string MediaCollapseDescriptor = "media-collapse-v1;window=3;";
 
+    // Spec 224: the insider-collapse descriptor, hashed and stored beside the media one.
+    private const string InsiderCollapseDescriptor = "insider-collapse-v1;window=30;";
+
     // Spec 148: the recent-signal window is a hashed field AND is carried verbatim on the persisted record,
     // so the store's descriptor↔fingerprint self-verification still holds. Deliberately NOT the 30-day
     // default, so a self-verification that ignored the field would fail rather than pass by coincidence.
@@ -64,7 +67,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         new(
             Fingerprint: ScoringConfigFingerprint.Compute(
                 EngineVersion, FormulaVersion, weights, AttentionDescriptor, SignalSourceDescriptor,
-                InsiderMaterialityDescriptor, MediaCollapseDescriptor, Window),
+                InsiderMaterialityDescriptor, MediaCollapseDescriptor, InsiderCollapseDescriptor, Window),
             EngineVersion: EngineVersion,
             FormulaVersion: FormulaVersion,
             Weights: weights,
@@ -72,6 +75,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
             SignalSourceDescriptor: SignalSourceDescriptor,
             InsiderMaterialityDescriptor: InsiderMaterialityDescriptor,
             MediaCollapseDescriptor: MediaCollapseDescriptor,
+            InsiderCollapseDescriptor: InsiderCollapseDescriptor,
             Window: Window);
 
     private static EffectiveScoringConfig ReadStored(string path)
@@ -197,7 +201,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         var recomputed = ScoringConfigFingerprint.Compute(
             stored.EngineVersion, stored.FormulaVersion, stored.Weights, stored.AttentionDescriptor,
             stored.SignalSourceDescriptor, stored.InsiderMaterialityDescriptor, stored.MediaCollapseDescriptor,
-            stored.Window!.Value);
+            stored.InsiderCollapseDescriptor, stored.Window!.Value);
 
         Assert.Equal(Path.GetFileNameWithoutExtension(path), recomputed);
         Assert.Equal(stored.Fingerprint, recomputed);
@@ -217,7 +221,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         var config = new EffectiveScoringConfig(
             Fingerprint: ScoringConfigFingerprint.Compute(
                 EngineVersion, composed, weights, AttentionDescriptor, SignalSourceDescriptor,
-                InsiderMaterialityDescriptor, MediaCollapseDescriptor, Window),
+                InsiderMaterialityDescriptor, MediaCollapseDescriptor, InsiderCollapseDescriptor, Window),
             EngineVersion: EngineVersion,
             FormulaVersion: composed,
             Weights: weights,
@@ -225,6 +229,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
             SignalSourceDescriptor: SignalSourceDescriptor,
             InsiderMaterialityDescriptor: InsiderMaterialityDescriptor,
             MediaCollapseDescriptor: MediaCollapseDescriptor,
+            InsiderCollapseDescriptor: InsiderCollapseDescriptor,
             Window: Window);
 
         var store = CreateStore();
@@ -236,7 +241,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
         var recomputed = ScoringConfigFingerprint.Compute(
             stored.EngineVersion, stored.FormulaVersion, stored.Weights, stored.AttentionDescriptor,
             stored.SignalSourceDescriptor, stored.InsiderMaterialityDescriptor, stored.MediaCollapseDescriptor,
-            stored.Window!.Value);
+            stored.InsiderCollapseDescriptor, stored.Window!.Value);
 
         Assert.Equal(Path.GetFileNameWithoutExtension(path), recomputed);
         Assert.Equal(stored.Fingerprint, recomputed);
@@ -248,7 +253,7 @@ public sealed class FileScoringConfigStoreTests : IDisposable
             ScoringConfigFingerprint.Compute(
                 EngineVersion, $"{ScoreFormulaVersions.V10}{FormulaIdentity.RevisionSeparator}rev2", weights,
                 AttentionDescriptor, SignalSourceDescriptor, InsiderMaterialityDescriptor,
-                MediaCollapseDescriptor, Window));
+                MediaCollapseDescriptor, InsiderCollapseDescriptor, Window));
     }
 
     [Fact]

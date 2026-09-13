@@ -28,6 +28,15 @@ namespace Radar.Application.Scoring;
 /// AT MOST ONE WARNING PER CATEGORY PER OPERATION. An operation with nothing to report logs nothing at all,
 /// so the healthy path's log is byte-identical to a run in which these transforms never fired.
 /// </para>
+/// <para>
+/// <b>Spec 224 adds a THIRD category on its own axis, at Information</b>: directional insider filings whose
+/// reporting owner could not be resolved and so were passed through unbucketed by
+/// <c>InsiderActivityCollapse</c>. Information rather than Warning because, for the first scoring window
+/// after the merge, EVERY accrued Form 4 evidence item lacks the owner field (it heals forward only), so a
+/// non-zero count is the expected state, not a fault — what matters is that the count is stated and falls
+/// to zero as that cohort ages out; a count that persists past one window means the collector stopped
+/// writing the key and IS a defect, which the line's wording says.
+/// </para>
 /// </summary>
 /// <remarks>
 /// Not thread-safe: both callers drive their scoring loops serially, and the aggregate must be deterministic
@@ -41,8 +50,10 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
 
     private readonly CategoryTally _unresolvedEvidence = new();
     private readonly CategoryTally _neutralization = new();
+    private readonly CategoryTally _insiderOwnerUnresolved = new();
 
     private long _unresolvedSignalIncidences;
+    private long _insiderOwnerUnresolvedIncidences;
     private long _unresolvedDistinctEvidencePerEvaluationSum;
     private long _currentLegacy;
     private long _currentMalformed;
@@ -72,6 +83,9 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
 
     /// <summary>True when at least one recorded evaluation neutralized a direction.</summary>
     public bool HasNeutralization => _neutralization.Evaluations > 0;
+
+    /// <summary>True when at least one recorded evaluation passed through an insider filing it could not bucket (spec 224).</summary>
+    public bool HasInsiderOwnerUnresolved => _insiderOwnerUnresolved.Evaluations > 0;
 
     /// <summary>
     /// Records ONE strategy-company evaluation. A healthy evaluation contributes to no axis, so an operation
@@ -103,6 +117,12 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
             _currentMalformed += diagnostics.CurrentWindowMalformedEnvelopeNeutralized;
             _previousLegacy += diagnostics.PreviousWindowLegacyInheritanceNeutralized;
             _previousMalformed += diagnostics.PreviousWindowMalformedEnvelopeNeutralized;
+        }
+
+        if (diagnostics.HasInsiderOwnerUnresolved)
+        {
+            _insiderOwnerUnresolved.Add(strategy, companyId, asOfUtc);
+            _insiderOwnerUnresolvedIncidences += diagnostics.CurrentWindowInsiderOwnerUnresolved;
         }
     }
 
@@ -164,6 +184,30 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
                 _neutralization.Companies.Count,
                 _neutralization.Strategies.Count,
                 AsOfAxis(_neutralization));
+        }
+
+        if (HasInsiderOwnerUnresolved)
+        {
+            logger.LogInformation(
+                "{Operation}: {InsiderOwnerUnresolvedIncidences} directional insider filing-evaluation "
+                    + "incidence(s) could not be bucketed by {CollapseVersion} because the evidence carries "
+                    + "no reporting-owner metadata, across {AffectedEvaluations} affected strategy-company "
+                    + "evaluation(s), {DistinctCompanies} distinct company/companies and {DistinctStrategies} "
+                    + "distinct strateg(ies){AsOfAxis}. These are signal-evaluation INCIDENCES, not globally "
+                    + "distinct filings: every strategy re-evaluates the same signal. Each such filing was "
+                    + "scored as its own signal exactly as before spec 224 (nothing dropped) — it simply "
+                    + "could not be collapsed with other filings by the same insider. Evidence collected "
+                    + "before spec 224 carries the owner only in its title, which the scorer never parses, "
+                    + "so this count is EXPECTED to be non-zero until that cohort ages out of the window and "
+                    + "should then fall to zero; a count that persists past one full window means the Form 4 "
+                    + "collector has stopped writing the owner keys and is a defect.",
+                _operation,
+                _insiderOwnerUnresolvedIncidences,
+                InsiderActivityCollapse.Version,
+                _insiderOwnerUnresolved.Evaluations,
+                _insiderOwnerUnresolved.Companies.Count,
+                _insiderOwnerUnresolved.Strategies.Count,
+                AsOfAxis(_insiderOwnerUnresolved));
         }
     }
 

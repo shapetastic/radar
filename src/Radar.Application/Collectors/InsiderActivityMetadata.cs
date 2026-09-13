@@ -40,6 +40,25 @@ public static class InsiderActivityMetadata
     /// <summary>Metadata key carrying the filing-level <c>SignalDirection</c> (debug/traceability marker).</summary>
     public const string DirectionKey = "insiderDirection";
 
+    /// <summary>
+    /// Metadata key carrying the filing's PRIMARY reporting owner's name (spec 224) — the first
+    /// <c>reportingOwner/reportingOwnerId/rptOwnerName</c> in the ownership XML, trimmed, written only when
+    /// non-blank. The insider IDENTITY the scoring-time <c>InsiderActivityCollapse</c> buckets on when no
+    /// CIK was captured. Before spec 224 the name reached the store ONLY inside the evidence title, which the
+    /// scorer must never parse; accrued evidence therefore lacks this key and heals forward only (AD-8).
+    /// ADDITIVE metadata only, never Title/RawText — evidence identity (the normalized title+body hash, spec
+    /// 145) is unmoved.
+    /// </summary>
+    public const string OwnerNameKey = "insiderOwnerName";
+
+    /// <summary>
+    /// Metadata key carrying the same primary reporting owner's SEC CIK (spec 224) —
+    /// <c>reportingOwner/reportingOwnerId/rptOwnerCik</c>, trimmed, written only when non-blank. The
+    /// PREFERRED insider identity (a person's CIK is stable across filings that spell the name differently);
+    /// <see cref="OwnerNameKey"/> is the fallback. Same additive-only / heals-forward rule as the name.
+    /// </summary>
+    public const string OwnerCikKey = "insiderOwnerCik";
+
     /// <summary>Metadata key for the SEC form type; a Form 4 carries <see cref="Form4"/>.</summary>
     public const string FormKey = "form";
 
@@ -86,8 +105,13 @@ public static class InsiderActivityMetadata
     /// <see cref="InsiderActivityRead.ClassificationReason"/> is <c>null</c> when the token is absent/blank
     /// (legacy pre-156 evidence); <see cref="InsiderActivityRead.NetValue"/> is <c>null</c> when the key is
     /// absent or not an invariant-culture decimal; <see cref="InsiderActivityRead.FilingDate"/> is
-    /// <c>null</c> when <see cref="FilingDateKey"/> is absent or not <c>yyyy-MM-dd</c>. Never throws;
-    /// <c>null</c> always means "not captured", never a defaulted value.
+    /// <c>null</c> when <see cref="FilingDateKey"/> is absent or not <c>yyyy-MM-dd</c>;
+    /// <see cref="InsiderActivityRead.OwnerName"/> / <see cref="InsiderActivityRead.OwnerCik"/> are
+    /// <c>null</c> when the key is absent or blank (legacy pre-224 evidence carries neither);
+    /// <see cref="InsiderActivityRead.HasCluster"/> is <c>true</c> only when <see cref="ClusterKey"/> holds
+    /// <c>"true"</c>/<c>"1"</c> (trimmed, case-insensitive — the same rule the extractor's generic flag read
+    /// applies; the collector writes the key only when the flag is set, so absent == not a cluster). Never
+    /// throws; <c>null</c> always means "not captured", never a defaulted value.
     /// </summary>
     public static InsiderActivityRead? TryRead(EvidenceItem evidence)
     {
@@ -119,7 +143,22 @@ public static class InsiderActivityMetadata
                 ? date
                 : null;
 
-        return new InsiderActivityRead(reason, netValue, filingDate);
+        var ownerName = metadata.TryGetValue(OwnerNameKey, out var rawOwnerName)
+            && !string.IsNullOrWhiteSpace(rawOwnerName)
+                ? rawOwnerName.Trim()
+                : null;
+
+        var ownerCik = metadata.TryGetValue(OwnerCikKey, out var rawOwnerCik)
+            && !string.IsNullOrWhiteSpace(rawOwnerCik)
+                ? rawOwnerCik.Trim()
+                : null;
+
+        var hasCluster = metadata.TryGetValue(ClusterKey, out var rawCluster)
+            && !string.IsNullOrWhiteSpace(rawCluster)
+            && (string.Equals(rawCluster.Trim(), "true", StringComparison.OrdinalIgnoreCase)
+                || rawCluster.Trim() == "1");
+
+        return new InsiderActivityRead(reason, netValue, filingDate, ownerName, ownerCik, hasCluster);
     }
 }
 
@@ -132,7 +171,17 @@ public static class InsiderActivityMetadata
 /// tokens, an unrecognised stored token, or <c>null</c> for legacy evidence without the key.</param>
 /// <param name="NetValue">The captured discretionary value, or <c>null</c> when none was persisted.</param>
 /// <param name="FilingDate">The SEC filing date, or <c>null</c> when absent/unparseable.</param>
+/// <param name="OwnerName">The primary reporting owner's name (spec 224), or <c>null</c> when the collector
+/// did not capture one — every pre-224 evidence item.</param>
+/// <param name="OwnerCik">The primary reporting owner's SEC CIK (spec 224), or <c>null</c> when not captured.
+/// Preferred over <paramref name="OwnerName"/> as the insider identity.</param>
+/// <param name="HasCluster">True when the filing carried the spec-93 multi-insider cluster flag. Defaults to
+/// <c>false</c> so the two pre-224 construction sites stay source-compatible; the collector writes the key
+/// only when set, so <c>false</c> is a measured absence for its evidence, not a defaulted one.</param>
 public sealed record InsiderActivityRead(
     string? ClassificationReason,
     decimal? NetValue,
-    DateOnly? FilingDate);
+    DateOnly? FilingDate,
+    string? OwnerName = null,
+    string? OwnerCik = null,
+    bool HasCluster = false);

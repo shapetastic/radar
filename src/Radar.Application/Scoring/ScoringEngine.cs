@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Radar.Application.Abstractions.Persistence;
 using Radar.Application.Acquisitions;
@@ -37,11 +38,13 @@ namespace Radar.Application.Scoring;
 /// (<see cref="InsiderMaterialityWeights.CanonicalDescriptor"/> — the config-tunable buy/sell tiers +
 /// cluster boost, spec 96) plus the media-collapse descriptor
 /// (<see cref="MediaAttentionCollapse.CanonicalDescriptor"/> — the same-event media-attention collapse
-/// structure + window, spec 109) plus the recent-signal WINDOW length
+/// structure + window, spec 109) plus the insider-collapse descriptor
+/// (<see cref="InsiderActivityCollapse.CanonicalDescriptor"/> — the same-insider Form 4 collapse structure +
+/// window, spec 224) plus the recent-signal WINDOW length
 /// (<see cref="ScoringOptions.Window"/>, spec 148), computed once via
 /// <see cref="ScoringConfigFingerprint"/> (AD-10 as amended). Any output-affecting change (formula shape
 /// <b>as expressed by <c>_formula.Version</c></b>, any weight, the tier map, an insider materiality tier, the
-/// media-collapse window, the scoring window) re-stamps automatically. <c>ScoringVersion</c> (structure
+/// media-collapse window, the insider-collapse window, the scoring window) re-stamps automatically. <c>ScoringVersion</c> (structure
 /// identity, <c>$"{EngineVersion}+{_formula.Version}"</c>) is unchanged.
 /// </para>
 /// <para>
@@ -113,6 +116,7 @@ public sealed class ScoringEngine : IScoringEngine
     private readonly ICompanyRepository _companyRepository;
     private readonly IScoreFormula _formula;
     private readonly MediaAttentionCollapse _mediaCollapse;
+    private readonly InsiderActivityCollapse _insiderCollapse;
 
     // SPEC 217 §2: the run-time acquisitions projection. NULL means no acquisitions store is composed, and
     // is treated as PendingAcquisitions.None - the inert projection, so every pre-217 composition (and every
@@ -185,6 +189,7 @@ public sealed class ScoringEngine : IScoringEngine
         ISignalSourceDescriptor sourceDescriptor,
         InsiderMaterialityWeights insiderMaterialityWeights,
         MediaAttentionCollapse mediaCollapse,
+        InsiderActivityCollapse insiderCollapse,
         ScoringOptions options,
         ILogger<ScoringEngine> logger,
         string? strategyName = null,
@@ -207,6 +212,7 @@ public sealed class ScoringEngine : IScoringEngine
         ArgumentNullException.ThrowIfNull(sourceDescriptor);
         ArgumentNullException.ThrowIfNull(insiderMaterialityWeights);
         ArgumentNullException.ThrowIfNull(mediaCollapse);
+        ArgumentNullException.ThrowIfNull(insiderCollapse);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -217,6 +223,7 @@ public sealed class ScoringEngine : IScoringEngine
         _companyRepository = companyRepository;
         _formula = formula;
         _mediaCollapse = mediaCollapse;
+        _insiderCollapse = insiderCollapse;
         _options = options;
         _logger = logger;
         _strategyName = strategyName;
@@ -250,6 +257,9 @@ public sealed class ScoringEngine : IScoringEngine
 
         var insiderMaterialityDescriptor = insiderMaterialityWeights.CanonicalDescriptor();
         var mediaCollapseDescriptor = mediaCollapse.CanonicalDescriptor();
+        // Spec 224: from the SAME instance ScoreCompanyAsync collapses with, so the hashed identity and the
+        // collapse actually applied cannot disagree (the "SAME tuple" reasoning below).
+        var insiderCollapseDescriptor = insiderCollapse.CanonicalDescriptor();
 
         // Spec 153: the formula's COMPOSED identity — resolved ONCE here so the hashed field, the persisted
         // EffectiveScoringConfig record and the per-snapshot ScoringVersion are literally the same string.
@@ -263,7 +273,7 @@ public sealed class ScoringEngine : IScoringEngine
         // cannot disagree — the same reasoning as the "SAME tuple" note below.
         _scoringConfigFingerprint = ScoringConfigFingerprint.Compute(
             EngineVersion, _formulaIdentity, weights, attentionDescriptor, signalSourceDescriptor,
-            insiderMaterialityDescriptor, mediaCollapseDescriptor, _options.Window);
+            insiderMaterialityDescriptor, mediaCollapseDescriptor, insiderCollapseDescriptor, _options.Window);
 
         // Build the effective-config projection from the SAME tuple the fingerprint hashes, so
         // EffectiveConfig.Fingerprint always equals the stamp on every snapshot this engine produces.
@@ -276,6 +286,7 @@ public sealed class ScoringEngine : IScoringEngine
             SignalSourceDescriptor: signalSourceDescriptor,
             InsiderMaterialityDescriptor: insiderMaterialityDescriptor,
             MediaCollapseDescriptor: mediaCollapseDescriptor,
+            InsiderCollapseDescriptor: insiderCollapseDescriptor,
             Window: _options.Window);
     }
 
@@ -506,7 +517,28 @@ public sealed class ScoringEngine : IScoringEngine
         // is a real signal keeping its evidence link, and the collapsed count is surfaced on its contribution
         // reason below. Non-MediaAttention signals and the activity-only previousSignals are untouched.
         var collapse = _mediaCollapse.Collapse(newsSuperseded);
-        var scoredSignals = collapse.Signals.ToList();
+
+        // Same-insider Form 4 collapse (spec 224): several directional insider filings by ONE reporting owner
+        // in ONE direction inside the collapse window are ONE decision, scored once as the earliest filing
+        // carrying the AGGREGATE value (its Strength re-derived through the same materiality tiers). Applied
+        // immediately AFTER the media collapse and it is THIS output the formula scores. Relative to the
+        // media collapse the order is behaviourally IRRELEVANT, and that is a CHECKED fact rather than an
+        // assumption: the media collapse only ever touches SignalType.MediaAttention signals and this one
+        // only ever touches SignalType.InsiderBuying signals — two disjoint populations, so neither can see
+        // the other's removals. PreCollapseSignals below (the media BREADTH credit input, spec 122) is
+        // deliberately still `newsSuperseded`, the PRE-media-collapse set: the breadth term reads distinct
+        // publishers, which an insider filing never is, so the insider collapse has nothing to add to it.
+        // Provenance is preserved: the representative is a real signal keeping its evidence link, the
+        // collapsed count, aggregate and Strength re-derivation are surfaced on its contribution reason
+        // below, and an owner the metadata cannot resolve is passed through unbucketed and counted.
+        //
+        // NOT applied to the previous/velocity window, by construction rather than by choice: that window
+        // is read activity-only with no evidence loaded (AD-6), so the reporting-owner identity the bucket
+        // key needs cannot be resolved there. Velocity therefore keeps counting filings as activity exactly
+        // as before — the media collapse is likewise not applied there, so the two windows stay like-for-like
+        // with each other in that respect.
+        var insiderCollapse = _insiderCollapse.Collapse(collapse.Signals);
+        var scoredSignals = insiderCollapse.Signals.ToList();
 
         // The immediately-preceding window of the same length, sourced from the ON-DISK signal store
         // (cross-run) rather than the in-memory repo — the in-memory repo starts empty every process and
@@ -660,6 +692,18 @@ public sealed class ScoringEngine : IScoringEngine
                 reason = $"{reason} (collapsed {collapsedN} same-event media items)";
             }
 
+            // Spec 224: if this contribution's signal represents a collapsed same-insider bucket, say how
+            // many filings it stands for, their aggregate value and the Strength re-derivation — otherwise
+            // the snapshot would score one insider signal at a Strength the store does not hold, with
+            // nothing anywhere explaining it. Placed after the media note and before the GuidanceChange
+            // note; it can never collide with either (different signal types). The text deliberately says
+            // "same-insider filing(s)" and never names the stored InsiderBuying token, which report text
+            // must not carry (spec 211) — the renderer's token rewrite is not relied on here.
+            if (insiderCollapse.Collapsed.TryGetValue(contribution.SignalId, out var insiderBucket))
+            {
+                reason = $"{reason} ({DescribeInsiderCollapse(insiderBucket)})";
+            }
+
             // Spec 193 §2: the mirror of the line above for the OTHER removal step. If this contribution's
             // signal superseded a stale GuidanceChange over the same filing evidence, say so on its reason,
             // so the persisted ScoreEvidenceLink records that this contribution REPLACED something rather
@@ -788,6 +832,27 @@ public sealed class ScoringEngine : IScoringEngine
                 CorporateActionSupersede.Version);
         }
 
+        // Spec 224: ONE aggregated per-company line, beside the three supersede lines above and at the same
+        // Information level, when the same-insider collapse actually removed something. Information, not
+        // Warning: collapsing repeat filings by one insider into one decision is the intended healthy
+        // behaviour. Current window only — the collapse is not applied to the activity-only velocity window
+        // (see the assembly comment). The owner-unresolved count is ALSO returned on the diagnostics record
+        // so the pass boundary can state it once for the whole grid.
+        if (insiderCollapse.TotalCollapsed > 0)
+        {
+            _logger.LogInformation(
+                "Collapsed {InsiderCollapsedCount} same-insider filing(s) for company {CompanyId} in the "
+                    + "current window into {InsiderBucketCount} representative(s) ({CollapseVersion}); "
+                    + "{OwnerUnresolvedCount} directional insider filing(s) carried no resolvable owner and "
+                    + "were scored as their own signals. Collapsed filings stay on disk for provenance and "
+                    + "are named, with the aggregate value, on the surviving signal's contribution reason.",
+                insiderCollapse.TotalCollapsed,
+                companyId,
+                insiderCollapse.BucketCount,
+                InsiderActivityCollapse.Version,
+                insiderCollapse.OwnerUnresolvedCount);
+        }
+
         // Spec 194 §1.4's neutralization counts and spec 145's dropped-signal counts, RETURNED rather than
         // logged as Warnings (spec 197 §3). This engine is ONE STRATEGY: a per-company Warning here is a
         // per-strategy × per-company Warning in a multi-strategy run, and on the live baseline the two
@@ -807,7 +872,9 @@ public sealed class ScoringEngine : IScoringEngine
             CurrentWindowLegacyInheritanceNeutralized: legacyNews.LegacyInheritanceCount,
             CurrentWindowMalformedEnvelopeNeutralized: legacyNews.MalformedEnvelopeCount,
             PreviousWindowLegacyInheritanceNeutralized: previousLegacyNews.LegacyInheritanceCount,
-            PreviousWindowMalformedEnvelopeNeutralized: previousLegacyNews.MalformedEnvelopeCount);
+            PreviousWindowMalformedEnvelopeNeutralized: previousLegacyNews.MalformedEnvelopeCount,
+            // Spec 224: insider filings the collapse could not bucket (its own axis; current window only).
+            CurrentWindowInsiderOwnerUnresolved: insiderCollapse.OwnerUnresolvedCount);
 
         // ONE bounded Debug line per AFFECTED strategy-company evaluation, so the per-cell detail the
         // aggregate necessarily pools is still recoverable by raising this category to Debug. Debug, not
@@ -822,8 +889,10 @@ public sealed class ScoringEngine : IScoringEngine
                     + "across {DistinctEvidenceCount} distinct evidence id(s); neutralized {LegacyCount} "
                     + "accrued spec-191 inherited news direction(s) and {MalformedCount} unverifiable "
                     + "judgment-signal envelope(s) in the current window (and {PreviousLegacyCount} / "
-                    + "{PreviousMalformedCount} in the previous/velocity window). Reported to the operator "
-                    + "as one aggregated Warning per category at the pass boundary.",
+                    + "{PreviousMalformedCount} in the previous/velocity window); {InsiderOwnerUnresolved} "
+                    + "directional insider filing(s) passed through unbucketed for want of a resolvable "
+                    + "owner. Reported to the operator as one aggregated line per category at the pass "
+                    + "boundary.",
                 companyId,
                 _strategyName ?? "(none)",
                 windowEndUtc,
@@ -832,10 +901,37 @@ public sealed class ScoringEngine : IScoringEngine
                 diagnostics.CurrentWindowLegacyInheritanceNeutralized,
                 diagnostics.CurrentWindowMalformedEnvelopeNeutralized,
                 diagnostics.PreviousWindowLegacyInheritanceNeutralized,
-                diagnostics.PreviousWindowMalformedEnvelopeNeutralized);
+                diagnostics.PreviousWindowMalformedEnvelopeNeutralized,
+                diagnostics.CurrentWindowInsiderOwnerUnresolved);
         }
 
         return new CompanyScoreResult(snapshot, links, diagnostics);
+    }
+
+    /// <summary>
+    /// Spec 224: the ONE wording of the same-insider collapse note appended to a representative's
+    /// contribution reason. Invariant culture; never a defaulted zero — when no member recorded a value the
+    /// note says so instead of printing $0; members without a value beside a recorded aggregate are counted
+    /// in words. Never names the stored InsiderBuying token (spec 211 report-language guardrail).
+    /// </summary>
+    internal static string DescribeInsiderCollapse(InsiderCollapsedBucket bucket)
+    {
+        ArgumentNullException.ThrowIfNull(bucket);
+
+        var n = bucket.CollapsedCount;
+        if (bucket.AggregateValue is not { } aggregate)
+        {
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"collapsed {n} same-insider filing(s); no recorded value on any member, strength kept at {bucket.StrengthBefore}");
+        }
+
+        var withoutValue = bucket.MembersWithoutValue > 0
+            ? string.Create(CultureInfo.InvariantCulture, $", {bucket.MembersWithoutValue} without a recorded value")
+            : string.Empty;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"collapsed {n} same-insider filing(s): {n + 1} filings by one insider totalling ~${aggregate:N0}{withoutValue}; strength {bucket.StrengthBefore} → {bucket.StrengthAfter}");
     }
 
     /// <summary>

@@ -3823,6 +3823,70 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     shrug. **OWED:** the §5 lines verbatim from the first post-merge run in the PR body, and the §3 split
     against the 2026-09-11 baseline (3 of 5 `Unknown`s citing missing references).
 
+- **Spec 224 (2026-09-13) — one insider's decision is ONE signal, not one per filing: `insider-collapse-v1`
+  collapses repeat directional Form 4s by ONE reporting owner at scoring time, the way `media-collapse-v2`
+  collapses same-event coverage.** The diagnosis (2026-09-12, live store): 244 `discretionary-sale` filings
+  concentrated by REPEAT FILER, not headcount — ATNI's 13 negative insider signals came from THREE people
+  (4.3 filings each), OOMA's five sale signals were three decisions across five weeks — and each filing added
+  its full Strength-8/0.60 weight to `Mneg` independently. A counting defect, not a weighting one: lowering
+  the sale tier would under-weight one genuine sale while five repeats still outvote everything.
+  - **What moved.** (§1) The Form 4 collector now persists the primary reporting owner as ADDITIVE metadata
+    (`InsiderActivityMetadata.OwnerNameKey` / `OwnerCikKey`, written only when non-blank; the reader reads
+    `rptOwnerCik` for the SAME first owner whose name it already used) — Title/RawText are byte-identical, so
+    evidence identity (spec 145) is unmoved; `InsiderActivityRead` gained `OwnerName`, `OwnerCik` and
+    `HasCluster`. (§2) `InsiderActivityCollapse` (`Radar.Application.Scoring`, options
+    `InsiderCollapseOptions` bound from `Radar:Scoring:InsiderCollapse`, default window owned by
+    `InsiderCollapseOptions.EventWindowDays`) buckets Positive/Negative `InsiderBuying` signals by
+    `(CompanyId, identity, Direction)` — identity is the CIK when captured, else the normalised name, NEVER
+    the title — greedily against the EARLIEST member through the SHARED `SameWindowBucketing` primitive
+    (extracted from the media collapse, which now routes through it with its pinned tests unmodified);
+    the representative is the earliest member, kept as the SAME persisted signal, its scoring-time Strength
+    re-derived from the SUMMED `insiderNetValue` through `InsiderMaterialityWeights.StrengthForAmount`
+    (extracted from the extractor's private copy; `BuyTiers`/`SellTiers` + the cluster boost if ANY member
+    was flagged, capped at 10); a bucket of one returns the same instance; no member with a value ⇒ Strength
+    kept, still collapsed and counted. Neutral insider signals and every other type pass through untouched.
+    A filing whose owner cannot be resolved (every pre-224 evidence item) is NEVER bucketed and is counted on
+    its own axis — `InsiderCollapseResult.OwnerUnresolvedCount`, `ScoreAssemblyDiagnostics.
+    CurrentWindowInsiderOwnerUnresolved`, and ONE Information line per pass from
+    `ScoreAssemblyDiagnosticsAggregator` (Information, not Warning: the accrued cohort is EXPECTED to be
+    unresolved for one full window and must then fall to zero; a count that persists is a collector defect
+    and the line says so). (§3) `ScoringEngine` applies it immediately AFTER the media collapse (disjoint
+    signal types — order is a CHECKED irrelevance), NOT on the activity-only velocity window (no evidence is
+    loaded there, AD-6, so no owner is resolvable by construction), appends
+    `(collapsed N same-insider filing(s): N+1 filings by one insider totalling ~$X; strength a → b)` to the
+    representative's contribution reason (which reaches the report line through the existing evidence-ref
+    render; the note never names the stored `InsiderBuying` token), and logs one aggregated per-company line
+    beside the three supersede lines. The `ChannelFeasibilityAudit` applies the same collapse in the same
+    position so its "scored set" mirrors production.
+  - **Fingerprint: ALL pins moved, BOTH families, one operator step owed.** `ScoringConfigFingerprint.Compute`
+    gained `insiderCollapseDescriptor` (`InsiderActivityCollapse.CanonicalDescriptor()`, structure version +
+    window by value), appended as the `insiderCollapse=` field immediately after `mediaCollapse` and before
+    `window`; `EffectiveScoringConfig` gained `InsiderCollapseDescriptor` (every new write populates it; the
+    store never reads a config back on the production path, so pre-224 files lacking it are fine). The field
+    is UNCONDITIONAL — pure assembly code, no AI gate — so the AI-OFF and AI-ON families moved together on all
+    three windows (the spec-198/217 shape): twelve asserted values in `ScoringConfigFingerprintTests`, which
+    is the ONLY authority for the new values (none is quoted here). No formula version bump, no
+    `RuleSetVersion` bump, no weight, tier or window edit — only the insider INPUT SET changes (the media
+    precedent). ONE operator step is owed after merge (delete/re-record every configured
+    `data/scoring-configs/strategies/{name}.json` before the first post-merge run); if no baseline ran
+    between the spec-220/221 merges and this one, it collapses with their outstanding step into ONE.
+  - **Comparability.** Pre/post 224 insider mass is NOT comparable for any company with repeat same-owner
+    filings in its window: before, `Mneg` counted one decision N times; after, once at the aggregate tier.
+    The effect heals FORWARD only — the first post-merge window still scores every accrued (pre-224) filing
+    unbucketed, so the boundary is gradual over one scoring window, not a step.
+  - **OWED: the §4 live distribution.** `InsiderCollapseCounterfactualTests` (`Radar.IntegrationTests`,
+    env-gated on `RADAR_INSIDER_COLLAPSE_DATA_ROOT`, read-only, no network, writes only to the temp
+    directory) emits filings collapsed / buckets formed / bucket-size distribution / owner-unresolved per
+    arm, before→after insider `Mneg`, Trajectory and Opportunity for ATNI, MRCY, FLXS, IDT, DGII, OOMA, and
+    whole-universe medians + the count of Opportunity moves > 2 with the max mover named. ⚠ It is a
+    PROJECTION: accrued evidence predates the owner field, so its AFTER arm adds `insiderOwnerName` IN
+    MEMORY from the title's fixed collector phrase — a parse that lives ONLY in that harness (the scorer
+    never parses a title) and yields a NAME-only identity (can under-bucket vs the live CIK, never
+    over-bucket). The MEASURED numbers are owed from the first post-merge run once the owner field fills a
+    full window. Deferred with its entry condition, per spec 224 §5: whether Strength 8 is right for a
+    discretionary sale and whether `plan-10b5-1` should carry a direction — re-run
+    `scripts/audit-insider-forward-returns.ps1` after this collapse lands and after bootstrap intervals exist.
+
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 
 This is HISTORY, not current state. The text below is `scripts/run-profiles/default.json`'s pre-213 top-level

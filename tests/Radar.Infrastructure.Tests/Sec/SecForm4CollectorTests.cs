@@ -46,7 +46,8 @@ public sealed class SecForm4CollectorTests
         bool hasCluster = false,
         bool is10b5Plan = false,
         string? ticker = "MRCY",
-        string? classificationReason = null) =>
+        string? classificationReason = null,
+        string? ownerCik = null) =>
         new(
             Accession: accession,
             FilingDate: filingDate,
@@ -54,6 +55,7 @@ public sealed class SecForm4CollectorTests
             IndexUrl: $"https://www.sec.gov/Archives/edgar/data/1/{accession.Replace("-", string.Empty)}/{accession}-index.htm",
             IssuerTicker: ticker,
             PrimaryOwnerName: owner,
+            PrimaryOwnerCik: ownerCik,
             DistinctOwnerCount: hasCluster ? 2 : 1,
             Direction: direction,
             NetValue: netValue,
@@ -132,6 +134,56 @@ public sealed class SecForm4CollectorTests
 
         Assert.Contains("insider open-market sale", item.Title, StringComparison.Ordinal);
         Assert.Equal("915750", item.Metadata["insiderNetValue"]);
+    }
+
+    /// <summary>
+    /// Spec 224: the primary reporting owner's name and CIK are written as ADDITIVE metadata so the
+    /// scoring-time collapse has a structured identity, while Title/RawText stay byte-identical to the
+    /// pre-224 phrase (evidence identity is the normalized title+body hash, spec 145).
+    /// </summary>
+    [Fact]
+    public async Task CollectAsync_WritesOwnerNameAndCik_AsAdditiveMetadata_TitleAndRawTextUnchanged()
+    {
+        const string url = "https://data.sec.gov/submissions/CIK.json";
+        var feed = Feed(Guid.Parse("aaaaaaaa-0000-0000-0000-00000000000d"), MrcyId, "Mercury — Form 4", url);
+        var reader = new FakeSecForm4Reader
+        {
+            [url] =
+            [
+                Filing("0001049521-26-000031", SignalDirection.Negative, 500_000m, shares: 5_000m,
+                    owner: "STANG ERIC B", ownerCik: "0001234567"),
+                Filing("0001049521-26-000032", SignalDirection.Negative, 500_000m, shares: 5_000m,
+                    owner: "STANG ERIC B", ownerCik: null),
+                Filing("0001049521-26-000033", SignalDirection.Neutral, 0m, owner: "  "),
+            ],
+        };
+        var context = new CollectionContext([Company(MrcyId, "Mercury Systems", "MRCY")], [feed]);
+
+        var result = await CreateCollector(reader).CollectAsync(context, CancellationToken.None);
+        var items = result.Evidence.ToList();
+        Assert.Equal(3, items.Count);
+
+        var withCik = items[0];
+        Assert.Equal("STANG ERIC B", withCik.Metadata[InsiderActivityMetadata.OwnerNameKey]);
+        Assert.Equal("0001234567", withCik.Metadata[InsiderActivityMetadata.OwnerCikKey]);
+        // The PRE-224 phrase, byte-for-byte: the owner keys change no title and no body.
+        Assert.Equal(
+            "Form 4 — insider open-market sale: STANG ERIC B sold 5,000 shares (~$500,000) (2026-06-02)",
+            withCik.Title);
+        Assert.Equal(
+            "Form 4 accession 0001049521-26-000031 filed 2026-06-02: insider open-market sale — STANG ERIC B "
+                + "sold 5,000 shares (~$500,000).",
+            withCik.RawText);
+
+        var withoutCik = items[1];
+        Assert.Equal("STANG ERIC B", withoutCik.Metadata[InsiderActivityMetadata.OwnerNameKey]);
+        Assert.False(withoutCik.Metadata.ContainsKey(InsiderActivityMetadata.OwnerCikKey));
+
+        // A blank owner writes NEITHER key (not captured), and the phrase falls back exactly as before.
+        var blankOwner = items[2];
+        Assert.False(blankOwner.Metadata.ContainsKey(InsiderActivityMetadata.OwnerNameKey));
+        Assert.False(blankOwner.Metadata.ContainsKey(InsiderActivityMetadata.OwnerCikKey));
+        Assert.Contains("An insider", blankOwner.Title, StringComparison.Ordinal);
     }
 
     [Fact]

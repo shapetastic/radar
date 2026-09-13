@@ -274,6 +274,7 @@ public sealed class FilingReadDurableStoreParityTests : IDisposable
             new StubSourceDescriptor(),
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             new ScoringOptions(),
             NullLogger<ScoringEngine>.Instance);
 

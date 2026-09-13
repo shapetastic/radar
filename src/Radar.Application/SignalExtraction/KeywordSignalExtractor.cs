@@ -515,20 +515,10 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         return string.Equals(trimmed, "true", StringComparison.OrdinalIgnoreCase) || trimmed == "1";
     }
 
-    // Walks the given descending tier table and returns the Strength of the first tier whose lower bound is
-    // at or below the amount. The floor tier's bound is decimal.MinValue, so any amount maps. One signature
-    // serves both the const GovernmentContract tiers and the config-injected InsiderBuying buy/sell tiers.
-    private static int StrengthForAmount(decimal amount, IReadOnlyList<InsiderMaterialityTier> tiers)
-    {
-        foreach (var tier in tiers)
-        {
-            if (tier.MinInclusive <= amount)
-                return tier.Strength;
-        }
-
-        // Unreachable: the floor tier (decimal.MinValue) always matches. Kept as a defensive fallback —
-        // return the last (floor) tier's Strength rather than a constant, so it stays correct if the tier
-        // table evolves (both tables are validated non-empty).
-        return tiers[^1].Strength;
-    }
+    // The tier walk itself lives on InsiderMaterialityWeights.StrengthForAmount since spec 224, because the
+    // scoring-time InsiderActivityCollapse re-derives a collapsed bucket's Strength from its AGGREGATE value
+    // and must use the identical rule (reuse over copy). This thin forwarder keeps every call site above
+    // unchanged.
+    private static int StrengthForAmount(decimal amount, IReadOnlyList<InsiderMaterialityTier> tiers) =>
+        InsiderMaterialityWeights.StrengthForAmount(amount, tiers);
 }

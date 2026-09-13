@@ -46,6 +46,7 @@ public sealed class RunProfileGuardCompatibilityTests
         services.AddRadarScoringStrategies(configuration);
         services.AddRadarInsiderMateriality(configuration);
         services.AddRadarMediaCollapse(configuration);
+        services.AddRadarInsiderCollapse(configuration);
         services.AddRadarAttentionTiers(configuration);
         return services.BuildServiceProvider();
     }
@@ -82,12 +83,14 @@ public sealed class RunProfileGuardCompatibilityTests
         using var provider = BindAllGuardedSites(Compose(overlayProfileName: null));
 
         // default.json deliberately omits Radar:Scoring / Radar:Insider / Radar:Scoring:MediaCollapse /
+        // Radar:Scoring:InsiderCollapse /
         // Radar:Attention, so every guarded site must keep resolving the exact code defaults.
         Assert.Equal(new ScoringWeights(), provider.GetRequiredService<ScoringWeights>());
         Assert.Equal(
             new InsiderMaterialityWeights().CanonicalDescriptor(),
             provider.GetRequiredService<InsiderMaterialityWeights>().CanonicalDescriptor());
         Assert.Equal(new MediaCollapseOptions(), provider.GetRequiredService<MediaCollapseOptions>());
+        Assert.Equal(new InsiderCollapseOptions(), provider.GetRequiredService<InsiderCollapseOptions>());
         Assert.Same(
             AttentionSourceTierOptions.Default, provider.GetRequiredService<AttentionSourceTierOptions>());
 
@@ -108,6 +111,7 @@ public sealed class RunProfileGuardCompatibilityTests
         Assert.NotNull(provider.GetRequiredService<ScoringStrategySet>());
         Assert.NotNull(provider.GetRequiredService<InsiderMaterialityWeights>());
         Assert.NotNull(provider.GetRequiredService<MediaCollapseOptions>());
+        Assert.NotNull(provider.GetRequiredService<InsiderCollapseOptions>());
         Assert.NotNull(provider.GetRequiredService<AttentionSourceTierOptions>());
     }
 

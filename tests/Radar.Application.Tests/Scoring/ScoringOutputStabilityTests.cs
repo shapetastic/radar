@@ -77,6 +77,7 @@ public sealed class ScoringOutputStabilityTests
             new StubSourceDescriptor(),
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             // The CODE DEFAULT window — the one the pins are computed at (30 days).
             new ScoringOptions(),
             NullLogger<ScoringEngine>.Instance);

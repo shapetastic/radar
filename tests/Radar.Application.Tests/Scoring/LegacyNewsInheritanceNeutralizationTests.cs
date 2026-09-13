@@ -359,6 +359,7 @@ public sealed class LegacyNewsInheritanceNeutralizationTests
             new StubSourceDescriptor(),
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             new ScoringOptions(),
             logger);
 

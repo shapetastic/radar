@@ -272,6 +272,20 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count();
 
+        // Spec 224: the SAME first reporting owner's CIK — taken from the <reportingOwner> element whose
+        // name became primaryOwnerName, not from "the first CIK anywhere", so the two fields can never
+        // describe two different people. Trimmed; blank/absent ⇒ null (not captured, never "0").
+        var primaryOwner = root
+            .Elements("reportingOwner")
+            .FirstOrDefault(o => o
+                .Elements("reportingOwnerId")
+                .Elements("rptOwnerName")
+                .Any(e => (e.Value ?? string.Empty).Trim().Length > 0));
+        var primaryOwnerCik = SecRecentFilings.NullIfBlank((string?)primaryOwner?
+            .Elements("reportingOwnerId")
+            .Elements("rptOwnerCik")
+            .FirstOrDefault())?.Trim();
+
         // Transactions only (skip <nonDerivativeHolding>/<derivativeHolding> — no coding/amounts).
         var transactions = root
             .Elements("nonDerivativeTable").Elements("nonDerivativeTransaction")
@@ -383,6 +397,7 @@ internal sealed class HttpSecForm4Reader : ISecForm4Reader
             IndexUrl: SecEdgarUrls.BuildIndexUrl(cik, row.Accession, ".htm"),
             IssuerTicker: issuerTicker,
             PrimaryOwnerName: primaryOwnerName,
+            PrimaryOwnerCik: primaryOwnerCik,
             DistinctOwnerCount: distinctOwnerCount,
             Direction: direction,
             NetValue: netValue,

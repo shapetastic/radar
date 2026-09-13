@@ -96,6 +96,7 @@ public sealed class RadarScoreFormulaV9OutputStabilityTests
             new StubSourceDescriptor(),
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             // The CODE DEFAULT window (30 days) — the same one the fingerprint pins are computed at.
             new ScoringOptions(),
             NullLogger<ScoringEngine>.Instance,

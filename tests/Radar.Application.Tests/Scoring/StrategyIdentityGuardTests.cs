@@ -96,6 +96,7 @@ public sealed class StrategyIdentityGuardTests
                 collectors.Select(c => (IEvidenceCollector)new FakeCollector(c)))),
             new InsiderMaterialityWeights(),
             new MediaAttentionCollapse(new MediaCollapseOptions()),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             new ScoringOptions(),
             NullLogger<ScoringEngine>.Instance,
             name);

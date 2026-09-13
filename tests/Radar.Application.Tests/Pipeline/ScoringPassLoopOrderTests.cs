@@ -141,7 +141,10 @@ public sealed class ScoringPassLoopOrderTests
             CurrentWindowLegacyInheritanceNeutralized: s,
             CurrentWindowMalformedEnvelopeNeutralized: c == 1 ? 1 : 0,
             PreviousWindowLegacyInheritanceNeutralized: 2 * s,
-            PreviousWindowMalformedEnvelopeNeutralized: c);
+            PreviousWindowMalformedEnvelopeNeutralized: c,
+            // Spec 224: the insider owner-unresolved axis rides the same aggregate; a per-cell value that
+            // differs by strategy AND company so a pooled total cannot pass by accident.
+            CurrentWindowInsiderOwnerUnresolved: s == 2 ? c + 1 : 0);
 
         var strategyMajor = new ScoreAssemblyDiagnosticsAggregator("Scoring pass");
         for (var s = 0; s < strategies.Length; s++)
@@ -300,6 +303,7 @@ public sealed class ScoringPassLoopOrderTests
                     descriptor,
                     new InsiderMaterialityWeights(),
                     new MediaAttentionCollapse(new MediaCollapseOptions()),
+                    new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
                     options,
                     engineLog,
                     definition.Name,

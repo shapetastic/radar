@@ -132,6 +132,44 @@ public sealed class ScoreAssemblyDiagnosticsAggregationTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Spec 224: the insider owner-unresolved count is a THIRD category on its own axis, rendered ONCE per
+    /// operation at Information (a pre-224 evidence cohort is expected, not a fault), labelled as
+    /// incidences, and never pooled into either Warning.
+    /// </summary>
+    [Fact]
+    public void Aggregator_InsiderOwnerUnresolved_IsOneInformationLine_OnItsOwnAxis()
+    {
+        var aggregator = new ScoreAssemblyDiagnosticsAggregator("Scoring pass");
+        var companyA = Guid.NewGuid();
+        var companyB = Guid.NewGuid();
+        var unresolved = ScoreAssemblyDiagnostics.None with { CurrentWindowInsiderOwnerUnresolved = 3 };
+
+        aggregator.Record("default", companyA, AsOf, unresolved);
+        aggregator.Record("alt", companyA, AsOf, unresolved);
+        aggregator.Record("default", companyB, AsOf, ScoreAssemblyDiagnostics.None with { CurrentWindowInsiderOwnerUnresolved = 1 });
+        aggregator.Record("default", Guid.NewGuid(), AsOf, ScoreAssemblyDiagnostics.None);
+
+        Assert.True(aggregator.HasInsiderOwnerUnresolved);
+        Assert.False(aggregator.HasUnresolvedEvidence);
+        Assert.False(aggregator.HasNeutralization);
+
+        var log = new CapturingLogger();
+        aggregator.LogAggregates(log);
+
+        var line = Assert.Single(log.Entries);
+        Assert.Equal(LogLevel.Information, line.Level);
+        Assert.Contains(
+            "Scoring pass: 7 directional insider filing-evaluation incidence(s) could not be bucketed by "
+                + "insider-collapse-v1",
+            line.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "across 3 affected strategy-company evaluation(s), 2 distinct company/companies and 2 distinct strateg(ies).",
+            line.Message, StringComparison.Ordinal);
+        Assert.Contains("nothing dropped", line.Message, StringComparison.Ordinal);
+        Assert.Contains("EXPECTED to be non-zero", line.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>§5.2 item 12's negative half: an unaffected pass emits NEITHER line.</summary>
     [Fact]
     public async Task Pass_WithNothingToReport_EmitsNeitherWarning()
@@ -344,6 +382,7 @@ public sealed class ScoreAssemblyDiagnosticsAggregationTests
                     new StubSourceDescriptor(),
                     new InsiderMaterialityWeights(),
                     new MediaAttentionCollapse(new MediaCollapseOptions()),
+                    new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
                     new ScoringOptions(),
                     engineLog,
                     strategyName: name))).ToList();

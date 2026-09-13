@@ -78,6 +78,7 @@ public sealed class NewsJudgmentScoringIdentityTests
                 news).CanonicalDescriptor(),
             new InsiderMaterialityWeights().CanonicalDescriptor(),
             new MediaAttentionCollapse(new MediaCollapseOptions()).CanonicalDescriptor(),
+            new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()).CanonicalDescriptor(),
             new ScoringOptions().Window);
 
     // ---- the five assertions spec 194 §2 demands (the fifth is in the Worker mode tests) ---------------

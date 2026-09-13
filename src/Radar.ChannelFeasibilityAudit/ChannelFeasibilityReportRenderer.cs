@@ -68,7 +68,7 @@ public static class ChannelFeasibilityReportRenderer
         sb.AppendLine(CultureInfo.InvariantCulture, $"| Dropped: evidence-unresolvable (before attribution) | {unresolvable} |");
         sb.AppendLine(CultureInfo.InvariantCulture, $"| Resolved ScoringSignals (before supersede) | {resolved} |");
         sb.AppendLine(CultureInfo.InvariantCulture, $"| After GuidanceChangeSupersede | {afterSupersede} |");
-        sb.AppendLine(CultureInfo.InvariantCulture, $"| After MediaAttentionCollapse (scored set) | {afterCollapse} |");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"| After MediaAttentionCollapse + InsiderActivityCollapse (scored set) | {afterCollapse} |");
         sb.AppendLine(CultureInfo.InvariantCulture, $"| Attribution over resolved inputs: recorded | {recorded} |");
         sb.AppendLine(CultureInfo.InvariantCulture, $"| Attribution over resolved inputs: inferred | {inferred} |");
         sb.AppendLine(CultureInfo.InvariantCulture, $"| Attribution over resolved inputs: unattributed | {unattributed} |");

@@ -117,6 +117,67 @@ public sealed class InsiderActivityMetadataTests
         Assert.Equal(new DateOnly(2026, 6, 12), read.FilingDate);
     }
 
+    // --- TryRead: the spec-224 owner identity and the cluster flag ---
+
+    [Fact]
+    public void OwnerKeys_ArePinnedByteExact()
+    {
+        Assert.Equal("insiderOwnerName", InsiderActivityMetadata.OwnerNameKey);
+        Assert.Equal("insiderOwnerCik", InsiderActivityMetadata.OwnerCikKey);
+    }
+
+    [Fact]
+    public void TryRead_OwnerNameAndCik_AreTrimmed()
+    {
+        var read = InsiderActivityMetadata.TryRead(Evidence(Form4Envelope(
+            ("insiderOwnerName", "  STANG ERIC B "), ("insiderOwnerCik", " 0001234567 "))));
+
+        Assert.NotNull(read);
+        Assert.Equal("STANG ERIC B", read.OwnerName);
+        Assert.Equal("0001234567", read.OwnerCik);
+    }
+
+    [Theory]
+    [InlineData(false, "")]
+    [InlineData(true, "")]
+    [InlineData(true, "   ")]
+    public void TryRead_LegacyForm4WithoutOwnerKeys_OwnerIsNull(bool keyPresent, string value)
+    {
+        var json = keyPresent
+            ? Form4Envelope(("insiderOwnerName", value), ("insiderOwnerCik", value))
+            : Form4Envelope();
+
+        var read = InsiderActivityMetadata.TryRead(Evidence(json));
+
+        Assert.NotNull(read);
+        Assert.Null(read.OwnerName);
+        Assert.Null(read.OwnerCik);
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
+    [InlineData(" 1 ", true)]
+    [InlineData("false", false)]
+    [InlineData("0", false)]
+    [InlineData("", false)]
+    public void TryRead_ClusterFlag_FollowsTheExtractorsRule(string value, bool expected)
+    {
+        var read = InsiderActivityMetadata.TryRead(Evidence(Form4Envelope(("insiderCluster", value))));
+
+        Assert.NotNull(read);
+        Assert.Equal(expected, read.HasCluster);
+    }
+
+    [Fact]
+    public void TryRead_ClusterKeyAbsent_IsFalse()
+    {
+        var read = InsiderActivityMetadata.TryRead(Evidence(Form4Envelope()));
+
+        Assert.NotNull(read);
+        Assert.False(read.HasCluster);
+    }
+
     // --- TryRead: the captured value ---
 
     [Fact]

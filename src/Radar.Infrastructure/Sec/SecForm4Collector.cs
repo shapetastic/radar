@@ -210,6 +210,22 @@ internal sealed class SecForm4Collector : IEvidenceCollector
             metadata["issuerTicker"] = filing.IssuerTicker;
         }
 
+        // Spec 224: the primary reporting owner's structured identity — name and, when the filing carried
+        // one, CIK — so the scoring-time InsiderActivityCollapse can bucket repeat filings by ONE insider
+        // without ever parsing the title. Written only when non-blank (an absent key is "not captured").
+        // ADDITIVE metadata only, never Title/RawText: evidence identity is the normalized title+body hash
+        // alone (spec 145), so ContentHash, the evidence id and AddIfNewAsync decisions are unmoved and the
+        // phrase the extractor matches is byte-identical to the pre-224 one.
+        if (!string.IsNullOrWhiteSpace(filing.PrimaryOwnerName))
+        {
+            metadata[InsiderActivityMetadata.OwnerNameKey] = filing.PrimaryOwnerName.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(filing.PrimaryOwnerCik))
+        {
+            metadata[InsiderActivityMetadata.OwnerCikKey] = filing.PrimaryOwnerCik.Trim();
+        }
+
         return new CollectedEvidence(
             SourceType: SourceType,
             SourceName: feed.Name,
