@@ -359,9 +359,11 @@ authoritative record:
   `run-20260910T142811301Z-b640146f`, spec 221's by `run-20260912T013411933Z-9ce33d31`, and spec 224's
   step was taken on 2026-09-13 after its merge, so its identity is stamped by the first post-224 run.
   **No operator step is outstanding for any spec through 224.** Do NOT clear the identity records on the
-  strength of the earlier wording.) **Spec 226 owes ONE operator step after it merges** (both families moved:
-  `KeywordSignalExtractor.RuleSetVersion` and `CorporateActionSupersede.Version` both bumped) — take it once,
-  before the first post-226 run, and verify that run's stamp against `ScoringConfigFingerprintTests`.
+  strength of the earlier wording.) Spec 226 (both families moved: `KeywordSignalExtractor.RuleSetVersion`
+  and `CorporateActionSupersede.Version` both bumped) owed ONE operator step after merging; it was TAKEN on
+  2026-09-14 after the merge (`b66e3b5`), so its identity is stamped by the first post-226 run — verify that
+  run's stamp against `ScoringConfigFingerprintTests`. **No operator step is outstanding for any spec through
+  226.**
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
