@@ -308,6 +308,8 @@ public sealed class NewsJudgmentScoringIdentityTests
     public void TheExtractorRuleSetVersion_IsUnmovedByThisSlice()
     {
         // spec 194 §2 changes no extraction rule: the segment is added BESIDE rules=, never instead of it.
-        Assert.Equal("radar-keyword-rules-v8", KeywordSignalExtractor.RuleSetVersion);
+        // (Spec 226 later moved the shipped value v8 → v9 for the SEC item-heading rules; this pins the
+        // current value so a rules= move is always a conscious edit.)
+        Assert.Equal("radar-keyword-rules-v9", KeywordSignalExtractor.RuleSetVersion);
     }
 }

@@ -37,7 +37,11 @@ public sealed class ScoringConfigFingerprintTests
     // v6's but the regime does not, because direction now rides a separate judgment-derived signal — and it
     // is a rule-STRUCTURE change, so it re-stamps every pin below.
     // (v6 was spec 130's TrademarkActivity group; spec 129 added RegulatoryApproval; spec 127 added
-    // PatentActivity; spec 103 added HiringActivity.)
+    // PatentActivity; spec 103 added HiringActivity.) SPEC 226 moves it once more, to radar-keyword-rules-v9:
+    // the SEC 8-K Item 1.01 / 2.01 heading phrases mint a Neutral CorporateAction instead of a Positive
+    // StrategicPartnership — a heading is an event type, not a direction. The literal below is kept equal to
+    // the shipped KeywordSignalExtractor.RuleSetVersion (Compute_ChangedExtractorRuleSet_ChangesFingerprint
+    // keeps its perturbation one version ahead of it).
     //
     // SPEC 194 §2 APPENDS A SECOND SEGMENT: the news-read identity, ALWAYS present, rendered here in its
     // DISABLED form because this constant is the code-default composition — nothing optional registered, the
@@ -60,7 +64,7 @@ public sealed class ScoringConfigFingerprintTests
     // AcquisitionAgreementScan.Version or CorporateActionSupersede.Version re-stamps every pin on its own
     // instead of leaving a stale copy here.
     private static readonly string SourceDescriptor =
-        "rules=radar-keyword-rules-v8;"
+        "rules=radar-keyword-rules-v9;"
             + NewsJudgmentScoringIdentity.Disabled.Segment
             + NewsQueryScoringIdentity.Default.Segment
             + AcquisitionScoringIdentity.Segment;
@@ -71,7 +75,7 @@ public sealed class ScoringConfigFingerprintTests
     /// — a descriptor built this way must reproduce the post-197 pins byte-for-byte.
     /// </summary>
     private static readonly string SourceDescriptorWithoutNewsQuery =
-        "rules=radar-keyword-rules-v8;"
+        "rules=radar-keyword-rules-v9;"
             + NewsJudgmentScoringIdentity.Disabled.Segment
             + NewsQueryScoringIdentity.None.Segment
             + AcquisitionScoringIdentity.Segment;
@@ -407,7 +411,8 @@ public sealed class ScoringConfigFingerprintTests
         //
         // Nothing else moved: no _formula.Version bump, no KeywordSignalExtractor.RuleSetVersion bump (still
         // radar-keyword-rules-v8 — the "material definitive agreement" rule is deliberately UNCHANGED, spec
-        // 217 §2), no MediaAttentionCollapse.Version bump (still media-collapse-v2), no
+        // 217 §2; ⚠ spec 226 later DID change it, to a Neutral CorporateAction under v9 — see below), no
+        // MediaAttentionCollapse.Version bump (still media-collapse-v2), no
         // supersede/neutralization version bump for the pre-217 transforms, no attention tier edit, no
         // weight edit, and AcquisitionRecognitionOptions.MaxFetchesPerRun is deliberately EXCLUDED (it
         // bounds how many filings are read, never whether a read filing is recognised — the spec-105 rule).
@@ -442,7 +447,28 @@ public sealed class ScoringConfigFingerprintTests
         // data/scoring-configs/strategies/{name}.json BEFORE the first post-merge run — git-ignored, never
         // fabricated; a StrategyIdentityGuard halt before that is CORRECT). If no baseline runs between the
         // spec-220/221 merges and this one, it collapses with their still-outstanding step into ONE.
-        Assert.Equal("radar-scoring-fp-4244521af873", DefaultFingerprint());
+        //
+        // ⚠ SPEC 226 MOVES THIS PIN — radar-scoring-fp-4244521af873 → radar-scoring-fp-fa64e525e7b0 — AND ALL
+        // ELEVEN OTHERS IN THIS FILE WITH IT, BOTH FAMILIES, for TWO causes folded into ONE recomputation, both
+        // inside SignalSourceDescriptor.CanonicalDescriptor() and both UNCONDITIONAL (not AI-gated):
+        //   (a) the `rules=` token: KeywordSignalExtractor.RuleSetVersion radar-keyword-rules-v8 → v9. The SEC
+        //       8-K Item 1.01 ("material definitive agreement") and Item 2.01 ("completion of acquisition")
+        //       heading phrases stop minting a POSITIVE StrategicPartnership and mint a NEUTRAL CorporateAction
+        //       at the same strength/novelty/confidence. MEASURED basis (2026-09-14, live store): in the ~60-day
+        //       window those headings covered credit agreements with a new direct financial obligation (item
+        //       2.03 beside 1.01 — ASIX, DGII, CAT, CALM, MYRG), an equity issuance (3.02 — EOSE), a completed
+        //       acquisition (ESQ) and acquisitions-or-disposals (THRM, NOVT), every one scored as a positive
+        //       partnership. A heading is an event type, not a direction.
+        //   (b) the `acq=` segment: CorporateActionSupersede.Version acq-supersede-v1 → v2. The supersede's MATCH
+        //       widened to StrategicPartnership OR CorporateAction (accrued v8 reads stay partnerships on disk,
+        //       new v9 reads are corporate actions) with a one-CorporateAction-per-recognised-filing guard.
+        // Scoring math is otherwise byte-identical: no _formula.Version bump, no weight, tier, window,
+        // media-collapse or insider-collapse change. ONE operator step is owed after merge: delete or re-record
+        // every configured data/scoring-configs/strategies/{name}.json BEFORE the first post-226 run (git-ignored,
+        // never fabricated; a StrategyIdentityGuard halt before that step is CORRECT), then verify the first
+        // run's stamp against Compute_LiveWindowAiOnStamps_ArePinned. Accrued v8 signals are never backfilled
+        // (AD-8), so the boundary is NOT a step: it heals forward as accrued v8 reads age out of the window.
+        Assert.Equal("radar-scoring-fp-fa64e525e7b0", DefaultFingerprint());
     }
 
     [Fact]
@@ -516,33 +542,42 @@ public sealed class ScoringConfigFingerprintTests
         // unchanged: with the news-query segment empty the composed descriptor is still byte-identical to
         // the current one minus `newsquery=`, and spec 198's segment remains exactly additive. ONE operator
         // step is owed after merge (see Compute_DefaultConfig_MatchesPinnedFingerprint).
+        //
+        // ⚠ SPEC 226 MOVES ALL SIX HALVES AGAIN, both families (the rules= token radar-keyword-rules-v8 → v9
+        // and acq-supersede-v1 → v2, both unconditional and both OUTSIDE the news-query segment): AI-OFF 30d
+        // radar-scoring-fp-c658889c7b2f → radar-scoring-fp-691701d72fbe; 60d radar-scoring-fp-c769b5237ca3 →
+        // radar-scoring-fp-1add9ab3b327; 120d radar-scoring-fp-075046305fbc → radar-scoring-fp-b9c73c39d0b8;
+        // AI-ON 30d radar-scoring-fp-e7473d744633 → radar-scoring-fp-6ced12c5b920; 60d
+        // radar-scoring-fp-553b5d5cc2d9 → radar-scoring-fp-e2927f5508e2; 120d radar-scoring-fp-b4cebdfe9560 →
+        // radar-scoring-fp-f64eb428a991. The additivity proof is unchanged: with the news-query segment empty
+        // the composed descriptor is still the current one minus `newsquery=`.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
         Assert.Equal(
-            "radar-scoring-fp-c658889c7b2f",
+            "radar-scoring-fp-691701d72fbe",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-e7473d744633",
+            "radar-scoring-fp-6ced12c5b920",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
         Assert.Equal(
-            "radar-scoring-fp-c769b5237ca3",
+            "radar-scoring-fp-1add9ab3b327",
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-553b5d5cc2d9",
+            "radar-scoring-fp-e2927f5508e2",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
         // 120-day -Profile long-window.
         Assert.Equal(
-            "radar-scoring-fp-075046305fbc",
+            "radar-scoring-fp-b9c73c39d0b8",
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-b4cebdfe9560",
+            "radar-scoring-fp-f64eb428a991",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -557,7 +592,7 @@ public sealed class ScoringConfigFingerprintTests
 
         var offSeven = DefaultFingerprint(sourceDescriptor: SourceDescriptor);
         var offFourteen = DefaultFingerprint(
-            sourceDescriptor: "rules=radar-keyword-rules-v8;"
+            sourceDescriptor: "rules=radar-keyword-rules-v9;"
                 + NewsJudgmentScoringIdentity.Disabled.Segment
                 + fourteen.Segment
                 + AcquisitionScoringIdentity.Segment);
@@ -597,14 +632,15 @@ public sealed class ScoringConfigFingerprintTests
         // source. What remains true, and is what this test now guards, is that a change to the signal-source
         // IDENTITY descriptor — the extractor rule STRUCTURE identity, which does change what is scored —
         // still re-stamps. The perturbation target is deliberately kept one version AHEAD of the shipped
-        // RuleSetVersion (spec 194 §1.1 moved the default to v8, so this perturbs to v9) — a perturbation
+        // RuleSetVersion (spec 194 §1.1 moved the default to v8 and this perturbed to v9; spec 226 moved the
+        // default to v9, so this now perturbs to v10) — a perturbation
         // equal to the default would make this test VACUOUS, which is exactly what happened when the shipped
         // version caught up with a perturbation literal that was not moved with it. Whoever bumps
         // KeywordSignalExtractor.RuleSetVersion next must move this literal in the same slice.
         // SPEC 194 §2: the perturbation carries the SAME news segment as the default, so the only thing that
         // differs is the rules= token — otherwise this would prove that two descriptors differing in two
         // places hash differently, which is a weaker claim.
-        var perturbed = "rules=radar-keyword-rules-v9;"
+        var perturbed = "rules=radar-keyword-rules-v10;"
             + NewsJudgmentScoringIdentity.Disabled.Segment
             + NewsQueryScoringIdentity.Default.Segment
             + AcquisitionScoringIdentity.Segment;
@@ -679,7 +715,7 @@ public sealed class ScoringConfigFingerprintTests
     // composition order — same reasoning as every segment since spec 194.
     private static string AiOnSourceDescriptorWith(
         string aiDirectionalDescriptor, NewsQueryScoringIdentity? newsQuery = null) =>
-        "rules=radar-keyword-rules-v8;"
+        "rules=radar-keyword-rules-v9;"
             + $"ai={DescriptorEscaping.Escape(aiDirectionalDescriptor)};"
             + LiveNewsJudgmentSegment
             + (newsQuery ?? NewsQueryScoringIdentity.Default).Segment
@@ -920,8 +956,13 @@ public sealed class ScoringConfigFingerprintTests
         // source descriptor and therefore outside every AI gate. No news=, ai=, rules=, acq=, weight, tier,
         // media-collapse or window change. See Compute_DefaultConfig_MatchesPinnedFingerprint for the
         // measured basis and the single operator step owed.
+        //
+        // → SPEC 226 MOVES IT (radar-scoring-fp-a448254b38cc → the value below), AI-OFF side WITH it: the
+        // rules= token radar-keyword-rules-v8 → v9 (the SEC item-heading rules become Neutral CorporateAction)
+        // and acq-supersede-v1 → v2, both unconditional inside the source descriptor. No news=, ai=, weight,
+        // tier, collapse or window change. See Compute_DefaultConfig_MatchesPinnedFingerprint.
         Assert.Equal(
-            "radar-scoring-fp-a448254b38cc",
+            "radar-scoring-fp-fcb4a4593ff1",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -952,12 +993,12 @@ public sealed class ScoringConfigFingerprintTests
         // review named: extraction changes the filing prompt even with no judge, so it cannot live in the
         // `news=` segment.
         var judgmentOffOn = DefaultFingerprint(
-            sourceDescriptor: "rules=radar-keyword-rules-v8;"
+            sourceDescriptor: "rules=radar-keyword-rules-v9;"
                 + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptor)};"
                 + NewsJudgmentScoringIdentity.Disabled.Segment
                 + NewsQueryScoringIdentity.Default.Segment);
         var judgmentOffOff = DefaultFingerprint(
-            sourceDescriptor: "rules=radar-keyword-rules-v8;"
+            sourceDescriptor: "rules=radar-keyword-rules-v9;"
                 + $"ai={DescriptorEscaping.Escape(AiDirectionalDescriptorWithoutReportedMetrics)};"
                 + NewsJudgmentScoringIdentity.Disabled.Segment
                 + NewsQueryScoringIdentity.Default.Segment);
@@ -1171,11 +1212,19 @@ public sealed class ScoringConfigFingerprintTests
         // union is still "delete or re-record every configured data/scoring-configs/strategies/{name}.json
         // BEFORE the first post-merge run"). Whatever the 60-day assertion below says is the value the first
         // post-224 baseline must report; a StrategyIdentityGuard halt before that step is CORRECT.
+        //
+        // SPEC 226 MOVES THEM AGAIN, AND THE AI-OFF PAIR MOVES WITH THEM (the spec-217/224 shape): 60d
+        // radar-scoring-fp-692055768db8 → radar-scoring-fp-b8872cce9666; 120d radar-scoring-fp-60f898fd0d1f →
+        // radar-scoring-fp-7b917a3d3d26. Two causes in one recomputation, both unconditional: the rules= token
+        // radar-keyword-rules-v8 → v9 and acq-supersede-v1 → v2. radar-scoring-fp-692055768db8 is the spec-224
+        // value, quoted as history. ⚠ ONE OPERATOR STEP IS OWED after merge: delete or re-record every configured
+        // data/scoring-configs/strategies/{name}.json BEFORE the first post-226 run (git-ignored, never
+        // fabricated); whatever the 60-day assertion below says is the value that run must report.
         Assert.Equal(
-            "radar-scoring-fp-692055768db8",
+            "radar-scoring-fp-b8872cce9666",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-60f898fd0d1f",
+            "radar-scoring-fp-7b917a3d3d26",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -1242,8 +1291,14 @@ public sealed class ScoringConfigFingerprintTests
         // move every insider-heavy score silently. 60d radar-scoring-fp-7b0758e7eede →
         // radar-scoring-fp-0e09edc016da; 120d radar-scoring-fp-5b36883c1b3a → radar-scoring-fp-9cb00807c3cf.
         // See the AI-OFF unit pin for the measured basis and the operator step.
-        Assert.Equal("radar-scoring-fp-0e09edc016da", DefaultFingerprint(window: TimeSpan.FromDays(60)));
-        Assert.Equal("radar-scoring-fp-9cb00807c3cf", DefaultFingerprint(window: TimeSpan.FromDays(120)));
+        //
+        // ⚠ SPEC 226 MOVES BOTH OF THESE, AND THAT MOVE IS THE DELIVERABLE: the rules= token
+        // (radar-keyword-rules-v8 → v9) and the acq= segment (acq-supersede-v1 → v2) are both rendered with or
+        // without any AI or judgment seam, so an unchanged AI-OFF pin would mean the rule change is not hashed.
+        // 60d radar-scoring-fp-0e09edc016da → radar-scoring-fp-9d1665dcebbb; 120d radar-scoring-fp-9cb00807c3cf
+        // → radar-scoring-fp-ba32db581757. See the AI-OFF unit pin for the measured basis and the operator step.
+        Assert.Equal("radar-scoring-fp-9d1665dcebbb", DefaultFingerprint(window: TimeSpan.FromDays(60)));
+        Assert.Equal("radar-scoring-fp-ba32db581757", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }
 
     [Fact]

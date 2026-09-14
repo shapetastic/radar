@@ -42,8 +42,9 @@ public enum AcquisitionVerification
 /// Append-only, content-identified, never rewritten (AD-8).
 /// <para>
 /// <b>Not a scoring input, and not a prediction.</b> The record closes a thesis: it forces the report label
-/// (<c>Ignore</c>, policy rule 0), supersedes the extractor's <c>StrategicPartnership</c> read of the same
-/// evidence with a Neutral <c>CorporateAction</c>, derives
+/// (<c>Ignore</c>, policy rule 0), supersedes the extractor's read of the same evidence (an accrued pre-226
+/// <c>StrategicPartnership</c>, or since spec 226 a strength-4 <c>CorporateAction</c>) with ONE Neutral
+/// strength-0 <c>CorporateAction</c> naming the acquisition, derives
 /// <see cref="Radar.Domain.Companies.CompanyStatus.PendingAcquisition"/> at run time, and excludes the
 /// company's observations from the forward efficacy series. It never adds a positive signal, never scores
 /// a deal spread, and Radar performs NO arithmetic on the consideration — it is stored and stated as the

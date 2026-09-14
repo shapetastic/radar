@@ -62,6 +62,20 @@ public sealed class SignalProducerRuleTests
     }
 
     [Fact]
+    public async Task TheSpec226ItemHeadingCorporateAction_IsStillAKeywordRule()
+    {
+        // The v9 item-heading Reason keeps the MatchedPhrasePrefix deliberately, so this reader needs no second
+        // predicate to recognise it.
+        var signal = await ExtractedAsync(
+            EvidenceSourceType.Filing,
+            "8-K — 8-K (2026-09-10) [items: 1.01,9.01] Items: Entry into a Material Definitive Agreement.",
+            "8-K item codes: 1.01,9.01. Items: Entry into a Material Definitive Agreement.");
+
+        Assert.Equal(SignalType.CorporateAction, signal.Type);
+        Assert.Equal(SignalProducer.KeywordPhraseRule, SignalProducerRule.Classify(signal, EvidenceSourceType.Filing));
+    }
+
+    [Fact]
     public void MatchedPhrase_IsTheExtractorsHistoricalWording()
     {
         Assert.Equal("Matched phrase 'partnership'", KeywordSignalReasons.MatchedPhrase("partnership"));

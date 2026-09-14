@@ -109,7 +109,7 @@ public sealed class SignalSourceDescriptorTests
         // future edit can reintroduce it by accident.
         var identity = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled + NewsQueryDefault + AcquisitionSegment, identity);
+        Assert.Equal("rules=radar-keyword-rules-v9;" + NewsDisabled + NewsQueryDefault + AcquisitionSegment, identity);
         Assert.DoesNotContain("collectors=", identity, StringComparison.Ordinal);
         Assert.DoesNotContain("usaspending", identity, StringComparison.Ordinal);
     }
@@ -172,7 +172,7 @@ public sealed class SignalSourceDescriptorTests
         var descriptor = DescriptorFor("rss");
 
         Assert.Contains(KeywordSignalExtractor.RuleSetVersion, descriptor, StringComparison.Ordinal);
-        Assert.Contains("radar-keyword-rules-v8", descriptor, StringComparison.Ordinal);
+        Assert.Contains("radar-keyword-rules-v9", descriptor, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -344,7 +344,7 @@ public sealed class SignalSourceDescriptorTests
         // segment.
         var descriptor = DescriptorFor("rss", "sec", "usaspending");
 
-        Assert.Equal("rules=radar-keyword-rules-v8;" + NewsDisabled + NewsQueryDefault + AcquisitionSegment, descriptor);
+        Assert.Equal("rules=radar-keyword-rules-v9;" + NewsDisabled + NewsQueryDefault + AcquisitionSegment, descriptor);
         Assert.DoesNotContain("ai=", descriptor, StringComparison.Ordinal);
     }
 
@@ -357,7 +357,7 @@ public sealed class SignalSourceDescriptorTests
         // side (spec 141): it carries per-signal magnitudes and the reading model, which change signal
         // DIRECTION — that is scoring identity, not a collector set.
         Assert.Equal(
-            "rules=radar-keyword-rules-v8;ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;"
+            "rules=radar-keyword-rules-v9;ai=directional-filing:str%3D6%3Bnov%3D6%3Bminconf%3D0.6;"
                 + NewsDisabled
                 + NewsQueryDefault
                 + AcquisitionSegment,
@@ -383,7 +383,7 @@ public sealed class SignalSourceDescriptorTests
         var descriptor = DescriptorWithAi("a=b;c,d%e", "rss");
 
         Assert.Equal(
-            "rules=radar-keyword-rules-v8;ai=a%3Db%3Bc%2Cd%25e;"
+            "rules=radar-keyword-rules-v9;ai=a%3Db%3Bc%2Cd%25e;"
                 + NewsDisabled
                 + NewsQueryDefault
                 + AcquisitionSegment,
@@ -458,7 +458,7 @@ public sealed class SignalSourceDescriptorTests
         var disabled = BuildWithNewsQuery(NewsQueryScoringIdentity.None, "rss").CanonicalDescriptor();
 
         Assert.Equal(
-            "rules=radar-keyword-rules-v8;" + NewsDisabled + AcquisitionSegment, disabled);
+            "rules=radar-keyword-rules-v9;" + NewsDisabled + AcquisitionSegment, disabled);
         Assert.DoesNotContain("newsquery=", disabled, StringComparison.Ordinal);
     }
 
@@ -530,7 +530,7 @@ public sealed class SignalSourceDescriptorTests
 
         Assert.Equal(0, rules);
         Assert.True(rules < ai && ai < news, descriptor);
-        Assert.StartsWith("rules=radar-keyword-rules-v8;ai=", descriptor, StringComparison.Ordinal);
+        Assert.StartsWith("rules=radar-keyword-rules-v9;ai=", descriptor, StringComparison.Ordinal);
     }
 
     [Fact]

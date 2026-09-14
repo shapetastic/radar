@@ -382,6 +382,9 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
     /// One arm's REAL engine over the arm's evidence decorator; nothing else differs. <c>internal</c> since
     /// spec 225 so its read-only harness scores through the SAME composition (reuse over copy); it hands in
     /// its own in-memory score repository because it needs the persisted LINKS as well as the snapshots.
+    /// Spec 226 adds two optional parameters, both defaulting to the pre-226 behaviour: a pending-acquisition
+    /// source (null ⇒ none composed, exactly as before) so the corporate-action supersede runs over the live
+    /// recognitions, and a sink for the full per-company results (diagnostics included).
     /// </summary>
     internal static async Task<IReadOnlyList<CompanyScoreSnapshot>> ScoreAllAsync(
         ServiceProvider provider,
@@ -391,8 +394,16 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
         ISignalFileStore windowReads,
         DateTimeOffset asOf,
         CancellationToken ct,
-        IScoreRepository? scoreRepository = null)
+        IScoreRepository? scoreRepository = null,
+        Radar.Application.Acquisitions.IPendingAcquisitionSource? pendingAcquisitions = null,
+        ICollection<CompanyScoreResult>? results = null,
+        ScoringStrategyDefinition? strategy = null,
+        ICollectorAttributionResolver? attribution = null)
     {
+        // Spec 226: a caller may hand in a strategy BOUND FROM CONFIG (formula, weights, signal types, channels)
+        // and the collector-attribution resolver the Worker composes; null keeps the pre-226 synthesised
+        // `default` / radar-formula-v8 composition byte-for-byte.
+        strategy ??= new ScoringStrategyDefinition("default", "default", new ScoringWeights(), IsPrimary: true);
         var sourceWeights = new ConfiguredAttentionSourceWeights(AttentionSourceTierOptions.Default);
         var engine = new ScoringEngine(
             signals,
@@ -400,9 +411,8 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
             armEvidence,
             scoreRepository ?? new InMemoryScoreRepository(),
             provider.GetRequiredService<ICompanyRepository>(),
-            new RadarScoreFormulaFactory(sourceWeights).Create(
-                new ScoringStrategyDefinition("default", "default", new ScoringWeights(), IsPrimary: true)),
-            new ScoringWeights(),
+            new RadarScoreFormulaFactory(sourceWeights, attribution).Create(strategy),
+            strategy.Weights,
             sourceWeights,
             ReadOnlyHarnessSourceDescriptor.Instance,
             new InsiderMaterialityWeights(),
@@ -410,13 +420,17 @@ public sealed class InsiderCollapseCounterfactualTests(ITestOutputHelper output)
             new InsiderActivityCollapse(new InsiderCollapseOptions(), new InsiderMaterialityWeights()),
             new ScoringOptions { Window = ScoringWindow },
             NullLogger<ScoringEngine>.Instance,
-            strategyName: "default");
+            strategyName: strategy.Name,
+            signalTypes: strategy.SignalTypes,
+            channels: strategy.Channels,
+            pendingAcquisitions: pendingAcquisitions);
 
         var snapshots = new List<CompanyScoreSnapshot>(companies.Count);
         foreach (var company in companies)
         {
             var result = await engine.ScoreCompanyAsync(company.Id, asOf, ct);
             snapshots.Add(result.Snapshot);
+            results?.Add(result);
         }
 
         return snapshots;

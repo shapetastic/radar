@@ -41,6 +41,11 @@ namespace Radar.Application.Scoring;
 /// unexpected axis (an unknown title shape, the anonymous placeholder, an ambiguous name, or a non-Form 4
 /// envelope) and the line's wording says so.
 /// </para>
+/// <para>
+/// <b>Spec 226 adds a FOURTH category, at Information</b>: companies under a recognised pending acquisition for
+/// which <c>CorporateActionSupersede</c> rewrote nothing in either window, named by id, with the "filing had
+/// in-window signals but none rewritable" sub-case named separately. An enabled rule that did no work says so.
+/// </para>
 /// </summary>
 /// <remarks>
 /// Not thread-safe: both callers drive their scoring loops serially, and the aggregate must be deterministic
@@ -55,6 +60,8 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
     private readonly CategoryTally _unresolvedEvidence = new();
     private readonly CategoryTally _neutralization = new();
     private readonly CategoryTally _insiderOwnerResolution = new();
+    private readonly CategoryTally _acquisitionSupersedeIdle = new();
+    private readonly HashSet<Guid> _acquisitionFilingNotRewritableCompanies = [];
 
     private long _unresolvedSignalIncidences;
     private long _insiderOwnerUnresolvedIncidences;
@@ -133,7 +140,19 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
             _insiderOwnerUnresolvedIncidences += diagnostics.CurrentWindowInsiderOwnerUnresolved;
             _insiderOwnerFromTitleIncidences += diagnostics.CurrentWindowInsiderOwnerFromTitle;
         }
+
+        if (diagnostics.HasRecognisedAcquisitionNothingRewritten)
+        {
+            _acquisitionSupersedeIdle.Add(strategy, companyId, asOfUtc);
+            if (diagnostics.RecognisedAcquisitionFilingHadNoRewritableSignal > 0)
+            {
+                _acquisitionFilingNotRewritableCompanies.Add(companyId);
+            }
+        }
     }
+
+    /// <summary>True when at least one evaluation's company had a recognised acquisition the supersede rewrote nothing for (spec 226).</summary>
+    public bool HasRecognisedAcquisitionNothingRewritten => _acquisitionSupersedeIdle.Evaluations > 0;
 
     /// <summary>
     /// Emits AT MOST ONE Warning per category. Call exactly once, at the end of the operation, after every
@@ -224,6 +243,35 @@ public sealed class ScoreAssemblyDiagnosticsAggregator
                 _insiderOwnerResolution.Companies.Count,
                 _insiderOwnerResolution.Strategies.Count,
                 AsOfAxis(_insiderOwnerResolution));
+        }
+
+        // Spec 226: ONE line per operation naming every company (by id, ordered) whose recognised pending
+        // acquisition the corporate-action supersede rewrote nothing for, in either window. Information: the
+        // usual cause is that the recognised filing has aged out of the window (or a strategy's type filter
+        // excludes it), which is expected; the companies whose filing HAD in-window signals with no rewritable
+        // read are named separately because that is the case to read.
+        if (HasRecognisedAcquisitionNothingRewritten)
+        {
+            logger.LogInformation(
+                "{Operation}: {SupersedeVersion} rewrote NOTHING for {DistinctCompanies} company/companies under a "
+                    + "recognised pending acquisition ({CompanyIds}), across {AffectedEvaluations} "
+                    + "strategy-company evaluation(s) and {DistinctStrategies} distinct strateg(ies){AsOfAxis}: no "
+                    + "StrategicPartnership or CorporateAction read of the recognised filing was in either scoring "
+                    + "window. Expected once the filing ages out of the window or where a strategy's signal-type "
+                    + "filter excludes it. Of these, {NotRewritableCompanies} company/companies ({NotRewritableIds}) "
+                    + "had signals over the recognised filing in a window but none of a rewritable type — that "
+                    + "sub-case is the one to read.",
+                _operation,
+                CorporateActionSupersede.Version,
+                _acquisitionSupersedeIdle.Companies.Count,
+                string.Join(", ", _acquisitionSupersedeIdle.Companies.Order()),
+                _acquisitionSupersedeIdle.Evaluations,
+                _acquisitionSupersedeIdle.Strategies.Count,
+                AsOfAxis(_acquisitionSupersedeIdle),
+                _acquisitionFilingNotRewritableCompanies.Count,
+                _acquisitionFilingNotRewritableCompanies.Count == 0
+                    ? "none"
+                    : string.Join(", ", _acquisitionFilingNotRewritableCompanies.Order()));
         }
     }
 

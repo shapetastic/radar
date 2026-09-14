@@ -91,9 +91,12 @@ public sealed record AcquisitionScanResult(
 /// <para>
 /// <b>Why it must read the filing.</b> A title-only rule fires on every "Entry into a Material Definitive
 /// Agreement" — and the accrued store holds 178 item-1.01 filings, overwhelmingly credit agreements, leases
-/// and supply contracts. The keyword extractor's "material definitive agreement" rule read MarineMax's
-/// $1.5B all-cash sale of the whole company as a <c>StrategicPartnership</c> and the 2026-08-10 report
-/// labelled it <b>Thesis improving</b>. Recognition therefore reads the text, and it recognises only when
+/// and supply contracts. The keyword extractor's "material definitive agreement" rule (as it stood until
+/// spec 226) read MarineMax's $1.5B all-cash sale of the whole company as a Positive
+/// <c>StrategicPartnership</c> and the 2026-08-10 report labelled it <b>Thesis improving</b>. (Spec 226,
+/// <c>radar-keyword-rules-v9</c>, has since made every item-heading read a Neutral <c>CorporateAction</c> —
+/// the title says an agreement exists, never whether it is good news — but only THIS scan can say the
+/// agreement is a takeover of the company.) Recognition therefore reads the text, and it recognises only when
 /// BOTH legs hold:
 /// </para>
 /// <list type="number">

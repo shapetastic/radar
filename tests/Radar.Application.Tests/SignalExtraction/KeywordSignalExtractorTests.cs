@@ -709,30 +709,142 @@ public class KeywordSignalExtractorTests
         Assert.DoesNotContain(output.Signals, s => s.Direction == "Positive");
     }
 
-    [Fact]
-    public async Task MaterialDefinitiveAgreementTitle_YieldsPositiveStrategicPartnership()
-    {
-        var evidence = MakeEvidence(
-            "Items: Entry into a Material Definitive Agreement.");
+    // ---- Spec 226 (radar-keyword-rules-v9): an SEC 8-K item heading is an event type, not a direction ----
+    // Until v8 these two headings minted a POSITIVE StrategicPartnership. The fixtures below use the SEC filing
+    // collector's own title/rawText shape ("8-K — 8-K (date) [items: …] Items: …").
 
-        var output = await ExtractAsync(evidence);
+    private static EvidenceItem MakeFiling(string items, string headings) =>
+        new EvidenceBuilder()
+            .WithSourceType(EvidenceSourceType.Filing)
+            .WithSourceName("Acme Corp — SEC filings (EDGAR)")
+            .WithTitle($"8-K — 8-K (2026-09-10) [items: {items}] Items: {headings}")
+            .WithRawText($"8-K filing accession 0000000000-26-000001 filed 2026-09-10: 8-K. 8-K item codes: {items}. Items: {headings}")
+            .WithPublishedAtUtc(PublishedAt)
+            .WithCollectedAtUtc(CollectedAt)
+            .Build();
+
+    [Fact]
+    public async Task MaterialDefinitiveAgreementHeading_YieldsNeutralCorporateAction_NamingItem101()
+    {
+        var output = await ExtractAsync(MakeFiling("1.01,9.01", "Entry into a Material Definitive Agreement."));
 
         var signal = Assert.Single(output.Signals);
-        Assert.Equal(SignalType.StrategicPartnership.ToString(), signal.SignalType);
-        Assert.Equal("Positive", signal.Direction);
+        Assert.Equal(SignalType.CorporateAction.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        // Same magnitudes as the v8 rule and as the sibling Neutral item-heading rules (2.03 / 3.02): only the
+        // invented direction is removed.
+        Assert.Equal(4, signal.Strength);
+        Assert.Equal(5, signal.Novelty);
+        Assert.Equal(0.5m, signal.Confidence);
+        Assert.Equal(
+            "Matched phrase 'material definitive agreement' (the SEC 8-K Item 1.01 heading phrase)"
+                + " — an item heading is an event type, not a direction",
+            signal.Reason);
+        Assert.Equal([SecItemHeadingPhrases.MaterialDefinitiveAgreement], KeywordSignalReasons.NamedItemHeadings(signal.Reason));
     }
 
     [Fact]
-    public async Task CompletionOfAcquisitionTitle_YieldsPositiveStrategicPartnership()
+    public async Task Item201DisposalHeading_YieldsNeutralCorporateAction_NeverADirection()
     {
-        var evidence = MakeEvidence(
-            "Items: Completion of Acquisition or Disposition of Assets.");
+        // Item 2.01 heads a completed acquisition OR DISPOSITION: a company selling a business gets the same
+        // heading as one buying one, so no direction can be read from it.
+        var evidence = MakeFiling("2.01,7.01,9.01", "Completion of Acquisition or Disposition of Assets; Regulation FD Disclosure.")
+            with { RawText = "Acme Corp completed the sale of its Industrial Products segment. 8-K item codes: 2.01,7.01,9.01. Items: Completion of Acquisition or Disposition of Assets." };
 
         var output = await ExtractAsync(evidence);
 
         var signal = Assert.Single(output.Signals);
-        Assert.Equal(SignalType.StrategicPartnership.ToString(), signal.SignalType);
-        Assert.Equal("Positive", signal.Direction);
+        Assert.Equal(SignalType.CorporateAction.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Contains("SEC 8-K Item 2.01 heading phrase", signal.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(output.Signals, s => s.Direction is "Positive" or "Negative");
+    }
+
+    [Fact]
+    public async Task Item101PlusItem203CreditFacility_YieldsOnlyNeutralSignals()
+    {
+        // The ASIX / DGII / CAT / CALM / MYRG shape: an agreement plus a new direct financial obligation. v8
+        // read it as a Positive partnership; v9 reads two event types and no direction.
+        var output = await ExtractAsync(MakeFiling(
+            "1.01,2.03,9.01",
+            "Entry into a Material Definitive Agreement; Creation of a Direct Financial Obligation or an Obligation under an Off-Balance Sheet Arrangement of a Registrant."));
+
+        Assert.Equal(2, output.Signals.Count);
+        Assert.All(output.Signals, s => Assert.Equal("Neutral", s.Direction));
+        Assert.Contains(output.Signals, s => s.SignalType == SignalType.CorporateAction.ToString());
+        Assert.Contains(output.Signals, s => s.SignalType == SignalType.CapitalRaise.ToString());
+        Assert.DoesNotContain(output.Signals, s => s.SignalType == SignalType.StrategicPartnership.ToString());
+    }
+
+    [Fact]
+    public async Task BothHeadings_MintOneCorporateAction_WhoseReasonNamesBothItems()
+    {
+        // First-match-per-type keeps ONE signal (1.01 wins by table order); the Reason still names the 2.01
+        // heading instead of dropping it without a trace.
+        var output = await ExtractAsync(MakeFiling(
+            "1.01,2.01,9.01",
+            "Entry into a Material Definitive Agreement; Completion of Acquisition or Disposition of Assets."));
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CorporateAction.ToString(), signal.SignalType);
+        Assert.Equal(
+            "Matched phrase 'material definitive agreement' (the SEC 8-K Item 1.01 heading phrase); also matched "
+                + "'completion of acquisition' (the SEC 8-K Item 2.01 heading phrase) — an item heading is an event "
+                + "type, not a direction",
+            signal.Reason);
+        Assert.Equal(SecItemHeadingPhrases.All, KeywordSignalReasons.NamedItemHeadings(signal.Reason));
+    }
+
+    [Fact]
+    public async Task HeadingPhraseInAPressRelease_IsAlsoNeutral_AndTheReasonDoesNotClaimAnEightK()
+    {
+        // The phrase rules are source-agnostic (no source-type branch): a press release saying "completion of
+        // acquisition" gets the same Neutral read, and the Reason describes the PHRASE, never the evidence.
+        var evidence = MakeEvidence("Acme announces the completion of acquisition of Beta Industries.", title: "Acme closes deal");
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.CorporateAction.ToString(), signal.SignalType);
+        Assert.Equal("Neutral", signal.Direction);
+        Assert.Contains("(the SEC 8-K Item 2.01 heading phrase)", signal.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("this 8-K", signal.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("filing", signal.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task HeadingPhraseInANewsArticle_NeverReachesTheRuleTable()
+    {
+        var evidence = MakeEvidence("Acme entered into a material definitive agreement.", title: "Acme deal")
+            with { SourceType = EvidenceSourceType.NewsArticle };
+
+        var output = await ExtractAsync(evidence);
+
+        var signal = Assert.Single(output.Signals);
+        Assert.Equal(SignalType.MediaAttention.ToString(), signal.SignalType);
+        Assert.Equal(KeywordSignalReasons.MediaAttention, signal.Reason);
+    }
+
+    [Fact]
+    public async Task ItemHeadingPartnershipPhraseTogether_KeepThePartnershipRead_AndAddTheCorporateAction()
+    {
+        // A genuine "partnership" phrase is a different rule and a different type, untouched by spec 226: it
+        // still reads Positive, while the heading beside it is recorded as its own Neutral event.
+        var output = await ExtractAsync(MakeFiling("1.01", "Entry into a Material Definitive Agreement.")
+            with { RawText = "Acme and Beta announce a strategic partnership. Items: Entry into a Material Definitive Agreement." });
+
+        Assert.Equal(2, output.Signals.Count);
+        Assert.Contains(output.Signals, s => s.SignalType == SignalType.StrategicPartnership.ToString() && s.Direction == "Positive");
+        Assert.Contains(output.Signals, s => s.SignalType == SignalType.CorporateAction.ToString() && s.Direction == "Neutral");
+    }
+
+    [Fact]
+    public void NamedItemHeadings_IsEmpty_ForTheAccruedV8ReasonAndOtherRules()
+    {
+        Assert.Empty(KeywordSignalReasons.NamedItemHeadings("Matched phrase 'material definitive agreement'"));
+        Assert.Empty(KeywordSignalReasons.NamedItemHeadings(KeywordSignalReasons.MediaAttention));
+        Assert.Empty(KeywordSignalReasons.NamedItemHeadings(null));
+        Assert.Throws<ArgumentException>(() => KeywordSignalReasons.ItemHeading([]));
     }
 
     [Fact]

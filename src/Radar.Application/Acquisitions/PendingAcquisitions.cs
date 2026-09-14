@@ -86,7 +86,7 @@ public sealed class PendingAcquisitions
 
     /// <summary>
     /// The evidence ids a recognition was made ON. The scoring-assembly supersede
-    /// (<c>acq-supersede-v1</c>) uses exactly this set: only the filing that WAS recognised has its
+    /// (<c>CorporateActionSupersede</c>) uses exactly this set: only the filing that WAS recognised has its
     /// keyword read replaced, never every filing of the company.
     /// </summary>
     public IReadOnlySet<Guid> RecognisedEvidenceIds => _evidenceIds;

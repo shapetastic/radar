@@ -9,7 +9,8 @@
   `NewsDirectionalReadSource` and `NewsDirectionalReadOptions` are deleted, with a reflection guard asserting
   none survives dormant. `NewsObservationEvidenceJoin`, `NewsTrajectorySignalRules` and
   `NewsDirectionalSignalMetadata` are RETAINED for the sections below.
-  `KeywordSignalExtractor.RuleSetVersion` is now **`radar-keyword-rules-v8`**.
+  `KeywordSignalExtractor.RuleSetVersion` is now **`radar-keyword-rules-v8`** (as of spec 194; spec 226 has
+  since moved it — `KeywordSignalExtractor.RuleSetVersion` owns the current value).
 - **§3 — DONE.** Retryable typing failure is scoped to in-window `(ObservationId, PayloadHash)` membership.
 - Live pins are now **60d AI-OFF `radar-scoring-fp-06e4781f86bb` / AI-ON `radar-scoring-fp-7a4cd9d409ed`**
   (30d `023b1af1e3d4`/`ef9104b7b2b9`; 120d `5cb9dc71f309`/`759835b624ca`). The identity records under

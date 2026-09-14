@@ -51,8 +51,16 @@ namespace Radar.Application.SignalExtraction;
 /// here to consult) and restores exactly the pre-191 Neutral <see cref="SignalType.MediaAttention"/> event:
 /// same direction, strength, novelty, confidence, excerpt, reason and (absent) metadata. Direction now
 /// arrives as its OWN judgment-derived signal, materialized after the judgment exists and anchored to the
-/// evidence that judgment actually cited. <see cref="RuleSetVersion"/> is therefore <c>v8</c>, not a
-/// rollback to <c>v6</c>.
+/// evidence that judgment actually cited. <see cref="RuleSetVersion"/> was therefore bumped to <c>v8</c>, not
+/// rolled back to <c>v6</c> (spec 226 has since moved it to <c>v9</c>, for the item-heading change below).
+/// </para>
+/// <para>
+/// <b>SPEC 226 — an SEC 8-K item heading is an event type, not a direction.</b> The Item 1.01 ("material
+/// definitive agreement") and Item 2.01 ("completion of acquisition") heading phrases mint a NEUTRAL
+/// <see cref="SignalType.CorporateAction"/>, where until v8 they minted a Positive
+/// <see cref="SignalType.StrategicPartnership"/>. This is a rule-table change, not a source-type branch: the
+/// phrases still match any non-news evidence. The Reason names the matched heading(s) via
+/// <see cref="KeywordSignalReasons.ItemHeading"/>.
 /// </para>
 /// <para>
 /// WATCH-ITEM: the InsiderBuying read (3) is <b>metadata-driven, not <see cref="EvidenceSourceType"/>-driven</b>,
@@ -94,7 +102,15 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
     // history has three semantic regimes (pre-191 Neutral news, spec-191 inherited direction — known
     // defective — and post-194 grounded judgment signals). It moves every ScoringConfigVersion pin and
     // re-stamps every strategy, deliberately; see the spec-194 lineage note in CLAUDE.md.
-    public const string RuleSetVersion = "radar-keyword-rules-v8";
+    // v9 (spec 226): the two SEC 8-K item-HEADING rules ("material definitive agreement" = Item 1.01,
+    // "completion of acquisition" = Item 2.01) stop minting a Positive StrategicPartnership and mint a NEUTRAL
+    // CorporateAction instead, at the SAME strength/novelty/confidence (4/5/0.5). A heading records that an
+    // event of a type happened — any material contract (a credit agreement, a lease, a merger agreement), an
+    // acquisition OR a disposal — and says nothing about whether it is good or bad for the business, so the
+    // v8 direction was invented. A rule-STRUCTURE change (a phrase's type and direction changed), hence the
+    // bump; it moves every ScoringConfigVersion pin on BOTH families (the rules= segment is not AI-gated).
+    // Accrued v8 signals stay as written (AD-8) — the change applies to newly extracted evidence only.
+    public const string RuleSetVersion = "radar-keyword-rules-v9";
 
     // Window of original-cased searchable-text characters captured on either side of a phrase match
     // so the excerpt carries surrounding context while remaining a verbatim slice of the composed
@@ -126,10 +142,28 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
         new("partnership", SignalType.StrategicPartnership, SignalDirection.Positive, 5, 5, 0.6m),
         new("partners with", SignalType.StrategicPartnership, SignalDirection.Positive, 5, 5, 0.6m),
         new("teams up", SignalType.StrategicPartnership, SignalDirection.Positive, 5, 5, 0.6m),
-        // SEC 8-K item titles (1.01 / 2.01): inherently growth-leaning corporate events. Also legitimate
-        // press-release phrases, so no source-coupling is introduced.
-        new("material definitive agreement", SignalType.StrategicPartnership, SignalDirection.Positive, 4, 5, 0.5m),
-        new("completion of acquisition", SignalType.StrategicPartnership, SignalDirection.Positive, 4, 5, 0.5m),
+        // SEC 8-K item HEADINGS (1.01 / 2.01) — ⚠ REVERSED BY SPEC 226 (radar-keyword-rules-v9). Until v8 this
+        // comment called them "inherently growth-leaning corporate events" and they minted a POSITIVE
+        // StrategicPartnership. That was false: Item 1.01 heads ANY material contract (credit agreements,
+        // leases, supply contracts, merger agreements) and Item 2.01 heads a completed acquisition OR
+        // DISPOSITION, so the heading is an event type with no direction. They now mint a NEUTRAL
+        // CorporateAction (no Trajectory mass) at the same 4/5/0.5 as the sibling Neutral item-heading rules
+        // (2.03 / 3.02 below). For HEADING-ONLY evidence that means activity/velocity and EvidenceConfidence see
+        // exactly what they saw before and only the invented direction is removed. For evidence that ALSO carries
+        // a "partnership" / "partners with" / "teams up" phrase it does not: v8 minted ONE StrategicPartnership
+        // there (first-match-per-type, strength 5), while v9 mints that partnership AND a CorporateAction (5 + 4)
+        // because they are now different types (live store 2026-09-14: 0 such accrued reads, spec 226 §4). Both
+        // heading rules are the same type, so first-match-per-type keeps ONE CorporateAction per evidence (1.01
+        // wins by table order) and its Reason names EVERY heading present
+        // (KeywordSignalReasons.ItemHeading). The phrases stay source-agnostic (no source-type branch — see the
+        // class doc): a press release that says "completion of acquisition" is equally not a direction.
+        // NewsArticle evidence never reaches this table (the Neutral MediaAttention branch returns first).
+        // Assigning a REAL direction (acquirer vs disposer vs credit facility) needs the filing body — future
+        // work, deliberately not attempted here.
+        new(SecItemHeadingPhrases.MaterialDefinitiveAgreement.Phrase, SignalType.CorporateAction, SignalDirection.Neutral, 4, 5, 0.5m,
+            SecItemHeadingPhrases.MaterialDefinitiveAgreement),
+        new(SecItemHeadingPhrases.CompletionOfAcquisition.Phrase, SignalType.CorporateAction, SignalDirection.Neutral, 4, 5, 0.5m,
+            SecItemHeadingPhrases.CompletionOfAcquisition),
 
         new("appoints", SignalType.ExecutiveHire, SignalDirection.Positive, 4, 5, 0.5m),
         new("names new", SignalType.ExecutiveHire, SignalDirection.Positive, 4, 5, 0.5m),
@@ -450,7 +484,9 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
                 Novelty: rule.Novelty,
                 Confidence: rule.Confidence,
                 SupportingExcerpt: BuildExcerpt(searchableText, index, rule.Phrase.Length),
-                Reason: KeywordSignalReasons.MatchedPhrase(rule.Phrase)));
+                Reason: rule.ItemHeading is null
+                    ? KeywordSignalReasons.MatchedPhrase(rule.Phrase)
+                    : KeywordSignalReasons.ItemHeading(MatchedItemHeadings(rule, searchableText))));
         }
 
         _logger.LogDebug(
@@ -461,6 +497,27 @@ public sealed class KeywordSignalExtractor : ISignalExtractor
 
         var summary = $"{signals.Count} signal(s) extracted by keyword rules.";
         return Task.FromResult(new ExtractSignalsOutput(signals, summary));
+    }
+
+    // Spec 226: every SEC item heading of the fired rule's TYPE that is present in the searchable text, in
+    // rule-table order, starting with the fired rule itself (first-match-per-type means it is the first one
+    // present). First-match-per-type still keeps ONE signal per evidence; this only makes its Reason name the
+    // headings that the dedupe would otherwise have dropped without a trace.
+    private static List<SecItemHeadingPhrase> MatchedItemHeadings(KeywordSignalRule fired, string searchableText)
+    {
+        var matched = new List<SecItemHeadingPhrase> { fired.ItemHeading! };
+        foreach (var rule in Rules)
+        {
+            if (rule.Type == fired.Type
+                && rule.ItemHeading is { } heading
+                && !ReferenceEquals(heading, fired.ItemHeading)
+                && searchableText.Contains(rule.Phrase, StringComparison.OrdinalIgnoreCase))
+            {
+                matched.Add(heading);
+            }
+        }
+
+        return matched;
     }
 
     // Returns a deterministic, verbatim slice of the original-cased searchable text around the match

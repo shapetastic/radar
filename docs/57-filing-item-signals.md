@@ -76,16 +76,25 @@ tests/Radar.Application.Tests/SignalExtraction/
 
 ### Keyword extractor — add filing cues
 - Add rule-table entries for the material item titles, conservative direction:
-  - "material definitive agreement" → `StrategicPartnership`, `Positive` (growth-leaning)
-  - "completion of acquisition" → `StrategicPartnership`, `Positive`
+  - "material definitive agreement" → `StrategicPartnership`, `Positive` (growth-leaning) — ⚠ **REVERSED by
+    spec 226** (`radar-keyword-rules-v9`): Item 1.01 heads ANY material contract (credit agreements, leases,
+    supply contracts, merger agreements), so the heading carries no direction. It now mints `CorporateAction`,
+    `Neutral` at the same strength/novelty/confidence, with a Reason naming the item. Accrued v8 signals stay
+    as written (AD-8).
+  - "completion of acquisition" → `StrategicPartnership`, `Positive` — ⚠ **REVERSED by spec 226**: Item 2.01 is
+    "Completion of Acquisition **or Disposition** of Assets" — buying or selling a business — so it too now
+    mints `CorporateAction`, `Neutral`.
   - "results of operations" → `GuidanceChange`, `Neutral` (valence unknown from the code)
   - "appointment of certain officers" (and/or "election of directors") → `ExecutiveHire`, `Neutral`
   - "direct financial obligation" → `CapitalRaise`, `Neutral`
   - "unregistered sales of equity" → `CapitalRaise`, `Neutral`
   - Keep strengths/novelty/confidence within domain ranges; pick modest values consistent with the existing
     table. First-match-per-`SignalType` dedupe and stable ordering are unchanged.
-- These are generic business phrases; they legitimately also apply to RSS text (a press release announcing a
-  "material definitive agreement" is a real partnership signal), so no source-coupling is introduced.
+- These are generic business phrases; they legitimately also apply to RSS text, so no source-coupling is
+  introduced. ⚠ **Amended in place by spec 226:** this bullet used to say a press release announcing a
+  "material definitive agreement" "is a real partnership signal" — false for the same reason the 8-K heading
+  is: an agreement's existence says nothing about its direction. The phrase rules stay source-agnostic, and
+  a non-filing match now mints the same Neutral `CorporateAction`.
 - Do NOT change the matching algorithm, the shared `EvidenceSearchableText` composition, `CompanyMention`, the
   scoring formula, the policy, or the report.
 
