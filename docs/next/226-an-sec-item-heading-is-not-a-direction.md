@@ -35,7 +35,7 @@ Positive `StrategicPartnership`:
 | date | ticker | items | what the item codes indicate |
 |---|---|---|---|
 | 2026-08-17 | ASIX | 1.01, 1.02, 2.03 | an agreement entered and one terminated, plus a **new debt obligation** |
-| 2026-08-31 | DGII | 1.01, 1.02, 2.03 | same shape — news coverage names a **$350M revolving credit facility** |
+| 2026-08-31 | DGII | 1.01, 1.02, 2.03 | same shape — agreement entered, one terminated, **new debt obligation** (a refinancing pattern; the item codes alone cannot say more) |
 | 2026-09-01 | CAT | 1.01, 2.03 | agreement plus **new debt obligation** |
 | 2026-09-02 | CALM | 1.01, 2.03 | agreement plus **new debt obligation** |
 | 2026-09-10 | MYRG | 1.01, 2.03 | agreement plus **new debt obligation** |
@@ -52,9 +52,11 @@ as a positive strategic partnership.
 
 **How this was found.** A skeptic stress test of ESQ (2026-09-14) noted that ESQ's acquisition 8-K scored as
 positive evidence. The 2026-09-13 weekly report confirms it verbatim:
-`StrategicPartnership (Positive): Matched phrase 'completion of acquisition'`. That company had just nearly
-doubled its size by buying a bank whose problem loans quadrupled during 2025 — a transaction whose merit is
-genuinely contested, and which the keyword rule scored as unambiguous good news.
+`StrategicPartnership (Positive): Matched phrase 'completion of acquisition'`. The skeptic's
+(web-sourced, not orchestrator-verified) account is that ESQ roughly doubled its size by buying a bank with
+sharply rising problem loans — a transaction whose merit is at least contestable, and which the keyword rule
+scored as unambiguous good news. The defect does not depend on that account: the rule would have minted the
+same Positive signal for a disposal.
 
 **Spec 217 fixed only one case.** `CorporateActionSupersede` (`acq-supersede-v1`) rewrites the
 `StrategicPartnership` over ONE filing — a recognised pending acquisition where the company is the **target** —
@@ -144,8 +146,8 @@ From the same 2026-09-14 ESQ stress test. Each needs its own verification and, i
 - **Merger share-conversion Form 4s may be counted as insider activity.** ESQ's Caronia and O'Rourke filings on
   2026-08-03 were reported by the skeptic as merger conversions, not trades, and may be inflating ESQ's Velocity
   of 100. Unverified by the orchestrator.
-- **`followingTier` is curated seed data and can go stale.** ESQ is `"small"` in `data/companies.json`, but after
-  the acquisition it is a ~$4.8B bank with analyst coverage and a premium valuation. A data review, not code.
+- **`followingTier` is curated seed data and can go stale.** ESQ is `"small"` in `data/companies.json`, but the
+  skeptic reports (unverified) that after the acquisition it is a multi-billion-dollar bank with analyst coverage. A data review, not code.
 - **The AI earnings read quotes totals.** From Q3 2026 through Q3 2027, ESQ's reported net income and loans may
   grow 50–70% year on year from the acquisition alone while per-share growth is much smaller. The judge could
   read deal growth as organic trajectory — the same failure the OOMA stress test found. The likeliest largest
