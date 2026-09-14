@@ -10,7 +10,7 @@ namespace Radar.Infrastructure.Sec;
 
 /// <summary>
 /// SPEC 217 §1 — the SEC-side implementation of <see cref="IAcquisitionFilingBodyReader"/>: fetches an
-/// item-1.01 8-K's own text so the pure <c>acqscan-v1</c> can read it.
+/// item-1.01 8-K's own text so the pure acquisition scan (<c>AcquisitionAgreementScan</c>) can read it.
 /// <para>
 /// <b>What it fetches, and why both.</b> The item-1.01 NARRATIVE ("the Company entered into an Agreement
 /// and Plan of Merger…") lives in the PRIMARY 8-K document; the per-share consideration is usually stated in

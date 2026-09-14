@@ -9,7 +9,7 @@ public enum CompanyStatus
 
     /// <summary>
     /// SPEC 217 — a pending acquisition of THIS company has been recognised deterministically from its own
-    /// item-1.01 8-K (<c>acqscan-v1</c>): an agreement in which the company is the TARGET, with a stated
+    /// item-1.01 8-K (the acquisition scan, <c>AcquisitionAgreementScan.Version</c>): an agreement in which the company is the TARGET, with a stated
     /// per-share consideration, both verified verbatim in the filing text.
     /// <para>
     /// <b>It is DERIVED AT RUN TIME, never curated.</b> Unlike the four members above it is not settable in

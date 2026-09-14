@@ -19,15 +19,26 @@ using Xunit.Abstractions;
 namespace Radar.IntegrationTests;
 
 /// <summary>
-/// SPEC 217 §1 — the READ-ONLY LIVE MEASUREMENT of what <c>acqscan-v1</c> actually produces over the whole
-/// accrued store (CLAUDE.md's "no measure ships without its live distribution").
+/// SPEC 217 §1 — the READ-ONLY LIVE MEASUREMENT of what the CURRENT acquisition scan
+/// (<see cref="AcquisitionAgreementScan.Version"/>) actually produces over the whole accrued store (CLAUDE.md's
+/// "no measure ships without its live distribution").
+/// <para>
+/// ⚠ AMENDED by spec 227. As shipped this harness composed only <c>AddFileRawEvidenceStore</c>, so
+/// <see cref="IEvidenceRepository"/> resolved to the IN-MEMORY repository and the harness saw no evidence at all
+/// (reproduced 2026-09-14: 0 item-1.01 filings identified) — spec 217 §1's distribution was never produced by
+/// it, and its expectation of exactly one recognition was wrong: the store held a second, FALSE
+/// <c>acqscan-v1</c> recognition (SHOO). The composition now also registers the durable signal history, which
+/// routes the repository to the file store (spec 142). The v1-versus-v2 side-by-side distribution, the recall
+/// check and the efficacy effect live in <see cref="AcquisitionScanV2LiveMeasurementTests"/>; this harness
+/// measures the current scan alone.
+/// </para>
 /// <para>
 /// It runs the PRODUCTION path — the same <see cref="IAcquisitionFilingBodyReader"/> the recognition pass
 /// uses, through the same globally-paced SEC <c>HttpClient</c> — over EVERY item-1.01 filing evidence item
-/// in the store (measured 2026-09-08: exactly 178), and reports the distribution: recognised /
+/// in the store (190 on 2026-09-14), and reports the distribution: recognised /
 /// not-recognised BY LEG / company-is-acquirer / fetch-failed / unresolved company / untrustworthy
-/// identifiers. Expected: 1 recognised (MarineMax, accession 0001193125-26-341302, the 2026-08-10 Safe
-/// Harbor Marinas merger) and 177 not.
+/// identifiers. Measured under <c>acqscan-v2</c> on 2026-09-14 (spec 227 §3): 1 recognised (MarineMax, accession
+/// 0001193125-26-341302, the 2026-08-10 SHM Holdco / Safe Harbor Marinas merger at $53.00) of 159 scanned.
 /// </para>
 /// <para>
 /// <b>ANY SECOND RECOGNITION MUST BE INVESTIGATED BY HAND AND NAMED IN THE PR BODY.</b> A false positive
@@ -83,7 +94,7 @@ public sealed class AcquisitionRecognitionLiveMeasurementTests(ITestOutputHelper
     }
 
     [AcqScanLiveFact]
-    public async Task LiveDistribution_OfAcqScanV1_OverEveryItem101FilingInTheStore()
+    public async Task LiveDistribution_OfTheCurrentAcqScan_OverEveryItem101FilingInTheStore()
     {
         var root = DataRoot()!;
         var ct = CancellationToken.None;
@@ -94,6 +105,10 @@ public sealed class AcquisitionRecognitionLiveMeasurementTests(ITestOutputHelper
         services.AddRadarApplicationServices();
         services.AddLocalFileCompanySeed(Path.Combine(root, "companies.json"));
         services.AddFileRawEvidenceStore(Path.Combine(root, "evidence", "raw"));
+        services.AddFileSignalStore(Path.Combine(root, "signals"));
+
+        // Spec 227: without this the repository is the in-memory one and the harness measures an empty store.
+        services.AddDurableRadarSignalHistory();
         services.AddRadarAcquisitionRecognition(
             new SecCollectorOptions { UserAgent = UserAgent()! },
             // Temp roots that are never written to: the harness calls the READER only, never the store or
@@ -225,13 +240,13 @@ public sealed class AcquisitionRecognitionLiveMeasurementTests(ITestOutputHelper
         sb.Append(CultureInfo.InvariantCulture, $"- Company unresolved (skipped before any fetch): {unresolved}.\n");
         sb.Append(CultureInfo.InvariantCulture, $"- Fetch failed (re-attempted on a later run; NOT a \"no acquisition\" answer): {fetchFailed.Count}.\n\n");
 
-        sb.Append("| acqscan-v1 outcome | count |\n| --- | ---: |\n");
+        sb.Append(CultureInfo.InvariantCulture, $"| {AcquisitionAgreementScan.Version} outcome | count |\n| --- | ---: |\n");
         foreach (var outcome in AcquisitionAgreementScan.AllOutcomes)
         {
             sb.Append(CultureInfo.InvariantCulture, $"| {AcquisitionAgreementScan.Token(outcome)} | {tally.GetValueOrDefault(outcome)} |\n");
         }
 
-        sb.Append(CultureInfo.InvariantCulture, $"\n**Recognised: {recognised.Count}.** Expected 1 (MarineMax / HZO, accession 0001193125-26-341302). ANY second recognition must be investigated by hand and named in the PR body — a false positive closes a live thesis.\n\n");
+        sb.Append(CultureInfo.InvariantCulture, $"\n**Recognised: {recognised.Count}.** Measured 1 under acqscan-v2 on 2026-09-14 (MarineMax / HZO, accession 0001193125-26-341302; spec 227 §3). ANY other recognition must be investigated by hand and named in the PR body — a false positive closes a live thesis.\n\n");
         foreach (var line in recognised)
         {
             sb.Append("- ").Append(line).Append('\n');

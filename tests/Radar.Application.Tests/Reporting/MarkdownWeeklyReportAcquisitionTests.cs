@@ -124,6 +124,59 @@ public sealed class MarkdownWeeklyReportAcquisitionTests
     }
 
     [Fact]
+    public void RetiredRecognitions_AreNamedInTheSectionFooter_WhenMeasured()
+    {
+        // SPEC 227 §2: a recognition retired by a scan-version change is on disk but closes no thesis; the
+        // section says so, with the count, rather than the company silently leaving the list.
+        var model = Model([Entry(new ScoreSnapshotBuilder().Build(), null)], []) with
+        {
+            AcquisitionsRetiredByScanVersion = 2,
+        };
+
+        var markdown = Renderer().Render(model);
+
+        var section = markdown.IndexOf("## Acquisitions pending", StringComparison.Ordinal);
+        var footer = markdown.IndexOf(
+            "2 recognitions retired by scan version: recorded under a scan version earlier than "
+                + AcquisitionAgreementScan.Version
+                + ", they are retired and govern nothing; only a recognition under the current rule closes a thesis.",
+            StringComparison.Ordinal);
+        Assert.True(section >= 0 && footer > section, markdown);
+        // A retired record never governs again, even after a rescan: the footer must not promise otherwise.
+        Assert.DoesNotContain("until the filing is rescanned", markdown, StringComparison.Ordinal);
+        Assert.Contains("Recognition is deterministic (" + AcquisitionAgreementScan.Version + ")", markdown, StringComparison.Ordinal);
+
+        var withRows = Renderer().Render(
+            Model([Entry(new ScoreSnapshotBuilder().Build(), Marinemax)], [Row()]) with
+            {
+                AcquisitionsRetiredByScanVersion = 1,
+            });
+        Assert.Contains(
+            "1 recognition retired by scan version: recorded under a scan version earlier than "
+                + AcquisitionAgreementScan.Version
+                + ", it is retired and governs nothing; only a recognition under the current rule closes a thesis.",
+            withRows,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnUnmeasuredOrZeroRetiredCount_RendersNoFooter()
+    {
+        // Null = not measured (no store / unreadable store) and must never print as a zero; a measured zero has
+        // nothing to account for.
+        foreach (int? retired in new int?[] { null, 0 })
+        {
+            var markdown = Renderer().Render(
+                Model([Entry(new ScoreSnapshotBuilder().Build(), null)], []) with
+                {
+                    AcquisitionsRetiredByScanVersion = retired,
+                });
+
+            Assert.DoesNotContain("retired by scan version", markdown, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void NullSection_RendersNothing_BecauseNothingWasMeasured()
     {
         // No acquisitions store composed: "nothing is pending" was never measured, so the report must not

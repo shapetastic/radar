@@ -124,6 +124,55 @@ public sealed class PendingAcquisitionsTests
     }
 
     [Fact]
+    public void ARecordFromAnOlderScanVersion_IsRetired_Counted_AndGovernsNoConsumer()
+    {
+        // SPEC 227 §2: a record recognised under a rule we no longer trust must stop closing a thesis the
+        // moment the rule is replaced — not when its rescan lands — and it must be COUNTED, not dropped.
+        var retiredCompany = Guid.NewGuid();
+        var retiredEvidence = Guid.NewGuid();
+        var retired = Record(companyId: retiredCompany, accession: "0001641172-25-008949", evidenceId: retiredEvidence)
+            with { ScanVersion = "acqscan-v1" };
+        var current = Record();
+
+        var projection = From(retired, current);
+
+        Assert.Equal(1, projection.RetiredByScanVersion);
+        Assert.Equal(AcquisitionAgreementScan.Version, projection.AdmittedScanVersion);
+        Assert.Equal(current, Assert.Single(projection.Records));
+
+        // Every consumer-facing read ignores it: scoring status, the report's For/At, the efficacy
+        // AnnouncedOn exclusion, and the supersede's evidence ids.
+        Assert.Null(projection.For(retiredCompany));
+        Assert.Null(projection.At(retiredCompany, Announced.AddDays(30)));
+        Assert.Null(projection.StatusAt(retiredCompany, Announced.AddDays(30)));
+        Assert.Null(projection.AnnouncedOn(retiredCompany));
+        Assert.DoesNotContain(retiredEvidence, projection.RecognisedEvidenceIds);
+
+        // A projection holding ONLY retired records has nothing pending — and says why.
+        var onlyRetired = From(retired);
+        Assert.False(onlyRetired.Any);
+        Assert.Empty(onlyRetired.RecognisedEvidenceIds);
+        Assert.Equal(1, onlyRetired.RetiredByScanVersion);
+        Assert.True(onlyRetired.RecognitionAvailable);
+    }
+
+    [Fact]
+    public void TheExplicitAdmittedVersionOverload_AdmitsOnlyThatVersion()
+    {
+        // The measurement-only overload (spec 227 §3's "before" arm): the durable v1 records admitted as v1
+        // admitted them, and the current version's records retired instead.
+        var v1 = Record() with { ScanVersion = "acqscan-v1" };
+        var current = Record(companyId: Guid.NewGuid());
+
+        var projection = new PendingAcquisitions(
+            new AcquisitionStoreReadResult([v1, current], 0), recognitionAvailable: true, "acqscan-v1");
+
+        Assert.Equal(v1, Assert.Single(projection.Records));
+        Assert.Equal(1, projection.RetiredByScanVersion);
+        Assert.Equal(0, PendingAcquisitions.None.RetiredByScanVersion);
+    }
+
+    [Fact]
     public void UnreadableFilesAreADifferentFactFromAnUnreadableStore()
     {
         // "Some records may be missing from this answer" (Unreadable > 0, still Readable) and "there is no

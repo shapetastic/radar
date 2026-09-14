@@ -8,4 +8,9 @@
     <ProjectReference Include="..\..\src\Radar.Domain\Radar.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Spec 227: verbatim excerpts of two real SEC item-1.01 bodies (see RealAcquisitionFilingBodies). -->
+    <EmbeddedResource Include="Acquisitions\*.txt" LogicalName="Radar.TestSupport.Acquisitions.%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

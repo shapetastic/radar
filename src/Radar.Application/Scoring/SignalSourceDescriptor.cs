@@ -174,7 +174,7 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // TrajectoryScore, OpportunityScore and rank for the affected company — measured: MarineMax's
         // trajectory rose 56 → 62 on 2026-08-10 on exactly that signal. A scoring-assembly rule that can
         // move a score and is NOT hashed is the comparability hole spec 194 §2 closed for the judgment read
-        // and spec 198 §3 closed for the feed query. `acqscan-v1` is folded in beside it because the
+        // and spec 198 §3 closed for the feed query. The scan version (`AcquisitionAgreementScan.Version`) is folded in beside it because the
         // supersede's rule is meaningless without the recognition rule that decides which evidence it
         // applies to.
         //

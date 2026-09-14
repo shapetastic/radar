@@ -3495,6 +3495,9 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     behaviour over the real filings is the env-gated live harness's job (`AcquisitionRecognitionLiveMeasurementTests`,
     §1 OWED: the distribution over all 178 accrued item-1.01 filings, expected 1 recognised / 177 not; any
     second recognition is investigated by hand and named, because a false positive closes a live thesis).
+    (⚠ AMENDED in place by spec 227: that harness never produced the distribution — its composition read the
+    in-memory evidence repository, so it saw no evidence — and the store in fact held a SECOND, FALSE `acqscan-v1`
+    recognition (SHOO). Spec 227 §3 produced the distribution for v1 and v2 side by side; see the spec-227 bullet.)
   - **The state is DERIVED, never curated.** `CompanyStatus.PendingAcquisition` is added to the Domain enum
     but is unreachable from `data/companies.json` (`LocalFileCompanySeedSource` always writes `Active`): the
     Worker resolves it per run from the append-only acquisitions store and stamps it on every snapshot from
@@ -4128,8 +4131,9 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
   - **Fingerprint: BOTH families moved, twelve values in `ScoringConfigFingerprintTests`** (the only authority;
     none quoted here) — the `rules=` token and the `acq=` segment are both unconditional. The three
     composition-guard pins did NOT move (their frozen `StubSourceDescriptor` carries neither). ONE operator step
-    is owed after merge (delete/re-record every configured `data/scoring-configs/strategies/{name}.json` before
-    the first post-226 run; never fabricated; a `StrategyIdentityGuard` halt before it is CORRECT).
+    was owed after merge (delete/re-record every configured `data/scoring-configs/strategies/{name}.json` before
+    the first post-226 run; never fabricated; a `StrategyIdentityGuard` halt before it is CORRECT) — TAKEN
+    2026-09-14 after the merge (`b66e3b5`).
   - **§4 live distribution — MEASURED 2026-09-14 as a read-only paired re-score of TWO arms** (history, not a
     current pin) (`ItemHeadingDirectionCounterfactualTests`, `Radar.IntegrationTests`, env-gated on
     `RADAR_ITEM_HEADING_DATA_ROOT`; the production v9 extractor re-run over each accrued partnership's evidence in
@@ -4178,7 +4182,9 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     - **HZO interaction (both arms):** exactly one `CorporateAction` link over the recognised filing, before and
       after; supersede counters BEFORE Rewrote 1 (from StrategicPartnership 1), AFTER Rewrote 1 (from
       CorporateAction 1), 0 duplicates.
-  - **Two spec-217 findings the harness surfaced, recorded here, NOT fixed (each needs its own spec):** (i) the
+  - **Two spec-217 findings the harness surfaced, recorded here, NOT fixed (each needs its own spec):** (⚠ AMENDED
+    in place: both were fixed by spec 227 — `acqscan-v2` does not recognise SHOO and records HZO at $53.00 with
+    acquirer "SHM Holdco, LLC"; see the spec-227 bullet.) (i) the
     live acquisitions store holds a SECOND recognition, SHOO accession `0001641172-25-008949` (2025-05-07), whose
     record names the acquirer "Lead Borrower" and a "$0.21 per share" consideration quoted from a quarterly
     DIVIDEND beside an amended credit agreement — on its face an `acqscan-v1` false positive that would mark SHOO
@@ -4186,6 +4192,88 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     `RecognisedFilingHasNoSignalInWindow` for it. (ii) HZO's live record names the acquirer "Parent" at "$0.001
     per share in cash", not the "Safe Harbor Marinas, LLC … $53.00" of the spec-217 fixture; the recognition is
     right, its quoted terms are not.
+- **Spec 227 (2026-09-14) — a dividend is not a takeover: `acqscan-v1 → acqscan-v2`, and the scan version becomes
+  part of recognition identity end to end.** The live store held two `acqscan-v1` recognitions; one was FALSE
+  (Steven Madden, SHOO, `0001641172-25-008949`: a Q1-results 8-K with a credit agreement attached — a heading with
+  no terminal punctuation bound "Steven Madden" in the dateline to "Acquisition of Kurt Geiger", the first
+  `$X per share` in the document was a quarterly dividend, and the credit agreement's "Lead Borrower" was read as
+  the acquirer), and the genuine one (MarineMax, HZO, `0001193125-26-341302`) carried the $0.001 par value and the
+  role word "Parent". SHOO had been `PendingAcquisition` since 2025-05-07 — out of the `benchmark-universe-v1` peer
+  mean and coverage denominator for every date the 2026-09-29 claim reads.
+  - **Leg (a).** The normalizer keeps the source's HARD line wraps ("Steve\nMadden"), so splitting on every line
+    break would cut real sentences and names; v2 splits a clause on terminal punctuation, a BLANK line, `~` and a
+    SPACED en/em dash, AND (not trusting the split alone) binds a company-after target phrase only to a DIRECT
+    object (whitespace, quotes and articles only between). The 90-character proximity survives only for the
+    company-FIRST phrases ("MarineMax Enters into Definitive Agreement to be Acquired by …"). "acquisition of" is
+    kept only with the company as direct object AND a capitalised `by {acquirer}` within 60 characters; removing it
+    outright would have lost 0 of v2's recognitions on the live population (measured below). New acquirer-side
+    vetoes: "completion of (the) acquisition of", "completes (the) acquisition of", "completed acquisition of".
+  - **Leg (b).** Exclusions are DATA in one place (`ConsiderationExclusions`: par value, dividend, exercise price,
+    conversion price, offering price / price to the public, and "purchase price" beside "offering" / "private
+    placement"); every per-share amount in a sentence is considered in position order and an excluded one is
+    skipped with the scan continuing in that sentence and after it; a surviving amount needs merger vocabulary
+    ("merger consideration", "offer price", "exchange ratio", a structural "right to receive $X", or "per share in
+    cash" beside acquired/acquire/merger/transaction).
+  - **Acquirer.** Defined-term roles are DATA (`DefinedTermRoles`) and are refused in every form, the walk
+    continuing; a defined-party capture is cut after its last party-list introducer (by and among / by and between
+    / among / between / with) and the defined-party pattern admits whitespace inside the quotation marks (the live
+    HZO body writes `(“ Parent ”)`, which v1 could not match). HZO under v2: **$53.00** (the §2.01(c) "right to
+    receive … $53.00 per share … (the “ Merger Consideration ”)" sentence; the par value is skipped), acquirer
+    **"SHM Holdco, LLC"** — the entity the merger agreement defines as Parent (Safe Harbor Marinas' vehicle). SHOO
+    under v2: **`NoMergerAgreement`** — the body carries only the credit agreement's "definitive agreement"
+    boilerplate and no clause puts SHOO in the target position; not `CompanyIsAcquirer`, because the heading's
+    subject is "Steve\nMadden" (not a seeded mention) and `~` separates it from the completion phrase.
+  - **Identity (§2).** The store writes `{companyId}/{scanVersion}/{accession}.json`; the two legacy
+    version-less files stay unmoved, unedited and readable (each carries its `scanVersion`); `ExistsAsync` takes the
+    scan version (a legacy file answers only for the version its content names); the pass reads the store once,
+    counts `RetiredByScanVersion` (null = store unreadable, never 0) and `RetiredRecordsRescanned`, and rescans a
+    filing whose only record is older within the ordinary `MaxFetchesPerRun`; `PendingAcquisitions` admits ONLY the
+    current version, so a retired record sets no status, no banner, no report row, no benchmark / eligibility
+    exclusion and no supersede — every consumer (scoring stamp, report builder, `UniverseBenchmark`,
+    `ObservationEligibility`, `CorporateActionSupersede`) reads that projection and nothing else. The retired count
+    is on the pass's aggregated line and in a footer of the report's `## Acquisitions pending` section (rendered
+    only when measured and non-zero). A retired record never governs again — a rescan writes a separate v2 record
+    and never revives it — and the legacy files are never removed, so the retired count stays non-zero for good.
+    **Timing:** v1 is retired the moment v2 ships. The backlog is NOT two filings: the version bump retires EVERY
+    scan-cache answer (the pass accepts only a cache hit whose version is current), so the first post-merge pass
+    faces the whole item-1.01 population — 185 accessions when the §3 harness measured it on 2026-09-14 (history;
+    it grows as filings accrue). Fetches are capped per run by `AcquisitionRecognitionOptions.MaxFetchesPerRun`
+    (bound from `Radar:Acquisitions:MaxFetchesPerRun`; read the option for the value) and spent newest-first, so the
+    drain takes several runs — PROJECTED, not measured: at the default in force on 2026-09-14 (40) that is at least
+    five. A failed body read is never cached, so the 31 deterministic read failures §3 measured are re-fetched and
+    spend budget on EVERY run, before and after the drain. Whether HZO (`0001193125-26-341302`, filed 2026-08-10)
+    is re-recognised on the FIRST post-merge run is **UNMEASURED** — it depends on its newest-first rank in the
+    live store, which this slice did not read; it is expected to fall early because the ordering is newest-first
+    and the filing is recent. Until its v2 record persists — and in any `score` / `replay` pass (no recognition
+    pass) or after a failed rescan — HZO shows un-pending. Already-stamped `CompanyStatusAtScoring =
+    PendingAcquisition` snapshots stay as written (AD-8).
+  - **Fingerprint.** BOTH families moved — twelve values in `ScoringConfigFingerprintTests` (the only authority;
+    none quoted here) — through the `acq=` segment's scan half, unconditional. `acq-supersede-v2` and
+    `excess-vs-universe-v2` did NOT bump: neither rule changed (the supersede still rewrites the governing record's
+    filing; the benchmark still excludes what the projection admits) — only WHICH records the projection admits
+    changed, and that is hashed through the scan version. **ONE operator step is owed after merge** (delete or
+    re-record every configured `data/scoring-configs/strategies/{name}.json` before the first post-227 run; never
+    fabricated; a `StrategyIdentityGuard` halt before it is CORRECT).
+  - **§3 live measurement — MEASURED 2026-09-14** (history, not a pin) by `AcquisitionScanV2LiveMeasurementTests`
+    (env-gated; production population, resolver, mentions and paced SEC reader; each body fetched once 19:54–19:59
+    UTC and kept outside `data/`; v1 = the frozen `AcqScanV1HistoricalControl`; store / cache / evidence writes
+    throw; all 188,321 files under `data/` compared by path, length and last-write time before and after — 0
+    changed). 190 item-1.01 evidence items (185 accessions), 0 unresolved, **31 body reads failed** (all
+    deterministic reader failures — "no parseable document table" / "no primary document row", which include
+    HZO's 2026-06-30 credit agreement — NOT fixed here; a finding for its own spec), 159 scanned by both. Tallies
+    v1 → v2: recognised 2 → 1, no-merger-agreement 132 → 132, company-not-target 12 → 12, company-is-acquirer
+    10 → 13, acquirer-not-named 1 → 0, no-stated-consideration 2 → 1, empty-body 0 → 0, verbatim-check-failed 0 → 0.
+    Changed: SHOO recognised → no-merger-agreement; UTL `0001193125-25-073493` acquirer-not-named →
+    company-is-acquirer (Unitil buying Maine Natural Gas); CMCO `0001193125-26-037694` no-merger-agreement →
+    company-is-acquirer (completes acquisition of Kito Crosby); NOVT `0001193125-26-262867` no-stated-consideration
+    → company-is-acquirer (definitive agreement to acquire Riverpoint Medical). Recall: the only Radar company any
+    evidence item describes with takeover language ("to be acquired by", "take-private", …) is HZO (4 items), found
+    by both versions. **Efficacy, same store, only the projection differing** (`StrategyComparisonOptions.Default`,
+    51 as-of dates, 35 in-sample / 16 out-of-sample): Lead `disclosure-led-v11` rank 3 → 3, in-sample rho 0.1070 →
+    0.0988, oos rho 0.0709 [0.0113, 0.1300] → 0.0615 [0.0022, 0.1203] (the oos interval's lower bound moves close to
+    zero), `CorporateActionInWindow` 82 → 41; `default` rank 4 → 4, in-sample 0.0464 → 0.0440, oos 0.0433 → 0.0459
+    (interval still spans zero), `CorporateActionInWindow` 98 → 49; benchmark dates with a member removed 51 → 35;
+    leaderboard ordering unchanged. The interim arm (v1 retired, no rescan) put the Lead's oos rho at 0.0610.
 
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 

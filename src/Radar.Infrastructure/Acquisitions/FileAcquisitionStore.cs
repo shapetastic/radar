@@ -15,9 +15,16 @@ public sealed class FileAcquisitionStoreOptions
 }
 
 /// <summary>
-/// SPEC 217 §1 — the on-disk acquisitions store: one JSON file per recognised (company, accession) at
-/// <c>{RootDirectory}/{companyId:D}/{sanitizedAccession}.json</c>, holding that filing's
-/// <see cref="PendingAcquisitionRecord"/>.
+/// SPEC 217 §1 — the on-disk acquisitions store: one JSON file per recognised (company, scan version,
+/// accession) at <c>{RootDirectory}/{companyId:D}/{sanitizedScanVersion}/{sanitizedAccession}.json</c>, holding
+/// that filing's <see cref="PendingAcquisitionRecord"/>.
+/// <para>
+/// <b>Version in the path (spec 227 §2).</b> Before spec 227 the path carried no version
+/// (<c>{companyId:D}/{accession}.json</c>), so a recognition under a corrected rule would have collided with
+/// the file the retired rule wrote. Those LEGACY files are never moved, edited or deleted; <see cref="GetAllAsync"/>
+/// still reads them (it enumerates recursively, and each record carries its own <c>scanVersion</c>), and
+/// <see cref="ExistsAsync"/> honours one only for the version its content names.
+/// </para>
 /// <para>
 /// <b>Append-only and insert-if-new</b> (AD-8; the spec-216 ledger pattern). The write goes through the
 /// shared <see cref="AtomicFileWriter"/>, so the rename IS the commit point and a half-written file can
@@ -66,17 +73,21 @@ public sealed class FileAcquisitionStore : IAcquisitionStore
         var companyDirectory = Path.Combine(_options.RootDirectory, record.CompanyId.ToString("D"));
 
         var fileName = FileTickerKey.Sanitize(record.Accession);
-        if (fileName is null)
+        var versionDirectory = SanitizeVersionDirectory(record.ScanVersion);
+        if (fileName is null || versionDirectory is null)
         {
             _logger.LogWarning(
-                "Acquisition accession '{Accession}' for company {CompanyId} is blank or contains invalid "
-                    + "filename characters; the record cannot be written.",
+                "Acquisition accession '{Accession}' or scan version '{ScanVersion}' for company {CompanyId} is "
+                    + "blank or contains invalid filename characters; the record cannot be written.",
                 record.Accession,
+                record.ScanVersion,
                 record.CompanyId);
             return DurableWriteResult.NotPersisted(companyDirectory);
         }
 
-        var path = Path.Combine(companyDirectory, fileName + ".json");
+        // SPEC 227 §2: the scan version is part of the durable path, so a record recognised under a new rule
+        // never collides with (and never overwrites) the file an earlier rule wrote for the same filing.
+        var path = Path.Combine(companyDirectory, versionDirectory, fileName + ".json");
         if (File.Exists(path))
         {
             return await ExistingFileOutcomeAsync(path, ct).ConfigureAwait(false);
@@ -161,28 +172,65 @@ public sealed class FileAcquisitionStore : IAcquisitionStore
             records.Add(record);
         }
 
-        // Deterministic order (AD-3): company, then accession ordinal.
+        // Deterministic order (AD-3): company, then accession ordinal, then scan version ordinal — since spec 227
+        // one (company, accession) can hold a record under more than one scan version.
         records.Sort(static (a, b) =>
         {
             var byCompany = a.CompanyId.CompareTo(b.CompanyId);
-            return byCompany != 0 ? byCompany : string.CompareOrdinal(a.Accession, b.Accession);
+            if (byCompany != 0)
+            {
+                return byCompany;
+            }
+
+            var byAccession = string.CompareOrdinal(a.Accession, b.Accession);
+            return byAccession != 0 ? byAccession : string.CompareOrdinal(a.ScanVersion, b.ScanVersion);
         });
 
         return new AcquisitionStoreReadResult(records, unreadable);
     }
 
-    public Task<bool> ExistsAsync(Guid companyId, string accession, CancellationToken ct)
+    public async Task<bool> ExistsAsync(
+        Guid companyId, string accession, string scanVersion, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(accession);
+        ArgumentNullException.ThrowIfNull(scanVersion);
 
         var fileName = FileTickerKey.Sanitize(accession);
-        if (fileName is null)
+        var versionDirectory = SanitizeVersionDirectory(scanVersion);
+        if (fileName is null || versionDirectory is null)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        var path = Path.Combine(_options.RootDirectory, companyId.ToString("D"), fileName + ".json");
-        return Task.FromResult(File.Exists(path));
+        var companyDirectory = Path.Combine(_options.RootDirectory, companyId.ToString("D"));
+        if (File.Exists(Path.Combine(companyDirectory, versionDirectory, fileName + ".json")))
+        {
+            return true;
+        }
+
+        // A LEGACY (pre-227, version-less path) file answers only for the scan version its CONTENT carries; for
+        // any other version it is "not recognised under THIS rule" and the filing is rescanned. It is read, never
+        // moved or edited (AD-8).
+        var legacy = Path.Combine(companyDirectory, fileName + ".json");
+        if (!File.Exists(legacy))
+        {
+            return false;
+        }
+
+        var record = await TryReadAsync(legacy, ct).ConfigureAwait(false);
+        return record is not null
+            && string.Equals(record.ScanVersion, scanVersion, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The scan version as a single directory segment, or null when it is blank, carries an invalid filename
+    /// character, or is a relative-path segment ("." / "..") that would place the file outside its company
+    /// folder.
+    /// </summary>
+    private static string? SanitizeVersionDirectory(string? scanVersion)
+    {
+        var sanitized = FileTickerKey.Sanitize(scanVersion);
+        return sanitized is null or "." or ".." ? null : sanitized;
     }
 
     /// <summary>

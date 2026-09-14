@@ -14,12 +14,12 @@ namespace Radar.Application.Acquisitions;
 /// lands in exactly one bucket — nothing is discarded without being counted (CLAUDE.md).
 /// </summary>
 /// <param name="Item101Filings">Item-1.01 filing evidence items identified in the store this pass.</param>
-/// <param name="AlreadyRecognised">Skipped because a record for (company, accession) is already durable.</param>
-/// <param name="AlreadyScanned">Skipped because <c>acqscan-v1</c> already answered for this accession (cache hit).</param>
+/// <param name="AlreadyRecognised">Skipped because a record for (company, accession) under the CURRENT scan version is already durable.</param>
+/// <param name="AlreadyScanned">Skipped because the current scan version already answered for this accession (cache hit).</param>
 /// <param name="UnresolvedCompany">Skipped because the filing's company could not be resolved from its hints.</param>
 /// <param name="UnparseableIdentifiers">Item-1.01 filings whose CIK/accession could not be trusted (never guessed).</param>
 /// <param name="FetchFailed">The bounded body fetch failed; a later run re-attempts the filing.</param>
-/// <param name="ByOutcome">The <c>acqscan-v1</c> outcome tally, over fresh scans AND replayed cache hits.</param>
+/// <param name="ByOutcome">The current scan version's outcome tally, over fresh scans AND replayed cache hits.</param>
 /// <param name="Recognised">The records recognised and durably persisted THIS pass.</param>
 /// <param name="NotPersisted">Recognitions whose durable write FAILED — a loss, counted, never reported as stored.</param>
 /// <param name="CacheNotWritten">Authoritative answers whose cache write failed — a re-fetch next run, counted.</param>
@@ -43,6 +43,23 @@ public sealed record AcquisitionRecognitionResult(
     /// <summary>The pass that ran nothing (not composed) — an honest all-zero record, never a null.</summary>
     public static readonly AcquisitionRecognitionResult NotRun =
         new(0, 0, 0, 0, 0, 0, new Dictionary<AcquisitionScanOutcome, int>(), [], 0, 0, 0);
+
+    /// <summary>
+    /// SPEC 227 §2 — durable records recognised under an OLDER scan version, read at the start of the pass:
+    /// retired, and they govern no consumer. A retired record never governs again: a rescan under the current
+    /// version writes a separate current-version record and never revives it, and the legacy file is never
+    /// removed (AD-8), so this count does not fall back to zero after a rescan. <c>null</c> means NOT MEASURED —
+    /// the store could not be read (or the pass did not run) — and must never render as 0.
+    /// </summary>
+    public int? RetiredByScanVersion { get; init; }
+
+    /// <summary>
+    /// SPEC 227 §2 — filings whose only durable record came from an older scan version that were fetched
+    /// successfully and rescanned under the current version THIS pass. A fetch attempt whose body read failed is
+    /// NOT counted here (it is counted on <see cref="AcquisitionRecognitionResult.FetchFailed"/>), although it
+    /// spent the same per-run fetch budget as any other filing.
+    /// </summary>
+    public int RetiredRecordsRescanned { get; init; }
 }
 
 /// <summary>The Application seam the pipeline runner calls between collection and scoring (spec 217 §1).</summary>
@@ -59,7 +76,7 @@ public interface IAcquisitionRecognitionPass
 /// <b>Every skip is counted and surfaced</b> in <see cref="AcquisitionRecognitionResult"/> and in ONE
 /// aggregated log line per pass (never one line per filing — CLAUDE.md). The buckets are deliberately
 /// distinct facts: already recognised, already scanned, unresolved company, untrustworthy identifiers,
-/// fetch failed, budget exhausted, and the per-outcome <c>acqscan-v1</c> tally naming each failed leg.
+/// fetch failed, budget exhausted, and the per-outcome scan tally naming each failed leg.
 /// </para>
 /// <para>
 /// <b>It never writes evidence, a signal or a score.</b> Its only durable outputs are the append-only
@@ -127,6 +144,18 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
 
         var mentionsByCompany = BuildMentionIndex(companies);
 
+        // SPEC 227 §2: ONE store read up front, projected through the SAME PendingAcquisitions every consumer
+        // uses, so the retired count this pass logs is the count those consumers act on. The (company,
+        // accession) pairs whose records are all retired are the filings the version bump owes a rescan.
+        var storeRead = await _store.GetAllAsync(ct).ConfigureAwait(false);
+        int? retiredByScanVersion = storeRead.Readable
+            ? new PendingAcquisitions(storeRead).RetiredByScanVersion
+            : null;
+        var retiredFilings = storeRead.Records
+            .Where(r => !string.Equals(r.ScanVersion, AcquisitionAgreementScan.Version, StringComparison.Ordinal))
+            .Select(r => (r.CompanyId, r.Accession))
+            .ToHashSet();
+
         var all = await _evidence.GetAllAsync(ct).ConfigureAwait(false);
 
         // Newest first, id-tiebroken (AD-3): the fetch budget must be spent on the filings most likely to
@@ -166,6 +195,7 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
         var cacheNotWritten = 0;
         var fetches = 0;
         var budgetRemaining = 0;
+        var retiredRescanned = 0;
 
         foreach (var (evidence, identifiers) in candidates)
         {
@@ -180,13 +210,17 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
                 continue;
             }
 
-            if (await _store.ExistsAsync(companyId, identifiers.Accession, ct).ConfigureAwait(false))
+            // SPEC 227 §2: "already recognised" means recognised under THIS scan version. A record from an older
+            // version does not count, so the filing falls through to the (version-aware) cache and is rescanned.
+            if (await _store
+                    .ExistsAsync(companyId, identifiers.Accession, AcquisitionAgreementScan.Version, ct)
+                    .ConfigureAwait(false))
             {
                 alreadyRecognised++;
                 continue;
             }
 
-            // The NEGATIVE half of the cache: an accession acqscan-v1 has already answered for under THIS
+            // The NEGATIVE half of the cache: an accession the scan has already answered for under THIS
             // scan version is never re-fetched. Without it the 177 not-recognised item-1.01 filings would
             // be re-fetched on every run, forever. A version bump retires every entry (heal-forward).
             var cached = await _scanCache.TryGetAsync(identifiers.Accession, ct).ConfigureAwait(false);
@@ -206,6 +240,7 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
             }
 
             fetches++;
+
             var body = await _reader
                 .ReadAsync(identifiers.Cik, identifiers.Accession, identifiers.PrimaryDocument, ct)
                 .ConfigureAwait(false);
@@ -213,6 +248,13 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
             {
                 fetchFailed++;
                 continue;
+            }
+
+            // Counted only once the body was actually read, so "rescanned" means a rescan that happened — a
+            // failed read of a retired filing is a fetch failure, not a rescan.
+            if (retiredFilings.Contains((companyId, identifiers.Accession)))
+            {
+                retiredRescanned++;
             }
 
             var mentions = mentionsByCompany.TryGetValue(companyId, out var m) ? m : [];
@@ -292,7 +334,11 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
             recognised,
             notPersisted,
             cacheNotWritten,
-            budgetRemaining);
+            budgetRemaining)
+        {
+            RetiredByScanVersion = retiredByScanVersion,
+            RetiredRecordsRescanned = retiredRescanned,
+        };
 
         LogPass(result);
         return result;
@@ -318,7 +364,10 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
                 + "{AlreadyScanned} already scanned (cache hit) / {UnresolvedCompany} unresolved company / "
                 + "{FetchFailed} fetch failed / {BudgetRemaining} left for a later run (budget {Budget}); "
                 + "scan tally {Tally}; {Recognised} newly recognised, {NotPersisted} recognised but NOT "
-                + "persisted, {CacheNotWritten} authoritative answer(s) not cached.",
+                + "persisted, {CacheNotWritten} authoritative answer(s) not cached; retired by scan version "
+                + "{RetiredByScanVersion} durable record(s) from an older scan version (they govern no "
+                + "consumer, now or after any rescan), {RetiredRecordsRescanned} of their filing(s) fetched "
+                + "successfully and rescanned under the current version this pass.",
             AcquisitionAgreementScan.Version,
             result.Item101Filings,
             result.UnparseableIdentifiers,
@@ -331,7 +380,12 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
             tally,
             result.Recognised.Count,
             result.NotPersisted,
-            result.CacheNotWritten);
+            result.CacheNotWritten,
+            // A retired count that could not be measured says so rather than printing a defaulted 0.
+            result.RetiredByScanVersion is { } retired
+                ? AcquisitionAgreementScan.Int(retired)
+                : "UNAVAILABLE (acquisitions store unreadable)",
+            result.RetiredRecordsRescanned);
     }
 
     /// <summary>
@@ -417,10 +471,14 @@ public sealed class AcquisitionRecognitionPass : IAcquisitionRecognitionPass
 public sealed class AcquisitionRecognitionOptions
 {
     /// <summary>
-    /// How many NEW item-1.01 body fetches one run may make. A scanned filing is never re-fetched (the
-    /// scan cache and the acquisitions store are the cache), so in steady state this is the number of
-    /// newly-filed item-1.01 8-Ks per run — small. The default drains the accrued 178-filing backlog over a
-    /// handful of runs without adding a burst to the shared SEC footprint.
+    /// How many NEW item-1.01 body fetches one run may make. A filing scanned under the CURRENT scan version
+    /// is never re-fetched (the scan cache and the acquisitions store are the cache), so in steady state this
+    /// is the number of newly-filed item-1.01 8-Ks per run — small. The default drained spec 217's accrued
+    /// 178-filing backlog over a handful of runs without adding a burst to the shared SEC footprint.
+    /// (⚠ AMENDED by spec 227: a <see cref="AcquisitionAgreementScan.Version"/> bump retires EVERY cached
+    /// answer, so the first pass under a new version faces the whole item-1.01 population again and drains it
+    /// newest-first over several runs; and a failed body read is never cached, so a deterministic read failure
+    /// is re-fetched — and spends this budget — on every run.)
     /// </summary>
     public int MaxFetchesPerRun { get; init; } = 40;
 }

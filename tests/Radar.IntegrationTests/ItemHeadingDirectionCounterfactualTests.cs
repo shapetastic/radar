@@ -891,7 +891,7 @@ public sealed class ItemHeadingDirectionCounterfactualTests(ITestOutputHelper ou
 
         public Task<AcquisitionStoreReadResult> GetAllAsync(CancellationToken ct) => inner.GetAllAsync(ct);
 
-        public Task<bool> ExistsAsync(Guid companyId, string accession, CancellationToken ct) => inner.ExistsAsync(companyId, accession, ct);
+        public Task<bool> ExistsAsync(Guid companyId, string accession, string scanVersion, CancellationToken ct) => inner.ExistsAsync(companyId, accession, scanVersion, ct);
     }
 }
 

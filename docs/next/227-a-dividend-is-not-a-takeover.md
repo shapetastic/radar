@@ -146,8 +146,11 @@ Make the version part of recognition identity end to end:
   acquisitions footer.
 - **Timing.** A v1 record is retired the moment v2 ships, not when its rescan lands. "Recognised under the rule we
   no longer trust" must not keep closing a thesis while a rescan waits in the budget queue. The consequence is that
-  HZO is briefly un-pending until its v2 rescan persists, normally the first post-merge run since the backlog is
-  two filings. State this in the PR.
+  HZO is briefly un-pending until its v2 rescan persists. State this in the PR. (⚠ AMENDED in place during
+  implementation: this line said the rescan normally lands on the first post-merge run "since the backlog is two
+  filings". That was false — the version bump retires every scan-cache answer, so the backlog is the whole
+  item-1.01 population, drained newest-first under the per-run fetch budget over several runs. Whether HZO lands
+  on the first run is UNMEASURED; see the spec-227 bullet in `docs/architecture-history.md`.)
 
 **Snapshots already stamped** `CompanyStatusAtScoring = PendingAcquisition` for SHOO stay exactly as written.
 That field is recorded provenance of what the run believed, and this spec does not rewrite it.

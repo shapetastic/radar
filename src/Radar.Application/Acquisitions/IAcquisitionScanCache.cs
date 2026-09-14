@@ -1,7 +1,7 @@
 namespace Radar.Application.Acquisitions;
 
 /// <summary>
-/// One cached <c>acqscan-v1</c> answer for one item-1.01 filing (spec 217 §1), keyed by SEC accession — the
+/// One cached acquisition-scan answer (stamped with its <c>AcquisitionAgreementScan.Version</c>) for one item-1.01 filing (spec 217 §1), keyed by SEC accession — the
 /// negative half of the "cached like the earnings read" rule. Without it the pass would re-fetch all 177
 /// NOT-recognised item-1.01 filings on every run forever; the acquisitions store alone caches only the
 /// recognitions.

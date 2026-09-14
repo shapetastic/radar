@@ -18,6 +18,15 @@ namespace Radar.Application.Acquisitions;
 /// <b>Nothing is discarded silently.</b> <see cref="Unreadable"/> carries the store's own count of files it
 /// could not parse, so a consumer that read fewer acquisitions than exist can say so.
 /// </para>
+/// <para>
+/// <b>Only the CURRENT scan version governs (spec 227 §2).</b> A record stamped with any other
+/// <see cref="PendingAcquisitionRecord.ScanVersion"/> is not admitted — it closes no thesis, excludes nothing
+/// from the benchmark or observation eligibility, and feeds no evidence id to the corporate-action supersede —
+/// and is counted on <see cref="RetiredByScanVersion"/>. The durable file is never moved, edited or deleted
+/// (AD-8). The recognition pass rescans the filing under the current version, and a recognition that rescan
+/// makes is a SEPARATE current-version record; the retired record is never revived and never governs again,
+/// so its count persists after the rescan.
+/// </para>
 /// </summary>
 public sealed class PendingAcquisitions
 {
@@ -39,17 +48,46 @@ public sealed class PendingAcquisitions
     /// (CLAUDE.md: a defaulted zero must never render as a measured zero).
     /// </param>
     public PendingAcquisitions(AcquisitionStoreReadResult read, bool recognitionAvailable = true)
+        : this(read, recognitionAvailable, AcquisitionAgreementScan.Version)
+    {
+    }
+
+    /// <summary>
+    /// The projection with an EXPLICIT admitted scan version. No production consumer calls this overload — every
+    /// consumer goes through the public constructor, which admits exactly
+    /// <see cref="AcquisitionAgreementScan.Version"/>. It exists so a read-only MEASUREMENT (spec 227 §3) can
+    /// build the "before" arm from the durable records a retired scan version wrote, without restamping them.
+    /// </summary>
+    /// <param name="read">The store read.</param>
+    /// <param name="recognitionAvailable">See the public constructor.</param>
+    /// <param name="admittedScanVersion">The ONE scan version whose records this projection admits.</param>
+    public PendingAcquisitions(
+        AcquisitionStoreReadResult read, bool recognitionAvailable, string admittedScanVersion)
     {
         ArgumentNullException.ThrowIfNull(read);
+        ArgumentException.ThrowIfNullOrWhiteSpace(admittedScanVersion);
 
         // A read that FAILED is never "available", whatever the caller passes: its emptiness was not
         // measured, so no consumer may state an absence from it. The two ways to be unavailable — no store
         // composed, and a store that could not be enumerated — collapse to the same honest answer here.
         RecognitionAvailable = recognitionAvailable && read.Readable;
         Unreadable = read.Unreadable;
+        AdmittedScanVersion = admittedScanVersion;
 
+        var retired = 0;
         foreach (var record in read.Records)
         {
+            // SPEC 227 §2: a record recognised under any OTHER scan version is RETIRED the moment that
+            // version stops being current — not when its rescan lands. "Recognised under a rule we no longer
+            // trust" must not keep closing a thesis while the rescan waits in the fetch budget. It is COUNTED,
+            // never silently dropped, and it contributes NOTHING: no company status, no banner, no
+            // benchmark/eligibility exclusion and no evidence id for the corporate-action supersede.
+            if (!string.Equals(record.ScanVersion, admittedScanVersion, StringComparison.Ordinal))
+            {
+                retired++;
+                continue;
+            }
+
             _evidenceIds.Add(record.EvidenceId);
 
             if (!_byCompany.TryGetValue(record.CompanyId, out var incumbent)
@@ -59,10 +97,22 @@ public sealed class PendingAcquisitions
             }
         }
 
+        RetiredByScanVersion = retired;
         Records = [.. _byCompany.Values
             .OrderBy(r => r.AnnouncedOnUtc)
             .ThenBy(r => r.CompanyId)];
     }
+
+    /// <summary>
+    /// SPEC 227 §2 — how many durable records on the read behind this projection were recognised under a scan
+    /// version OTHER than <see cref="AdmittedScanVersion"/> and were therefore NOT admitted. Meaningful only
+    /// when <see cref="RecognitionAvailable"/> is true: on the inert/unavailable projection it is 0 because
+    /// nothing was read, and a consumer must not render that zero as measured.
+    /// </summary>
+    public int RetiredByScanVersion { get; }
+
+    /// <summary>The scan version whose records this projection admits (<see cref="AcquisitionAgreementScan.Version"/> in production).</summary>
+    public string AdmittedScanVersion { get; }
 
     /// <summary>
     /// True when this projection came from a real acquisitions-store read. False for <see cref="None"/>:
@@ -87,7 +137,8 @@ public sealed class PendingAcquisitions
     /// <summary>
     /// The evidence ids a recognition was made ON. The scoring-assembly supersede
     /// (<c>CorporateActionSupersede</c>) uses exactly this set: only the filing that WAS recognised has its
-    /// keyword read replaced, never every filing of the company.
+    /// keyword read replaced, never every filing of the company. Since spec 227 it holds ADMITTED records'
+    /// evidence ids only, so the supersede can never act on a retired (older-scan-version) recognition.
     /// </summary>
     public IReadOnlySet<Guid> RecognisedEvidenceIds => _evidenceIds;
 

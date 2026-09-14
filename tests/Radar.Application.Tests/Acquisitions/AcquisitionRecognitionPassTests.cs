@@ -228,6 +228,93 @@ public sealed class AcquisitionRecognitionPassTests
         Assert.Equal(0, reader.Calls);
     }
 
+    [Fact]
+    public async Task AFilingWhoseOnlyRecordIsFromAnOlderScanVersion_IsRescannedUnderTheCurrentOne()
+    {
+        // SPEC 227 §2 + acceptance 4: the v1 record neither counts as "already recognised" nor blocks the fetch,
+        // the stale cache entry is a miss, and the rescan spends the ordinary per-run budget.
+        var filing = Filing("0001193125-26-341302");
+        var store = new FakeStore();
+        store.Preexisting.Add(PendingAcquisitionsTests.Record(companyId: CompanyId) with { ScanVersion = "acqscan-v1" });
+        var cache = new FakeCache();
+        await cache.SetAsync(
+            new AcquisitionScanCacheRecord(
+                "0001193125-26-341302", CompanyId, AcquisitionScanOutcome.Recognised, "acqscan-v1", DateTimeOffset.UnixEpoch),
+            default);
+        var reader = new FakeReader(AcquisitionFilingBodyFor(filing));
+
+        var result = await Pass(new FakeEvidence([filing]), reader, store, cache).RunAsync([Company], default);
+
+        Assert.Equal(1, reader.Calls);
+        Assert.Equal(0, result.AlreadyRecognised);
+        Assert.Equal(0, result.AlreadyScanned);
+        Assert.Equal(1, result.RetiredByScanVersion);
+        Assert.Equal(1, result.RetiredRecordsRescanned);
+        var record = Assert.Single(result.Recognised);
+        Assert.Equal(AcquisitionAgreementScan.Version, record.ScanVersion);
+        Assert.Equal(AcquisitionAgreementScan.Version, cache.Entries["0001193125-26-341302"].ScanVersion);
+    }
+
+    [Fact]
+    public async Task ARecordUnderTheCurrentScanVersion_IsAlreadyRecognised_AndNeverRefetched()
+    {
+        var filing = Filing("0001193125-26-341302");
+        var store = new FakeStore();
+        store.Preexisting.Add(PendingAcquisitionsTests.Record(companyId: CompanyId));
+        var reader = new FakeReader(AcquisitionFilingBody.Failed("must not be called"));
+
+        var result = await Pass(new FakeEvidence([filing]), reader, store, new FakeCache()).RunAsync([Company], default);
+
+        Assert.Equal(0, reader.Calls);
+        Assert.Equal(1, result.AlreadyRecognised);
+        Assert.Equal(0, result.RetiredByScanVersion);
+        Assert.Equal(0, result.RetiredRecordsRescanned);
+    }
+
+    [Fact]
+    public async Task RetiredRescans_SpendTheOrdinaryFetchBudget_AndTheRemainderIsCounted()
+    {
+        var filings = new[] { Filing("0001193125-26-341302"), Filing("0001193125-26-341303") };
+        var store = new FakeStore();
+        foreach (var filing in filings)
+        {
+            store.Preexisting.Add(
+                PendingAcquisitionsTests.Record(companyId: CompanyId, accession: filing.ContentHash)
+                    with { ScanVersion = "acqscan-v1" });
+        }
+
+        var reader = new FakeReader(AcquisitionFilingBody.Failed("blocked"));
+        var result = await Pass(
+                new FakeEvidence(filings),
+                reader,
+                store,
+                new FakeCache(),
+                budget: 1)
+            .RunAsync([Company], default);
+
+        // The one budgeted fetch was spent on a retired filing; the other is left for a later run and counted.
+        Assert.Equal(1, reader.Calls);
+        Assert.Equal(2, result.RetiredByScanVersion);
+        Assert.Equal(1, result.FetchBudgetRemaining);
+        // ...but its body read FAILED, so no rescan happened: it is a fetch failure, never a "rescanned" filing.
+        Assert.Equal(1, result.FetchFailed);
+        Assert.Equal(0, result.RetiredRecordsRescanned);
+    }
+
+    [Fact]
+    public async Task AnUnreadableStore_LeavesTheRetiredCountUNMEASURED_NotZero()
+    {
+        var result = await Pass(
+                new FakeEvidence([]),
+                new FakeReader(AcquisitionFilingBody.Failed("must not be called")),
+                new FakeStore { ReadUnavailable = true },
+                new FakeCache())
+            .RunAsync([Company], default);
+
+        Assert.Null(result.RetiredByScanVersion);
+        Assert.Null(AcquisitionRecognitionResult.NotRun.RetiredByScanVersion);
+    }
+
     private static AcquisitionFilingBody AcquisitionFilingBodyFor(EvidenceItem filing) =>
         filing.ContentHash == "0001193125-26-341302"
             ? AcquisitionFilingBody.Success(AcquisitionFilingFixtures.MarineMaxMerger)
@@ -290,10 +377,17 @@ public sealed class AcquisitionRecognitionPassTests
         }
 
         public Task<AcquisitionStoreReadResult> GetAllAsync(CancellationToken ct) =>
-            Task.FromResult(new AcquisitionStoreReadResult(Written, 0));
+            Task.FromResult(ReadUnavailable
+                ? AcquisitionStoreReadResult.Unavailable
+                : new AcquisitionStoreReadResult([.. Preexisting, .. Written], 0));
 
-        public Task<bool> ExistsAsync(Guid companyId, string accession, CancellationToken ct) =>
-            Task.FromResult(Written.Any(r => r.CompanyId == companyId && r.Accession == accession));
+        public bool ReadUnavailable { get; init; }
+
+        public List<PendingAcquisitionRecord> Preexisting { get; } = [];
+
+        public Task<bool> ExistsAsync(Guid companyId, string accession, string scanVersion, CancellationToken ct) =>
+            Task.FromResult(Written.Concat(Preexisting).Any(r =>
+                r.CompanyId == companyId && r.Accession == accession && r.ScanVersion == scanVersion));
     }
 
     private sealed class FakeCache : IAcquisitionScanCache

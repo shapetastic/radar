@@ -7,7 +7,8 @@ namespace Radar.Application.Scoring;
 
 /// <summary>
 /// SPEC 217 §2, widened by SPEC 226 — the pure, read/assembly-time supersede of the keyword extractor's read
-/// of an item-1.01 8-K that <c>acqscan-v1</c> recognised as a pending acquisition OF THE COMPANY.
+/// of an item-1.01 8-K that the acquisition scan (<c>AcquisitionAgreementScan.Version</c>) recognised as a pending
+/// acquisition OF THE COMPANY, as admitted by <c>PendingAcquisitions</c> (current scan version only, spec 227).
 ///
 /// <para>
 /// <b>The gap this closes, stated once so the class is legible without the spec.</b> On 2026-08-10
