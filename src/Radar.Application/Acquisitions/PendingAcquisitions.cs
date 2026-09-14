@@ -53,15 +53,17 @@ public sealed class PendingAcquisitions
     }
 
     /// <summary>
-    /// The projection with an EXPLICIT admitted scan version. No production consumer calls this overload — every
-    /// consumer goes through the public constructor, which admits exactly
-    /// <see cref="AcquisitionAgreementScan.Version"/>. It exists so a read-only MEASUREMENT (spec 227 §3) can
-    /// build the "before" arm from the durable records a retired scan version wrote, without restamping them.
+    /// The projection with an EXPLICIT admitted scan version. INTERNAL so no assembly outside Radar.Application
+    /// (other than the test assemblies granted <c>InternalsVisibleTo</c>) can admit a non-current version, and by
+    /// convention no production code calls it — every consumer goes through the public constructor, which admits
+    /// exactly <see cref="AcquisitionAgreementScan.Version"/>. It exists so a read-only MEASUREMENT (spec 227 §3, reached
+    /// via <c>InternalsVisibleTo</c>) can build the "before" arm from the durable records a retired scan version
+    /// wrote, without restamping them.
     /// </summary>
     /// <param name="read">The store read.</param>
     /// <param name="recognitionAvailable">See the public constructor.</param>
     /// <param name="admittedScanVersion">The ONE scan version whose records this projection admits.</param>
-    public PendingAcquisitions(
+    internal PendingAcquisitions(
         AcquisitionStoreReadResult read, bool recognitionAvailable, string admittedScanVersion)
     {
         ArgumentNullException.ThrowIfNull(read);

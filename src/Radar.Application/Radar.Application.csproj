@@ -11,6 +11,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Radar.Application.Tests" />
+    <!-- Spec 227 §3: the live measurement harness builds the "before" arm through the internal
+         explicit-scan-version PendingAcquisitions constructor. -->
+    <InternalsVisibleTo Include="Radar.IntegrationTests" />
   </ItemGroup>
 
 </Project>

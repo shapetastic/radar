@@ -1,5 +1,3 @@
-using System.Reflection;
-
 namespace Radar.TestSupport;
 
 /// <summary>
@@ -48,7 +46,7 @@ public static class RealAcquisitionFilingBodies
     private static string Load(string fileName)
     {
         var name = "Radar.TestSupport.Acquisitions." + fileName;
-        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(name)
+        using var stream = typeof(RealAcquisitionFilingBodies).Assembly.GetManifestResourceStream(name)
             ?? throw new InvalidOperationException($"Embedded fixture '{name}' is missing.");
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd().Replace("\r\n", "\n", StringComparison.Ordinal);
