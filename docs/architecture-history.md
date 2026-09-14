@@ -3501,14 +3501,18 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     the announcement onward as `CompanyScoreSnapshot.CompanyStatusAtScoring` — **recorded, hashed into
     nothing**, `null` meaning NOT RECORDED and never `Active`. Retiring a closed deal to `Delisted` stays a
     conscious, journaled maintainer step.
-  - **Scoring continues; the keyword rule is UNCHANGED; the READ is corrected at assembly.** `acq-supersede-v1`
+  - **Scoring continues; the keyword rule is UNCHANGED; the READ is corrected at assembly.** (⚠ AMENDED in place
+    by spec 226: the keyword rule WAS later changed — `radar-keyword-rules-v9` makes every Item 1.01 / 2.01
+    heading a Neutral `CorporateAction` — and the supersede moved to `acq-supersede-v2`, which rewrites EITHER an
+    accrued `StrategicPartnership` or a v9 `CorporateAction`; see the spec-226 bullet. The rest of this bullet is
+    spec 217 as shipped.) `acq-supersede-v1`
     rewrites the extractor's `StrategicPartnership` over the ONE recognised evidence id as a Neutral
     `SignalType.CorporateAction` at strength 0 — SAME signal id, so the persisted `ScoreEvidenceLink` still
     walks report → snapshot → signal → evidence and the rewrite is visible as a CHANGE rather than as a
     disappearance. It runs in both windows (velocity too), touches no other type or evidence, and is counted
     on one aggregated per-company line plus the contribution reason. `KeywordSignalExtractor.RuleSetVersion`
-    is deliberately NOT bumped (still the value that file owns): the rule is a scoring input, and changing
-    the table is a different slice.
+    is deliberately NOT bumped by spec 217 (the rule is a scoring input, and changing the table is a different
+    slice — which spec 226 then was).
   - **⚠ BOTH PIN FAMILIES MOVED ONCE — the first time in the 197→216 arc that the AI-OFF side moved, and
     that is the deliverable.** The cause is a trailing, UNCONDITIONAL `acq=acqscan-v1;supersede=acq-supersede-v1;`
     segment appended to `SignalSourceDescriptor.CanonicalDescriptor()` after spec 198's `newsquery=`. It is
@@ -4069,6 +4073,119 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
       and items, not verified by accession; spec 218 quoted the title without 9.01). POWL's EC 80 comes from that
       read's 0.95, and holding EC at the median moves POWL 32 places; whether the read was right is not measured by
       this slice.
+
+- **Spec 226 (2026-09-14) — an SEC 8-K item heading is an event type, not a direction: the Item 1.01 / 2.01
+  heading rules stop minting a Positive `StrategicPartnership`.** The keyword extractor's "material definitive
+  agreement" (Item 1.01) and "completion of acquisition" (Item 2.01 — acquisition OR DISPOSITION) phrases match
+  the SEC's own item headings, which the filing collector writes into every 8-K's title; until v8 both minted a
+  Positive `StrategicPartnership` at strength 4. Found by a 2026-09-14 skeptic stress test of ESQ; the live store
+  showed the headings covering credit agreements with a new direct financial obligation (ASIX, DGII, CAT, CALM,
+  MYRG), an equity issuance (EOSE), a completed acquisition (ESQ) and acquisitions-or-disposals (THRM, NOVT).
+  - **What moved.** (§1) `radar-keyword-rules-v8 → v9`: both rules mint `SignalType.CorporateAction`,
+    `SignalDirection.Neutral`, at the SAME strength 4 / novelty 5 / confidence 0.5 as before and as the sibling
+    Neutral item-heading rules (2.03 / 3.02). **Strength 4, not spec 217's 0, deliberately:** `SignalValidation`
+    rejects Strength < 1 at extraction, and on a Neutral signal Strength feeds only activity —
+    `SignalVelocityScore` (sum of strength, both windows), the v9/v10 collector-channel all-signal `ActivityMass`,
+    and the reviewer's `MinMaterialStrength` gate of 3 (4 stays Approved) — never Trajectory (direction sign 0);
+    EvidenceConfidence reads Confidence and Quality, not Strength. For HEADING-ONLY evidence keeping 4 isolates
+    exactly the invented direction: activity, velocity and EvidenceConfidence are unchanged (measured unchanged
+    for every affected company below), while v11's `DirectionalActivityMass` loses the item's mass, as it should.
+    For evidence that ALSO carries a "partnership" / "partners with" / "teams up" phrase it does not: v8 minted ONE
+    `StrategicPartnership` there (first-match-per-type, strength 5, the partnership phrase winning by table
+    order), while v9 mints that partnership AND a `CorporateAction` (5 + 4), because the two are now different
+    types — 0 such accrued reads in the window and 0 all time among resolvable evidence (§4 below). The Reason lives in
+    `KeywordSignalReasons.ItemHeading`: it still begins with `MatchedPhrasePrefix` (so `SignalProducerRule`
+    classifies it as `KeywordPhraseRule` with no second predicate), names the item ("the SEC 8-K Item 1.01
+    heading phrase") WITHOUT asserting the evidence is an 8-K (the phrase rules are source-agnostic), names EVERY
+    heading present when both are (first-match-per-type still keeps one signal; `NamedItemHeadings` reads the
+    Reason back), and ends "— an item heading is an event type, not a direction". The heading → item map has ONE
+    home, `SecItemHeadingPhrases`, shared by the rule table, the Reason and readers. No other extractor rule or
+    path emits `CorporateAction`. NewsArticle evidence never reaches the rule table (the Neutral MediaAttention
+    branch returns first). **Scope, decided:** the change applies to all non-news evidence — a press release
+    saying "completion of acquisition" is equally not a direction; measured below, 1 accrued read of 201
+    resolvable. (§1) `acq-supersede-v1 → v2`: over the ONE recognised evidence id the supersede rewrites EITHER a
+    `StrategicPartnership` (accrued v8) OR a `CorporateAction` (v9) into the strength-0 acquisition-reasoned
+    `CorporateAction`; any further rewritable read of that filing is REMOVED and counted (`DuplicatesCollapsed`,
+    named on the survivor's reason) so exactly one survives; the result splits what it rewrote by stored type; a
+    company WITH a recognition that rewrote nothing in either window is counted on
+    `ScoreAssemblyDiagnostics.RecognisedAcquisitionNothingRewritten` (sub-axis
+    `RecognisedAcquisitionFilingHadNoRewritableSignal`) and stated once per pass by
+    `ScoreAssemblyDiagnosticsAggregator`, naming the company ids. A filing is extracted exactly once
+    (`CollectionPass` extracts only `DurableWriteOutcome.Written` evidence; identity is content-derived, spec 145),
+    so a v8 and a v9 read of the SAME evidence do not coexist on the normal path — but a second rewritable read
+    of one recognised filing IS a normal-path v9 outcome: one extraction of text carrying a partnership phrase and
+    an item heading yields a Positive `StrategicPartnership` AND a Neutral `CorporateAction` (live store: 0 such
+    reads in window, 0 all time among resolvable evidence). A lost-and-recollected raw file is a further, abnormal
+    source. The survivor is order-independent (earliest `ObservedAtUtc`, then lowest id).
+    (⚠ Amended in place during review: this sentence first said the guard existed only "for the paths that are not
+    normal", which the partnership-phrase + heading case made false.)
+  - **What deliberately did not move.** No attempt to assign a REAL direction (acquirer vs disposer vs credit
+    facility needs the filing body — an `acqscan` extension or an AI read; future work). No change to 2.03 / 3.02.
+    **No backfill (AD-8):** accrued v8 partnerships stay on disk and keep scoring Positive until they age out of
+    the 60-day window (and, as activity, the velocity window); only evidence first extracted after the merge is
+    Neutral. The boundary is therefore NOT a step: it heals forward as accrued v8 reads age out of the window
+    (contrast spec 224).
+  - **Fingerprint: BOTH families moved, twelve values in `ScoringConfigFingerprintTests`** (the only authority;
+    none quoted here) — the `rules=` token and the `acq=` segment are both unconditional. The three
+    composition-guard pins did NOT move (their frozen `StubSourceDescriptor` carries neither). ONE operator step
+    is owed after merge (delete/re-record every configured `data/scoring-configs/strategies/{name}.json` before
+    the first post-226 run; never fabricated; a `StrategyIdentityGuard` halt before it is CORRECT).
+  - **§4 live distribution — MEASURED 2026-09-14 as a read-only paired re-score of TWO arms** (history, not a
+    current pin) (`ItemHeadingDirectionCounterfactualTests`, `Radar.IntegrationTests`, env-gated on
+    `RADAR_ITEM_HEADING_DATA_ROOT`; the production v9 extractor re-run over each accrued partnership's evidence in
+    memory; the production engine + v2 supersede over the live acquisitions store; the arms are `default` and the
+    effective Lead read from the store's `strategy-operating-calls.json`, each BOUND from
+    `scripts/run-profiles/default.json` through the Worker's own `AddRadarScoringStrategies` /
+    `AddRadarCollectorAttribution` via `RunProfileMirror`; writes throw; report to a per-process temp file). The
+    harness itself verifies no write: (a) all 188,332 files under `data/` compared by length and last-write time
+    before/after — 0 added, removed or changed; (b) files or directories under `data/` with a last-write or
+    creation time at or after the harness start — 0. It is a re-score at one instant held in memory, NOT a
+    persisted run. As-of 2026-09-13T21:45:29Z, 60-day window, 102 companies.
+    - **Signals (arm-independent).** In window: **16 signals change** (Item 1.01: 13, Item 2.01: 3, both: 0; all 16
+      over Filing evidence, 0 non-filing) across **15 companies**; 18 more in the velocity window. All time: 201
+      resolvable heading reads (200 Filing, 1 PressRelease; 179 name 1.01, 16 name 2.01, 6 both); a further 889
+      heading reads point at evidence ids that resolve to nothing (spec-145 residue — source type not knowable,
+      none in window, dropped by the engine before scoring anyway). 0 partnership-phrase reads whose evidence also
+      carries a heading (so 0 gain a second CorporateAction under v9); 0 strength/novelty mismatches.
+    - **`default` (`radar-formula-v8`).** Trajectory / Opportunity (rank) before → after: ESQ 71→69 / 43→42 (2→2);
+      DGII 78→76 / 34→34 (9→9); EOSE 54→52 / 22→21 (43→47); CAT 59→55 / 7→6 (100→100); CALM 48→41 / 11→10 (93→95);
+      MYRG 71→67 / 22→21 (37→45); ASIX 57→50 / 18→16 (63→72); NOVT 70→67 / 25→24 (32→33); THRM 61→58 / 19→18
+      (58→61); also AXGN 67→62 / 26→24 (29→34), CLFD 55→50 / 18→17 (64→65), EPM 58→49 / 19→16 (60→76; two 1.01
+      reads), IDT 69→66 / 31→29 (16→19), PSTL 56→50 / 17→16 (67→75); HZO 58→58 / 16→16 (already superseded in both
+      arms). EvidenceConfidence and Velocity unchanged for every one. Universe: median Trajectory 58 → 57.5, median
+      Opportunity 20 → 20; 14 Trajectory changes, 13 Opportunity changes, **1 company moved Opportunity by more
+      than 2 points (EPM −3)**, 43 ranks changed, top 10 unchanged. Corroboration-floor proxy: 3 of 40 Small/Mid,
+      Trajectory ≥ 50 companies lose their second positive type (AXGN, THRM, EPM).
+    - **`disclosure-led-v11` (`radar-formula-v11`, the effective LEAD; one `filings` channel over `sec-edgar`,
+      directional-only mass; its label lines as bound from `default.json` at measurement time were Investigate 20
+      / Watch 15).** Trajectory before/after matches `default` for every affected company and for the universe
+      median; Opportunity moves much more, because the heading read was a large share of the filings channel's
+      directional mass. Opportunity (rank) before → after: ESQ 15→11 (2→7); DGII 13→8 (4→23); EOSE 2→0 (51→66); CAT
+      4→2 (44→43); CALM 3→0 (47→89); MYRG 10→6 (13→36); ASIX 3→0 (46→70); NOVT 10→7 (14→32); THRM 2→0 (48→58);
+      also AXGN 13→7 (5→34), CLFD 2→0 (50→72), EPM 8→0 (32→84), IDT 3→0 (45→46), PSTL 2→0 (49→78); HZO 0→0 (63→56).
+      EvidenceConfidence and Velocity unchanged for every one. Universe: median Trajectory 58 → 57.5, **median
+      Opportunity 2 → 0**; 14 Trajectory and 14 Opportunity changes; **9 companies moved Opportunity by more than 2
+      points** (max EPM −8); **88 of 102 ranks changed**; top 10: 2 entries (IOSP, STRL) / 2 exits (AXGN, DGII).
+      **Label-line crossings BY SCORE:** the Investigate band holds 0 companies before and after; the Watch band
+      holds 2 before and 1 after — **ESQ crosses from the Watch line to below it (Opportunity 15 → 11,
+      EvidenceConfidence 72, no pending acquisition)**; no other company crosses. That is a crossing of the LINE
+      only: the report policy's earlier rules (pending acquisition, the EvidenceConfidence floor, the thesis delta
+      versus the prior persisted snapshot) and the Small/Mid corroboration floor were not applied, so it is not a
+      claimed label change. Corroboration-floor proxy: the same 3 of 40 (AXGN, THRM, EPM). ⚠ A finding beside the
+      measurement, not addressed here: the Lead's Opportunity sits at or near zero for most of the universe
+      (median 2 before this change) — the near-constant shape CLAUDE.md's "no measure ships without its live
+      distribution" rule calls a defect; it predates spec 226 and needs its own spec.
+    - **HZO interaction (both arms):** exactly one `CorporateAction` link over the recognised filing, before and
+      after; supersede counters BEFORE Rewrote 1 (from StrategicPartnership 1), AFTER Rewrote 1 (from
+      CorporateAction 1), 0 duplicates.
+  - **Two spec-217 findings the harness surfaced, recorded here, NOT fixed (each needs its own spec):** (i) the
+    live acquisitions store holds a SECOND recognition, SHOO accession `0001641172-25-008949` (2025-05-07), whose
+    record names the acquirer "Lead Borrower" and a "$0.21 per share" consideration quoted from a quarterly
+    DIVIDEND beside an amended credit agreement — on its face an `acqscan-v1` false positive that would mark SHOO
+    `PendingAcquisition`; its filing is outside every window, so the supersede reports
+    `RecognisedFilingHasNoSignalInWindow` for it. (ii) HZO's live record names the acquirer "Parent" at "$0.001
+    per share in cash", not the "Safe Harbor Marinas, LLC … $53.00" of the spec-217 fixture; the recognition is
+    right, its quoted terms are not.
 
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 

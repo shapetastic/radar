@@ -84,7 +84,11 @@ Estimated implementation time: UNMEASURED. Record actual dispatch→PR time in t
   one-line footer per strategy (`1 company excluded: pending acquisition — see Acquisitions pending`), so a
   pinned price never sits inside a ranking a reader compares. Counted, never silent.
 - **The keyword rule** for "material definitive agreement" is NOT removed (it is a scoring input; changing
-  it is `RuleSetVersion` territory) — but when `acqscan-v1` recognises the filing, the extractor's
+  it is `RuleSetVersion` territory) — ⚠ **SUPERSEDED by spec 226** (`radar-keyword-rules-v9`): that rule and
+  the "completion of acquisition" rule WERE changed, to a Neutral `CorporateAction` for every company, because
+  an item heading is an event type and never a direction; `acq-supersede-v2` now rewrites EITHER an accrued
+  `StrategicPartnership` or a v9 `CorporateAction` over the recognised filing into exactly one strength-0
+  `CorporateAction`. The text below describes spec 217 as shipped — but when `acqscan-v1` recognises the filing, the extractor's
   `StrategicPartnership` from THAT evidence is superseded at scoring assembly by the same mechanism the
   judgment signal uses (`news-judgment-supersede-v1` precedent): a `CorporateAction (Neutral)` signal from
   the same evidence, strength 0 contribution, reason naming the acquisition — counted per company. This is

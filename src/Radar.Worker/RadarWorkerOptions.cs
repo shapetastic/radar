@@ -316,7 +316,7 @@ public sealed class ScoreWorkerOptions
 /// SPEC 217 §1 — the acquisition-recognition knobs (<c>Radar:Acquisitions</c>). OPERATIONAL only: they
 /// bound how many filings are READ per run and whether the pass runs at all, never whether a filing that IS
 /// read is recognised — so none of them is a scoring-fingerprint input (the spec-105 exclusion). The
-/// RECOGNITION rule's identity (<c>acqscan-v1</c> + <c>acq-supersede-v1</c>) IS hashed, through the
+/// RECOGNITION rule's identity (<c>AcquisitionAgreementScan.Version</c> + <c>CorporateActionSupersede.Version</c>) IS hashed, through the
 /// signal-source descriptor's <c>acq=</c> field.
 /// </summary>
 public sealed class AcquisitionsWorkerOptions

@@ -492,17 +492,20 @@ public sealed class ScoringEngine : IScoringEngine
         var newsSupersede = NewsJudgmentSignalSupersede.Apply(superseded);
         var newsSuperseded = newsSupersede.Signals;
 
-        // Corporate-action supersede (spec 217 §2): when acqscan-v1 has recognised a pending acquisition OF
-        // THIS COMPANY, the keyword extractor's Positive StrategicPartnership read of THAT ONE recognised
-        // item-1.01 filing is rewritten in place as a Neutral CorporateAction at strength 0. The 2026-08-10
-        // MarineMax shape - a $1.5B all-cash sale scored as a partnership, trajectory 56 -> 62, labelled
-        // "Thesis improving" - cannot recur.
+        // Corporate-action supersede (spec 217 §2, acq-supersede-v2 since spec 226): when acqscan-v1 has
+        // recognised a pending acquisition OF THIS COMPANY, the keyword extractor's read of THAT ONE recognised
+        // item-1.01 filing — an accrued pre-226 Positive StrategicPartnership, or a v9 Neutral CorporateAction —
+        // is rewritten in place as ONE Neutral CorporateAction at strength 0 naming the acquisition (any
+        // further read of the same filing is collapsed into it and counted). The 2026-08-10 MarineMax shape -
+        // a $1.5B all-cash sale scored as a partnership, trajectory 56 -> 62, labelled "Thesis improving" -
+        // cannot recur.
         //
         // PLACEMENT, deliberately: AFTER the two supersedes and BEFORE the media collapse, for the same
         // reason §1.3 sits there. Relative to the guidance and news supersedes the order is behaviourally
         // IRRELEVANT and that is a CHECKED fact, not an assumption: those two only ever touch
         // GuidanceChange and MediaAttention signals respectively, while this one only ever touches
-        // StrategicPartnership signals over one recognised filing evidence id - three disjoint populations.
+        // StrategicPartnership/CorporateAction signals over one recognised filing evidence id - three
+        // disjoint populations.
         // It runs before the collapse so the collapse buckets the corrected set, and before
         // PreCollapseSignals is captured so the formula's breadth term cannot credit the superseded read
         // back in.
@@ -588,10 +591,10 @@ public sealed class ScoringEngine : IScoringEngine
         previousSignals = previousNewsSupersede.Signals;
 
         // Spec 217 §2, previous window too, and in the SAME relative position. The previous window is
-        // activity-only and builds no contributions or evidence links (AD-6), but a strength-4 POSITIVE
-        // partnership counting as prior activity would still move velocity for an event that was never a
-        // partnership. Its rewrites are reported through the aggregated per-company log line rather than
-        // through a contribution reason.
+        // activity-only and builds no contributions or evidence links (AD-6), but a strength-4 read of a
+        // recognised takeover (a pre-226 partnership or a v9 corporate action) counting as prior activity would
+        // still move velocity for an event the current window takes to zero. Its rewrites are reported through
+        // the aggregated per-company log line rather than through a contribution reason.
         var previousAcqSupersede = CorporateActionSupersede.Apply(
             previousSignals, reads.PendingAcquisitions, companyId);
         previousSignals = previousAcqSupersede.Signals;
@@ -746,10 +749,10 @@ public sealed class ScoringEngine : IScoringEngine
 
             // Spec 217 §2: the fourth member of the same accounting block. If this contribution's signal is
             // the rewritten corporate-action signal, the link SAYS SO and names the acquisition - otherwise
-            // the snapshot would score a Neutral strength-0 signal where the store holds a Positive
-            // strength-4 partnership, with nothing anywhere explaining the difference. It can never collide
-            // with the three notes above: they attach to MediaAttention/GuidanceChange signals, this one to
-            // a StrategicPartnership-turned-CorporateAction signal.
+            // the snapshot would score a Neutral strength-0 signal where the store holds a strength-4 read
+            // (a pre-226 Positive partnership or a v9 Neutral corporate action), with nothing anywhere
+            // explaining the difference. It can never collide with the three notes above: they attach to
+            // MediaAttention/GuidanceChange signals, this one to a rewritten StrategicPartnership/CorporateAction.
             if (acqSupersede.SupersededReasons.TryGetValue(contribution.SignalId, out var acqReason))
             {
                 reason = $"{reason} ({acqReason})";
@@ -819,18 +822,29 @@ public sealed class ScoringEngine : IScoringEngine
         // Information level, when a recognised acquisition actually rewrote a keyword partnership read.
         // Information, not Warning: the rewrite is the intended healthy behaviour - it is how a takeover
         // stops reading as a partnership. Both windows are reported for the reason the lines above give.
+        // Spec 226: the line splits what was rewritten by its stored type (an accrued pre-226
+        // StrategicPartnership vs a v9 CorporateAction) and states the duplicate-guard count, in both windows.
         if (acqSupersede.TotalSuperseded > 0 || previousAcqSupersede.TotalSuperseded > 0)
         {
             _logger.LogInformation(
-                "Superseded {AcqSupersededCount} StrategicPartnership signal(s) for company {CompanyId} in "
-                    + "the current window (and {PreviousAcqSupersededCount} in the previous/velocity window) "
-                    + "with a Neutral CorporateAction at strength 0: {SupersedeVersion} recognised this "
-                    + "filing as an agreement to acquire the company. The stored signal is untouched and the "
-                    + "rewrite is named on the contribution reason.",
-                acqSupersede.TotalSuperseded,
+                "Superseded the keyword read of the recognised acquisition filing for company {CompanyId} with "
+                    + "ONE Neutral CorporateAction at strength 0 ({SupersedeVersion}): current window "
+                    + "{AcqSupersededCount} rewritten from {AcqFromPartnership} StrategicPartnership and "
+                    + "{AcqFromCorporateAction} CorporateAction read(s), {AcqDuplicates} duplicate(s) collapsed; "
+                    + "previous/velocity window {PreviousAcqSupersededCount} rewritten from "
+                    + "{PreviousAcqFromPartnership} StrategicPartnership and {PreviousAcqFromCorporateAction} "
+                    + "CorporateAction read(s), {PreviousAcqDuplicates} duplicate(s) collapsed. The stored "
+                    + "signals are untouched and the rewrite is named on the contribution reason.",
                 companyId,
+                CorporateActionSupersede.Version,
+                acqSupersede.TotalSuperseded,
+                acqSupersede.SupersededFromStrategicPartnership,
+                acqSupersede.SupersededFromCorporateAction,
+                acqSupersede.DuplicatesCollapsed,
                 previousAcqSupersede.TotalSuperseded,
-                CorporateActionSupersede.Version);
+                previousAcqSupersede.SupersededFromStrategicPartnership,
+                previousAcqSupersede.SupersededFromCorporateAction,
+                previousAcqSupersede.DuplicatesCollapsed);
         }
 
         // Spec 224: ONE aggregated per-company line, beside the three supersede lines above and at the same
@@ -882,7 +896,23 @@ public sealed class ScoringEngine : IScoringEngine
             // Spec 224: insider filings the collapse could not bucket (its own axis; current window only).
             CurrentWindowInsiderOwnerUnresolved: insiderCollapse.OwnerUnresolvedCount,
             // Spec 224 amendment: insider filings bucketed on a title-derived owner (its own axis).
-            CurrentWindowInsiderOwnerFromTitle: insiderCollapse.OwnerFromTitleCount);
+            CurrentWindowInsiderOwnerFromTitle: insiderCollapse.OwnerFromTitleCount)
+        {
+            // Spec 226: a company WITH a recognised acquisition whose supersede rewrote nothing in EITHER window
+            // is counted (never silent), with the sub-case where the recognised filing DID have in-window
+            // signals, none rewritable, on its own axis. Aggregated once per pass by the caller.
+            RecognisedAcquisitionNothingRewritten =
+                acqSupersede.RecognisedButNothingRewritten && previousAcqSupersede.RecognisedButNothingRewritten
+                    ? 1
+                    : 0,
+            RecognisedAcquisitionFilingHadNoRewritableSignal =
+                acqSupersede.RecognisedButNothingRewritten && previousAcqSupersede.RecognisedButNothingRewritten
+                && (acqSupersede.Outcome == CorporateActionSupersedeOutcome.RecognisedFilingHasNoRewritableSignal
+                    || previousAcqSupersede.Outcome
+                        == CorporateActionSupersedeOutcome.RecognisedFilingHasNoRewritableSignal)
+                    ? 1
+                    : 0,
+        };
 
         // ONE bounded Debug line per AFFECTED strategy-company evaluation, so the per-cell detail the
         // aggregate necessarily pools is still recoverable by raising this category to Debug. Debug, not
@@ -899,8 +929,10 @@ public sealed class ScoringEngine : IScoringEngine
                     + "judgment-signal envelope(s) in the current window (and {PreviousLegacyCount} / "
                     + "{PreviousMalformedCount} in the previous/velocity window); {InsiderOwnerUnresolved} "
                     + "directional insider filing(s) passed through unbucketed for want of a resolvable "
-                    + "owner and {InsiderOwnerFromTitle} bucketed on a title-derived owner. Reported to the "
-                    + "operator as one aggregated line per category at the pass boundary.",
+                    + "owner and {InsiderOwnerFromTitle} bucketed on a title-derived owner; recognised "
+                    + "acquisition rewrote nothing {AcquisitionNothingRewritten} (filing had no rewritable read "
+                    + "{AcquisitionNotRewritable}). Reported to the operator as one aggregated line per category at "
+                    + "the pass boundary.",
                 companyId,
                 _strategyName ?? "(none)",
                 windowEndUtc,
@@ -911,7 +943,9 @@ public sealed class ScoringEngine : IScoringEngine
                 diagnostics.PreviousWindowLegacyInheritanceNeutralized,
                 diagnostics.PreviousWindowMalformedEnvelopeNeutralized,
                 diagnostics.CurrentWindowInsiderOwnerUnresolved,
-                diagnostics.CurrentWindowInsiderOwnerFromTitle);
+                diagnostics.CurrentWindowInsiderOwnerFromTitle,
+                diagnostics.RecognisedAcquisitionNothingRewritten,
+                diagnostics.RecognisedAcquisitionFilingHadNoRewritableSignal);
         }
 
         return new CompanyScoreResult(snapshot, links, diagnostics);

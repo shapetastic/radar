@@ -191,11 +191,13 @@ public sealed class KeywordSignalExtractorNewsNeutralityTests
     }
 
     [Fact]
-    public void RuleSetVersionIsV8_ACorrectionNotARollbackToV6()
+    public void RuleSetVersion_IsTheShippedIdentity_V8WasACorrectionNotARollbackToV6()
     {
         // The identity that carries this correction into every ScoringConfigVersion. v6 and v8 emit the same
         // NewsArticle signal but do not mean the same thing: v8 sits downstream of a live judgment layer.
-        Assert.Equal("radar-keyword-rules-v8", KeywordSignalExtractor.RuleSetVersion);
+        // Spec 226 moved the shipped identity to v9 for an UNRELATED rule change (the SEC item-heading rules
+        // became Neutral CorporateAction); the news branch is unchanged by it, so the v8 correction still holds.
+        Assert.Equal("radar-keyword-rules-v9", KeywordSignalExtractor.RuleSetVersion);
     }
 
     /// <summary>Transitive closure over declared members - private fields included (a leak in a closure is still a leak).</summary>

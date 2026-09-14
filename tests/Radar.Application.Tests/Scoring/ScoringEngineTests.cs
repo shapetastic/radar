@@ -1332,7 +1332,7 @@ public sealed class ScoringEngineTests
         // collector runs.
         // Spec 217 §2 appends the UNCONDITIONAL acquisition segment last (see SignalSourceDescriptorTests).
         Assert.Equal(
-            "rules=radar-keyword-rules-v8;"
+            "rules=radar-keyword-rules-v9;"
                 + NewsJudgmentScoringIdentity.Disabled.Segment
                 + NewsQueryScoringIdentity.Default.Segment
                 + AcquisitionScoringIdentity.Segment,

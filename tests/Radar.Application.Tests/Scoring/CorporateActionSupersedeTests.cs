@@ -7,7 +7,7 @@ using Radar.Domain.Signals;
 namespace Radar.Application.Tests.Scoring;
 
 /// <summary>
-/// SPEC 217 §2 — <c>acq-supersede-v1</c>: the assembly-time rewrite that stops a takeover scoring as a
+/// SPEC 217 §2 (v2 since spec 226) — <c>CorporateActionSupersede</c>: the assembly-time rewrite that stops a takeover scoring as a
 /// partnership. The regression this pins is measured, not hypothetical: MarineMax's 2026-08-10 merger 8-K
 /// minted a POSITIVE <c>StrategicPartnership</c> at strength 4 and trajectory rose 56 → 62.
 /// </summary>
@@ -59,10 +59,158 @@ public sealed class CorporateActionSupersedeTests
         PendingAcquisitionsTests.From(
             PendingAcquisitionsTests.Record(companyId: Company, evidenceId: MergerEvidence));
 
+    /// <summary>
+    /// The v9 extractor's read of the same filing (spec 226): a Neutral CorporateAction at the rule strength 4,
+    /// with the item-heading Reason.
+    /// </summary>
+    private static Signal V9CorporateAction(Guid evidenceId) => Partnership(evidenceId) with
+    {
+        Id = Guid.NewGuid(),
+        Type = SignalType.CorporateAction,
+        Direction = SignalDirection.Neutral,
+        Confidence = 0.5m,
+        Reason = Radar.Application.SignalExtraction.KeywordSignalReasons.ItemHeading(
+            [Radar.Application.SignalExtraction.SecItemHeadingPhrases.MaterialDefinitiveAgreement]),
+    };
+
     [Fact]
     public void Version_IsTheDeclaredSupersedeIdentity()
     {
-        Assert.Equal("acq-supersede-v1", CorporateActionSupersede.Version);
+        // v2 (spec 226): the match widened to StrategicPartnership OR CorporateAction.
+        Assert.Equal("acq-supersede-v2", CorporateActionSupersede.Version);
+    }
+
+    [Fact]
+    public void AccruedV8PartnershipRead_BecomesExactlyOneCorporateAction_CountedAsAPartnership()
+    {
+        var signal = Partnership(MergerEvidence);
+        var result = CorporateActionSupersede.Apply(
+            new List<ScoringSignal> { new(signal, Evidence(MergerEvidence)) }, WithRecognition(), Company);
+
+        Assert.Single(result.Signals, s => s.Signal.Type == SignalType.CorporateAction);
+        Assert.Equal(CorporateActionSupersedeOutcome.Rewrote, result.Outcome);
+        Assert.Equal(1, result.TotalSuperseded);
+        Assert.Equal(1, result.SupersededFromStrategicPartnership);
+        Assert.Equal(0, result.SupersededFromCorporateAction);
+        Assert.Equal(0, result.DuplicatesCollapsed);
+    }
+
+    [Fact]
+    public void V9ExtractorCorporateActionRead_BecomesExactlyOneStrengthZeroCorporateAction_NamingTheAcquisition()
+    {
+        var signal = V9CorporateAction(MergerEvidence);
+        var result = CorporateActionSupersede.Apply(
+            new List<ScoringSignal> { new(signal, Evidence(MergerEvidence)) }, WithRecognition(), Company);
+
+        var rewritten = Assert.Single(result.Signals).Signal;
+        Assert.Equal(signal.Id, rewritten.Id);
+        Assert.Equal(SignalType.CorporateAction, rewritten.Type);
+        Assert.Equal(SignalDirection.Neutral, rewritten.Direction);
+        Assert.Equal(0, rewritten.Strength);
+        Assert.Equal(0, rewritten.Novelty);
+        Assert.Contains("Safe Harbor Marinas, LLC", rewritten.Reason, StringComparison.Ordinal);
+        Assert.Equal(CorporateActionSupersedeOutcome.Rewrote, result.Outcome);
+        Assert.Equal(1, result.TotalSuperseded);
+        Assert.Equal(0, result.SupersededFromStrategicPartnership);
+        Assert.Equal(1, result.SupersededFromCorporateAction);
+    }
+
+    [Fact]
+    public void AnAccruedV8AndAV9ReadOfTheSameFiling_CollapseToOneCorporateAction_AndTheDuplicateIsCounted()
+    {
+        // A v8 heading read and a v9 heading read of the same evidence do not coexist on the normal path
+        // (evidence is extracted once); this pins the guard for the abnormal one (a lost-and-recollected raw
+        // file). The normal-path duplicate is the next test.
+        var v8 = Partnership(MergerEvidence) with { ObservedAtUtc = Observed };
+        var v9 = V9CorporateAction(MergerEvidence) with { ObservedAtUtc = Observed.AddMinutes(1) };
+        var other = OfType(SignalType.GuidanceChange, MergerEvidence);
+        var input = new List<Signal> { v8, other, v9 };
+
+        var result = CorporateActionSupersede.Apply(input, WithRecognition(), Company);
+
+        var corporateAction = Assert.Single(result.Signals, s => s.Type == SignalType.CorporateAction);
+        Assert.Equal(v8.Id, corporateAction.Id);                   // the earliest ObservedAtUtc survives
+        Assert.Equal(0, corporateAction.Strength);
+        Assert.Equal([v8.Id, other.Id], result.Signals.Select(s => s.Id));
+        Assert.Equal(1, result.TotalSuperseded);
+        Assert.Equal(1, result.SupersededFromStrategicPartnership);
+        Assert.Equal(1, result.SupersededFromCorporateAction);
+        Assert.Equal(1, result.DuplicatesCollapsed);
+        Assert.Contains("1 further keyword read(s) of this filing were collapsed", corporateAction.Reason, StringComparison.Ordinal);
+        Assert.Equal(corporateAction.Reason, result.SupersededReasons[v8.Id]);
+    }
+
+    [Fact]
+    public void V9PartnershipPhrasePlusHeading_OneExtraction_CollapsesToOneCorporateAction_WithADeterministicSurvivor()
+    {
+        // THE NORMAL-PATH duplicate under v9: one extraction of a recognised 8-K whose text carries both a
+        // "partnership" phrase (StrategicPartnership, Positive, strength 5) and an item heading (CorporateAction,
+        // Neutral, strength 4) — two types, so first-match-per-type keeps both. Same evidence, same run, so the
+        // two signals share ObservedAtUtc; the survivor must not depend on the order they arrive in.
+        var partnership = Partnership(MergerEvidence, strength: 5) with
+        {
+            Id = Guid.Parse("00000000-0000-0000-0000-00000000000b"),
+            Reason = Radar.Application.SignalExtraction.KeywordSignalReasons.MatchedPhrase("partnership"),
+        };
+        var heading = V9CorporateAction(MergerEvidence) with
+        {
+            Id = Guid.Parse("00000000-0000-0000-0000-00000000000a"),
+        };
+        Assert.Equal(partnership.ObservedAtUtc, heading.ObservedAtUtc);
+
+        foreach (var input in new[] { new List<Signal> { partnership, heading }, new List<Signal> { heading, partnership } })
+        {
+            var result = CorporateActionSupersede.Apply(input, WithRecognition(), Company);
+
+            var survivor = Assert.Single(result.Signals);
+            Assert.Equal(heading.Id, survivor.Id);                   // equal instants ⇒ the lowest id, either order
+            Assert.Equal(SignalType.CorporateAction, survivor.Type);
+            Assert.Equal(SignalDirection.Neutral, survivor.Direction);
+            Assert.Equal(0, survivor.Strength);
+            Assert.Equal(1, result.TotalSuperseded);
+            Assert.Equal(1, result.DuplicatesCollapsed);
+            Assert.Equal(1, result.SupersededFromStrategicPartnership);
+            Assert.Equal(1, result.SupersededFromCorporateAction);
+            Assert.Equal(survivor.Reason, result.SupersededReasons[heading.Id]);
+        }
+    }
+
+    [Fact]
+    public void RecognitionWithNoSignalOverTheFiling_RewritesNothing_AndSaysSo()
+    {
+        var input = new List<Signal> { Partnership(Guid.NewGuid()) };
+
+        var result = CorporateActionSupersede.Apply(input, WithRecognition(), Company);
+
+        Assert.Same(input, result.Signals);
+        Assert.Equal(0, result.TotalSuperseded);
+        Assert.Equal(CorporateActionSupersedeOutcome.RecognisedFilingHasNoSignalInWindow, result.Outcome);
+        Assert.True(result.RecognisedButNothingRewritten);
+    }
+
+    [Fact]
+    public void RecognisedFilingWithOnlyNonRewritableSignals_RewritesNothing_OnItsOwnAxis()
+    {
+        var input = new List<Signal> { OfType(SignalType.GuidanceChange, MergerEvidence) };
+
+        var result = CorporateActionSupersede.Apply(input, WithRecognition(), Company);
+
+        Assert.Same(input, result.Signals);
+        Assert.Equal(CorporateActionSupersedeOutcome.RecognisedFilingHasNoRewritableSignal, result.Outcome);
+        Assert.True(result.RecognisedButNothingRewritten);
+    }
+
+    [Fact]
+    public void AnOrdinaryV9CorporateActionOnAnotherFiling_KeepsItsStrength()
+    {
+        var elsewhere = V9CorporateAction(Guid.NewGuid());
+        var input = new List<Signal> { elsewhere, Partnership(MergerEvidence) };
+
+        var result = CorporateActionSupersede.Apply(input, WithRecognition(), Company);
+
+        Assert.Equal(4, result.Signals[0].Strength);
+        Assert.Equal(elsewhere, result.Signals[0]);
+        Assert.Equal(1, result.TotalSuperseded);
     }
 
     [Fact]
@@ -89,7 +237,7 @@ public sealed class CorporateActionSupersedeTests
         // Counted, and the reason names the acquisition (the contribution reason quotes it verbatim).
         Assert.Equal(1, result.TotalSuperseded);
         var reason = Assert.Contains(signal.Id, result.SupersededReasons);
-        Assert.Contains("acq-supersede-v1", reason, StringComparison.Ordinal);
+        Assert.Contains(CorporateActionSupersede.Version, reason, StringComparison.Ordinal);
         Assert.Contains("Safe Harbor Marinas, LLC", reason, StringComparison.Ordinal);
         Assert.Contains("$53.00 per share in cash", reason, StringComparison.Ordinal);
         Assert.Equal(reason, rewritten.Reason);

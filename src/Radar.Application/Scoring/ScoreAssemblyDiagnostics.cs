@@ -73,6 +73,24 @@ public sealed record ScoreAssemblyDiagnostics(
     /// <summary>The healthy evaluation: nothing dropped, nothing neutralized, every insider owner resolved from metadata.</summary>
     public static ScoreAssemblyDiagnostics None { get; } = new(0, 0, 0, 0, 0, 0, 0, 0);
 
+    /// <summary>
+    /// Spec 226: 1 when the company HAS a recognised pending acquisition and <c>CorporateActionSupersede</c>
+    /// rewrote nothing in EITHER window (the recognised filing aged out of the window, predates it, was excluded
+    /// by the strategy's type filter, or carried no rewritable read) — else 0. An enabled rule that did no work
+    /// says so; this is not a defect on its own.
+    /// </summary>
+    public int RecognisedAcquisitionNothingRewritten { get; init; }
+
+    /// <summary>
+    /// Spec 226: 1 when, within <see cref="RecognisedAcquisitionNothingRewritten"/>, the recognised filing DID
+    /// have signals in a window but none was a StrategicPartnership or CorporateAction — the sub-case worth
+    /// reading, kept on its own axis so it cannot disappear inside the expected "aged out" case.
+    /// </summary>
+    public int RecognisedAcquisitionFilingHadNoRewritableSignal { get; init; }
+
+    /// <summary>True when this evaluation's company has a recognition that rewrote nothing (spec 226).</summary>
+    public bool HasRecognisedAcquisitionNothingRewritten => RecognisedAcquisitionNothingRewritten > 0;
+
     /// <summary>True when this evaluation dropped at least one signal for unresolvable evidence.</summary>
     public bool HasUnresolvedEvidence => UnresolvedEvidenceSignalCount > 0;
 
@@ -91,5 +109,6 @@ public sealed record ScoreAssemblyDiagnostics(
 
     /// <summary>True when this evaluation has anything at all to report.</summary>
     public bool HasAny =>
-        HasUnresolvedEvidence || HasNeutralization || HasInsiderOwnerUnresolved || HasInsiderOwnerFromTitle;
+        HasUnresolvedEvidence || HasNeutralization || HasInsiderOwnerUnresolved || HasInsiderOwnerFromTitle
+        || HasRecognisedAcquisitionNothingRewritten;
 }

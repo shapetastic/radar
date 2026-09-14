@@ -345,9 +345,10 @@ authoritative record:
   structure earns **v12**. An in-place composition change bumps
   `IScoreFormula.CompositionRevision` (spec 153); a strategy that changes formula or weights
   gets a NEW NAME (spec 141, immutable-by-convention).
-- **Fingerprint pins are window-dependent and have moved fourteen times since spec 191** (191,
-  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224 (214–216, 219, 220 and 221 AI-ON only; 217
-  and 224 moved both sides — 224 unconditionally, via the new `insiderCollapse=` fingerprint field). 214+215
+- **Fingerprint pins are window-dependent and have moved fifteen times since spec 191** (191,
+  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224, 226 (214–216, 219, 220 and 221 AI-ON only; 217,
+  224 and 226 moved both sides — 224 unconditionally, via the new `insiderCollapse=` fingerprint field; 226 via
+  the unconditional `rules=` token and `acq=` segment). 214+215
   merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
   composition stamped a full 102-company live run; each later move (216, 217, 219) invalidated the
   identity records again, and the 2026-09-09 run (`run-20260909T234658242Z-5c6644f6`) stamped the
@@ -358,7 +359,9 @@ authoritative record:
   `run-20260910T142811301Z-b640146f`, spec 221's by `run-20260912T013411933Z-9ce33d31`, and spec 224's
   step was taken on 2026-09-13 after its merge, so its identity is stamped by the first post-224 run.
   **No operator step is outstanding for any spec through 224.** Do NOT clear the identity records on the
-  strength of the earlier wording.)
+  strength of the earlier wording.) **Spec 226 owes ONE operator step after it merges** (both families moved:
+  `KeywordSignalExtractor.RuleSetVersion` and `CorporateActionSupersede.Version` both bumped) — take it once,
+  before the first post-226 run, and verify that run's stamp against `ScoringConfigFingerprintTests`.
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
@@ -381,7 +384,11 @@ authoritative record:
   pre-224 one counted one FILING — a STEP boundary at the first post-merge scoring pass, because accrued
   Form 4 evidence resolves its owner from the collector's title shape at read time
   (`InsiderActivityMetadata.TryRead`), so the collapse applies to the whole window at once;
-  `docs/architecture-history.md` names it). The
+  `docs/architecture-history.md` names it), and **226** (an SEC 8-K Item 1.01 / 2.01 heading is an event type,
+  not a direction: evidence extracted after the merge carries a Neutral `CorporateAction` where pre-226
+  extraction minted a Positive `StrategicPartnership`. NOT a step: accrued v8 partnership signals are never
+  backfilled (AD-8) and keep their direction until they age out of the scoring window (and, as activity, the
+  velocity window), so the boundary HEALS FORWARD over one window length after the merge). The
   spec-191 inherited-direction cohort is known DEFECTIVE and is not a control.
 - **News is a two-stage read** (specs 177–221): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact
@@ -446,11 +453,16 @@ authoritative record:
   because a false positive closes a live thesis. `CompanyStatus.PendingAcquisition` is DERIVED at run
   time from the append-only acquisitions store — never settable in `data/companies.json` — and stamped
   on snapshots as recorded provenance (`CompanyStatusAtScoring`; `null` = not recorded, never `Active`).
-  Scoring continues and nothing is rewritten; what changes is the READ: `acq-supersede-v1` rewrites the
-  extractor's `StrategicPartnership` over that ONE recognised filing as a Neutral `CorporateAction` at
-  strength 0. Report policy rule 0 (`weekly-report-action-v6`) forces `Ignore` — **no seventh label**;
+  Scoring continues and nothing is rewritten; what changes is the READ: the corporate-action supersede
+  (`CorporateActionSupersede`) rewrites the extractor's read of that ONE recognised filing as ONE Neutral
+  `CorporateAction` at strength 0. (⚠ AMENDED in place by spec 226: under `acq-supersede-v1` the read it
+  rewrote was always a `StrategicPartnership`; since `radar-keyword-rules-v9` every item-heading read is
+  already a strength-4 Neutral `CorporateAction`, so `acq-supersede-v2` rewrites EITHER — accrued pre-226
+  partnerships stay on disk — collapses any duplicate so exactly one survives, and counts a recognition that
+  rewrote nothing.) Report policy rule 0 (`weekly-report-action-v6`) forces `Ignore` — **no seventh label**;
   the state is the rationale, a banner, a `## Acquisitions pending` section and a counted per-strategy
-  footer. The RULE identity (`acq=acqscan-v1;supersede=acq-supersede-v1`) IS hashed into
+  footer. The RULE identity (the `acq=` segment, composed from `AcquisitionAgreementScan.Version` and
+  `CorporateActionSupersede.Version` — read those, not a copy here) IS hashed into
   `ScoringConfigVersion`, unconditionally and NOT AI-gated, so both pin families move together; the
   per-company OUTCOME is not. Retiring a closed deal to `Delisted` stays a conscious, journaled step.
 - **Label lines are per-strategy config, not constants** (spec 212): `Radar:Strategies[i].Labels`

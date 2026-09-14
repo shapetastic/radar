@@ -166,9 +166,11 @@ public sealed class SignalSourceDescriptor : ISignalSourceDescriptor
         // SPEC 217 §2: the ACQUISITION-RECOGNITION identity — the deterministic item-1.01 scan version and
         // the scoring-assembly supersede rule it drives.
         //
-        // WHY IT IS HASHED, and hashed on the IDENTITY side. `acq-supersede-v1` REWRITES a signal the
-        // formula scores: the keyword extractor's Positive StrategicPartnership read (strength 4) of a
-        // recognised item-1.01 8-K becomes a Neutral CorporateAction at strength 0. That changes
+        // WHY IT IS HASHED, and hashed on the IDENTITY side. The supersede REWRITES a signal the formula
+        // scores: under `acq-supersede-v1` the keyword extractor's Positive StrategicPartnership read
+        // (strength 4) of a recognised item-1.01 8-K became a Neutral CorporateAction at strength 0 (since
+        // spec 226, `acq-supersede-v2`, it also rewrites the v9 extractor's Neutral CorporateAction read, and
+        // collapses any duplicate — CorporateActionSupersede.Version owns the current token). That changes
         // TrajectoryScore, OpportunityScore and rank for the affected company — measured: MarineMax's
         // trajectory rose 56 → 62 on 2026-08-10 on exactly that signal. A scoring-assembly rule that can
         // move a score and is NOT hashed is the comparability hole spec 194 §2 closed for the judgment read

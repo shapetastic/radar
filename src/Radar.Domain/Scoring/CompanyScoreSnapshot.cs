@@ -32,7 +32,8 @@ namespace Radar.Domain.Scoring;
 /// <see cref="CompanyStatusAtScoring"/> (spec 217 §2) records the company's DERIVED status at this scoring
 /// instant — today only <c>PendingAcquisition</c>, resolved at run time from the append-only acquisitions
 /// store when a recognised agreement's announcement date is on or before this snapshot's window end. It is
-/// <b>recorded, never hashed</b>: the recognition RULE (<c>acqscan-v1</c> + <c>acq-supersede-v1</c>) IS a
+/// <b>recorded, never hashed</b>: the recognition RULE (the acqscan + acq-supersede versions, owned by
+/// <c>AcquisitionAgreementScan.Version</c> and <c>CorporateActionSupersede.Version</c>) IS a
 /// fingerprint input through the signal-source descriptor's <c>acq=</c> field, but a per-company OUTCOME of
 /// that rule is no more an identity input than the collector set is. A <c>null</c> value means NOT RECORDED
 /// — a pre-217 file, or a company under no recognised acquisition at this instant — and must never be read

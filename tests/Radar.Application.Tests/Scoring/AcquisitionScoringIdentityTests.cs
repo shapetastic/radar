@@ -13,7 +13,7 @@ public sealed class AcquisitionScoringIdentityTests
     [Fact]
     public void Segment_NamesBothVersions_InAFixedOrder()
     {
-        Assert.Equal("acq=acqscan-v1;supersede=acq-supersede-v1;", AcquisitionScoringIdentity.Segment);
+        Assert.Equal("acq=acqscan-v1;supersede=acq-supersede-v2;", AcquisitionScoringIdentity.Segment);
     }
 
     [Fact]

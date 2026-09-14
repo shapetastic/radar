@@ -154,8 +154,11 @@ they claim to measure. Radar says so instead of pretending otherwise.
 - **Scoring does NOT stop, and nothing is rewritten.** The company keeps being scored every run and its
   accrued history is untouched (append-only). What changes is how the announcement is READ: the keyword
   extractor's "material definitive agreement" match over that filing is superseded at scoring time by a
-  neutral `CorporateAction` at strength 0, so an all-cash sale of the whole company can never again score as
-  a partnership.
+  neutral `CorporateAction` at strength 0 that names the acquisition, so an all-cash sale of the whole company
+  can never again score as a partnership. (Since spec 226 EVERY SEC 8-K Item 1.01 / 2.01 heading match — for
+  any company — already reads as a neutral `CorporateAction`: a heading says an agreement, acquisition or
+  disposal happened, never whether it is good news. Report lines for older filings may still show the
+  pre-226 `StrategicPartnership (Positive)` read, because accrued signals are never rewritten.)
 - **Retiring it is a human step.** When the deal closes and the company delists, a maintainer moves it to
   `Delisted` in the seed and journals the move. Radar does not do that automatically: "the deal completed"
   is not something the filings alone tell it.
