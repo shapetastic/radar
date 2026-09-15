@@ -43,4 +43,10 @@ public sealed record WeeklyReportModel(
     // direct-model caller — byte-identical output); an EMPTY list means it IS composed and nothing is
     // pending, which the renderer states rather than hiding. Trailing and defaulted so every existing
     // construction site keeps compiling.
-    IReadOnlyList<AcquisitionPendingReportRow>? AcquisitionsPending = null);
+    IReadOnlyList<AcquisitionPendingReportRow>? AcquisitionsPending = null,
+    // Spec 227 §2: durable acquisitions records recognised under an OLDER scan version, which the projection
+    // behind this report did NOT admit (they govern nothing, and never will again — a rescan writes a separate
+    // current-version record and never revives them). Rendered in the `## Acquisitions pending`
+    // section. NULL means not measured (no store composed, or the store could not be read) and is never
+    // rendered as zero. Trailing and defaulted so every existing construction site keeps compiling.
+    int? AcquisitionsRetiredByScanVersion = null);

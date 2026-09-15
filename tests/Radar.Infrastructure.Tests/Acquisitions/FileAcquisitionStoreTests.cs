@@ -7,7 +7,8 @@ using Radar.Infrastructure.Acquisitions;
 namespace Radar.Infrastructure.Tests.Acquisitions;
 
 /// <summary>
-/// SPEC 217 §1 — the append-only acquisitions store and the heal-forward <c>acqscan-v1</c> answer cache.
+/// SPEC 217 §1 — the append-only acquisitions store and the heal-forward scan answer cache (the scan version
+/// entered the store's durable path in spec 227 §2).
 /// </summary>
 public sealed class FileAcquisitionStoreTests : IDisposable
 {
@@ -87,16 +88,75 @@ public sealed class FileAcquisitionStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task ExistsAsync_IsTheCheapPerFilingCheck()
+    public async Task ExistsAsync_IsTheCheapPerFilingCheck_ForTheGivenScanVersion()
     {
         var store = Store();
-        Assert.False(await store.ExistsAsync(Company, "0001193125-26-341302", default));
+        Assert.False(await store.ExistsAsync(Company, "0001193125-26-341302", AcquisitionAgreementScan.Version, default));
 
         await store.WriteIfNewAsync(Record(), default);
 
-        Assert.True(await store.ExistsAsync(Company, "0001193125-26-341302", default));
-        Assert.False(await store.ExistsAsync(Company, "0001193125-26-290439", default));
-        Assert.False(await store.ExistsAsync(Guid.NewGuid(), "0001193125-26-341302", default));
+        Assert.True(await store.ExistsAsync(Company, "0001193125-26-341302", AcquisitionAgreementScan.Version, default));
+        Assert.False(await store.ExistsAsync(Company, "0001193125-26-290439", AcquisitionAgreementScan.Version, default));
+        Assert.False(await store.ExistsAsync(Guid.NewGuid(), "0001193125-26-341302", AcquisitionAgreementScan.Version, default));
+
+        // SPEC 227 §2: a record under ANOTHER scan version is not "already recognised" for this one.
+        Assert.False(await store.ExistsAsync(Company, "0001193125-26-341302", "acqscan-v999", default));
+    }
+
+    [Fact]
+    public async Task TheDurablePath_CarriesTheScanVersion()
+    {
+        // SPEC 227 §2: the version is part of recognition identity on disk, so a later rule's record for the
+        // same filing can never collide with the file an earlier rule wrote.
+        var store = Store();
+
+        var write = await store.WriteIfNewAsync(Record(), default);
+
+        Assert.Equal(
+            Path.Combine(
+                _root, "acquisitions", Company.ToString("D"), AcquisitionAgreementScan.Version, "0001193125-26-341302.json"),
+            write.Path);
+        Assert.True(File.Exists(write.Path));
+    }
+
+    [Fact]
+    public async Task ALegacyVersionlessFile_StaysPutAndReadable_AndANewVersionWritesBesideIt()
+    {
+        // SPEC 227 §2 + AD-8: files written before the version entered the path are never moved, edited or
+        // deleted. They stay readable (the record carries its own scanVersion), they answer ExistsAsync ONLY
+        // for the version their content names, and a record under the current version is written beside them.
+        var store = Store();
+        var legacyDirectory = Path.Combine(_root, "acquisitions", Company.ToString("D"));
+        Directory.CreateDirectory(legacyDirectory);
+        var legacyPath = Path.Combine(legacyDirectory, "0001193125-26-341302.json");
+        var legacyRecord = Record() with
+        {
+            Id = PendingAcquisitionRecord.IdentityFor("acqscan-v1", Company, "0001193125-26-341302"),
+            AcquirerName = "Parent",
+            ConsiderationPerShare = "0.001",
+            ScanVersion = "acqscan-v1",
+        };
+        await File.WriteAllTextAsync(
+            legacyPath,
+            System.Text.Json.JsonSerializer.Serialize(
+                legacyRecord, Radar.Infrastructure.FileSystem.RadarFileStoreJson.Options));
+        var legacyBytes = await File.ReadAllBytesAsync(legacyPath);
+        var legacyWritten = File.GetLastWriteTimeUtc(legacyPath);
+
+        Assert.True(await store.ExistsAsync(Company, "0001193125-26-341302", "acqscan-v1", default));
+        Assert.False(await store.ExistsAsync(Company, "0001193125-26-341302", AcquisitionAgreementScan.Version, default));
+
+        var write = await store.WriteIfNewAsync(Record(), default);
+        Assert.Equal(DurableWriteOutcome.Written, write.Outcome);
+
+        var read = await store.GetAllAsync(default);
+        Assert.Equal(0, read.Unreadable);
+        Assert.Equal(2, read.Records.Count);
+        Assert.Contains(legacyRecord, read.Records);
+        Assert.Contains(Record(), read.Records);
+
+        Assert.Equal(legacyBytes, await File.ReadAllBytesAsync(legacyPath));
+        Assert.Equal(legacyWritten, File.GetLastWriteTimeUtc(legacyPath));
     }
 
     [Fact]
@@ -105,7 +165,8 @@ public sealed class FileAcquisitionStoreTests : IDisposable
         // The spec-216 §4 rule: reporting a fragment as the record is exactly how a closed thesis would
         // silently reopen — or, worse, how an unreadable file would be treated as a complete recognition.
         var store = Store();
-        var directory = Path.Combine(_root, "acquisitions", Company.ToString("D"));
+        var directory = Path.Combine(
+            _root, "acquisitions", Company.ToString("D"), AcquisitionAgreementScan.Version);
         Directory.CreateDirectory(directory);
         await File.WriteAllTextAsync(
             Path.Combine(directory, "0001193125-26-341302.json"), "{ not json");

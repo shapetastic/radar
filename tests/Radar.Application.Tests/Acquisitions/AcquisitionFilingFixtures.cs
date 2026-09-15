@@ -1,7 +1,8 @@
 namespace Radar.Application.Tests.Acquisitions;
 
 /// <summary>
-/// SPEC 217 §1 — the item-1.01 filing bodies <c>acqscan-v1</c> is exercised against.
+/// SPEC 217 §1 — the SYNTHETIC item-1.01 filing bodies the acquisition scan is exercised against (written for
+/// <c>acqscan-v1</c>; every case still holds under <c>acqscan-v2</c>, spec 227, unchanged).
 ///
 /// <para>
 /// <b>The two MarineMax fixtures are the slice's ground truth.</b> The accrued store holds exactly 178
@@ -13,19 +14,20 @@ namespace Radar.Application.Tests.Acquisitions;
 /// AGREEMENT. It must NOT be recognised, and it is the fail-closed case: "Entry into a Material Definitive
 /// Agreement" plus the company's own name is exactly the shape a title-only rule fires on.</item>
 /// <item><c>0001193125-26-341302</c>, filed 2026-08-10 (items 1.01, 7.01, 9.01) — the Safe Harbor Marinas
-/// merger at $53.00 per share in cash. It is the ONE expected recognition in the whole store, and the
+/// merger at $53.00 per share in cash. It is the ONE genuine recognition in the whole store (⚠ amended by
+/// spec 227: <c>acqscan-v1</c> ALSO falsely recognised SHOO, and recorded this one at the par value), and the
 /// pinned regression case for "an 8-K 1.01 merger ⇒ Ignore, not Thesis improving".</item>
 /// </list>
 /// <para>
 /// <b>What these strings ARE, stated plainly so nobody mistakes them for something they are not.</b> They
 /// are REPRESENTATIVE 8-K wording written for this test suite from the publicly known facts of each filing
 /// (parties, item codes, consideration, filing dates) in the standard form those items take. They are NOT
-/// verbatim copies of the SEC documents, and no test here claims they are. The VERBATIM behaviour over the
-/// real documents is the job of the env-gated live harness
-/// (<c>AcquisitionRecognitionLiveMeasurementTests</c>), which runs <c>acqscan-v1</c> over all 178 accrued
-/// item-1.01 filings through the production reader and reports the distribution — the measurement spec 217
-/// §1 requires before the recognition can be trusted, and the one thing these fixtures deliberately do not
-/// stand in for.
+/// verbatim copies of the SEC documents, and no test here claims they are. (⚠ AMENDED by spec 227: the claim
+/// that the env-gated <c>AcquisitionRecognitionLiveMeasurementTests</c> covered the real documents was never
+/// realised — that harness saw no evidence — and <c>acqscan-v1</c> mis-read BOTH real bodies it recognised.
+/// VERBATIM excerpts of those two real bodies now live in <c>Radar.TestSupport.RealAcquisitionFilingBodies</c>
+/// and are pinned by <c>AcquisitionAgreementScanV2Tests</c>; the v1-versus-v2 distribution over every accrued
+/// item-1.01 filing is <c>AcquisitionScanV2LiveMeasurementTests</c>.)
 /// </para>
 /// </summary>
 internal static class AcquisitionFilingFixtures

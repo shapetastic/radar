@@ -116,35 +116,12 @@ public sealed class AcquisitionLeaderboardCounterfactualTests(ITestOutputHelper 
             ],
             Unreadable: 0));
 
-        // Every strategy series on disk: the primary at scores/, each other at scores/strategies/{name}/.
-        var series = new List<StrategyScoreSeries>();
-        var scoresRoot = Path.Combine(root, "scores");
-        series.Add(new StrategyScoreSeries(
-            "default", await builder.BuildAsync(StoreAt(scoresRoot), ct)));
-
-        var strategiesRoot = Path.Combine(scoresRoot, "strategies");
-        if (Directory.Exists(strategiesRoot))
-        {
-            foreach (var directory in Directory.EnumerateDirectories(strategiesRoot)
-                .OrderBy(d => d, StringComparer.Ordinal))
-            {
-                series.Add(new StrategyScoreSeries(
-                    Path.GetFileName(directory), await builder.BuildAsync(StoreAt(directory), ct)));
-            }
-        }
+        var series = await LoadSeriesAsync(builder, root, ct);
 
         var universe = await universeSource.ReadAsync(ct);
         Assert.NotNull(universe);
 
-        var bars = new Dictionary<string, IReadOnlyList<PriceBar>>(StringComparer.Ordinal);
-        foreach (var member in universe!.Members)
-        {
-            var history = await prices.ReadAsync(member.PriceSeriesKey, ct);
-            if (history is { Bars.Count: > 0 })
-            {
-                bars[member.PriceSeriesKey] = history.Bars;
-            }
-        }
+        var bars = await LoadBarsAsync(prices, universe!, ct);
 
         var options = StrategyComparisonOptions.Default;
         var harness = new StrategyComparisonHarness();
@@ -165,7 +142,50 @@ public sealed class AcquisitionLeaderboardCounterfactualTests(ITestOutputHelper 
         Assert.All(before.Rows, r => Assert.Equal(0, r.ObservationsCorporateActionInWindow));
     }
 
-    private static IScoreSnapshotFileStore StoreAt(string directory) =>
+    /// <summary>
+    /// Every strategy series on disk: the primary at <c>scores/</c> (named <c>default</c>), each other at
+    /// <c>scores/strategies/{name}/</c>. Shared with the spec-227 §3 harness (reuse over copy).
+    /// </summary>
+    internal static async Task<List<StrategyScoreSeries>> LoadSeriesAsync(
+        EfficacyDatasetBuilder builder, string root, CancellationToken ct)
+    {
+        var series = new List<StrategyScoreSeries>();
+        var scoresRoot = Path.Combine(root, "scores");
+        series.Add(new StrategyScoreSeries(
+            "default", await builder.BuildAsync(StoreAt(scoresRoot), ct)));
+
+        var strategiesRoot = Path.Combine(scoresRoot, "strategies");
+        if (Directory.Exists(strategiesRoot))
+        {
+            foreach (var directory in Directory.EnumerateDirectories(strategiesRoot)
+                .OrderBy(d => d, StringComparer.Ordinal))
+            {
+                series.Add(new StrategyScoreSeries(
+                    Path.GetFileName(directory), await builder.BuildAsync(StoreAt(directory), ct)));
+            }
+        }
+
+        return series;
+    }
+
+    /// <summary>The frozen benchmark members' price bars (a member with no bars is simply absent). Shared with spec 227 §3.</summary>
+    internal static async Task<Dictionary<string, IReadOnlyList<PriceBar>>> LoadBarsAsync(
+        IPriceHistoryStore prices, BenchmarkUniverse universe, CancellationToken ct)
+    {
+        var bars = new Dictionary<string, IReadOnlyList<PriceBar>>(StringComparer.Ordinal);
+        foreach (var member in universe.Members)
+        {
+            var history = await prices.ReadAsync(member.PriceSeriesKey, ct);
+            if (history is { Bars.Count: > 0 })
+            {
+                bars[member.PriceSeriesKey] = history.Bars;
+            }
+        }
+
+        return bars;
+    }
+
+    internal static IScoreSnapshotFileStore StoreAt(string directory) =>
         new FileScoreSnapshotStore(
             new FileScoreSnapshotStoreOptions { RootDirectory = directory },
             NullLogger<FileScoreSnapshotStore>.Instance);
@@ -175,7 +195,7 @@ public sealed class AcquisitionLeaderboardCounterfactualTests(ITestOutputHelper 
     /// frozen benchmark artifact. No score repository, no run store, no artifact store, no collector — so
     /// there is nothing this harness could write even by accident.
     /// </summary>
-    private static ServiceProvider BuildReadOnlyComposition(string root)
+    internal static ServiceProvider BuildReadOnlyComposition(string root)
     {
         var services = new ServiceCollection();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Error));
@@ -240,20 +260,20 @@ public sealed class AcquisitionLeaderboardCounterfactualTests(ITestOutputHelper 
         return sb.ToString();
     }
 
-    private static string Rank(StrategyLeaderboardRow? row) =>
+    internal static string Rank(StrategyLeaderboardRow? row) =>
         row is null ? "dropped" : row.Rank.ToString(CultureInfo.InvariantCulture);
 
-    private static string Rho(StrategyWindowMetric? metric) =>
+    internal static string Rho(StrategyWindowMetric? metric) =>
         metric is null ? "—" : metric.Correlation.Rho.ToString("0.0000", CultureInfo.InvariantCulture);
 
-    private static string Ci(StrategyWindowMetric? metric) =>
+    internal static string Ci(StrategyWindowMetric? metric) =>
         metric is null
             ? "—"
             : string.Create(
                 CultureInfo.InvariantCulture,
                 $"{metric.Correlation.LowerBound:0.0000} to {metric.Correlation.UpperBound:0.0000}");
 
-    private static string Obs(StrategyWindowMetric? metric) =>
+    internal static string Obs(StrategyWindowMetric? metric) =>
         metric is null ? "—" : metric.Coverage.Observations.ToString(CultureInfo.InvariantCulture);
 
     private static string Order(StrategyLeaderboard leaderboard) =>

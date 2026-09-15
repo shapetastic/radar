@@ -3,7 +3,7 @@ using Radar.Application.Acquisitions;
 namespace Radar.Application.Tests.Acquisitions;
 
 /// <summary>
-/// SPEC 217 §1 — <c>acqscan-v1</c>. The scan is the whole slice's gate: a false positive CLOSES A LIVE
+/// SPEC 217 §1 — the acquisition scan (<c>acqscan-v1</c>, tightened to <c>acqscan-v2</c> by spec 227). The scan is the whole slice's gate: a false positive CLOSES A LIVE
 /// THESIS, so every test here is about failing closed and counting the reason.
 /// </summary>
 public sealed class AcquisitionAgreementScanTests
@@ -18,8 +18,9 @@ public sealed class AcquisitionAgreementScanTests
     public void Version_IsTheDeclaredScanIdentity()
     {
         // Pinned because it is part of every record's content-derived id AND of the hashed acq= descriptor
-        // field: a silent rename would re-mint every record and move every fingerprint.
-        Assert.Equal("acqscan-v1", AcquisitionAgreementScan.Version);
+        // field: a silent rename would re-mint every record and move every fingerprint. Spec 227 bumped it
+        // acqscan-v1 → acqscan-v2 (the SHOO dividend false positive, the HZO par value and "Parent").
+        Assert.Equal("acqscan-v2", AcquisitionAgreementScan.Version);
     }
 
     [Fact]

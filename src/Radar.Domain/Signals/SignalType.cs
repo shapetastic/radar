@@ -37,7 +37,7 @@ public enum SignalType
     //     SEC 8-K Item 1.01 / 2.01 heading phrases, at the rule strength 4: a heading records that a material
     //     agreement, an acquisition or a disposal happened, never whether it is good or bad for the business;
     //   * the read/assembly-time supersede (acq-supersede-v2) rewrites the extractor's read of an item-1.01
-    //     8-K that `acqscan-v1` recognised as a pending acquisition OF THE COMPANY — an accrued v8
+    //     8-K that the acquisition scan recognised as a pending acquisition OF THE COMPANY — an accrued v8
     //     StrategicPartnership or a v9 CorporateAction — into ONE CorporateAction at strength 0 naming the
     //     acquisition; that rewrite is never persisted.
     // (⚠ Amended in place by spec 226: this comment previously said it was minted ONLY by the supersede, never

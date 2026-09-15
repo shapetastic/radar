@@ -233,7 +233,8 @@ public sealed class RadarWorkerOptions
 
     /// <summary>
     /// Root directory of the append-only ACQUISITIONS store (spec 217 §1): one
-    /// <c>{companyId}/{accession}.json</c> per item-1.01 8-K that <c>acqscan-v1</c> recognised as an
+    /// <c>{companyId}/{scanVersion}/{accession}.json</c> (spec 227; pre-227 files sit version-less at
+    /// <c>{companyId}/{accession}.json</c>) per item-1.01 8-K that the acquisition scan recognised as an
     /// agreement to acquire THAT company. Read by scoring (the CompanyStatusAtScoring stamp and the
     /// corporate-action supersede), by the weekly report (rule 0, the banner, the Acquisitions pending
     /// section and the per-strategy footer) and by the efficacy comparison
@@ -242,7 +243,7 @@ public sealed class RadarWorkerOptions
     public string AcquisitionsDirectory { get; init; } = "data/acquisitions";
 
     /// <summary>
-    /// Root directory of the heal-forward <c>acqscan-v1</c> answer cache (spec 217 §1): one
+    /// Root directory of the heal-forward acquisition-scan answer cache (spec 217 §1): one
     /// <c>{accession}.json</c> per SCANNED item-1.01 filing, recognised or not. It is what stops the ~177
     /// item-1.01 filings that are NOT acquisitions being re-fetched from www.sec.gov on every run. An entry
     /// produced under a different scan version is a MISS, so a version bump retires every answer without

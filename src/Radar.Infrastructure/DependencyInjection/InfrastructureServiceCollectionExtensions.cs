@@ -236,7 +236,7 @@ public static class InfrastructureServiceCollectionExtensions
 
     /// <summary>
     /// SPEC 217 §1 — registers the deterministic ACQUISITION RECOGNITION path: the append-only acquisitions
-    /// store, the heal-forward <c>acqscan-v1</c> answer cache, the SEC item-1.01 body reader (with its own
+    /// store, the heal-forward acquisition-scan answer cache, the SEC item-1.01 body reader (with its own
     /// typed <c>HttpClient</c> routed through the shared global SEC pacer) and the recognition pass; and it
     /// REPLACES the library's inert <see cref="IPendingAcquisitionSource"/> with the store-backed one, so
     /// scoring, the report and the efficacy comparison all see the recognitions.

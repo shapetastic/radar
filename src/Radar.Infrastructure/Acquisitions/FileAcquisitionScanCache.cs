@@ -14,7 +14,7 @@ public sealed class FileAcquisitionScanCacheOptions
 }
 
 /// <summary>
-/// SPEC 217 §1 — the on-disk <c>acqscan-v1</c> answer cache: one JSON file per accession at
+/// SPEC 217 §1 — the on-disk acquisition-scan answer cache: one JSON file per accession at
 /// <c>{RootDirectory}/{sanitizedAccession}.json</c>.
 /// <para>
 /// <b>It is the NEGATIVE half of "cached like the earnings read".</b> The acquisitions store caches the
@@ -25,7 +25,8 @@ public sealed class FileAcquisitionScanCacheOptions
 /// <para>
 /// <b>Heal-forward, never mass-invalidated</b> (AD-8/AD-1): the record carries the
 /// <see cref="AcquisitionScanCacheRecord.ScanVersion"/> it was produced under and the CALLER treats a
-/// different version as a miss, so bumping <c>acqscan-v1</c> retires every answer without deleting a byte.
+/// different version as a miss, so bumping <c>AcquisitionAgreementScan.Version</c> retires every answer without
+/// deleting a byte (spec 227's acqscan-v1 → acqscan-v2 bump did exactly that).
 /// </para>
 /// <para>
 /// A read failure is a MISS (never a throw) and a write failure returns <c>false</c> so the caller can

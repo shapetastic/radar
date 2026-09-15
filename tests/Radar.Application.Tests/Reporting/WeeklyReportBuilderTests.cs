@@ -303,7 +303,9 @@ public sealed partial class WeeklyReportBuilderTests
             // warning fires once per snapshot; the default stays silent.
             ILogger<WeeklyReportBuilder>? logger = null,
             // Spec 215 §4: the optional reported-metrics ledger the builder joins to evidence refs.
-            Radar.Application.Filings.IReportedMetricStore? reportedMetrics = null)
+            Radar.Application.Filings.IReportedMetricStore? reportedMetrics = null,
+            // Spec 227 §2: the acquisitions projection source (the inert one by default).
+            IPendingAcquisitionSource? pendingAcquisitions = null)
         {
             CountingSignals = new CountingSignalRepository(Signals);
             CountingEvidence = new CountingEvidenceRepository(Evidence);
@@ -329,7 +331,7 @@ public sealed partial class WeeklyReportBuilderTests
                 ScoreFileStores,
                 operatingCalls ?? NullOperatingCallSource.Instance,
                 evidenceFacts ?? UnavailableStrategyEvidenceFactsSource.Instance,
-                new NoPendingAcquisitionSource(),
+                pendingAcquisitions ?? new NoPendingAcquisitionSource(),
                 options ?? new WeeklyReportOptions(),
                 new FixedTimeProvider(FixedNow),
                 logger ?? NullLogger<WeeklyReportBuilder>.Instance,
@@ -508,6 +510,35 @@ public sealed partial class WeeklyReportBuilderTests
         await h.Scores.AddEvidenceLinkAsync(link, default);
 
         return signalId;
+    }
+
+    [Fact]
+    public async Task TheRetiredByScanVersionCount_ReachesTheModel_OnlyWhenTheStoreWasRead()
+    {
+        // SPEC 227 §2: a durable record from an older scan version closes no thesis, and the report's
+        // acquisitions section is told how many were retired. With no store composed the count is NOT
+        // MEASURED (null), never zero.
+        var retired = Radar.Application.Tests.Acquisitions.PendingAcquisitionsTests.Record() with
+        {
+            ScanVersion = "acqscan-v1",
+        };
+        var withStore = new Harness(
+            pendingAcquisitions: new FixedPendingSource(
+                new PendingAcquisitions(new AcquisitionStoreReadResult([retired], 0))));
+        await withStore.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        Assert.Equal(1, withStore.Renderer.LastModel!.AcquisitionsRetiredByScanVersion);
+        Assert.Empty(withStore.Renderer.LastModel.AcquisitionsPending!);
+
+        var inert = new Harness();
+        await inert.Builder.GenerateAsync(PeriodEnd, CollectionSummary.Empty, null, default);
+
+        Assert.Null(inert.Renderer.LastModel!.AcquisitionsRetiredByScanVersion);
+    }
+
+    private sealed class FixedPendingSource(PendingAcquisitions acquisitions) : IPendingAcquisitionSource
+    {
+        public Task<PendingAcquisitions> GetAsync(CancellationToken ct) => Task.FromResult(acquisitions);
     }
 
     [Fact]

@@ -125,11 +125,15 @@ When a company has agreed to be acquired, its thesis is **closed**: from the ann
 sits at the offer and tracks the deal, not the business, so trajectory and opportunity stop measuring what
 they claim to measure. Radar says so instead of pretending otherwise.
 
-- **How it is recognised.** Deterministically, from the company's own 8-K — no AI. `acqscan-v1` reads the
-  item-1.01 filing ("Entry into a Material Definitive Agreement") and recognises an acquisition only when
-  BOTH hold verbatim in the text: the company is the **target** (its own name in the target position
-  relative to "acquired by" / "merge with and into" / "acquisition of"), and a **per-share consideration is
-  stated** ("$53.00 per share in cash"). Item 1.01 alone means nothing — most of those filings are credit
+- **How it is recognised.** Deterministically, from the company's own 8-K — no AI. The acquisition scan
+  (`AcquisitionAgreementScan.Version`; tightened by spec 227) reads the item-1.01 filing ("Entry into a Material Definitive Agreement") and
+  recognises an acquisition only when BOTH hold verbatim in the text: the company is the **target** (its own
+  name as the subject of "acquired by", or the DIRECT object of "merge with and into" / "acquisition of … by
+  …", within one clause), and a **per-share MERGER consideration is stated** ("$53.00 per share in cash", "the
+  right to receive $53.00" — a par value, dividend, exercise or conversion price or offering price never
+  counts). The acquirer must be a real name, never a defined role like "Parent". A recognition made under an
+  older scan version no longer counts; the report's Acquisitions pending section says how many were retired
+  that way. Item 1.01 alone means nothing — most of those filings are credit
   agreements, leases and supply contracts — and a filing where the company is the **acquirer** is excluded
   by construction. Every filing that falls short is counted with the reason it fell short, so a missed
   recognition is visible rather than silent. Recognition deliberately fails closed: a false positive would

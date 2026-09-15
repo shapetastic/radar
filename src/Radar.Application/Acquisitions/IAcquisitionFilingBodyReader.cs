@@ -34,7 +34,7 @@ public sealed record AcquisitionFilingBody(
 
 /// <summary>
 /// The Application seam over "fetch the item-1.01 filing's own text" (spec 217 §1). The SEC/HTTP/HTML
-/// specifics live behind it in Infrastructure (AD-5), so <c>acqscan-v1</c> stays a pure function of text.
+/// specifics live behind it in Infrastructure (AD-5), so the scan (<c>AcquisitionAgreementScan.Version</c>) stays a pure function of text.
 /// <para>
 /// One BOUNDED fetch per item-1.01 filing, cached like the earnings read, and routed through the shared
 /// global SEC pacer — the recognition pass never issues an unpaced burst.

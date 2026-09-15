@@ -492,7 +492,7 @@ public sealed class ScoringEngine : IScoringEngine
         var newsSupersede = NewsJudgmentSignalSupersede.Apply(superseded);
         var newsSuperseded = newsSupersede.Signals;
 
-        // Corporate-action supersede (spec 217 §2, acq-supersede-v2 since spec 226): when acqscan-v1 has
+        // Corporate-action supersede (spec 217 §2, acq-supersede-v2 since spec 226): when the acquisition scan has
         // recognised a pending acquisition OF THIS COMPANY, the keyword extractor's read of THAT ONE recognised
         // item-1.01 filing — an accrued pre-226 Positive StrategicPartnership, or a v9 Neutral CorporateAction —
         // is rewritten in place as ONE Neutral CorporateAction at strength 0 naming the acquisition (any

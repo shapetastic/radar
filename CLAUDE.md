@@ -345,10 +345,10 @@ authoritative record:
   structure earns **v12**. An in-place composition change bumps
   `IScoreFormula.CompositionRevision` (spec 153); a strategy that changes formula or weights
   gets a NEW NAME (spec 141, immutable-by-convention).
-- **Fingerprint pins are window-dependent and have moved fifteen times since spec 191** (191,
-  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224, 226 (214–216, 219, 220 and 221 AI-ON only; 217,
-  224 and 226 moved both sides — 224 unconditionally, via the new `insiderCollapse=` fingerprint field; 226 via
-  the unconditional `rules=` token and `acq=` segment). 214+215
+- **Fingerprint pins are window-dependent and have moved sixteen times since spec 191** (191,
+  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224, 226, 227 (214–216, 219, 220 and 221 AI-ON only; 217,
+  224, 226 and 227 moved both sides — 224 unconditionally, via the new `insiderCollapse=` fingerprint field; 226 via
+  the unconditional `rules=` token and `acq=` segment; 227 via the `acq=` segment's scan half). 214+215
   merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
   composition stamped a full 102-company live run; each later move (216, 217, 219) invalidated the
   identity records again, and the 2026-09-09 run (`run-20260909T234658242Z-5c6644f6`) stamped the
@@ -363,7 +363,10 @@ authoritative record:
   and `CorporateActionSupersede.Version` both bumped) owed ONE operator step after merging; it was TAKEN on
   2026-09-14 after the merge (`b66e3b5`), so its identity is stamped by the first post-226 run — verify that
   run's stamp against `ScoringConfigFingerprintTests`. **No operator step is outstanding for any spec through
-  226.**
+  226.** Spec 227 moved the pins a SIXTEENTH time, BOTH families (the `acq=` segment's scan half:
+  `AcquisitionAgreementScan.Version` bumped, unconditional, not AI-gated) and **owes ONE operator step after
+  it merges** — delete or re-record every configured `data/scoring-configs/strategies/{name}.json` before the
+  first post-227 run, then verify that run's stamp against `ScoringConfigFingerprintTests`.
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
@@ -390,7 +393,14 @@ authoritative record:
   not a direction: evidence extracted after the merge carries a Neutral `CorporateAction` where pre-226
   extraction minted a Positive `StrategicPartnership`. NOT a step: accrued v8 partnership signals are never
   backfilled (AD-8) and keep their direction until they age out of the scoring window (and, as activity, the
-  velocity window), so the boundary HEALS FORWARD over one window length after the merge). The
+  velocity window), so the boundary HEALS FORWARD over one window length after the merge), and **227**
+  (`acqscan-v2` + version-in-identity: from the first post-merge pass the retired `acqscan-v1` recognitions
+  govern nothing, so Steven Madden (SHOO) is no longer `PendingAcquisition` and RE-ENTERS the
+  `benchmark-universe-v1` peer mean, the coverage denominator and observation eligibility for EVERY date since
+  2025-05-07 — the efficacy comparison is recomputed from the store, so this is a whole-history change to the
+  benchmark, not a dated step; already-stamped `CompanyStatusAtScoring = PendingAcquisition` snapshots stay
+  exactly as written (AD-8). Leaderboards before and after it are NOT comparable;
+  `docs/architecture-history.md` records the measured size). The
   spec-191 inherited-direction cohort is known DEFECTIVE and is not a control.
 - **News is a two-stage read** (specs 177–221): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact
@@ -449,10 +459,23 @@ authoritative record:
   (`ObservationEligibility.Version`, `observation-eligibility-v2`): an outcome no strategy could have
   earned is excluded on its own counted axis, `CorporateActionInWindow`.
 - **A pending acquisition is a CLOSED THESIS, recognised deterministically and counted everywhere**
-  (spec 217). `acqscan-v1` reads the item-1.01 8-K itself — never the title — and recognises only when
-  BOTH legs hold verbatim: the company is the TARGET (positionally, so an acquirer-side filing fails by
-  construction) and a per-share consideration is stated. It fails CLOSED and names every failed leg,
-  because a false positive closes a live thesis. `CompanyStatus.PendingAcquisition` is DERIVED at run
+  (spec 217). The scan (`AcquisitionAgreementScan.Version` — read it, not a copy here) reads the item-1.01
+  8-K itself — never the title — and recognises only when BOTH legs hold verbatim: the company is the TARGET
+  (positionally, so an acquirer-side filing fails by construction) and a per-share consideration is stated.
+  It fails CLOSED and names every failed leg, because a false positive closes a live thesis. (⚠ AMENDED in
+  place by spec 227: `acqscan-v1` DID close a live thesis — Steven Madden (SHOO) on a Q1-results 8-K, a
+  heading binding the company to "acquisition of Kurt Geiger", a quarterly dividend read as the price and
+  "Lead Borrower" as the acquirer — and recorded the one genuine recognition, MarineMax, at the $0.001 par
+  value with acquirer "Parent". `acqscan-v2` binds a company-after target phrase only to a DIRECT object,
+  splits clauses on blank lines / `~` / spaced dashes (never on a single source line break), keeps
+  "acquisition of" only with a `by {acquirer}`, vetoes "completion of/completes acquisition of", excludes
+  par values, dividends, exercise/conversion prices and offering prices as DATA and requires merger
+  vocabulary for the amount, and never accepts a defined-term role as an acquirer. The scan version is
+  now part of recognition IDENTITY end to end: the store's path carries it (legacy version-less files stay
+  unmoved and readable), the pass rescans a filing whose only record is older, and `PendingAcquisitions`
+  admits ONLY current-version records — an older one is counted as `RetiredByScanVersion` (in the pass's
+  aggregated line and the report's `## Acquisitions pending` footer) and governs no consumer from the moment
+  the version ships.) `CompanyStatus.PendingAcquisition` is DERIVED at run
   time from the append-only acquisitions store — never settable in `data/companies.json` — and stamped
   on snapshots as recorded provenance (`CompanyStatusAtScoring`; `null` = not recorded, never `Active`).
   Scoring continues and nothing is rewritten; what changes is the READ: the corporate-action supersede

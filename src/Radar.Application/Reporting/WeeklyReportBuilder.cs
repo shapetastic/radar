@@ -544,7 +544,10 @@ public sealed class WeeklyReportBuilder : IWeeklyReportBuilder
             Lifecycle: lifecycle,
             NewsJudgment: judgmentMarkers,
             Labels: labelLines,
-            AcquisitionsPending: acquisitionsPending);
+            AcquisitionsPending: acquisitionsPending,
+            AcquisitionsRetiredByScanVersion: acquisitions.RecognitionAvailable
+                ? acquisitions.RetiredByScanVersion
+                : null);
 
         var markdown = _renderer.Render(model);
 

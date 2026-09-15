@@ -4,7 +4,11 @@ namespace Radar.Application.Acquisitions;
 
 /// <summary>
 /// The append-only acquisitions store (spec 217 §1), implemented in Infrastructure at
-/// <c>{root}/{companyId}/{accession}.json</c> — one file per recognised (company, accession). Insert-if-new
+/// <c>{root}/{companyId}/{scanVersion}/{accession}.json</c> — one file per recognised (company, accession,
+/// scan version). Spec 227 §2 put the scan version into the durable identity so a rule change can record a
+/// new answer for the same filing without colliding with the old one; files written before spec 227 sit at
+/// the legacy <c>{root}/{companyId}/{accession}.json</c> path, are never moved or edited, and stay readable
+/// (they carry their <c>scanVersion</c> in their content). Insert-if-new
 /// (the spec-206 raw-evidence / spec-216 ledger pattern): an existing file is
 /// <see cref="DurableWriteOutcome.AlreadyAvailable"/> and is never overwritten; a disk failure is
 /// <see cref="DurableWriteOutcome.Failed"/> and never throws; only caller cancellation propagates.
@@ -19,9 +23,9 @@ namespace Radar.Application.Acquisitions;
 public interface IAcquisitionStore
 {
     /// <summary>
-    /// Writes <paramref name="record"/> if no file for its (company, accession) exists. Never throws for a
-    /// disk failure — the outcome is returned so the caller can COUNT a loss instead of reporting a
-    /// success.
+    /// Writes <paramref name="record"/> if no file for its (company, scan version, accession) exists. Never
+    /// throws for a disk failure — the outcome is returned so the caller can COUNT a loss instead of
+    /// reporting a success.
     /// </summary>
     Task<DurableWriteResult> WriteIfNewAsync(PendingAcquisitionRecord record, CancellationToken ct);
 
@@ -33,11 +37,12 @@ public interface IAcquisitionStore
     Task<AcquisitionStoreReadResult> GetAllAsync(CancellationToken ct);
 
     /// <summary>
-    /// True when a record for (<paramref name="companyId"/>, <paramref name="accession"/>) is already on
-    /// disk — the cheap per-filing check that keeps a re-run from re-fetching a filing it has already
-    /// recognised.
+    /// True when a record for (<paramref name="companyId"/>, <paramref name="accession"/>) recognised under
+    /// <paramref name="scanVersion"/> is already on disk — the cheap per-filing check that keeps a re-run from
+    /// re-fetching a filing it has already recognised. Since spec 227 §2 a record from a DIFFERENT scan
+    /// version does not count: the pass must rescan that filing under the current rule.
     /// </summary>
-    Task<bool> ExistsAsync(Guid companyId, string accession, CancellationToken ct);
+    Task<bool> ExistsAsync(Guid companyId, string accession, string scanVersion, CancellationToken ct);
 }
 
 /// <summary>

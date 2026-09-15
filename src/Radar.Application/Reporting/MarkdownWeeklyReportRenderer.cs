@@ -1179,7 +1179,9 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
         sb.Append("A recognised agreement to acquire the company closes its thesis: from the announcement ")
             .Append("the price tracks the deal, not the business. These companies are labelled Ignore by ")
             .Append("rule and are excluded from every strategy's ranked table and from the benchmark peer ")
-            .Append("mean. Recognition is deterministic (acqscan-v1) and every figure below is quoted ")
+            .Append("mean. Recognition is deterministic (")
+            .Append(Radar.Application.Acquisitions.AcquisitionAgreementScan.Version)
+            .Append(") and every figure below is quoted ")
             .Append("verbatim from the company's own 8-K.")
             .Append(Lf);
         sb.Append(Lf);
@@ -1189,6 +1191,7 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
             sb.Append("_None — no company in the universe is under a recognised pending acquisition._")
                 .Append(Lf);
             sb.Append(Lf);
+            AppendRetiredAcquisitionsFooter(sb, model);
             return;
         }
 
@@ -1216,6 +1219,37 @@ public sealed class MarkdownWeeklyReportRenderer : IWeeklyReportRenderer
                 .Append(Lf);
         }
 
+        sb.Append(Lf);
+        AppendRetiredAcquisitionsFooter(sb, model);
+    }
+
+    /// <summary>
+    /// SPEC 227 §2 — the acquisitions section's footer naming the durable recognitions RETIRED because they
+    /// were made under an older scan version: they are on disk (never moved, edited or deleted) but govern
+    /// nothing, so a reader who remembers a company as pending is told why it no longer is. A retired record
+    /// NEVER governs again — a rescan under the current rule writes a separate current-version record rather
+    /// than reviving it — and the legacy files are never removed, so once non-zero this count stays non-zero;
+    /// the wording is therefore true in every state (before and after any rescan). Rendered only when the
+    /// count was MEASURED (non-null) and non-zero; a null — the store not composed or not readable — is never
+    /// printed as a zero, and a measured zero has nothing to account for.
+    /// </summary>
+    private static void AppendRetiredAcquisitionsFooter(StringBuilder sb, WeeklyReportModel model)
+    {
+        if (model.AcquisitionsRetiredByScanVersion is not { } retired || retired <= 0)
+        {
+            return;
+        }
+
+        sb.Append(retired.ToString(CultureInfo.InvariantCulture))
+            .Append(retired == 1 ? " recognition" : " recognitions")
+            .Append(" retired by scan version: recorded under a scan version earlier than ")
+            .Append(Radar.Application.Acquisitions.AcquisitionAgreementScan.Version)
+            .Append(", ")
+            .Append(retired == 1 ? "it is" : "they are")
+            .Append(" retired and govern")
+            .Append(retired == 1 ? "s" : string.Empty)
+            .Append(" nothing; only a recognition under the current rule closes a thesis.")
+            .Append(Lf);
         sb.Append(Lf);
     }
 
