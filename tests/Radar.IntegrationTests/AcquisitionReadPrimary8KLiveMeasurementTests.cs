@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +23,10 @@ namespace Radar.IntegrationTests;
 /// row), and of the scan over each read: <c>acqscan-v2</c> (the pre-228 read) against <c>acqscan-v3</c> (the
 /// spec-228 read). The scan RULE is unchanged by spec 228 — only the text it is given — so both columns run the
 /// production <see cref="AcquisitionAgreementScan.Scan"/>; the version difference IS the read.
+/// (⚠ AMENDED in place by spec 229: "the production scan" is <c>acqscan-v4</c> since spec 229 changed the RULE, so a
+/// re-run of this harness scans BOTH columns with v4 and its v2/v3 labels no longer name what ran. Its 2026-09-15
+/// measurement stands as recorded. The v3-against-v4 measurement, with a frozen v3 control, is
+/// <see cref="AcquisitionScanV4LiveMeasurementTests"/>.)
 /// <para>
 /// <b>Population, resolver and mentions are the production pass's own</b> (reused through the spec-227 harness's
 /// read-only composition). The NEW read is the production <see cref="IAcquisitionFilingBodyReader"/> through the
@@ -91,8 +94,8 @@ public sealed class AcquisitionReadPrimary8KLiveMeasurementTests(ITestOutputHelp
     {
         var root = Path.GetFullPath(DataRoot()!);
         var ct = CancellationToken.None;
-        var oldBodyDirectory = OutsideRoot(root, Environment.GetEnvironmentVariable(OldBodyDirectoryVariable), create: false);
-        var cacheDirectory = OutsideRoot(root, Environment.GetEnvironmentVariable(DocumentCacheVariable), create: true);
+        var oldBodyDirectory = LiveHarnessPaths.OutsideDataRoot(root, Environment.GetEnvironmentVariable(OldBodyDirectoryVariable), create: false);
+        var cacheDirectory = LiveHarnessPaths.OutsideDataRoot(root, Environment.GetEnvironmentVariable(DocumentCacheVariable), create: true);
 
         output.WriteLine($"Report path: {ReportPath}");
         var before = AcquisitionScanV2LiveMeasurementTests.SnapshotTree(root);
@@ -147,63 +150,21 @@ public sealed class AcquisitionReadPrimary8KLiveMeasurementTests(ITestOutputHelp
         string? cacheDirectory,
         CancellationToken ct)
     {
-        var mentions = AcquisitionRecognitionPass.BuildMentionIndex(companies);
-        var byId = companies.ToDictionary(c => c.Id);
-        var resolver = provider.GetRequiredService<ICompanyResolver>();
         var reader = provider.GetRequiredService<IAcquisitionFilingBodyReader>();
         var normalizer = provider.GetRequiredService<IEvidenceNormalizer>();
-        var evidence = await provider.GetRequiredService<IEvidenceRepository>().GetAllAsync(ct);
 
-        var candidates = new List<(EvidenceItem Evidence, FilingEvidenceIdentifiers Identifiers)>();
-        var untrustworthy = 0;
-        foreach (var item in evidence)
-        {
-            if (FilingEvidenceFacts.TryResolve(
-                    item, AcquisitionRecognitionPass.FormCode, AcquisitionRecognitionPass.ItemCode, out var identifiers, out var rejection))
-            {
-                candidates.Add((item, identifiers!));
-            }
-            else if (rejection is FilingEvidenceRejection.UnparseableSourceUrl or FilingEvidenceRejection.AccessionMismatch)
-            {
-                untrustworthy++;
-            }
-        }
-
-        candidates.Sort(static (a, b) =>
-        {
-            var byWhen = (a.Evidence.PublishedAtUtc ?? a.Evidence.CollectedAtUtc).CompareTo(b.Evidence.PublishedAtUtc ?? b.Evidence.CollectedAtUtc);
-            return byWhen != 0 ? byWhen : a.Evidence.Id.CompareTo(b.Evidence.Id);
-        });
-
+        // SPEC 229: the population is the shared production-pass population (ItemOneOhOnePopulation), unchanged.
+        var population = await ItemOneOhOnePopulation.LoadAsync(provider, companies, ct);
         var rows = new List<FilingRow>();
-        var unresolved = 0;
-        var seen = new Dictionary<string, FilingRow>(StringComparer.Ordinal);
-        var duplicateItems = 0;
-        foreach (var (item, identifiers) in candidates)
+        foreach (var filing in population.Filings)
         {
-            var resolution = await resolver.ResolveAsync(item.Title, AcquisitionScanV2LiveMeasurementTests.HintsOf(item), ct);
-            if (resolution.CompanyId is not { } companyId || !byId.TryGetValue(companyId, out var company))
-            {
-                unresolved++;
-                continue;
-            }
-
-            if (seen.ContainsKey(identifiers.Accession))
-            {
-                // A second evidence item for an accession already measured: the read is per accession.
-                duplicateItems++;
-                continue;
-            }
-
-            var row = await MeasureFilingAsync(
-                client, reader, normalizer, state, item, identifiers, company, mentions.GetValueOrDefault(companyId, []), oldBodyDirectory, ct);
-            seen[identifiers.Accession] = row;
-            rows.Add(row);
+            rows.Add(await MeasureFilingAsync(
+                client, reader, normalizer, state, filing.Evidence, filing.Identifiers, filing.Company, filing.Mentions, oldBodyDirectory, ct));
         }
 
-        Render(sb, root, rows, candidates.Count, untrustworthy, unresolved, duplicateItems, state, oldBodyDirectory, cacheDirectory);
+        Render(sb, root, rows, population.CandidateItems, population.Untrustworthy, population.Unresolved, population.DuplicateItems, state, oldBodyDirectory, cacheDirectory);
 
-        Assert.Equal(candidates.Count, rows.Count + unresolved + duplicateItems);
+        Assert.Equal(population.CandidateItems, rows.Count + population.Unresolved + population.DuplicateItems);
         Assert.All(rows, r => Assert.NotEqual(AcquisitionScanOutcome.VerbatimCheckFailed, r.V3?.Outcome));
         Assert.All(rows, r => Assert.True(r.BodyCompositionMatches is not false, $"The shipped body for {r.Identifiers.Accession} is not primary + EX-99.1 + EX-2.1 as rebuilt."));
         Assert.All(rows, r => Assert.True(r.ControlAgrees is not false, $"The pre-228 control disagrees with spec 227's recorded read for {r.Identifiers.Accession}: {r.ControlNote}"));
@@ -504,29 +465,6 @@ public sealed class AcquisitionReadPrimary8KLiveMeasurementTests(ITestOutputHelp
         return response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync(ct) : null;
     }
 
-    private static string? OutsideRoot(string root, string? directory, bool create)
-    {
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            return null;
-        }
-
-        var full = Path.GetFullPath(directory);
-        // A path-BOUNDARY check, not a prefix check: root C:\data must not reject C:\data-cache.
-        var relative = Path.GetRelativePath(root, full);
-        var outside = Path.IsPathRooted(relative)
-            || relative == ".."
-            || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
-        Assert.True(outside, $"{full} must lie OUTSIDE the data root — the harness writes nothing under it.");
-        if (create)
-        {
-            Directory.CreateDirectory(full);
-        }
-
-        return full;
-    }
-
     private static string ReadKey(AcquisitionFilingBody body) => body.IsSuccess ? "success" : "failed: " + body.Detail;
 
     private static bool CoverFirst(AcquisitionFilingBody body) =>
@@ -569,89 +507,6 @@ public sealed class AcquisitionReadPrimary8KLiveMeasurementTests(ITestOutputHelp
         string? AgreementFile,
         AcquisitionScanResult? V3WithoutAgreement,
         bool? BodyCompositionMatches);
-
-    /// <summary>Counts every SEC request the harness's clients issue, and (optionally) keeps each 200 response outside the data root.</summary>
-    private sealed class SecResponseLog(string? cacheDirectory)
-    {
-        private int _requests;
-        private int _live;
-
-        public int Requests => _requests;
-
-        public int LiveRequests => _live;
-
-        public string? PathFor(Uri uri)
-        {
-            if (cacheDirectory is null || !uri.AbsolutePath.StartsWith("/Archives/", StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            return Path.Combine(cacheDirectory, uri.AbsolutePath.Trim('/').Replace('/', '_'));
-        }
-
-        public void Counted() => Interlocked.Increment(ref _requests);
-
-        public void Live() => Interlocked.Increment(ref _live);
-    }
-
-    /// <summary>
-    /// The OUTERMOST handler on the reader's client: counts the request, answers from the document cache when it
-    /// holds the URL, and otherwise passes it to the production pipeline (the shared SEC pacer) and keeps a 200.
-    /// A new instance per handler-chain build; the state is shared.
-    /// </summary>
-    private sealed class RecordingCacheHandler(SecResponseLog log) : DelegatingHandler
-    {
-        private const string ContentTypeSuffix = ".content-type";
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var isArchive = request.RequestUri!.AbsolutePath.StartsWith("/Archives/", StringComparison.Ordinal);
-            if (isArchive)
-            {
-                log.Counted();
-            }
-
-            var path = log.PathFor(request.RequestUri);
-            if (path is not null && File.Exists(path))
-            {
-                var cached = new ByteArrayContent(await File.ReadAllBytesAsync(path, cancellationToken));
-                var contentTypePath = path + ContentTypeSuffix;
-                if (File.Exists(contentTypePath)
-                    && MediaTypeHeaderValue.TryParse(await File.ReadAllTextAsync(contentTypePath, cancellationToken), out var contentType))
-                {
-                    cached.Headers.ContentType = contentType;
-                }
-
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = cached, RequestMessage = request };
-            }
-
-            if (isArchive)
-            {
-                log.Live();
-            }
-
-            var response = await base.SendAsync(request, cancellationToken);
-            if (path is not null && response.StatusCode == HttpStatusCode.OK)
-            {
-                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-                await File.WriteAllBytesAsync(path, bytes, cancellationToken);
-                var content = new ByteArrayContent(bytes);
-                if (response.Content.Headers.ContentType is { } contentType)
-                {
-                    // Kept beside the body so a cached replay decodes with the charset the wire declared.
-                    content.Headers.ContentType = contentType;
-                    await File.WriteAllTextAsync(path + ContentTypeSuffix, contentType.ToString(), cancellationToken);
-                }
-
-                var replay = new HttpResponseMessage(HttpStatusCode.OK) { Content = content, RequestMessage = request };
-                response.Dispose();
-                return replay;
-            }
-
-            return response;
-        }
-    }
 }
 
 /// <summary>Runs the spec-228 §3 measurement only when a data root AND a compliant SEC User-Agent are configured.</summary>
