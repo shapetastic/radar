@@ -41,7 +41,8 @@ describes corporate structure, not an acquisition.
 ### 2. The acquirer veto is proximity, not grammar, and can hide a real takeover
 
 `IsAcquirerSide` fires when a company mention appears **before** `to acquire` / `will acquire` / `agreed to acquire`
-within `ObjectProximity = 90` characters. A common target-side sentence has exactly that shape:
+within `ObjectProximity = 90` characters. A common target-side sentence has exactly that shape. The example below is
+constructed to show the pattern; it is not quoted from HZO's filing, which v3 recognises:
 
 > "On August 10, 2026, **MarineMax, Inc.** entered into an Agreement and Plan of Merger with Parent, pursuant to which
 > Parent **agreed to acquire** the Company…"
