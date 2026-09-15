@@ -84,7 +84,8 @@ public sealed record AcquisitionScanResult(
 }
 
 /// <summary>
-/// SPEC 217 §1, tightened by SPEC 227 — <c>acqscan-v2</c> (see <see cref="Version"/>): the DETERMINISTIC,
+/// SPEC 217 §1, tightened by SPEC 227 (<c>acqscan-v2</c>, the rule) and re-versioned by SPEC 228 (<c>acqscan-v3</c>,
+/// the read — the rule below is v2's, unchanged; see <see cref="Version"/>): the DETERMINISTIC,
 /// PURE, FAIL-CLOSED recognition of a pending acquisition OF THE SUBJECT COMPANY from an item-1.01 8-K's own
 /// text. No AI, no clock, no I/O, no randomness (AD-3): the same text and the same company names always yield
 /// the same answer.
@@ -98,7 +99,10 @@ public sealed record AcquisitionScanResult(
 /// taken as the consideration; and (c) the credit agreement's defined role "Lead Borrower" was accepted as
 /// the acquirer. The genuine recognition (MarineMax, HZO, 0001193125-26-341302) carried the par value
 /// ($0.001) as its price and the defined term "Parent" as its acquirer. v2 closes each hole; the rules
-/// below say how.
+/// below say how. (⚠ AMENDED in place by spec 228: neither body was the 8-K. The reader took SHOO's EX-10.1
+/// credit agreement and HZO's EX-2.1 merger agreement as "the primary document", so the credit agreement's
+/// signature pages ran straight into the EX-99.1 release, and HZO's par-value recital came from the merger
+/// agreement. <c>acqscan-v3</c> reads the real 8-K; see <see cref="Version"/>.)
 /// </para>
 /// <para>
 /// <b>Why it must read the filing.</b> A title-only rule fires on every "Entry into a Material Definitive
@@ -179,10 +183,18 @@ public static partial class AcquisitionAgreementScan
     /// record's durable path by it, the recognition pass rescans a filing whose only record carries an older
     /// version, and <see cref="PendingAcquisitions"/> admits only records stamped with THIS value (an older
     /// one is counted as <see cref="PendingAcquisitions.RetiredByScanVersion"/>, never silently dropped).
-    /// History: <c>acqscan-v1</c> (spec 217) → <c>acqscan-v2</c> (spec 227).
+    /// </para>
+    /// <para>
+    /// <b>Since spec 228 the version covers the READ as well as the rule.</b> A recognition is a function of WHICH
+    /// text was read and of the rule that scans it, so a change to what the item-1.01 body reader supplies (which
+    /// documents, in which order) changes the answer for the same accession exactly as a rule change does, and
+    /// bumps this value. <c>acqscan-v3</c> changed no rule: it is the first version whose body is the filing's real
+    /// primary 8-K document (see <see cref="Scan"/>'s <c>text</c>).
+    /// History: <c>acqscan-v1</c> (spec 217) → <c>acqscan-v2</c> (spec 227, the rule) → <c>acqscan-v3</c> (spec 228,
+    /// the read).
     /// </para>
     /// </summary>
-    public const string Version = "acqscan-v2";
+    public const string Version = "acqscan-v3";
 
     /// <summary>
     /// Minimum plausible body length (chars, after trimming) for a scan to be authoritative. Shorter means
@@ -373,7 +385,12 @@ public static partial class AcquisitionAgreementScan
     /// </summary>
     /// <param name="text">
     /// The filing body: the primary 8-K document and its EX-99.1 exhibit, stripped to plain text by the
-    /// shared normalizer and concatenated. Never null.
+    /// shared normalizer and concatenated. Never null. (⚠ AMENDED in place by spec 228: under <c>acqscan-v1</c>
+    /// and <c>acqscan-v2</c> that was the DESIGN, not the practice — the reader dropped the iXBRL primary's index
+    /// row, so 153 of 154 live bodies were an EX-10.1 / EX-2.1 / EX-1.1 / EX-4.1 / EX-5.1 / EX-3.1 exhibit plus
+    /// EX-99.1 when present, and only 1 began with the 8-K cover. Since <c>acqscan-v3</c> the body is the declared or
+    /// form-typed primary 8-K document, then EX-99.1 and then the EX-2.1 merger agreement, each when the index
+    /// shows one; no EX-10.* material contract is ever appended.)
     /// </param>
     /// <param name="companyMentions">
     /// The subject company's own name and aliases (and its ticker), as the seed records them. A mention is

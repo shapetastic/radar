@@ -482,11 +482,26 @@ public sealed class ScoringConfigFingerprintTests
         // one), so an unchanged pin would let a v1-governed snapshot and a v2-governed one read as comparable.
         // acq-supersede-v2 does NOT move (its match and collapse are unchanged; it acts on whatever the projection
         // admits). No _formula.Version, RuleSetVersion, weight, tier, window, collapse, news= or ai= change.
-        // ⚠ ONE OPERATOR STEP IS OWED after merge: delete or re-record every configured
+        // ONE OPERATOR STEP WAS OWED after merge (TAKEN 2026-09-15): delete or re-record every configured
         // data/scoring-configs/strategies/{name}.json BEFORE the first post-227 run (git-ignored, never
         // fabricated; a StrategyIdentityGuard halt before that step is CORRECT), then verify that run's stamp
         // against Compute_LiveWindowAiOnStamps_ArePinned.
-        Assert.Equal("radar-scoring-fp-e060ada97074", DefaultFingerprint());
+        //
+        // ⚠ SPEC 228 MOVES THIS PIN — radar-scoring-fp-e060ada97074 → radar-scoring-fp-7544950c14d4 — AND ALL
+        // ELEVEN OTHERS IN THIS FILE WITH IT, BOTH FAMILIES, for ONE cause: the `acq=` segment's scan half,
+        // AcquisitionAgreementScan.Version acqscan-v2 → acqscan-v3 (unconditional, not AI-gated). The RULE did
+        // not change; the READ did, and the version now covers the read: the item-1.01 body reader never read
+        // the 8-K — EDGAR links the iXBRL primary through /ix?doc=…, the shared index parser dropped that row,
+        // and the first-untyped-row fallback took an EX-10.1 / EX-2.1 / EX-1.1 / EX-4.1 exhibit as "the
+        // primary" (153 of 154 live reads; 31 more failed outright). Since spec 228 the body is the declared or
+        // form-typed 8-K plus EX-99.1, so the same accession can answer differently, and every v2 answer and
+        // record is retired through spec 227's machinery. acq-supersede-v2 does NOT move. No _formula.Version,
+        // RuleSetVersion, weight, tier, window, collapse, news= or ai= change. The MEASURED basis is spec 228
+        // §3 (docs/architecture-history.md, spec-228 bullet). ⚠ ONE OPERATOR STEP IS OWED after merge: delete
+        // or re-record every configured data/scoring-configs/strategies/{name}.json BEFORE the first post-228
+        // run (git-ignored, never fabricated; a StrategyIdentityGuard halt before that step is CORRECT), then
+        // verify that run's stamp against Compute_LiveWindowAiOnStamps_ArePinned.
+        Assert.Equal("radar-scoring-fp-7544950c14d4", DefaultFingerprint());
     }
 
     [Fact]
@@ -576,33 +591,41 @@ public sealed class ScoringConfigFingerprintTests
         // radar-scoring-fp-b9c73c39d0b8 → radar-scoring-fp-6e7b65972129; AI-ON 30d radar-scoring-fp-6ced12c5b920
         // → radar-scoring-fp-068937f7ec96; 60d radar-scoring-fp-e2927f5508e2 → radar-scoring-fp-6262cedb8d00;
         // 120d radar-scoring-fp-f64eb428a991 → radar-scoring-fp-eeacbc8972d5. The additivity proof is unchanged.
+        //
+        // ⚠ SPEC 228 MOVES ALL SIX HALVES AGAIN, both families (the acq= scan half acqscan-v2 → acqscan-v3 — the
+        // read changed, not the rule — unconditional and OUTSIDE the news-query segment): AI-OFF 30d
+        // radar-scoring-fp-694724ee4c5e → radar-scoring-fp-dc81936adff5; 60d radar-scoring-fp-2b13c2bafbb1 →
+        // radar-scoring-fp-4bda731619b7; 120d radar-scoring-fp-6e7b65972129 → radar-scoring-fp-afe9c0be1d54; AI-ON
+        // 30d radar-scoring-fp-068937f7ec96 → radar-scoring-fp-88345c34e6f8; 60d radar-scoring-fp-6262cedb8d00 →
+        // radar-scoring-fp-84ce04b1980e; 120d radar-scoring-fp-eeacbc8972d5 → radar-scoring-fp-2c1715c48512. The
+        // additivity proof is unchanged.
         Assert.Equal(string.Empty, NewsQueryScoringIdentity.None.Segment);
 
         // 30-day ScoringOptions code default (the unit pins).
         Assert.Equal(
-            "radar-scoring-fp-694724ee4c5e",
+            "radar-scoring-fp-dc81936adff5",
             DefaultFingerprint(sourceDescriptor: SourceDescriptorWithoutNewsQuery));
         Assert.Equal(
-            "radar-scoring-fp-068937f7ec96",
+            "radar-scoring-fp-88345c34e6f8",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery));
 
         // 60-day live baseline (Radar:ScoringWindowDays = 60).
         Assert.Equal(
-            "radar-scoring-fp-2b13c2bafbb1",
+            "radar-scoring-fp-4bda731619b7",
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-6262cedb8d00",
+            "radar-scoring-fp-84ce04b1980e",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(60)));
 
         // 120-day -Profile long-window.
         Assert.Equal(
-            "radar-scoring-fp-6e7b65972129",
+            "radar-scoring-fp-afe9c0be1d54",
             DefaultFingerprint(
                 sourceDescriptor: SourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
         Assert.Equal(
-            "radar-scoring-fp-eeacbc8972d5",
+            "radar-scoring-fp-2c1715c48512",
             DefaultFingerprint(
                 sourceDescriptor: AiOnSourceDescriptorWithoutNewsQuery, window: TimeSpan.FromDays(120)));
     }
@@ -990,8 +1013,13 @@ public sealed class ScoringConfigFingerprintTests
         // → SPEC 227 MOVES IT (radar-scoring-fp-fcb4a4593ff1 → the value below), AI-OFF side WITH it: the acq=
         // scan half acqscan-v1 → acqscan-v2, unconditional inside the source descriptor. No news=, ai=, rules=,
         // supersede, weight, tier, collapse or window change. See Compute_DefaultConfig_MatchesPinnedFingerprint.
+        //
+        // → SPEC 228 MOVES IT (radar-scoring-fp-b7e9623fd747 → the value below), AI-OFF side WITH it: the acq=
+        // scan half acqscan-v2 → acqscan-v3 (the item-1.01 READ changed — the 8-K primary is now read — not the
+        // rule), unconditional inside the source descriptor. No news=, ai=, rules=, supersede, weight, tier,
+        // collapse or window change. See Compute_DefaultConfig_MatchesPinnedFingerprint.
         Assert.Equal(
-            "radar-scoring-fp-b7e9623fd747",
+            "radar-scoring-fp-4e7cec079dfe",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor));
     }
 
@@ -1253,15 +1281,22 @@ public sealed class ScoringConfigFingerprintTests
         // SPEC 227 MOVES THEM AGAIN, AND THE AI-OFF PAIR MOVES WITH THEM (the spec-217/224/226 shape): 60d
         // radar-scoring-fp-b8872cce9666 → radar-scoring-fp-f8c4a612502c; 120d radar-scoring-fp-7b917a3d3d26 →
         // radar-scoring-fp-18a020b22eac. One cause, unconditional: the acq= scan half acqscan-v1 → acqscan-v2.
-        // radar-scoring-fp-b8872cce9666 is the spec-226 value, quoted as history. ⚠ ONE OPERATOR STEP IS OWED
-        // after merge: delete or re-record every configured data/scoring-configs/strategies/{name}.json BEFORE
-        // the first post-227 run (git-ignored, never fabricated); whatever the 60-day assertion below says is the
-        // value that run must report.
+        // radar-scoring-fp-b8872cce9666 is the spec-226 value, quoted as history. ONE OPERATOR STEP WAS OWED
+        // after merge (TAKEN 2026-09-15): delete or re-record every configured
+        // data/scoring-configs/strategies/{name}.json BEFORE the first post-227 run (git-ignored, never fabricated).
+        //
+        // SPEC 228 MOVES THEM AGAIN, AND THE AI-OFF PAIR MOVES WITH THEM (the spec-217/224/226/227 shape): 60d
+        // radar-scoring-fp-f8c4a612502c → radar-scoring-fp-376fec1cc260; 120d radar-scoring-fp-18a020b22eac →
+        // radar-scoring-fp-afd955beba0f. One cause, unconditional: the acq= scan half acqscan-v2 → acqscan-v3 (the
+        // read, not the rule). radar-scoring-fp-f8c4a612502c is the spec-227 value, quoted as history. ⚠ ONE
+        // OPERATOR STEP IS OWED after merge: delete or re-record every configured
+        // data/scoring-configs/strategies/{name}.json BEFORE the first post-228 run (git-ignored, never
+        // fabricated); whatever the 60-day assertion below says is the value that run must report.
         Assert.Equal(
-            "radar-scoring-fp-f8c4a612502c",
+            "radar-scoring-fp-376fec1cc260",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(60)));
         Assert.Equal(
-            "radar-scoring-fp-18a020b22eac",
+            "radar-scoring-fp-afd955beba0f",
             DefaultFingerprint(sourceDescriptor: AiOnSourceDescriptor, window: TimeSpan.FromDays(120)));
     }
 
@@ -1340,8 +1375,14 @@ public sealed class ScoringConfigFingerprintTests
         // pin would mean the recognition-rule change is not hashed. 60d radar-scoring-fp-9d1665dcebbb →
         // radar-scoring-fp-cfc2fb4370f4; 120d radar-scoring-fp-ba32db581757 → radar-scoring-fp-e878916856dc. See
         // the AI-OFF unit pin for the measured basis and the operator step.
-        Assert.Equal("radar-scoring-fp-cfc2fb4370f4", DefaultFingerprint(window: TimeSpan.FromDays(60)));
-        Assert.Equal("radar-scoring-fp-e878916856dc", DefaultFingerprint(window: TimeSpan.FromDays(120)));
+        //
+        // ⚠ SPEC 228 MOVES BOTH OF THESE, AND THAT MOVE IS THE DELIVERABLE: the acq= segment's scan half
+        // (acqscan-v2 → acqscan-v3, the version now covering the item-1.01 READ) is rendered with or without any
+        // AI or judgment seam, so an unchanged AI-OFF pin would mean the read change is not hashed. 60d
+        // radar-scoring-fp-cfc2fb4370f4 → radar-scoring-fp-219d216de6b2; 120d radar-scoring-fp-e878916856dc →
+        // radar-scoring-fp-ef8f67469ab8. See the AI-OFF unit pin for the measured basis and the operator step.
+        Assert.Equal("radar-scoring-fp-219d216de6b2", DefaultFingerprint(window: TimeSpan.FromDays(60)));
+        Assert.Equal("radar-scoring-fp-ef8f67469ab8", DefaultFingerprint(window: TimeSpan.FromDays(120)));
     }
 
     [Fact]

@@ -4241,7 +4241,10 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     (bound from `Radar:Acquisitions:MaxFetchesPerRun`; read the option for the value) and spent newest-first, so the
     drain takes several runs — PROJECTED, not measured: at the default in force on 2026-09-14 (40) that is at least
     five. A failed body read is never cached, so the 31 deterministic read failures §3 measured are re-fetched and
-    spend budget on EVERY run, before and after the drain. Whether HZO (`0001193125-26-341302`, filed 2026-08-10)
+    spend budget on EVERY run, before and after the drain. (⚠ AMENDED in place by spec 228: those 31 were a parser
+    defect, not a property of the filings, and spec 228 fixed it — all 185 accessions read successfully under the
+    spec-228 reader on 2026-09-15, so none is re-fetched for failing. The `acqscan-v3` bump retires every v2 answer
+    again, so the drain described here recurs once after spec 228 merges.) Whether HZO (`0001193125-26-341302`, filed 2026-08-10)
     is re-recognised on the FIRST post-merge run is **UNMEASURED** — it depends on its newest-first rank in the
     live store, which this slice did not read; it is expected to fall early because the ordering is newest-first
     and the filing is recent. Until its v2 record persists — and in any `score` / `replay` pass (no recognition
@@ -4260,7 +4263,13 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     throw; all 188,321 files under `data/` compared by path, length and last-write time before and after — 0
     changed). 190 item-1.01 evidence items (185 accessions), 0 unresolved, **31 body reads failed** (all
     deterministic reader failures — "no parseable document table" / "no primary document row", which include
-    HZO's 2026-06-30 credit agreement — NOT fixed here; a finding for its own spec), 159 scanned by both. Tallies
+    HZO's 2026-06-30 credit agreement — NOT fixed here; a finding for its own spec), 159 scanned by both. (⚠ AMENDED
+    in place by spec 228: the failures were the shared index parser dropping EDGAR's `/ix?doc=` primary-document row,
+    and the 159 "scanned" bodies were not the 8-K either — the first-untyped-row fallback took an exhibit as the
+    primary, so 153 of the 154 distinct bodies began with an EX-10.1 / EX-2.1 / EX-1.1 / EX-4.x / EX-5.1 / EX-3.1
+    exhibit and only 1 with the 8-K cover. HZO's v2 recognition below was read from its EX-2.1 merger agreement,
+    and SHOO's v1 false positive from its EX-10.1 credit agreement. Every tally in this bullet is therefore a
+    measurement of the scan over the WRONG DOCUMENT; the spec-228 bullet re-measures over the real 8-K.) Tallies
     v1 → v2: recognised 2 → 1, no-merger-agreement 132 → 132, company-not-target 12 → 12, company-is-acquirer
     10 → 13, acquirer-not-named 1 → 0, no-stated-consideration 2 → 1, empty-body 0 → 0, verbatim-check-failed 0 → 0.
     Changed: SHOO recognised → no-merger-agreement; UTL `0001193125-25-073493` acquirer-not-named →
@@ -4274,6 +4283,74 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     zero), `CorporateActionInWindow` 82 → 41; `default` rank 4 → 4, in-sample 0.0464 → 0.0440, oos 0.0433 → 0.0459
     (interval still spans zero), `CorporateActionInWindow` 98 → 49; benchmark dates with a member removed 51 → 35;
     leaderboard ordering unchanged. The interim arm (v1 retired, no rescan) put the Lead's oos rho at 0.0610.
+
+- **Spec 228 (2026-09-15) — the acquisition read never read the 8-K: `acqscan-v2 → acqscan-v3`, the version now
+  covers the READ.** Since SEC's inline-XBRL rules EDGAR links the primary 8-K document as
+  `/ix?doc=/Archives/…/{file}.htm`. `SecFilingIndexTable` cut that href at `?`, kept `/ix`, and dropped the row.
+  `SelectPrimaryDocument` then fell back to "the first row whose Type is null", and Type was resolved only for EX-99.
+  So 31 of 185 item-1.01 accessions failed ("no parseable document table" 15 / "no primary document row" 16), and 153
+  of the other 154 scanned an EX-10.1 / EX-2.1 / EX-1.1 / EX-4.x / EX-5.1 / EX-3.1 exhibit posing as the primary.
+  - **Parser (§1).** The shared parser resolves an inline-viewer link from its `doc` parameter's last path segment
+    and reads every row's Type COLUMN (header-located, never the free-text Description cell) as
+    `SecFilingIndexRow.DocumentType`; the EX-99 type the earnings selector reads is unchanged and renamed `Ex99Type`.
+    The primary is chosen from what SEC says: the declared `primaryDocument` when the index carries that row, else the
+    ONE row typed `8-K` / `8-K/A`. No row, or more than one, is a NAMED read failure (counted on the pass's
+    `FetchFailed`). The first-untyped-row fallback is deleted. **The earnings read is byte-identical by construction:**
+    it parses with `InlineViewerLinks.IgnoreAsBeforeSpec228`, which yields exactly the pre-228 row set. A deliberate
+    consequence, recorded rather than changed: an index whose only `.htm` is an iXBRL primary still reads `Malformed`
+    in the earnings read, not `NoEarningsExhibit`. Four trimmed real index pages are pinned in
+    `tests/Radar.Infrastructure.Tests/Sec/Fixtures` (MYRG no exhibits; HZO 2026-06-30 EX-99.1 only; SHOO with the
+    EX-10.1 the old code took; HZO 2026-08-10 with the EX-2.1 the old code took).
+  - **Append decision (§1) — EX-2.1 IS appended, nothing else, MEASURED.** The default was NOT to append a
+    material-contract exhibit, because a contract in the body is how SHOO's false positive assembled itself. The live
+    measurement overturned that for EX-2.1 only. Without it, HZO `0001193125-26-341302` reads `acquirer-not-named`:
+    its 8-K names the buyer only inside "by and among the Company, SHM Holdco, LLC, … (“Parent”)", a party list the
+    rule cannot read because it opens with "the Company". The body is now primary → EX-99.1 → EX-2.1 (each when
+    shown; `SecFilingIndexTable.SelectMergerAgreementExhibit`). Over the 21 accessions carrying an EX-2.1 the append
+    changed 4 outcomes: HZO acquirer-not-named → **recognised** (acquirer "SHM Holdco, LLC", consideration **$53.00**
+    quoted from the 8-K's own "Merger Consideration" paragraph); STRL `0001193125-25-142774` and CLMB
+    `0001437749-26-005335` no-merger-agreement → company-not-target; ESQ `0001104659-26-026781` company-not-target →
+    company-is-acquirer. None changed into a recognition except HZO, and none out of one. EX-10.* contracts (in 103 of
+    185 filings) are never appended. A rule that reads that party-list shape would make the append unnecessary — a
+    candidate follow-up, not done here (§4: rule design is out of scope).
+  - **Identity (§2).** `AcquisitionAgreementScan.Version` is `acqscan-v3`; the scan RULE is v2's, unchanged. No new
+    axis: spec 227's machinery (version in store path, cache key, `PendingAcquisitions` admission,
+    `RetiredByScanVersion`) retires every v2 record and cached answer without touching a file under
+    `data/acquisitions/`. **HZO is un-pending until its v3 rescan persists** — expected on the first post-merge full
+    run, because the drain is newest-first and HZO's filing is recent (PROJECTED, not measured) — and it stays
+    un-pending in any `score` / `replay` pass or after a failed rescan. BOTH pin families moved (twelve values in
+    `ScoringConfigFingerprintTests`, the only authority; none quoted here) through the unconditional `acq=` scan half.
+    **ONE operator step is owed after merge** (delete or re-record every configured
+    `data/scoring-configs/strategies/{name}.json` before the first post-228 run; never fabricated; a
+    `StrategyIdentityGuard` halt before it is CORRECT).
+  - **§3 live measurement — MEASURED 2026-09-15** (history, not a pin) by
+    `AcquisitionReadPrimary8KLiveMeasurementTests` (env-gated; production population, resolver, mentions and paced
+    reader; old read = spec 227's VERBATIM bodies and failures, cross-checked against a control of the pre-228
+    selection on today's index pages: 185 of 185 agree; store / cache / evidence writes throw; all 190,922 files under
+    `data/` compared before and after, 0 changed). 190 item-1.01 evidence items, 185 accessions, 0 unresolved.
+    Read outcomes old → new: success 154 → **185**, no parseable document table 15 → 0, no primary document row 16 →
+    0; still failing **0** (so §4's deterministic-failure caching has nothing to cache). Primary chosen by the declared
+    `primaryDocument` 185, by form-typed row 0. The first document read, by index Type, old → new: 8-K 1 → **185**,
+    EX-10.1 81 → 0, EX-1.1 21 → 0, EX-2.1 21 → 0, EX-4.1 18 → 0, EX-5.1 3 → 0, EX-3.1 3 → 0, other EX-10.x / EX-4.x
+    6 → 0, read failed 31 → 0; the 8-K cover ("CURRENT REPORT" + "Section 13") within the first 5,000 characters old 1
+    of 154 → new 185 of 185. Scan tally v2 (old read) → v3 (new read, with EX-2.1): recognised 1 → 1,
+    no-merger-agreement 127 → 135, company-not-target 12 → 4, company-is-acquirer 13 → 45, acquirer-not-named 0 → 0,
+    no-stated-consideration 1 → 0, empty-body 0 → 0, verbatim-check-failed 0 → 0, not scanned 31 → 0; 71 filings
+    changed outcome, every one named in the spec-228 file's appendix. The only recognition under either is HZO
+    `0001193125-26-341302`, at $53.00 with acquirer "SHM Holdco, LLC" under both. SHOO `0001641172-25-008949` is
+    no-merger-agreement under both. Of the 31 formerly unreadable filings, **none is RECOGNISED as a takeover under
+    `acqscan-v3`** (24 no-merger-agreement, 6 company-is-acquirer, 1 company-not-target — MMSI
+    `0000856982-25-000035`). That count alone is not an absence claim, because the scan fails closed. So the 31 were
+    also CHECKED BY HAND from the harness's document cache, with no new SEC request. The Item 1.01 narrative of each
+    primary 8-K was read, and a takeover-phrase search ran across every fetched document, every hit read in context.
+    On that check **none of the 31 is a takeover of the Radar company**: they include credit and loan agreements, leases,
+    consulting / supply / framework contracts, litigation settlements, JV term sheets, a standstill waiver and a share
+    conversion agreement, plus four acquisitions in which the Radar company is the BUYER (MMSI, OOMA, STXS, EPM). The
+    per-filing table is in the spec-228 file's appendix. Request cost per filing under the new reader: 2 requests 93
+    filings, 3 requests 77, 4 requests 15 (477 total, mean 2.58). **Finding, not fixed:** company-is-acquirer 13 →
+    45, and the bucket now includes filings that are not acquisitions at all: AMBA's office lease, PUMP's
+    Caterpillar framework agreement and LBRT's two supply contracts. The acquirer-side vetoes fire on ordinary 8-K
+    narrative. No recognition depends on it and it fails closed, but the bucket says less than its name.
 
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 

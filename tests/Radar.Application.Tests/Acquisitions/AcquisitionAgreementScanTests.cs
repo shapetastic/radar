@@ -19,8 +19,9 @@ public sealed class AcquisitionAgreementScanTests
     {
         // Pinned because it is part of every record's content-derived id AND of the hashed acq= descriptor
         // field: a silent rename would re-mint every record and move every fingerprint. Spec 227 bumped it
-        // acqscan-v1 → acqscan-v2 (the SHOO dividend false positive, the HZO par value and "Parent").
-        Assert.Equal("acqscan-v2", AcquisitionAgreementScan.Version);
+        // acqscan-v1 → acqscan-v2 (the SHOO dividend false positive, the HZO par value and "Parent") →
+        // acqscan-v3 (spec 228: the READ — the real 8-K primary, not an exhibit posing as it; the rule is unchanged).
+        Assert.Equal("acqscan-v3", AcquisitionAgreementScan.Version);
     }
 
     [Fact]

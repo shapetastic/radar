@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging;
 
 using Radar.Application.Acquisitions;
 using Radar.Application.Evidence;
-using Radar.Infrastructure.Sources;
 
 namespace Radar.Infrastructure.Sec;
 
@@ -16,9 +15,39 @@ namespace Radar.Infrastructure.Sec;
 /// and Plan of Merger…") lives in the PRIMARY 8-K document; the per-share consideration is usually stated in
 /// the EX-99.1 press release. Leg (a) and leg (b) of the scan therefore live in different documents, so the
 /// reader fetches the index, then the primary document, then the EX-99.1 exhibit WHEN THE INDEX SHOWS ONE,
-/// and concatenates the stripped plain text. That is at most three <c>www.sec.gov</c> requests per filing —
-/// and only ONCE per filing ever, because the caller's durable scan cache and acquisitions store make a
+/// and concatenates the stripped plain text. That is at most three <c>www.sec.gov</c> requests per filing (four
+/// since spec 228, when the index also carries an EX-2.1 — see below) —
+/// and only ONCE per filing per scan version, because the caller's durable scan cache and acquisitions store make a
 /// scanned accession a permanent hit (the spec-107 cache-first posture).
+/// </para>
+/// <para>
+/// <b>⚠ AMENDED in place by spec 228 — until then it did not read the 8-K.</b> The paragraph above was the design,
+/// not the practice: EDGAR links an iXBRL primary document through the inline viewer (<c>/ix?doc=…</c>), the shared
+/// index parser dropped that row, and the primary-document selection fell back to the first row without an EX-99
+/// type — an EX-10.1 credit agreement, EX-2.1 merger agreement, EX-1.1 underwriting agreement or EX-4.1 indenture on
+/// 153 of 154 live reads — while 31 more filings failed outright ("no parseable document table" / "no primary
+/// document row"). Since spec 228 the primary document is chosen from what SEC says, in order: the declared
+/// <c>primaryDocument</c> when the index carries that row, else the ONE row whose Type column is <c>8-K</c> /
+/// <c>8-K/A</c>; anything else is a named failure (<see cref="SecFilingIndexTable.SelectPrimaryDocument"/>). A body
+/// can no longer start with an exhibit posing as the 8-K, and because the read is part of the answer the change
+/// bumped <c>AcquisitionAgreementScan.Version</c> to <c>acqscan-v3</c>.
+/// </para>
+/// <para>
+/// <b>The EX-2.1 merger agreement IS appended — and no other contract (spec 228 §1 decision, MEASURED).</b> The body
+/// is the primary 8-K, then EX-99.1 when shown, then the EX-2.1 exhibit when the index carries one
+/// (<see cref="SecFilingIndexTable.SelectMergerAgreementExhibit"/>) — in that order, so the 8-K cover always comes
+/// first. The default was NOT to append: a contract in the body is how SHOO's spec-227 false positive assembled
+/// itself (a credit agreement's defined roles beside a release's dividend), and the scan is fail-closed because a
+/// false positive closes a live thesis. The live measurement overturned that default for EX-2.1 only. Over the 185
+/// item-1.01 accessions in the store on 2026-09-15, 21 carry an EX-2.1. Without it, the one genuine takeover —
+/// MarineMax (HZO, 0001193125-26-341302) — reads <c>AcquirerNotNamed</c>: its 8-K names the buyer only inside
+/// "by and among the Company, SHM Holdco, LLC, … (“Parent”)", which the rule cannot read, while the merger
+/// agreement's own party definition names it. With it, HZO is recognised at $53.00 (the consideration quote is the
+/// 8-K's own). The append changed three other outcomes, and none into a recognition: STRL and CLMB went
+/// <c>NoMergerAgreement</c> → <c>CompanyNotTarget</c>, and ESQ went <c>CompanyNotTarget</c> → <c>CompanyIsAcquirer</c>.
+/// SHOO stays unrecognised (its credit-agreement 8-K carries no EX-2.1). EX-10.* material contracts (in 103 of
+/// the 185 filings) are never appended. The cost is one more request per EX-2.1 filing. The full table is in
+/// <c>docs/architecture-history.md</c> (spec-228 bullet).
 /// </para>
 /// <para>
 /// <b>Pacing and failure.</b> Every request goes through this client's <see cref="SecRateLimitingHandler"/>,
@@ -83,13 +112,17 @@ internal sealed class HttpSecAcquisitionFilingReader : IAcquisitionFilingBodyRea
             return AcquisitionFilingBody.Failed("no parseable document table");
         }
 
-        var primary = SecFilingIndexTable.SelectPrimaryDocument(rows, primaryDocument);
-        if (primary is null)
+        var selection = SecFilingIndexTable.SelectPrimaryDocument(rows, primaryDocument);
+        if (selection.Row is not { } primary)
         {
+            // Spec 228: no authoritative primary (neither the declared document nor exactly one row typed as the
+            // form) is a NAMED failure, never a positional guess. Counted by the caller as a failed read.
             _logger.LogInformation(
-                "SEC filing index {IndexUrl} carried no non-exhibit primary document row; skipping.",
-                indexUrl);
-            return AcquisitionFilingBody.Failed("no primary document row");
+                "SEC filing index {IndexUrl} named no authoritative primary document ({Detail}); the item-1.01 "
+                    + "read is skipped and will be re-attempted.",
+                indexUrl,
+                selection.FailureDetail);
+            return AcquisitionFilingBody.Failed(selection.FailureDetail ?? SecFilingIndexTable.NoPrimaryDocumentRow);
         }
 
         var (primaryFailure, primaryBody) = await FetchAsync($"{baseUrl}/{primary.FileName}", ct)
@@ -101,18 +134,28 @@ internal sealed class HttpSecAcquisitionFilingReader : IAcquisitionFilingBodyRea
 
         var text = new StringBuilder(_normalizer.Normalize(title: null, rawText: primaryBody!).NormalizedText);
 
-        // The EX-99.1 press release, when the index shows one. Its ABSENCE is not a failure: many item-1.01
-        // filings carry no exhibit, and the primary document alone is a complete read of the item.
-        var exhibit = SecFilingIndexTable.SelectEarningsExhibit(rows);
-        if (exhibit is not null)
+        // Then, in this order: the EX-99.1 press release, and (spec 228 §1) the EX-2.1 merger agreement, each only
+        // when the index shows one. Their ABSENCE is not a failure: many item-1.01 filings carry neither, and the
+        // primary document alone is a complete read of the item.
+        foreach (var exhibit in new[]
+                 {
+                     SecFilingIndexTable.SelectEarningsExhibit(rows),
+                     SecFilingIndexTable.SelectMergerAgreementExhibit(rows),
+                 })
         {
+            if (exhibit is null)
+            {
+                continue;
+            }
+
             var (exhibitFailure, exhibitBody) = await FetchAsync($"{baseUrl}/{exhibit.FileName}", ct)
                 .ConfigureAwait(false);
             if (exhibitFailure is not null)
             {
                 // A missing exhibit body degrades the READ, and a partial read must never be scanned as a
-                // whole one: leg (b) commonly lives in the exhibit, so scanning without it could record a
-                // NOT-recognised answer that the cache would then make permanent. Fail the whole read.
+                // whole one: leg (b) commonly lives in EX-99.1 and the acquirer's name in EX-2.1, so scanning
+                // without it could record a NOT-recognised answer that the cache would then make permanent. Fail
+                // the whole read.
                 return exhibitFailure;
             }
 

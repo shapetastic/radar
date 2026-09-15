@@ -345,10 +345,10 @@ authoritative record:
   structure earns **v12**. An in-place composition change bumps
   `IScoreFormula.CompositionRevision` (spec 153); a strategy that changes formula or weights
   gets a NEW NAME (spec 141, immutable-by-convention).
-- **Fingerprint pins are window-dependent and have moved sixteen times since spec 191** (191,
-  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224, 226, 227 (214–216, 219, 220 and 221 AI-ON only; 217,
-  224, 226 and 227 moved both sides — 224 unconditionally, via the new `insiderCollapse=` fingerprint field; 226 via
-  the unconditional `rules=` token and `acq=` segment; 227 via the `acq=` segment's scan half). 214+215
+- **Fingerprint pins are window-dependent and have moved seventeen times since spec 191** (191,
+  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224, 226, 227, 228 (214–216, 219, 220 and 221 AI-ON only;
+  217, 224, 226, 227 and 228 moved both sides — 224 unconditionally, via the new `insiderCollapse=` fingerprint field;
+  226 via the unconditional `rules=` token and `acq=` segment; 227 and 228 via the `acq=` segment's scan half). 214+215
   merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
   composition stamped a full 102-company live run; each later move (216, 217, 219) invalidated the
   identity records again, and the 2026-09-09 run (`run-20260909T234658242Z-5c6644f6`) stamped the
@@ -366,7 +366,11 @@ authoritative record:
   `AcquisitionAgreementScan.Version` bumped, unconditional, not AI-gated) and owed ONE operator step after
   merging; it was TAKEN on 2026-09-15 after the merge (`5686088`), so its identity is stamped by the first
   post-227 run — verify that run's stamp against `ScoringConfigFingerprintTests`. **No operator step is
-  outstanding for any spec through 227.**
+  outstanding for any spec through 227.** Spec 228 moved the pins a SEVENTEENTH time, BOTH families (the `acq=`
+  segment's scan half again: `AcquisitionAgreementScan.Version` bumped because the version now covers the item-1.01
+  READ — the reader finally reads the 8-K — unconditional, not AI-gated) and **owes ONE operator step after
+  merging**: delete or re-record every configured `data/scoring-configs/strategies/{name}.json` before the first
+  post-228 run, then verify that run's stamp against `ScoringConfigFingerprintTests`.
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
@@ -400,7 +404,12 @@ authoritative record:
   2025-05-07 — the efficacy comparison is recomputed from the store, so this is a whole-history change to the
   benchmark, not a dated step; already-stamped `CompanyStatusAtScoring = PendingAcquisition` snapshots stay
   exactly as written (AD-8). Leaderboards before and after it are NOT comparable;
-  `docs/architecture-history.md` records the measured size). The
+  `docs/architecture-history.md` records the measured size), and **228** (`acqscan-v3` — the item-1.01 body is
+  the real 8-K primary document, not an exhibit posing as it: from the first post-merge pass every `acqscan-v2`
+  record and cached answer is retired, so MarineMax (HZO) is UN-PENDING until its `acqscan-v3` rescan persists —
+  expected on the first post-merge full run, because the rescan drains newest-first — and stays un-pending in any
+  `score` / `replay` pass or after a failed rescan; the whole item-1.01 population is rescanned over several runs (PROJECTED)
+  under `MaxFetchesPerRun`; `docs/architecture-history.md` records the measured read and scan distribution). The
   spec-191 inherited-direction cohort is known DEFECTIVE and is not a control.
 - **News is a two-stage read** (specs 177–221): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact
@@ -475,7 +484,15 @@ authoritative record:
   unmoved and readable), the pass rescans a filing whose only record is older, and `PendingAcquisitions`
   admits ONLY current-version records — an older one is counted as `RetiredByScanVersion` (in the pass's
   aggregated line and the report's `## Acquisitions pending` footer) and governs no consumer from the moment
-  the version ships.) `CompanyStatus.PendingAcquisition` is DERIVED at run
+  the version ships.) (⚠ AMENDED in place by spec 228: "reads the item-1.01 8-K itself" was NOT TRUE IN
+  PRACTICE under `acqscan-v1` or `acqscan-v2`. EDGAR links an iXBRL primary through `/ix?doc=…`, the shared
+  `SecFilingIndexTable` parser dropped that row, and the reader's first-untyped-row fallback took an exhibit as
+  "the primary": 153 of 154 live bodies were an EX-10.1 / EX-2.1 / EX-1.1 / EX-4.1 exhibit plus EX-99.1 when present, and 31
+  filings failed outright. Since `acqscan-v3` the body is the declared or form-typed (`8-K` / `8-K/A`) primary
+  document, then EX-99.1, then the EX-2.1 merger agreement (each when shown; appended because the live measurement
+  found HZO's buyer named, in a shape the rule can read, only there; no EX-10.* contract is ever appended); no authoritative primary is a
+  named, counted read failure. The scan version now covers the READ as well as the rule.)
+  `CompanyStatus.PendingAcquisition` is DERIVED at run
   time from the append-only acquisitions store — never settable in `data/companies.json` — and stamped
   on snapshots as recorded provenance (`CompanyStatusAtScoring`; `null` = not recorded, never `Active`).
   Scoring continues and nothing is rewritten; what changes is the READ: the corporate-action supersede
