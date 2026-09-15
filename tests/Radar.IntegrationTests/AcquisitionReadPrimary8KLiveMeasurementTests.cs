@@ -512,9 +512,13 @@ public sealed class AcquisitionReadPrimary8KLiveMeasurementTests(ITestOutputHelp
         }
 
         var full = Path.GetFullPath(directory);
-        Assert.False(
-            full.StartsWith(root, StringComparison.OrdinalIgnoreCase),
-            $"{full} must lie OUTSIDE the data root — the harness writes nothing under it.");
+        // A path-BOUNDARY check, not a prefix check: root C:\data must not reject C:\data-cache.
+        var relative = Path.GetRelativePath(root, full);
+        var outside = Path.IsPathRooted(relative)
+            || relative == ".."
+            || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
+        Assert.True(outside, $"{full} must lie OUTSIDE the data root — the harness writes nothing under it.");
         if (create)
         {
             Directory.CreateDirectory(full);
