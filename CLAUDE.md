@@ -361,12 +361,12 @@ authoritative record:
   **No operator step is outstanding for any spec through 224.** Do NOT clear the identity records on the
   strength of the earlier wording.) Spec 226 (both families moved: `KeywordSignalExtractor.RuleSetVersion`
   and `CorporateActionSupersede.Version` both bumped) owed ONE operator step after merging; it was TAKEN on
-  2026-09-14 after the merge (`b66e3b5`), so its identity is stamped by the first post-226 run — verify that
-  run's stamp against `ScoringConfigFingerprintTests`. **No operator step is outstanding for any spec through
-  226.** Spec 227 moved the pins a SIXTEENTH time, BOTH families (the `acq=` segment's scan half:
-  `AcquisitionAgreementScan.Version` bumped, unconditional, not AI-gated) and **owes ONE operator step after
-  it merges** — delete or re-record every configured `data/scoring-configs/strategies/{name}.json` before the
-  first post-227 run, then verify that run's stamp against `ScoringConfigFingerprintTests`.
+  2026-09-14 after the merge (`b66e3b5`), and `run-20260914T214015589Z-dadc96b7` stamped `default` with the
+  spec-226 pin. Spec 227 moved the pins a SIXTEENTH time, BOTH families (the `acq=` segment's scan half:
+  `AcquisitionAgreementScan.Version` bumped, unconditional, not AI-gated) and owed ONE operator step after
+  merging; it was TAKEN on 2026-09-15 after the merge (`5686088`), so its identity is stamped by the first
+  post-227 run — verify that run's stamp against `ScoringConfigFingerprintTests`. **No operator step is
+  outstanding for any spec through 227.**
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
