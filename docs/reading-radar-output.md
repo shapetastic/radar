@@ -126,7 +126,9 @@ sits at the offer and tracks the deal, not the business, so trajectory and oppor
 they claim to measure. Radar says so instead of pretending otherwise.
 
 - **How it is recognised.** Deterministically, from the company's own 8-K — no AI. The acquisition scan
-  (`AcquisitionAgreementScan.Version`; tightened by spec 227) reads the item-1.01 filing ("Entry into a Material Definitive Agreement") and
+  (`AcquisitionAgreementScan.Version`; tightened by spec 227) reads the item-1.01 filing ("Entry into a Material Definitive Agreement") —
+  since spec 228 the 8-K document itself, then its EX-99.1 press release and EX-2.1 merger agreement when the
+  filing has them (before spec 228 the read silently took an attached exhibit instead of the 8-K) — and
   recognises an acquisition only when BOTH hold verbatim in the text: the company is the **target** (its own
   name as the subject of "acquired by", or the DIRECT object of "merge with and into" / "acquisition of … by
   …", within one clause), and a **per-share MERGER consideration is stated** ("$53.00 per share in cash", "the

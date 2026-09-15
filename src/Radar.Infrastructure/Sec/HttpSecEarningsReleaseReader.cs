@@ -107,8 +107,8 @@ internal sealed class HttpSecEarningsReleaseReader : ISecEarningsReleaseReader
         // text. The normalizer also computes a content hash we ignore here; reuse over a second stripper.
         var plainText = _normalizer.Normalize(title: null, rawText: exhibitBody).NormalizedText;
 
-        // SelectEarningsExhibit only returns EX-99 rows, whose Type is guaranteed non-null.
-        return SecEarningsReleaseReadResult.Success(plainText, selected.Type!, selected.FileName);
+        // SelectEarningsExhibit only returns EX-99 rows, whose Ex99Type is guaranteed non-null.
+        return SecEarningsReleaseReadResult.Success(plainText, selected.Ex99Type!, selected.FileName);
     }
 
     /// <summary>
@@ -226,9 +226,18 @@ internal sealed class HttpSecEarningsReleaseReader : ISecEarningsReleaseReader
     /// SPEC 217 — the index-table parse and the EX-99 selection now live in the SHARED
     /// <see cref="SecFilingIndexTable"/> (reuse over copy): the item-1.01 acquisition reader needs the
     /// identical row/cell/size rules, and a second copy would drift. Behaviour here is unchanged.
+    /// <para>
+    /// SPEC 228 taught the shared parser to resolve EDGAR's inline-XBRL viewer links (the iXBRL PRIMARY document's
+    /// row) for the acquisition read. The earnings read parses with
+    /// <see cref="InlineViewerLinks.IgnoreAsBeforeSpec228"/>, so it sees exactly the pre-228 row set and its
+    /// behaviour stays byte-identical (spec 228 §1): the primary is never an earnings candidate, and resolving it
+    /// here would only relabel an index whose sole <c>.htm</c> is an iXBRL primary from <c>Malformed</c> ("no
+    /// parseable document table") to <c>NoEarningsExhibit</c>. That label is deliberately left as it was — a
+    /// known mislabel, recorded rather than silently changed.
+    /// </para>
     /// </summary>
     private static List<SecFilingIndexRow> ParseDocumentTable(string html) =>
-        SecFilingIndexTable.Parse(html);
+        SecFilingIndexTable.Parse(html, InlineViewerLinks.IgnoreAsBeforeSpec228);
 
     /// <inheritdoc cref="SecFilingIndexTable.SelectEarningsExhibit"/>
     private static SecFilingIndexRow? SelectEarningsExhibit(List<SecFilingIndexRow> rows) =>

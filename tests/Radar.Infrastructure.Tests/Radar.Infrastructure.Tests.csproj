@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Spec 228: trimmed REAL SEC filing-index pages (provenance in each file's leading comment). -->
+    <EmbeddedResource Include="Sec\Fixtures\*.html" LogicalName="Radar.Infrastructure.Tests.Sec.Fixtures.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Radar.CalibrationAudit\Radar.CalibrationAudit.csproj" />
     <ProjectReference Include="..\..\src\Radar.ChannelFeasibilityAudit\Radar.ChannelFeasibilityAudit.csproj" />
     <ProjectReference Include="..\..\src\Radar.Infrastructure\Radar.Infrastructure.csproj" />

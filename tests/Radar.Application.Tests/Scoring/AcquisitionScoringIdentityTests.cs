@@ -13,8 +13,9 @@ public sealed class AcquisitionScoringIdentityTests
     [Fact]
     public void Segment_NamesBothVersions_InAFixedOrder()
     {
-        // Spec 227 moved the scan half acqscan-v1 → acqscan-v2 (the supersede half is unchanged).
-        Assert.Equal("acq=acqscan-v2;supersede=acq-supersede-v2;", AcquisitionScoringIdentity.Segment);
+        // Spec 227 moved the scan half acqscan-v1 → acqscan-v2, spec 228 acqscan-v2 → acqscan-v3 (the read);
+        // the supersede half is unchanged.
+        Assert.Equal("acq=acqscan-v3;supersede=acq-supersede-v2;", AcquisitionScoringIdentity.Segment);
     }
 
     [Fact]

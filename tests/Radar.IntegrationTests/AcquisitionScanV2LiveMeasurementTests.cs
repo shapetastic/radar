@@ -39,6 +39,14 @@ namespace Radar.IntegrationTests;
 /// <see cref="AcqScanV1HistoricalControl"/> (a measurement control, never edited).
 /// </para>
 /// <para>
+/// (⚠ AMENDED in place by spec 228: the column this harness labels <c>acqscan-v2</c> runs the CURRENT production
+/// scan, which spec 228 re-versioned to <c>acqscan-v3</c> without changing the rule, and its bodies come from the
+/// production reader, which since spec 228 reads the real 8-K primary. Its 2026-09-14 measurement was taken over
+/// the pre-228 read — an exhibit posing as the primary on 153 of 154 bodies. A re-run measures v1 against the current
+/// rule over the NEW read unless the body directory still holds the spec-227 bodies. The read-before-and-after
+/// measurement is <see cref="AcquisitionReadPrimary8KLiveMeasurementTests"/>.)
+/// </para>
+/// <para>
 /// <b>Each body is fetched ONCE.</b> When <c>RADAR_ACQSCAN_V2_BODY_DIR</c> is set (it must lie OUTSIDE the data
 /// root), each successful body is kept there verbatim as <c>{accession}.txt</c> and each failed read as
 /// <c>{accession}.failed</c> holding the reader's named detail, and a later run of this harness reads those
@@ -501,7 +509,12 @@ public sealed class AcquisitionScanV2LiveMeasurementTests(ITestOutputHelper outp
             .Any(p => lower.Contains(p, StringComparison.Ordinal));
     }
 
-    private static ServiceProvider BuildComposition(string root)
+    /// <summary>
+    /// The read-only composition (spec 227; reused by the spec-228 §3 harness): the production population, resolver,
+    /// mentions and paced SEC reader, with every write seam replaced by one that THROWS. <paramref name="configure"/>
+    /// runs last, before the provider is built.
+    /// </summary>
+    internal static ServiceProvider BuildComposition(string root, Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Error));
@@ -536,15 +549,16 @@ public sealed class AcquisitionScanV2LiveMeasurementTests(ITestOutputHelper outp
         services.AddSingleton<IEvidenceRepository>(sp =>
             new ReadOnlyEvidenceRepository((IEvidenceRepository)evidenceFactory(sp)));
 
+        configure?.Invoke(services);
         return services.BuildServiceProvider();
     }
 
-    private static Dictionary<string, (long Length, DateTime LastWriteUtc)> SnapshotTree(string root) =>
+    internal static Dictionary<string, (long Length, DateTime LastWriteUtc)> SnapshotTree(string root) =>
         new DirectoryInfo(root)
             .EnumerateFiles("*", SearchOption.AllDirectories)
             .ToDictionary(f => f.FullName, f => (f.Length, f.LastWriteTimeUtc), StringComparer.OrdinalIgnoreCase);
 
-    private static List<string> DiffTrees(
+    internal static List<string> DiffTrees(
         Dictionary<string, (long Length, DateTime LastWriteUtc)> before,
         Dictionary<string, (long Length, DateTime LastWriteUtc)> after)
     {
@@ -570,31 +584,31 @@ public sealed class AcquisitionScanV2LiveMeasurementTests(ITestOutputHelper outp
             ? $"recognised · acquirer `{result.AcquirerName}` · consideration `{result.ConsiderationCurrency}{result.ConsiderationPerShare}` ({result.ConsiderationKind}) · consideration quote: {Trim(result.ConsiderationQuote!, 200)} · target quote (tail): {Tail(result.TargetQuote!, 200)}"
             : AcquisitionAgreementScan.Token(result.Outcome);
 
-    private static string Filed(EvidenceItem item) =>
+    internal static string Filed(EvidenceItem item) =>
         (item.PublishedAtUtc ?? item.CollectedAtUtc).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-    private static IReadOnlyList<string> HintsOf(EvidenceItem evidence)
+    internal static IReadOnlyList<string> HintsOf(EvidenceItem evidence)
     {
         EvidenceMetadata.TryRead(evidence.MetadataJson, out _, out var hints);
         return hints;
     }
 
-    private static string Flatten(string text) =>
+    internal static string Flatten(string text) =>
         string.Join(' ', text.Split((char[])['\n', '\r', '\t', ' '], StringSplitOptions.RemoveEmptyEntries));
 
-    private static string Trim(string text, int max)
+    internal static string Trim(string text, int max)
     {
         var flat = Flatten(text);
         return flat.Length <= max ? flat : flat[..max] + "…";
     }
 
-    private static string Tail(string text, int max)
+    internal static string Tail(string text, int max)
     {
         var flat = Flatten(text);
         return flat.Length <= max ? flat : "…" + flat[^max..];
     }
 
-    private static string Cell(string text) => text.Replace("|", "\\|", StringComparison.Ordinal);
+    internal static string Cell(string text) => text.Replace("|", "\\|", StringComparison.Ordinal);
 
     private sealed record ScanRow(
         EvidenceItem Evidence,

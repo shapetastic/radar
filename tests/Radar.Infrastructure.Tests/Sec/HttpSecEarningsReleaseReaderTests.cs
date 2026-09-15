@@ -178,6 +178,90 @@ public sealed class HttpSecEarningsReleaseReaderTests
         Assert.DoesNotContain(BaseUrl + "/" + Ex992File, handler.Requested);
     }
 
+    // SPEC 228 §1 — the earnings read must not change when the shared parser learns inline-XBRL viewer links. The
+    // same index as IndexWith991, but with the 8-K cover linked the way EDGAR links an iXBRL primary today.
+    private static readonly string IndexWith991InlineViewerPrimary = BuildIndex(
+    [
+        ("1", "mrcy-20260505.htm document", EightKFile, "8-K", "38 KB"),
+        ("2", "a2026q3earningsreleaseex.htm document", Ex991File, "EX-99.1", "321 KB"),
+        ("3", "q3fy26earningspresentati.htm document", Ex992File, "EX-99.2", "150 KB"),
+    ],
+    new HashSet<string>(StringComparer.Ordinal) { EightKFile });
+
+    // Only an iXBRL primary: before spec 228 the parser saw no row at all, and so does the earnings read now.
+    private static readonly string IndexOnlyInlineViewerPrimary = BuildIndex(
+    [
+        ("1", "mrcy-20260505.htm document", EightKFile, "8-K", "38 KB"),
+    ],
+    new HashSet<string>(StringComparer.Ordinal) { EightKFile });
+
+    [Fact]
+    public async Task ReadAsync_InlineViewerPrimary_SelectsAndFetchesExactlyWhatThePlainLinkIndexDoes()
+    {
+        async Task<(SecEarningsReleaseReadResult Result, List<string> Requested)> ReadWith(string index)
+        {
+            var handler = new RoutingHandler(req =>
+            {
+                var url = req.RequestUri!.AbsoluteUri;
+                if (url.EndsWith("-index.html", StringComparison.Ordinal))
+                    return Html(HttpStatusCode.OK, index);
+                if (url.EndsWith(Ex991File, StringComparison.Ordinal))
+                    return Html(HttpStatusCode.OK, Ex991Html);
+                return Html(HttpStatusCode.NotFound, "missing");
+            });
+            var result = await CreateReader(handler).ReadAsync(Cik, Accession, CancellationToken.None);
+            return (result, handler.Requested);
+        }
+
+        var plain = await ReadWith(IndexWith991);
+        var viewer = await ReadWith(IndexWith991InlineViewerPrimary);
+
+        Assert.Equal(plain.Result, viewer.Result);
+        Assert.Equal(plain.Requested, viewer.Requested);
+        Assert.Equal("EX-99.1", viewer.Result.DocumentType);
+        Assert.DoesNotContain(BaseUrl + "/" + EightKFile, viewer.Requested);
+    }
+
+    [Fact]
+    public async Task ReadAsync_OnlyAnInlineViewerPrimary_StaysMalformed_AsBeforeSpec228()
+    {
+        var handler = new RoutingHandler(_ => Html(HttpStatusCode.OK, IndexOnlyInlineViewerPrimary));
+
+        var result = await CreateReader(handler).ReadAsync(Cik, Accession, CancellationToken.None);
+
+        Assert.Equal(SecEarningsReleaseReadOutcome.Malformed, result.Outcome);
+        Assert.Equal("no parseable document table", result.Detail);
+        Assert.Equal([IndexUrl], handler.Requested);
+    }
+
+    [Theory]
+    [InlineData("hzo", "Success", "hzo-ex99_1.htm")]
+    [InlineData("shoo", "Success", "ex99-1.htm")]
+    [InlineData("myrg", "Malformed", null)]
+    public async Task ReadAsync_RealIndexPages_KeepThePre228Selection(
+        string page, string expected, string? expectedFile)
+    {
+        var index = page switch
+        {
+            "hzo" => RealSecFilingIndexPages.HzoEx991Only,
+            "shoo" => RealSecFilingIndexPages.ShooCreditAgreementAndResults,
+            _ => RealSecFilingIndexPages.MyrgNoExhibits,
+        };
+        var handler = new RoutingHandler(req =>
+            req.RequestUri!.AbsoluteUri.EndsWith("-index.html", StringComparison.Ordinal)
+                ? Html(HttpStatusCode.OK, index)
+                : Html(HttpStatusCode.OK, Ex991Html));
+
+        var result = await CreateReader(handler).ReadAsync(Cik, Accession, CancellationToken.None);
+
+        Assert.Equal(expected, result.Outcome.ToString());
+        Assert.Equal(expectedFile, result.DocumentFileName);
+        // Never the primary document, whose row the acquisition read now resolves.
+        Assert.DoesNotContain(handler.Requested, u => u.EndsWith("hzo-20260629.htm", StringComparison.Ordinal)
+            || u.EndsWith("form8-k.htm", StringComparison.Ordinal)
+            || u.EndsWith("myrg-20260908.htm", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task ReadAsync_IndexHttp403_ReturnsForbiddenWithoutThrowing()
     {
@@ -283,7 +367,8 @@ public sealed class HttpSecEarningsReleaseReaderTests
     }
 
     private static string BuildIndex(
-        IReadOnlyList<(string Seq, string Description, string File, string Type, string Size)> rows)
+        IReadOnlyList<(string Seq, string Description, string File, string Type, string Size)> rows,
+        IReadOnlySet<string>? inlineViewerFiles = null)
     {
         var sb = new StringBuilder();
         sb.Append("""
@@ -296,7 +381,8 @@ public sealed class HttpSecEarningsReleaseReaderTests
             """);
         foreach (var (seq, description, file, type, size) in rows)
         {
-            var href = "/Archives/edgar/data/1049521/000104952126000021/" + file;
+            var href = (inlineViewerFiles?.Contains(file) == true ? "/ix?doc=" : string.Empty)
+                + "/Archives/edgar/data/1049521/000104952126000021/" + file;
             sb.Append(
                 $"""
                   <tr>

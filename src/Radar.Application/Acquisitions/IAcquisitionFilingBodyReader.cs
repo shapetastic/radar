@@ -3,11 +3,17 @@ namespace Radar.Application.Acquisitions;
 /// <summary>Why one item-1.01 body read ended (spec 217 §1). Every value is counted by the caller.</summary>
 public enum AcquisitionBodyReadOutcome
 {
-    /// <summary>The primary document (and its EX-99.1 exhibit when present) were fetched and stripped.</summary>
+    /// <summary>
+    /// The primary document (and its EX-99.1 exhibit when present) were fetched and stripped. (⚠ AMENDED in place by
+    /// spec 228: and, after EX-99.1, the EX-2.1 merger agreement when the index carries one — the primary 8-K always
+    /// comes first; no EX-10.* contract is ever read.)
+    /// </summary>
     Success = 1,
 
     /// <summary>
-    /// The fetch failed — 403/429/timeout/transport/unparseable index. NOT "no acquisition": nothing is
+    /// The fetch failed — 403/429/timeout/transport/unparseable index, or (spec 228) no authoritative primary
+    /// document: "no primary document row" (neither the declared primary nor a row typed 8-K / 8-K/A) or
+    /// "ambiguous primary document rows" (more than one row typed as the form). NOT "no acquisition": nothing is
     /// persisted and a later run re-attempts the filing, so a transient block can never permanently close
     /// or permanently open a thesis.
     /// </summary>
@@ -46,8 +52,11 @@ public interface IAcquisitionFilingBodyReader
     /// <param name="accession">The DASHED accession of the 8-K.</param>
     /// <param name="primaryDocument">
     /// The filing's primary document file name as the evidence metadata declares it, or null. Supplied so
-    /// the reader can fetch the 8-K body itself (the item-1.01 narrative lives there, not in EX-99.1);
-    /// a null falls back to whatever the filing index names first.
+    /// the reader can fetch the 8-K body itself (the item-1.01 narrative lives there, not in EX-99.1).
+    /// (⚠ AMENDED in place by spec 228: this used to say "a null falls back to whatever the filing index names
+    /// first", and in practice that fallback took an exhibit. A null — or a declared name the index does not carry
+    /// — now falls back ONLY to the one index row typed as the form itself (<c>8-K</c> / <c>8-K/A</c>); with no
+    /// such row the read is a named <see cref="AcquisitionBodyReadOutcome.FetchFailed"/>.)
     /// </param>
     Task<AcquisitionFilingBody> ReadAsync(
         string cik, string accession, string? primaryDocument, CancellationToken ct);
