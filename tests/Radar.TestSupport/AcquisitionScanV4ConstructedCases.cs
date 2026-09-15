@@ -11,10 +11,10 @@ namespace Radar.TestSupport;
 /// </summary>
 public static class AcquisitionScanV4ConstructedCases
 {
-    /// <summary>The mentions the Example Industries cases are scanned with.</summary>
+    /// <summary>The mentions that the Example Industries cases are scanned with.</summary>
     public static readonly string[] ExampleMentions = ["Example Industries, Inc.", "Example Industries"];
 
-    /// <summary>The mentions the MarineMax cases are scanned with (the seed's name and alias).</summary>
+    /// <summary>The mentions that the MarineMax cases are scanned with (the seed's name and alias).</summary>
     public static readonly string[] MarineMaxMentions = ["MarineMax, Inc.", "MarineMax"];
 
     /// <summary>
