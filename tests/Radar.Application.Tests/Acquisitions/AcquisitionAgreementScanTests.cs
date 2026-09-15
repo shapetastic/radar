@@ -3,7 +3,7 @@ using Radar.Application.Acquisitions;
 namespace Radar.Application.Tests.Acquisitions;
 
 /// <summary>
-/// SPEC 217 §1 — the acquisition scan (<c>acqscan-v1</c>, tightened to <c>acqscan-v2</c> by spec 227). The scan is the whole slice's gate: a false positive CLOSES A LIVE
+/// SPEC 217 §1 — the acquisition scan (<c>acqscan-v1</c>, tightened to <c>acqscan-v2</c> by spec 227, <c>acqscan-v4</c> by spec 229). The scan is the whole slice's gate: a false positive CLOSES A LIVE
 /// THESIS, so every test here is about failing closed and counting the reason.
 /// </summary>
 public sealed class AcquisitionAgreementScanTests
@@ -20,8 +20,10 @@ public sealed class AcquisitionAgreementScanTests
         // Pinned because it is part of every record's content-derived id AND of the hashed acq= descriptor
         // field: a silent rename would re-mint every record and move every fingerprint. Spec 227 bumped it
         // acqscan-v1 → acqscan-v2 (the SHOO dividend false positive, the HZO par value and "Parent") →
-        // acqscan-v3 (spec 228: the READ — the real 8-K primary, not an exhibit posing as it; the rule is unchanged).
-        Assert.Equal("acqscan-v3", AcquisitionAgreementScan.Version);
+        // acqscan-v3 (spec 228: the READ — the real 8-K primary, not an exhibit posing as it; the rule is unchanged) →
+        // acqscan-v4 (spec 229: the RULE — honest outcome precedence, subject-bound acquirer veto, governed completion,
+        // case-insensitive acquirer keywords, clause-governed consideration exclusions; the read is unchanged).
+        Assert.Equal("acqscan-v4", AcquisitionAgreementScan.Version);
     }
 
     [Fact]

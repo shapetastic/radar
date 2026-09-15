@@ -4350,7 +4350,81 @@ Rules of this file (inherited from CLAUDE.md, unchanged by the move):
     filings, 3 requests 77, 4 requests 15 (477 total, mean 2.58). **Finding, not fixed:** company-is-acquirer 13 →
     45, and the bucket now includes filings that are not acquisitions at all: AMBA's office lease, PUMP's
     Caterpillar framework agreement and LBRT's two supply contracts. The acquirer-side vetoes fire on ordinary 8-K
-    narrative. No recognition depends on it and it fails closed, but the bucket says less than its name.
+    narrative. No recognition depends on it and it fails closed, but the bucket says less than its name. (⚠ AMENDED in
+    place by spec 229: FIXED by `acqscan-v4`. A hand check found the filer genuinely acquiring something in 15 of the 45,
+    one of the 45 (WTRG) is itself a merger TARGET, and v4's 14 labels are all true; see the spec-229 bullet.)
+
+- **Spec 229 (2026-09-15) — the acquisition scan says WHY truthfully: `acqscan-v3 → acqscan-v4`, the RULE (the read is
+  v3's).** Spec 228's real 8-K bodies all carry "Entry into a Material Definitive Agreement", so v2's proximity rules
+  fired on ordinary narrative and `company-is-acquirer` rose from 13 to 45. `AcquisitionAgreementScan` keeps fail-closed
+  and every named outcome and changes five rules (the class remarks carry them):
+  - (1) **honest precedence**: merger context is an explicit merger phrase, or a target clause that itself says
+    "definitive agreement … acquire". Without it the answer is `no-merger-agreement` unless the filer acquires a NAMED
+    party (`UnnamedObjectWords` / `DefinedTermRoles` refused). `subsidiary of {company}` vetoes only beside a merger
+    phrase and binds a direct object.
+  - (2) **subject-bound acquirer veto** (`GovernsVerb`): a bare `InterveningSubjectRoles` role, or "pursuant to which
+    {X}", between the company and the verb makes X the subject. A role the company is itself defined as is the company,
+    wherever in the clause it is defined and however far from the verb (`FilerDefinedRoles` / `SubjectIsFilerRole`).
+    New target form: "… pursuant to which Parent agreed to acquire the Company". Fail-closed: "the Company" reads as the
+    filer only when EVERY (the “Company”) definition in the body — quoted, or the bare "(the Company)" — directly follows
+    a whole company mention, at most 60 characters after it, with nothing between but whitespace or an entity
+    apposition: legal-suffix segments (", Inc.") and at most one final ", a/an …" segment whose lower-case words are
+    all in `EntityAppositionWords` and which holds at most three capitalised words, none a legal suffix. A definition
+    after a verb ("Example Industries, Inc. agreed to acquire Widget Holdings, Inc. (the “Company”)") or after another
+    party's name, and any definition whose ownership is ambiguous, belongs to another party
+    (`DefinesCompanyAliasForAnotherParty`). With no (the “Company”) definition at all, "the Company" is the filer.
+    These guards were added over two review iterations after buyer-side probes showed the form recognising the BUYER
+    ("… Widget Holdings, Inc. (the “Company”) … pursuant to which Parent agreed to acquire the Company"; "Example
+    Industries, Inc. agreed to acquire Widget Holdings, Inc. (the “Company”) … Purchaser will acquire the Company").
+    They changed no live outcome: each re-run report is byte-identical. A defined-party capture that spans a sentence
+    boundary is no longer a name.
+  - (3) **governed completion noun phrases**.
+  - (4) **case-insensitive acquirer keywords** via inline `(?i:…)` groups, with the name group still starting with a
+    capital.
+  - (5) **clause-governed consideration exclusions**: only `ExclusionConnectorWords` may separate the exclusion from
+    its amount, and a defined-term parenthetical ("(the “Exercise Price”)") counts as one. This replaces the fixed
+    60/25-character windows.
+
+  A not-recognised result now carries `AcquisitionScanResult.DecidingQuote`, a diagnostic that is neither persisted
+  nor cached, and nothing downstream reads it or the acquirer label (§4).
+  - **Rule 6, EX-2.1 KEPT, MEASURED.** Under v4, HZO without the EX-2.1 is still `acquirer-not-named`. Rule 4 matches
+    its headline "to be Acquired by Blackstone Infrastructure Portfolio Company, Safe Harbor, in a $1.5 Billion …",
+    but the name capture finds no terminator within 120 characters. `HttpSecAcquisitionFilingReader` is unchanged:
+    477 requests over 185 filings with the append, 456 without. A party-list rule that reads "by and among the
+    Company, SHM Holdco, LLC (“Parent”)" remains the candidate that would let the EX-2.1 go (not done: out of scope).
+  - **Identity.** `AcquisitionAgreementScan.Version` is `acqscan-v4`. BOTH pin families moved, twelve values in
+    `ScoringConfigFingerprintTests` (the only authority; none quoted here), through the unconditional `acq=` scan half.
+    `acq-supersede-v2`, `excess-vs-universe-v2` and `observation-eligibility-v2` did NOT bump. Every v3 record and
+    cached answer is retired through spec 227's machinery. **HZO is un-pending until its v4 rescan persists**
+    (PROJECTED: on the first post-merge full run, the drain being newest-first) and in any `score` / `replay` pass.
+    **ONE operator step is owed after merge**: delete or re-record every configured
+    `data/scoring-configs/strategies/{name}.json` before the first post-229 run. Never fabricate one, and a
+    `StrategyIdentityGuard` halt before that step is CORRECT.
+  - **§2 live measurement — MEASURED 2026-09-15** (history, not a pin) by `AcquisitionScanV4LiveMeasurementTests`.
+    - **How.** The harness is env-gated. It uses the production population, resolver, mentions and reader. v3 is the
+      frozen `AcqScanV3HistoricalControl` over the spec-228 read, and it reproduces spec 228's recorded v3 tally
+      exactly. Bodies came from spec 228's document cache: 954 Archives requests, 0 over the wire, after a 200 check
+      on `www.sec.gov`. Store / cache / evidence writes throw, and all 190,922 files under `data/` were compared before
+      and after with 0 changed. Population: 190 items, 185 accessions.
+    - **Tally v3 → v4:** recognised 1 → 1, no-merger-agreement 135 → 165, company-not-target 4 → 5,
+      company-is-acquirer 45 → 14, all others 0 → 0.
+    - **What changed.** 31 filings changed outcome, every one from `company-is-acquirer`: 30 became
+      `no-merger-agreement` and 1 became `company-not-target`. **No recognition changed**: HZO is recognised at $53.00
+      with acquirer "SHM Holdco, LLC" under both, and SHOO is not recognised under either. By §3's timing note this
+      slice changes no score, only the stated reasons and the identity.
+    - **Label precision, hand-checked** from each filing's Item 1.01 narrative and deciding clause. "Acquiring" means
+      a business, a company or an ownership interest in one. **v3: 15 of 45 (33%). v4: 14 of 14 (100%).** The one true
+      label lost is GHM `0001193125-26-021705`, whose FlackTek acquisition is worded "ACQUIRES" / "announced the
+      acquisition of".
+    - **Recall probe.** 9 merger-phrase filings are not recognised under v4. 7 are the Radar company buying (UTL
+      `0001193125-25-073493`, MMSI, STRL, THRM `0001193125-26-029374`, CLMB, ESQ, AXGN), 1 is a credit amendment (THRM
+      `0001193125-26-082690`), and **1 is a MISSED TAKEOVER: Essential Utilities (WTRG) `0001552781-25-000341`**, the target of American Water Works' all-stock
+      merger (0.305 AWK shares per share). The rule cannot read it: the filing names the target "Essential", which is
+      not a seeded mention, and states the consideration as "the right to receive 0.305 shares (the “Exchange Ratio”)".
+      It is NOT fixed here, and WTRG has therefore stayed in the benchmark peer mean and observation eligibility since
+      2025-10-27. The effect is UNMEASURED; that is a follow-up for the maintainer.
+    - **Where the tables are.** The per-filing truth table, the recall table and the verbatim report are in the
+      spec-229 file's appendix.
 
 ## default.json _comment history (moved verbatim by spec 213, 2026-09-07)
 

@@ -44,7 +44,8 @@ namespace Radar.IntegrationTests;
 /// production reader, which since spec 228 reads the real 8-K primary. Its 2026-09-14 measurement was taken over
 /// the pre-228 read — an exhibit posing as the primary on 153 of 154 bodies. A re-run measures v1 against the current
 /// rule over the NEW read unless the body directory still holds the spec-227 bodies. The read-before-and-after
-/// measurement is <see cref="AcquisitionReadPrimary8KLiveMeasurementTests"/>.)
+/// measurement is <see cref="AcquisitionReadPrimary8KLiveMeasurementTests"/>. Since spec 229 the current rule is
+/// <c>acqscan-v4</c>; its measurement against a frozen v3 is <see cref="AcquisitionScanV4LiveMeasurementTests"/>.)
 /// </para>
 /// <para>
 /// <b>Each body is fetched ONCE.</b> When <c>RADAR_ACQSCAN_V2_BODY_DIR</c> is set (it must lie OUTSIDE the data
@@ -107,15 +108,9 @@ public sealed class AcquisitionScanV2LiveMeasurementTests(ITestOutputHelper outp
     {
         var root = Path.GetFullPath(DataRoot()!);
         var ct = CancellationToken.None;
-        var bodyDirectory = Environment.GetEnvironmentVariable(BodyDirectoryVariable);
-        if (!string.IsNullOrWhiteSpace(bodyDirectory))
-        {
-            bodyDirectory = Path.GetFullPath(bodyDirectory);
-            Assert.False(
-                bodyDirectory.StartsWith(root, StringComparison.OrdinalIgnoreCase),
-                "The body directory must lie OUTSIDE the data root — the harness writes nothing under it.");
-            Directory.CreateDirectory(bodyDirectory);
-        }
+        // SPEC 229: the shared path-BOUNDARY guard (this harness's own text-prefix check rejected C:\data-cache for
+        // root C:\data).
+        var bodyDirectory = LiveHarnessPaths.OutsideDataRoot(root, Environment.GetEnvironmentVariable(BodyDirectoryVariable), create: true);
 
         output.WriteLine($"Report path: {ReportPath}");
         var before = SnapshotTree(root);

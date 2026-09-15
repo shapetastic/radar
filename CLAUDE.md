@@ -345,10 +345,11 @@ authoritative record:
   structure earns **v12**. An in-place composition change bumps
   `IScoreFormula.CompositionRevision` (spec 153); a strategy that changes formula or weights
   gets a NEW NAME (spec 141, immutable-by-convention).
-- **Fingerprint pins are window-dependent and have moved seventeen times since spec 191** (191,
-  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224, 226, 227, 228 (214–216, 219, 220 and 221 AI-ON only;
-  217, 224, 226, 227 and 228 moved both sides — 224 unconditionally, via the new `insiderCollapse=` fingerprint field;
-  226 via the unconditional `rules=` token and `acq=` segment; 227 and 228 via the `acq=` segment's scan half). 214+215
+- **Fingerprint pins are window-dependent and have moved eighteen times since spec 191** (191,
+  194 ×2, 196, 197, 198, 214, 215, 216, 217, 219, 220, 221, 224, 226, 227, 228, 229 (214–216, 219, 220 and 221 AI-ON
+  only; 217, 224, 226, 227, 228 and 229 moved both sides — 224 unconditionally, via the new `insiderCollapse=`
+  fingerprint field; 226 via the unconditional `rules=` token and `acq=` segment; 227, 228 and 229 via the `acq=`
+  segment's scan half). 214+215
   merged back-to-back and shared ONE operator step, performed on 2026-09-08, whose
   composition stamped a full 102-company live run; each later move (216, 217, 219) invalidated the
   identity records again, and the 2026-09-09 run (`run-20260909T234658242Z-5c6644f6`) stamped the
@@ -370,7 +371,11 @@ authoritative record:
   owed ONE operator step after merging. It merged (`b6ba462`) before any run followed spec 227's step, so the
   identity records were still empty on 2026-09-15 and that one clearing serves BOTH specs: no post-227 run
   exists, and the first post-228 run stamps the identity — verify that run's stamp against
-  `ScoringConfigFingerprintTests`. **No operator step is outstanding for any spec through 228.**
+  `ScoringConfigFingerprintTests`. **No operator step is outstanding for any spec through 228.** Spec 229 moved
+  the pins an EIGHTEENTH time, BOTH families (the `acq=` segment's scan half again: `AcquisitionAgreementScan.Version`
+  bumped for a RULE change — truthful not-recognised reasons; unconditional, not AI-gated) and **owes ONE operator
+  step after merging**: delete or re-record every configured `data/scoring-configs/strategies/{name}.json` before the
+  first post-229 run, then verify that run's stamp against `ScoringConfigFingerprintTests`.
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
@@ -409,7 +414,11 @@ authoritative record:
   record and cached answer is retired, so MarineMax (HZO) is UN-PENDING until its `acqscan-v3` rescan persists —
   expected on the first post-merge full run, because the rescan drains newest-first — and stays un-pending in any
   `score` / `replay` pass or after a failed rescan; the whole item-1.01 population is rescanned over several runs (PROJECTED)
-  under `MaxFetchesPerRun`; `docs/architecture-history.md` records the measured read and scan distribution). The
+  under `MaxFetchesPerRun`; `docs/architecture-history.md` records the measured read and scan distribution), and
+  **229** (`acqscan-v4` — the rule behind the not-recognised REASONS: the live measurement found NO recognition
+  changed, so it moves no score beyond the same interim as 228 — every `acqscan-v3` record and cached answer retires
+  at merge and HZO is un-pending until its `acqscan-v4` rescan persists — but `company-is-acquirer` /
+  `no-merger-agreement` / `company-not-target` counts before and after it are NOT comparable). The
   spec-191 inherited-direction cohort is known DEFECTIVE and is not a control.
 - **News is a two-stage read** (specs 177–221): stage-1 typing (facts, structurally no
   direction) → stage-2 judge (cited `BusinessTrajectory`; since spec 214 every supplied fact
@@ -491,7 +500,18 @@ authoritative record:
   filings failed outright. Since `acqscan-v3` the body is the declared or form-typed (`8-K` / `8-K/A`) primary
   document, then EX-99.1, then the EX-2.1 merger agreement (each when shown; appended because the live measurement
   found HZO's buyer named, in a shape the rule can read, only there; no EX-10.* contract is ever appended); no authoritative primary is a
-  named, counted read failure. The scan version now covers the READ as well as the rule.)
+  named, counted read failure. The scan version now covers the READ as well as the rule.) (⚠ AMENDED in place by
+  spec 229: the vetoes described above were PROXIMITY tests, and on the real 8-K they fired on ordinary narrative — of
+  45 live `company-is-acquirer` labels a hand check found 15 true, and one labelled filer (WTRG) is itself a merger
+  TARGET. Since `acqscan-v4` "subsidiary of {company}" vetoes only beside an explicit merger phrase and binds a direct
+  object; the "to acquire" vetoes bind the verb's SUBJECT ("… with Parent, pursuant to which Parent agreed to acquire
+  the Company" is a TARGET clause — unless the filer is itself defined as that role, or any (the “Company”) definition
+  in the body is not provably the filer's own, i.e. not directly after a company mention with only whitespace or an
+  entity apposition such as ", a Florida corporation" between; both fail-closed); "completion of the acquisition of" vetoes only when the filer governs it; without a
+  merger phrase the answer is no-merger-agreement unless the filer acquires a NAMED party; the acquirer keywords match in
+  any case; and an excluded amount must be GOVERNED by its exclusion word. The EX-2.1 append was re-measured and KEPT.
+  No live recognition changed. A takeover the rule cannot read — WTRG, an all-stock merger naming its target
+  "Essential" — is recorded in `docs/architecture-history.md` as a known miss, not fixed.)
   `CompanyStatus.PendingAcquisition` is DERIVED at run
   time from the append-only acquisitions store — never settable in `data/companies.json` — and stamped
   on snapshots as recorded provenance (`CompanyStatusAtScoring`; `null` = not recorded, never `Active`).

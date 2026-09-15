@@ -50,6 +50,18 @@ namespace Radar.Infrastructure.Sec;
 /// <c>docs/architecture-history.md</c> (spec-228 bullet).
 /// </para>
 /// <para>
+/// <b>Re-decided by spec 229 §1 rule 6 — KEPT, MEASURED.</b> Spec 229 made the acquirer keywords case-insensitive so a
+/// title-case headline ("MarineMax Enters into Definitive Agreement to be Acquired by Blackstone Infrastructure
+/// Portfolio Company, Safe Harbor, …") could name the buyer, and asked whether the EX-2.1 could then be dropped. It
+/// cannot: under <c>acqscan-v4</c>, HZO without the EX-2.1 still reads <c>AcquirerNotNamed</c>, because the headline's
+/// name is followed by ", Safe Harbor, in a $1.5 Billion All-Cash Transaction …" with no terminator the acquirer capture
+/// accepts within its 120 characters, and the 8-K's party list still opens with "the Company". So the append stays
+/// (primary → EX-99.1 → EX-2.1), and the body reader did not change in spec 229. Under v4 the append changes the same
+/// four outcomes it changed under v3 (HZO into its recognition; STRL and CLMB no-merger-agreement → company-not-target;
+/// ESQ company-not-target → company-is-acquirer) and costs 21 requests over the 185 filings (477 with it, 456
+/// without). The table is in <c>docs/architecture-history.md</c> (spec-229 bullet).
+/// </para>
+/// <para>
 /// <b>Pacing and failure.</b> Every request goes through this client's <see cref="SecRateLimitingHandler"/>,
 /// so it counts against the SAME process-wide <c>*.sec.gov</c> budget as the collectors and the earnings
 /// read — the recognition pass can never issue an unpaced burst. Every failure (403 / 429 / non-success /
