@@ -369,13 +369,13 @@ authoritative record:
   BOTH families (the `acq=` segment's scan half again: `AcquisitionAgreementScan.Version` bumped because the
   version now covers the item-1.01 READ — the reader finally reads the 8-K — unconditional, not AI-gated) and
   owed ONE operator step after merging. It merged (`b6ba462`) before any run followed spec 227's step, so the
-  identity records were still empty on 2026-09-15 and that one clearing serves BOTH specs: no post-227 run
-  exists, and the first post-228 run stamps the identity — verify that run's stamp against
-  `ScoringConfigFingerprintTests`. **No operator step is outstanding for any spec through 228.** Spec 229 moved
+  identity records were still empty on 2026-09-15 and that one clearing serves BOTH specs. Spec 229 moved
   the pins an EIGHTEENTH time, BOTH families (the `acq=` segment's scan half again: `AcquisitionAgreementScan.Version`
-  bumped for a RULE change — truthful not-recognised reasons; unconditional, not AI-gated) and **owes ONE operator
-  step after merging**: delete or re-record every configured `data/scoring-configs/strategies/{name}.json` before the
-  first post-229 run, then verify that run's stamp against `ScoringConfigFingerprintTests`.
+  bumped for a RULE change — truthful not-recognised reasons; unconditional, not AI-gated) and owed ONE operator
+  step after merging. It too merged (`a387d5b`) before any run, with the identity records still empty, so the
+  same 2026-09-15 clearing serves 227, 228 and 229: no post-227 or post-228 run exists, and the first post-229
+  run stamps the identity — verify that run's stamp against `ScoringConfigFingerprintTests`. **No operator step
+  is outstanding for any spec through 229.**
   `ScoringConfigFingerprintTests` is the ONLY authority for current
   values — never trust a pin quoted in prose. The three windows (30d unit pins / 60d live
   baseline / 120d `long-window`) are three correct answers — never reconcile them onto one
